@@ -194,7 +194,12 @@ export class IncrementalParser {
       this.appendToLast(this.insideThink ? "reasoning" : "text", this.accum);
       this.accum = "";
     }
-    return normalizeParts(this.parts);
+    const result = normalizeParts(this.parts);
+    // Must clear parts after flush — otherwise the next flush() call re-returns
+    // the same parts and StreamBuffer.flushText() pushes them to buffer.parts again,
+    // causing text duplication when multiple tool calls occur in one agent turn.
+    this.parts = [];
+    return result;
   }
 
   /** Get snapshot of all parts including buffered accum, WITHOUT resetting state */

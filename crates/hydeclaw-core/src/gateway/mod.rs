@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 pub mod error;
 // Phase 62 RES-04: rate limiter types extracted to a leaf submodule
 // (zero crate:: imports) so lib.rs can re-export for integration tests.
-pub mod rate_limiter;
+pub use hydeclaw_gateway_util::rate_limiter;
 // Phase 64 SEC-05: pure CSP report core — leaf module (deps: axum, serde,
 // std, tracing, `crate::metrics::MetricsRegistry`). Re-exported from lib.rs
 // at path `hydeclaw_core::gateway::csp` for integration tests.
@@ -17,11 +17,11 @@ pub mod csp_core;
 // Phase 64 SEC-04: streaming body cap + struson primitives for POST /api/restore.
 // Leaf module — zero `crate::*` imports — re-exported from lib.rs at path
 // `hydeclaw_core::gateway::restore_stream_core` for integration_backup_size_cap.rs.
-pub mod restore_stream_core;
+pub use hydeclaw_gateway_util::restore_stream_core;
 // Phase 65 OBS-04: W3C Trace Context middleware — leaf module (axum + tracing
 // + uuid, zero `crate::*` imports). Re-exported from lib.rs at path
 // `hydeclaw_core::gateway::trace_context` for integration_trace_context.rs.
-pub mod trace_context;
+pub use hydeclaw_gateway_util::trace_context;
 pub mod middleware;
 pub mod sse;
 pub mod stream_registry;

@@ -1,20 +1,23 @@
+// ── Extracted to hydeclaw-db (leaf modules, zero crate::* refs) ─────────
+pub use hydeclaw_db::approvals;
+pub use hydeclaw_db::notifications;
+pub use hydeclaw_db::session_wal;
+pub use hydeclaw_db::sessions;
+pub use hydeclaw_db::usage;
+
+// ── Remaining modules (not extracted) ───────────────────────────────────
 pub mod access;
-pub mod approvals;
 pub mod audit_queue;
-pub mod github;
 pub mod audit;
-pub mod tool_audit;
-pub mod tool_quality;
+pub mod github;
 pub mod memory_queries;
-pub mod notifications;
-pub mod providers;
 pub mod outbound;
 pub mod pending;
-pub mod session_wal;
-pub mod sessions;
+pub mod providers;
 pub mod skill_metrics;
 pub mod skill_versions;
-pub mod usage;
+pub mod tool_audit;
+pub mod tool_quality;
 
 use anyhow::Result;
 use sqlx::postgres::PgPoolOptions;

@@ -95,8 +95,7 @@ pub mod gateway {
     //! integration tests. `sse` is exposed for Phase 62 RES-01
     //! integration tests.
 
-    #[path = "rate_limiter.rs"]
-    pub mod rate_limiter;
+    pub use hydeclaw_gateway_util::rate_limiter;
 
     pub mod middleware {
         //! Facade preserving `gateway::middleware::{AuthRateLimiter, RequestRateLimiter}`
@@ -133,8 +132,7 @@ pub mod gateway {
     // Provides `check_content_length_cap`, `drain_body_with_cap`, `CapExceeded`,
     // `parse_stream_value` — the primitives POST /api/restore uses to enforce
     // max_restore_size_mb without loading the whole body.
-    #[path = "restore_stream_core.rs"]
-    pub mod restore_stream_core;
+    pub use hydeclaw_gateway_util::restore_stream_core;
 
     // Phase 65 OBS-04: `trace_context` is a leaf module (deps: axum, tracing,
     // uuid — zero `crate::*` references). Safe to re-export for
@@ -145,60 +143,19 @@ pub mod gateway {
     //
     // Exposed inside the existing `gateway` facade (not a new top-level
     // `pub mod`), so the 10-module lib-facade cap stays at 7 top-level mods.
-    #[path = "trace_context.rs"]
-    pub mod trace_context;
+    pub use hydeclaw_gateway_util::trace_context;
 }
 
-// ── Test-facing re-exports added by Phase 61 Plan 03 ────────────────────
-// Wave-2 characterization tests need direct access to `db::approvals`.
-// These re-exports are TEST-FACING ONLY — production consumers continue
-// to use the binary's internal module tree via `src/main.rs`.
-//
-// CASCADE AVOIDANCE: including `db/mod.rs` would pull in every db submodule,
-// some of which reference `crate::memory` (see `db/memory_queries.rs`) and
-// would in turn cascade to `config`, `secrets`, etc. — exceeding the
-// 10-module budget documented at the top of this file. Instead, we include
-// ONLY `db/approvals.rs` via a `#[path]` attribute, because `approvals.rs`
-// has zero crate-internal dependencies (only `anyhow`, `chrono`, `sqlx`,
-// `uuid` — all regular `[dependencies]` so the lib already has them).
+// ── DB modules extracted to hydeclaw-db ────────────────────────────────
+// Re-exported here so integration tests can reach them at the same
+// `hydeclaw_core::db::*` paths they already use. New DB modules go into
+// hydeclaw-db directly — no new entries needed here.
 pub mod db {
-    //! Test-facing re-export subset of the binary's `src/db/` tree.
-    //! Keep this minimal — every added submodule risks pulling in new
-    //! crate::* cross-references and cascading the lib surface.
-    //!
-    //! The `#[path]` attribute is resolved relative to the default
-    //! directory of this inline module, which is `src/db/`. Hence the
-    //! bare filename points at `src/db/approvals.rs`.
-
-    #[path = "approvals.rs"]
-    pub mod approvals;
-
-    // Post-review fix (2026-04-18): `db::usage` is a leaf module (deps:
-    // anyhow, sqlx, uuid — no `crate::*` references). Exposed so
-    // `tests/integration_aborted_usage.rs` can verify the `insert_aborted_row`
-    // contract against the m025 schema using testcontainers.
-    #[path = "usage.rs"]
-    pub mod usage;
-
-    // Phase 62 RES-03: `session_wal` is a leaf module (deps: anyhow, sqlx,
-    // uuid, serde_json — no crate::* references). Safe to re-export without
-    // cascading the lib surface. Consumed by
-    // `tests/integration_session_events_cleanup.rs`.
-    #[path = "session_wal.rs"]
-    pub mod session_wal;
-
-    // Phase 63 DATA-02: `sessions` is a leaf module (deps: anyhow, chrono,
-    // sqlx, uuid — no crate::* references). Safe to re-export without
-    // cascading the lib surface. Consumed by
-    // `tests/integration_stuck_sessions_window_fn.rs`.
-    #[path = "sessions.rs"]
-    pub mod sessions;
-
-    // Phase A W1: `notifications` is a leaf module (anyhow, sqlx, uuid, chrono, serde_json —
-    // no crate::* references). Exposed so dto_export can re-export Notification and
-    // NotificationsResponseDto for ts-gen.
-    #[path = "notifications.rs"]
-    pub mod notifications;
+    pub use hydeclaw_db::approvals;
+    pub use hydeclaw_db::notifications;
+    pub use hydeclaw_db::session_wal;
+    pub use hydeclaw_db::sessions;
+    pub use hydeclaw_db::usage;
 }
 
 // ── Phase 64 SEC-01: unified SSRF guard ────────────────────────────────

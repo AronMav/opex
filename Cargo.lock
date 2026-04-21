@@ -1099,6 +1099,8 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "hydeclaw-db",
+ "hydeclaw-gateway-util",
  "hydeclaw-text",
  "hydeclaw-types",
  "if-addrs 0.14.0",
@@ -1143,6 +1145,36 @@ dependencies = [
  "uuid",
  "wiremock",
  "zeroize",
+]
+
+[[package]]
+name = "hydeclaw-db"
+version = "0.20.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "hydeclaw-gateway-util"
+version = "0.20.1"
+dependencies = [
+ "axum",
+ "futures-util",
+ "serde_json",
+ "struson",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
