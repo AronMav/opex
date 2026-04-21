@@ -1,6 +1,35 @@
 import { describe, it, expect } from "vitest";
 import { IncrementalParser } from "@/lib/message-parser";
 
+describe("IncrementalParser.flush()", () => {
+  it("does not re-return previously flushed parts on second flush (duplication regression)", () => {
+    const parser = new IncrementalParser();
+    // Simulate first text segment (enough to exceed the 15-char safe buffer)
+    parser.processDelta("This is the first text segment that is long enough.");
+    const first = parser.flush();
+    expect(first.length).toBeGreaterThan(0);
+    const firstText = first.map(p => p.text).join("");
+
+    // Simulate second text segment
+    parser.processDelta("Second segment.");
+    const second = parser.flush();
+    // Second flush must NOT contain text from the first flush
+    const secondText = second.map(p => p.text).join("");
+    expect(secondText).not.toContain(firstText.slice(0, 20));
+    // And must contain the new text
+    expect(secondText).toContain("Second");
+  });
+
+  it("resets parts after flush — subsequent snapshot shows only new content", () => {
+    const parser = new IncrementalParser();
+    parser.processDelta("initial content that is definitely long enough to process");
+    parser.flush();
+    // After flush, snapshot should return empty (no new deltas)
+    const snap = parser.snapshot();
+    expect(snap).toHaveLength(0);
+  });
+});
+
 describe("IncrementalParser.reset()", () => {
   it("clears insideThink state — text after reset is classified as text, not reasoning", () => {
     const parser = new IncrementalParser();
