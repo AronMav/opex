@@ -369,7 +369,8 @@ pub async fn set_session_run_status(db: &PgPool, session_id: Uuid, status: &str)
     sqlx::query(
         "UPDATE sessions SET run_status = $1 \
          WHERE id = $2 \
-           AND run_status NOT IN ('done', 'failed', 'interrupted', 'cancelled', 'timeout')"
+           AND (run_status IS NULL \
+             OR run_status NOT IN ('done', 'failed', 'interrupted', 'cancelled', 'timeout'))"
     )
         .bind(status)
         .bind(session_id)
