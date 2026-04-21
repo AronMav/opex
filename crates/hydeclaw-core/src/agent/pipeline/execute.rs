@@ -57,23 +57,6 @@ pub enum ExecuteStatus {
     Interrupted(&'static str),
 }
 
-// ── Sink helpers ─────────────────────────────────────────────────────────────
-
-/// Emit a `StreamEvent` into the sink, mapping `SinkError::Closed` to the
-/// `Interrupted` shortcut via `?` using the sentinel `None` return.
-///
-/// Returns `Some(())` on success, `None` when the sink is closed (caller should
-/// return `Interrupted`). Any other error is propagated with `?`.
-macro_rules! emit_or_interrupted {
-    ($sink:expr, $ev:expr, $outcome:expr) => {{
-        match $sink.emit(PipelineEvent::Stream($ev)).await {
-            Ok(()) => {}
-            Err(SinkError::Closed) | Err(SinkError::Full) => return Ok($outcome),
-            Err(e) => return Err(e.into()),
-        }
-    }};
-}
-
 // ── execute() ────────────────────────────────────────────────────────────────
 
 /// Run the LLM+tools loop and stream results into `sink`.
@@ -119,17 +102,22 @@ pub async fn execute<S: EventSink>(
 
     // Signal the start of a message to the sink.
     let msg_id = format!("msg_{}", Uuid::new_v4());
-    emit_or_interrupted!(
-        sink,
-        StreamEvent::MessageStart { message_id: msg_id },
-        ExecuteOutcome {
-            status: ExecuteStatus::Interrupted("sink_closed"),
-            final_text: String::new(),
-            thinking_json: None,
-            messages_len_at_end: messages.len(),
-            final_parent_msg_id: last_msg_id,
+    match sink
+        .emit(PipelineEvent::Stream(StreamEvent::MessageStart { message_id: msg_id }))
+        .await
+    {
+        Ok(()) => {}
+        Err(SinkError::Closed) | Err(SinkError::Full) => {
+            return Ok(ExecuteOutcome {
+                status: ExecuteStatus::Interrupted("sink_closed"),
+                final_text: String::new(),
+                thinking_json: None,
+                messages_len_at_end: messages.len(),
+                final_parent_msg_id: last_msg_id,
+            });
         }
-    );
+        Err(e) => return Err(e.into()),
+    }
 
     // ── Mutable loop state ───────────────────────────────────────────────────
     let loop_config = engine.tool_loop_config();
