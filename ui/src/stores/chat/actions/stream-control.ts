@@ -38,9 +38,11 @@ export function createStreamActions(deps: ActionDeps) {
 
     stopStream: () => {
       const agent = get().currentAgent;
-      // abortLocalOnly clears the reconnect timer, aborts the session's
-      // AbortSignal, and lands connectionPhase: "idle" via StreamSession.dispose().
-      renderer.abortLocalOnly(agent);
+      // abortActiveStream fires POST /abort to the backend (cancels the pipeline
+      // CancellationToken) AND tears down the local SSE connection. Using
+      // abortLocalOnly here was a bug (H1): the backend kept processing after the
+      // user pressed Stop, wasting LLM tokens and keeping run_status='running'.
+      renderer.abortActiveStream(agent);
     },
 
     resumeStream: (agent: string, sessionId: string) => renderer.resumeStream(agent, sessionId),

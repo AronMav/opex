@@ -298,7 +298,11 @@ export async function processSSEStream(
                   .filter((p: MessagePart): p is TextPart => p.type === "text")
                   .reduce((acc: number, p: TextPart) => acc + (p.text?.length ?? 0), 0);
                 if (syncTextLen > localTextLen || Math.abs(syncTextLen - localTextLen) > 50) {
-                  existingMsg.parts = syncParts;
+                  // H2: syncParts carries only text/reasoning — preserve tool, approval, file parts
+                  const preserved = (existingMsg.parts as MessagePart[]).filter(
+                    (p: MessagePart) => p.type !== "text" && p.type !== "reasoning"
+                  );
+                  existingMsg.parts = [...syncParts, ...preserved];
                 }
                 if (existingMsg.status !== "complete") {
                   existingMsg.status = (syncStatus === "done" || syncStatus === "finished") ? "complete" : "streaming";

@@ -362,9 +362,15 @@ pub async fn finalize_streaming_message(db: &PgPool, message_id: Uuid) -> Result
 }
 
 /// Set `run_status` for a session (called on enter/exit of `handle_with_status`).
+/// H4: guards ALL terminal states — first writer wins, no later transition can
+/// overwrite a terminal value. `claim_session_running` intentionally bypasses
+/// this guard because it re-enters a session the user is actively continuing.
 pub async fn set_session_run_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<()> {
-    // IS DISTINCT FROM handles NULLs correctly (NULL IS DISTINCT FROM 'done' = TRUE)
-    sqlx::query("UPDATE sessions SET run_status = $1 WHERE id = $2 AND run_status IS DISTINCT FROM 'done'")
+    sqlx::query(
+        "UPDATE sessions SET run_status = $1 \
+         WHERE id = $2 \
+           AND run_status NOT IN ('done', 'failed', 'interrupted', 'cancelled', 'timeout')"
+    )
         .bind(status)
         .bind(session_id)
         .execute(db)

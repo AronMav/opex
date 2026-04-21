@@ -172,20 +172,29 @@ pub(crate) async fn api_session_messages(
     }
 }
 
-/// DELETE /api/messages/{id}
-/// Deletes a single message by UUID.
+/// DELETE /api/messages/{id}?agent=xxx — deletes a message owned by the given agent's session.
+/// S1: agent query param required; JOIN with sessions prevents cross-agent deletion.
 pub(crate) async fn api_delete_message(
     State(infra): State<InfraServices>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
 ) -> impl IntoResponse {
-    let result = sqlx::query("DELETE FROM messages WHERE id = $1")
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    let result = sqlx::query(
+        "DELETE FROM messages WHERE id = $1 \
+         AND session_id IN (SELECT id FROM sessions WHERE agent_id = $2)"
+    )
         .bind(id)
+        .bind(agent)
         .execute(&infra.db)
         .await;
 
     match result {
         Ok(r) if r.rows_affected() > 0 => Json(json!({"ok": true})).into_response(),
-        Ok(_) => ApiError::NotFound("message not found".into()).into_response(),
+        Ok(_) => ApiError::NotFound("message not found or does not belong to agent".into()).into_response(),
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
 }
@@ -475,22 +484,31 @@ pub(crate) struct FeedbackRequest {
     feedback: i32, // 1 = like, -1 = dislike, 0 = clear
 }
 
-/// PATCH /api/messages/{id} — edit message content
+/// PATCH /api/messages/{id}?agent=xxx — edit message content.
+/// S1: agent query param required; JOIN with sessions prevents cross-agent edits.
 pub(crate) async fn api_patch_message(
     State(infra): State<InfraServices>,
     Path(id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
     Json(body): Json<PatchMessageRequest>,
 ) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
     let result = sqlx::query(
-        "UPDATE messages SET content = $1, edited_at = now() WHERE id = $2 AND role = 'user'"
+        "UPDATE messages SET content = $1, edited_at = now() \
+         WHERE id = $2 AND role = 'user' \
+         AND session_id IN (SELECT id FROM sessions WHERE agent_id = $3)"
     )
         .bind(&body.content)
         .bind(id)
+        .bind(agent)
         .execute(&infra.db)
         .await;
     match result {
         Ok(r) if r.rows_affected() > 0 => Json(json!({"ok": true})).into_response(),
-        Ok(_) => ApiError::NotFound("message not found or not a user message".into()).into_response(),
+        Ok(_) => ApiError::NotFound("message not found, not a user message, or wrong agent".into()).into_response(),
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
 }

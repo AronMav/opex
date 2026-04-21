@@ -51,7 +51,10 @@ export function mergeLiveOverlay(
 
     if (m.role === "user") {
       const firstText = m.parts?.[0]?.type === "text" ? (m.parts[0] as { text: string }).text : "";
-      if (!historyUserTexts.has(firstText)) {
+      if (!firstText) {
+        // H5: empty / attachment-only messages all map to "" — fall back to ID dedup
+        if (!historyIds.has(m.id)) overlay.push(m);
+      } else if (!historyUserTexts.has(firstText)) {
         overlay.push(m);
       }
       continue;

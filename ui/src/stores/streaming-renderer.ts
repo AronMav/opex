@@ -393,7 +393,8 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── MEM-01: Agent cleanup ──────────────────────────────────────────────
 
   function cleanupAgent(agent: string) {
-    // AbortController lifecycle is managed by StreamSession (Task 3.6)
+    // H3: dispose StreamSession to free AbortController + rAF handles
+    streamSessionManager.disposeCurrent(agent);
     const timer = _reconnectTimers.get(agent);
     if (timer) clearTimeout(timer);
     _reconnectTimers.delete(agent);

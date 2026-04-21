@@ -79,7 +79,7 @@ export function createSessionCrudActions(deps: ActionDeps) {
 
     deleteMessage: async (messageId: string) => {
       const agent = get().currentAgent;
-      await apiDelete(`/api/messages/${messageId}`);
+      await apiDelete(`/api/messages/${messageId}?agent=${encodeURIComponent(agent)}`);
       const st = get().agents[agent];
       if (!st) return;
       const store = get();
