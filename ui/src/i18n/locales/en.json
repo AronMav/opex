@@ -453,8 +453,6 @@
   "tools.mcp_field_url": "URL (external)",
   "tools.mcp_field_container": "Docker container",
   "tools.mcp_field_port": "Port",
-  "tools.mcp_field_idle_timeout": "Idle timeout",
-  "tools.mcp_hint_idle_timeout": "e.g. 5m, 30s",
   "tools.new_service": "New Service",
   "tools.editing_service": "Editing: {{name}}",
   "tools.add_infra_service": "Add infrastructure service",

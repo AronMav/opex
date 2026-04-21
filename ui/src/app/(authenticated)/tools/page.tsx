@@ -42,19 +42,18 @@ interface McpFormData {
   container: string;
   port: string;
   mode: string;
-  idle_timeout: string;
   protocol: string;
 }
 
 const emptyMcpForm = (): McpFormData => ({
-  name: "", url: "", container: "", port: "", mode: "on-demand", idle_timeout: "5m", protocol: "http",
+  name: "", url: "", container: "", port: "", mode: "on-demand", protocol: "http",
 });
 
 function mcpToForm(e: McpEntry): McpFormData {
   return {
     name: e.name, url: e.url ?? "", container: e.container ?? "",
     port: e.port != null ? String(e.port) : "", mode: e.mode,
-    idle_timeout: "", protocol: e.protocol,
+    protocol: e.protocol,
   };
 }
 
@@ -63,7 +62,7 @@ function formToPayload(f: McpFormData) {
     name: f.name.trim(), url: f.url.trim() || null,
     container: f.container.trim() || null,
     port: f.port.trim() ? Number(f.port) : null,
-    mode: f.mode, idle_timeout: f.idle_timeout.trim() || null, protocol: f.protocol,
+    mode: f.mode, protocol: f.protocol,
   };
 }
 
@@ -453,12 +452,6 @@ parameters:
                 </Field>
               </div>
             </div>
-            {mcpForm.mode === "on-demand" && (
-              <Field label={t("tools.mcp_field_idle_timeout")} hint={t("tools.mcp_hint_idle_timeout")}>
-                <Input type="text" value={mcpForm.idle_timeout} onChange={(e) => setMcpForm((f) => ({ ...f, idle_timeout: e.target.value }))}
-                  placeholder="5m" />
-              </Field>
-            )}
             <div className="flex justify-end gap-3 pt-3 border-t border-border/50">
               <Button type="button" variant="ghost" size="sm" onClick={cancelEdit}>
                 {t("common.cancel")}

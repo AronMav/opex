@@ -102,7 +102,6 @@ export interface YamlToolEntry {
 }
 
 // McpEntry is now generated from Rust DTO via ts-rs codegen.
-// Drift fix: removed idle_timeout (was never emitted by handler).
 // Source: crates/hydeclaw-core/src/gateway/handlers/tools_dto_structs.rs
 // Regenerate: make gen-types
 export type { McpEntryDto as McpEntry } from "./api.generated";

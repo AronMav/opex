@@ -453,8 +453,6 @@
   "tools.mcp_field_url": "URL (внешний)",
   "tools.mcp_field_container": "Docker-контейнер",
   "tools.mcp_field_port": "Порт",
-  "tools.mcp_field_idle_timeout": "Таймаут простоя",
-  "tools.mcp_hint_idle_timeout": "напр. 5m, 30s",
   "tools.new_service": "Новый сервис",
   "tools.editing_service": "Редактирование: {{name}}",
   "tools.add_infra_service": "Добавить инфраструктурный сервис",
