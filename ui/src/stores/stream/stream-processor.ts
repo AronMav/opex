@@ -365,9 +365,10 @@ export async function processSSEStream(
 
       const agentState = callbacks.getAgentState(agent);
       const isError = agentState?.connectionPhase === "error";
+      const isIdle = agentState?.connectionPhase === "idle";
       const effectiveSessionId = receivedSessionId ?? agentState?.activeSessionId;
 
-      if (!isError && !receivedFinishEvent && effectiveSessionId) {
+      if (!isError && !isIdle && !receivedFinishEvent && effectiveSessionId) {
         callbacks.onReconnectNeeded(effectiveSessionId, reconnectAttempt);
         return;
       }

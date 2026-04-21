@@ -26,6 +26,7 @@ export function mergeLiveOverlay(
   if (liveMessages.length === 0) return historyMessages;
 
   // Index history for O(1) lookups during overlay walk.
+  const historyIds = new Set(historyMessages.map(m => m.id));
   const historyToolIds = new Set<string>();
   const historyTextSet = new Set<string>();
   const historyUserTexts = new Set<string>();
@@ -44,6 +45,9 @@ export function mergeLiveOverlay(
   const overlay: ChatMessage[] = [];
   for (const m of liveMessages) {
     if (m.role === "assistant" && m.parts.length === 0) continue;
+    // Skip assistant messages already present in history — prevents stale live
+    // overlays (reconnect replays, post-finish flicker) from creating duplicates.
+    if (m.role === "assistant" && historyIds.has(m.id)) continue;
 
     if (m.role === "user") {
       const firstText = m.parts?.[0]?.type === "text" ? (m.parts[0] as { text: string }).text : "";
