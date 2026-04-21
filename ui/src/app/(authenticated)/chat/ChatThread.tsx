@@ -143,15 +143,16 @@ export function ChatThread({
 
   const isStreaming = isActivePhase(connectionPhase);
 
-  // Show thinking indicator when waiting for a response.
-  // Cases: (1) just submitted, (2) streaming but no assistant text yet,
-  //        (3) engine running server-side (e.g. during delegation — no SSE stream, but agent is working)
   const lastMsg = sourceMessages[sourceMessages.length - 1];
-  const hasAssistantContent = lastMsg?.role === "assistant" && lastMsg.parts.length > 0;
+  // Show thinking when assistant hasn't produced text yet — covers "waiting for
+  // first response" and "tool-call loop still running" (parts exist but no text).
+  const lastAssistantHasText = lastMsg?.role === "assistant" && lastMsg.parts.some(
+    (p) => p.type === "text" && (p as { type: string; text?: string }).text,
+  );
   const lastMsgIsOtherAgent = lastMsg?.role === "assistant" && lastMsg.agentId && lastMsg.agentId !== currentAgent;
   const isLiveOrHistory = isLive || isHistory;
   const showThinking = isLiveOrHistory
-    && !hasAssistantContent
+    && !lastAssistantHasText
     && !lastMsgIsOtherAgent
     && (connectionPhase === "submitted" || connectionPhase === "streaming" || connectionPhase === "reconnecting"
         || engineRunning || sessionRunStatus === "running");

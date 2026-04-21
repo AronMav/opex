@@ -372,6 +372,23 @@ pub async fn set_session_run_status(db: &PgPool, session_id: Uuid, status: &str)
     Ok(())
 }
 
+/// Try to atomically claim a session as `'running'`. Returns `true` when the
+/// update succeeded (previous status was not `'done'`), `false` when the
+/// session was already in a terminal `'done'` state and bootstrap must not
+/// proceed. Using `rows_affected` prevents bootstrap from silently running on
+/// a session that has already been finalized, which causes the guard-drop
+/// `'failed'` / concurrent-finalize race.
+pub async fn claim_session_running(db: &PgPool, session_id: Uuid) -> Result<bool> {
+    let rows = sqlx::query(
+        "UPDATE sessions SET run_status = 'running' WHERE id = $1 AND run_status IS DISTINCT FROM 'done'"
+    )
+        .bind(session_id)
+        .execute(db)
+        .await?
+        .rows_affected();
+    Ok(rows > 0)
+}
+
 /// Transition `run_status` from `'running'` to `new_status`. No-op if the
 /// session is already in any terminal state (`'done'`, `'failed'`,
 /// `'interrupted'`, `'timeout'`, `'cancelled'`).
