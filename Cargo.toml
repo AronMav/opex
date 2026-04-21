@@ -6,6 +6,7 @@ members = [
     "crates/hydeclaw-watchdog",
     "crates/hydeclaw-memory-worker",
     "crates/hydeclaw-text",
+    "crates/hydeclaw-db",
 ]
 
 [workspace.package]

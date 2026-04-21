@@ -1146,6 +1146,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hydeclaw-db"
+version = "0.20.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "hydeclaw-memory-worker"
 version = "0.20.1"
 dependencies = [
