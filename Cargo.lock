@@ -1161,6 +1161,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hydeclaw-gateway-util"
+version = "0.20.1"
+dependencies = [
+ "axum",
+ "futures-util",
+ "serde_json",
+ "struson",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "hydeclaw-memory-worker"
 version = "0.20.1"
 dependencies = [
