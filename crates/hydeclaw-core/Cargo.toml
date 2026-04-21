@@ -44,7 +44,7 @@ dotenv = { workspace = true }
 # Streaming
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
-futures-util = "0.3"
+futures-util = { workspace = true }
 async-stream = "0.3"
 # `bytes` is transitively pulled by reqwest/tokio; expose directly so
 # stream helpers can name `bytes::Bytes` in public signatures.
@@ -91,7 +91,7 @@ dunce = "1.0"
 # Used by the backup-restore size-cap path to avoid loading the whole body. No openssl.
 # `serde` feature enables JsonReader::deserialize_next<T: DeserializeOwned> — the
 # section-by-section walker lets us bound peak RSS to the largest single section.
-struson = { version = "0.6", features = ["serde"] }
+struson = { workspace = true }
 
 # Phase 64 SEC-03: HKDF-SHA256 for domain-separated upload-HMAC key derivation.
 # Pairs with existing `sha2 = "0.10"` and `hmac = "0.12"`. Pure Rust. No openssl.
@@ -120,7 +120,7 @@ ts-rs = { version = "12", optional = true, features = ["chrono-impl", "serde-jso
 [features]
 default = []
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
-ts-gen = ["dep:ts-rs", "hydeclaw-types/ts-gen"]
+ts-gen = ["dep:ts-rs", "hydeclaw-types/ts-gen", "hydeclaw-db/ts-gen"]
 
 # Systemd watchdog (Linux-only)
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -14,7 +14,7 @@ use uuid::Uuid;
 /// where BIND_COUNT_PER_ROW counts ONLY the `$N` placeholders per VALUES row,
 /// NOT the target-list column count. Literal SQL values (`'tool'`, `NOW()`,
 /// `'complete'`) do NOT count toward the bind budget.
-pub(crate) const MAX_PARAMS_PER_QUERY: usize = 32767;
+pub const MAX_PARAMS_PER_QUERY: usize = 32767;
 
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 #[allow(dead_code)]
