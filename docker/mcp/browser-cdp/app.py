@@ -6,6 +6,7 @@ Follows Immutable Core: runs as external MCP skill in Docker.
 
 import asyncio
 import base64
+import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -236,7 +237,6 @@ async def handle_screenshot(args: dict) -> list:
 async def handle_evaluate(args: dict) -> str:
     page = await get_page(args.get("session_id", "default"))
     result = await page.evaluate(args["expression"])
-    import json
     if isinstance(result, (dict, list)):
         return json.dumps(result, ensure_ascii=False, indent=2)
     return str(result) if result is not None else "(undefined)"
