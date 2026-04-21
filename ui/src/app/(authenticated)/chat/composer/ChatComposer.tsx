@@ -305,6 +305,7 @@ export function ChatComposer() {
               <span className="truncate max-w-[200px]">{att.name}</span>
               <button
                 type="button"
+                aria-label={t("chat.remove_attachment")}
                 onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
                 className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
               >
@@ -332,6 +333,7 @@ export function ChatComposer() {
               <span className="font-semibold text-primary">@{resolvedMention}</span>
               <button
                 type="button"
+                aria-label={t("chat.clear_mention")}
                 onClick={clearResolvedMention}
                 className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
               >
@@ -354,6 +356,7 @@ export function ChatComposer() {
               />
               <button
                 type="button"
+                aria-label={t("chat.attach")}
                 className="rounded p-3 md:p-2 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -371,6 +374,7 @@ export function ChatComposer() {
                 <button
                   type="button"
                   title={t("chat.export_session_tooltip")}
+                  aria-label={t("chat.export_session")}
                   className="rounded p-3 md:p-2 text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
                   onClick={() => useChatStore.getState().exportSession()}
                 >
@@ -381,6 +385,7 @@ export function ChatComposer() {
                 <Button
                   type="button"
                   size="icon"
+                  aria-label={t("chat.slash_stop")}
                   onClick={() => useChatStore.getState().stopStream()}
                   className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-destructive/30 bg-destructive/15 text-destructive hover:bg-destructive/25 hover:border-destructive/50 shadow-sm animate-in fade-in zoom-in-90"
                 >
@@ -390,6 +395,7 @@ export function ChatComposer() {
               <Button
                 type="submit"
                 size="icon"
+                aria-label={t("chat.send")}
                 disabled={(!hasInput && attachments.length === 0) || isUploading}
                 className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-primary/30 bg-primary/15 text-primary hover:bg-primary/25 hover:border-primary/50 shadow-sm disabled:opacity-30 disabled:shadow-none group/send animate-in fade-in zoom-in-90"
               >

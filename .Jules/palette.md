@@ -1,5 +1,7 @@
-## 2026-04-21 - [Micro-UX] ApprovalCard Loading States & Accessibility
+# Palette — UX Discovery Journal
 
-**Learning:** Interactive elements like the "Approve" and "Reject" buttons in `ApprovalCard` lacked visual feedback during async operations, which could lead to multiple clicks or confusion. Additionally, the icon-only collapsible trigger for tool input was not accessible to screen readers.
+## 2026-04-21 - `title` vs `aria-label` on icon-only buttons
 
-**Action:** Added `Loader2` spinners to buttons during `isSubmitting` state and provided an `aria-label` to the collapsible trigger. Removed redundant `tabIndex={0}` to follow standard HTML behavior.
+**Discovery:** The codebase uses `title` for tooltips on icon-only buttons (e.g., the export Download button), but `title` is not reliably announced by screen readers. `aria-label` is the correct attribute for accessible names. Several icon-only X (close/remove) buttons had neither.
+
+**Action:** Always use `aria-label` on icon-only buttons. `title` is fine to keep alongside for mouse hover tooltip, but never rely on it alone for accessibility.

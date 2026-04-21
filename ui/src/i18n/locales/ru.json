@@ -994,5 +994,10 @@
   "notifications.title": "Уведомления",
   "notifications.mark_all_read": "Отметить все прочитанными",
   "notifications.empty": "Нет уведомлений",
-  "notifications.clear_all": "Очистить все"
+  "notifications.clear_all": "Очистить все",
+  "chat.attach": "Прикрепить файл",
+  "chat.send": "Отправить сообщение",
+  "chat.export_session": "Экспортировать диалог в Markdown",
+  "chat.remove_attachment": "Удалить вложение",
+  "chat.clear_mention": "Очистить упоминание"
 }

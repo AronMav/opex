@@ -995,5 +995,10 @@
   "notifications.title": "Notifications",
   "notifications.mark_all_read": "Mark all read",
   "notifications.empty": "No notifications",
-  "notifications.clear_all": "Clear all"
+  "notifications.clear_all": "Clear all",
+  "chat.attach": "Attach file",
+  "chat.send": "Send Message",
+  "chat.export_session": "Export session as Markdown",
+  "chat.remove_attachment": "Remove attachment",
+  "chat.clear_mention": "Clear mention"
 }

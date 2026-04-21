@@ -101,13 +101,17 @@ vi.mock("@/stores/chat-store", () => ({
 
 // ── Mock: @/lib/queries ────────────────────────────────────────────────────
 
-vi.mock("@/lib/queries", () => ({
-  useSessions: () => ({ data: { sessions: [] }, isLoading: false, error: null, refetch: vi.fn() }),
-  useSessionMessages: () => ({ data: { messages: [] }, isLoading: false, error: null, refetch: vi.fn() }),
-  useAgents: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
-  useProviders: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
-  useProviderModels: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
-}));
+vi.mock("@/lib/queries", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/queries")>();
+  return {
+    ...actual,
+    useSessions: () => ({ data: { sessions: [] }, isLoading: false, error: null, refetch: vi.fn() }),
+    useSessionMessages: () => ({ data: { messages: [] }, isLoading: false, error: null, refetch: vi.fn() }),
+    useAgents: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
+    useProviders: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
+    useProviderModels: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
+  };
+});
 
 // ── Mock: @/lib/sanitize-url ───────────────────────────────────────────────
 
