@@ -1099,6 +1099,8 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "hydeclaw-db",
+ "hydeclaw-gateway-util",
  "hydeclaw-text",
  "hydeclaw-types",
  "if-addrs 0.14.0",

@@ -105,6 +105,8 @@ zeroize = { version = "1", features = ["derive"] }
 # Internal
 hydeclaw-text = { path = "../hydeclaw-text" }
 hydeclaw-types = { workspace = true }
+hydeclaw-db           = { path = "../hydeclaw-db" }
+hydeclaw-gateway-util = { path = "../hydeclaw-gateway-util" }
 
 # OpenTelemetry (optional, behind `otel` feature)
 opentelemetry = { workspace = true, optional = true }
@@ -125,6 +127,8 @@ ts-gen = ["dep:ts-rs", "hydeclaw-types/ts-gen"]
 sd-notify = { workspace = true }
 
 [dev-dependencies]
+hydeclaw-db           = { path = "../hydeclaw-db" }
+hydeclaw-gateway-util = { path = "../hydeclaw-gateway-util" }
 tempfile = "3.27.0"
 insta = { version = "1", features = ["json"] }
 # Phase 64 SEC-05: in-process axum integration via Router::oneshot (no TCP server).
