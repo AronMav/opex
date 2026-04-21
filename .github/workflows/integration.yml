@@ -17,6 +17,20 @@ jobs:
   integration-x86_64:
     name: Integration tests (x86_64) + rustls invariant
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hydeclaw_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -38,8 +52,11 @@ jobs:
 
       # Full test suite. testcontainers-backed tests (integration_smoke, plus
       # Wave-2 binaries created by Plans 03/04/05) will spin up ephemeral PG
-      # via the Docker daemon above.
+      # via the Docker daemon above. #[sqlx::test] unit tests use the service
+      # postgres above via DATABASE_URL.
       - name: Run integration tests
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hydeclaw_test
         run: cargo test -p hydeclaw-core --tests
 
   # Phase 65 OBS-06: rustls-only invariant — no OpenSSL in the transitive
