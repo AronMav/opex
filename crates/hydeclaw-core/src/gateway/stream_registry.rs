@@ -60,10 +60,16 @@ impl StreamRegistry {
         }
     }
 
-    /// Register a new active stream for a session.
-    /// Creates a DB job for persistence. Returns (`CancellationToken`, `job_id`).
-    pub async fn register(&self, session_id: Uuid, agent_id: &str) -> Option<(CancellationToken, Uuid)> {
-        // Create persistent job in DB
+    /// Like the old `register`, but uses a caller-supplied `CancellationToken` instead of
+    /// creating a new one. The caller must hold another clone of the token to detect
+    /// cancellation (e.g. pass one clone to the pipeline, register the other here).
+    /// Returns `job_id` on success, `None` on capacity limit or DB error.
+    pub async fn register_with_token(
+        &self,
+        session_id: Uuid,
+        agent_id: &str,
+        cancel_token: CancellationToken,
+    ) -> Option<Uuid> {
         let job_id = match stream_jobs::create_job(&self.db, session_id, agent_id).await {
             Ok(id) => id,
             Err(e) => {
@@ -74,10 +80,8 @@ impl StreamRegistry {
 
         let key = session_id.to_string();
         let (broadcast_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-        let cancel_token = CancellationToken::new();
         let mut streams = self.streams.write().await;
 
-        // Evict finished streams if at capacity (lock-free check via AtomicBool)
         if streams.len() >= MAX_ACTIVE_STREAMS {
             streams.retain(|_, s| !s.finished.load(Ordering::Relaxed));
             if streams.len() >= MAX_ACTIVE_STREAMS {
@@ -86,19 +90,18 @@ impl StreamRegistry {
             }
         }
 
-        // Mark any existing stream for this session as finished + cancel it
         if let Some(existing) = streams.get(&key) {
             existing.cancel_token.cancel();
             existing.finished.store(true, Ordering::Relaxed);
             let mut inner = existing.inner.lock().await;
             inner.finished_at = Some(Instant::now());
-            // Mark old job as error in DB
-            if let Err(e) = stream_jobs::error_job(&self.db, existing.job_id, "superseded by new stream").await {
+            if let Err(e) =
+                stream_jobs::error_job(&self.db, existing.job_id, "superseded by new stream").await
+            {
                 tracing::warn!(error = %e, "stream_registry: failed to mark superseded job as error");
             }
         }
 
-        let token_clone = cancel_token.clone();
         streams.insert(
             key,
             Arc::new(ActiveStream {
@@ -116,7 +119,7 @@ impl StreamRegistry {
             }),
         );
 
-        Some((token_clone, job_id))
+        Some(job_id)
     }
 
     /// Cancel an active stream. Returns true if found and cancelled.

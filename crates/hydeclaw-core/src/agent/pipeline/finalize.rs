@@ -173,7 +173,11 @@ pub async fn finalize<S: EventSink>(
 
     let out = match &outcome {
         FinalizeOutcome::Done { assistant_text, thinking_json } => {
-            sm.save_message_ex(
+            // Resolve the guard before the DB write (C2): if save_message fails the
+            // session must not be marked 'failed' by guard Drop — the LLM already
+            // produced its response. Failure to persist is non-fatal for session status.
+            lifecycle_guard.done().await;
+            if let Err(e) = sm.save_message_ex(
                 ctx.session_id,
                 "assistant",
                 assistant_text,
@@ -183,8 +187,14 @@ pub async fn finalize<S: EventSink>(
                 thinking_json.as_ref(),
                 ctx.user_message_id,
             )
-            .await?;
-            lifecycle_guard.done().await;
+            .await
+            {
+                tracing::error!(
+                    session_id = %ctx.session_id,
+                    error = %e,
+                    "finalize: failed to persist assistant message"
+                );
+            }
             spawn_knowledge_extraction(
                 ctx.db.clone(),
                 ctx.session_id,

@@ -19,12 +19,16 @@ impl AgentEngine {
     ///
     /// Phase 62 RES-01: `event_tx` is an `EngineEventSender` wrapping a bounded
     /// `mpsc::Sender<StreamEvent>` (capacity 256 in chat.rs).
+    ///
+    /// `cancel` must be the same token registered with `StreamRegistry::register_with_token`
+    /// so that `POST /api/chat/{id}/abort` propagates into the pipeline (C3).
     pub async fn handle_sse(
         &self,
         msg: &IncomingMessage,
         event_tx: EngineEventSender,
         resume_session_id: Option<Uuid>,
         force_new_session: bool,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Uuid> {
         if let crate::agent::hooks::HookAction::Block(reason) =
             self.hooks().fire(&crate::agent::hooks::HookEvent::BeforeMessage)
@@ -37,7 +41,24 @@ impl AgentEngine {
         // requests while the SSE stream is live. Cleared after finalize so idle
         // agents don't keep a dangling reference. Previously lost during the
         // pipeline refactor; restored 2026-04-20.
+        //
+        // C1: wrap inner logic so sse_event_tx is cleared on ALL exit paths
+        // (including bootstrap error, finalize error, etc.) — previously a `?`
+        // anywhere in the body could bypass the clear at the end of the function.
         *self.sse_event_tx().lock().await = Some(event_tx.clone());
+        let result = self.handle_sse_inner(msg, event_tx, resume_session_id, force_new_session, cancel).await;
+        *self.sse_event_tx().lock().await = None;
+        result
+    }
+
+    async fn handle_sse_inner(
+        &self,
+        msg: &IncomingMessage,
+        event_tx: EngineEventSender,
+        resume_session_id: Option<Uuid>,
+        force_new_session: bool,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<Uuid> {
         let mut s = sink::SseSink::new(event_tx);
 
         let boot = bootstrap::bootstrap(
@@ -121,8 +142,8 @@ impl AgentEngine {
             return Ok(session_id);
         }
 
-        // Full pipeline
-        let cancel = tokio_util::sync::CancellationToken::new();
+        // Full pipeline — `cancel` token is the same one registered with the
+        // StreamRegistry, so POST /api/chat/{id}/abort propagates here (C3).
         let outcome = execute::execute(self, boot_for_execute, &mut s, cancel).await?;
 
         let fin_ctx = finalize::finalize_context_from_engine(
@@ -144,10 +165,6 @@ impl AgentEngine {
         // Trim old messages if the agent's session.max_messages is configured.
         // Missed during the pipeline refactor (Tasks 7-10 dropped the tail call).
         self.maybe_trim_session(session_id).await;
-
-        // Clear the event sender now that the stream is gone. Matches the
-        // `*self.sse_event_tx().lock().await = None;` tail in old engine_sse.rs.
-        *self.sse_event_tx().lock().await = None;
 
         Ok(session_id)
     }

@@ -541,9 +541,15 @@ pub(crate) async fn api_chat_sse(
     let agent_for_broadcast = msg.agent_id.clone();
     let invite_db = infra.db.clone();
     let mentioned_for_invite = mentioned_agent.clone();
+    // C3: create the pipeline cancel token here, before spawning, so it can be
+    // shared between handle_sse (pipeline execution) and StreamRegistry (abort API).
+    // All clones share cancellation state: POST /abort → registry.cancel() →
+    // pipeline_cancel.cancel() → engine_cancel propagates into execute().
+    let pipeline_cancel = CancellationToken::new();
+    let engine_cancel = pipeline_cancel.clone();
     let engine_handle = tokio::spawn(async move {
         let current_agent_name = engine.name().to_string();
-        if let Err(e) = engine.handle_sse(&msg, engine_event_tx.clone(), session_id, force_new_session).await {
+        if let Err(e) = engine.handle_sse(&msg, engine_event_tx.clone(), session_id, force_new_session, engine_cancel).await {
             tracing::error!(error = %e, "SSE chat error (agent: {})", current_agent_name);
             // Error is a non-text event — use send_async to honor CONTEXT.md
             // "non-text never dropped" contract. send_async awaits a slot on
@@ -725,10 +731,13 @@ pub(crate) async fn api_chat_sse(
             let data = match event {
                 StreamEvent::SessionId(sid) => {
                     let parsed_uuid = uuid::Uuid::from_str(&sid).ok();
-                    // Register stream in registry for resume + abort support
+                    // Register stream in registry for resume + abort support (C3).
+                    // Use register_with_token so the registry stores the SAME token
+                    // that was passed to handle_sse: POST /api/chat/{id}/abort →
+                    // registry.cancel() cancels pipeline_cancel → propagates into execute().
                     if let Some(uuid) = parsed_uuid
-                        && let Some((token, jid)) = registry.register(uuid, &agent_name).await {
-                            cancel_token = Some(token);
+                        && let Some(jid) = registry.register_with_token(uuid, &agent_name, pipeline_cancel.clone()).await {
+                            cancel_token = Some(pipeline_cancel.clone());
                             job_id = Some(jid);
                         }
                     session_id_str = Some(sid.clone());

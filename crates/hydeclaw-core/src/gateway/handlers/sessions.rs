@@ -807,7 +807,7 @@ pub(crate) async fn api_retry_session(
         tokio::spawn(async move { while raw_rx.recv().await.is_some() {} });
         let event_tx = crate::agent::engine_event_sender::EngineEventSender::new(raw_tx);
 
-        match engine.handle_sse(&msg, event_tx, Some(session_id), false).await {
+        match engine.handle_sse(&msg, event_tx, Some(session_id), false, tokio_util::sync::CancellationToken::new()).await {
             Ok(_msg_id) => {
                 tracing::info!(session_id = %session_id, "retry succeeded");
             }
