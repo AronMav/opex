@@ -42,13 +42,8 @@ impl RequestContext {
         cancel: CancellationToken,
         loop_config: &ToolLoopConfig,
     ) -> Self {
-        let mut detector = LoopDetector::new(loop_config);
-
-        match session_wal::load_tool_events(db, session_id).await {
+        let detector = match session_wal::load_tool_events(db, session_id).await {
             Ok(events) => {
-                for ev in &events {
-                    detector.record_result_from_wal(&ev.tool_name, ev.success);
-                }
                 if !events.is_empty() {
                     tracing::debug!(
                         session_id = %session_id,
@@ -56,6 +51,7 @@ impl RequestContext {
                         "WAL warm-up: replayed tool events into LoopDetector",
                     );
                 }
+                LoopDetector::warm_up_from_wal(loop_config, &events)
             }
             Err(e) => {
                 tracing::warn!(
@@ -63,8 +59,9 @@ impl RequestContext {
                     error = %e,
                     "WAL warm-up failed, proceeding with fresh LoopDetector",
                 );
+                LoopDetector::new(loop_config)
             }
-        }
+        };
 
         Self {
             session_id,

@@ -188,6 +188,7 @@ pub fn is_context_overflow(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hydeclaw_db::session_wal::WalToolEvent;
 
     fn config(threshold: usize) -> ToolLoopConfig {
         ToolLoopConfig {
@@ -229,15 +230,13 @@ mod tests {
 
     #[test]
     fn warm_up_from_wal_restores_error_streak() {
-        use hydeclaw_db::session_wal::WalToolEvent;
-
         let cfg = config(3); // error_break_threshold = 3
-        let events2 = vec![
+        let events = vec![
             WalToolEvent { tool_name: "fs".to_string(), success: false },
             WalToolEvent { tool_name: "fs".to_string(), success: false },
         ];
-        let mut d2 = LoopDetector::warm_up_from_wal(&cfg, &events2);
-        let status = d2.record_result("fs", false);
+        let mut detector = LoopDetector::warm_up_from_wal(&cfg, &events);
+        let status = detector.record_result("fs", false);
         assert!(
             matches!(status, LoopStatus::Break(_)),
             "error streak should be restored from WAL — 2 prior failures + 1 new = trip at threshold 3"
@@ -246,7 +245,6 @@ mod tests {
 
     #[test]
     fn warm_up_from_wal_empty_events_gives_fresh_detector() {
-        use hydeclaw_db::session_wal::WalToolEvent;
         let cfg = config(3);
         let events: Vec<WalToolEvent> = vec![];
         let mut detector = LoopDetector::warm_up_from_wal(&cfg, &events);
@@ -258,7 +256,6 @@ mod tests {
 
     #[test]
     fn warm_up_from_wal_success_resets_streak() {
-        use hydeclaw_db::session_wal::WalToolEvent;
         let cfg = config(3);
         let events = vec![
             WalToolEvent { tool_name: "tool".to_string(), success: false },
