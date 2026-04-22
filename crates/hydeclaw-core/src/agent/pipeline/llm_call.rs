@@ -472,6 +472,7 @@ async fn deadline_retry_inner(
     let base_messages = messages.clone();
     let mut attempt: u32 = 0;
     let run_started = std::time::Instant::now();
+    let mut prepare_messages: Option<Vec<hydeclaw_types::Message>> = None;
 
     loop {
         // Check run deadline
@@ -493,8 +494,8 @@ async fn deadline_retry_inner(
             }));
         }
 
-        // Restore messages to base state for this attempt
-        *messages = base_messages.clone();
+        // Restore messages: use prepared prefill if available, otherwise fall back to base state
+        *messages = prepare_messages.take().unwrap_or_else(|| base_messages.clone());
 
         let result = chat_stream_with_transient_retry(
             provider,
@@ -520,7 +521,7 @@ async fn deadline_retry_inner(
 
                         attempt += 1;
                         // Exponential backoff: 2s, 4s, 8s, 16s, 30s cap
-                        let delay_ms = (2u64.pow(attempt) * 1000).min(30_000);
+                        let delay_ms = (2u64.saturating_pow(attempt) * 1000).min(30_000);
 
                         on_retry(attempt, delay_ms);
 
@@ -536,19 +537,22 @@ async fn deadline_retry_inner(
                             "LLM call timed out, scheduling retry"
                         );
 
-                        // Anthropic prefill: inject partial text as assistant message
+                        // Prepare messages for next attempt
                         if is_resumable && provider.supports_prefill() {
                             if let Some(PartialState::Text(ref partial)) = partial_state {
-                                *messages = base_messages.clone();
-                                messages.push(Message {
+                                let mut next = base_messages.clone();
+                                next.push(Message {
                                     role: MessageRole::Assistant,
                                     content: partial.clone(),
                                     tool_calls: None,
                                     tool_call_id: None,
                                     thinking_blocks: vec![],
                                 });
+                                prepare_messages = Some(next);
                             }
                         }
+                        // If not resumable or not prefill-capable, prepare_messages stays None;
+                        // the next iteration will restore to base_messages.
 
                         // Backoff with cancel check
                         tokio::select! {
@@ -772,5 +776,76 @@ mod deadline_retry_tests {
         let err = result.unwrap_err();
         assert!(err.downcast_ref::<LlmCallError>().map(|e| matches!(e, LlmCallError::ConnectTimeout { .. })).unwrap_or(false),
             "ConnectTimeout must propagate without retry: {err}");
+    }
+
+    #[tokio::test]
+    async fn deadline_retry_injects_prefill_for_anthropic_provider() {
+        use std::sync::{Arc, Mutex};
+
+        struct PrefillCapturingProvider {
+            calls: std::sync::atomic::AtomicU32,
+            received_messages: Arc<Mutex<Vec<Vec<hydeclaw_types::Message>>>>,
+        }
+
+        impl PrefillCapturingProvider {
+            fn new() -> Self {
+                Self {
+                    calls: std::sync::atomic::AtomicU32::new(0),
+                    received_messages: Arc::new(Mutex::new(vec![])),
+                }
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl crate::agent::providers::LlmProvider for PrefillCapturingProvider {
+            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition]) -> anyhow::Result<LlmResponse> {
+                Ok(ok_response())
+            }
+            async fn chat_stream(&self, m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+                self.received_messages.lock().unwrap().push(m.to_vec());
+                let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if n == 0 {
+                    // First call: return a partial text timeout
+                    return Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
+                        provider: "test".into(),
+                        silent_secs: 30,
+                        partial_state: PartialState::Text("partial response".into()),
+                    }));
+                }
+                tx.send("continuation".into()).ok();
+                Ok(ok_response())
+            }
+            fn name(&self) -> &str { "prefill-capturing" }
+            fn supports_prefill(&self) -> bool { true }
+        }
+
+        let provider = PrefillCapturingProvider::new();
+        let captured = Arc::clone(&provider.received_messages);
+        let (chunk_tx, _) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let cancel = CancellationToken::new();
+        let mut messages = vec![];
+
+        let result = chat_stream_with_deadline_retry_no_wal(
+            &provider,
+            &mut messages,
+            &[],
+            chunk_tx,
+            &NoopCompact,
+            &cancel,
+            0,
+        ).await;
+        assert!(result.is_ok(), "expected success, got {result:?}");
+
+        let all_calls = captured.lock().unwrap();
+        assert_eq!(all_calls.len(), 2, "expected 2 LLM calls");
+
+        // First call: no prefill (empty message list)
+        assert!(all_calls[0].is_empty(), "first call should have empty messages");
+
+        // Second call: should have the assistant prefill message
+        assert_eq!(all_calls[1].len(), 1, "second call should have 1 message (the prefill)");
+        let prefill_msg = &all_calls[1][0];
+        assert_eq!(prefill_msg.role, hydeclaw_types::MessageRole::Assistant);
+        assert_eq!(prefill_msg.content, "partial response");
     }
 }
