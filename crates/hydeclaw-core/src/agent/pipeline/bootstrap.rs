@@ -185,9 +185,19 @@ pub async fn bootstrap<S: EventSink>(
         )
         .await?;
 
-    // 7. LoopDetector — resets on each session entry (spec §7)
+    // 7. LoopDetector: warm-up from WAL if session has prior tool history (BUG-026).
+    //    Restores error-streak state so a looping agent cannot get a free
+    //    break_threshold reset after crash/resume.
+    //    DB errors are non-fatal — unwrap_or_default() gives a fresh detector
+    //    (same behaviour as before this fix).
     let loop_config = engine.tool_loop_config();
-    let loop_detector = LoopDetector::new(&loop_config);
+    let wal_events = crate::db::session_wal::load_tool_events(&engine.cfg().db, session_id)
+        .await
+        .unwrap_or_default();
+    let loop_detector = LoopDetector::warm_up_from_wal(&loop_config, &wal_events);
+    if !wal_events.is_empty() {
+        tracing::debug!(session = %session_id, events = wal_events.len(), "LoopDetector warmed from WAL");
+    }
 
     // 8. Slash-command detection (spec §11.1 — future extension point for richer outputs)
     let command_output = match engine.handle_command(&user_text, ctx.msg).await {
