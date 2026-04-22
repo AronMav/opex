@@ -29,6 +29,11 @@ impl SessionManager {
         Self { db }
     }
 
+    /// Return a reference to the underlying connection pool.
+    pub fn db(&self) -> &PgPool {
+        &self.db
+    }
+
     /// Find or create a session for the given agent+user+channel.
     pub async fn get_or_create(
         &self,

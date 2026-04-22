@@ -447,3 +447,330 @@ pub fn audit(
         details,
     );
 }
+
+// ── Deadline retry ──────────────────────────────────────────────────
+
+/// Special prefix sent on chunk_tx when the deadline retry loop retries.
+/// Handled by `execute::forward_chunks_into_sink` to emit `StreamEvent::Reconnecting`.
+pub(crate) const RECONNECTING_PREFIX: &str = "__reconnecting__:";
+
+/// Inner timeout-retry loop without WAL logging — extracted for unit testability.
+/// Production callers use `chat_stream_with_deadline_retry` which wraps this.
+async fn deadline_retry_inner(
+    provider: &dyn LlmProvider,
+    messages: &mut Vec<hydeclaw_types::Message>,
+    tools: &[hydeclaw_types::ToolDefinition],
+    chunk_tx: mpsc::UnboundedSender<String>,
+    compact: &impl Compactor,
+    session_cancel: &tokio_util::sync::CancellationToken,
+    run_max_duration_secs: u64,
+    on_retry: impl Fn(u32, u64),
+) -> Result<hydeclaw_types::LlmResponse> {
+    use crate::agent::providers::error::{LlmCallError, PartialState};
+    use hydeclaw_types::{Message, MessageRole};
+
+    let base_messages = messages.clone();
+    let mut attempt: u32 = 0;
+    let run_started = std::time::Instant::now();
+
+    loop {
+        // Check run deadline
+        if run_max_duration_secs > 0 {
+            let elapsed = run_started.elapsed().as_secs();
+            if elapsed >= run_max_duration_secs {
+                return Err(anyhow::Error::new(LlmCallError::MaxDurationExceeded {
+                    provider: provider.name().to_string(),
+                    elapsed_secs: elapsed,
+                    partial_state: PartialState::Empty,
+                }));
+            }
+        }
+
+        // Check cancellation before each attempt
+        if session_cancel.is_cancelled() {
+            return Err(anyhow::Error::new(LlmCallError::UserCancelled {
+                partial_state: PartialState::Empty,
+            }));
+        }
+
+        // Restore messages to base state for this attempt
+        *messages = base_messages.clone();
+
+        let result = chat_stream_with_transient_retry(
+            provider,
+            messages,
+            tools,
+            chunk_tx.clone(),
+            compact,
+        ).await;
+
+        match result {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                let call_err = e.downcast_ref::<LlmCallError>().cloned();
+                match call_err {
+                    // Propagate user/shutdown cancellations immediately
+                    Some(LlmCallError::UserCancelled { .. }) | Some(LlmCallError::ShutdownDrain { .. }) => {
+                        return Err(e);
+                    }
+                    // Timeout → retry
+                    Some(ref te) if matches!(te, LlmCallError::InactivityTimeout { .. } | LlmCallError::MaxDurationExceeded { .. }) => {
+                        let partial_state = te.partial_state().cloned();
+                        let is_resumable = partial_state.as_ref().map(|p| p.is_resumable()).unwrap_or(false);
+
+                        attempt += 1;
+                        // Exponential backoff: 2s, 4s, 8s, 16s, 30s cap
+                        let delay_ms = (2u64.pow(attempt) * 1000).min(30_000);
+
+                        on_retry(attempt, delay_ms);
+
+                        // Signal the UI via chunk_tx (handled by forward_chunks_into_sink)
+                        let signal = format!("{}{attempt}:{delay_ms}", RECONNECTING_PREFIX);
+                        let _ = chunk_tx.send(signal);
+
+                        tracing::warn!(
+                            attempt,
+                            delay_ms,
+                            is_resumable,
+                            reason = te.abort_reason().unwrap_or("unknown"),
+                            "LLM call timed out, scheduling retry"
+                        );
+
+                        // Anthropic prefill: inject partial text as assistant message
+                        if is_resumable && provider.supports_prefill() {
+                            if let Some(PartialState::Text(ref partial)) = partial_state {
+                                *messages = base_messages.clone();
+                                messages.push(Message {
+                                    role: MessageRole::Assistant,
+                                    content: partial.clone(),
+                                    tool_calls: None,
+                                    tool_call_id: None,
+                                    thinking_blocks: vec![],
+                                });
+                            }
+                        }
+
+                        // Backoff with cancel check
+                        tokio::select! {
+                            biased;
+                            _ = session_cancel.cancelled() => {
+                                return Err(anyhow::Error::new(LlmCallError::UserCancelled {
+                                    partial_state: PartialState::Empty,
+                                }));
+                            }
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(delay_ms)) => {}
+                        }
+
+                        continue;
+                    }
+                    // Other errors propagate to routing
+                    _ => return Err(e),
+                }
+            }
+        }
+    }
+}
+
+/// Streaming LLM call with deadline retry for timeout errors.
+///
+/// On `InactivityTimeout` or `MaxDurationExceeded`, retries with exponential
+/// backoff (2s base, 30s cap). Logs a WAL `llm_retry` event on each retry.
+/// Stops when the model succeeds, `run_max_duration_secs` is exceeded, or
+/// `session_cancel` fires (user Stop).
+///
+/// Non-timeout errors (ConnectTimeout, AuthError, etc.) are returned immediately
+/// so the routing layer can fail over.
+pub async fn chat_stream_with_deadline_retry(
+    provider: &dyn LlmProvider,
+    messages: &mut Vec<Message>,
+    tools: &[ToolDefinition],
+    chunk_tx: mpsc::UnboundedSender<String>,
+    compact: &impl Compactor,
+    session_cancel: &tokio_util::sync::CancellationToken,
+    run_max_duration_secs: u64,
+    session_id: uuid::Uuid,
+    sm: &crate::agent::session_manager::SessionManager,
+) -> Result<hydeclaw_types::LlmResponse> {
+    deadline_retry_inner(
+        provider, messages, tools, chunk_tx, compact, session_cancel, run_max_duration_secs,
+        |attempt, delay_ms| {
+            let sm_db = sm.db().clone();
+            tokio::spawn(async move {
+                let details = serde_json::json!({
+                    "attempt": attempt,
+                    "delay_ms": delay_ms,
+                });
+                let sm2 = crate::agent::session_manager::SessionManager::new(sm_db);
+                sm2.log_wal_event(session_id, "llm_retry", Some(&details)).await.ok();
+            });
+        },
+    ).await
+}
+
+#[cfg(test)]
+pub(crate) async fn chat_stream_with_deadline_retry_no_wal(
+    provider: &dyn LlmProvider,
+    messages: &mut Vec<Message>,
+    tools: &[ToolDefinition],
+    chunk_tx: mpsc::UnboundedSender<String>,
+    compact: &impl Compactor,
+    session_cancel: &tokio_util::sync::CancellationToken,
+    run_max_duration_secs: u64,
+) -> Result<hydeclaw_types::LlmResponse> {
+    deadline_retry_inner(
+        provider, messages, tools, chunk_tx, compact, session_cancel, run_max_duration_secs,
+        |_attempt, _delay_ms| {},
+    ).await
+}
+
+#[cfg(test)]
+mod deadline_retry_tests {
+    use super::*;
+    use crate::agent::providers::error::{LlmCallError, PartialState};
+    use hydeclaw_types::LlmResponse;
+    use tokio_util::sync::CancellationToken;
+
+    struct NoopCompact;
+    #[async_trait::async_trait]
+    impl Compactor for NoopCompact {
+        async fn compact(&self, _messages: &mut Vec<hydeclaw_types::Message>) {}
+    }
+
+    fn ok_response() -> LlmResponse {
+        LlmResponse {
+            content: "done".into(),
+            tool_calls: vec![],
+            usage: None,
+            finish_reason: None,
+            model: None,
+            provider: None,
+            fallback_notice: None,
+            tools_used: vec![],
+            iterations: 0,
+            thinking_blocks: vec![],
+        }
+    }
+
+    struct RetryOnceProvider {
+        calls: std::sync::atomic::AtomicU32,
+    }
+
+    impl RetryOnceProvider {
+        fn new() -> Self { Self { calls: std::sync::atomic::AtomicU32::new(0) } }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agent::providers::LlmProvider for RetryOnceProvider {
+        async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition]) -> anyhow::Result<LlmResponse> {
+            Ok(ok_response())
+        }
+        async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                return Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
+                    provider: "test".into(),
+                    silent_secs: 60,
+                    partial_state: PartialState::Empty,
+                }));
+            }
+            tx.send("done".into()).ok();
+            Ok(ok_response())
+        }
+        fn name(&self) -> &str { "retry-once" }
+    }
+
+    #[tokio::test]
+    async fn deadline_retry_succeeds_on_second_attempt() {
+        let provider = RetryOnceProvider::new();
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let cancel = CancellationToken::new();
+        let mut messages = vec![];
+        let compact = NoopCompact;
+
+        let result = chat_stream_with_deadline_retry_no_wal(
+            &provider,
+            &mut messages,
+            &[],
+            chunk_tx,
+            &compact,
+            &cancel,
+            0,
+        ).await;
+        assert!(result.is_ok(), "expected Ok on second attempt, got {result:?}");
+
+        let mut chunks = vec![];
+        while let Ok(c) = chunk_rx.try_recv() { chunks.push(c); }
+        assert!(chunks.iter().any(|c| c.starts_with("__reconnecting__:")),
+            "expected __reconnecting__ chunk, got: {chunks:?}");
+    }
+
+    #[tokio::test]
+    async fn deadline_retry_stops_on_user_cancel() {
+        struct AlwaysInactiveProvider;
+        #[async_trait::async_trait]
+        impl crate::agent::providers::LlmProvider for AlwaysInactiveProvider {
+            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition]) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
+            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+                Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
+                    provider: "test".into(), silent_secs: 60, partial_state: PartialState::Empty,
+                }))
+            }
+            fn name(&self) -> &str { "always-inactive" }
+        }
+
+        let cancel = CancellationToken::new();
+        let (chunk_tx, _) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut messages = vec![];
+
+        let cancel_clone = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            cancel_clone.cancel();
+        });
+
+        let result = chat_stream_with_deadline_retry_no_wal(
+            &AlwaysInactiveProvider,
+            &mut messages,
+            &[],
+            chunk_tx,
+            &NoopCompact,
+            &cancel,
+            0,
+        ).await;
+
+        let err = result.unwrap_err();
+        assert!(err.downcast_ref::<LlmCallError>().map(|e| matches!(e, LlmCallError::UserCancelled { .. })).unwrap_or(false),
+            "expected UserCancelled, got: {err}");
+    }
+
+    #[tokio::test]
+    async fn deadline_retry_propagates_connect_timeout() {
+        struct ConnectFailProvider;
+        #[async_trait::async_trait]
+        impl crate::agent::providers::LlmProvider for ConnectFailProvider {
+            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition]) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
+            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+                Err(anyhow::Error::new(LlmCallError::ConnectTimeout { provider: "test".into(), elapsed_secs: 10 }))
+            }
+            fn name(&self) -> &str { "connect-fail" }
+        }
+
+        let cancel = CancellationToken::new();
+        let (chunk_tx, _) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut messages = vec![];
+
+        let result = chat_stream_with_deadline_retry_no_wal(
+            &ConnectFailProvider,
+            &mut messages,
+            &[],
+            chunk_tx,
+            &NoopCompact,
+            &cancel,
+            0,
+        ).await;
+
+        let err = result.unwrap_err();
+        assert!(err.downcast_ref::<LlmCallError>().map(|e| matches!(e, LlmCallError::ConnectTimeout { .. })).unwrap_or(false),
+            "ConnectTimeout must propagate without retry: {err}");
+    }
+}
