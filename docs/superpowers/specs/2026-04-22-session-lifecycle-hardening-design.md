@@ -40,10 +40,8 @@ The SIGHUP handler acquires two separate `read()` locks for cancel (step 1) and 
 
 | ID | File(s) | Description |
 | -- | ------- | ----------- |
-| W1 | `tool_loop.rs` | Add `warm_up_from_wal(config, events) -> (Self, usize)` |
+| W1 | `tool_loop.rs` | Add `warm_up_from_wal(config, events) -> Self` |
 | W2 | `bootstrap.rs` | Query WAL events + call `warm_up_from_wal` instead of `LoopDetector::new` |
-| W3 | `bootstrap.rs` | Add `warm_iterations: usize` to `BootstrapOutcome` |
-| W4 | `execute.rs` | Destructure `warm_iterations`, start loop at `warm_iterations` |
 | F1 | `hydeclaw-db/src/session_status.rs` | New file: `SessionStatus` enum + `can_transition_to` |
 | F2 | `hydeclaw-db/src/lib.rs` | Export `pub use session_status::SessionStatus` |
 | F3 | `hydeclaw-db/src/sessions.rs` | Tighten `set_session_run_status` SQL + add `validate_transition` call in Rust |
@@ -65,18 +63,19 @@ Add after `LoopDetector::new`:
 ///
 /// Replays error-streak (consecutive_errors + last_error_tool) from WAL history.
 /// Hash-based consecutive detection (consecutive/last_hash) is NOT restored —
-/// WAL does not store args. Returns (detector, event_count) where event_count
-/// is used as the warm iteration offset in execute.rs.
-pub fn warm_up_from_wal(config: &ToolLoopConfig, events: &[hydeclaw_db::session_wal::WalToolEvent]) -> (Self, usize) {
+/// WAL does not store args.
+pub fn warm_up_from_wal(config: &ToolLoopConfig, events: &[hydeclaw_db::session_wal::WalToolEvent]) -> Self {
     let mut detector = Self::new(config);
     for e in events {
         detector.record_result_from_wal(&e.tool_name, e.success);
     }
-    (detector, events.len())
+    detector
 }
 ```
 
-### W2 + W3 — `bootstrap.rs` wiring
+**Note — iteration count restoration deferred:** `tool_end` events cannot be used as an iteration offset because one LLM call (one `execute.rs` iteration) can produce multiple tool calls, causing over-counting. Restoring the total iteration count requires a new WAL event type (e.g., `llm_call`) logged once per LLM call in `execute.rs`. This is deferred to a follow-up spec. The primary value of BUG-026 — error-streak warm-up — is fully delivered by W1 + W2.
+
+### W2 — `bootstrap.rs` wiring
 
 **File:** `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`
 
@@ -86,55 +85,19 @@ Replace the `LoopDetector::new` block (current lines ~188-190):
 // 7. LoopDetector: warm-up from WAL if session has prior tool history (BUG-026).
 //    Restores error-streak state so a looping agent cannot get a free
 //    break_threshold reset after crash/resume.
+//    DB errors are non-fatal — unwrap_or_default() gives a fresh detector
+//    (same behaviour as before this fix).
 let loop_config = engine.tool_loop_config();
 let wal_events = hydeclaw_db::session_wal::load_tool_events(&engine.cfg().db, session_id)
     .await
     .unwrap_or_default();
-let (loop_detector, warm_iterations) = LoopDetector::warm_up_from_wal(&loop_config, &wal_events);
-if warm_iterations > 0 {
-    tracing::debug!(session = %session_id, warm_iterations, "LoopDetector warmed from WAL");
+let loop_detector = LoopDetector::warm_up_from_wal(&loop_config, &wal_events);
+if !wal_events.is_empty() {
+    tracing::debug!(session = %session_id, events = wal_events.len(), "LoopDetector warmed from WAL");
 }
 ```
 
-Add `warm_iterations: usize` to `BootstrapOutcome`:
-
-```rust
-pub struct BootstrapOutcome {
-    // ... existing fields ...
-    pub warm_iterations: usize,
-}
-```
-
-Update the `Ok(BootstrapOutcome { ... })` at the end to include `warm_iterations`.
-
-### W4 — `execute.rs` iteration offset
-
-**File:** `crates/hydeclaw-core/src/agent/pipeline/execute.rs`
-
-The `BootstrapOutcome` destructuring already uses explicit field names. Add `warm_iterations` to the destructure:
-
-```rust
-let BootstrapOutcome {
-    session_id,
-    mut messages,
-    tools,
-    mut loop_detector,
-    warm_iterations,
-    // ... rest unchanged ...
-} = bootstrap_outcome;
-```
-
-Change the turn loop start:
-
-```rust
-// Before:
-for iteration in 0..loop_config.effective_max_iterations() {
-
-// After:
-for iteration in warm_iterations..loop_config.effective_max_iterations() {
-```
-
-This correctly limits remaining iterations: a session with 45/50 prior iterations gets only 5 more.
+`BootstrapOutcome` is unchanged — no new fields needed.
 
 ---
 
@@ -231,8 +194,6 @@ WHERE id = $2
 
 **Edge case:** `cleanup_interrupted_sessions` queries sessions where `run_status = 'running' OR EXISTS(streaming messages)`. A session already marked `'interrupted'` with stale streaming messages will match the EXISTS clause, then `set_session_run_status(id, "interrupted")` will be a silent no-op under the new WHERE (not 'running', not NULL). This is correct — the streaming message repair (step 2) runs independently and already fixed the messages. The status write no-op is harmless.
 
-`claim_session_running` stays as `IS DISTINCT FROM 'done'` — it needs to allow re-entry from soft-terminal states (user reopens a failed/interrupted session).
-
 Add a Rust-level validation helper in `sessions.rs` for use by callers:
 
 ```rust
@@ -255,9 +216,20 @@ pub fn warn_invalid_transition(from: Option<SessionStatus>, to: SessionStatus, s
 
 **File:** `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
 
-Where `set_session_run_status` is called with a known target status, call `warn_invalid_transition` first. The current status of the session is in the `SessionLifecycleGuard` outcome field (`SessionOutcome` enum). Map `SessionOutcome` → `SessionStatus` for the `to` argument, pass `None` for `from` (we don't query current DB status — the SQL guard handles correctness).
+Where `set_session_run_status` is called with a known target status, call `warn_invalid_transition` first. `finalize` is only ever reached after a successful `bootstrap`, which calls `claim_session_running` — so the current status is always `Running`. Pass `Some(SessionStatus::Running)` as `from`:
 
-This is a logging-only addition, not a correctness change.
+```rust
+warn_invalid_transition(Some(SessionStatus::Running), target_status, session_id);
+set_session_run_status(&db, session_id, target_status.as_str()).await?;
+```
+
+Map `SessionOutcome` variants → `SessionStatus` for the `to` argument:
+
+- `SessionOutcome::Done` → `SessionStatus::Done`
+- `SessionOutcome::Failed` → `SessionStatus::Failed`
+- `SessionOutcome::Interrupted` → `SessionStatus::Interrupted`
+
+This is a logging-only addition: `warn_invalid_transition` logs a `tracing::warn!` but does not abort. The SQL guard remains the hard barrier.
 
 ---
 
@@ -347,8 +319,7 @@ Note the error path: if `start_agent_from_config` fails, the old handle is re-in
 | File | Action | Change |
 | ---- | ------ | ------ |
 | `crates/hydeclaw-core/src/agent/tool_loop.rs` | Modify | Add `warm_up_from_wal` constructor |
-| `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | Modify | WAL query + warm_up_from_wal + `warm_iterations` field |
-| `crates/hydeclaw-core/src/agent/pipeline/execute.rs` | Modify | Destructure `warm_iterations`, start loop at offset |
+| `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | Modify | WAL query + `warm_up_from_wal` instead of `LoopDetector::new` |
 | `crates/hydeclaw-db/src/session_status.rs` | Create | `SessionStatus` enum + FSM methods |
 | `crates/hydeclaw-db/src/lib.rs` | Modify | `pub mod session_status; pub use session_status::SessionStatus;` |
 | `crates/hydeclaw-db/src/sessions.rs` | Modify | Tighten `set_session_run_status` SQL + `warn_invalid_transition` |
