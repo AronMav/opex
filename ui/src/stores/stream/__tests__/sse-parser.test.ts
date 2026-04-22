@@ -108,6 +108,16 @@ describe("parseSseEvent", () => {
       expect(event.action).toBe("approved");
     }
   });
+
+  it("parses reconnecting events with attempt and delay_ms", () => {
+    const event = parseSseEvent(JSON.stringify({ type: "reconnecting", attempt: 2, delay_ms: 4000 }));
+    expect(event).toEqual({ type: "reconnecting", attempt: 2, delay_ms: 4000 });
+  });
+
+  it("parses reconnecting events with defaults for missing fields", () => {
+    const event = parseSseEvent(JSON.stringify({ type: "reconnecting" }));
+    expect(event).toEqual({ type: "reconnecting", attempt: 1, delay_ms: 2000 });
+  });
 });
 
 describe("parseSSELines", () => {
