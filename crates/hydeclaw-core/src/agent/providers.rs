@@ -1210,7 +1210,7 @@ impl RoutingProvider {
     /// Returns `Some(reason)` if the error is failover-worthy (caller
     /// should try next route — the returned short string is the label
     /// suitable for `llm_failover_total{reason=…}`), or `None` if the
-    /// error should bubble up immediately (preserving any `partial_text`
+    /// error should bubble up immediately (preserving any `partial_state`
     /// carried by the typed `LlmCallError`).
     ///
     /// Resolution order:
@@ -1453,7 +1453,7 @@ impl LlmProvider for RoutingProvider {
                 Ok(resp) => return Ok(resp),
                 Err(e) => match self.handle_provider_error(&e, &primary_key, primary_cooldown) {
                     None => {
-                        // Non-failover-worthy: bubble up with `partial_text` intact.
+                        // Non-failover-worthy: bubble up with `partial_state` intact.
                         return Err(e);
                     }
                     Some(reason) => {
@@ -1563,7 +1563,7 @@ impl LlmProvider for RoutingProvider {
                         return Err(e);
                     }
                     // Downcast to typed error; non-failover-worthy errors bubble up
-                    // (preserving `partial_text`); failover-worthy errors apply
+                    // (preserving `partial_state`); failover-worthy errors apply
                     // cooldown and fall through to the fallback chain.
                     match self.handle_provider_error(&e, &primary_key, primary_cooldown) {
                         None => return Err(e),

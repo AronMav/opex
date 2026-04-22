@@ -184,6 +184,7 @@ pub async fn parse_sse_stream(
     use crate::agent::providers::{CancelSlot, LlmCallError, cancellable_stream::stream_with_cancellation};
 
     let slot = CancelSlot::new();
+    // TODO: use cancel.child_token() here for retry isolation once this function has active callers.
     let byte_stream = stream_with_cancellation(
         resp.bytes_stream(),
         cancel.clone(),

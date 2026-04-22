@@ -636,7 +636,7 @@ pub(crate) async fn api_chat_sse(
         // On explicit API cancel (POST /api/chat/{id}/abort) we do NOT
         // hard-abort `engine_handle` immediately. The CancellationToken
         // cascades through providers' `stream_with_cancellation` and raises
-        // `LlmCallError::UserCancelled` with partial_text; the engine's error
+        // `LlmCallError::UserCancelled` with partial_state; the engine's error
         // path then persists the aborted message row and writes an aborted
         // usage_log entry. We give it a bounded window (CANCEL_GRACE) to
         // finish naturally, then hard-abort if it's wedged. This guards

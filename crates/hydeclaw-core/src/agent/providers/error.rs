@@ -38,6 +38,9 @@ pub enum PartialState {
     /// Stream cut during a tool_use block — cannot resume mid-JSON.
     ToolUse,
     /// Stream cut during a thinking block — cannot resume.
+    /// Reserved for future Anthropic extended-thinking support; not yet constructed
+    /// by any provider (ThinkingFilter discards thinking deltas before cancellation).
+    #[allow(dead_code)]
     Thinking,
     /// Nothing accumulated before the timeout.
     Empty,
