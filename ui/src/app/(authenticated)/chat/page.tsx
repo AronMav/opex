@@ -82,6 +82,7 @@ export default function ChatPage() {
   const currentAgent = useChatStore((s) => s.currentAgent);
   const { data: sessionsData, isLoading: sessionsLoading } = useSessions(currentAgent ?? "");
   const sessions = sessionsData?.sessions ?? EMPTY_SESSIONS;
+  const sessionsTotal = sessionsData?.total ?? sessions.length;
   const activeSessionId = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionId ?? null);
   const activeSessionIds = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE);
   const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? { mode: "new-chat" as const });
@@ -429,7 +430,7 @@ export default function ChatPage() {
             {t("chat.sessions")}
           </span>
           <span className="text-xs text-muted-foreground/60">
-            {t("chat.sessions_count", { count: sessions.length })}
+            {t("chat.sessions_count", { count: sessionsTotal })}
           </span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -723,7 +724,7 @@ export default function ChatPage() {
           <AlertDialogHeader>
             <AlertDialogTitle className="text-base font-bold text-destructive">{t("chat.delete_all_confirm_title", { agent: currentAgent })}</AlertDialogTitle>
             <AlertDialogDescription className="text-sm text-muted-foreground">
-              {t("chat.delete_all_confirm_description", { count: sessions.length, agent: currentAgent })}
+              {t("chat.delete_all_confirm_description", { count: sessionsTotal, agent: currentAgent })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

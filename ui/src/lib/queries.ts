@@ -379,7 +379,7 @@ export function useSessions(agent: string) {
   return useQuery({
     queryKey: qk.sessions(agent),
     queryFn: () =>
-      apiGet<{ sessions: SessionRow[] }>(
+      apiGet<{ sessions: SessionRow[]; total: number }>(
         `/api/sessions?limit=40&agent=${encodeURIComponent(agent)}`
       ),
     enabled: !!agent,

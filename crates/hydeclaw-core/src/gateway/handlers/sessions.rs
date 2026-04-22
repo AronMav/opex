@@ -87,10 +87,10 @@ pub(crate) async fn api_list_sessions(
         }
     };
 
-    let query = match q.channel.as_deref() {
+    let (query, total) = match q.channel.as_deref() {
         Some(channel) => {
             let channels: Vec<&str> = channel.split(',').collect();
-            sqlx::query_as::<_, sessions::Session>(
+            let rows = sqlx::query_as::<_, sessions::Session>(
                 "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants \
                  FROM sessions WHERE (agent_id = $1 OR $1 = ANY(participants)) AND channel = ANY($2) \
                  ORDER BY last_message_at DESC LIMIT $3",
@@ -99,10 +99,19 @@ pub(crate) async fn api_list_sessions(
             .bind(&channels)
             .bind(limit)
             .fetch_all(&infra.db)
+            .await;
+            let total: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sessions WHERE (agent_id = $1 OR $1 = ANY(participants)) AND channel = ANY($2)",
+            )
+            .bind(agent)
+            .bind(&channels)
+            .fetch_one(&infra.db)
             .await
+            .unwrap_or(0);
+            (rows, total)
         }
         None => {
-            sqlx::query_as::<_, sessions::Session>(
+            let rows = sqlx::query_as::<_, sessions::Session>(
                 "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants \
                  FROM sessions WHERE agent_id = $1 OR $1 = ANY(participants) \
                  ORDER BY last_message_at DESC LIMIT $2",
@@ -110,7 +119,15 @@ pub(crate) async fn api_list_sessions(
             .bind(agent)
             .bind(limit)
             .fetch_all(&infra.db)
+            .await;
+            let total: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sessions WHERE agent_id = $1 OR $1 = ANY(participants)",
+            )
+            .bind(agent)
+            .fetch_one(&infra.db)
             .await
+            .unwrap_or(0);
+            (rows, total)
         }
     };
 
@@ -133,7 +150,7 @@ pub(crate) async fn api_list_sessions(
                     })
                 })
                 .collect();
-            Json(json!({ "sessions": sessions })).into_response()
+            Json(json!({ "sessions": sessions, "total": total })).into_response()
         }
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
