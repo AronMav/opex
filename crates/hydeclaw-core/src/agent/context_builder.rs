@@ -526,6 +526,7 @@ mod tests {
             formatting_prompt: None,
             tool_policy_override: None,
             leaf_message_id: None,
+            user_message_id: None,
         }
     }
 
