@@ -470,7 +470,7 @@ export function useSessionMessages(sessionId: string | null, engineRunning = fal
         `/api/sessions/${sessionId}/messages?limit=100`
       ),
     enabled: !!sessionId,
-    staleTime: 0,
+    staleTime: 2000,
     gcTime: 24 * 60 * 60 * 1000,
     // Poll every 5s when engine is still processing, 3s when streaming
     refetchInterval: (query) => {

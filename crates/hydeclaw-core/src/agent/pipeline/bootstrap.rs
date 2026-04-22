@@ -168,12 +168,17 @@ pub async fn bootstrap<S: EventSink>(
     // so the new turn stays anchored to a real chain instead of floating as a
     // root orphan. Without this fallback, reload-during-stream would leave the
     // user message invisible in active_path (seen 2026-04-20).
-    let parent_message_id = match ctx.msg.leaf_message_id {
-        Some(id) => Some(id),
-        None => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
-    };
-    let user_message_id = sm
-        .save_message_ex(
+    // When user_message_id is provided (forkAndRegenerate path), the branch user
+    // message was already persisted by POST /api/sessions/{id}/fork. Reuse it
+    // directly to avoid creating a duplicate message in the same branch.
+    let user_message_id: uuid::Uuid = if let Some(existing_id) = ctx.msg.user_message_id {
+        existing_id
+    } else {
+        let parent_message_id = match ctx.msg.leaf_message_id {
+            Some(id) => Some(id),
+            None => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
+        };
+        sm.save_message_ex(
             session_id,
             "user",
             &enriched_text,
@@ -183,7 +188,8 @@ pub async fn bootstrap<S: EventSink>(
             None,
             parent_message_id,
         )
-        .await?;
+        .await?
+    };
 
     // 7. LoopDetector: warm-up from WAL if session has prior tool history (BUG-026).
     //    Restores error-streak state so a looping agent cannot get a free

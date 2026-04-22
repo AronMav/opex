@@ -186,12 +186,12 @@ export function AgentEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-hidden p-0 border-border shadow-2xl max-w-[95vw] sm:max-w-xl rounded-xl">
+      <DialogContent className="max-h-[90vh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-xl rounded-xl">
         <DialogHeader className="px-5 pt-4 pb-0 border-b-0 bg-muted/20">
           <DialogTitle className="text-sm font-bold text-foreground truncate pb-3">
             {editName ? t("agents.editing", { name: editName }) : t("agents.new_agent_dialog")}
           </DialogTitle>
-          {/* Tab bar */}
+          {/* Tab bar — icons only on mobile, icons+labels on sm+ */}
           <div className="flex gap-0.5 overflow-x-auto scrollbar-none -mx-5 px-5 pb-0">
             {AGENT_TABS.map((tab) => {
               const Icon = tab.icon;
@@ -201,8 +201,9 @@ export function AgentEditDialog({
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
+                  title={t(tab.labelKey)}
                   className={`
-                    relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium whitespace-nowrap
+                    relative flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium whitespace-nowrap
                     transition-colors rounded-t-md shrink-0
                     ${isActive
                       ? "text-foreground bg-background border-t border-l border-r border-border"
@@ -210,8 +211,8 @@ export function AgentEditDialog({
                     }
                   `}
                 >
-                  <Icon className="h-3 w-3 shrink-0" />
-                  {t(tab.labelKey)}
+                  <Icon className="h-3.5 w-3.5 shrink-0 sm:h-3 sm:w-3" />
+                  <span className="hidden sm:inline">{t(tab.labelKey)}</span>
                   {isActive && (
                     <span className="absolute bottom-0 left-0 right-0 h-px bg-background" />
                   )}
@@ -681,7 +682,7 @@ export function ChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border shadow-2xl max-w-[95vw] sm:max-w-sm max-h-[90vh] overflow-y-auto rounded-xl p-0">
+      <DialogContent className="border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-sm max-h-[90vh] overflow-y-auto rounded-xl p-0">
         <DialogHeader className="px-5 py-4 border-b border-border bg-muted/20">
           <DialogTitle className="text-sm font-bold">{channelDialogId ? t("agents.channel_edit") : t("agents.channel_add_dialog")}</DialogTitle>
         </DialogHeader>

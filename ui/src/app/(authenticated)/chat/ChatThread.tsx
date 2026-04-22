@@ -126,20 +126,24 @@ export function ChatThread({
   // Filter out inter-agent routing messages (internal inter-agent context passed between agents).
   // These have role="user" with content starting with "[Handoff from" or "[Response from".
   // Keep the original user message (no agentId or agentId matching current agent).
-  const allMessages = useMemo(() => {
-    const filtered = sourceMessages.filter(m => {
-      // Skip empty assistant messages (pre-content SSE placeholders) — ThinkingMessage handles this
-      if (m.role === "assistant" && m.parts.length === 0) return false;
-      if (m.role !== "user" || !m.agentId) return true;
-      // Keep if it's from the session's primary agent (real user proxy)
-      const content = m.parts[0]?.type === "text" ? (m.parts[0] as { text: string }).text : "";
-      return !content.startsWith("[Handoff from") && !content.startsWith("[Response from");
-    });
-    return filtered.length > renderLimit ? filtered.slice(-renderLimit) : filtered;
-  }, [sourceMessages, renderLimit]);
+  const filteredMessages = useMemo(() => sourceMessages.filter(m => {
+    // Skip empty assistant messages (pre-content SSE placeholders) — ThinkingMessage handles this
+    if (m.role === "assistant" && m.parts.length === 0) return false;
+    if (m.role !== "user" || !m.agentId) return true;
+    // Keep if it's from the session's primary agent (real user proxy)
+    const content = m.parts[0]?.type === "text" ? (m.parts[0] as { text: string }).text : "";
+    return !content.startsWith("[Handoff from") && !content.startsWith("[Response from");
+  }), [sourceMessages]);
+
+  const allMessages = useMemo(
+    () => filteredMessages.length > renderLimit ? filteredMessages.slice(-renderLimit) : filteredMessages,
+    [filteredMessages, renderLimit],
+  );
 
   const msgCount = sourceMessages.length;
-  const hiddenCount = useMemo(() => Math.max(0, msgCount - renderLimit), [msgCount, renderLimit]);
+  // hiddenCount is based on filteredMessages (not raw sourceMessages) so inter-agent
+  // routing messages don't inflate the "load earlier" indicator.
+  const hiddenCount = useMemo(() => Math.max(0, filteredMessages.length - renderLimit), [filteredMessages.length, renderLimit]);
   const hasMessages = msgCount > 0;
 
   const isStreaming = isActivePhase(connectionPhase);

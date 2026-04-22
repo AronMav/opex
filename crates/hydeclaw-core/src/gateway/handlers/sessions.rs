@@ -842,6 +842,7 @@ pub(crate) async fn api_retry_session(
         context: Default::default(),
         attachments: vec![],
         leaf_message_id: None,
+        user_message_id: None,
         tool_policy_override: None,
         timestamp: chrono::Utc::now(),
         formatting_prompt: None,

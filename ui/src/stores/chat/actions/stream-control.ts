@@ -165,7 +165,9 @@ export function createStreamActions(deps: ActionDeps) {
           }
         });
 
-        renderer.startStream(agent, sessionId, seedMessages, newContent);
+        // Pass resp.message_id so the backend reuses the already-persisted branch
+        // user message instead of creating a duplicate via /api/chat.
+        renderer.startStream(agent, sessionId, seedMessages, newContent, undefined, resp.message_id);
       } catch (e) {
         console.error("[fork] failed:", e);
       }

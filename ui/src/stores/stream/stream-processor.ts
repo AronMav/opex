@@ -384,12 +384,16 @@ export async function processSSEStream(
       const effectiveSessionId = receivedSessionId ?? agentState?.activeSessionId;
 
       if (!isError && !isIdle && !receivedFinishEvent && effectiveSessionId) {
+        // SSE connection dropped before finish — LLM retry may have been in progress.
+        // Reset the flag now; scheduleReconnect will re-set it only if a __reconnecting__
+        // chunk arrives on the next SSE connection.
+        session.write({ isLlmReconnecting: false });
         callbacks.onReconnectNeeded(effectiveSessionId, reconnectAttempt);
         return;
       }
 
       if (!isError) {
-        session.write({ connectionPhase: "idle", connectionError: null, reconnectAttempt: 0 });
+        session.write({ connectionPhase: "idle", connectionError: null, reconnectAttempt: 0, isLlmReconnecting: false });
       }
       callbacks.onStreamDone?.();
     } else {

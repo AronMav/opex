@@ -168,23 +168,23 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
         <p className="text-destructive text-xs mt-2">{error}</p>
       )}
 
-      {/* Button row */}
+      {/* Button row — stacks vertically on mobile, single row on sm+ */}
       {!isEditing && (
-        <div className="flex items-center gap-2 mt-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 mt-3">
           <Button
             variant="ghost"
             size="sm"
-            className="text-primary text-xs"
+            className="text-primary text-xs w-full sm:w-auto justify-start sm:justify-center"
             onClick={() => setIsEditing(true)}
             disabled={isSubmitting}
           >
             {t("chat.approval_edit_args")}
           </Button>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:ml-auto">
             <Button
               variant="outline"
               size="sm"
-              className="text-destructive border-destructive/40 hover:bg-destructive/10"
+              className="flex-1 sm:flex-none text-destructive border-destructive/40 hover:bg-destructive/10"
               aria-label={`${t("chat.approval_reject")} ${part.toolName}`}
               onClick={handleReject}
               disabled={isSubmitting}
@@ -198,7 +198,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
             <Button
               variant="default"
               size="sm"
-              className="bg-success hover:bg-success/90 text-white"
+              className="flex-1 sm:flex-none bg-success hover:bg-success/90 text-white"
               aria-label={`${t("chat.approval_approve")} ${part.toolName}`}
               onClick={handleApprove}
               disabled={isSubmitting}

@@ -285,6 +285,7 @@ pub(crate) async fn gmail_push_handler(
                 formatting_prompt: None,
                 tool_policy_override: None,
                 leaf_message_id: None,
+                user_message_id: None,
             };
             if let Err(e) = engine.handle(&incoming).await {
                 tracing::error!(agent = %agent_id, error = %e, "gmail push handler error");

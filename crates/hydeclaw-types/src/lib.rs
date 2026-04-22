@@ -103,6 +103,11 @@ pub struct IncomingMessage {
     /// When set, engine builds LLM context from the branch chain ending at this message
     /// instead of the flat chronological history. Used for branching sessions.
     pub leaf_message_id: Option<uuid::Uuid>,
+    /// When set, bootstrap skips saving a new user message and uses this existing
+    /// message id directly as the user turn. Used by forkAndRegenerate so the
+    /// branch message created by POST /api/sessions/{id}/fork is reused instead
+    /// of creating a duplicate.
+    pub user_message_id: Option<uuid::Uuid>,
 }
 
 // ── Tool definitions for LLM ──
@@ -268,6 +273,7 @@ impl IncomingMessageDto {
             formatting_prompt,
             tool_policy_override: None,
             leaf_message_id: None,
+            user_message_id: None,
         }
     }
 }

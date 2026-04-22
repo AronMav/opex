@@ -232,7 +232,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── SSE stream handler ──────────────────────────────────────────────────
   // Reconnect policy is in stream/stream-reconnect.ts (SSE-02).
 
-  function startStream(agent: string, sessionId: string | null, messages: ChatMessage[], userText: string, attachments?: Array<any>) {
+  function startStream(agent: string, sessionId: string | null, messages: ChatMessage[], userText: string, attachments?: Array<any>, userMessageId?: string) {
     // Local-only cleanup for the same reason documented in resumeStream.
     abortLocalOnly(agent);
 
@@ -286,6 +286,8 @@ export function createStreamingRenderer(store: StoreAccess) {
       connectionPhase: "submitted",
       connectionError: null,
       turnLimitMessage: null,
+      reconnectAttempt: 0,
+      isLlmReconnecting: false,
     });
     saveUiState(agent);
 
@@ -318,6 +320,9 @@ export function createStreamingRenderer(store: StoreAccess) {
           body.leaf_message_id = rawMsgs[rawMsgs.length - 1].id;
         }
       }
+    }
+    if (userMessageId) {
+      body.user_message_id = userMessageId;
     }
     if (forceNew) {
       body.force_new_session = true;

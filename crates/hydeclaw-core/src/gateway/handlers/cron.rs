@@ -433,6 +433,7 @@ pub(crate) async fn api_run_cron(
             formatting_prompt: None,
             tool_policy_override: tool_policy,
             leaf_message_id: None,
+            user_message_id: None,
         };
 
         // Record cron run start

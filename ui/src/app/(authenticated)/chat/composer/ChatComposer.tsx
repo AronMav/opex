@@ -396,7 +396,7 @@ export function ChatComposer() {
                 type="submit"
                 size="icon"
                 aria-label={t("chat.send")}
-                disabled={(!hasInput && attachments.length === 0) || isUploading}
+                disabled={(!hasInput && attachments.length === 0) || isUploading || isStreaming}
                 className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-primary/30 bg-primary/15 text-primary hover:bg-primary/25 hover:border-primary/50 shadow-sm disabled:opacity-30 disabled:shadow-none group/send animate-in fade-in zoom-in-90"
               >
                 {isUploading

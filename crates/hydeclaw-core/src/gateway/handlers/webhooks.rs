@@ -474,6 +474,7 @@ pub(crate) async fn webhook_handler(
         formatting_prompt: None,
         tool_policy_override: None,
         leaf_message_id: None,
+        user_message_id: None,
     };
 
     tracing::info!(webhook = %name, agent = %wh.agent_id, is_async, "webhook triggered");

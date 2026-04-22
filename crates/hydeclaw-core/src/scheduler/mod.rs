@@ -557,6 +557,7 @@ impl Scheduler {
                 formatting_prompt: fmt_prompt,
                 tool_policy_override: tool_policy.clone(),
                 leaf_message_id: None,
+            user_message_id: None,
             };
 
             let db2 = db.clone();
@@ -683,6 +684,7 @@ impl Scheduler {
                     formatting_prompt: fmt_prompt,
                     tool_policy_override: tool_policy.clone(),
                     leaf_message_id: None,
+            user_message_id: None,
                 };
 
                 // Record cron run start
@@ -966,6 +968,7 @@ async fn run_heartbeat(
         formatting_prompt: fmt_prompt,
         tool_policy_override: None,
         leaf_message_id: None,
+        user_message_id: None,
     };
 
     let response = engine.handle_isolated(&msg).await?;
@@ -1067,6 +1070,7 @@ pub async fn run_first_run_onboarding(
         formatting_prompt: None,
         tool_policy_override: None,
         leaf_message_id: None,
+        user_message_id: None,
     };
 
     let response = engine.handle_isolated(&msg).await?;

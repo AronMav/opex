@@ -268,6 +268,7 @@ describe("STATE-01: history to live transition", () => {
           streamGeneration: 0,
           reconnectAttempt: 0,
           maxReconnectAttempts: 3,
+          isLlmReconnecting: false,
           selectedBranches: {},
         };
       } else {

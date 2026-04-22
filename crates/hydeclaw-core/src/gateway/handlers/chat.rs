@@ -390,6 +390,11 @@ pub(crate) struct ChatSseRequest {
     /// Last message ID in the active path — used as `parent_message_id` for the new user message.
     #[serde(default)]
     leaf_message_id: Option<uuid::Uuid>,
+    /// When set, bootstrap reuses this existing message as the user turn instead
+    /// of creating a new one. Sent by forkAndRegenerate after the fork API has
+    /// already persisted the branch user message.
+    #[serde(default)]
+    user_message_id: Option<uuid::Uuid>,
 }
 
 #[allow(unused_assignments)]
@@ -509,6 +514,7 @@ pub(crate) async fn api_chat_sse(
         formatting_prompt: None,
         tool_policy_override: None,
         leaf_message_id: req.leaf_message_id,
+        user_message_id: req.user_message_id,
     };
 
     // Phase 62 RES-01: bounded engine-side channel + coalescing converter task.

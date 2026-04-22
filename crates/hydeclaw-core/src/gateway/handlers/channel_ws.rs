@@ -1004,6 +1004,7 @@ async fn handle_ws(socket: WebSocket, agents: AgentCore, bus: ChannelBus, status
                             formatting_prompt: None,
                             tool_policy_override: None,
                             leaf_message_id: None,
+                            user_message_id: None,
                         };
 
                         let (chunk_tx, mut chunk_rx) = mpsc::channel::<String>(512);
