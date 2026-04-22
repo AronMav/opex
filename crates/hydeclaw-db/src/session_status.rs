@@ -40,7 +40,7 @@ impl SessionStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "running" => Some(Self::Running),
             "done" => Some(Self::Done),
@@ -103,18 +103,18 @@ mod tests {
     }
 
     #[test]
-    fn as_str_and_from_str_round_trip() {
+    fn as_str_and_parse_round_trip() {
         use SessionStatus::*;
         for status in [Running, Done, Failed, Interrupted, Timeout, Cancelled] {
             let s = status.as_str();
-            assert_eq!(SessionStatus::from_str(s), Some(status), "round-trip failed for {:?}", status);
+            assert_eq!(SessionStatus::parse(s), Some(status), "round-trip failed for {:?}", status);
         }
     }
 
     #[test]
-    fn from_str_unknown_returns_none() {
-        assert_eq!(SessionStatus::from_str("unknown"), None);
-        assert_eq!(SessionStatus::from_str(""), None);
+    fn parse_unknown_returns_none() {
+        assert_eq!(SessionStatus::parse("unknown"), None);
+        assert_eq!(SessionStatus::parse(""), None);
     }
 
     #[test]

@@ -386,13 +386,13 @@ pub async fn set_session_run_status(db: &PgPool, session_id: Uuid, status: &str)
 /// Does NOT abort — the SQL guard is the hard barrier. This is an early
 /// diagnostic for test failures and log analysis.
 pub fn warn_invalid_transition(from: Option<SessionStatus>, to: SessionStatus, session_id: Uuid) {
-    if let Some(f) = from {
-        if !f.can_transition_to(to) {
-            tracing::warn!(
-                from = f.as_str(), to = to.as_str(), %session_id,
-                "session FSM violation: invalid status transition"
-            );
-        }
+    if let Some(f) = from
+        && !f.can_transition_to(to)
+    {
+        tracing::warn!(
+            from = f.as_str(), to = to.as_str(), %session_id,
+            "session FSM violation: invalid status transition"
+        );
     }
 }
 
