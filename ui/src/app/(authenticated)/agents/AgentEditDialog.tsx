@@ -227,7 +227,7 @@ export function AgentEditDialog({
           <div className="px-5 py-3"><div className="grid">
 
             {/* ── General tab ── */}
-            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "general" ? "" : "invisible pointer-events-none select-none"}`}>
+            <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "general" ? "" : "opacity-0 pointer-events-none select-none"}`}>
                 <div className="flex flex-wrap items-end gap-3 mb-3">
                   <div className="shrink-0">
                     <div className="h-[18px]" />
@@ -423,7 +423,7 @@ export function AgentEditDialog({
             </div>
 
             {/* ── Tools tab ── */}
-            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "tools" ? "" : "invisible pointer-events-none select-none"}`}>
+            <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "tools" ? "" : "opacity-0 pointer-events-none select-none"}`}>
                 <SwitchSection title={t("agents.section_tool_policy")} enabled={form.toolsEnabled} onToggle={(v) => upd({ toolsEnabled: v })}>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
@@ -488,7 +488,7 @@ export function AgentEditDialog({
             </div>
 
             {/* ── Behavior tab ── */}
-            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "behavior" ? "" : "invisible pointer-events-none select-none"}`}>
+            <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "behavior" ? "" : "opacity-0 pointer-events-none select-none"}`}>
                 <SwitchSection title={t("agents.section_tool_loop")} enabled={form.tlEnabled} onToggle={(v) => upd({ tlEnabled: v })}>
                   <div className="space-y-2">
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -532,7 +532,7 @@ export function AgentEditDialog({
             </div>
 
             {/* ── Session tab ── */}
-            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "session" ? "" : "invisible pointer-events-none select-none"}`}>
+            <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "session" ? "" : "opacity-0 pointer-events-none select-none"}`}>
                 <SwitchSection title={t("agents.section_session")} enabled={form.sessionEnabled} onToggle={(v) => upd({ sessionEnabled: v })}>
                   <div className="space-y-2">
                     <Field label={t("agents.field_dm_scope")}>
@@ -583,7 +583,7 @@ export function AgentEditDialog({
             </div>
 
             {/* ── Schedule tab ── */}
-            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "schedule" ? "" : "invisible pointer-events-none select-none"}`}>
+            <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "schedule" ? "" : "opacity-0 pointer-events-none select-none"}`}>
               <SwitchSection title={t("agents.section_schedule")} enabled={form.hbEnabled} onToggle={(v) => upd({ hbEnabled: v })}>
                 <CronSchedulePicker value={form.hbCron} onChange={(v) => upd({ hbCron: v })} timezone={form.hbTimezone || "UTC"} onTimezoneChange={(v) => upd({ hbTimezone: v })} />
                 <Field label={t("agents.field_announce_to")}>
@@ -600,7 +600,7 @@ export function AgentEditDialog({
             </div>
 
             {/* ── Channels tab ── */}
-            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "channels" ? "" : "invisible pointer-events-none select-none"}`}>
+            <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "channels" ? "" : "opacity-0 pointer-events-none select-none"}`}>
                 <RoutingRulesEditor routing={form.routing} llmProviders={llmProviders} discoveredModels={discoveredModels} fetchModels={fetchModels} onChange={(routing) => upd({ routing })} />
                 {editName && (
                   <div className="space-y-2 border-t border-border/30 pt-3">
