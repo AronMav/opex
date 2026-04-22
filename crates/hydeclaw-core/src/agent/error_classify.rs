@@ -23,6 +23,9 @@ pub enum LlmErrorClass {
     Billing,
     /// Provider overloaded (capacity, high demand).
     Overloaded,
+    /// Stream inactivity or max-duration timeout — handled by the outer deadline retry loop.
+    /// NOT retryable by the inner transient retry loop.
+    CallTimeout,
     /// Unrecognized error.
     Unknown,
 }
@@ -59,6 +62,14 @@ static RE_OVERLOADED: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Classify an LLM error into an actionable category.
 pub fn classify(error: &anyhow::Error) -> LlmErrorClass {
+    // Fast path: typed dispatch for LlmCallError variants.
+    if let Some(llm_err) = error.downcast_ref::<crate::agent::providers::error::LlmCallError>() {
+        use crate::agent::providers::error::LlmCallError::*;
+        match llm_err {
+            InactivityTimeout { .. } | MaxDurationExceeded { .. } => return LlmErrorClass::CallTimeout,
+            _ => {}
+        }
+    }
     let msg = error.to_string();
     classify_str(&msg)
 }
@@ -102,6 +113,7 @@ pub fn cooldown_duration(class: &LlmErrorClass) -> std::time::Duration {
         LlmErrorClass::Overloaded => Duration::from_secs(30),
         LlmErrorClass::TransientHttp | LlmErrorClass::Unknown => Duration::from_secs(15),
         LlmErrorClass::ContextOverflow | LlmErrorClass::SessionCorruption => Duration::ZERO,
+        LlmErrorClass::CallTimeout => Duration::ZERO,
     }
 }
 
@@ -122,6 +134,7 @@ pub fn user_message_lang(class: &LlmErrorClass, language: &str) -> &'static str 
         LlmErrorClass::AuthPermanent => e.auth_permanent,
         LlmErrorClass::Billing => e.billing,
         LlmErrorClass::Overloaded => e.overloaded,
+        LlmErrorClass::CallTimeout => e.unknown,  // handled by retry UI, not error message
         LlmErrorClass::Unknown => e.unknown,
     }
 }
@@ -144,6 +157,14 @@ pub fn is_retryable(class: &LlmErrorClass) -> bool {
         class,
         LlmErrorClass::TransientHttp | LlmErrorClass::Overloaded | LlmErrorClass::RateLimit
     )
+}
+
+/// Asserts that CallTimeout is not included in the retryable set.
+#[allow(dead_code)]
+fn _assert_call_timeout_not_retryable() {
+    // Compile-time assertion: if CallTimeout becomes retryable, this would need updating.
+    let ct = LlmErrorClass::CallTimeout;
+    assert!(!is_retryable(&ct), "CallTimeout must NOT be retryable by inner transient retry loop");
 }
 
 // ── RetryConfig ──────────────────────────────────────────────────────────────
@@ -299,6 +320,7 @@ mod tests {
         assert!(is_retryable(&LlmErrorClass::Overloaded));
         assert!(is_retryable(&LlmErrorClass::RateLimit));
         assert!(!is_retryable(&LlmErrorClass::AuthPermanent));
+        assert!(!is_retryable(&LlmErrorClass::CallTimeout));
         assert!(!is_retryable(&LlmErrorClass::Unknown));
     }
 
@@ -373,12 +395,39 @@ mod tests {
     }
 
     #[test]
+    fn classify_inactivity_timeout_is_call_timeout() {
+        use crate::agent::providers::error::{LlmCallError, PartialState};
+        let e = anyhow::Error::new(LlmCallError::InactivityTimeout {
+            provider: "p".into(),
+            silent_secs: 60,
+            partial_state: PartialState::Empty,
+        });
+        assert_eq!(classify(&e), LlmErrorClass::CallTimeout);
+    }
+
+    #[test]
+    fn classify_max_duration_exceeded_is_call_timeout() {
+        use crate::agent::providers::error::{LlmCallError, PartialState};
+        let e = anyhow::Error::new(LlmCallError::MaxDurationExceeded {
+            provider: "p".into(),
+            elapsed_secs: 600,
+            partial_state: PartialState::Empty,
+        });
+        assert_eq!(classify(&e), LlmErrorClass::CallTimeout);
+    }
+
+    #[test]
+    fn call_timeout_is_not_retryable() {
+        assert!(!is_retryable(&LlmErrorClass::CallTimeout));
+    }
+
+    #[test]
     fn user_messages_not_empty() {
         let classes = [
             LlmErrorClass::ContextOverflow, LlmErrorClass::SessionCorruption,
             LlmErrorClass::TransientHttp, LlmErrorClass::RateLimit,
             LlmErrorClass::AuthPermanent, LlmErrorClass::Billing,
-            LlmErrorClass::Overloaded, LlmErrorClass::Unknown,
+            LlmErrorClass::Overloaded, LlmErrorClass::CallTimeout, LlmErrorClass::Unknown,
         ];
         for class in &classes {
             assert!(!user_message(class).is_empty(), "empty message for {:?}", class);
