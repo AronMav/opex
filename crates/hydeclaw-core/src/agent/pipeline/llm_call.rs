@@ -456,6 +456,7 @@ pub(crate) const RECONNECTING_PREFIX: &str = "__reconnecting__:";
 
 /// Inner timeout-retry loop without WAL logging — extracted for unit testability.
 /// Production callers use `chat_stream_with_deadline_retry` which wraps this.
+#[allow(clippy::too_many_arguments)]
 async fn deadline_retry_inner(
     provider: &dyn LlmProvider,
     messages: &mut Vec<hydeclaw_types::Message>,
@@ -538,18 +539,19 @@ async fn deadline_retry_inner(
                         );
 
                         // Prepare messages for next attempt
-                        if is_resumable && provider.supports_prefill() {
-                            if let Some(PartialState::Text(ref partial)) = partial_state {
-                                let mut next = base_messages.clone();
-                                next.push(Message {
-                                    role: MessageRole::Assistant,
-                                    content: partial.clone(),
-                                    tool_calls: None,
-                                    tool_call_id: None,
-                                    thinking_blocks: vec![],
-                                });
-                                prepare_messages = Some(next);
-                            }
+                        if is_resumable
+                            && provider.supports_prefill()
+                            && let Some(PartialState::Text(ref partial)) = partial_state
+                        {
+                            let mut next = base_messages.clone();
+                            next.push(Message {
+                                role: MessageRole::Assistant,
+                                content: partial.clone(),
+                                tool_calls: None,
+                                tool_call_id: None,
+                                thinking_blocks: vec![],
+                            });
+                            prepare_messages = Some(next);
                         }
                         // If not resumable or not prefill-capable, prepare_messages stays None;
                         // the next iteration will restore to base_messages.
@@ -584,6 +586,7 @@ async fn deadline_retry_inner(
 ///
 /// Non-timeout errors (ConnectTimeout, AuthError, etc.) are returned immediately
 /// so the routing layer can fail over.
+#[allow(clippy::too_many_arguments)]
 pub async fn chat_stream_with_deadline_retry(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,

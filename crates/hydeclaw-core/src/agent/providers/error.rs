@@ -51,6 +51,7 @@ impl PartialState {
         matches!(self, Self::Text(s) if !s.is_empty())
     }
 
+    #[allow(dead_code)]
     pub fn text(&self) -> Option<&str> {
         if let Self::Text(s) = self { Some(s) } else { None }
     }
