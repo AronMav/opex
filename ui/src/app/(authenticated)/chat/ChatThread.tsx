@@ -151,8 +151,13 @@ export function ChatThread({
   );
   const lastMsgIsOtherAgent = lastMsg?.role === "assistant" && lastMsg.agentId && lastMsg.agentId !== currentAgent;
   const isLiveOrHistory = isLive || isHistory;
+  // When resumeStream starts, live overlay is empty ([]) so history bleeds through —
+  // the last rendered message is the previous ALMA response (has text), which
+  // incorrectly suppresses showThinking. Bypass lastAssistantHasText when live
+  // mode has no overlay content yet (the stream hasn't sent any events yet).
+  const isLiveEmpty = isLive && !liveHasContent;
   const showThinking = isLiveOrHistory
-    && !lastAssistantHasText
+    && (isLiveEmpty || !lastAssistantHasText)
     && !lastMsgIsOtherAgent
     && (connectionPhase === "submitted" || connectionPhase === "streaming" || connectionPhase === "reconnecting"
         || engineRunning || sessionRunStatus === "running");
