@@ -846,7 +846,7 @@ mod tests {
             Ok::<LlmResponse, anyhow::Error>(mk_response(vec![]))
         };
 
-        let mut sink = MockSink::new();
+        let sink = MockSink::new();
         let (out, sink) = {
             let mut s = sink;
             let out = forward_chunks_into_sink(llm_fut, chunk_rx, &mut s).await;
