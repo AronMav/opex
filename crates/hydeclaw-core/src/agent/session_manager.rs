@@ -10,6 +10,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::db::sessions::MessageRow;
+use hydeclaw_db::sessions::warn_invalid_transition;
+use hydeclaw_db::SessionStatus;
 
 // ── SessionManager ──────────────────────────────────────────────────────────
 
@@ -245,6 +247,7 @@ impl SessionLifecycleGuard {
     /// Mark session as done in DB. Sets outcome to `Done` only on DB success;
     /// on failure logs a warning and leaves `Running` so `Drop` fires fallback.
     pub async fn done(&mut self) {
+        warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Done, self.session_id);
         match crate::db::sessions::set_session_run_status(&self.db, self.session_id, "done").await
         {
             Ok(()) => {
@@ -264,6 +267,7 @@ impl SessionLifecycleGuard {
     /// Mark session as failed in DB with a reason. Sets outcome to `Failed` only on
     /// DB success; on failure logs a warning and leaves `Running` so `Drop` fires fallback.
     pub async fn fail(&mut self, reason: &str) {
+        warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Failed, self.session_id);
         match crate::db::sessions::set_session_run_status(&self.db, self.session_id, "failed")
             .await
         {
@@ -285,6 +289,7 @@ impl SessionLifecycleGuard {
 
     /// Mark session as interrupted (client disconnected / user cancel).
     pub async fn interrupt(&mut self, reason: &str) {
+        warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Interrupted, self.session_id);
         match crate::db::sessions::set_session_run_status(&self.db, self.session_id, "interrupted").await {
             Ok(()) => {
                 self.outcome = SessionOutcome::Interrupted;
