@@ -129,11 +129,6 @@ impl SessionManager {
         .await
     }
 
-    /// Update the session `run_status` field.
-    pub async fn set_run_status(&self, session_id: Uuid, status: &str) -> Result<()> {
-        crate::db::sessions::set_session_run_status(&self.db, session_id, status).await
-    }
-
     /// Trim the session message history to `max` messages (oldest first).
     pub async fn trim_messages(&self, session_id: Uuid, max: u32) -> Result<u64> {
         crate::db::sessions::trim_session_messages(&self.db, session_id, max).await

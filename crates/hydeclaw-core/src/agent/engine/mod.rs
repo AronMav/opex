@@ -1,17 +1,12 @@
 use anyhow::Result;
-use hydeclaw_types::{IncomingMessage, Message, MessageRole, ToolDefinition};
+use hydeclaw_types::{Message, MessageRole, ToolDefinition};
 use sqlx::PgPool;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::channel_actions::ChannelActionRouter;
 use super::providers::LlmProvider;
 use crate::mcp::McpRegistry;
-
-use super::error_classify;
-use super::thinking::{looks_incomplete, maybe_strip_thinking, strip_thinking};
-use super::tool_loop::LoopDetector;
 
 
 // Extracted impl AgentEngine blocks (submodules of engine for full super:: access)
@@ -30,7 +25,6 @@ pub mod loop_detector_integration;
 // REF-01 task 2: re-export stream submodule items so external callers keep
 // resolving `crate::agent::engine::{ProcessingPhase, StreamEvent}`.
 pub use self::stream::{ProcessingPhase, StreamEvent};
-pub(crate) use self::stream::ProcessingGuard;
 
 // REF-01 task 3: re-export ApprovalResult so `super::engine::ApprovalResult`
 // keeps resolving for `approval_manager.rs` and external callers.
@@ -106,10 +100,7 @@ const AUTO_CONTINUE_NUDGE: &str = "[system] You described remaining steps but di
 // above via `pub use self::approval_flow::ApprovalResult` so
 // `approval_manager.rs` keeps importing it via `super::engine::ApprovalResult`.
 
-// ProcessingGuard — moved to self::stream (REF-01 task 2), re-exported above
-// via `pub(crate) use self::stream::ProcessingGuard`.
-
-use crate::agent::session_manager::{SessionLifecycleGuard, SessionManager};
+use crate::agent::session_manager::SessionManager;
 
 /// Convert a DB `MessageRow` into a typed Message.
 /// Parses `tool_calls` JSON exactly once per row (ENG-02).

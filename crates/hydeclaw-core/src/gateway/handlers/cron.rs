@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post, put},
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use sqlx::Row;
 
 use super::super::AppState;
