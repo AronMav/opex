@@ -66,11 +66,10 @@ Replace `partial_text: String` fields in `InactivityTimeout`, `MaxDurationExceed
 pub enum PartialState {
     /// Accumulated text deltas — usable for Anthropic assistant prefill.
     Text(String),
-    /// Stream was cut during a tool_use block. `discarded` is always true
-    /// since we cannot resume mid-tool-use JSON.
-    ToolUse { discarded: bool },
-    /// Stream was cut during a thinking block. Same: always discarded.
-    Thinking { discarded: bool },
+    /// Stream was cut during a tool_use block — cannot resume mid-JSON.
+    ToolUse,
+    /// Stream was cut during a thinking block — cannot resume.
+    Thinking,
     /// Nothing accumulated before the timeout.
     Empty,
 }
@@ -177,21 +176,34 @@ No provider struct changes needed — `self.cancel` stays as `CancellationToken`
 
 **File:** `crates/hydeclaw-core/src/agent/providers.rs`
 
-Add a default method to `LlmProvider` trait so `execute.rs` can query the deadline without downcast:
+Add two default methods to `LlmProvider` trait:
 
 ```rust
 /// Maximum wall-clock duration for all retry attempts combined. 0 = infinite.
 /// Overridden by each concrete provider to return `self.timeouts.run_max_duration_secs`.
 fn run_max_duration_secs(&self) -> u64 { 0 }
+
+/// True when the provider supports Anthropic-style assistant prefill (appending
+/// a partial assistant message so the model continues from it).
+/// Only `AnthropicProvider` overrides this to `true`.
+fn supports_prefill(&self) -> bool { false }
 ```
 
-Implement in `OpenAiProvider`, `AnthropicProvider`, `GoogleProvider`, `OllamaProvider`:
+Implement in `OpenAiProvider`, `GoogleProvider`, `OllamaProvider`:
 
 ```rust
 fn run_max_duration_secs(&self) -> u64 { self.timeouts.run_max_duration_secs }
+// supports_prefill() uses default false
 ```
 
-`RoutingProvider` returns the value from its active route's inner provider, or 0 if no route is active.
+Implement in `AnthropicProvider`:
+
+```rust
+fn run_max_duration_secs(&self) -> u64 { self.timeouts.run_max_duration_secs }
+fn supports_prefill(&self) -> bool { true }
+```
+
+`RoutingProvider` returns `0` for both methods — the inner provider manages its own stream timeouts; applying a deadline at routing level would double-count elapsed time across routes.
 
 ---
 
@@ -244,6 +256,8 @@ pub async fn chat_stream_with_deadline_retry(
 ) -> Result<hydeclaw_types::LlmResponse, LlmCallError>
 ```
 
+**Return contract:** On timeout retry, the function loops internally and returns only when the model succeeds, `run_max_duration_secs` is exceeded, or `session_cancel` fires. It does NOT emit `StreamEvent::Reconnecting` — that is the caller's responsibility (see R8).
+
 **Algorithm:**
 
 ```
@@ -268,7 +282,6 @@ loop:
         Err(e @ InactivityTimeout { partial_state, .. } | e @ MaxDurationExceeded { partial_state, .. }):
             attempt += 1
             log WAL llm_retry event (attempt, reason, partial_resumable)
-            emit SSE Reconnecting { attempt, delay_ms }
 
             delay = min(2^attempt * 2s, 30s)  // 2s, 4s, 8s, 16s, 30s cap
 
@@ -279,19 +292,17 @@ loop:
             }
 
             // Build resume context
-            if partial_state.is_resumable() and provider_supports_prefill(provider):
+            if partial_state.is_resumable() and provider.supports_prefill():
                 // Anthropic: append assistant prefill message
                 messages = resume_messages.clone()
                 messages.push(Message { role: Assistant, content: partial_state.text() })
-                // Model continues from here; no user "continue" needed for Anthropic ≤4.5
+                // Model continues from here
             else:
                 // Discard partial, retry with original messages
                 messages = resume_messages.clone()
 
         Err(other) => return Err(other)  // ConnectTimeout, AuthError, etc. — propagate to routing
 ```
-
-**`provider_supports_prefill`:** checks `provider.name()` for `"anthropic"` prefix.
 
 **Backoff:** exponential 2s base, 30s cap. `select!` with `session_cancel.cancelled()` so user Stop interrupts backoff immediately.
 
@@ -315,7 +326,7 @@ let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_transient_retry
 
 // After:
 // Note: `sm` is already instantiated earlier in execute() — reuse it.
-let run_max = engine.cfg().provider.run_max_duration_secs();  // via LlmProvider trait (R6b)
+let run_max = provider.run_max_duration_secs();  // via LlmProvider trait (R6b)
 let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
     provider,
     &mut messages,
@@ -329,7 +340,19 @@ let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
 );
 ```
 
-`session_id`, `sm`, and `cancel` are all already in scope in `execute()` (see existing code).
+`session_id`, `sm`, `provider`, and `cancel` are all already in scope in `execute()`.
+
+**SSE `Reconnecting` emission** belongs in `execute.rs`, not in `llm_call.rs` (which has no sink access). `chat_stream_with_deadline_retry` is called inside `forward_chunks_into_sink`. Since the deadline retry loops internally and returns only on final success/failure, the sink cannot observe intermediate retry attempts from the outside.
+
+Solution: wrap `forward_chunks_into_sink` in a thin outer loop in `execute.rs` that drives one `chat_stream_with_deadline_retry` call — but since the retry is now internal to `chat_stream_with_deadline_retry`, emit the event via a callback. Pass an optional `on_retry` closure:
+
+```rust
+let on_retry = |attempt: u32, delay_ms: u64| {
+    let _ = sink.emit(PipelineEvent::Stream(StreamEvent::Reconnecting { attempt, delay_ms }));
+};
+```
+
+Add `on_retry: Option<&dyn Fn(u32, u64)>` as the last parameter of `chat_stream_with_deadline_retry`. Called after delay is computed, before `sleep`. `execute.rs` passes `Some(&on_retry)`; tests pass `None`.
 
 ---
 
@@ -355,21 +378,37 @@ Non-fatal: `.ok()` — retry continues even if WAL write fails.
 
 ### R10 — SSE `reconnecting` event
 
-**File:** `crates/hydeclaw-core/src/gateway/mod.rs` (sse_types) + `ui/src/stores/sse-events.ts`
+**Files:** `crates/hydeclaw-core/src/gateway/mod.rs` (sse_types), `ui/src/stores/sse-events.ts`, `ui/src/stores/chat-store.ts`
 
 Add new `StreamEvent` variant:
 
 ```rust
-// In sse_types:
+// In sse_types (gateway/mod.rs):
 Reconnecting { attempt: u32, delay_ms: u64 },
 ```
 
-Serialized as:
-```json
-{"type": "reconnecting", "attempt": 1, "delay_ms": 2000}
-```
+Serialized as `{"type": "reconnecting", "attempt": 1, "delay_ms": 2000}`.
 
-Frontend: display "Model is thinking, retrying..." indicator during backoff. Dismiss on next `text-start` or `finish`. This requires a small addition to `sse-events.ts` and the chat store reconnect indicator.
+**Frontend (`sse-events.ts`):** add `"reconnecting"` to the union type of known event types.
+
+**Frontend (`chat-store.ts`):** add `isReconnecting: boolean` flag to `AgentState`. Set to `true` on `reconnecting` event, reset to `false` on `text-start`, `finish`, or `error`. The chat UI shows a "Model is retrying..." banner while `isReconnecting` is true — dismiss is automatic on next token arrival.
+
+**`chat_stream_with_deadline_retry` final signature** (incorporating `on_retry` from R8):
+
+```rust
+pub async fn chat_stream_with_deadline_retry(
+    provider: &dyn LlmProvider,
+    messages: &mut Vec<Message>,
+    tools: &[ToolDefinition],
+    chunk_tx: mpsc::UnboundedSender<String>,
+    compact: &impl Compactor,
+    session_cancel: &CancellationToken,
+    run_max_duration_secs: u64,
+    session_id: Uuid,
+    sm: &SessionManager,
+    on_retry: Option<&dyn Fn(u32, u64)>,  // (attempt, delay_ms) callback
+) -> Result<hydeclaw_types::LlmResponse, LlmCallError>
+```
 
 ---
 
@@ -386,7 +425,7 @@ Frontend: display "Model is thinking, retrying..." indicator during backoff. Dis
 
 - `partial_state_text_is_resumable`: `PartialState::Text("hello")` → `is_resumable() == true`
 - `partial_state_empty_is_not_resumable`: `PartialState::Empty` → `is_resumable() == false`
-- `partial_state_tool_use_is_not_resumable`: `PartialState::ToolUse { discarded: true }` → `is_resumable() == false`
+- `partial_state_tool_use_is_not_resumable`: `PartialState::ToolUse` → `is_resumable() == false`
 - `inactivity_is_not_failover_worthy_after_change`: verify `is_failover_worthy() == false`
 
 ### Unit tests (in `error_classify.rs`)
