@@ -1,6 +1,7 @@
 "use client";
 import * as React from "react";
 import type { TimeoutsConfig } from "@/types/api";
+import { useTranslation } from "@/hooks/use-translation";
 
 const DEFAULTS: TimeoutsConfig = {
   connect_secs: 10,
@@ -22,23 +23,25 @@ type Props = {
 };
 
 export function TimeoutsSection({ value, onChange }: Props) {
+  const { t } = useTranslation();
+
   const fields: Array<[keyof TimeoutsConfig, string]> = [
-    ["connect_secs", "Connect"],
-    ["request_secs", "Request (non-streaming)"],
-    ["stream_inactivity_secs", "Stream inactivity"],
-    ["stream_max_duration_secs", "Stream max duration"],
+    ["connect_secs", t("providers.timeout_connect")],
+    ["request_secs", t("providers.timeout_request")],
+    ["stream_inactivity_secs", t("providers.timeout_stream_inactivity")],
+    ["stream_max_duration_secs", t("providers.timeout_stream_max")],
   ];
   const errors: Partial<Record<keyof TimeoutsConfig, string>> = {};
   for (const [k] of fields) {
     const v = value[k] ?? DEFAULTS[k];
     const [lo, hi] = BOUNDS[k];
-    if (v < lo || v > hi) errors[k] = `must be >= ${lo} and <= ${hi}`;
+    if (v < lo || v > hi) errors[k] = t("providers.timeout_error", { lo, hi });
   }
 
   return (
     <fieldset className="border rounded-md p-3 space-y-2">
       <legend className="text-sm font-medium">
-        Timeouts (seconds, 0 = no limit)
+        {t("providers.timeouts_section")}
       </legend>
       {fields.map(([k, label]) => (
         <label key={k} className="flex items-center justify-between gap-4">

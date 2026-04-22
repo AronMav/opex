@@ -62,7 +62,7 @@ import { CanvasPanel } from "./CanvasPanel";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
-import { inviteAgent } from "@/lib/api";
+import { inviteAgent, assertToken } from "@/lib/api";
 import type { SessionRow, AgentInfo } from "@/types/api";
 import { TaskPlanPanel } from "@/components/TaskPlanPanel";
 
@@ -119,6 +119,31 @@ export default function ChatPage() {
   // IMPORTANT: Wait until sessions are ACTUALLY loaded (not just isLoading=false with empty data).
   // React Query can report isLoading=false before the first fetch completes (initial state).
   const sessionsReady = !sessionsLoading && sessionsData !== undefined;
+
+  // Cross-agent URL deep-link resolver. When ?s= session is not in the current agent's
+  // list, fetch the session to find its owning agent and switch to it. This handles
+  // shared URLs where the recipient's localStorage points to a different agent.
+  const urlResolveFetched = useRef<string | null>(null);
+  useEffect(() => {
+    if (!urlSessionId || !sessionsReady || !currentAgent) return;
+    const agentState = useChatStore.getState().agents[currentAgent];
+    if (agentState?.activeSessionId === urlSessionId) return;
+    if (sessions.some((s) => s.id === urlSessionId)) return; // restore effect handles this
+    if (urlResolveFetched.current === urlSessionId) return; // already tried
+    urlResolveFetched.current = urlSessionId;
+    fetch(`/api/sessions/${urlSessionId}`, {
+      headers: { Authorization: `Bearer ${assertToken()}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { agent_id?: string } | null) => {
+        if (!data?.agent_id) return;
+        if (agents.includes(data.agent_id) && data.agent_id !== currentAgent) {
+          useChatStore.getState().setCurrentAgent(data.agent_id);
+        }
+      })
+      .catch(() => {});
+  }, [urlSessionId, sessionsReady, sessions, currentAgent, agents]);
+
   useEffect(() => {
     if (!currentAgent || !sessionsReady) return;
 
@@ -362,7 +387,7 @@ export default function ChatPage() {
 
   // Agent selector component (reused in desktop header and mobile)
   const agentSelector = (
-    <Select value={currentAgent} onValueChange={switchAgent} aria-label="Switch agent">
+    <Select value={currentAgent} onValueChange={switchAgent} aria-label={t("chat.switch_agent")}>
       <SelectTrigger size="sm" className="w-auto min-w-[5rem] sm:min-w-[7rem] max-w-[7rem] md:max-w-[10rem] text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
         <SelectValue />
       </SelectTrigger>
@@ -621,7 +646,7 @@ export default function ChatPage() {
     <ChatRuntimeProvider key={currentAgent}>
     <div className="flex h-full flex-col lg:flex-row bg-background overflow-hidden">
       {/* Desktop sidebar — visible only at lg+ */}
-      <aside className="hidden w-[280px] shrink-0 flex-col border-r border-border lg:flex" aria-label="Session list">
+      <aside className="hidden w-[280px] shrink-0 flex-col border-r border-border lg:flex" aria-label={t("chat.session_list")}>
         {sessionList}
       </aside>
 

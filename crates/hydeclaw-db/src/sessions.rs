@@ -397,14 +397,15 @@ pub fn warn_invalid_transition(from: Option<SessionStatus>, to: SessionStatus, s
 }
 
 /// Try to atomically claim a session as `'running'`. Returns `true` when the
-/// update succeeded (previous status was not `'done'`), `false` when the
-/// session was already in a terminal `'done'` state and bootstrap must not
-/// proceed. Using `rows_affected` prevents bootstrap from silently running on
-/// a session that has already been finalized, which causes the guard-drop
-/// `'failed'` / concurrent-finalize race.
+/// session exists and was claimed (regardless of previous status), `false` when
+/// the session was not found. Allows re-entry from any status including `'done'`
+/// so that users can continue completed conversations. The guard-drop race is
+/// safe: `mark_session_run_status_if_running` (used by `SessionLifecycleGuard`)
+/// guards `WHERE run_status = 'running'`, so a completed-then-reclaimed session
+/// cannot be accidentally set to `'failed'` by a stale guard.
 pub async fn claim_session_running(db: &PgPool, session_id: Uuid) -> Result<bool> {
     let rows = sqlx::query(
-        "UPDATE sessions SET run_status = 'running' WHERE id = $1 AND run_status IS DISTINCT FROM 'done'"
+        "UPDATE sessions SET run_status = 'running' WHERE id = $1"
     )
         .bind(session_id)
         .execute(db)

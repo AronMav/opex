@@ -86,15 +86,15 @@ pub async fn bootstrap<S: EventSink>(
         )
         .await?;
 
-    // 2. Atomically claim the session as 'running'. Bail if it is already 'done'
-    //    so the bootstrap does not proceed on a session that another pipeline
-    //    run already finalized — this prevents the guard-drop / concurrent-
-    //    finalize race that produces spurious 'failed' WAL entries.
+    // 2. Atomically claim the session as 'running'. Allows re-entry from any
+    //    status, including 'done', so users can continue completed sessions.
+    //    Ok(false) means the session was deleted between build_context and here
+    //    (race between UI and a concurrent delete) — bail in that case only.
     let sm = SessionManager::new(engine.cfg().db.clone());
     match crate::db::sessions::claim_session_running(&engine.cfg().db, session_id).await {
         Ok(true) => {}
         Ok(false) => {
-            anyhow::bail!("session {} is already done; bootstrap aborted", session_id);
+            anyhow::bail!("session {} not found; bootstrap aborted", session_id);
         }
         Err(e) => {
             tracing::warn!(session_id = %session_id, error = %e, "claim_session_running failed");

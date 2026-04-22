@@ -2,6 +2,7 @@
 
 import { PulseDotLoader } from "@/components/ui/loader";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/hooks/use-translation";
 
 interface ReconnectingIndicatorProps {
   attempt: number;
@@ -10,11 +11,12 @@ interface ReconnectingIndicatorProps {
 }
 
 export function ReconnectingIndicator({ attempt, maxAttempts, className }: ReconnectingIndicatorProps) {
+  const { t } = useTranslation();
   return (
     <div
       role="status"
       aria-live="polite"
-      aria-label={`Reconnecting, attempt ${attempt} of ${maxAttempts}`}
+      aria-label={t("chat.reconnecting_aria", { attempt, max: maxAttempts })}
       className={cn(
         "mx-auto flex max-w-fit items-center gap-2 rounded-lg border border-primary/20 bg-muted/40 px-3 py-2",
         className,
@@ -22,7 +24,7 @@ export function ReconnectingIndicator({ attempt, maxAttempts, className }: Recon
     >
       <PulseDotLoader size="sm" />
       <span className="text-sm text-muted-foreground">
-        Reconnecting
+        {t("chat.reconnecting")}
         <span className="inline-flex">
           <span className="animate-[loading-dots_1.4s_infinite_0.2s]">.</span>
           <span className="animate-[loading-dots_1.4s_infinite_0.4s]">.</span>
@@ -30,7 +32,7 @@ export function ReconnectingIndicator({ attempt, maxAttempts, className }: Recon
         </span>
       </span>
       <span className="text-xs text-muted-foreground">
-        (attempt <span className="text-foreground">{attempt}</span>/{maxAttempts})
+        ({t("chat.reconnecting_attempt_word")} <span className="text-foreground">{attempt}</span>/{maxAttempts})
       </span>
     </div>
   );

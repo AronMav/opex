@@ -20,7 +20,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/sessions/latest", get(api_latest_session))
         .route("/api/sessions/search", get(api_search_sessions))
         .route("/api/sessions/stuck", get(api_stuck_sessions))
-        .route("/api/sessions/{id}", delete(api_delete_session).patch(api_patch_session))
+        .route("/api/sessions/{id}", get(api_get_session).delete(api_delete_session).patch(api_patch_session))
         .route("/api/sessions/{id}/compact", post(api_compact_session))
         .route("/api/sessions/{id}/export", get(api_export_session))
         .route("/api/sessions/{id}/invite", post(api_invite_to_session))
@@ -195,6 +195,41 @@ pub(crate) async fn api_delete_message(
     match result {
         Ok(r) if r.rows_affected() > 0 => Json(json!({"ok": true})).into_response(),
         Ok(_) => ApiError::NotFound("message not found or does not belong to agent".into()).into_response(),
+        Err(e) => ApiError::Internal(e.to_string()).into_response(),
+    }
+}
+
+/// GET /api/sessions/{id}
+/// Returns lightweight session metadata for deep-link resolution (agent_id, channel, run_status).
+/// Does not require an agent parameter — used by the frontend to locate the owning agent.
+pub(crate) async fn api_get_session(
+    State(infra): State<InfraServices>,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    #[derive(sqlx::FromRow)]
+    struct SessionMeta {
+        id: uuid::Uuid,
+        agent_id: String,
+        channel: String,
+        run_status: Option<String>,
+    }
+
+    let row = sqlx::query_as::<_, SessionMeta>(
+        "SELECT id, agent_id, channel, run_status FROM sessions WHERE id = $1"
+    )
+    .bind(id)
+    .fetch_optional(&infra.db)
+    .await;
+
+    match row {
+        Ok(Some(r)) => Json(json!({
+            "id": r.id,
+            "agent_id": r.agent_id,
+            "channel": r.channel,
+            "run_status": r.run_status,
+        }))
+        .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
 }

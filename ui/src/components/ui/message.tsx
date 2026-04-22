@@ -1,3 +1,5 @@
+"use client"
+
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import {
   Tooltip,
@@ -8,6 +10,7 @@ import {
 import { cn } from "@/lib/utils"
 import { Markdown } from "./markdown"
 import { ErrorBoundary } from "./error-boundary"
+import { useTranslation } from "@/hooks/use-translation"
 
 export type MessageProps = {
   children: React.ReactNode
@@ -60,13 +63,14 @@ const MessageContent = ({
   isStreaming,
   ...props
 }: MessageContentProps) => {
+  const { t } = useTranslation()
   const classNames = cn(
     "rounded-lg p-2 text-foreground bg-secondary prose break-words whitespace-normal",
     className
   )
 
   return markdown ? (
-    <ErrorBoundary fallback={<div className={cn(classNames, "border-destructive text-destructive")}>Failed to render message content.</div>}>
+    <ErrorBoundary fallback={<div className={cn(classNames, "border-destructive text-destructive")}>{t("chat.render_error")}</div>}>
       <Markdown className={classNames} isStreaming={isStreaming} {...props}>
         {children as string}
       </Markdown>

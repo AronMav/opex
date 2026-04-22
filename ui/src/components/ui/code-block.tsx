@@ -5,11 +5,13 @@ import { Check, Copy } from "lucide-react"
 import { useTheme } from "next-themes"
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import DOMPurify from "dompurify"
+import { useTranslation } from "@/hooks/use-translation"
 
 // ── Code Block Header Bar ───────────────────────────────────────────────────
 
 function CodeBlockHeader({ language, code }: { language?: string; code: string }) {
   const [copied, setCopied] = useState(false)
+  const { t } = useTranslation()
 
   const handleCopy = useCallback(async () => {
     try {
@@ -37,13 +39,13 @@ function CodeBlockHeader({ language, code }: { language?: string; code: string }
       <span className="font-mono rounded bg-muted/50 px-1.5 py-0.5">{language || "text"}</span>
       <button
         onClick={handleCopy}
-        aria-label={copied ? "Copied" : "Copy code"}
+        aria-label={copied ? t("common.copied") : t("common.copy_code")}
         className="flex items-center gap-1 rounded px-2 py-1.5 md:px-1.5 md:py-0.5 min-h-[44px] md:min-h-0 hover:bg-muted/50 hover:text-foreground transition-colors"
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-green-500" />
         ) : (
-          <><Copy className="h-3.5 w-3.5" /> <span>Copy</span></>
+          <><Copy className="h-3.5 w-3.5" /> <span>{t("common.copy")}</span></>
         )}
       </button>
     </div>

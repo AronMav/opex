@@ -3,6 +3,7 @@
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useChatStore } from "@/stores/chat-store";
+import { useTranslation } from "@/hooks/use-translation";
 
 interface BranchNavigatorProps {
   parentMessageId: string;
@@ -12,6 +13,7 @@ interface BranchNavigatorProps {
 
 export function BranchNavigator({ parentMessageId, siblings, currentIndex }: BranchNavigatorProps) {
   const switchBranch = useChatStore((s) => s.switchBranch);
+  const { t } = useTranslation();
 
   if (siblings.length <= 1) return null;
 
@@ -23,7 +25,7 @@ export function BranchNavigator({ parentMessageId, siblings, currentIndex }: Bra
         onClick={() => switchBranch(parentMessageId, siblings[currentIndex - 1].id)}
         disabled={currentIndex === 0}
         className="h-5 w-5 rounded-full"
-        aria-label="Previous branch"
+        aria-label={t("chat.branch_previous")}
       >
         <ChevronLeft className="h-3 w-3" />
       </Button>
@@ -36,7 +38,7 @@ export function BranchNavigator({ parentMessageId, siblings, currentIndex }: Bra
         onClick={() => switchBranch(parentMessageId, siblings[currentIndex + 1].id)}
         disabled={currentIndex === siblings.length - 1}
         className="h-5 w-5 rounded-full"
-        aria-label="Next branch"
+        aria-label={t("chat.branch_next")}
       >
         <ChevronRight className="h-3 w-3" />
       </Button>
