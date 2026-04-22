@@ -44,6 +44,7 @@ fn build_provider_clients_honors_non_default_timeouts() {
         request_secs: 45,
         stream_inactivity_secs: 30,
         stream_max_duration_secs: 300,
+        run_max_duration_secs: 0,
     };
     let (_req, _stream) = build_provider_clients(&cfg);
     // Zero request_secs means "no limit" — must also not panic.
@@ -52,6 +53,7 @@ fn build_provider_clients_honors_non_default_timeouts() {
         request_secs: 0,
         stream_inactivity_secs: 60,
         stream_max_duration_secs: 600,
+        run_max_duration_secs: 0,
     };
     let (_req2, _stream2) = build_provider_clients(&cfg_zero);
 }
@@ -66,6 +68,7 @@ async fn build_provider_stores_timeouts_on_openai_provider() {
         request_secs: 33,
         stream_inactivity_secs: 44,
         stream_max_duration_secs: 555,
+        run_max_duration_secs: 0,
     };
     let secrets = Arc::new(SecretsManager::new_noop());
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -98,6 +101,7 @@ async fn openai_new_from_row_honors_overrides_and_timeouts() {
         request_secs: 111,
         stream_inactivity_secs: 22,
         stream_max_duration_secs: 333,
+        run_max_duration_secs: 0,
     };
     let secrets = Arc::new(SecretsManager::new_noop());
     let cancel = tokio_util::sync::CancellationToken::new();

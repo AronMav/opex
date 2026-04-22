@@ -148,6 +148,17 @@ pub trait LlmProvider: Send + Sync {
     fn current_model(&self) -> String {
         self.name().to_string()
     }
+
+    /// Maximum wall-clock duration for all retry attempts combined (seconds). 0 = infinite.
+    fn run_max_duration_secs(&self) -> u64 {
+        0
+    }
+
+    /// True when the provider supports Anthropic-style assistant prefill
+    /// (injecting a partial assistant message so the model continues from it).
+    fn supports_prefill(&self) -> bool {
+        false
+    }
 }
 
 // ── ModelOverride ─────────────────────────────────────────────────────────────

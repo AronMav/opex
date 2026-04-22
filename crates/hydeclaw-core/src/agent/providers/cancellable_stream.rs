@@ -280,6 +280,7 @@ mod tests {
             request_secs: 120,
             stream_inactivity_secs: 1,      // 1s to keep test fast
             stream_max_duration_secs: 3600, // effectively off
+            run_max_duration_secs: 0,
         };
         let inner = chunk_stream(vec![
             ("hello", Duration::from_millis(100)),
@@ -307,6 +308,7 @@ mod tests {
             request_secs: 120,
             stream_inactivity_secs: 1,
             stream_max_duration_secs: 3600,
+            run_max_duration_secs: 0,
         };
         // 5 chunks, each 400 ms apart — each arrives well under the 1 s limit.
         let inner = chunk_stream((0..5).map(|_| ("x", Duration::from_millis(400))).collect());
@@ -328,6 +330,7 @@ mod tests {
             request_secs: 120,
             stream_inactivity_secs: 60,
             stream_max_duration_secs: 1, // 1s wall clock
+            run_max_duration_secs: 0,
         };
         // Chunks every 100 ms for 3 seconds (30 total) — inactivity never fires,
         // but max_duration must trigger around 1s.
@@ -356,6 +359,7 @@ mod tests {
             request_secs: 120,
             stream_inactivity_secs: 1,
             stream_max_duration_secs: 3600,
+            run_max_duration_secs: 0,
         };
 
         // Source sends 5 chunks quickly (50 ms apart) then closes cleanly.
@@ -395,6 +399,7 @@ mod tests {
                 request_secs: 120,
                 stream_inactivity_secs: 60,
                 stream_max_duration_secs: 3600,
+                run_max_duration_secs: 0,
             };
             // Source streams forever (pending) — no natural EOF.
             let inner = chunk_stream(vec![("alpha", Duration::from_millis(10))]);
@@ -439,6 +444,7 @@ mod tests {
             request_secs: 120,
             stream_inactivity_secs: 60,
             stream_max_duration_secs: 3600,
+            run_max_duration_secs: 0,
         };
         let inner = chunk_stream(vec![("x", Duration::from_millis(10))]);
         let out = stream_with_cancellation(inner, token.clone(), slot.clone(), timeouts);

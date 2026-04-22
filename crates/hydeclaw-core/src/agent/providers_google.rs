@@ -559,6 +559,10 @@ impl LlmProvider for GoogleProvider {
     fn current_model(&self) -> String {
         self.model.effective()
     }
+
+    fn run_max_duration_secs(&self) -> u64 {
+        self.timeouts.run_max_duration_secs
+    }
 }
 
 /// Recursively strip `"required": []` from JSON schemas.

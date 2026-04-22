@@ -566,6 +566,14 @@ impl LlmProvider for AnthropicProvider {
     fn current_model(&self) -> String {
         self.model.effective()
     }
+
+    fn run_max_duration_secs(&self) -> u64 {
+        self.timeouts.run_max_duration_secs
+    }
+
+    fn supports_prefill(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

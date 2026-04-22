@@ -14,6 +14,10 @@ pub struct TimeoutsConfig {
     pub stream_inactivity_secs: u64,
     #[serde(default = "default_stream_max_duration_secs")]
     pub stream_max_duration_secs: u64,
+    /// Maximum wall-clock duration for ALL retry attempts combined (seconds).
+    /// Zero = no limit; the session runs until the model responds or user cancels.
+    #[serde(default)]
+    pub run_max_duration_secs: u64,
 }
 
 fn default_connect_secs() -> u64 { 10 }
@@ -28,6 +32,7 @@ impl Default for TimeoutsConfig {
             request_secs: default_request_secs(),
             stream_inactivity_secs: default_stream_inactivity_secs(),
             stream_max_duration_secs: default_stream_max_duration_secs(),
+            run_max_duration_secs: 0,
         }
     }
 }
@@ -226,6 +231,7 @@ mod tests {
             request_secs: 3600,
             stream_inactivity_secs: 3600,
             stream_max_duration_secs: 7200,
+            run_max_duration_secs: 0,
         };
         assert!(cfg.validate().is_ok());
         let cfg2 = TimeoutsConfig {
@@ -233,7 +239,26 @@ mod tests {
             request_secs: 0,
             stream_inactivity_secs: 0,
             stream_max_duration_secs: 0,
+            run_max_duration_secs: 0,
         };
         assert!(cfg2.validate().is_ok());
+    }
+
+    #[test]
+    fn run_max_duration_secs_defaults_to_zero() {
+        assert_eq!(TimeoutsConfig::default().run_max_duration_secs, 0);
+    }
+
+    #[test]
+    fn run_max_duration_secs_round_trips_json() {
+        let input = r#"{"run_max_duration_secs": 3600}"#;
+        let cfg: TimeoutsConfig = serde_json::from_str(input).unwrap();
+        assert_eq!(cfg.run_max_duration_secs, 3600);
+    }
+
+    #[test]
+    fn run_max_duration_secs_zero_is_valid() {
+        let cfg = TimeoutsConfig { run_max_duration_secs: 0, ..Default::default() };
+        assert!(cfg.validate().is_ok());
     }
 }
