@@ -87,6 +87,12 @@ impl TimeoutsConfig {
                 self.stream_max_duration_secs
             ));
         }
+        if self.run_max_duration_secs > 86400 {
+            return Err(format!(
+                "run_max_duration_secs must be in 0..=86400 (got {})",
+                self.run_max_duration_secs
+            ));
+        }
         Ok(())
     }
 }
@@ -260,5 +266,18 @@ mod tests {
     fn run_max_duration_secs_zero_is_valid() {
         let cfg = TimeoutsConfig { run_max_duration_secs: 0, ..Default::default() };
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_run_max_duration_secs_boundary() {
+        let cfg = TimeoutsConfig { run_max_duration_secs: 86400, ..Default::default() };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_run_max_duration_secs_over_86400() {
+        let cfg = TimeoutsConfig { run_max_duration_secs: 86401, ..Default::default() };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("run_max_duration_secs"), "{err}");
     }
 }

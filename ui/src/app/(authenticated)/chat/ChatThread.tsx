@@ -82,6 +82,7 @@ export function ChatThread({
   const connectionPhase = useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle");
   const reconnectAttempt = useChatStore((s) => s.agents[s.currentAgent]?.reconnectAttempt ?? 0);
   const maxReconnectAttempts = useChatStore((s) => s.agents[s.currentAgent]?.maxReconnectAttempts ?? 3);
+  const isLlmReconnecting = useChatStore((s) => s.agents[s.currentAgent]?.isLlmReconnecting ?? false);
   const activeSessionIds = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionIds ?? []);
   // Engine running: either WS says it's active, OR React Query sessions list says run_status=running
   const { data: sessionsData } = useSessions(currentAgent);
@@ -200,8 +201,8 @@ export function ChatThread({
         onLoadEarlier={() => loadEarlierMessages(currentAgent)}
       />
 
-      {/* Reconnecting indicator */}
-      {connectionPhase === "reconnecting" && (
+      {/* Reconnecting indicator — SSE transport reconnect OR LLM-level retry */}
+      {(connectionPhase === "reconnecting" || isLlmReconnecting) && (
         <ReconnectingIndicator
           attempt={reconnectAttempt}
           maxAttempts={maxReconnectAttempts}
