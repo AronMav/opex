@@ -27,10 +27,36 @@ pub enum CancelReason {
     ShutdownDrain,
 }
 
+/// Structured partial response state captured on stream timeout.
+///
+/// Only `Text` can be used for Anthropic-style assistant prefill.
+/// `ToolUse` and `Thinking` cannot be partially resumed.
+#[derive(Debug, Clone)]
+pub enum PartialState {
+    /// Accumulated text deltas — usable for Anthropic assistant prefill.
+    Text(String),
+    /// Stream cut during a tool_use block — cannot resume mid-JSON.
+    ToolUse,
+    /// Stream cut during a thinking block — cannot resume.
+    Thinking,
+    /// Nothing accumulated before the timeout.
+    Empty,
+}
+
+impl PartialState {
+    pub fn is_resumable(&self) -> bool {
+        matches!(self, Self::Text(s) if !s.is_empty())
+    }
+
+    pub fn text(&self) -> Option<&str> {
+        if let Self::Text(s) = self { Some(s) } else { None }
+    }
+}
+
 /// Single typed error enum every LLM provider returns.
 ///
 /// Every variant that corresponds to a cancellation carries
-/// `partial_text` so the engine can persist work already produced;
+/// `partial_state` so the engine can persist work already produced;
 /// see spec §5.
 #[derive(Debug, Clone, Error)]
 pub enum LlmCallError {
@@ -41,7 +67,7 @@ pub enum LlmCallError {
     InactivityTimeout {
         provider: String,
         silent_secs: u64,
-        partial_text: String,
+        partial_state: PartialState,
     },
 
     #[error("{provider}: request timed out after {elapsed_secs}s")]
@@ -51,14 +77,14 @@ pub enum LlmCallError {
     MaxDurationExceeded {
         provider: String,
         elapsed_secs: u64,
-        partial_text: String,
+        partial_state: PartialState,
     },
 
     #[error("stopped by user")]
-    UserCancelled { partial_text: String },
+    UserCancelled { partial_state: PartialState },
 
     #[error("interrupted by shutdown drain")]
-    ShutdownDrain { partial_text: String },
+    ShutdownDrain { partial_state: PartialState },
 
     #[error("{provider}: schema error at byte {at_bytes}: {detail}")]
     SchemaError {
@@ -153,12 +179,12 @@ impl LlmCallError {
         use LlmCallError::*;
         match self {
             ConnectTimeout { .. }
-            | InactivityTimeout { .. }
             | RequestTimeout { .. }
             | Network(_)
             | Server5xx { .. } => true,
 
-            MaxDurationExceeded { .. }
+            InactivityTimeout { .. }      // changed: no longer failover-worthy (retry same provider)
+            | MaxDurationExceeded { .. }
             | UserCancelled { .. }
             | ShutdownDrain { .. }
             | AuthError { .. } => false,
@@ -167,14 +193,14 @@ impl LlmCallError {
         }
     }
 
-    /// Returns the preserved partial text if this variant carries any.
-    pub fn partial_text(&self) -> Option<&str> {
+    /// Returns the partial state if this variant carries one.
+    pub fn partial_state(&self) -> Option<&PartialState> {
         use LlmCallError::*;
         match self {
-            InactivityTimeout { partial_text, .. }
-            | MaxDurationExceeded { partial_text, .. }
-            | UserCancelled { partial_text }
-            | ShutdownDrain { partial_text } => Some(partial_text.as_str()),
+            InactivityTimeout { partial_state, .. }
+            | MaxDurationExceeded { partial_state, .. }
+            | UserCancelled { partial_state }
+            | ShutdownDrain { partial_state } => Some(partial_state),
             _ => None,
         }
     }
@@ -206,16 +232,6 @@ mod tests {
     }
 
     #[test]
-    fn is_failover_worthy_inactivity_timeout() {
-        let e = LlmCallError::InactivityTimeout {
-            provider: "p".into(),
-            silent_secs: 60,
-            partial_text: String::new(),
-        };
-        assert!(e.is_failover_worthy());
-    }
-
-    #[test]
     fn is_failover_worthy_request_timeout() {
         let e = LlmCallError::RequestTimeout { provider: "p".into(), elapsed_secs: 120 };
         assert!(e.is_failover_worthy());
@@ -232,20 +248,20 @@ mod tests {
         let e = LlmCallError::MaxDurationExceeded {
             provider: "p".into(),
             elapsed_secs: 600,
-            partial_text: String::new(),
+            partial_state: PartialState::Empty,
         };
         assert!(!e.is_failover_worthy());
     }
 
     #[test]
     fn not_failover_worthy_user_cancelled() {
-        let e = LlmCallError::UserCancelled { partial_text: String::new() };
+        let e = LlmCallError::UserCancelled { partial_state: PartialState::Empty };
         assert!(!e.is_failover_worthy());
     }
 
     #[test]
     fn not_failover_worthy_shutdown_drain() {
-        let e = LlmCallError::ShutdownDrain { partial_text: String::new() };
+        let e = LlmCallError::ShutdownDrain { partial_state: PartialState::Empty };
         assert!(!e.is_failover_worthy());
     }
 
@@ -273,12 +289,15 @@ mod tests {
     }
 
     #[test]
-    fn variants_carrying_partial_text_can_return_it() {
-        let e = LlmCallError::UserCancelled { partial_text: "hello".into() };
-        assert_eq!(e.partial_text(), Some("hello"));
+    fn variants_carrying_partial_state_can_return_it() {
+        let e = LlmCallError::UserCancelled { partial_state: PartialState::Text("hello".into()) };
+        match e.partial_state() {
+            Some(PartialState::Text(s)) => assert_eq!(s, "hello"),
+            other => panic!("expected Some(Text), got {other:?}"),
+        }
 
         let e2 = LlmCallError::ConnectTimeout { provider: "p".into(), elapsed_secs: 5 };
-        assert_eq!(e2.partial_text(), None);
+        assert!(e2.partial_state().is_none());
     }
 
     // ── classify_reqwest_err tests ──────────────────────────────────────────
@@ -335,10 +354,35 @@ mod tests {
         // these strings breaks historical rows. Pin them here.
         use LlmCallError::*;
         assert_eq!(ConnectTimeout { provider: "p".into(), elapsed_secs: 1 }.abort_reason(), Some("connect_timeout"));
-        assert_eq!(InactivityTimeout { provider: "p".into(), silent_secs: 1, partial_text: "".into() }.abort_reason(), Some("inactivity"));
+        assert_eq!(InactivityTimeout { provider: "p".into(), silent_secs: 1, partial_state: PartialState::Empty }.abort_reason(), Some("inactivity"));
         assert_eq!(RequestTimeout { provider: "p".into(), elapsed_secs: 1 }.abort_reason(), Some("request_timeout"));
-        assert_eq!(MaxDurationExceeded { provider: "p".into(), elapsed_secs: 1, partial_text: "".into() }.abort_reason(), Some("max_duration"));
-        assert_eq!(UserCancelled { partial_text: "".into() }.abort_reason(), Some("user_cancelled"));
-        assert_eq!(ShutdownDrain { partial_text: "".into() }.abort_reason(), Some("shutdown_drain"));
+        assert_eq!(MaxDurationExceeded { provider: "p".into(), elapsed_secs: 1, partial_state: PartialState::Empty }.abort_reason(), Some("max_duration"));
+        assert_eq!(UserCancelled { partial_state: PartialState::Empty }.abort_reason(), Some("user_cancelled"));
+        assert_eq!(ShutdownDrain { partial_state: PartialState::Empty }.abort_reason(), Some("shutdown_drain"));
+    }
+
+    #[test]
+    fn partial_state_text_is_resumable() {
+        use super::PartialState;
+        assert!(PartialState::Text("hello".into()).is_resumable());
+        assert!(!PartialState::Text(String::new()).is_resumable());
+    }
+
+    #[test]
+    fn partial_state_non_text_is_not_resumable() {
+        use super::PartialState;
+        assert!(!PartialState::ToolUse.is_resumable());
+        assert!(!PartialState::Thinking.is_resumable());
+        assert!(!PartialState::Empty.is_resumable());
+    }
+
+    #[test]
+    fn inactivity_is_not_failover_worthy_after_r1() {
+        let e = LlmCallError::InactivityTimeout {
+            provider: "p".into(),
+            silent_secs: 60,
+            partial_state: PartialState::Empty,
+        };
+        assert!(!e.is_failover_worthy(), "InactivityTimeout must NOT be failover-worthy after R1");
     }
 }

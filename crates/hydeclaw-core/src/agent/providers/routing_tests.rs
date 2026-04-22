@@ -13,20 +13,21 @@ use super::{LlmCallError, LlmProvider, RoutingProvider};
 
 // ── Mock providers ───────────────────────────────────────────────────────────
 
-/// Always returns `InactivityTimeout` (failover-worthy).
-struct MockInactivityProvider;
+/// Always returns `Server5xx` (failover-worthy). Used to test failover paths
+/// that previously used InactivityTimeout — after R1, InactivityTimeout is
+/// no longer failover-worthy (it retries the same provider instead).
+struct MockFailoverProvider;
 
 #[async_trait]
-impl LlmProvider for MockInactivityProvider {
+impl LlmProvider for MockFailoverProvider {
     async fn chat(
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
     ) -> anyhow::Result<LlmResponse> {
-        Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
-            provider: "mock-inactivity".into(),
-            silent_secs: 60,
-            partial_text: "partial".into(),
+        Err(anyhow::Error::new(LlmCallError::Server5xx {
+            provider: "mock-failover".into(),
+            status: 503,
         }))
     }
 
@@ -36,15 +37,14 @@ impl LlmProvider for MockInactivityProvider {
         _tools: &[ToolDefinition],
         _chunk_tx: mpsc::UnboundedSender<String>,
     ) -> anyhow::Result<LlmResponse> {
-        Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
-            provider: "mock-inactivity".into(),
-            silent_secs: 60,
-            partial_text: "partial".into(),
+        Err(anyhow::Error::new(LlmCallError::Server5xx {
+            provider: "mock-failover".into(),
+            status: 503,
         }))
     }
 
     fn name(&self) -> &str {
-        "mock-inactivity"
+        "mock-failover"
     }
 }
 
@@ -59,7 +59,7 @@ impl LlmProvider for MockUserCancelProvider {
         _tools: &[ToolDefinition],
     ) -> anyhow::Result<LlmResponse> {
         Err(anyhow::Error::new(LlmCallError::UserCancelled {
-            partial_text: "partial-before-cancel".into(),
+            partial_state: crate::agent::providers::error::PartialState::Text("partial-before-cancel".into()),
         }))
     }
 
@@ -151,9 +151,58 @@ impl LlmProvider for MockSuccessProvider {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
+/// After R1, `Server5xx` is failover-worthy and triggers failover to the next route.
 #[tokio::test]
-async fn routing_fails_over_on_inactivity_timeout() {
+async fn routing_fails_over_on_server_error() {
     let called = Arc::new(AtomicBool::new(false));
+    let primary: Arc<dyn LlmProvider> = Arc::new(MockFailoverProvider);
+    let fallback: Arc<dyn LlmProvider> = Arc::new(MockSuccessProvider {
+        called: called.clone(),
+        marker: "from-fallback",
+    });
+
+    let routing = RoutingProvider::new_for_test(vec![
+        ("primary:mock-failover".into(), primary, 60),
+        ("fallback:mock-success".into(), fallback, 60),
+    ]);
+
+    let resp = routing.chat(&[], &[]).await.expect("failover should succeed");
+    assert_eq!(resp.content, "from-fallback");
+    assert!(called.load(Ordering::SeqCst), "fallback must have been called");
+}
+
+/// After R1, `InactivityTimeout` is NOT failover-worthy — it bubbles up for retry.
+#[tokio::test]
+async fn routing_does_not_fail_over_on_inactivity_timeout() {
+    use crate::agent::providers::error::PartialState;
+
+    let called = Arc::new(AtomicBool::new(false));
+
+    struct MockInactivityProvider;
+    #[async_trait]
+    impl LlmProvider for MockInactivityProvider {
+        async fn chat(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+        ) -> anyhow::Result<LlmResponse> {
+            Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
+                provider: "mock-inactivity".into(),
+                silent_secs: 60,
+                partial_state: PartialState::Text("partial".into()),
+            }))
+        }
+        async fn chat_stream(
+            &self,
+            messages: &[Message],
+            tools: &[ToolDefinition],
+            _chunk_tx: mpsc::UnboundedSender<String>,
+        ) -> anyhow::Result<LlmResponse> {
+            self.chat(messages, tools).await
+        }
+        fn name(&self) -> &str { "mock-inactivity" }
+    }
+
     let primary: Arc<dyn LlmProvider> = Arc::new(MockInactivityProvider);
     let fallback: Arc<dyn LlmProvider> = Arc::new(MockSuccessProvider {
         called: called.clone(),
@@ -165,9 +214,19 @@ async fn routing_fails_over_on_inactivity_timeout() {
         ("fallback:mock-success".into(), fallback, 60),
     ]);
 
-    let resp = routing.chat(&[], &[]).await.expect("failover should succeed");
-    assert_eq!(resp.content, "from-fallback");
-    assert!(called.load(Ordering::SeqCst), "fallback must have been called");
+    let err = routing
+        .chat(&[], &[])
+        .await
+        .expect_err("InactivityTimeout must bubble up after R1, not fail over");
+    let typed = err.downcast_ref::<LlmCallError>().expect("error must be LlmCallError");
+    assert!(
+        matches!(typed, LlmCallError::InactivityTimeout { .. }),
+        "expected InactivityTimeout, got {typed:?}"
+    );
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "fallback MUST NOT be called for non-failover-worthy InactivityTimeout"
+    );
 }
 
 #[tokio::test]
@@ -195,8 +254,11 @@ async fn routing_does_not_fail_over_on_user_cancel() {
         matches!(typed, LlmCallError::UserCancelled { .. }),
         "expected UserCancelled, got {typed:?}"
     );
-    // Partial text preserved.
-    assert_eq!(typed.partial_text(), Some("partial-before-cancel"));
+    // Partial state preserved.
+    match typed.partial_state() {
+        Some(crate::agent::providers::error::PartialState::Text(s)) => assert_eq!(s, "partial-before-cancel"),
+        other => panic!("expected Some(Text(\"partial-before-cancel\")), got {other:?}"),
+    }
     assert!(
         !called.load(Ordering::SeqCst),
         "fallback MUST NOT have been called for non-failover-worthy error"
@@ -234,20 +296,18 @@ async fn routing_does_not_fail_over_on_auth_error() {
     );
 }
 
-/// LLM-timeout refactor Task 22: when `RoutingProvider` takes the
-/// failover path on an inactivity timeout, both counters (timeout + failover)
-/// are bumped on the process-wide `MetricsRegistry`.
+/// LLM-timeout refactor: `InactivityTimeout` is NOT failover-worthy after R1,
+/// but the timeout counter IS still bumped on `handle_provider_error`.
 ///
 /// Test isolation note: the `global()` OnceLock is process-wide and tests
 /// run in parallel, so we can't read absolute values. Instead we use
-/// unique provider names ("mock-inactivity-unique-t22" / "fallback-unique-t22")
-/// that no other test touches, guaranteeing a clean baseline.
+/// unique provider names so this test's counter labels are isolated.
 #[tokio::test]
-async fn routing_bumps_timeout_and_failover_counters_on_inactivity() {
+async fn routing_bumps_timeout_counter_on_inactivity_but_does_not_fail_over() {
     use std::sync::Arc;
+    use crate::agent::providers::error::PartialState;
 
-    // Provider that returns an InactivityTimeout with a unique provider
-    // name so this test's counter labels are isolated.
+    // Provider that returns an InactivityTimeout with a unique provider name.
     struct UniqueInactivityProvider;
     #[async_trait]
     impl LlmProvider for UniqueInactivityProvider {
@@ -259,7 +319,7 @@ async fn routing_bumps_timeout_and_failover_counters_on_inactivity() {
             Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
                 provider: "mock-inactivity-unique-t22".into(),
                 silent_secs: 60,
-                partial_text: "".into(),
+                partial_state: PartialState::Empty,
             }))
         }
         async fn chat_stream(
@@ -295,14 +355,21 @@ async fn routing_bumps_timeout_and_failover_counters_on_inactivity() {
         ("fallback:unique-t22".into(), fallback, 60),
     ]);
 
-    let resp = routing.chat(&[], &[]).await.expect("failover should succeed");
-    assert_eq!(resp.content, "from-fallback-t22");
+    // After R1: InactivityTimeout bubbles up, fallback is NOT called.
+    let err = routing
+        .chat(&[], &[])
+        .await
+        .expect_err("InactivityTimeout must bubble up after R1");
+    let typed = err.downcast_ref::<LlmCallError>().expect("must be LlmCallError");
+    assert!(matches!(typed, LlmCallError::InactivityTimeout { .. }));
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "fallback MUST NOT be called for non-failover-worthy InactivityTimeout"
+    );
 
     // Unique labels → exact-equality assertion is safe even under parallel
-    // test execution.
+    // test execution. Timeout counter IS bumped even for non-failover errors.
     let timeout_snap = metrics.snapshot_llm_timeout_total();
-    let failover_snap = metrics.snapshot_llm_failover_total();
-
     assert_eq!(
         timeout_snap.get(&(
             "mock-inactivity-unique-t22".to_string(),
@@ -311,28 +378,30 @@ async fn routing_bumps_timeout_and_failover_counters_on_inactivity() {
         Some(&1),
         "llm_timeout_total{{provider=mock-inactivity-unique-t22,kind=inactivity}} must be 1"
     );
+    // Failover counter is NOT bumped — inactivity is no longer failover-worthy.
+    let failover_snap = metrics.snapshot_llm_failover_total();
     assert_eq!(
         failover_snap.get(&(
             "primary:unique-t22".to_string(),
             "fallback:unique-t22".to_string(),
             "inactivity".to_string()
         )),
-        Some(&1),
-        "llm_failover_total{{from=primary:unique-t22,to=fallback:unique-t22,reason=inactivity}} must be 1"
+        None,
+        "llm_failover_total must NOT be bumped for non-failover-worthy InactivityTimeout"
     );
 }
 
 #[tokio::test]
-async fn routing_fails_over_on_streaming_inactivity() {
+async fn routing_fails_over_on_streaming_server_error() {
     let called = Arc::new(AtomicBool::new(false));
-    let primary: Arc<dyn LlmProvider> = Arc::new(MockInactivityProvider);
+    let primary: Arc<dyn LlmProvider> = Arc::new(MockFailoverProvider);
     let fallback: Arc<dyn LlmProvider> = Arc::new(MockSuccessProvider {
         called: called.clone(),
         marker: "streamed-fallback",
     });
 
     let routing = RoutingProvider::new_for_test(vec![
-        ("primary:mock-inactivity".into(), primary, 60),
+        ("primary:mock-failover".into(), primary, 60),
         ("fallback:mock-success".into(), fallback, 60),
     ]);
 
@@ -348,24 +417,24 @@ async fn routing_fails_over_on_streaming_inactivity() {
 // ── Issue #9: max_failover_attempts cap ──────────────────────────────────────
 
 /// Counts how many times it's invoked and always returns a failover-worthy error.
-/// Used to prove the cap stops iteration before the full route list is exhausted.
-struct CountingInactivityProvider {
+/// Uses `Server5xx` (failover-worthy) — NOT InactivityTimeout, which is no
+/// longer failover-worthy after R1.
+struct CountingFailoverProvider {
     calls: Arc<std::sync::atomic::AtomicU32>,
     tag: &'static str,
 }
 
 #[async_trait]
-impl LlmProvider for CountingInactivityProvider {
+impl LlmProvider for CountingFailoverProvider {
     async fn chat(
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
     ) -> anyhow::Result<LlmResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
+        Err(anyhow::Error::new(LlmCallError::Server5xx {
             provider: self.tag.to_string(),
-            silent_secs: 60,
-            partial_text: "".into(),
+            status: 503,
         }))
     }
 
@@ -389,7 +458,7 @@ async fn routing_respects_max_failover_attempts_cap() {
     let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
 
     let make = |tag: &'static str| -> Arc<dyn LlmProvider> {
-        Arc::new(CountingInactivityProvider {
+        Arc::new(CountingFailoverProvider {
             calls: calls.clone(),
             tag,
         })
@@ -428,7 +497,7 @@ async fn routing_default_cap_allows_full_chain_when_large() {
     // With u32::MAX cap (default of new_for_test), all 4 routes are tried.
     let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
     let make = |tag: &'static str| -> Arc<dyn LlmProvider> {
-        Arc::new(CountingInactivityProvider {
+        Arc::new(CountingFailoverProvider {
             calls: calls.clone(),
             tag,
         })

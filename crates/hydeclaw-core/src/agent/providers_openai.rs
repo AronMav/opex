@@ -519,7 +519,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let slot = CancelSlot::new();
         let byte_stream = stream_with_cancellation(
             resp.bytes_stream(),
-            self.cancel.clone(),
+            self.cancel.child_token(),
             slot.clone(),
             self.timeouts,
         );
@@ -631,24 +631,27 @@ impl LlmProvider for OpenAiCompatibleProvider {
         // (user_cancelled / shutdown_drain / max_duration / inactivity) or
         // treat it as failover-worthy (see `LlmCallError::is_failover_worthy`).
         if let Some(reason) = slot.get() {
-            use crate::agent::providers::error::CancelReason;
+            use crate::agent::providers::error::{CancelReason, PartialState};
+            let partial_state = if !tool_call_parts.is_empty() {
+                PartialState::ToolUse
+            } else if !full_content.is_empty() {
+                PartialState::Text(full_content.clone())
+            } else {
+                PartialState::Empty
+            };
             let err = match reason {
                 CancelReason::InactivityTimeout { silent_secs } => LlmCallError::InactivityTimeout {
                     provider: self.name().to_string(),
                     silent_secs,
-                    partial_text: full_content.clone(),
+                    partial_state,
                 },
                 CancelReason::MaxDurationExceeded { elapsed_secs } => LlmCallError::MaxDurationExceeded {
                     provider: self.name().to_string(),
                     elapsed_secs,
-                    partial_text: full_content.clone(),
+                    partial_state,
                 },
-                CancelReason::UserCancelled => LlmCallError::UserCancelled {
-                    partial_text: full_content.clone(),
-                },
-                CancelReason::ShutdownDrain => LlmCallError::ShutdownDrain {
-                    partial_text: full_content.clone(),
-                },
+                CancelReason::UserCancelled => LlmCallError::UserCancelled { partial_state },
+                CancelReason::ShutdownDrain => LlmCallError::ShutdownDrain { partial_state },
             };
             return Err(anyhow::Error::new(err));
         }

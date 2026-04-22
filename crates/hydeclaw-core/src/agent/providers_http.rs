@@ -224,24 +224,25 @@ pub async fn parse_sse_stream(
 
     // Stream exited. If cancellation fired, surface the typed reason.
     if let Some(reason) = slot.get() {
-        use crate::agent::providers::error::CancelReason;
+        use crate::agent::providers::error::{CancelReason, PartialState};
+        let partial_state = if !partial_text.is_empty() {
+            PartialState::Text(partial_text.clone())
+        } else {
+            PartialState::Empty
+        };
         let err = match reason {
             CancelReason::InactivityTimeout { silent_secs } => LlmCallError::InactivityTimeout {
                 provider: provider_name.to_string(),
                 silent_secs,
-                partial_text: partial_text.clone(),
+                partial_state,
             },
             CancelReason::MaxDurationExceeded { elapsed_secs } => LlmCallError::MaxDurationExceeded {
                 provider: provider_name.to_string(),
                 elapsed_secs,
-                partial_text: partial_text.clone(),
+                partial_state,
             },
-            CancelReason::UserCancelled => LlmCallError::UserCancelled {
-                partial_text: partial_text.clone(),
-            },
-            CancelReason::ShutdownDrain => LlmCallError::ShutdownDrain {
-                partial_text: partial_text.clone(),
-            },
+            CancelReason::UserCancelled => LlmCallError::UserCancelled { partial_state },
+            CancelReason::ShutdownDrain => LlmCallError::ShutdownDrain { partial_state },
         };
         return Err(anyhow::Error::new(err));
     }
