@@ -186,7 +186,7 @@ export function AgentEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-xl rounded-xl">
+      <DialogContent className="max-h-[90vh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-2xl rounded-xl">
         <DialogHeader className="px-5 pt-4 pb-0 border-b-0 bg-muted/20">
           <DialogTitle className="text-sm font-bold text-foreground truncate pb-3">
             {editName ? t("agents.editing", { name: editName }) : t("agents.new_agent_dialog")}
