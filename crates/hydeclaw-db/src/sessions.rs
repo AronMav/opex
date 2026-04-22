@@ -3,6 +3,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool, Row};
 use uuid::Uuid;
 
+use crate::session_status::SessionStatus;
+
 /// Maximum number of bind parameters per single SQL round-trip.
 ///
 /// PostgreSQL's extended-query wire protocol uses a 16-bit length field for
@@ -361,21 +363,37 @@ pub async fn finalize_streaming_message(db: &PgPool, message_id: Uuid) -> Result
     Ok(())
 }
 
-/// Set `run_status` for a session (called on enter/exit of `handle_with_status`).
-/// H4: guards ALL terminal states — first writer wins, no later transition can
-/// overwrite a terminal value. `claim_session_running` intentionally bypasses
-/// this guard because it re-enters a session the user is actively continuing.
+/// Set `run_status` for a session (finalize path: running → terminal).
+///
+/// Only allows transitions from `running` or `NULL` (new session). This blocks
+/// all terminal→terminal jumps (e.g. failed→done, interrupted→failed) at the
+/// SQL level. `claim_session_running` keeps its own looser guard because it
+/// must allow soft-terminal → running re-entry.
 pub async fn set_session_run_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<()> {
     sqlx::query(
         "UPDATE sessions SET run_status = $1 \
          WHERE id = $2 \
-           AND run_status IS DISTINCT FROM 'done'"
+           AND (run_status = 'running' OR run_status IS NULL)"
     )
         .bind(status)
         .bind(session_id)
         .execute(db)
         .await?;
     Ok(())
+}
+
+/// Log a warning if the requested transition violates the session FSM.
+/// Does NOT abort — the SQL guard is the hard barrier. This is an early
+/// diagnostic for test failures and log analysis.
+pub fn warn_invalid_transition(from: Option<SessionStatus>, to: SessionStatus, session_id: Uuid) {
+    if let Some(f) = from {
+        if !f.can_transition_to(to) {
+            tracing::warn!(
+                from = f.as_str(), to = to.as_str(), %session_id,
+                "session FSM violation: invalid status transition"
+            );
+        }
+    }
 }
 
 /// Try to atomically claim a session as `'running'`. Returns `true` when the
