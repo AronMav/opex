@@ -174,6 +174,8 @@ export interface AgentState {
   reconnectAttempt: number;
   /** NET-02: Max reconnect attempts (exposed for UI indicator). */
   maxReconnectAttempts: number;
+  /** True while the LLM deadline retry loop is backing off before next attempt. */
+  isLlmReconnecting: boolean;
   /** Branch selection state: parentMessageId -> selectedChildId. */
   selectedBranches: Record<string, string>;
 }
@@ -234,6 +236,7 @@ export function emptyAgentState(): AgentState {
     streamGeneration: 0,
     reconnectAttempt: 0,
     maxReconnectAttempts: 3,
+    isLlmReconnecting: false,
     selectedBranches: {},
   };
 }

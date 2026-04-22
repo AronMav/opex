@@ -136,6 +136,9 @@ export async function processSSEStream(
 
           case "text-start": {
             if (event.agentName) session.buffer.currentRespondingAgent = event.agentName;
+            session.writeDraft((agentDraft: AgentState) => {
+              agentDraft.isLlmReconnecting = false;
+            });
             break;
           }
 
@@ -330,6 +333,13 @@ export async function processSSEStream(
             break;
           }
 
+          case "reconnecting": {
+            session.writeDraft((agentDraft: AgentState) => {
+              agentDraft.isLlmReconnecting = true;
+            });
+            break;
+          }
+
           case "finish": {
             receivedFinishEvent = true;
             session.cancelScheduledCommit();
@@ -340,6 +350,7 @@ export async function processSSEStream(
             if (receivedSessionId) {
               const sid = receivedSessionId;
               session.writeDraft((agentDraft: AgentState) => {
+                agentDraft.isLlmReconnecting = false;
                 agentDraft.activeSessionIds = (agentDraft.activeSessionIds || []).filter((id: string) => id !== sid);
               });
             }
@@ -351,7 +362,7 @@ export async function processSSEStream(
             if (errText.includes("turn limit") || errText.includes("cycle detected")) {
               session.write({ turnLimitMessage: errText });
             } else {
-              session.write({ streamError: errText, connectionPhase: "error", connectionError: errText });
+              session.write({ streamError: errText, connectionPhase: "error", connectionError: errText, isLlmReconnecting: false });
             }
             break;
           }

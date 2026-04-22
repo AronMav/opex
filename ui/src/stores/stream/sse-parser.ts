@@ -74,6 +74,12 @@ export function parseSseEvent(raw: string): SseEvent | null {
       };
     case "error":
       return { type, errorText: typeof e.errorText === "string" ? e.errorText : "Unknown error" };
+    case "reconnecting":
+      return {
+        type,
+        attempt: typeof e.attempt === "number" ? e.attempt : 1,
+        delay_ms: typeof e.delay_ms === "number" ? e.delay_ms : 2000,
+      };
     case "tool-approval-needed": {
       if (typeof e.approvalId !== "string" || typeof e.toolName !== "string") return null;
       return {
