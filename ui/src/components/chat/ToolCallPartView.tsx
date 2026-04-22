@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState } from "react";
+import { memo, useState, useMemo } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { ChevronRight } from "lucide-react";
@@ -34,13 +34,15 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
             ? "DENY"
             : "...";
 
-  const inputDisplay = args && Object.keys(args).length > 0
-    ? JSON.stringify(args, null, 2)
-    : null;
+  const inputDisplay = useMemo(
+    () => args && Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : null,
+    [args],
+  );
 
-  const resultRaw = result
-    ? typeof result === "string" ? result : JSON.stringify(result, null, 2)
-    : "";
+  const resultRaw = useMemo(
+    () => result ? (typeof result === "string" ? result : JSON.stringify(result, null, 2)) : "",
+    [result],
+  );
   const [showFullOutput, setShowFullOutput] = useState(false);
   const { text: resultDisplay, truncated: resultTruncated, hiddenChars: resultHiddenChars } =
     showFullOutput
