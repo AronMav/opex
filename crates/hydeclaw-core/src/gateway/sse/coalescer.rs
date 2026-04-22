@@ -31,6 +31,7 @@ fn event_type_label(ev: &StreamEvent) -> &'static str {
         StreamEvent::ApprovalResolved { .. } => "approval-resolved",
         StreamEvent::Finish { .. } => "finish",
         StreamEvent::Error(_) => "error",
+        StreamEvent::Reconnecting { .. } => "reconnecting",
     }
 }
 

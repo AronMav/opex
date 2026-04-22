@@ -927,6 +927,15 @@ pub(crate) async fn api_chat_sse(
                     }
                     continue;
                 }
+                StreamEvent::Reconnecting { attempt, delay_ms } => {
+                    let data = serde_json::json!({
+                        "type": sse_types::RECONNECTING,
+                        "attempt": attempt,
+                        "delay_ms": delay_ms,
+                    }).to_string();
+                    let _ = send_and_buffer!(data);
+                    continue;
+                }
                 StreamEvent::Error(ref text) => {
                     let err_data = json!({"type": sse_types::ERROR, "errorText": text}).to_string();
                     let _ = send_and_buffer!(err_data);

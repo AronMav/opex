@@ -59,4 +59,6 @@ pub enum StreamEvent {
         agent_name: String,
     },
     Error(String),
+    /// LLM deadline retry: model timed out and is being retried after `delay_ms`.
+    Reconnecting { attempt: u32, delay_ms: u64 },
 }

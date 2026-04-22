@@ -178,12 +178,17 @@ pub async fn execute<S: EventSink>(
         //    `tests::emits_reasoning_text_before_tool_call` below.
         let (chunk_tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let provider = engine.cfg().provider.as_ref();
-        let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_transient_retry(
+        let run_max = provider.run_max_duration_secs();
+        let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
             provider,
             &mut messages,
             &tools,
             chunk_tx,
             engine,
+            &cancel,
+            run_max,
+            session_id,
+            &sm,
         );
 
         // 5. Drive the LLM future and the chunk forwarder concurrently.
@@ -648,12 +653,30 @@ where
     // the first non-Closed SinkError so the caller can surface it after the
     // LLM future resolves. We intentionally do NOT abort the LLM future on sink
     // errors — that would leak the in-flight provider call.
+    //
+    // Reconnecting signal: if the chunk starts with `RECONNECTING_PREFIX`, it is
+    // a control signal injected by `chat_stream_with_deadline_retry`. Emit a
+    // `StreamEvent::Reconnecting` event instead of `TextDelta` and do NOT add
+    // the chunk to `partial` (it must not appear in the accumulated response text).
     async fn emit_chunk<S: EventSink>(
         sink: &mut S,
         chunk: String,
         partial: &mut String,
         first_err: &mut Option<anyhow::Error>,
     ) {
+        if let Some(rest) = chunk.strip_prefix(crate::agent::pipeline::llm_call::RECONNECTING_PREFIX) {
+            let mut parts = rest.splitn(2, ':');
+            let attempt = parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
+            let delay_ms = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(2000);
+            match sink.emit(PipelineEvent::Stream(StreamEvent::Reconnecting { attempt, delay_ms })).await {
+                Ok(()) | Err(SinkError::Closed) => {}
+                Err(other) if first_err.is_none() => {
+                    *first_err = Some(anyhow::Error::new(other));
+                }
+                Err(_) => {}
+            }
+            return; // Do NOT add to partial text accumulator
+        }
         partial.push_str(&chunk);
         match sink.emit(PipelineEvent::Stream(StreamEvent::TextDelta(chunk))).await {
             Ok(()) | Err(SinkError::Closed) => {}
@@ -806,6 +829,50 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Test C: A `__reconnecting__:` prefixed chunk must emit a
+    /// `StreamEvent::Reconnecting` event and must NOT contribute to the
+    /// partial text accumulator. A subsequent plain text chunk IS accumulated.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn reconnecting_prefix_emits_reconnecting_event_and_skips_partial() {
+        let (chunk_tx, chunk_rx) = mpsc::unbounded_channel::<String>();
+
+        // LLM future: send reconnecting signal then a normal text chunk.
+        let llm_fut = async move {
+            chunk_tx.send("__reconnecting__:1:2000".to_string()).unwrap();
+            chunk_tx.send("Hello".to_string()).unwrap();
+            drop(chunk_tx);
+            Ok::<LlmResponse, anyhow::Error>(mk_response(vec![]))
+        };
+
+        let mut sink = MockSink::new();
+        let (out, sink) = {
+            let mut s = sink;
+            let out = forward_chunks_into_sink(llm_fut, chunk_rx, &mut s).await;
+            (out, s)
+        };
+
+        let (_llm_result, partial, sink_err) = out;
+        assert!(sink_err.is_none(), "no fatal sink error expected");
+
+        // Partial text must be "Hello" only — the reconnecting signal must NOT be included.
+        assert_eq!(partial, "Hello", "partial must not contain the reconnecting signal");
+
+        // Exactly one Reconnecting event must have been emitted.
+        let reconnecting_events: Vec<_> = sink.events.iter().filter_map(|e| {
+            if let PipelineEvent::Stream(StreamEvent::Reconnecting { attempt, delay_ms }) = e {
+                Some((*attempt, *delay_ms))
+            } else {
+                None
+            }
+        }).collect();
+        assert_eq!(reconnecting_events.len(), 1, "expected exactly 1 Reconnecting event, got: {:?}", reconnecting_events);
+        assert_eq!(reconnecting_events[0], (1, 2000), "Reconnecting payload mismatch");
+
+        // Exactly one TextDelta("Hello") must have been emitted.
+        let deltas = text_deltas(&sink);
+        assert_eq!(deltas, vec!["Hello".to_string()], "expected TextDelta(Hello), got: {deltas:?}");
     }
 
     /// Test B: When the LLM call returns tool_calls, any text chunks that

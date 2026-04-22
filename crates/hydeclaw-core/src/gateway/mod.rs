@@ -95,6 +95,7 @@ mod sse_types {
     pub const ERROR: &str = "error";
     pub const APPROVAL_NEEDED: &str = "tool-approval-needed";
     pub const APPROVAL_RESOLVED: &str = "tool-approval-resolved";
+    pub const RECONNECTING: &str = "reconnecting";
 }
 
 /// Public OpenAI-format message — used by gateway AND referenced from `engine::handle_openai`.
