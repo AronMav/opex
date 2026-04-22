@@ -186,7 +186,7 @@ export function AgentEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-2xl rounded-xl">
+      <DialogContent className="flex flex-col max-h-[90vh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-2xl rounded-xl">
         <DialogHeader className="px-5 pt-4 pb-0 border-b-0 bg-muted/20">
           <DialogTitle className="text-sm font-bold text-foreground truncate pb-3">
             {editName ? t("agents.editing", { name: editName }) : t("agents.new_agent_dialog")}
@@ -223,12 +223,11 @@ export function AgentEditDialog({
         </DialogHeader>
         <div className="border-t border-border bg-muted/5" />
 
-        <ScrollArea className="max-h-[55vh] sm:max-h-[65vh]">
-          <div className="px-5 py-3 space-y-3">
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="px-5 py-3"><div className="grid">
 
             {/* ── General tab ── */}
-            {activeTab === "general" && (
-              <>
+            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "general" ? "" : "invisible pointer-events-none select-none"}`}>
                 <div className="flex flex-wrap items-end gap-3 mb-3">
                   <div className="shrink-0">
                     <div className="h-[18px]" />
@@ -421,12 +420,10 @@ export function AgentEditDialog({
                     <Input type="number" step="10000" min="0" value={form.dailyBudgetTokens} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ dailyBudgetTokens: e.target.value })} />
                   </Field>
                 </div>
-              </>
-            )}
+            </div>
 
             {/* ── Tools tab ── */}
-            {activeTab === "tools" && (
-              <>
+            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "tools" ? "" : "invisible pointer-events-none select-none"}`}>
                 <SwitchSection title={t("agents.section_tool_policy")} enabled={form.toolsEnabled} onToggle={(v) => upd({ toolsEnabled: v })}>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
@@ -488,12 +485,10 @@ export function AgentEditDialog({
                     </Field>
                   </div>
                 </SwitchSection>
-              </>
-            )}
+            </div>
 
             {/* ── Behavior tab ── */}
-            {activeTab === "behavior" && (
-              <>
+            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "behavior" ? "" : "invisible pointer-events-none select-none"}`}>
                 <SwitchSection title={t("agents.section_tool_loop")} enabled={form.tlEnabled} onToggle={(v) => upd({ tlEnabled: v })}>
                   <div className="space-y-2">
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -534,12 +529,10 @@ export function AgentEditDialog({
                     </Field>
                   </div>
                 </SwitchSection>
-              </>
-            )}
+            </div>
 
             {/* ── Session tab ── */}
-            {activeTab === "session" && (
-              <>
+            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "session" ? "" : "invisible pointer-events-none select-none"}`}>
                 <SwitchSection title={t("agents.section_session")} enabled={form.sessionEnabled} onToggle={(v) => upd({ sessionEnabled: v })}>
                   <div className="space-y-2">
                     <Field label={t("agents.field_dm_scope")}>
@@ -587,11 +580,10 @@ export function AgentEditDialog({
                     )}
                   </div>
                 </SwitchSection>
-              </>
-            )}
+            </div>
 
             {/* ── Schedule tab ── */}
-            {activeTab === "schedule" && (
+            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "schedule" ? "" : "invisible pointer-events-none select-none"}`}>
               <SwitchSection title={t("agents.section_schedule")} enabled={form.hbEnabled} onToggle={(v) => upd({ hbEnabled: v })}>
                 <CronSchedulePicker value={form.hbCron} onChange={(v) => upd({ hbCron: v })} timezone={form.hbTimezone || "UTC"} onTimezoneChange={(v) => upd({ hbTimezone: v })} />
                 <Field label={t("agents.field_announce_to")}>
@@ -605,11 +597,10 @@ export function AgentEditDialog({
                   </Select>
                 </Field>
               </SwitchSection>
-            )}
+            </div>
 
             {/* ── Channels tab ── */}
-            {activeTab === "channels" && (
-              <>
+            <div className={`col-start-1 row-start-1 space-y-3 ${activeTab === "channels" ? "" : "invisible pointer-events-none select-none"}`}>
                 <RoutingRulesEditor routing={form.routing} llmProviders={llmProviders} discoveredModels={discoveredModels} fetchModels={fetchModels} onChange={(routing) => upd({ routing })} />
                 {editName && (
                   <div className="space-y-2 border-t border-border/30 pt-3">
@@ -638,10 +629,9 @@ export function AgentEditDialog({
                     )}
                   </div>
                 )}
-              </>
-            )}
+            </div>
 
-          </div>
+          </div></div>
         </ScrollArea>
 
         <DialogFooter className="px-5 py-3 border-t border-border bg-muted/20">
