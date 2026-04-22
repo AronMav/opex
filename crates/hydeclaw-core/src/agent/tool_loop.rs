@@ -130,6 +130,19 @@ impl LoopDetector {
         LoopStatus::Ok
     }
 
+    /// Reconstruct detector state from WAL tool_end events after crash/resume (BUG-026).
+    ///
+    /// Replays error-streak (consecutive_errors + last_error_tool) from WAL history.
+    /// Hash-based consecutive detection (consecutive/last_hash) is NOT restored —
+    /// WAL does not store args.
+    pub fn warm_up_from_wal(config: &ToolLoopConfig, events: &[hydeclaw_db::session_wal::WalToolEvent]) -> Self {
+        let mut detector = Self::new(config);
+        for e in events {
+            detector.record_result_from_wal(&e.tool_name, e.success);
+        }
+        detector
+    }
+
     pub fn hash_call_raw(name: &str, args: &serde_json::Value) -> u64 { Self::hash_call(name, args) }
 
     fn hash_call(name: &str, args: &serde_json::Value) -> u64 {
@@ -212,5 +225,50 @@ mod tests {
         // A third identical call must still trip immediately.
         let status2 = detector.check_limits("tool", &args);
         assert!(matches!(status2, LoopStatus::Break(_)), "detector must retain history after nudge — no reset() allowed");
+    }
+
+    #[test]
+    fn warm_up_from_wal_restores_error_streak() {
+        use hydeclaw_db::session_wal::WalToolEvent;
+
+        let cfg = config(3); // error_break_threshold = 3
+        let events2 = vec![
+            WalToolEvent { tool_name: "fs".to_string(), success: false },
+            WalToolEvent { tool_name: "fs".to_string(), success: false },
+        ];
+        let mut d2 = LoopDetector::warm_up_from_wal(&cfg, &events2);
+        let status = d2.record_result("fs", false);
+        assert!(
+            matches!(status, LoopStatus::Break(_)),
+            "error streak should be restored from WAL — 2 prior failures + 1 new = trip at threshold 3"
+        );
+    }
+
+    #[test]
+    fn warm_up_from_wal_empty_events_gives_fresh_detector() {
+        use hydeclaw_db::session_wal::WalToolEvent;
+        let cfg = config(3);
+        let events: Vec<WalToolEvent> = vec![];
+        let mut detector = LoopDetector::warm_up_from_wal(&cfg, &events);
+        // Two failures — should NOT trip yet (only 2 of 3 threshold)
+        detector.record_result("tool", false);
+        let status = detector.record_result("tool", false);
+        assert!(matches!(status, LoopStatus::Ok), "empty WAL should produce fresh detector");
+    }
+
+    #[test]
+    fn warm_up_from_wal_success_resets_streak() {
+        use hydeclaw_db::session_wal::WalToolEvent;
+        let cfg = config(3);
+        let events = vec![
+            WalToolEvent { tool_name: "tool".to_string(), success: false },
+            WalToolEvent { tool_name: "tool".to_string(), success: false },
+            WalToolEvent { tool_name: "tool".to_string(), success: true }, // success resets
+        ];
+        let mut detector = LoopDetector::warm_up_from_wal(&cfg, &events);
+        // After a success reset, two more failures should not trip
+        detector.record_result("tool", false);
+        let status = detector.record_result("tool", false);
+        assert!(matches!(status, LoopStatus::Ok), "success in WAL should reset error streak");
     }
 }
