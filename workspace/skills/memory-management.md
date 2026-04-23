@@ -9,45 +9,45 @@ triggers:
   - memory write
 ---
 
-# Управление памятью
+# Memory Management
 
-## Категоризация воспоминаний
+## Categorizing Memories
 
-При сохранении информации в память ВСЕГДА указывай category и topic.
+When saving information to memory, ALWAYS specify category and topic.
 
-### Категории (category)
-- **decision** — принятые решения, выбор между альтернативами
-- **preference** — предпочтения пользователя, вкусы, стиль
-- **event** — произошедшие события, встречи, инциденты
-- **discovery** — найденные факты, инсайты, новые знания
-- **advice** — рекомендации, советы, best practices
-- **general** — всё остальное
+### Categories
+- **decision** — decisions made, choices between alternatives
+- **preference** — user preferences, tastes, style
+- **event** — things that happened, meetings, incidents
+- **discovery** — found facts, insights, new knowledge
+- **advice** — recommendations, tips, best practices
+- **general** — everything else
 
-### Тема (topic)
-Свободный текст, описывающий область: название проекта, технология, имя человека и т.д.
+### Topic
+Free text describing the domain: project name, technology, person's name, etc.
 
-## Примеры
+## Examples
 
-Пользователь: "Запомни что я предпочитаю Python для скриптов"
-→ memory(action="index", content="Пользователь предпочитает Python для скриптов", category="preference", topic="programming", pinned=true)
+User: "Remember that I prefer Python for scripts"
+→ memory(action="index", content="User prefers Python for scripts", category="preference", topic="programming", pinned=true)
 
-Пользователь: "Мы решили использовать PostgreSQL"
-→ memory(action="index", content="Решение: использовать PostgreSQL в проекте", category="decision", topic="database", pinned=true)
+User: "We decided to use PostgreSQL"
+→ memory(action="index", content="Decision: use PostgreSQL in the project", category="decision", topic="database", pinned=true)
 
-## Закрепление (pinned)
+## Pinning
 
-Устанавливай pinned=true для:
-- Ключевых фактов о пользователе
-- Важных решений по проектам
-- Устойчивых предпочтений
+Set pinned=true for:
+- Key facts about the user
+- Important project decisions
+- Stable preferences
 
-pinned=false (по умолчанию) для:
-- Временной информации
-- Деталей разговоров
-- Контекстных заметок
+pinned=false (default) for:
+- Temporary information
+- Conversation details
+- Contextual notes
 
-## Поиск с фильтрацией
+## Filtered Search
 
-При поиске используй category и topic для точности:
-→ memory(action="search", query="база данных", category="decision") — только решения
-→ memory(action="search", query="Python", topic="programming") — только по теме
+Use category and topic for precision:
+- memory(action="search", query="database", category="decision") — decisions only
+- memory(action="search", query="Python", topic="programming") — topic-scoped only
