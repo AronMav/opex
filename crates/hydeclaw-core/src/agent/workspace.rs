@@ -295,10 +295,21 @@ pub fn build_system_prompt(
         prompt.push_str(instructions);
         prompt.push('\n');
     } else {
-        prompt.push_str(concat!(
-            "Match response length to question complexity; use channel-native formatting; bold key conclusions.\n",
-            "For detailed per-channel rules (messenger brevity, cron terseness, inter-agent structured data, API/webhook freedom) load the `channel-formatting` skill.\n",
-        ));
+        match runtime.channel.as_str() {
+            // Web UI: markdown renders natively, no messenger constraints
+            "ui" => prompt.push_str(
+                "Match response length to question complexity. Markdown renders in the UI — use it freely.\n",
+            ),
+            // Automated channels: no human reader, output feeds into further processing
+            "cron" | "heartbeat" | "system" | "inter-agent" => prompt.push_str(
+                "Be concise and structured. Output may be relayed to a channel or another agent.\n",
+            ),
+            // Messenger channel without an explicit formatting prompt from adapter — suggest the skill
+            _ => prompt.push_str(concat!(
+                "Match response length to question complexity; use channel-native formatting; bold key conclusions.\n",
+                "For detailed per-channel rules load the `channel-formatting` skill.\n",
+            )),
+        }
     }
 
     // 5. Available Capabilities with usage guidance
