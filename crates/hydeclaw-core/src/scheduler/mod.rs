@@ -483,9 +483,12 @@ impl Scheduler {
         secrets: Arc<crate::secrets::SecretsManager>,
         agent_deps: Arc<tokio::sync::RwLock<crate::gateway::state::AgentDeps>>,
     ) -> Result<()> {
+        let cron_expr = {
+            let raw = cron_expr.trim();
+            if raw.split_whitespace().count() == 5 { format!("0 {raw}") } else { raw.to_string() }
+        };
         tracing::info!(cron = %cron_expr, retention_days, "scheduling automatic backup");
 
-        let cron_expr = cron_expr.to_string();
         let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
             let db = db.clone();
             let secrets = secrets.clone();

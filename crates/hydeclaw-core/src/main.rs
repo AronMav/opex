@@ -938,10 +938,12 @@ async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[conf
 
     // Automatic backup
     if state.config.config.backup.enabled {
-        sched.add_backup(
+        if let Err(e) = sched.add_backup(
             &state.config.config.backup.cron, state.config.config.backup.retention_days,
             db.clone(), state.auth.secrets.clone(), state.agents.deps.clone(),
-        ).await.ok();
+        ).await {
+            tracing::error!(error = %e, "failed to schedule automatic backup");
+        }
     }
 
     sched.start().await.ok();
