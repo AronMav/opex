@@ -30,12 +30,12 @@ Hosted on GitHub CDN — fetched on demand, never loaded in full.
 
 **Manifest** (categories index):
 ```
-https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/refs/manifest.json
+https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/manifest.json
 ```
 
 **Per-category file**:
 ```
-https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/refs/{slug}.json
+https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/{slug}.json
 ```
 
 Each prompt entry has: `name`, `prompt`, `negative_prompt`, `tags`, `preview_url` (optional).
@@ -47,7 +47,7 @@ Each prompt entry has: `name`, `prompt`, `negative_prompt`, `tags`, `preview_url
 Check if `workspace/refs/image-prompts-manifest.json` exists and was modified within the last 7 days using `workspace_read`. If missing or stale, fetch it:
 
 ```
-process(action="start", command="mkdir -p ~/hydeclaw/workspace/refs && curl -sL 'https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/refs/manifest.json' -o ~/hydeclaw/workspace/refs/image-prompts-manifest.json")
+process(action="start", command="mkdir -p ~/hydeclaw/workspace/refs && curl -sL 'https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/manifest.json' -o ~/hydeclaw/workspace/refs/image-prompts-manifest.json")
 ```
 
 Then read the manifest to see available categories and their slugs.
@@ -68,7 +68,7 @@ Do not interrogate. One question max, then proceed.
 Pick the most fitting category from the manifest. Fetch **only that category's** JSON and filter by keywords — never load full files into context:
 
 ```
-process(action="start", command="curl -sL 'https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/refs/{slug}.json' | python3 -c \"import json,sys; data=json.load(sys.stdin); matches=[p for p in data if any(k in json.dumps(p).lower() for k in ['{kw1}','{kw2}'])]; [print(json.dumps(m)) for m in matches[:8]]\"")
+process(action="start", command="curl -sL 'https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/{slug}.json' | python3 -c \"import json,sys; data=json.load(sys.stdin); matches=[p for p in data if any(k in json.dumps(p).lower() for k in ['{kw1}','{kw2}'])]; [print(json.dumps(m)) for m in matches[:8]]\"")
 ```
 
 If a category is borderline, check at most 2 — don't fetch all 11.
