@@ -92,6 +92,7 @@ pub(crate) const RICH_CARD_PREFIX: &str = "__rich_card__:";
 pub(crate) const FILE_PREFIX: &str = "__file__:";
 
 /// Nudge message injected when auto-continue detects incomplete LLM response.
+#[allow(dead_code)]
 const AUTO_CONTINUE_NUDGE: &str = "[system] You described remaining steps but didn't execute them. Continue and complete the task using tools.";
 
 // CACHEABLE_SEARCH_TOOLS + search_cache_key() — moved to self::yaml_tool_runner (REF-01 task 4).
@@ -287,6 +288,7 @@ impl AgentEngine {
     // — moved to self::yaml_tool_runner (REF-01 task 4).
 
     /// Broadcast a UI event to connected WebSocket clients.
+    #[allow(dead_code)]
     fn broadcast_ui_event(&self, event: serde_json::Value) {
         if let Some(ref tx) = self.state().ui_event_tx {
             tx.send(event.to_string()).ok();

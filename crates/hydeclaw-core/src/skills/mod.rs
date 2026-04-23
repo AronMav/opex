@@ -26,6 +26,7 @@ pub mod evolution;
 /// when a skill is matched. `tools_required` tools are prioritized, but core tools
 /// (memory, workspace, message, shell) are always available.
 use serde::Deserialize;
+use std::cmp::Reverse;
 use std::path::Path;
 use tokio::fs;
 
@@ -122,7 +123,7 @@ pub async fn load_skills(workspace_dir: &str) -> Vec<SkillDef> {
     }
 
     // Sort by priority descending — highest priority skills checked first
-    skills.sort_by(|a, b| b.meta.priority.cmp(&a.meta.priority));
+    skills.sort_by_key(|s| Reverse(s.meta.priority));
 
     skills
 }
@@ -155,7 +156,7 @@ pub async fn load_skills_for_base(workspace_dir: &str) -> Vec<SkillDef> {
         }
     }
 
-    skills.sort_by(|a, b| b.meta.priority.cmp(&a.meta.priority));
+    skills.sort_by_key(|s| Reverse(s.meta.priority));
     skills
 }
 

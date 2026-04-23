@@ -277,6 +277,15 @@ impl LlmProvider for GoogleProvider {
                 })
                 .collect();
             body["tools"] = serde_json::json!([{"functionDeclarations": fn_decls}]);
+            // Force tool call when a skill trigger was detected in the system prompt
+            if let Some(tool_name) = super::forced_skill_tool(messages, tools) {
+                body["toolConfig"] = serde_json::json!({
+                    "functionCallingConfig": {
+                        "mode": "ANY",
+                        "allowedFunctionNames": [tool_name]
+                    }
+                });
+            }
         }
 
         tracing::info!(

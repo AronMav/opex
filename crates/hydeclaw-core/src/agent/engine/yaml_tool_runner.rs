@@ -87,6 +87,7 @@ impl AgentEngine {
     }
 
     /// Truncate a string to `max` chars with "..." suffix, preserving char boundaries.
+    #[allow(dead_code)]
     pub(super) fn truncate_preview(s: &str, max: usize) -> String {
         crate::agent::pipeline::context::truncate_preview(s, max)
     }

@@ -161,6 +161,23 @@ pub trait LlmProvider: Send + Sync {
     }
 }
 
+// ── Skill trigger detection ───────────────────────────────────────────────────
+
+/// Returns `Some("skill_use")` when the system message contains the
+/// "## Relevant Skill Detected" marker AND the tools list includes `skill_use`.
+/// Providers use this to set `tool_choice` so the model is forced to load the
+/// skill before answering. Injected server-side by `context_builder.rs` block 4d.
+pub(crate) fn forced_skill_tool(messages: &[Message], tools: &[ToolDefinition]) -> Option<&'static str> {
+    let has_trigger = messages
+        .iter()
+        .any(|m| m.role == MessageRole::System && m.content.contains("## Relevant Skill Detected"));
+    if has_trigger && tools.iter().any(|t| t.name == "skill_use") {
+        Some("skill_use")
+    } else {
+        None
+    }
+}
+
 // ── ModelOverride ─────────────────────────────────────────────────────────────
 
 /// Shared model-override logic: stores a default model name and an optional

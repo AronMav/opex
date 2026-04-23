@@ -191,8 +191,7 @@ async fn parse_mcp_response(resp: reqwest::Response) -> Result<serde_json::Value
         .lines()
         .filter_map(|line| line.strip_prefix("data:"))
         .map(str::trim)
-        .filter(|s| !s.is_empty() && *s != "[DONE]")
-        .next_back()
+        .rfind(|s| !s.is_empty() && *s != "[DONE]")
         .ok_or_else(|| anyhow::anyhow!("empty SSE stream from MCP server"))?;
 
     serde_json::from_str(payload).map_err(|e| anyhow::anyhow!("MCP SSE JSON parse: {e}"))

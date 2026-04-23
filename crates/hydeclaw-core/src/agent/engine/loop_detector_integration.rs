@@ -104,6 +104,7 @@ impl AgentEngine {
     }
 
     /// Streaming variant of chat_with_transient_retry.
+    #[allow(dead_code)]
     pub(super) async fn chat_stream_with_transient_retry(
         &self,
         messages: &mut Vec<Message>,
@@ -145,6 +146,7 @@ impl AgentEngine {
     }
 
     /// Streaming variant of chat_with_transient_retry_using.
+    #[allow(dead_code)]
     pub(super) async fn chat_stream_with_transient_retry_using(
         &self,
         provider: &Arc<dyn crate::agent::providers::LlmProvider>,
@@ -200,6 +202,7 @@ impl AgentEngine {
     }
 
     /// Fire-and-forget audit event recording.
+    #[allow(dead_code)]
     pub(super) fn audit(&self, event_type: &'static str, actor: Option<&str>, details: serde_json::Value) {
         crate::agent::pipeline::llm_call::audit(
             self.cfg().db.clone(),

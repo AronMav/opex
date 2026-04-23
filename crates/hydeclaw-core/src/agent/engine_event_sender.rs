@@ -104,6 +104,7 @@ impl EngineEventSender {
     ///
     /// Prefer `send_async` in async contexts — it preserves the never-drop
     /// contract for non-text events without requiring a retry loop.
+    #[allow(dead_code)] // used in tests and retained for callers that need sync send
     pub fn send(&self, ev: StreamEvent) -> Result<(), EngineSendError> {
         match self.inner.try_send(ev) {
             Ok(()) => Ok(()),
@@ -150,6 +151,7 @@ mod tests {
     use super::*;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::result_large_err)]
     async fn text_delta_drops_on_full() {
         let (tx, _rx) = mpsc::channel::<StreamEvent>(1);
         let sender = EngineEventSender::new(tx);

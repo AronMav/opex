@@ -1171,8 +1171,7 @@ fn process_conditionals(template: &str, params: &serde_json::Map<String, serde_j
     let mut result = template.to_string();
 
     // Process {{#if param}}...{{/if}}
-    loop {
-        let Some(start) = result.find("{{#if ") else { break };
+    while let Some(start) = result.find("{{#if ") {
         let after_tag = start + 6; // length of "{{#if "
         let Some(close_tag) = result[after_tag..].find("}}") else { break };
         let param_name = &result[after_tag..after_tag + close_tag];
@@ -1188,8 +1187,7 @@ fn process_conditionals(template: &str, params: &serde_json::Map<String, serde_j
     }
 
     // Process {{#unless param}}...{{/unless}}
-    loop {
-        let Some(start) = result.find("{{#unless ") else { break };
+    while let Some(start) = result.find("{{#unless ") {
         let after_tag = start + 10; // length of "{{#unless "
         let Some(close_tag) = result[after_tag..].find("}}") else { break };
         let param_name = &result[after_tag..after_tag + close_tag];

@@ -4,6 +4,7 @@
 pub mod event_types {
     pub const APPROVAL_REQUESTED: &str = "approval_requested";
     pub const APPROVAL_RESOLVED: &str = "approval_resolved";
+    #[allow(dead_code)]
     pub const PROMPT_INJECTION: &str = "prompt_injection_detected";
     pub const COMPACTION: &str = "compaction";
     // Agent lifecycle

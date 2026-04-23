@@ -5,6 +5,7 @@ use hydeclaw_types::IncomingMessage;
 
 /// Check if thinking blocks should be stripped for this message.
 /// Returns false (don't strip) when /think directive is present in context.
+#[allow(dead_code)]
 pub(crate) fn should_strip_thinking(msg: &IncomingMessage) -> bool {
     !msg.context
         .get("directives")
@@ -15,6 +16,7 @@ pub(crate) fn should_strip_thinking(msg: &IncomingMessage) -> bool {
 
 /// Conditionally strip thinking blocks based on message directives and engine thinking level.
 /// Level 0: always strip. Level 1-2: strip (summary TBD). Level 3+: preserve.
+#[allow(dead_code)]
 pub(crate) fn maybe_strip_thinking(text: &str, msg: &IncomingMessage, thinking_level: u8) -> String {
     // Per-message /think directive overrides engine level
     if !should_strip_thinking(msg) {

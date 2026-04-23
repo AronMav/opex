@@ -239,6 +239,10 @@ impl AnthropicProvider {
                     last["cache_control"] = serde_json::json!({"type": "ephemeral"});
                 }
             body["tools"] = serde_json::Value::Array(tools_json);
+            // Force tool call when a skill trigger was detected in the system prompt
+            if let Some(tool_name) = super::forced_skill_tool(messages, tools) {
+                body["tool_choice"] = serde_json::json!({"type": "tool", "name": tool_name});
+            }
         }
 
         (system_text, body)

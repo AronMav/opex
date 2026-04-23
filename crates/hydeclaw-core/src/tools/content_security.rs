@@ -2,6 +2,7 @@
 
 /// Injection pattern: (trigger, `context_words`, label).
 /// Trigger must be present. If `context_words` is non-empty, at least one must also match.
+#[allow(dead_code)]
 const INJECTION_PATTERNS: &[(&str, &[&str], &str)] = &[
     ("ignore", &["previous instructions", "prior instructions", "above instructions"], "ignore_previous_instructions"),
     ("disregard", &["above", "previous"], "disregard_previous"),
@@ -26,6 +27,7 @@ const INJECTION_PATTERNS: &[(&str, &[&str], &str)] = &[
 /// Check user message for prompt injection patterns.
 /// Returns a list of matched pattern names (empty = clean).
 /// Detection is logging-only — messages are NOT blocked.
+#[allow(dead_code)]
 pub fn detect_prompt_injection(text: &str) -> Vec<&'static str> {
     let lower = text.to_lowercase();
     let mut matches = Vec::new();

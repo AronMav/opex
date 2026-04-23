@@ -285,6 +285,10 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         workspace::load_workspace_prompt(&self.cfg().workspace_dir, &self.cfg().agent.name).await
     }
 
+    fn workspace_dir(&self) -> &str {
+        &self.cfg().workspace_dir
+    }
+
     async fn mcp_tool_definitions(&self) -> Vec<hydeclaw_types::ToolDefinition> {
         if let Some(mcp) = self.mcp() {
             mcp.all_tool_definitions().await

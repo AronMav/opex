@@ -263,6 +263,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
             if self.supports_parallel_tools() {
                 body["parallel_tool_calls"] = serde_json::json!(true);
             }
+            // Force tool call when a skill trigger was detected in the system prompt
+            if let Some(tool_name) = super::forced_skill_tool(messages, tools) {
+                body["tool_choice"] = serde_json::json!({
+                    "type": "function",
+                    "function": {"name": tool_name}
+                });
+            }
         }
 
         let msg_count = messages.len();

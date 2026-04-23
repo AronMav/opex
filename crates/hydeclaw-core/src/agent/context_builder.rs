@@ -78,6 +78,7 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
 
     // Workspace
     async fn load_workspace_prompt(&self) -> Result<String>;
+    fn workspace_dir(&self) -> &str;
 
     // MCP
     async fn mcp_tool_definitions(&self) -> Vec<ToolDefinition>;
@@ -215,7 +216,33 @@ impl ContextBuilder for DefaultContextBuilder {
             }
         }
 
-        // 4d. Multi-agent session context
+        // 4d. Skill trigger matching — inject a hint when the user message matches skill triggers
+        {
+            let msg_lower = user_text.to_lowercase();
+            let workspace_dir = deps.workspace_dir();
+            let skills = if deps.agent_base() {
+                crate::skills::load_skills_for_base(workspace_dir).await
+            } else {
+                crate::skills::load_skills(workspace_dir).await
+            };
+            // skills are sorted by priority desc; find the first match
+            if let Some(skill) = skills.iter().find(|s| {
+                !s.meta.triggers.is_empty()
+                    && s.meta.triggers.iter().any(|t| msg_lower.contains(t.to_lowercase().as_str()))
+            }) {
+                system_prompt.push_str(&format!(
+                    "\n\n## Relevant Skill Detected\n\
+                     The user's request matches the **{}** skill: {}.\n\
+                     Call `skill_use(action=\"load\", name=\"{}\")` to load the full instructions \
+                     before responding. Do not answer from memory — load the skill first.\n",
+                    skill.meta.name,
+                    skill.meta.description,
+                    skill.meta.name
+                ));
+            }
+        }
+
+        // 4e. Multi-agent session context
         if let Ok(participants) = deps.session_get_participants(session_id).await
             && participants.len() > 1
         {
