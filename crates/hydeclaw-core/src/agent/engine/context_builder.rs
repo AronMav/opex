@@ -285,10 +285,6 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         workspace::load_workspace_prompt(&self.cfg().workspace_dir, &self.cfg().agent.name).await
     }
 
-    fn workspace_dir(&self) -> &str {
-        &self.cfg().workspace_dir
-    }
-
     async fn mcp_tool_definitions(&self) -> Vec<hydeclaw_types::ToolDefinition> {
         if let Some(mcp) = self.mcp() {
             mcp.all_tool_definitions().await
@@ -352,6 +348,22 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         let map: std::collections::HashMap<String, crate::tools::yaml_tools::YamlToolDef> =
             loaded.iter().cloned().map(|t| (t.name.clone(), t)).collect();
         *self.tex().yaml_tools_cache.write().await = (std::time::Instant::now(), std::sync::Arc::new(map));
+        loaded
+    }
+
+    async fn load_skills_cached(&self) -> Vec<crate::skills::SkillDef> {
+        {
+            let cache = self.tex().skills_cache.read().await;
+            if cache.0.elapsed() < std::time::Duration::from_secs(30) && !cache.1.is_empty() {
+                return cache.1.clone();
+            }
+        }
+        let loaded = if self.cfg().agent.base {
+            crate::skills::load_skills_for_base(&self.cfg().workspace_dir).await
+        } else {
+            crate::skills::load_skills(&self.cfg().workspace_dir).await
+        };
+        *self.tex().skills_cache.write().await = (std::time::Instant::now(), loaded.clone());
         loaded
     }
 

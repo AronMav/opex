@@ -184,6 +184,7 @@ pub async fn start_agent_from_config(
                 sandbox: if agent_cfg.agent.base { None } else { deps.sandbox.clone() },
                 bg_processes: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
                 yaml_tools_cache: tokio::sync::RwLock::new((std::time::Instant::now(), std::sync::Arc::new(std::collections::HashMap::new()))),
+                skills_cache: tokio::sync::RwLock::new((std::time::Instant::now(), vec![])),
                 search_cache: tokio::sync::RwLock::new(std::collections::HashMap::new()),
                 tool_embed_cache: deps.tool_embed_cache.clone(),
                 penalty_cache: deps.penalty_cache.clone(),

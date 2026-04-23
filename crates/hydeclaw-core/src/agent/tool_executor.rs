@@ -77,6 +77,8 @@ pub struct DefaultToolExecutor {
     pub(crate) bg_processes: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::agent::engine::BgProcess>>>,
     /// Cached YAML tool definitions with TTL (avoids per-batch disk reads in parallel execution).
     pub(crate) yaml_tools_cache: tokio::sync::RwLock<(std::time::Instant, std::sync::Arc<std::collections::HashMap<String, crate::tools::yaml_tools::YamlToolDef>>)>,
+    /// Cached skill definitions with TTL (avoids per-message disk reads during context building).
+    pub(crate) skills_cache: tokio::sync::RwLock<(std::time::Instant, Vec<crate::skills::SkillDef>)>,
     /// Per-engine web search cache (`query_hash` → (result, expiry)). TTL: 5 minutes.
     pub(crate) search_cache: tokio::sync::RwLock<std::collections::HashMap<u64, (String, std::time::Instant)>>,
     /// In-memory cache for tool embeddings (semantic top-K selection).
@@ -120,6 +122,7 @@ pub struct DefaultToolExecutorFields {
     pub sandbox: Option<Arc<crate::containers::sandbox::CodeSandbox>>,
     pub bg_processes: Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::agent::engine::BgProcess>>>,
     pub yaml_tools_cache: tokio::sync::RwLock<(std::time::Instant, std::sync::Arc<std::collections::HashMap<String, crate::tools::yaml_tools::YamlToolDef>>)>,
+    pub skills_cache: tokio::sync::RwLock<(std::time::Instant, Vec<crate::skills::SkillDef>)>,
     pub search_cache: tokio::sync::RwLock<std::collections::HashMap<u64, (String, std::time::Instant)>>,
     pub tool_embed_cache: Arc<crate::tools::embedding::ToolEmbeddingCache>,
     pub penalty_cache: Arc<crate::db::tool_quality::PenaltyCache>,
@@ -146,6 +149,7 @@ impl DefaultToolExecutor {
             sandbox: fields.sandbox,
             bg_processes: fields.bg_processes,
             yaml_tools_cache: fields.yaml_tools_cache,
+            skills_cache: fields.skills_cache,
             search_cache: fields.search_cache,
             tool_embed_cache: fields.tool_embed_cache,
             penalty_cache: fields.penalty_cache,

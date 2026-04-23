@@ -78,7 +78,6 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
 
     // Workspace
     async fn load_workspace_prompt(&self) -> Result<String>;
-    fn workspace_dir(&self) -> &str;
 
     // MCP
     async fn mcp_tool_definitions(&self) -> Vec<ToolDefinition>;
@@ -103,6 +102,7 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     // Tools
     fn internal_tool_definitions(&self) -> Vec<ToolDefinition>;
     async fn load_yaml_tools_cached(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef>;
+    async fn load_skills_cached(&self) -> Vec<crate::skills::SkillDef>;
     async fn tool_penalties(&self) -> std::collections::HashMap<String, f32>;
     fn filter_tools_by_policy(&self, tools: Vec<ToolDefinition>) -> Vec<ToolDefinition>;
     async fn select_top_k_tools_semantic(
@@ -198,9 +198,10 @@ impl ContextBuilder for DefaultContextBuilder {
             &runtime,
         );
 
+        let msg_lower = user_text.to_lowercase();
+
         // 4c. Skill capture prompt
         {
-            let msg_lower = user_text.to_lowercase();
             let is_capture_request =
                 (msg_lower.contains("save") && msg_lower.contains("skill"))
                 || (msg_lower.contains("сохрани")
@@ -218,13 +219,7 @@ impl ContextBuilder for DefaultContextBuilder {
 
         // 4d. Skill trigger matching — inject a hint when the user message matches skill triggers
         {
-            let msg_lower = user_text.to_lowercase();
-            let workspace_dir = deps.workspace_dir();
-            let skills = if deps.agent_base() {
-                crate::skills::load_skills_for_base(workspace_dir).await
-            } else {
-                crate::skills::load_skills(workspace_dir).await
-            };
+            let skills = deps.load_skills_cached().await;
             // skills are sorted by priority desc; find the first match
             if let Some(skill) = skills.iter().find(|s| {
                 !s.meta.triggers.is_empty()
