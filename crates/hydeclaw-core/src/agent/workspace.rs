@@ -262,7 +262,6 @@ pub fn build_system_prompt(
     // 2. Project Context & Agent State (workspace files including AGENTS.md with Safety)
     if !workspace_content.is_empty() {
         prompt.push_str("# Project Context\n");
-        prompt.push_str("The following files from your workspace define your current identity, character, and memory. These are configuration files you own and manage. Update them to evolve.\n\n");
         prompt.push_str(workspace_content);
         prompt.push('\n');
     }
@@ -324,7 +323,7 @@ pub fn build_system_prompt(
         if capabilities.is_base {
             prompt.push_str("- **Scheduling**: `cron` to create, list, delete, or run scheduled tasks\n");
         } else {
-            prompt.push_str("- **Scheduling**: `cron(action=\"list\")` to view scheduled tasks (read-only). To create/delete/run cron jobs, use `agent` tool to delegate to the **base agent** (use `agents_list` to find it)\n");
+            prompt.push_str("- **Scheduling**: `cron(action=\"list\")` read-only. Create/delete/run via base agent (`agents_list` to find it)\n");
         }
     }
     if capabilities.has_message_actions {
@@ -343,7 +342,7 @@ pub fn build_system_prompt(
         "- **Skills**: detailed guides loaded on demand. `skill_use(action=\"list\")` to discover, `skill_use(action=\"load\", name=\"...\")` to read. For task classification start with `discovery-protocol`.\n",
     );
     if capabilities.has_browser {
-        prompt.push_str("- **Browser Automation**: `browser_action` (create_session → navigate → click/type/screenshot/evaluate → close; 5 min idle TTL)\n");
+        prompt.push_str("- **Browser Automation**: `browser_action` — load `browser-automation` skill for usage pattern\n");
     }
     if capabilities.has_host_exec {
         prompt.push_str("- **Host Access**: `code_exec` runs bash/python on the host (filesystem, package managers, services, system config)\n");
@@ -351,22 +350,11 @@ pub fn build_system_prompt(
 
     // Agent tool: 1-line pointer, full delegation patterns live in the
     // `multi-agent-coordination` skill (already in the catalogue).
-    prompt.push_str("- **Agent Tool**: delegate to another agent with `agent(action=\"run\"|\"async\"|\"collect\"|\"message\"|\"kill\", target, task)`. Load `multi-agent-coordination` skill for parallel/orchestration patterns.\n");
+    prompt.push_str("- **Agent Tool**: `agent` to delegate and coordinate agents — load `multi-agent-coordination` skill for patterns\n");
 
-    // Memory: 1-line pointer; rules live in `memory-management` skill
-    // (search-before-save, categorization, deduplication).
-    if capabilities.has_memory {
-        prompt.push_str("- **Memory**: `memory(action=\"search\"|\"index\")`. Search before acting on user references to past conversations. Load `memory-management` skill for categorization and deduplication rules.\n");
-    }
-
-    // 8. Language instruction (reinforced — must appear both early and late in prompt)
+    // Language instruction reinforced at end of prompt — must stay load-bearing.
     prompt.push_str(&format!(
-        "\n# Language — CRITICAL RULE\nYou MUST respond EXCLUSIVELY in {lang}. This is non-negotiable.\n\
-        - ALL your messages, explanations, summaries, and text outputs MUST be in {lang}\n\
-        - Tool names, code, URLs, and proper nouns stay in original form\n\
-        - If the user writes in another language, STILL respond in {lang}\n\
-        - Do NOT switch to English or any other language unless the user explicitly asks\n\
-        - This rule applies to EVERY message without exception\n",
+        "\n# Language\nRespond EXCLUSIVELY in {lang}. Tool names, code, URLs, and proper nouns stay in original form.\n",
         lang = language_name(language)
     ));
 
