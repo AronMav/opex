@@ -19,8 +19,14 @@ pub fn spawn_workspace_watcher(
             }
         };
 
-        // Watch entire workspace root -- exclude system dirs at event time
-        let watch_dir_path = std::path::PathBuf::from(&workspace_dir);
+        // Watch entire workspace root -- exclude system dirs at event time.
+        // Canonicalize so the exclude check below can strip a consistent
+        // prefix: `notify` emits absolute paths, and `workspace_dir` is
+        // typically a relative literal ("workspace") from config. Without
+        // canonicalization, `strip_prefix` silently fails and EVERY file
+        // passes the exclude check (skills/, agents/*/SOUL.md, etc.).
+        let watch_dir_path = dunce::canonicalize(&workspace_dir)
+            .unwrap_or_else(|_| std::path::PathBuf::from(&workspace_dir));
         let watch_dir = watch_dir_path.as_path();
 
         if let Err(e) = watcher.watch(watch_dir, RecursiveMode::Recursive) {
@@ -39,15 +45,23 @@ pub fn spawn_workspace_watcher(
 
             match rx.recv_timeout(timeout) {
                 Ok(Ok(Event { kind: EventKind::Create(_) | EventKind::Modify(_), paths, .. })) => {
-                    let workspace_root = std::path::Path::new(&workspace_dir);
                     let exclude_dirs = crate::agent::workspace::MEMORY_INDEX_EXCLUDE_DIRS;
                     for p in paths {
-                        // Skip files in system directories
-                        let in_excluded = p.strip_prefix(workspace_root)
+                        // Skip files in system directories. Check ANY path
+                        // component — belt-and-suspenders over strip_prefix
+                        // against the canonical watch_dir, so a nested file
+                        // like `workspace/agents/Hyde/SOUL.md` is caught even
+                        // if the prefix comparison fails.
+                        let in_excluded = p.strip_prefix(&watch_dir_path)
                             .ok()
                             .and_then(|rel| rel.components().next())
                             .and_then(|c| c.as_os_str().to_str())
-                            .is_some_and(|first| exclude_dirs.contains(&first));
+                            .is_some_and(|first| exclude_dirs.contains(&first))
+                            || p.components().any(|c| {
+                                c.as_os_str()
+                                    .to_str()
+                                    .is_some_and(|s| exclude_dirs.contains(&s))
+                            });
                         if in_excluded {
                             continue;
                         }

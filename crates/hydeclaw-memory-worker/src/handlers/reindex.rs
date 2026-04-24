@@ -196,6 +196,14 @@ async fn handle_legacy_directory(
     let clear_existing = task.params["clear_existing"].as_bool().unwrap_or(false);
     let agent_id = task.params["agent_id"].as_str().unwrap_or("");
 
+    // System directories must never be indexed — their contents (skills,
+    // tools, MCP configs, agent identity files) are not user knowledge and
+    // would poison long-term memory with prompt fragments.
+    const SYSTEM_DIRS: &[&str] = &["tools", "skills", "mcp", "uploads", "agents"];
+    if SYSTEM_DIRS.contains(&directory) {
+        anyhow::bail!("refusing to index system directory '{directory}'");
+    }
+
     let base = std::path::PathBuf::from(workspace_dir).join(directory);
     if !base.exists() || !base.is_dir() {
         anyhow::bail!("directory '{directory}' not found");
