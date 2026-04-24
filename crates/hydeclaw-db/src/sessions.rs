@@ -775,6 +775,34 @@ pub async fn cleanup_old_sessions(db: &PgPool, ttl_days: u32) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
+/// Delete sessions beyond `max_per_agent` for every agent, keeping the
+/// most recent by `last_message_at`. Running sessions are preserved and
+/// not counted toward the cap — they may be actively streaming.
+/// A cap of 0 disables this cleanup.
+pub async fn cleanup_excess_sessions_per_agent(
+    db: &PgPool,
+    max_per_agent: u32,
+) -> Result<u64> {
+    if max_per_agent == 0 {
+        return Ok(0);
+    }
+    let result = sqlx::query(
+        "WITH ranked AS ( \
+           SELECT id, ROW_NUMBER() OVER ( \
+             PARTITION BY agent_id ORDER BY last_message_at DESC \
+           ) AS rn \
+           FROM sessions \
+           WHERE run_status IS NULL OR run_status != 'running' \
+         ) \
+         DELETE FROM sessions \
+         WHERE id IN (SELECT id FROM ranked WHERE rn > $1)",
+    )
+    .bind(max_per_agent as i32)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Find the active session for a user+agent+channel pair (last 4 hours).
 pub async fn find_active_session(
     db: &PgPool,

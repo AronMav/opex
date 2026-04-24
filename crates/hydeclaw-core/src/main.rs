@@ -921,7 +921,29 @@ async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[conf
 
     // Session cleanup (based on max TTL in agent configs)
     let ttl_days = agent_configs.iter().filter_map(|c| c.agent.session.as_ref()).map(|s| s.ttl_days).max().unwrap_or(30);
-    sched.add_session_cleanup(db.clone(), ttl_days).await.ok();
+    let max_sessions_per_agent = state.config.config.limits.max_sessions_per_agent;
+    sched.add_session_cleanup(db.clone(), ttl_days, max_sessions_per_agent).await.ok();
+
+    // One-shot enforcement of the per-agent session cap at startup. Protects
+    // against cron/async-subagent backlogs that accumulated while the gateway
+    // was offline; the daily cron handles steady-state growth from here on.
+    if max_sessions_per_agent > 0 {
+        match hydeclaw_db::sessions::cleanup_excess_sessions_per_agent(
+            db,
+            max_sessions_per_agent,
+        ).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                deleted = n,
+                cap = max_sessions_per_agent,
+                "session cap enforcement at startup trimmed excess sessions"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "session cap enforcement at startup failed (continuing)"
+            ),
+        }
+    }
 
     // Phase 62 RES-03: hourly batched session_events WAL cleanup. Runs
     // alongside the legacy daily add_session_cleanup (which still handles

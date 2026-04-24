@@ -241,6 +241,15 @@ pub struct LimitsConfig {
     /// `drain_body_with_cap` (streaming byte counter). Overflow → 413 Payload Too Large.
     #[serde(default = "default_max_restore_size_mb")]
     pub max_restore_size_mb: u64,
+    /// Maximum sessions retained per agent. Excess oldest non-running
+    /// sessions are deleted at gateway startup and during the daily
+    /// session-cleanup cron. 0 disables the cap. Default: 500.
+    ///
+    /// Complements `agent.session.ttl_days` (age prune): the age prune
+    /// only fires at 05:00 UTC and cannot protect against high-velocity
+    /// session creation (cron-heavy agents, async subagents) between runs.
+    #[serde(default = "default_max_sessions_per_agent")]
+    pub max_sessions_per_agent: u32,
 }
 
 fn default_max_requests() -> u32 { 300 }
@@ -249,6 +258,7 @@ fn default_request_timeout() -> u64 { 180 }
 fn default_max_agent_turns() -> usize { 5 }
 fn default_max_inter_agent_context_chars() -> usize { 2000 }
 fn default_max_restore_size_mb() -> u64 { 500 }
+fn default_max_sessions_per_agent() -> u32 { 500 }
 
 impl Default for LimitsConfig {
     fn default() -> Self {
@@ -259,6 +269,7 @@ impl Default for LimitsConfig {
             max_agent_turns: default_max_agent_turns(),
             max_inter_agent_context_chars: default_max_inter_agent_context_chars(),
             max_restore_size_mb: default_max_restore_size_mb(),
+            max_sessions_per_agent: default_max_sessions_per_agent(),
         }
     }
 }

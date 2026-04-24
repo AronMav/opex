@@ -219,13 +219,23 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Add session cleanup job (daily at 5:00 UTC — delete old sessions).
-    pub async fn add_session_cleanup(&self, db: PgPool, ttl_days: u32) -> Result<()> {
-        if ttl_days == 0 {
-            tracing::info!("session cleanup disabled (ttl_days = 0)");
+    /// Add session cleanup job (daily at 5:00 UTC — delete old sessions
+    /// by age AND enforce per-agent entry cap).
+    pub async fn add_session_cleanup(
+        &self,
+        db: PgPool,
+        ttl_days: u32,
+        max_sessions_per_agent: u32,
+    ) -> Result<()> {
+        if ttl_days == 0 && max_sessions_per_agent == 0 {
+            tracing::info!("session cleanup disabled (ttl_days = 0 and cap = 0)");
             return Ok(());
         }
-        tracing::info!(ttl_days, "scheduling session cleanup (daily 05:00 UTC)");
+        tracing::info!(
+            ttl_days,
+            max_sessions_per_agent,
+            "scheduling session cleanup (daily 05:00 UTC)"
+        );
 
         let job = Job::new_async("0 0 5 * * *", move |_uuid, _lock| {
             let db = db.clone();
@@ -238,6 +248,22 @@ impl Scheduler {
                         }
                     }
                     Err(e) => tracing::error!(error = %e, "session cleanup failed"),
+                }
+                // Enforce per-agent session cap after age-based prune.
+                match crate::db::sessions::cleanup_excess_sessions_per_agent(
+                    &db,
+                    max_sessions_per_agent,
+                ).await {
+                    Ok(0) => {}
+                    Ok(deleted) => tracing::info!(
+                        deleted,
+                        cap = max_sessions_per_agent,
+                        "session cap enforcement trimmed excess sessions"
+                    ),
+                    Err(e) => tracing::error!(
+                        error = %e,
+                        "session cap enforcement failed"
+                    ),
                 }
                 // Prune old WAL events alongside session cleanup
                 match crate::db::session_wal::prune_old_events(&db, ttl_days).await {
