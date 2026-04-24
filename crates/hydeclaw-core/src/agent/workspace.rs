@@ -1037,11 +1037,16 @@ mod tests {
     fn prompt_enforces_language_twice() {
         let p = build_system_prompt("", &[], &test_caps(), "ru", &test_runtime());
         let first = p.find("Russian").expect("language mentioned in Runtime section");
-        let critical = p.find("Language — CRITICAL RULE").expect("Language CRITICAL block missing");
+        // The tail-end Language block was trimmed in faf3498 — the "# Language"
+        // header + "Respond EXCLUSIVELY in <lang>" sentence is the reinforcement
+        // gate against model drift into other languages mid-response.
+        let reinforcement = p
+            .rfind("Respond EXCLUSIVELY in Russian")
+            .expect("Language reinforcement block missing at prompt tail");
         assert!(
-            critical > first,
-            "Language CRITICAL block must come AFTER the initial Runtime mention \
-             (reinforcement gate against Chinese/other drift)"
+            reinforcement > first,
+            "Language reinforcement must come AFTER the initial Runtime mention \
+             (reinforcement gate against mid-response drift)"
         );
     }
 
@@ -1082,14 +1087,19 @@ mod tests {
     }
 
     #[test]
-    fn memory_section_points_to_skill_when_capability_enabled() {
+    fn memory_section_is_brief_not_inline_ruleset() {
         let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime());
+        // Memory capability must still be announced — agents need to know
+        // the tool exists. The detailed categorization/dedup rules live in
+        // the memory-management skill, which is discoverable via the always-
+        // present skill_use(action="list") pointer, so we don't require an
+        // inline skill reference in every prompt.
         assert!(
-            p.contains("memory-management"),
-            "memory section must reference memory-management skill"
+            p.contains("memory(action=\"search\")"),
+            "memory capability must advertise the search action"
         );
-        // The long "Search memory when / Skip memory search when" block is now
-        // in the skill — ensure it did not leak back into the base prompt.
+        // The long "Search memory when / Skip memory search when" block is
+        // now in the skill — ensure it did not leak back into the base prompt.
         assert!(
             !p.contains("Skip memory search when:"),
             "detailed memory search rules must live in the skill, not base prompt"
@@ -1098,10 +1108,17 @@ mod tests {
 
     #[test]
     fn channel_formatting_points_to_skill_when_no_override() {
-        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime());
+        // Channel-aware fallback (13c477a): the channel-formatting skill pointer
+        // is emitted ONLY for messenger channels. UI gets a terser markdown
+        // note, and automated channels (cron/heartbeat/...) get a structured
+        // output note. Use a messenger channel here to exercise the skill
+        // pointer branch.
+        let mut runtime = test_runtime();
+        runtime.channel = "telegram".into();
+        let p = build_system_prompt("", &[], &test_caps(), "en", &runtime);
         assert!(
             p.contains("channel-formatting"),
-            "output section must reference channel-formatting skill when no override"
+            "output section must reference channel-formatting skill when no override on messenger channel"
         );
         // Previously the prompt listed all 5+ channel format rules inline.
         assert!(
