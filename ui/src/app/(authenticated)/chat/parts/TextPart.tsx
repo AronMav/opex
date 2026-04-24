@@ -7,10 +7,9 @@ import { useChatStore } from "@/stores/chat-store";
 import { useSmoothedText } from "@/hooks/use-smoothed-text";
 
 export const TextPart = memo(function TextPart({ text }: { text: string }) {
-  const currentAgent = useChatStore((s) => s.currentAgent)
   const isStreaming = useChatStore(
-    (s) => s.agents[currentAgent]?.connectionPhase === "streaming"
-  )
+    (s) => s.agents[s.currentAgent]?.connectionPhase === "streaming"
+  );
   const cleaned = cleanContent(text);
   const smoothed = useSmoothedText(cleaned, isStreaming);
   if (!smoothed) return null;
