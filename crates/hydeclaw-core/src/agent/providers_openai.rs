@@ -421,6 +421,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
             "messages": messages_to_openai_format(messages),
             "temperature": self.temperature,
             "stream": true,
+            // Opt into the usage block on the final chunk. OpenAI-compatible
+            // servers (Ollama, vLLM, SGLang, LiteLLM, DeepSeek, Moonshot, …)
+            // omit `usage` from streaming responses by default; without this
+            // flag we record 0 input/output tokens for every message on
+            // locally-hosted backends. The parser already reads usage when
+            // present, so this request-side opt-in is all that's needed.
+            "stream_options": { "include_usage": true },
         });
         if let Some(mt) = self.max_tokens {
             body["max_tokens"] = serde_json::json!(mt);
