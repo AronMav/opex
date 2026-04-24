@@ -51,8 +51,6 @@ struct AgentChannelRow {
     pub channel_type: String,
     pub display_name: String,
     pub config: serde_json::Value,
-    #[allow(dead_code)]
-    pub container_name: Option<String>,
     pub status: String,
     pub error_msg: Option<String>,
 }
@@ -70,7 +68,7 @@ pub(crate) async fn api_channels_list(
     Path(agent_name): Path<String>,
 ) -> impl IntoResponse {
     let rows: Result<Vec<AgentChannelRow>, _> = sqlx::query_as(
-        "SELECT id, agent_name, channel_type, display_name, config, container_name, status, error_msg
+        "SELECT id, agent_name, channel_type, display_name, config, status, error_msg
          FROM agent_channels WHERE agent_name = $1 ORDER BY created_at"
     )
     .bind(&agent_name)
@@ -107,7 +105,7 @@ pub(crate) async fn api_channel_create(
     let row: Result<AgentChannelRow, _> = sqlx::query_as(
         "INSERT INTO agent_channels (agent_name, channel_type, display_name, config, status)
          VALUES ($1, $2, $3, $4, 'stopped')
-         RETURNING id, agent_name, channel_type, display_name, config, container_name, status, error_msg"
+         RETURNING id, agent_name, channel_type, display_name, config, status, error_msg"
     )
     .bind(&agent_name)
     .bind(&body.channel_type)
@@ -159,7 +157,7 @@ pub(crate) async fn api_channel_delete(
     };
 
     let row: Option<AgentChannelRow> = sqlx::query_as(
-        "SELECT id, agent_name, channel_type, display_name, config, container_name, status, error_msg
+        "SELECT id, agent_name, channel_type, display_name, config, status, error_msg
          FROM agent_channels WHERE id = $1 AND agent_name = $2"
     )
     .bind(uuid)
@@ -370,7 +368,7 @@ pub(crate) async fn api_channel_status(
     };
 
     let row: Option<AgentChannelRow> = sqlx::query_as(
-        "SELECT id, agent_name, channel_type, display_name, config, container_name, status, error_msg
+        "SELECT id, agent_name, channel_type, display_name, config, status, error_msg
          FROM agent_channels WHERE id = $1 AND agent_name = $2"
     )
     .bind(uuid)
@@ -396,7 +394,7 @@ pub(crate) async fn api_list_all_channels(
 ) -> impl IntoResponse {
     let reveal = query.get("reveal").is_some_and(|v| v == "true");
     let rows = sqlx::query_as::<_, AgentChannelRow>(
-        "SELECT id, agent_name, channel_type, display_name, config, container_name, status, error_msg \
+        "SELECT id, agent_name, channel_type, display_name, config, status, error_msg \
          FROM agent_channels ORDER BY agent_name, created_at",
     )
     .fetch_all(&infra.db)
