@@ -55,12 +55,11 @@ impl SemanticCache {
 
         sqlx::query(
             r#"
-            INSERT INTO tool_execution_cache (tool_name, query_text, query_embedding, result_json, expires_at)
-            VALUES ($1, $2, $3::vector, $4, now() + make_interval(secs => $5))
+            INSERT INTO tool_execution_cache (tool_name, query_embedding, result_json, expires_at)
+            VALUES ($1, $2::vector, $3, now() + make_interval(secs => $4))
             "#,
         )
         .bind(tool_name)
-        .bind(query_text)
         .bind(embedding_vec)
         .bind(result_json)
         .bind(ttl_secs as f64)

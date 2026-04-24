@@ -14,7 +14,6 @@ pub mod memory_queries;
 pub mod outbound;
 pub mod pending;
 pub mod providers;
-pub mod skill_metrics;
 pub mod skill_versions;
 pub mod tool_audit;
 pub mod tool_quality;

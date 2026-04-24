@@ -20,11 +20,6 @@ pub async fn analyze_and_evolve(
         return;
     }
 
-    // Record outcome for each skill used
-    for skill_name in skills_used {
-        let _ = crate::db::skill_metrics::record_outcome(db, skill_name, success).await;
-    }
-
     // Only evolve on failures or unusually long responses
     if success && response.len() < 2000 {
         return;
