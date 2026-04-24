@@ -1,6 +1,6 @@
 {
   "name": "hydeclaw-channels",
-  "version": "0.21.2",
+  "version": "0.21.3",
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
