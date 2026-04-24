@@ -87,12 +87,19 @@ pub(crate) async fn api_list_sessions(
         }
     };
 
+    // Filter by ownership (agent_id), not participation. Previously this
+    // included `OR $1 = ANY(participants)` which surfaced sessions where
+    // the agent was merely invited or @-mentioned. Those sessions are owned
+    // by a different agent and cannot be deleted through this agent's
+    // session list (the DELETE path checks agent_id = owner), so showing
+    // them created a broken UX: "I see the session but can't delete it."
+    // Ownership is the only predicate that matches the delete permission.
     let (query, total) = match q.channel.as_deref() {
         Some(channel) => {
             let channels: Vec<&str> = channel.split(',').collect();
             let rows = sqlx::query_as::<_, sessions::Session>(
                 "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants \
-                 FROM sessions WHERE (agent_id = $1 OR $1 = ANY(participants)) AND channel = ANY($2) \
+                 FROM sessions WHERE agent_id = $1 AND channel = ANY($2) \
                  ORDER BY last_message_at DESC LIMIT $3",
             )
             .bind(agent)
@@ -101,7 +108,7 @@ pub(crate) async fn api_list_sessions(
             .fetch_all(&infra.db)
             .await;
             let total: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM sessions WHERE (agent_id = $1 OR $1 = ANY(participants)) AND channel = ANY($2)",
+                "SELECT COUNT(*) FROM sessions WHERE agent_id = $1 AND channel = ANY($2)",
             )
             .bind(agent)
             .bind(&channels)
@@ -113,7 +120,7 @@ pub(crate) async fn api_list_sessions(
         None => {
             let rows = sqlx::query_as::<_, sessions::Session>(
                 "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants \
-                 FROM sessions WHERE agent_id = $1 OR $1 = ANY(participants) \
+                 FROM sessions WHERE agent_id = $1 \
                  ORDER BY last_message_at DESC LIMIT $2",
             )
             .bind(agent)
@@ -121,7 +128,7 @@ pub(crate) async fn api_list_sessions(
             .fetch_all(&infra.db)
             .await;
             let total: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM sessions WHERE agent_id = $1 OR $1 = ANY(participants)",
+                "SELECT COUNT(*) FROM sessions WHERE agent_id = $1",
             )
             .bind(agent)
             .fetch_one(&infra.db)
