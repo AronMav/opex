@@ -17,6 +17,11 @@ const SHARED_ROOT_PROMPT_FILES: &[&str] = &["TOOLS.md", "AGENTS.md", "USER.md"];
 /// Directories excluded from memory indexing — system/binary/config dirs not meant for knowledge base.
 pub const MEMORY_INDEX_EXCLUDE_DIRS: &[&str] = &["tools", "skills", "mcp", "uploads", "agents"];
 
+/// Root-level system files excluded from memory indexing. These are governance /
+/// reference docs loaded into every system prompt — they are NOT user knowledge
+/// and must not pollute the long-term memory vector store.
+pub const MEMORY_INDEX_EXCLUDE_FILES: &[&str] = &["AGENTS.md", "TOOLS.md", "AUTHORITY.md"];
+
 /// Resolve the per-agent workspace directory: `{workspace_dir}/agents/{agent_name}`.
 fn agent_dir(workspace_dir: &str, agent_name: &str) -> PathBuf {
     Path::new(workspace_dir).join("agents").join(agent_name)

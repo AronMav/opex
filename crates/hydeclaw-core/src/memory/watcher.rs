@@ -46,13 +46,14 @@ pub fn spawn_workspace_watcher(
             match rx.recv_timeout(timeout) {
                 Ok(Ok(Event { kind: EventKind::Create(_) | EventKind::Modify(_), paths, .. })) => {
                     let exclude_dirs = crate::agent::workspace::MEMORY_INDEX_EXCLUDE_DIRS;
+                    let exclude_files = crate::agent::workspace::MEMORY_INDEX_EXCLUDE_FILES;
                     for p in paths {
                         // Skip files in system directories. Check ANY path
                         // component — belt-and-suspenders over strip_prefix
                         // against the canonical watch_dir, so a nested file
                         // like `workspace/agents/Hyde/SOUL.md` is caught even
                         // if the prefix comparison fails.
-                        let in_excluded = p.strip_prefix(&watch_dir_path)
+                        let in_excluded_dir = p.strip_prefix(&watch_dir_path)
                             .ok()
                             .and_then(|rel| rel.components().next())
                             .and_then(|c| c.as_os_str().to_str())
@@ -62,7 +63,16 @@ pub fn spawn_workspace_watcher(
                                     .to_str()
                                     .is_some_and(|s| exclude_dirs.contains(&s))
                             });
-                        if in_excluded {
+                        if in_excluded_dir {
+                            continue;
+                        }
+                        // Skip root-level system docs (AGENTS.md, TOOLS.md,
+                        // AUTHORITY.md) — these are governance / reference
+                        // docs, not user knowledge.
+                        let is_excluded_file = p.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|name| exclude_files.contains(&name));
+                        if is_excluded_file {
                             continue;
                         }
                         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
