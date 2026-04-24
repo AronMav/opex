@@ -9,6 +9,7 @@ import {
   useAgents,
 } from "@/lib/queries";
 import { apiPost } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "@/hooks/use-translation";
 import { formatDate } from "@/lib/format";
@@ -39,25 +40,6 @@ import { Copy, Plus, Trash2, Edit3, Webhook, Check, RefreshCw } from "lucide-rea
 import type { WebhookEntry } from "@/types/api";
 
 const emptyForm = { name: "", agent: "", prompt_prefix: "", webhook_type: "generic" as "generic" | "github", event_filter: "" };
-
-/** Copy text with fallback for insecure contexts (HTTP). */
-function copyText(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
-  }
-  return fallbackCopy(text);
-}
-
-function fallbackCopy(text: string): Promise<void> {
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0";
-  document.body.appendChild(ta);
-  ta.select();
-  document.execCommand("copy");
-  document.body.removeChild(ta);
-  return Promise.resolve();
-}
 
 export default function WebhooksPage() {
   const { t, locale } = useTranslation();

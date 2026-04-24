@@ -130,6 +130,7 @@ vi.mock("@/lib/queries", () => ({
   useAgents: () => ({ data: mockAgentsRef.current, isLoading: false, error: null, refetch: vi.fn() }),
   useProviders: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
   useProviderModels: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
+  useProviderActive: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
   qk: {
     sessions: (agent: string) => ["sessions", "list", agent],
   },

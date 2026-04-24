@@ -107,6 +107,7 @@ vi.mock("@/lib/queries", () => ({
   useAgents: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
   useProviders: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
   useProviderModels: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
+  useProviderActive: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
 }));
 
 // ── Mock: @/lib/sanitize-url ───────────────────────────────────────────────

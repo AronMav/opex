@@ -45,6 +45,7 @@ vi.mock("@/hooks/use-translation", () => ({
 vi.mock("@/lib/queries", () => ({
   useSessions: () => ({ data: { sessions: [] }, isLoading: false, error: null, refetch: vi.fn() }),
   useSessionMessages: () => ({ data: { messages: [] }, isLoading: false, error: null, refetch: vi.fn() }),
+  useProviderActive: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
 }));
 
 // ── Mock: @/lib/api ────────────────────────────────────────────────────────

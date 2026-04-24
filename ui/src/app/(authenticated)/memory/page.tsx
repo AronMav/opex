@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPatch, apiDelete } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { useMemoryStats, qk } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import { Input } from "@/components/ui/input";
@@ -34,7 +35,7 @@ function DocumentFullView({ id, onBack }: { id: string; onBack: () => void }) {
 
   const handleCopy = () => {
     if (content) {
-      navigator.clipboard.writeText(content);
+      copyText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }

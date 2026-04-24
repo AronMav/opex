@@ -110,6 +110,7 @@ vi.mock("@/lib/queries", async (importOriginal) => {
     useAgents: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
     useProviders: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
     useProviderModels: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
+    useProviderActive: () => ({ data: [], isLoading: false, error: null, refetch: vi.fn() }),
   };
 });
 

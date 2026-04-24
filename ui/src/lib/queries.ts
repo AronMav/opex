@@ -212,7 +212,14 @@ export function useAgentTasks(agentName: string | null, isStreaming = false) {
     queryFn: () => apiGet<{ tasks: AgentTask[] }>(`/api/agents/${agentName}/tasks`),
     select: (d) => d.tasks,
     enabled: !!agentName,
-    refetchInterval: isStreaming ? 3000 : 10000,
+    // Most agents never use task plans — keep polling cheap by stopping
+    // entirely when idle AND no tasks have been seen. Streaming resumes
+    // polling so new tasks created mid-turn show up quickly.
+    refetchInterval: (query) => {
+      const taskCount = query.state.data?.tasks?.length ?? 0;
+      if (!isStreaming && taskCount === 0) return false;
+      return isStreaming ? 3000 : 15000;
+    },
     staleTime: 2500,
   })
 }

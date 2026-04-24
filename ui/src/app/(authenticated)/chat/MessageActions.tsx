@@ -3,6 +3,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useChatStore } from "@/stores/chat-store";
 import { assertToken } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
+import { useProviderActive } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import type { ChatMessage, TextPart } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
@@ -45,8 +47,7 @@ function CopyButton({ message }: { message: ChatMessage }) {
 
   const handleCopy = useCallback(() => {
     const text = extractText(message);
-    navigator.clipboard
-      .writeText(text)
+    copyText(text)
       .then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
@@ -125,6 +126,8 @@ function ReloadButton() {
 
 function SpeakButton({ message }: { message: ChatMessage }) {
   const { t } = useTranslation();
+  const { data: active } = useProviderActive();
+  const ttsAvailable = !!active?.find((r) => r.capability === "tts" && r.provider_name);
   const [playing, setPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
@@ -180,6 +183,12 @@ function SpeakButton({ message }: { message: ChatMessage }) {
       }
     })();
   }, [message, playing, cleanup, t]);
+
+  // Hide the button entirely when no TTS provider is configured — clicking
+  // would only surface a 503. When provider-active query is still loading
+  // (`active` is undefined) we default to rendering so the button doesn't
+  // flicker in/out on page load.
+  if (active && !ttsAvailable) return null;
 
   return (
     <Button

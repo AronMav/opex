@@ -5,6 +5,7 @@ import { Check, Copy } from "lucide-react"
 import { useTheme } from "next-themes"
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import DOMPurify from "dompurify"
+import { copyText } from "@/lib/clipboard"
 import { useTranslation } from "@/hooks/use-translation"
 
 // ── Code Block Header Bar ───────────────────────────────────────────────────
@@ -15,20 +16,10 @@ function CodeBlockHeader({ language, code }: { language?: string; code: string }
 
   const handleCopy = useCallback(async () => {
     try {
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(code)
-      } else {
-        throw new Error("clipboard unavailable")
-      }
+      await copyText(code)
     } catch {
-      const ta = document.createElement("textarea")
-      ta.value = code
-      ta.style.position = "fixed"
-      ta.style.opacity = "0"
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand("copy")
-      document.body.removeChild(ta)
+      // Both clipboard API and execCommand fallback failed — silent fail
+      // (legacy behaviour; existing consumers already swallowed this).
     }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
