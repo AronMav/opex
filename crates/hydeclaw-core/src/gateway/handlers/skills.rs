@@ -53,13 +53,85 @@ pub(crate) async fn find_skill_path(
     None
 }
 
+// ── Available-tools helper for API filtering ─────────────────────────────────
+
+/// Default location of agent config files. Production callers pass
+/// this; tests pass a tempdir to avoid cwd dependency.
+pub(crate) const DEFAULT_AGENTS_DIR: &str = "config/agents";
+
+/// Build the set of tool names available to the named agent based on
+/// on-disk config and YAML tool files. Returns `None` if the agent is
+/// unknown (caller falls back to no filtering — see api_skills_list_global).
+///
+/// Note: this is a synchronous filesystem read inside an async fn. Reading
+/// ~10 small TOML files takes ~1ms on SSD; acceptable for an HTTP handler
+/// (not a hot path). If profile shows it matters, wrap in `spawn_blocking`.
+pub(crate) async fn available_tools_for_agent(
+    workspace_dir: &str,
+    agents_dir: &str,
+    agent_name: &str,
+) -> Option<std::collections::HashSet<String>> {
+    let agents = crate::config::load_agent_configs(agents_dir).ok()?;
+    let cfg = agents.into_iter().find(|c| c.agent.name == agent_name)?;
+
+    let mut all: Vec<String> = crate::agent::pipeline::dispatch::SYSTEM_TOOL_NAMES
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    // memory is a special-case (gated by memory_available at runtime).
+    // We assume memory is available in the API filter; worst case the
+    // user sees memory-needing skills they can't actually call.
+    all.push("memory".to_string());
+    for yt in crate::tools::yaml_tools::load_yaml_tools(workspace_dir, false).await {
+        all.push(yt.name);
+    }
+
+    let policy = cfg.agent.tools.as_ref();
+    let kept: std::collections::HashSet<String> = all
+        .into_iter()
+        .filter(|name| {
+            let Some(p) = policy else { return true };
+            if p.deny.iter().any(|d| d == name) {
+                return false;
+            }
+            if p.allow_all {
+                return true;
+            }
+            if p.deny_all_others {
+                return p.allow.iter().any(|a| a == name);
+            }
+            if !p.allow.is_empty() {
+                return p.allow.iter().any(|a| a == name);
+            }
+            true
+        })
+        .collect();
+
+    Some(kept)
+}
+
 // ── Global skills endpoints ───────────────────────────────────────────────────
 
-/// GET /api/skills
+#[derive(serde::Deserialize)]
+pub(crate) struct SkillsListQuery {
+    agent: Option<String>,
+}
+
+/// GET /api/skills (?agent=<name> for tool-aware filtering)
 pub(crate) async fn api_skills_list_global(
     State(_state): State<InfraServices>,
+    axum::extract::Query(q): axum::extract::Query<SkillsListQuery>,
 ) -> impl IntoResponse {
-    let skills = crate::skills::load_skills(crate::config::WORKSPACE_DIR).await;
+    let mut skills = crate::skills::load_skills(crate::config::WORKSPACE_DIR).await;
+    if let Some(agent_name) = q.agent.as_deref()
+        && let Some(available) = available_tools_for_agent(
+            crate::config::WORKSPACE_DIR,
+            DEFAULT_AGENTS_DIR,
+            agent_name,
+        ).await
+    {
+        skills = crate::skills::filter_skills_by_available_tools(skills, &available);
+    }
     let result: Vec<serde_json::Value> = skills.iter().map(|s| {
         serde_json::json!({
             "name": s.meta.name,
@@ -146,12 +218,19 @@ pub(crate) async fn api_skill_delete_global(
 // ── Per-agent skills endpoints (compat) ──────────────────────────────────────
 
 /// GET /api/agents/{name}/skills
-/// Returns list of all skills for the agent (name, description, triggers, `tools_required`, priority).
+/// Returns list of all skills, filtered by tools available to the named agent.
 pub(crate) async fn api_skills_list(
     State(_state): State<InfraServices>,
-    axum::extract::Path(_agent_name): axum::extract::Path<String>,
+    axum::extract::Path(agent_name): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    let skills = crate::skills::load_skills(crate::config::WORKSPACE_DIR).await;
+    let mut skills = crate::skills::load_skills(crate::config::WORKSPACE_DIR).await;
+    if let Some(available) = available_tools_for_agent(
+        crate::config::WORKSPACE_DIR,
+        DEFAULT_AGENTS_DIR,
+        &agent_name,
+    ).await {
+        skills = crate::skills::filter_skills_by_available_tools(skills, &available);
+    }
     let result: Vec<serde_json::Value> = skills.iter().map(|s| {
         serde_json::json!({
             "name": s.meta.name,
@@ -248,5 +327,60 @@ pub(crate) async fn api_skill_delete(
             Json(serde_json::json!({"ok": true})).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_agent_toml(dir: &std::path::Path, name: &str, body: &str) {
+        std::fs::create_dir_all(dir).expect("create config dir");
+        std::fs::write(dir.join(format!("{name}.toml")), body).expect("write toml");
+    }
+
+    #[tokio::test]
+    async fn available_tools_for_agent_respects_deny_list() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agents_dir = dir.path().join("agents");
+        write_agent_toml(
+            &agents_dir,
+            "UnitTestAgent",
+            r#"
+[agent]
+name = "UnitTestAgent"
+base = false
+provider = "anthropic"
+model = "claude-3-5-sonnet-20241022"
+
+[agent.tools]
+deny = ["code_exec"]
+allow_all = true
+"#,
+        );
+
+        let workspace = dir.path().to_str().unwrap();
+        let agents = agents_dir.to_str().unwrap();
+        let available = available_tools_for_agent(workspace, agents, "UnitTestAgent")
+            .await
+            .expect("agent must be found");
+
+        assert!(!available.contains("code_exec"), "code_exec should be denied");
+        assert!(available.contains("workspace_read"), "core tools should remain");
+    }
+
+    #[tokio::test]
+    async fn available_tools_for_agent_unknown_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let agents_dir = dir.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).expect("create config dir");
+
+        let result = available_tools_for_agent(
+            dir.path().to_str().unwrap(),
+            agents_dir.to_str().unwrap(),
+            "NonExistentAgent",
+        ).await;
+
+        assert!(result.is_none(), "unknown agent should return None");
     }
 }

@@ -60,6 +60,17 @@ pub fn clean_tool_params(arguments: &serde_json::Value) -> serde_json::Value {
 
 // ── Tool policy filtering ────────────────────────────────────────────────────
 
+/// Hardcoded core/system tool names. Public so audit/integration code
+/// in other crates or test crates can reference it. Mirrored — read-only —
+/// by the API helper in `gateway/handlers/skills.rs::available_tools_for_agent`.
+pub const SYSTEM_TOOL_NAMES: &[&str] = &[
+    "workspace_write", "workspace_read", "workspace_list", "workspace_edit",
+    "workspace_delete", "workspace_rename",
+    "web_fetch", "agent", "message", "cron", "code_exec", "browser_action",
+    "git", "session", "skill", "skill_use", "canvas", "rich_card",
+    "agents_list", "secret_set", "process",
+];
+
 /// Filter tools based on per-agent allow/deny policy.
 ///
 /// `memory_available` indicates whether the memory store is currently configured
@@ -85,31 +96,8 @@ pub fn filter_tools_by_policy(
                 return false;
             }
 
-            // Core internal tools (workspace, memory, system) always allowed unless denied above
-            if matches!(
-                name,
-                "workspace_write"
-                    | "workspace_read"
-                    | "workspace_list"
-                    | "workspace_edit"
-                    | "workspace_delete"
-                    | "workspace_rename"
-                    | "web_fetch"
-                    | "agent"
-                    | "message"
-                    | "cron"
-                    | "code_exec"
-                    | "browser_action"
-                    | "git"
-                    | "session"
-                    | "skill"
-                    | "skill_use"
-                    | "canvas"
-                    | "rich_card"
-                    | "agents_list"
-                    | "secret_set"
-                    | "process"
-            ) {
+            // Core internal tools always allowed unless denied above
+            if SYSTEM_TOOL_NAMES.iter().any(|t| *t == name) {
                 return true;
             }
 
