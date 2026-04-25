@@ -188,22 +188,6 @@ pub mod net {
 #[path = "uploads.rs"]
 pub mod uploads;
 
-// ── skills leaf surface ────────────────────────────────────────────────
-// `skills/mod.rs` is a leaf module (deps: serde, serde_yaml, tokio::fs,
-// tracing, std — zero `crate::*` references). The `evolution` submodule
-// has crate-internal deps (`crate::agent::providers`, `crate::db`) that
-// are not present in the lib facade; it is gated `#[cfg(not(test))]` in
-// `skills/mod.rs` so it is skipped when the lib target runs unit tests.
-// This module is `#[cfg(test)]`-gated here so clippy / doc builds of the
-// lib facade don't try to compile `evolution` in a non-test context where
-// the crate-internal deps are absent.
-//
-// Top-level `pub mod` accounting: metrics, agent, shutdown, gateway, db,
-// net, uploads, skills (test-only) = 8. Under the 10-module lib-facade cap.
-#[cfg(test)]
-#[path = "skills/mod.rs"]
-pub mod skills;
-
 // ── ts-gen codegen surface ─────────────────────────────────────────────
 // Exposes DTO types for the `gen_ts_types` binary (feature-gated so
 // production builds never pull in ts-rs). All included modules are leaf
