@@ -105,6 +105,11 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     async fn load_skills_cached(&self) -> Vec<crate::skills::SkillDef>;
     async fn tool_penalties(&self) -> std::collections::HashMap<String, f32>;
     fn filter_tools_by_policy(&self, tools: Vec<ToolDefinition>) -> Vec<ToolDefinition>;
+    /// Return the set of tool names this agent may actually call,
+    /// after applying `filter_tools_by_policy` to the union of
+    /// internal/system tools, cached YAML tools, and cached MCP tools.
+    /// Used by skill-filtering call sites and trigger-hint logic.
+    async fn available_tool_names(&self) -> std::collections::HashSet<String>;
     async fn select_top_k_tools_semantic(
         &self,
         tools: Vec<ToolDefinition>,

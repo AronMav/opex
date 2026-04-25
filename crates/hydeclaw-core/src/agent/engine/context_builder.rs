@@ -375,6 +375,22 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         AgentEngine::filter_tools_by_policy(self, tools)
     }
 
+    async fn available_tool_names(&self) -> std::collections::HashSet<String> {
+        let mut tools = AgentEngine::internal_tool_definitions(self);
+        // Add YAML tools (load via cache).
+        for yt in self.load_yaml_tools_cached().await {
+            tools.push(hydeclaw_types::ToolDefinition {
+                name: yt.name.clone(),
+                description: yt.description.clone(),
+                input_schema: serde_json::json!({}),
+            });
+        }
+        // Add MCP tools (cached via deps).
+        tools.extend(self.mcp_tool_definitions().await);
+        let filtered = AgentEngine::filter_tools_by_policy(self, tools);
+        filtered.into_iter().map(|t| t.name).collect()
+    }
+
     async fn select_top_k_tools_semantic(
         &self,
         tools: Vec<hydeclaw_types::ToolDefinition>,
