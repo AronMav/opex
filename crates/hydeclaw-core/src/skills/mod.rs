@@ -161,6 +161,39 @@ pub async fn load_skills_for_base(workspace_dir: &str) -> Vec<SkillDef> {
 }
 
 
+// ── Filter ────────────────────────────────────────────────────────────────────
+
+/// Filter skills by tool availability.
+///
+/// A skill is kept if it has no `tools_required` OR at least one of them
+/// is in `available`. Skills with non-empty requirements where none match
+/// are dropped (and logged at `tracing::debug` level).
+///
+/// Tool name matching is **exact and case-sensitive**. MCP tools must be
+/// referenced by their full prefixed name (e.g. `mcp__searxng__search`).
+pub fn filter_skills_by_available_tools(
+    skills: Vec<SkillDef>,
+    available: &std::collections::HashSet<String>,
+) -> Vec<SkillDef> {
+    skills
+        .into_iter()
+        .filter(|s| {
+            if s.meta.tools_required.is_empty() {
+                return true;
+            }
+            let kept = s.meta.tools_required.iter().any(|t| available.contains(t));
+            if !kept {
+                tracing::debug!(
+                    skill = %s.meta.name,
+                    required = ?s.meta.tools_required,
+                    "skill skipped: no required tool available",
+                );
+            }
+            kept
+        })
+        .collect()
+}
+
 // ── Scaffold ─────────────────────────────────────────────────────────────────
 
 /// Create a skill file in the shared skills directory.
@@ -279,5 +312,87 @@ mod tests {
         let content = "   \n---\nname: indented\n---\n\nBody.";
         let skill = SkillDef::parse(content).expect("should parse despite leading whitespace");
         assert_eq!(skill.meta.name, "indented");
+    }
+
+    // ── filter_skills_by_available_tools ──────────────────────────────────────
+
+    fn make_skill(name: &str, required: &[&str]) -> SkillDef {
+        SkillDef {
+            meta: SkillFrontmatter {
+                name: name.to_string(),
+                description: format!("desc {name}"),
+                triggers: vec![],
+                tools_required: required.iter().map(|s| s.to_string()).collect(),
+                priority: 0,
+            },
+            instructions: String::new(),
+        }
+    }
+
+    fn set_of(items: &[&str]) -> std::collections::HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn filter_no_tools_required_keeps_skill() {
+        let skills = vec![make_skill("s1", &[])];
+        let kept = filter_skills_by_available_tools(skills, &set_of(&[]));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].meta.name, "s1");
+    }
+
+    #[test]
+    fn filter_all_required_available_keeps_skill() {
+        let skills = vec![make_skill("s1", &["a", "b"])];
+        let kept = filter_skills_by_available_tools(skills, &set_of(&["a", "b", "c"]));
+        assert_eq!(kept.len(), 1);
+    }
+
+    #[test]
+    fn filter_one_of_many_required_available_keeps_skill() {
+        let skills = vec![make_skill("s1", &["a", "b", "c"])];
+        let kept = filter_skills_by_available_tools(skills, &set_of(&["b"]));
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].meta.name, "s1");
+    }
+
+    #[test]
+    fn filter_none_available_drops_skill() {
+        let skills = vec![make_skill("s1", &["a", "b"])];
+        let kept = filter_skills_by_available_tools(skills, &set_of(&["c", "d"]));
+        assert!(kept.is_empty());
+    }
+
+    #[test]
+    fn filter_empty_available_drops_skills_with_requirements() {
+        let with_req = make_skill("with_req", &["a"]);
+        let no_req = make_skill("no_req", &[]);
+        let kept = filter_skills_by_available_tools(
+            vec![with_req, no_req],
+            &set_of(&[]),
+        );
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].meta.name, "no_req");
+    }
+
+    /// Loaded skills are pre-sorted by `Reverse(priority)` in `load_skills`.
+    /// This test catches regressions if someone replaces `iter().filter(...)`
+    /// with a `HashSet`-collect or other order-losing structure.
+    #[test]
+    fn filter_preserves_input_order() {
+        let mut skills = vec![
+            make_skill("low", &["a"]),
+            make_skill("high", &[]),
+            make_skill("mid", &["a"]),
+        ];
+        // Manually set priorities and pre-sort like load_skills does.
+        skills[0].meta.priority = 1;
+        skills[1].meta.priority = 10;
+        skills[2].meta.priority = 5;
+        skills.sort_by_key(|s| std::cmp::Reverse(s.meta.priority));
+
+        let kept = filter_skills_by_available_tools(skills, &set_of(&["a"]));
+        let names: Vec<&str> = kept.iter().map(|s| s.meta.name.as_str()).collect();
+        assert_eq!(names, vec!["high", "mid", "low"]);
     }
 }
