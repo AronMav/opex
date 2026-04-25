@@ -97,7 +97,7 @@ pub fn filter_tools_by_policy(
             }
 
             // Core internal tools always allowed unless denied above
-            if SYSTEM_TOOL_NAMES.iter().any(|t| *t == name) {
+            if SYSTEM_TOOL_NAMES.contains(&name) {
                 return true;
             }
 

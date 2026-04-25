@@ -446,10 +446,10 @@ mod tests {
                 if path.extension().and_then(|e| e.to_str()) != Some("md") {
                     continue;
                 }
-                if let Ok(content) = fs::read_to_string(&path).await {
-                    if let Some(skill) = SkillDef::parse(&content) {
-                        skills.push(skill);
-                    }
+                if let Ok(content) = fs::read_to_string(&path).await
+                    && let Some(skill) = SkillDef::parse(&content)
+                {
+                    skills.push(skill);
                 }
             }
         }
