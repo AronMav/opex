@@ -225,8 +225,10 @@ impl ContextBuilder for DefaultContextBuilder {
         // 4d. Skill trigger matching — inject a hint when the user message matches skill triggers
         {
             let skills = deps.load_skills_cached().await;
-            // skills are sorted by priority desc; find the first match
-            if let Some(skill) = skills.iter().find(|s| {
+            let available = deps.available_tool_names().await;
+            let visible = crate::skills::filter_skills_by_available_tools(skills, &available);
+            // visible are sorted by priority desc; find the first match
+            if let Some(skill) = visible.iter().find(|s| {
                 !s.meta.triggers.is_empty()
                     && s.meta.triggers.iter().any(|t| msg_lower.contains(t.to_lowercase().as_str()))
             }) {
