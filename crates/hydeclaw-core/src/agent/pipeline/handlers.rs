@@ -687,18 +687,24 @@ pub async fn handle_skill_use(
     }
 }
 
-/// Skill meta-tool: list available skills.
-pub async fn handle_skill_list(workspace_dir: &str, is_base: bool, _args: &serde_json::Value) -> String {
+/// Skill meta-tool: list available skills, filtered by tools the agent may call.
+pub async fn handle_skill_list(
+    workspace_dir: &str,
+    is_base: bool,
+    available_tools: &std::collections::HashSet<String>,
+    _args: &serde_json::Value,
+) -> String {
     let skills = if is_base {
         crate::skills::load_skills_for_base(workspace_dir).await
     } else {
         crate::skills::load_skills(workspace_dir).await
     };
-    if skills.is_empty() {
+    let visible = crate::skills::filter_skills_by_available_tools(skills, available_tools);
+    if visible.is_empty() {
         return "No skills found in workspace/skills/".to_string();
     }
-    let mut out = format!("Skills ({}):\n", skills.len());
-    for s in &skills {
+    let mut out = format!("Skills ({}):\n", visible.len());
+    for s in &visible {
         out.push_str(&format!(
             "- **{}** (priority: {}): {}\n  Triggers: {}\n  Tools: {}\n",
             s.meta.name,
@@ -860,5 +866,31 @@ mod tests {
         .await;
 
         assert!(result.contains("INSTRUCTIONS"), "load by name must work even when filter would hide: {result}");
+    }
+
+    #[tokio::test]
+    async fn handle_skill_list_filters_by_available_tools() {
+        let dir = temp_workspace_with_skills(&[
+            (
+                "needs_code_exec",
+                "---\nname: needs_code_exec\ndescription: x\ntools_required:\n  - code_exec\n---\n\nbody",
+            ),
+            (
+                "no_requirements",
+                "---\nname: no_requirements\ndescription: free\n---\n\nbody",
+            ),
+        ]);
+
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let result = handle_skill_list(
+            dir.path().to_str().unwrap(),
+            false,
+            &empty,
+            &serde_json::json!({}),
+        )
+        .await;
+
+        assert!(result.contains("no_requirements"), "should keep no-requirements skill: {result}");
+        assert!(!result.contains("needs_code_exec"), "should hide code_exec skill when empty available set: {result}");
     }
 }

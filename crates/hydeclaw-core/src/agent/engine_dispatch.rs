@@ -382,7 +382,10 @@ impl AgentEngine {
         match action {
             "create" => ph::handle_skill_create(&self.cfg().workspace_dir, arguments).await,
             "update" => ph::handle_skill_create(&self.cfg().workspace_dir, arguments).await,
-            "list" => ph::handle_skill_list(&self.cfg().workspace_dir, self.cfg().agent.base, arguments).await,
+            "list" => {
+                let available = self.available_tool_names().await;
+                ph::handle_skill_list(&self.cfg().workspace_dir, self.cfg().agent.base, &available, arguments).await
+            }
             _ => format!("Error: unknown skill action '{}'. Use: create, update, list.", action),
         }
     }
