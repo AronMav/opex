@@ -60,9 +60,16 @@ pub fn clean_tool_params(arguments: &serde_json::Value) -> serde_json::Value {
 
 // ── Tool policy filtering ────────────────────────────────────────────────────
 
-/// Hardcoded core/system tool names. Public so audit/integration code
-/// in other crates or test crates can reference it. Mirrored — read-only —
-/// by the API helper in `gateway/handlers/skills.rs::available_tools_for_agent`.
+/// Hardcoded core/system tool names that `filter_tools_by_policy` admits
+/// unconditionally (after the deny check). This is a **subset** of the
+/// authoritative registry [`crate::agent::pipeline::tool_defs::all_system_tool_names`]:
+/// it omits `memory` (gated separately by `memory_available`) and the
+/// `tool_*` family (gated by the `tool_management` group), since this
+/// function handles those via dedicated branches below.
+///
+/// **Do not use this for "is X a known system tool?" — use
+/// `tool_defs::all_system_tool_names()` instead.** This constant is only
+/// the unconditional-admit list for `filter_tools_by_policy`.
 pub const SYSTEM_TOOL_NAMES: &[&str] = &[
     "workspace_write", "workspace_read", "workspace_list", "workspace_edit",
     "workspace_delete", "workspace_rename",

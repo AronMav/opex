@@ -12,6 +12,12 @@ use crate::config::ToolGroups;
 /// All system (internal) tool names — single source of truth.
 /// Used by the API to populate tool policy UI without needing an engine instance.
 /// Keep in sync with `build_internal_tool_definitions()` below.
+///
+/// Related: [`crate::agent::pipeline::dispatch::SYSTEM_TOOL_NAMES`] is a
+/// **subset** of this list — only tools `filter_tools_by_policy` admits
+/// unconditionally. It excludes `memory` and the `tool_*` family because
+/// those go through dedicated gates (`memory_available`, `tool_management`
+/// group). For "is X a known tool?" questions always use this function.
 pub fn all_system_tool_names() -> &'static [&'static str] {
     &[
         // Core workspace

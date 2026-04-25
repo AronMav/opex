@@ -74,14 +74,15 @@ pub(crate) async fn available_tools_for_agent(
     let agents = crate::config::load_agent_configs(agents_dir).ok()?;
     let cfg = agents.into_iter().find(|c| c.agent.name == agent_name)?;
 
-    let mut all: Vec<String> = crate::agent::pipeline::dispatch::SYSTEM_TOOL_NAMES
+    // Use the comprehensive system-tool catalogue (includes `tool_*` family,
+    // `memory`, and other tools that `dispatch::SYSTEM_TOOL_NAMES` omits because
+    // `filter_tools_by_policy` handles them via dedicated branches). At the API
+    // layer we have no `memory_available` flag — assume memory is on (worst case
+    // a memory-needing skill is shown but won't actually run; non-blocking).
+    let mut all: Vec<String> = crate::agent::pipeline::tool_defs::all_system_tool_names()
         .iter()
         .map(|s| s.to_string())
         .collect();
-    // memory is a special-case (gated by memory_available at runtime).
-    // We assume memory is available in the API filter; worst case the
-    // user sees memory-needing skills they can't actually call.
-    all.push("memory".to_string());
     for yt in crate::tools::yaml_tools::load_yaml_tools(workspace_dir, false).await {
         all.push(yt.name);
     }
