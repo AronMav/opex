@@ -395,4 +395,85 @@ mod tests {
         let names: Vec<&str> = kept.iter().map(|s| s.meta.name.as_str()).collect();
         assert_eq!(names, vec!["high", "mid", "low"]);
     }
+
+    /// Audit: every `tools_required` entry across workspace/ and config/
+    /// skills must reference a known tool (core system, YAML, or mcp__-prefixed).
+    /// Catches typos that would silently hide a skill from listings.
+    #[tokio::test]
+    async fn audit_all_skills_required_tools_exist() {
+        // Resolve workspace/ relative to the Cargo workspace root (two levels up from
+        // crates/hydeclaw-core/), so the test finds real skill files regardless of
+        // which directory cargo runs from.
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir.parent().unwrap_or(manifest_dir)
+            .parent().unwrap_or(manifest_dir);
+        let workspace_dir_path = workspace_root.join("workspace");
+
+        if !workspace_dir_path.exists() {
+            eprintln!("skipping audit: workspace/ not present at {}", workspace_dir_path.display());
+            return;
+        }
+        let workspace_dir = workspace_dir_path.to_string_lossy();
+        let workspace_dir = workspace_dir.as_ref();
+
+        // Use the comprehensive system tool list (includes tool management, git, etc.)
+        // rather than the policy-filter subset in dispatch::SYSTEM_TOOL_NAMES.
+        let mut known: std::collections::HashSet<String> =
+            crate::agent::pipeline::tool_defs::all_system_tool_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        // memory is already in all_system_tool_names(); explicit insert guards
+        // against the constant inadvertently losing it.
+        known.insert("memory".to_string());
+
+        // Include draft tools in the known set: tools_required is meant to
+        // express "what this skill needs", not "what's active right now".
+        // A skill referencing a draft tool is correct — it will be hidden until
+        // the tool is verified, which is intentional behaviour.
+        // Only truly non-existent tools (absent from the YAML files entirely) indicate a typo.
+        for yt in crate::tools::yaml_tools::load_yaml_tools(workspace_dir, true).await {
+            known.insert(yt.name);
+        }
+
+        // Load workspace skills then config skills using absolute paths derived
+        // from the workspace root (avoids cwd-relative path issues in test runner).
+        let mut skills = load_skills(workspace_dir).await;
+        let config_skills_dir = workspace_root.join("config").join("skills");
+        if let Ok(mut rd) = fs::read_dir(&config_skills_dir).await {
+            while let Ok(Some(entry)) = rd.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                if let Ok(content) = fs::read_to_string(&path).await {
+                    if let Some(skill) = SkillDef::parse(&content) {
+                        skills.push(skill);
+                    }
+                }
+            }
+        }
+
+        let mut missing: Vec<(String, Vec<String>)> = Vec::new();
+        for s in skills {
+            let unknown: Vec<String> = s.meta.tools_required.iter()
+                .filter(|t| !known.contains(*t) && !t.starts_with("mcp__"))
+                .cloned()
+                .collect();
+            if !unknown.is_empty() {
+                missing.push((s.meta.name, unknown));
+            }
+        }
+
+        if !missing.is_empty() {
+            let report = missing.iter()
+                .map(|(name, unknown)| format!("  - {name}: {unknown:?}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            panic!(
+                "Skills reference unknown tools (not in core, YAML, or mcp__* prefix):\n{report}\n\n\
+                 Either fix the typo, register the tool, or use the full mcp__server__tool prefix."
+            );
+        }
+    }
 }
