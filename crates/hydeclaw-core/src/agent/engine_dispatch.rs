@@ -3,6 +3,7 @@
 //! Extracted from engine.rs for readability.
 
 use super::*;
+use crate::agent::context_builder::ContextBuilderDeps;
 use crate::agent::pipeline::handlers as ph;
 use crate::agent::pipeline::sandbox as ps;
 use crate::agent::pipeline::subagent as psub;
@@ -180,7 +181,10 @@ impl AgentEngine {
                 "tool_verify" => Some(ph::handle_tool_verify(&self.cfg().workspace_dir, arguments).await),
                 "tool_disable" => Some(ph::handle_tool_disable(&self.cfg().workspace_dir, arguments).await),
                 "skill" => Some(self.dispatch_skill_tool(arguments).await),
-                "skill_use" => Some(ph::handle_skill_use(&self.cfg().workspace_dir, self.cfg().agent.base, arguments).await),
+                "skill_use" => {
+                    let available = self.available_tool_names().await;
+                    Some(ph::handle_skill_use(&self.cfg().workspace_dir, self.cfg().agent.base, &available, arguments).await)
+                }
                 "tool_discover" => Some(ph::handle_tool_discover(&self.cfg().workspace_dir, self.ssrf_http_client(), arguments).await),
                 "secret_set" => Some(ph::handle_secret_set(self.secrets(), &self.cfg().agent.name, self.cfg().agent.base, arguments).await),
                 "session" => Some(self.dispatch_session_tool(arguments).await),

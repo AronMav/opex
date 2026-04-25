@@ -641,6 +641,7 @@ pub async fn handle_skill_create(workspace_dir: &str, args: &serde_json::Value) 
 pub async fn handle_skill_use(
     workspace_dir: &str,
     is_base: bool,
+    available_tools: &std::collections::HashSet<String>,
     args: &serde_json::Value,
 ) -> String {
     let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("list");
@@ -652,11 +653,12 @@ pub async fn handle_skill_use(
 
     match action {
         "list" => {
-            if skills.is_empty() {
+            let visible = crate::skills::filter_skills_by_available_tools(skills, available_tools);
+            if visible.is_empty() {
                 return "No skills available.".to_string();
             }
             let mut out = String::from("Available skills:\n\n");
-            for s in &skills {
+            for s in &visible {
                 out.push_str(&format!("- **{}** — {}", s.meta.name, s.meta.description));
                 if !s.meta.triggers.is_empty() {
                     out.push_str(&format!(" (use when: {})", s.meta.triggers.join(", ")));
@@ -666,6 +668,7 @@ pub async fn handle_skill_use(
             out
         }
         "load" => {
+            // load is NOT filtered — direct references by name must keep working.
             let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
             if name.is_empty() {
                 return "Error: 'name' parameter required for load action.".to_string();
@@ -786,4 +789,76 @@ pub async fn handle_tool_discover(
     }
     out.push_str("\nUse tool_test to verify, then tool_verify to activate.");
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_workspace_with_skills(skills: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skills_dir = dir.path().join("skills");
+        std::fs::create_dir_all(&skills_dir).expect("create skills dir");
+        for (name, content) in skills {
+            let path = skills_dir.join(format!("{name}.md"));
+            std::fs::write(path, content).expect("write skill");
+        }
+        dir
+    }
+
+    #[tokio::test]
+    async fn handle_skill_use_list_filters_by_available_tools() {
+        let dir = temp_workspace_with_skills(&[
+            (
+                "needs_code_exec",
+                "---\nname: needs_code_exec\ndescription: needs code\ntools_required:\n  - code_exec\n---\n\nbody",
+            ),
+            (
+                "needs_web_fetch",
+                "---\nname: needs_web_fetch\ndescription: needs web\ntools_required:\n  - web_fetch\n---\n\nbody",
+            ),
+            (
+                "no_requirements",
+                "---\nname: no_requirements\ndescription: free\n---\n\nbody",
+            ),
+        ]);
+
+        let available: std::collections::HashSet<String> =
+            ["web_fetch".to_string()].into_iter().collect();
+        let args = serde_json::json!({"action": "list"});
+
+        let result = handle_skill_use(
+            dir.path().to_str().unwrap(),
+            false, // is_base
+            &available,
+            &args,
+        )
+        .await;
+
+        assert!(result.contains("needs_web_fetch"), "web_fetch skill should be visible: {result}");
+        assert!(result.contains("no_requirements"), "skills without requirements always visible: {result}");
+        assert!(!result.contains("needs_code_exec"), "code_exec skill should be hidden: {result}");
+    }
+
+    #[tokio::test]
+    async fn handle_skill_use_load_ignores_filter() {
+        let dir = temp_workspace_with_skills(&[
+            (
+                "needs_code_exec",
+                "---\nname: needs_code_exec\ndescription: needs code\ntools_required:\n  - code_exec\n---\n\nINSTRUCTIONS",
+            ),
+        ]);
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let args = serde_json::json!({"action": "load", "name": "needs_code_exec"});
+
+        let result = handle_skill_use(
+            dir.path().to_str().unwrap(),
+            false,
+            &empty,
+            &args,
+        )
+        .await;
+
+        assert!(result.contains("INSTRUCTIONS"), "load by name must work even when filter would hide: {result}");
+    }
 }
