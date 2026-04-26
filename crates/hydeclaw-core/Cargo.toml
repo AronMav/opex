@@ -53,6 +53,7 @@ bytes = "1"
 # URL parsing
 url = { workspace = true }
 urlencoding = "2"
+percent-encoding = "2"
 
 # Encoding
 base64 = { workspace = true }
