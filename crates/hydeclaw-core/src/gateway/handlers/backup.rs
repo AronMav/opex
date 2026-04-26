@@ -43,6 +43,51 @@ pub(crate) fn routes() -> Router<AppState> {
 const BACKUP_DIR: &str = "backups";
 const RETENTION_DAYS: i64 = 7;
 
+/// Tables excluded from pg_dump — ephemeral or too large to be useful in backups.
+#[allow(dead_code)]
+pub(crate) const EXCLUDED_TABLES: &[&str] = &[
+    "sessions", "messages", "session_events",
+    "usage_log",
+    "audit_log", "audit_events",
+    "notifications",
+    "pending_approvals",
+    "pending_messages", "outbound_queue",
+    "memory_tasks",
+    "pairing_codes",
+    "cron_runs",
+    "tool_execution_cache",
+    "stream_jobs",
+    "graph_extraction_queue",
+    "tasks", "task_steps",
+    "secrets",
+];
+
+/// Parse the first non-empty container name from `docker ps` stdout.
+fn parse_container_name<'a>(docker_output: &'a str, fallback: &'a str) -> &'a str {
+    docker_output
+        .lines()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or(fallback)
+}
+
+/// Discover the running postgres container name.
+/// Tries `docker ps --filter name=postgres`; falls back to `configured`.
+#[allow(dead_code)]
+async fn discover_postgres_container(configured: &str) -> String {
+    let out = tokio::process::Command::new("docker")
+        .args(["ps", "--filter", "name=postgres", "--format", "{{.Names}}"])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            parse_container_name(&stdout, configured).to_owned()
+        }
+        _ => configured.to_owned(),
+    }
+}
+
 include!("backup_dto_structs.rs");
 
 // ── Backup file format ──────────────────────────────────────────────────────
@@ -1694,5 +1739,32 @@ mod tests {
         assert_eq!(via_struson.providers.len(), via_serde.providers.len());
         assert_eq!(via_struson.providers[0], via_serde.providers[0]);
         assert_eq!(via_struson.provider_active, via_serde.provider_active);
+    }
+
+    #[test]
+    fn parse_container_name_returns_first_non_empty_line() {
+        assert_eq!(
+            parse_container_name("docker-postgres-1\ndocker-postgres-2\n", "fallback"),
+            "docker-postgres-1"
+        );
+    }
+
+    #[test]
+    fn parse_container_name_falls_back_when_output_empty() {
+        assert_eq!(parse_container_name("", "docker-postgres-1"), "docker-postgres-1");
+    }
+
+    #[test]
+    fn parse_container_name_trims_whitespace() {
+        assert_eq!(parse_container_name("  my-pg-1  \n", "fb"), "my-pg-1");
+    }
+
+    #[test]
+    fn excluded_tables_contains_secrets_and_sessions() {
+        assert!(EXCLUDED_TABLES.contains(&"secrets"));
+        assert!(EXCLUDED_TABLES.contains(&"sessions"));
+        assert!(EXCLUDED_TABLES.contains(&"messages"));
+        assert!(EXCLUDED_TABLES.contains(&"pending_messages"));
+        assert!(EXCLUDED_TABLES.contains(&"outbound_queue"));
     }
 }
