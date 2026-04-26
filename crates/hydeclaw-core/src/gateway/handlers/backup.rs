@@ -174,10 +174,9 @@ async fn restart_agents_from_disk(
     bus: &crate::gateway::clusters::ChannelBus,
     cfg_svc: &crate::gateway::clusters::ConfigServices,
     status: &crate::gateway::clusters::StatusMonitor,
-) -> Vec<String> {
-    let Ok(agent_configs) = crate::config::load_agent_configs("config/agents") else {
-        return vec![];
-    };
+) -> anyhow::Result<Vec<String>> {
+    let agent_configs = crate::config::load_agent_configs("config/agents")
+        .context("load_agent_configs failed")?;
     let mut restarted = Vec::new();
     for cfg in &agent_configs {
         match super::agents::start_agent_from_config(
@@ -196,7 +195,7 @@ async fn restart_agents_from_disk(
             }
         }
     }
-    restarted
+    Ok(restarted)
 }
 
 include!("backup_dto_structs.rs");
@@ -898,13 +897,27 @@ pub(crate) async fn api_restore(
             Json(json!({"error": "unsupported backup format: missing version"}))).into_response();
     }
 
+    // Pre-check: db.dump must exist before we disrupt anything
+    let dump_path = extract_dir.join("db.dump");
+    if !dump_path.exists() {
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": "backup archive is missing db.dump"
+        }))).into_response();
+    }
+
     // Snapshot workspace for rollback
     let workspace_bak = tmpdir.join("workspace.bak.tar.gz");
-    let _ = tokio::process::Command::new("tar")
+    let workspace_bak_ok = tokio::process::Command::new("tar")
         .args(["czf"])
         .arg(&workspace_bak)
         .args(["-C", ".", "workspace"])
-        .output().await;
+        .output().await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !workspace_bak_ok {
+        tracing::warn!("workspace snapshot for rollback failed — rollback will not be available if restore fails");
+    }
 
     tracing::warn!("RESTORE initiated from pg_dump backup (v3)");
 
@@ -921,10 +934,10 @@ pub(crate) async fn api_restore(
     }
 
     // pg_restore
-    let dump_path = extract_dir.join("db.dump");
     if let Err(e) = run_pg_restore(&container, &dump_path).await {
         tracing::error!("pg_restore failed: {e}");
-        let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status).await;
+        let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status).await
+            .unwrap_or_default();
         let _ = tokio::fs::remove_dir_all(&tmpdir).await;
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
             "error": format!("pg_restore failed: {e}"),
@@ -939,9 +952,14 @@ pub(crate) async fn api_restore(
         serde_json::from_slice(&secrets_bytes).unwrap_or_default();
     let secret_count = plaintext_secrets.len();
     if let Err(e) = auth.secrets.restore_plaintext(plaintext_secrets).await {
+        let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status).await
+            .unwrap_or_default();
         let _ = tokio::fs::remove_dir_all(&tmpdir).await;
         return (StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("secrets restore failed: {e}")}))).into_response();
+            Json(json!({
+                "error": format!("secrets restore failed: {e}"),
+                "agents_restarted": restarted,
+            }))).into_response();
     }
 
     // Restore workspace and config
@@ -949,9 +967,13 @@ pub(crate) async fn api_restore(
     if workspace_src.exists() {
         let workspace_src_str = workspace_src.to_string_lossy().into_owned();
         if let Err(e) = copy_dir_to(&workspace_src_str, std::path::Path::new("workspace")).await {
-            // Rollback workspace from snapshot
-            let _ = tokio::process::Command::new("tar")
-                .args(["xzf"]).arg(&workspace_bak).args(["-C", "."]).output().await;
+            // Rollback workspace from snapshot (only if snapshot was created successfully)
+            if workspace_bak_ok {
+                let _ = tokio::process::Command::new("tar")
+                    .args(["xzf"]).arg(&workspace_bak).args(["-C", "."]).output().await;
+            } else {
+                tracing::error!("workspace rollback skipped: snapshot was not created");
+            }
             let _ = tokio::fs::remove_dir_all(&tmpdir).await;
             return (StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": format!("workspace restore failed: {e}")}))).into_response();
@@ -974,7 +996,7 @@ pub(crate) async fn api_restore(
     // Restart agents from restored configs
     let restarted = restart_agents_from_disk(
         &agents, &infra, &auth, &bus, &cfg_svc, &status
-    ).await;
+    ).await.unwrap_or_default();
 
     let _ = tokio::fs::remove_dir_all(&tmpdir).await;
     tracing::warn!(agents = ?restarted, "RESTORE complete (pg_dump v3)");
