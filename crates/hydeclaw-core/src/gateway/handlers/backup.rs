@@ -192,7 +192,11 @@ async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow:
         .args([
             "exec", "-i", container,
             "pg_restore", "-U", "hydeclaw", "-d", "hydeclaw",
-            "--data-only", "-Fc",
+            "--data-only",
+            // Disable FK triggers during COPY so restore order doesn't cause
+            // constraint violations. Requires superuser — hydeclaw is POSTGRES_USER.
+            "--disable-triggers",
+            "-Fc",
         ])
         .stdin(std::process::Stdio::from(file))
         .output()
