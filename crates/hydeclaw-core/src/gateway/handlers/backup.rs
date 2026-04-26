@@ -822,11 +822,11 @@ pub(crate) async fn api_restore(
         }
     };
 
-    // Detect format: tar.gz starts with magic bytes 0x1f 0x8b; otherwise treat as legacy JSON.
-    let is_tar_gz = buf.len() >= 2 && buf[0] == 0x1f && buf[1] == 0x8b;
-    if !is_tar_gz {
-        // Delegate to legacy JSON restore logic
-        return restore_from_json_buf(buf, infra, auth, agents, bus, cfg_svc, status).await;
+    // Reject non-tar.gz input: JSON format is fully retired (no backward compatibility)
+    if buf.len() < 2 || buf[0] != 0x1f || buf[1] != 0x8b {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": "unsupported format: only .tar.gz backups (v3) are accepted"
+        }))).into_response();
     }
 
     let container = discover_postgres_container(
