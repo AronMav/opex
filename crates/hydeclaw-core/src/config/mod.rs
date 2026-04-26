@@ -108,10 +108,16 @@ pub struct BackupConfig {
     /// Number of days to retain old backup files (default: 7).
     #[serde(default = "default_backup_retention_days")]
     pub retention_days: u32,
+    /// Postgres Docker container name for pg_dump/pg_restore.
+    /// Auto-detected from `docker ps --filter name=postgres` if not set.
+    /// Default: "docker-postgres-1"
+    #[serde(default = "default_postgres_container")]
+    pub postgres_container: String,
 }
 
 fn default_backup_cron() -> String { "0 0 5 * * *".to_string() }
 fn default_backup_retention_days() -> u32 { 7 }
+fn default_postgres_container() -> String { "docker-postgres-1".to_string() }
 
 impl Default for BackupConfig {
     fn default() -> Self {
@@ -119,6 +125,7 @@ impl Default for BackupConfig {
             enabled: false,
             cron: default_backup_cron(),
             retention_days: default_backup_retention_days(),
+            postgres_container: default_postgres_container(),
         }
     }
 }
@@ -1936,5 +1943,32 @@ max_tokens = 2048
         let cfg = AgentDefaultsConfig::default();
         assert!(cfg.temperature.is_none());
         assert!(cfg.max_tokens.is_none());
+    }
+}
+
+#[cfg(test)]
+mod backup_config_tests {
+    use super::*;
+
+    #[test]
+    fn backup_config_default_postgres_container() {
+        let cfg = BackupConfig::default();
+        assert_eq!(cfg.postgres_container, "docker-postgres-1");
+    }
+
+    #[test]
+    fn backup_config_parses_postgres_container_from_toml() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            [gateway]
+            listen = "0.0.0.0:18789"
+            [database]
+            url = "postgres://localhost/test"
+            [backup]
+            postgres_container = "my-postgres-2"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.backup.postgres_container, "my-postgres-2");
     }
 }
