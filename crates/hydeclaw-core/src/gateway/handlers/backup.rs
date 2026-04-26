@@ -147,43 +147,60 @@ async fn copy_dir_to(src: &str, dst: &std::path::Path) -> anyhow::Result<()> {
 }
 
 /// Run pg_restore inside the postgres container, reading db.dump from stdin.
+///
+/// Strategy: TRUNCATE all tables in the dump (CASCADE handles FK deps from excluded tables),
+/// then pg_restore --data-only. This avoids `--clean` which fails when excluded tables have
+/// FK constraints referencing included tables (e.g. cron_runs → scheduled_jobs).
 async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow::Result<()> {
-    // Open the dump file as a std::fs::File so it can be used as Stdio::from
-    let file = std::fs::File::open(dump_path)
-        .with_context(|| format!("open db.dump at {}", dump_path.display()))?;
+    // Step 1: get the list of tables present in the dump.
+    let file_list = std::fs::File::open(dump_path)
+        .with_context(|| format!("open db.dump for --list: {}", dump_path.display()))?;
+    let list_out = tokio::process::Command::new("docker")
+        .args(["exec", "-i", container, "pg_restore", "--list"])
+        .stdin(std::process::Stdio::from(file_list))
+        .output()
+        .await
+        .context("pg_restore --list failed")?;
 
+    // Lines look like: "234; 0 16442 TABLE DATA public memory_chunks postgres"
+    let tables: Vec<String> = String::from_utf8_lossy(&list_out.stdout)
+        .lines()
+        .filter(|l| l.contains(" TABLE DATA public "))
+        .filter_map(|l| l.split_whitespace().nth(6).map(|t| format!("\"{}\"", t)))
+        .collect();
+
+    // Step 2: TRUNCATE with CASCADE to clear existing rows without dropping schema.
+    if !tables.is_empty() {
+        let sql = format!("TRUNCATE {} CASCADE", tables.join(", "));
+        let trunc = tokio::process::Command::new("docker")
+            .args(["exec", container, "psql", "-U", "hydeclaw", "hydeclaw", "-c", &sql])
+            .output()
+            .await
+            .context("pre-restore TRUNCATE failed")?;
+        if !trunc.status.success() {
+            anyhow::bail!(
+                "pre-restore TRUNCATE failed: {}",
+                String::from_utf8_lossy(&trunc.stderr)
+            );
+        }
+    }
+
+    // Step 3: restore data only — schema is already in place from migrations.
+    let file = std::fs::File::open(dump_path)
+        .with_context(|| format!("open db.dump: {}", dump_path.display()))?;
     let out = tokio::process::Command::new("docker")
         .args([
             "exec", "-i", container,
             "pg_restore", "-U", "hydeclaw", "-d", "hydeclaw",
-            // --clean drops objects before recreating them; --if-exists prevents errors
-            // when objects don't exist yet. We intentionally omit --exit-on-error because
-            // excluded tables (e.g. cron_runs) may have FK constraints referencing included
-            // tables (e.g. scheduled_jobs), causing benign DROP CONSTRAINT failures in the
-            // --clean phase. We filter real data errors from these benign schema errors below.
-            "--clean", "--if-exists", "-Fc",
+            "--data-only", "-Fc",
         ])
         .stdin(std::process::Stdio::from(file))
         .output()
         .await
-        .context("docker exec pg_restore: spawn failed")?;
+        .context("pg_restore spawn failed")?;
 
     if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        // Only fail on real data/schema errors — not on FK-dependency DROP errors
-        // that occur when excluded tables reference included tables.
-        let real_errors: Vec<&str> = stderr
-            .lines()
-            .filter(|l| l.starts_with("pg_restore: error:"))
-            .filter(|l| !l.contains("DROP CONSTRAINT") && !l.contains("drop constraint"))
-            .collect();
-        if !real_errors.is_empty() {
-            anyhow::bail!("pg_restore failed:\n{}", real_errors.join("\n"));
-        }
-        tracing::warn!(
-            "pg_restore: non-fatal FK dependency errors during --clean (expected \
-             when excluded tables have FK refs to included tables)"
-        );
+        anyhow::bail!("pg_restore failed:\n{}", String::from_utf8_lossy(&out.stderr));
     }
     Ok(())
 }
