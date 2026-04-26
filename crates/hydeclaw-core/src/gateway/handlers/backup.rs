@@ -90,6 +90,8 @@ pub(crate) struct WorkspaceFile {
 pub(crate) struct MemoryChunk {
     pub id: String,
     #[serde(default)]
+    pub agent_id: String,
+    #[serde(default)]
     pub user_id: Option<String>,
     pub content: String,
     pub source: Option<String>,
@@ -100,6 +102,14 @@ pub(crate) struct MemoryChunk {
     pub parent_id: Option<String>,
     #[serde(default)]
     pub chunk_index: i32,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
+    pub archived: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -636,6 +646,16 @@ pub(crate) async fn api_restore(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore commit failed: {e}")}))).into_response();
     }
 
+    // Mark setup as complete so the wizard doesn't appear after restore.
+    // A backup taken from a configured system implies setup was done.
+    let _ = sqlx::query(
+        "INSERT INTO system_flags (key, value) VALUES ('setup_complete', 'true'::jsonb) \
+         ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()"
+    )
+    .execute(&infra.db)
+    .await
+    .inspect_err(|e| tracing::warn!(error = %e, "restore: failed to set setup_complete flag"));
+
     // Restart agents from restored configs
     let agent_configs = match crate::config::load_agent_configs("config/agents") {
         Ok(cfgs) => cfgs,
@@ -756,9 +776,10 @@ async fn collect_memory_from_db(db: &PgPool) -> sqlx::Result<Vec<MemoryChunk>> {
     }
 
     #[allow(clippy::type_complexity)]
-    let rows: Vec<(uuid::Uuid, String, Option<String>, bool, f64, chrono::DateTime<Utc>, Option<uuid::Uuid>, i32)> =
+    let rows: Vec<(uuid::Uuid, String, String, Option<String>, bool, f64, chrono::DateTime<Utc>, Option<uuid::Uuid>, i32, String, Option<String>, Option<String>, bool)> =
         sqlx::query_as(
-            "SELECT id, content, source, pinned, relevance_score, created_at, parent_id, chunk_index
+            "SELECT id, agent_id, content, source, pinned, relevance_score, created_at, parent_id, chunk_index,
+                    COALESCE(scope, 'private'), category, topic, COALESCE(archived, false)
              FROM memory_chunks ORDER BY created_at LIMIT $1",
         )
         .bind(MEMORY_BACKUP_LIMIT)
@@ -766,8 +787,9 @@ async fn collect_memory_from_db(db: &PgPool) -> sqlx::Result<Vec<MemoryChunk>> {
         .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, content, source, pinned, relevance_score, created_at, parent_id, chunk_index)| MemoryChunk {
+        .map(|(id, agent_id, content, source, pinned, relevance_score, created_at, parent_id, chunk_index, scope, category, topic, archived)| MemoryChunk {
             id: id.to_string(),
+            agent_id,
             user_id: None,
             content,
             source,
@@ -776,6 +798,10 @@ async fn collect_memory_from_db(db: &PgPool) -> sqlx::Result<Vec<MemoryChunk>> {
             created_at,
             parent_id: parent_id.map(|p| p.to_string()),
             chunk_index,
+            scope,
+            category,
+            topic,
+            archived,
         })
         .collect())
 }
@@ -1180,11 +1206,13 @@ async fn restore_memory_and_cron(
     for chunk in chunks {
         let id = uuid::Uuid::parse_str(&chunk.id).unwrap_or_else(|_| uuid::Uuid::new_v4());
         let parent_id = chunk.parent_id.as_deref().and_then(|s| uuid::Uuid::parse_str(s).ok());
+        let scope = if chunk.scope.is_empty() { "private" } else { &chunk.scope };
         sqlx::query(
-            "INSERT INTO memory_chunks (id, content, source, pinned, relevance_score, created_at, tsv, parent_id, chunk_index)
-             VALUES ($1, $2, $3, $4, $5, $6, to_tsvector($7::regconfig, $2), $8, $9)",
+            "INSERT INTO memory_chunks (id, agent_id, content, source, pinned, relevance_score, created_at, tsv, parent_id, chunk_index, scope, category, topic, archived)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, to_tsvector($8::regconfig, $3), $9, $10, $11, $12, $13, $14)",
         )
         .bind(id)
+        .bind(&chunk.agent_id)
         .bind(&chunk.content)
         .bind(&chunk.source)
         .bind(chunk.pinned)
@@ -1193,6 +1221,10 @@ async fn restore_memory_and_cron(
         .bind(fts_lang)
         .bind(parent_id)
         .bind(chunk.chunk_index)
+        .bind(scope)
+        .bind(&chunk.category)
+        .bind(&chunk.topic)
+        .bind(chunk.archived)
         .execute(&mut *tx)
         .await?;
     }

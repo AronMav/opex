@@ -7,6 +7,9 @@
 #   --yes   Skip all confirmations (dangerous)
 set -uo pipefail  # no -e: we handle errors ourselves
 
+YES=0
+for arg in "$@"; do [[ "$arg" == "--yes" ]] && YES=1; done
+
 BOLD='\033[1m'; NC='\033[0m'
 C_OK='\033[38;2;0;229;204m'
 C_WARN='\033[38;2;255;176;32m'
@@ -29,7 +32,11 @@ else
   echo "Error: cannot find hydeclaw installation. Run from the hydeclaw directory."
   exit 1
 fi
-confirm() { return 0; }
+confirm() {
+  [[ "$YES" == "1" ]] && return 0
+  read -r -p "  Type 'yes' to confirm: " ans
+  [[ "$ans" == "yes" ]]
+}
 
 echo -e "${BOLD}${C_ERR}"
 echo "  ╦ ╦╔╗╔╦╔╗╔╔═╗╔╦╗╔═╗╦  ╦  "
