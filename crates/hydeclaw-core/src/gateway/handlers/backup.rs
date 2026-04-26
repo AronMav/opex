@@ -143,6 +143,62 @@ async fn copy_dir_to(src: &str, dst: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Run pg_restore inside the postgres container, reading db.dump from stdin.
+async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow::Result<()> {
+    // Open the dump file as a std::fs::File so it can be used as Stdio::from
+    let file = std::fs::File::open(dump_path)
+        .with_context(|| format!("open db.dump at {}", dump_path.display()))?;
+
+    let out = tokio::process::Command::new("docker")
+        .args([
+            "exec", "-i", container,
+            "pg_restore", "-U", "hydeclaw", "-d", "hydeclaw",
+            "--clean", "--if-exists", "--exit-on-error", "-Fc",
+        ])
+        .stdin(std::process::Stdio::from(file))
+        .output()
+        .await
+        .context("docker exec pg_restore: spawn failed")?;
+
+    if !out.status.success() {
+        anyhow::bail!("pg_restore failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    Ok(())
+}
+
+/// Load agent configs from disk and restart all agents.
+async fn restart_agents_from_disk(
+    agents: &crate::gateway::clusters::AgentCore,
+    infra: &crate::gateway::clusters::InfraServices,
+    auth: &crate::gateway::clusters::AuthServices,
+    bus: &crate::gateway::clusters::ChannelBus,
+    cfg_svc: &crate::gateway::clusters::ConfigServices,
+    status: &crate::gateway::clusters::StatusMonitor,
+) -> Vec<String> {
+    let Ok(agent_configs) = crate::config::load_agent_configs("config/agents") else {
+        return vec![];
+    };
+    let mut restarted = Vec::new();
+    for cfg in &agent_configs {
+        match super::agents::start_agent_from_config(
+            cfg, agents, infra, auth, bus, cfg_svc, status
+        ).await {
+            Ok((handle, guard)) => {
+                let name = cfg.agent.name.clone();
+                agents.map.write().await.insert(name.clone(), handle);
+                if let Some(g) = guard {
+                    auth.access_guards.write().await.insert(name.clone(), g);
+                }
+                restarted.push(name);
+            }
+            Err(e) => {
+                tracing::error!(agent = %cfg.agent.name, %e, "restart failed after restore");
+            }
+        }
+    }
+    restarted
+}
+
 include!("backup_dto_structs.rs");
 
 // ── Backup file format ──────────────────────────────────────────────────────
@@ -638,7 +694,7 @@ pub(crate) async fn api_delete_backup(Path(filename): Path<String>) -> impl Into
 
 // ── POST /api/restore ─────────────────────────────────────────────────────────
 
-/// Phase 64 SEC-04 — streaming restore handler.
+/// Phase 64 SEC-04 — streaming restore handler (legacy JSON format v1/v2).
 ///
 /// Replaces the old `Json<BackupFile>` extractor with a bounded streaming pipeline:
 ///   1. Validate the `X-Confirm-Restore` header (unchanged security gate).
@@ -648,7 +704,7 @@ pub(crate) async fn api_delete_backup(Path(filename): Path<String>) -> impl Into
 ///   4. `parse_backup_stream` — struson JsonStreamReader section walk. NO
 ///      `serde_json::from_slice(&buf)` fallback (CONTEXT D-SEC-04).
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn api_restore(
+async fn api_restore_legacy(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
     State(agents): State<AgentCore>,
@@ -710,6 +766,241 @@ pub(crate) async fn api_restore(
         }
     };
 
+    // Delegate to the shared JSON restore core logic.
+    restore_from_json_buf(buf, infra, auth, agents, bus, cfg_svc, status).await
+}
+
+// ── POST /api/restore (v3 tar.gz / pg_dump format) ────────────────────────────
+
+/// Restore from a v3 `.tar.gz` backup produced by `api_create_backup`.
+///
+/// The archive must contain:
+///   - `manifest.json`  — must have a `"version"` field
+///   - `db.dump`        — custom-format pg_dump (restored via pg_restore)
+///   - `secrets.json`   — plaintext secrets array
+///   - `workspace/`     — workspace directory tree (optional)
+///   - `config/`        — agent configs (optional)
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn api_restore(
+    State(infra): State<InfraServices>,
+    State(auth): State<AuthServices>,
+    State(agents): State<AgentCore>,
+    State(bus): State<crate::gateway::clusters::ChannelBus>,
+    State(cfg_svc): State<crate::gateway::clusters::ConfigServices>,
+    State(status): State<crate::gateway::clusters::StatusMonitor>,
+    req: Request,
+) -> axum::response::Response {
+    // Guard: require X-Confirm-Restore header
+    let headers = req.headers().clone();
+    let confirm = headers.get("x-confirm-restore").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if confirm != "yes-i-am-sure" {
+        return (StatusCode::BAD_REQUEST, Json(json!({
+            "error": "restore requires X-Confirm-Restore: yes-i-am-sure header"
+        }))).into_response();
+    }
+
+    // Size cap
+    let cap_mb = cfg_svc.config.limits.max_restore_size_mb;
+    let cap_bytes = (cap_mb as usize).saturating_mul(1024 * 1024);
+    if let Some((status_code, body)) = check_content_length_cap(&headers, cap_bytes) {
+        tracing::warn!(cap_mb, "restore rejected via Content-Length fast-path (payload > cap)");
+        return (status_code, [(header::CONTENT_TYPE, "application/json")], body).into_response();
+    }
+    let body = req.into_body();
+    let buf = match drain_body_with_cap(body.into_data_stream(), cap_bytes).await {
+        Ok(b) => b,
+        Err(CapExceeded { observed_bytes, cap_bytes }) => {
+            tracing::warn!(observed_bytes, cap_bytes, "restore rejected via streaming byte-counter");
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({
+                    "error": "payload exceeds max_restore_size_mb",
+                    "cap_bytes": cap_bytes,
+                    "observed_bytes": observed_bytes,
+                })),
+            ).into_response();
+        }
+    };
+
+    // Detect format: tar.gz starts with magic bytes 0x1f 0x8b; otherwise treat as legacy JSON.
+    let is_tar_gz = buf.len() >= 2 && buf[0] == 0x1f && buf[1] == 0x8b;
+    if !is_tar_gz {
+        // Delegate to legacy JSON restore logic
+        return restore_from_json_buf(buf, infra, auth, agents, bus, cfg_svc, status).await;
+    }
+
+    let container = discover_postgres_container(
+        &cfg_svc.config.backup.postgres_container
+    ).await;
+
+    // Write .tar.gz to temp file
+    let tmpdir = std::env::temp_dir()
+        .join(format!("hydeclaw-restore-{}", uuid::Uuid::new_v4()));
+    if let Err(e) = tokio::fs::create_dir_all(&tmpdir).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("tmpdir: {e}")}))).into_response();
+    }
+    let tar_path = tmpdir.join("restore.tar.gz");
+    if let Err(e) = tokio::fs::write(&tar_path, &buf).await {
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("write tar: {e}")}))).into_response();
+    }
+
+    // Extract tar
+    let extract_dir = tmpdir.join("extracted");
+    if let Err(e) = tokio::fs::create_dir_all(&extract_dir).await {
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("mkdir extracted: {e}")}))).into_response();
+    }
+    let tar_out = tokio::process::Command::new("tar")
+        .args(["xzf"])
+        .arg(&tar_path)
+        .arg("-C")
+        .arg(&extract_dir)
+        .output().await;
+    match tar_out {
+        Ok(o) if !o.status.success() => {
+            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+            return (StatusCode::BAD_REQUEST, Json(json!({
+                "error": format!("tar extract failed: {}", String::from_utf8_lossy(&o.stderr))
+            }))).into_response();
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("tar spawn: {e}")}))).into_response();
+        }
+        Ok(_) => {}
+    }
+
+    // Validate manifest
+    let manifest_path = extract_dir.join("manifest.json");
+    let manifest: serde_json::Value = match tokio::fs::read(&manifest_path).await {
+        Ok(b) => match serde_json::from_slice(&b) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+                return (StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!("manifest.json invalid: {e}")}))).into_response();
+            }
+        },
+        Err(e) => {
+            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+            return (StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("manifest.json missing: {e}")}))).into_response();
+        }
+    };
+    if manifest.get("version").is_none() {
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        return (StatusCode::BAD_REQUEST,
+            Json(json!({"error": "unsupported backup format: missing version"}))).into_response();
+    }
+
+    // Snapshot workspace for rollback
+    let workspace_bak = tmpdir.join("workspace.bak.tar.gz");
+    let _ = tokio::process::Command::new("tar")
+        .args(["czf"])
+        .arg(&workspace_bak)
+        .args(["-C", ".", "workspace"])
+        .output().await;
+
+    tracing::warn!("RESTORE initiated from pg_dump backup (v3)");
+
+    // Stop all running agents
+    {
+        let mut map = agents.map.write().await;
+        let names: Vec<_> = map.keys().cloned().collect();
+        for name in &names {
+            if let Some(h) = map.remove(name) {
+                h.shutdown(&agents.scheduler).await;
+                tracing::info!(agent = %name, "agent stopped for restore");
+            }
+        }
+    }
+
+    // pg_restore
+    let dump_path = extract_dir.join("db.dump");
+    if let Err(e) = run_pg_restore(&container, &dump_path).await {
+        tracing::error!("pg_restore failed: {e}");
+        let restarted = restart_agents_from_disk(&agents, &infra, &auth, &bus, &cfg_svc, &status).await;
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
+            "error": format!("pg_restore failed: {e}"),
+            "agents_restarted_from_old_state": restarted,
+        }))).into_response();
+    }
+
+    // Restore secrets
+    let secrets_bytes = tokio::fs::read(extract_dir.join("secrets.json")).await
+        .unwrap_or_default();
+    let plaintext_secrets: Vec<crate::secrets::PlaintextSecret> =
+        serde_json::from_slice(&secrets_bytes).unwrap_or_default();
+    let secret_count = plaintext_secrets.len();
+    if let Err(e) = auth.secrets.restore_plaintext(plaintext_secrets).await {
+        let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+        return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("secrets restore failed: {e}")}))).into_response();
+    }
+
+    // Restore workspace and config
+    let workspace_src = extract_dir.join("workspace");
+    if workspace_src.exists() {
+        let workspace_src_str = workspace_src.to_string_lossy().into_owned();
+        if let Err(e) = copy_dir_to(&workspace_src_str, std::path::Path::new("workspace")).await {
+            // Rollback workspace from snapshot
+            let _ = tokio::process::Command::new("tar")
+                .args(["xzf"]).arg(&workspace_bak).args(["-C", "."]).output().await;
+            let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+            return (StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("workspace restore failed: {e}")}))).into_response();
+        }
+    }
+    let config_src = extract_dir.join("config");
+    if config_src.exists() {
+        let config_src_str = config_src.to_string_lossy().into_owned();
+        let _ = copy_dir_to(&config_src_str, std::path::Path::new("config")).await;
+    }
+
+    // Mark setup complete
+    let _ = sqlx::query(
+        "INSERT INTO system_flags (key, value) VALUES ('setup_complete', 'true'::jsonb) \
+         ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()"
+    )
+    .execute(&infra.db).await
+    .inspect_err(|e| tracing::warn!(%e, "restore: set setup_complete failed"));
+
+    // Restart agents from restored configs
+    let restarted = restart_agents_from_disk(
+        &agents, &infra, &auth, &bus, &cfg_svc, &status
+    ).await;
+
+    let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+    tracing::warn!(agents = ?restarted, "RESTORE complete (pg_dump v3)");
+
+    Json(json!({
+        "ok": true,
+        "restored": {
+            "db": "pg_restore ok",
+            "secrets": secret_count,
+        },
+        "restarted_agents": restarted,
+    })).into_response()
+}
+
+/// Core legacy restore logic operating on an already-drained JSON buffer.
+/// Called from both `api_restore_legacy` and the new `api_restore` (format auto-detect).
+#[allow(clippy::too_many_arguments)]
+async fn restore_from_json_buf(
+    buf: Vec<u8>,
+    infra: InfraServices,
+    auth: AuthServices,
+    agents: AgentCore,
+    bus: crate::gateway::clusters::ChannelBus,
+    cfg_svc: crate::gateway::clusters::ConfigServices,
+    status: crate::gateway::clusters::StatusMonitor,
+) -> axum::response::Response {
     // struson section walk (CONTEXT D-SEC-04). Each section is deserialize_next'd
     // into the typed accumulator; unknown fields are skip_value()-ed for forward-compat.
     let cursor = std::io::Cursor::new(&buf);
@@ -783,8 +1074,6 @@ pub(crate) async fn api_restore(
     }
 
     // V2 sections — wrapped in transaction for atomicity (D-10, D-11)
-    // Errors are propagated instead of silently swallowed; on failure the transaction
-    // rolls back automatically, preventing partial state corruption.
     let mut tx = match infra.db.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -792,85 +1081,35 @@ pub(crate) async fn api_restore(
         }
     };
 
-    match restore_providers(&mut tx, &backup.providers, &backup.provider_active).await {
-        Ok(n) => { restored["providers"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at providers: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
+    macro_rules! v2_restore {
+        ($call:expr, $key:literal) => {
+            match $call {
+                Ok(n) => { restored[$key] = json!(n); }
+                Err(e) => {
+                    tracing::error!("V2 restore failed at {}: {}", $key, e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
+                }
+            }
+        };
     }
-    match restore_channels(&mut tx, &backup.channels).await {
-        Ok(n) => { restored["channels"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at channels: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
-    match restore_webhooks(&mut tx, &backup.webhooks).await {
-        Ok(n) => { restored["webhooks"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at webhooks: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
-    match restore_watchdog_settings(&mut tx, &backup.watchdog_settings).await {
-        Ok(n) => { restored["watchdog_settings"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at watchdog_settings: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
-    match restore_allowed_users(&mut tx, &backup.allowed_users).await {
-        Ok(n) => { restored["allowed_users"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at allowed_users: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
-    match restore_approval_allowlist(&mut tx, &backup.approval_allowlist).await {
-        Ok(n) => { restored["approval_allowlist"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at approval_allowlist: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
-    // OAuth accounts must be restored before bindings (FK dependency)
-    match restore_oauth_accounts(&mut tx, &backup.oauth_accounts).await {
-        Ok(n) => { restored["oauth_accounts"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at oauth_accounts: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
-    match restore_oauth_bindings(&mut tx, &backup.oauth_bindings).await {
-        Ok(n) => { restored["oauth_bindings"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at oauth_bindings: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
-    match restore_gmail_triggers(&mut tx, &backup.gmail_triggers).await {
-        Ok(n) => { restored["gmail_triggers"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at gmail_triggers: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
-    match restore_github_repos(&mut tx, &backup.github_repos).await {
-        Ok(n) => { restored["github_repos"] = json!(n); }
-        Err(e) => {
-            tracing::error!("V2 restore failed at github_repos: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore failed: {e}")}))).into_response();
-        }
-    }
+
+    v2_restore!(restore_providers(&mut tx, &backup.providers, &backup.provider_active).await, "providers");
+    v2_restore!(restore_channels(&mut tx, &backup.channels).await, "channels");
+    v2_restore!(restore_webhooks(&mut tx, &backup.webhooks).await, "webhooks");
+    v2_restore!(restore_watchdog_settings(&mut tx, &backup.watchdog_settings).await, "watchdog_settings");
+    v2_restore!(restore_allowed_users(&mut tx, &backup.allowed_users).await, "allowed_users");
+    v2_restore!(restore_approval_allowlist(&mut tx, &backup.approval_allowlist).await, "approval_allowlist");
+    v2_restore!(restore_oauth_accounts(&mut tx, &backup.oauth_accounts).await, "oauth_accounts");
+    v2_restore!(restore_oauth_bindings(&mut tx, &backup.oauth_bindings).await, "oauth_bindings");
+    v2_restore!(restore_gmail_triggers(&mut tx, &backup.gmail_triggers).await, "gmail_triggers");
+    v2_restore!(restore_github_repos(&mut tx, &backup.github_repos).await, "github_repos");
 
     if let Err(e) = tx.commit().await {
         tracing::error!("V2 restore transaction commit failed: {e}");
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("v2 restore commit failed: {e}")}))).into_response();
     }
 
-    // Mark setup as complete so the wizard doesn't appear after restore.
-    // A backup taken from a configured system implies setup was done.
+    // Mark setup as complete
     let _ = sqlx::query(
         "INSERT INTO system_flags (key, value) VALUES ('setup_complete', 'true'::jsonb) \
          ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()"
