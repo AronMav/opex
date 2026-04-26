@@ -384,6 +384,15 @@ pub async fn write_workspace_file(
     base: bool,
 ) -> Result<()> {
     let path = validate_workspace_path(workspace_dir, agent_name, filename).await?;
+
+    // Create parent directories BEFORE canonicalization:
+    // resolve_workspace_path calls dunce::canonicalize on the parent, which
+    // fails with ENOENT when subdirectories don't exist yet (e.g. "notes/x.md"
+    // redirected to "agents/Hyde/notes/x.md" where "notes/" is new).
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+
     // Canonicalize before is_read_only to prevent symlink bypass:
     // a symlink "notes.md" -> "SOUL.md" must be checked as "SOUL.md"
     // Phase 64 SEC-02: use path_guard::resolve_workspace_path which
@@ -395,11 +404,6 @@ pub async fn write_workspace_file(
         anyhow::bail!("'{filename}' is read-only and cannot be modified");
     }
 
-    // Create parent directories if they don't exist
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
-
     fs::write(&path, content).await?;
     tracing::info!(file = %path.display(), "workspace file updated by AI");
     Ok(())
@@ -407,16 +411,15 @@ pub async fn write_workspace_file(
 
 /// Validate and resolve a workspace path.
 ///
-/// Paths are relative to the workspace root. The agent may write to:
-/// - direct files at workspace root (USER.md, AGENTS.md, etc.)
-/// - its own agent directory: `agents/{agent_name}/` and below
-/// - shared directories: `tools/`, `skills/`, `mcp/`
+/// Resolution rules (applied in order after stripping a leading `workspace/` prefix):
+/// 1. Bare filename (no `/`): shared root files → workspace root; bare names → `agents/{name}/`
+/// 2. Path with `/` whose first component is a known root dir (`agents`, `tools`, `skills`,
+///    `mcp`, `uploads`, `toolgate`, `channels`) → workspace root.
+/// 3. Path with `/` whose first component is NOT a known root dir (e.g. `notes/x.md`) →
+///    redirected to `agents/{name}/notes/x.md` so agents can freely use subdirectories.
 ///
-/// A leading `workspace/` prefix is stripped automatically so the bot can
-/// pass either `SOUL.md` or `workspace/agents/MyAgent/SOUL.md` — both resolve.
-///
-/// Bare filenames like `SOUL.md` resolve to `agents/{agent_name}/SOUL.md`.
-/// Paths starting with `agents/` must target the agent's own directory.
+/// Write access is further restricted by the directory whitelist in the inner function.
+/// Paths starting with `agents/` must target the calling agent's own directory.
 pub async fn validate_workspace_path(
     workspace_dir: &str,
     agent_name: &str,
@@ -455,14 +458,30 @@ async fn validate_workspace_path_inner(
     // toolgate/ and channels/ removed — base agent uses code_exec on host directly
     const SHARED_ROOT_DIRS: &[&str] = &["tools", "skills", "mcp", "uploads"];
 
+    // Root-level directories the agent is allowed to address by their full path.
+    // Paths whose first component is NOT in this list are redirected to the
+    // agent's own directory so `notes/ui_test.md` → `agents/{name}/notes/ui_test.md`
+    // instead of the illegal `workspace/notes/ui_test.md`.
+    const ROOT_DIRS: &[&str] = &[
+        "agents", "tools", "skills", "mcp", "uploads", "toolgate", "channels",
+    ];
+
     // Bare filename (no directory separator):
     //   - shared root files (USER.md, AGENTS.md) → workspace root
-    //   - shared root dirs (tools/, skills/, toolgate/, …) → workspace root
+    //   - shared root dirs (tools/, skills/, …) → workspace root
     //   - for read: if it exists at workspace root → workspace root (e.g. zettelkasten/)
     //   - everything else → agent-specific dir
+    //
+    // Path with directory separators:
+    //   - first component is a known root dir → workspace root (keeps explicit paths intact)
+    //   - otherwise → agent-specific dir (agents write `notes/x.md`, not `workspace/notes/x.md`)
     let resolved = if normalized.contains('/') {
-        // Path with directories → relative to workspace root
-        workspace_root.join(normalized)
+        let first_component = normalized.split('/').next().unwrap_or("");
+        if ROOT_DIRS.contains(&first_component) || SHARED_ROOT_FILES.contains(&first_component) {
+            workspace_root.join(normalized)
+        } else {
+            agent_dir.join(normalized)
+        }
     } else if SHARED_ROOT_FILES.contains(&normalized) || SHARED_ROOT_DIRS.contains(&normalized) {
         workspace_root.join(normalized)
     } else if allow_read_any && workspace_root.join(normalized).exists() {
@@ -977,6 +996,59 @@ mod tests {
         // Verify SOUL.md was NOT modified
         let content = std::fs::read_to_string(agent_dir_path.join("SOUL.md")).unwrap();
         assert_eq!(content, "original soul", "SOUL.md must not be modified");
+    }
+
+    // ── validate_workspace_path — subdirectory redirect regression ──────────
+
+    /// `notes/ui_test.md` must NOT be rejected (access denied to "notes").
+    /// It must land in `agents/{name}/notes/ui_test.md`.
+    #[tokio::test]
+    async fn subdir_path_redirects_to_agent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(ws.join("agents").join("Hyde")).unwrap();
+
+        let ws_str = ws.to_str().unwrap();
+        let result = validate_workspace_path(ws_str, "Hyde", "notes/ui_test.md").await;
+        assert!(result.is_ok(), "notes/ui_test.md must be accepted: {:?}", result);
+        let path = result.unwrap();
+        assert!(
+            path.ends_with("agents/Hyde/notes/ui_test.md"),
+            "must land under agents/Hyde/: {}", path.display()
+        );
+    }
+
+    /// Explicit `tools/my.yaml` must still go to workspace root (not agent dir).
+    #[tokio::test]
+    async fn tools_subpath_stays_at_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(ws.join("tools")).unwrap();
+
+        let ws_str = ws.to_str().unwrap();
+        let result = validate_workspace_path(ws_str, "Hyde", "tools/my.yaml").await;
+        assert!(result.is_ok(), "tools/my.yaml must be accepted: {:?}", result);
+        let path = result.unwrap();
+        assert!(
+            path.ends_with("tools/my.yaml"),
+            "must stay at workspace root: {}", path.display()
+        );
+        assert!(!path.to_string_lossy().contains("agents"), "must NOT be under agents/");
+    }
+
+    /// `write_workspace_file("notes/report.md")` must write and create parent dirs.
+    #[tokio::test]
+    async fn write_creates_subdir_in_agent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(ws.join("agents").join("Hyde")).unwrap();
+
+        let ws_str = ws.to_str().unwrap();
+        let result = write_workspace_file(ws_str, "Hyde", "notes/report.md", "hello", false).await;
+        assert!(result.is_ok(), "write to notes/report.md must succeed: {:?}", result);
+        let expected = ws.join("agents").join("Hyde").join("notes").join("report.md");
+        assert!(expected.exists(), "file must exist at {}", expected.display());
+        assert_eq!(std::fs::read_to_string(&expected).unwrap(), "hello");
     }
 
     // ── build_system_prompt — refactor regression tests (2026-04-18) ────────
