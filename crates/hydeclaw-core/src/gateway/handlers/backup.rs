@@ -44,7 +44,6 @@ const BACKUP_DIR: &str = "backups";
 const RETENTION_DAYS: i64 = 7;
 
 /// Tables excluded from pg_dump — ephemeral or too large to be useful in backups.
-#[allow(dead_code)]
 pub(crate) const EXCLUDED_TABLES: &[&str] = &[
     "sessions", "messages", "session_events",
     "usage_log",
@@ -73,7 +72,6 @@ fn parse_container_name<'a>(docker_output: &'a str, fallback: &'a str) -> &'a st
 
 /// Discover the running postgres container name.
 /// Tries `docker ps --filter name=postgres`; falls back to `configured`.
-#[allow(dead_code)]
 async fn discover_postgres_container(configured: &str) -> String {
     let out = tokio::process::Command::new("docker")
         .args(["ps", "--filter", "name=postgres", "--format", "{{.Names}}"])
@@ -89,23 +87,37 @@ async fn discover_postgres_container(configured: &str) -> String {
 }
 
 /// Run pg_dump inside the postgres container and write output to `dest`.
-#[allow(dead_code)]
 async fn run_pg_dump(container: &str, dest: &std::path::Path) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let file = tokio::fs::File::create(dest).await
+        .with_context(|| format!("create db.dump at {}", dest.display()))?;
+
     let mut cmd = tokio::process::Command::new("docker");
     cmd.args(["exec", container, "pg_dump", "-U", "hydeclaw", "hydeclaw", "-Fc"]);
     for table in EXCLUDED_TABLES {
         cmd.args(["--exclude-table", table]);
     }
-    let output = cmd.output().await.context("docker exec pg_dump: spawn failed")?;
+    cmd.stdout(std::process::Stdio::piped())
+       .stderr(std::process::Stdio::piped());
+
+    let mut child = cmd.spawn().context("docker exec pg_dump: spawn failed")?;
+
+    // Copy pg_dump stdout → file without buffering in RAM
+    let mut stdout = child.stdout.take().expect("stdout was piped");
+    let mut writer = tokio::io::BufWriter::new(file);
+    tokio::io::copy(&mut stdout, &mut writer).await
+        .context("streaming pg_dump output to db.dump")?;
+    writer.flush().await.context("flush db.dump")?;
+
+    let output = child.wait_with_output().await.context("pg_dump wait")?;
     if !output.status.success() {
         anyhow::bail!("pg_dump failed: {}", String::from_utf8_lossy(&output.stderr));
     }
-    tokio::fs::write(dest, &output.stdout).await.context("write db.dump")?;
     Ok(())
 }
 
 /// Get the PostgreSQL version string from inside the container for the manifest.
-#[allow(dead_code)]
 async fn get_pg_version(container: &str) -> anyhow::Result<String> {
     let out = tokio::process::Command::new("docker")
         .args(["exec", container, "psql", "-U", "hydeclaw", "-t", "-c", "SELECT version()"])
@@ -116,7 +128,6 @@ async fn get_pg_version(container: &str) -> anyhow::Result<String> {
 
 /// Copy directory contents to `dst` using `cp -r src/. dst/`.
 /// Creates `dst` if it does not exist.
-#[allow(dead_code)]
 async fn copy_dir_to(src: &str, dst: &std::path::Path) -> anyhow::Result<()> {
     tokio::fs::create_dir_all(dst).await?;
     let src_dot = format!("{src}/.");
@@ -398,6 +409,7 @@ pub(crate) async fn create_backup_internal(
 }
 
 async fn cleanup_old_backups_v3(now: chrono::DateTime<chrono::Utc>, retention_days: i64) {
+    if retention_days == 0 { return; }  // 0 = disabled
     let cutoff = now - chrono::Duration::days(retention_days);
     let Ok(mut dir) = tokio::fs::read_dir(BACKUP_DIR).await else { return };
     while let Ok(Some(entry)) = dir.next_entry().await {
