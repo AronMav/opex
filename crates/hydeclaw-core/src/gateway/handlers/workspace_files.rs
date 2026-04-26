@@ -41,8 +41,8 @@ pub(crate) async fn serve_workspace_file(
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    if let Err(e) = crate::uploads::verify_workspace_file_url(&rel_decoded, &q.sig, q.exp, &key, now) {
-        return (StatusCode::FORBIDDEN, format!("{e:?}")).into_response();
+    if crate::uploads::verify_workspace_file_url(&rel_decoded, &q.sig, q.exp, &key, now).is_err() {
+        return (StatusCode::FORBIDDEN, "invalid or expired signature").into_response();
     }
 
     let workspace_root = StdPath::new(crate::config::WORKSPACE_DIR);

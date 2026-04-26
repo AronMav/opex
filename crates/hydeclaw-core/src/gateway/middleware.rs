@@ -225,7 +225,7 @@ pub(crate) async fn auth_middleware(
     // /ws*                 — WebSocket (validated separately via ticket)
     if is_loopback(&client_ip) {
         const LOOPBACK_EXACT: &[&str] = &["/health", "/api/mcp/callback", "/api/channels/notify", "/api/media/upload"];
-        const LOOPBACK_PREFIX: &[&str] = &["/uploads/", "/workspace-files/", "/ws"];
+        const LOOPBACK_PREFIX: &[&str] = &["/uploads/", "/ws"];
         let loopback_allowed = LOOPBACK_EXACT.contains(&path)
             || LOOPBACK_PREFIX.iter().any(|p| path.starts_with(p));
         if loopback_allowed {

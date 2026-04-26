@@ -47,14 +47,21 @@ pub(crate) const WHITELIST_EXTENSIONS: &[&str] = &[
 ];
 
 /// Snapshot all "user-artifact" files under `workspace_dir`.
-pub fn snapshot(workspace_dir: &Path) -> WorkspaceSnapshot {
-    let mut snap = WorkspaceSnapshot {
-        entries: HashMap::new(),
-        truncated: false,
-    };
-    let mut total_bytes: u64 = 0;
-    walk(workspace_dir, workspace_dir, &mut snap, &mut total_bytes);
-    snap
+/// Runs directory traversal + file hashing on a blocking thread pool to
+/// avoid blocking the Tokio async runtime (files can be up to 100 MB).
+pub async fn snapshot(workspace_dir: &Path) -> WorkspaceSnapshot {
+    let dir = workspace_dir.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let mut snap = WorkspaceSnapshot {
+            entries: HashMap::new(),
+            truncated: false,
+        };
+        let mut total_bytes: u64 = 0;
+        walk(&dir, &dir, &mut snap, &mut total_bytes);
+        snap
+    })
+    .await
+    .unwrap_or_else(|_| WorkspaceSnapshot { entries: HashMap::new(), truncated: false })
 }
 
 /// Compare two snapshots; return Created and Modified changes only.
@@ -162,138 +169,138 @@ mod tests {
         f.write_all(content).expect("write");
     }
 
-    #[test]
-    fn snapshot_picks_up_user_files() {
+    #[tokio::test]
+    async fn snapshot_picks_up_user_files() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "out.csv", b"a,b\n1,2\n");
         write_file(dir.path(), "chart.png", b"\x89PNG\r\n");
-        let snap = snapshot(dir.path());
+        let snap = snapshot(dir.path()).await;
         assert_eq!(snap.entries.len(), 2);
         assert!(snap.entries.contains_key(&PathBuf::from("out.csv")));
         assert!(snap.entries.contains_key(&PathBuf::from("chart.png")));
         assert!(!snap.truncated);
     }
 
-    #[test]
-    fn snapshot_skips_blacklisted_subdirs() {
+    #[tokio::test]
+    async fn snapshot_skips_blacklisted_subdirs() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "user.csv", b"x");
         write_file(dir.path(), "skills/system.md", b"x");
         write_file(dir.path(), "tools/t.yaml", b"x");
         write_file(dir.path(), ".git/config", b"x");
-        let snap = snapshot(dir.path());
+        let snap = snapshot(dir.path()).await;
         assert_eq!(snap.entries.len(), 1);
         assert!(snap.entries.contains_key(&PathBuf::from("user.csv")));
     }
 
-    #[test]
-    fn snapshot_skips_non_whitelist_extensions() {
+    #[tokio::test]
+    async fn snapshot_skips_non_whitelist_extensions() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "keep.csv", b"x");
         write_file(dir.path(), "drop.bin", b"x");
         write_file(dir.path(), "drop.exe", b"x");
-        let snap = snapshot(dir.path());
+        let snap = snapshot(dir.path()).await;
         assert_eq!(snap.entries.len(), 1);
     }
 
-    #[test]
-    fn snapshot_skips_hidden_files() {
+    #[tokio::test]
+    async fn snapshot_skips_hidden_files() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "a.csv", b"x");
         write_file(dir.path(), ".cache", b"x");
         write_file(dir.path(), ".gitkeep", b"");
-        let snap = snapshot(dir.path());
+        let snap = snapshot(dir.path()).await;
         assert_eq!(snap.entries.len(), 1);
     }
 
-    #[test]
-    fn snapshot_truncates_at_max_files() {
+    #[tokio::test]
+    async fn snapshot_truncates_at_max_files() {
         let dir = tempfile::tempdir().unwrap();
         for i in 0..(MAX_FILES + 5) {
             write_file(dir.path(), &format!("f{i}.txt"), b"x");
         }
-        let snap = snapshot(dir.path());
+        let snap = snapshot(dir.path()).await;
         assert!(snap.entries.len() <= MAX_FILES);
         assert!(snap.truncated);
     }
 
-    #[test]
-    fn snapshot_truncates_at_max_bytes() {
+    #[tokio::test]
+    async fn snapshot_truncates_at_max_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let big = vec![0u8; 60 * 1024 * 1024];
         write_file(dir.path(), "a.txt", &big);
         write_file(dir.path(), "b.txt", &big);
-        let snap = snapshot(dir.path());
+        let snap = snapshot(dir.path()).await;
         assert_eq!(snap.entries.len(), 1, "second file should be skipped");
         assert!(snap.truncated);
     }
 
-    #[test]
-    fn diff_detects_created_files() {
+    #[tokio::test]
+    async fn diff_detects_created_files() {
         let dir = tempfile::tempdir().unwrap();
-        let before = snapshot(dir.path());
+        let before = snapshot(dir.path()).await;
         write_file(dir.path(), "new.csv", b"data");
-        let after = snapshot(dir.path());
+        let after = snapshot(dir.path()).await;
         let changes = diff(&before, &after);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].kind, ChangeKind::Created);
         assert_eq!(changes[0].rel_path, PathBuf::from("new.csv"));
     }
 
-    #[test]
-    fn diff_detects_modified_files_via_sha256() {
+    #[tokio::test]
+    async fn diff_detects_modified_files_via_sha256() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "x.csv", b"v1");
-        let before = snapshot(dir.path());
+        let before = snapshot(dir.path()).await;
         write_file(dir.path(), "x.csv", b"v2");
-        let after = snapshot(dir.path());
+        let after = snapshot(dir.path()).await;
         let changes = diff(&before, &after);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].kind, ChangeKind::Modified);
     }
 
-    #[test]
-    fn diff_no_change_returns_empty() {
+    #[tokio::test]
+    async fn diff_no_change_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "x.csv", b"v1");
-        let snap = snapshot(dir.path());
+        let snap = snapshot(dir.path()).await;
         let changes = diff(&snap, &snap);
         assert!(changes.is_empty());
     }
 
-    #[test]
-    fn diff_ignores_deleted_files() {
+    #[tokio::test]
+    async fn diff_ignores_deleted_files() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "x.csv", b"v1");
-        let before = snapshot(dir.path());
+        let before = snapshot(dir.path()).await;
         std::fs::remove_file(dir.path().join("x.csv")).unwrap();
-        let after = snapshot(dir.path());
+        let after = snapshot(dir.path()).await;
         let changes = diff(&before, &after);
         assert!(changes.is_empty(), "deletions intentionally not surfaced");
     }
 
-    #[test]
-    fn diff_handles_delete_then_recreate_within_one_call() {
+    #[tokio::test]
+    async fn diff_handles_delete_then_recreate_within_one_call() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "x.csv", b"v1");
-        let before = snapshot(dir.path());
+        let before = snapshot(dir.path()).await;
         std::fs::remove_file(dir.path().join("x.csv")).unwrap();
         write_file(dir.path(), "x.csv", b"v2");
-        let after = snapshot(dir.path());
+        let after = snapshot(dir.path()).await;
         let changes = diff(&before, &after);
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].kind, ChangeKind::Modified);
     }
 
     #[cfg(unix)]
-    #[test]
-    fn snapshot_does_not_follow_symlinks() {
+    #[tokio::test]
+    async fn snapshot_does_not_follow_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         let target_dir = tempfile::tempdir().unwrap();
         write_file(target_dir.path(), "secret.csv", b"hidden");
         std::os::unix::fs::symlink(target_dir.path(), dir.path().join("link")).unwrap();
         write_file(dir.path(), "user.csv", b"x");
-        let snap = snapshot(dir.path());
+        let snap = snapshot(dir.path()).await;
         assert_eq!(snap.entries.len(), 1);
         assert!(snap.entries.contains_key(&PathBuf::from("user.csv")));
     }

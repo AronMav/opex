@@ -45,7 +45,7 @@ pub async fn handle_code_exec(
 
     // Snapshot BEFORE so we can diff after.
     let workspace_path = std::path::Path::new(workspace_dir);
-    let before = crate::agent::pipeline::artifact_hook::snapshot(workspace_path);
+    let before = crate::agent::pipeline::artifact_hook::snapshot(workspace_path).await;
 
     // Run the sandbox / host fallback path.
     let host_fn = execute_host_code;
@@ -70,7 +70,7 @@ pub async fn handle_code_exec(
         };
 
     // Snapshot AFTER (always, even on Err — script may have written partial files).
-    let after = crate::agent::pipeline::artifact_hook::snapshot(workspace_path);
+    let after = crate::agent::pipeline::artifact_hook::snapshot(workspace_path).await;
     let changes = crate::agent::pipeline::artifact_hook::diff(&before, &after);
 
     let key = secrets.get_upload_hmac_key();
@@ -94,6 +94,12 @@ pub async fn handle_code_exec(
             s
         };
 
+    let truncation_warning = if after.truncated {
+        "\n⚠️ Artifact snapshot truncated — some created/modified files may not appear above (limit: 200 files / 100 MB)."
+    } else {
+        ""
+    };
+
     match outcome {
         Ok(result) => {
             let mut out = result.stdout;
@@ -105,11 +111,13 @@ pub async fn handle_code_exec(
                 out = format!("Exit code: {}", result.exit_code);
             }
             out.push_str(&format_markers(&changes));
+            out.push_str(truncation_warning);
             out
         }
         Err(e) => {
             let mut out = format!("Error: {}", e);
             out.push_str(&format_markers(&changes));
+            out.push_str(truncation_warning);
             out
         }
     }
@@ -392,10 +400,10 @@ mod tests {
         use crate::agent::pipeline::artifact_hook::{snapshot, diff};
 
         let dir = tempfile::tempdir().unwrap();
-        let before = snapshot(dir.path());
+        let before = snapshot(dir.path()).await;
         write_file(dir.path(), "out.csv", b"data");
         write_file(dir.path(), "chart.png", b"\x89PNG");
-        let after = snapshot(dir.path());
+        let after = snapshot(dir.path()).await;
         let changes = diff(&before, &after);
         assert_eq!(changes.len(), 2);
 
