@@ -348,8 +348,11 @@ if [[ -f channels/package.json ]]; then
 fi
 
 if [[ -f toolgate/requirements.txt ]]; then
-  run_step "Setting up toolgate" bash -c "cd toolgate && python3 -m venv .venv 2>/dev/null && .venv/bin/pip install -q -r requirements.txt"
-  ok "Toolgate ready"
+  if run_step "Setting up toolgate" bash -c "cd toolgate && python3 -m venv .venv 2>/dev/null && .venv/bin/pip install -q -r requirements.txt"; then
+    ok "Toolgate ready"
+  else
+    warn "Toolgate setup failed (STT/TTS/Vision unavailable until fixed)"
+  fi
 fi
 
 # ════════════════════════════════════════════════════════════════
