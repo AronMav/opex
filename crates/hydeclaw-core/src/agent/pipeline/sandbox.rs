@@ -78,7 +78,13 @@ pub async fn handle_code_exec(
         |changes: &[crate::agent::pipeline::artifact_hook::ArtifactChange]| -> String {
             let mut s = String::new();
             for change in changes {
-                let rel = change.rel_path.to_string_lossy();
+                // Force forward slashes — Windows produces backslashes in
+                // PathBuf::to_string_lossy() that would break URL routing.
+                let rel: String = change.rel_path
+                    .iter()
+                    .map(|c| c.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
                 let url = crate::uploads::mint_workspace_file_url(&rel, &key, ttl_secs);
                 let mime = crate::uploads::guess_mime_from_extension(&rel);
                 let json =

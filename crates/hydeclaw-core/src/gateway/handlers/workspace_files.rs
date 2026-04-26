@@ -148,4 +148,31 @@ mod tests {
         let abs = workspace.path().join(&decoded).canonicalize().unwrap();
         assert!(abs.exists());
     }
+
+    /// Full round-trip: mint URL with the same path that `handle_workspace_write`
+    /// resolves bare filenames to (`agents/{name}/x.md`), then verify sig +
+    /// canonicalize + read body — same sequence as `serve_workspace_file`.
+    /// Catches the C-2 bug class (marker URL not pointing where the file landed).
+    #[test]
+    fn roundtrip_mint_verify_resolve_for_agent_file() {
+        let workspace = tempfile::tempdir().unwrap();
+        write_file(workspace.path(), "agents/Aria/note.md", b"hello world");
+
+        let key = [99u8; 32];
+        let rel = "agents/Aria/note.md";
+        let url = crate::uploads::mint_workspace_file_url(rel, &key, 60);
+        assert!(url.starts_with("/workspace-files/agents/Aria/note.md?"), "{url}");
+
+        let sig = url.split("sig=").nth(1).unwrap().split('&').next().unwrap();
+        let exp: u64 = url.split("exp=").nth(1).unwrap().parse().unwrap();
+
+        crate::uploads::verify_workspace_file_url(rel, sig, exp, &key, now()).unwrap();
+
+        let workspace_canon = workspace.path().canonicalize().unwrap();
+        let abs = workspace.path().join(rel).canonicalize().unwrap();
+        assert!(abs.starts_with(&workspace_canon), "must resolve inside workspace");
+
+        let body = std::fs::read(&abs).unwrap();
+        assert_eq!(body, b"hello world");
+    }
 }

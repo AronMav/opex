@@ -417,7 +417,7 @@ pub async fn write_workspace_file(
 ///
 /// Bare filenames like `SOUL.md` resolve to `agents/{agent_name}/SOUL.md`.
 /// Paths starting with `agents/` must target the agent's own directory.
-async fn validate_workspace_path(
+pub async fn validate_workspace_path(
     workspace_dir: &str,
     agent_name: &str,
     filename: &str,

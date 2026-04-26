@@ -38,8 +38,13 @@ pub async fn handle_workspace_write(
         .await
     {
         Ok(()) => {
+            // Resolve to the actual on-disk path so the signed URL points
+            // where the file landed (e.g. bare "x.md" -> "agents/{name}/x.md").
+            // If resolution fails, fall back to the raw filename — the marker
+            // URL may 404 in that edge case but the write succeeded.
+            let rel_for_url = resolve_workspace_url_path(workspace_dir, agent_name, filename).await;
             let key = secrets.get_upload_hmac_key();
-            let url = crate::uploads::mint_workspace_file_url(filename, &key, ttl_secs);
+            let url = crate::uploads::mint_workspace_file_url(&rel_for_url, &key, ttl_secs);
             let mime = crate::uploads::guess_mime_from_extension(filename);
             let marker_json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
             format!(
@@ -61,6 +66,29 @@ pub async fn handle_workspace_write(
             format!("Error writing {}: {}", filename, e)
         }
     }
+}
+
+/// Resolve a workspace filename argument to a workspace-root-relative path
+/// suitable for `mint_workspace_file_url`. Bare filenames like "x.md" become
+/// "agents/{agent_name}/x.md"; rooted paths like "subdir/out.csv" stay as-is.
+/// Always uses forward slashes (cross-platform safe in URLs).
+///
+/// Falls back to the raw filename if validation/resolution fails.
+async fn resolve_workspace_url_path(workspace_dir: &str, agent_name: &str, filename: &str) -> String {
+    let workspace_root = std::path::Path::new(workspace_dir);
+    let resolved = match workspace::validate_workspace_path(workspace_dir, agent_name, filename).await {
+        Ok(p) => p,
+        Err(_) => return filename.to_string(),
+    };
+    let rel = match resolved.strip_prefix(workspace_root) {
+        Ok(p) => p.to_path_buf(),
+        Err(_) => return filename.to_string(),
+    };
+    // Force forward slashes — Windows produces backslashes that break URLs.
+    rel.iter()
+        .map(|c| c.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Internal tool: read a file from workspace.
@@ -127,8 +155,9 @@ pub async fn handle_workspace_edit(
     .await
     {
         Ok(()) => {
+            let rel_for_url = resolve_workspace_url_path(workspace_dir, agent_name, filename).await;
             let key = secrets.get_upload_hmac_key();
-            let url = crate::uploads::mint_workspace_file_url(filename, &key, ttl_secs);
+            let url = crate::uploads::mint_workspace_file_url(&rel_for_url, &key, ttl_secs);
             let mime = crate::uploads::guess_mime_from_extension(filename);
             let marker_json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
             format!(
@@ -853,7 +882,8 @@ mod tests {
 
         assert!(result.starts_with("Successfully updated"), "{result}");
         assert!(result.contains(crate::agent::engine::FILE_PREFIX), "{result}");
-        assert!(result.contains("/workspace-files/x.md?sig="), "{result}");
+        // Bare filename "x.md" resolves to "agents/TestAgent/x.md" inside workspace_dir.
+        assert!(result.contains("/workspace-files/agents/TestAgent/x.md?sig="), "{result}");
         assert!(result.contains("\"mediaType\":\"text/markdown\""), "{result}");
     }
 
@@ -898,7 +928,8 @@ mod tests {
 
         assert!(result.starts_with("Successfully edited"), "{result}");
         assert!(result.contains(crate::agent::engine::FILE_PREFIX), "{result}");
-        assert!(result.contains("/workspace-files/x.md?sig="), "{result}");
+        // Bare filename "x.md" resolves to "agents/TestAgent/x.md" inside workspace_dir.
+        assert!(result.contains("/workspace-files/agents/TestAgent/x.md?sig="), "{result}");
         assert!(result.contains("\"mediaType\":\"text/markdown\""), "{result}");
     }
 
