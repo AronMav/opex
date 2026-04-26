@@ -18,7 +18,7 @@ use tokio::fs;
 use sqlx::Row;
 
 use crate::gateway::AppState;
-use crate::gateway::clusters::{AgentCore, AuthServices, InfraServices};
+use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices, InfraServices};
 use crate::gateway::restore_stream_core::{
     check_content_length_cap, drain_body_with_cap, CapExceeded,
 };
@@ -306,9 +306,118 @@ pub(crate) struct BackupGithubRepo {
 
 // ── POST /api/backup ─────────────────────────────────────────────────────────
 
+/// Create a pg_dump-based backup bundle (.tar.gz).
+pub(crate) async fn create_backup_internal(
+    secrets: &Arc<crate::secrets::SecretsManager>,
+    agent_deps: &Arc<tokio::sync::RwLock<crate::gateway::state::AgentDeps>>,
+    retention_days: i64,
+    postgres_container: &str,
+) -> anyhow::Result<String> {
+    let now = chrono::Utc::now();
+    let filename = format!("hydeclaw-{}.tar.gz", now.format("%Y-%m-%d"));
+
+    let container = discover_postgres_container(postgres_container).await;
+
+    // Temp dir with restricted permissions
+    let tmpdir = std::env::temp_dir()
+        .join(format!("hydeclaw-backup-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&tmpdir).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&tmpdir,
+            std::fs::Permissions::from_mode(0o700)).await?;
+    }
+
+    let result: anyhow::Result<String> = async {
+        // 1. pg_dump
+        run_pg_dump(&container, &tmpdir.join("db.dump")).await?;
+
+        // 2. Secrets — plaintext, chmod 600
+        let backup_secrets = secrets.export_decrypted().await
+            .context("secrets export failed")?;
+        let secrets_path = tmpdir.join("secrets.json");
+        tokio::fs::write(&secrets_path,
+            serde_json::to_vec(&backup_secrets).context("secrets serialize")?)
+            .await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            tokio::fs::set_permissions(&secrets_path,
+                std::fs::Permissions::from_mode(0o600)).await?;
+        }
+
+        // 3. Manifest
+        let pg_version = get_pg_version(&container).await.unwrap_or_default();
+        tokio::fs::write(
+            tmpdir.join("manifest.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": 3,
+                "created_at": now,
+                "pg_version": pg_version,
+                "excluded_tables": EXCLUDED_TABLES,
+            })).context("manifest serialize")?,
+        ).await?;
+
+        // 4. workspace/ and config/
+        let workspace_dir = {
+            let deps = agent_deps.read().await;
+            deps.workspace_dir.clone()
+        };
+        copy_dir_to(&workspace_dir, &tmpdir.join("workspace")).await?;
+        copy_dir_to("config", &tmpdir.join("config")).await?;
+
+        // 5. tar czf
+        tokio::fs::create_dir_all(BACKUP_DIR).await?;
+        let filepath = format!("{BACKUP_DIR}/{filename}");
+        let tar_out = tokio::process::Command::new("tar")
+            .args(["czf", &filepath, "-C"])
+            .arg(&tmpdir)
+            .arg(".")
+            .output().await
+            .context("tar czf: spawn failed")?;
+        if !tar_out.status.success() {
+            anyhow::bail!("tar failed: {}", String::from_utf8_lossy(&tar_out.stderr));
+        }
+
+        Ok(filename.clone())
+    }.await;
+
+    // Always clean up temp dir, even on error
+    let _ = tokio::fs::remove_dir_all(&tmpdir).await;
+
+    let filename = result?;
+
+    // Cleanup old backups
+    cleanup_old_backups_v3(now, retention_days).await;
+
+    let size = tokio::fs::metadata(format!("{BACKUP_DIR}/{filename}"))
+        .await.map(|m| m.len()).unwrap_or(0);
+    tracing::info!(filename = %filename, size_bytes = size, "backup created");
+    Ok(filename)
+}
+
+async fn cleanup_old_backups_v3(now: chrono::DateTime<chrono::Utc>, retention_days: i64) {
+    let cutoff = now - chrono::Duration::days(retention_days);
+    let Ok(mut dir) = tokio::fs::read_dir(BACKUP_DIR).await else { return };
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_owned();
+        if !name.ends_with(".tar.gz") { continue; }
+        if let Some(date_part) = name.strip_prefix("hydeclaw-").and_then(|s| s.strip_suffix(".tar.gz"))
+            && let Ok(date) = chrono::NaiveDate::parse_from_str(date_part, "%Y-%m-%d")
+        {
+            let file_dt = date.and_hms_opt(0, 0, 0).unwrap().and_utc();
+            if file_dt < cutoff {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
+        }
+    }
+}
+
 /// Create a backup without Axum context — callable from the scheduler or HTTP handler.
 /// Returns the filename of the created backup on success.
-pub(crate) async fn create_backup_internal(
+async fn create_backup_internal_legacy(
     db: &PgPool,
     secrets: &Arc<SecretsManager>,
     agent_deps: &Arc<tokio::sync::RwLock<crate::gateway::state::AgentDeps>>,
@@ -414,14 +523,16 @@ pub(crate) async fn create_backup_internal(
     Ok(filename)
 }
 
-/// Create a backup: collect all data, save to disk, clean up old files.
+/// Create a backup: pg_dump + workspace + config + secrets, bundle as .tar.gz.
 pub(crate) async fn api_create_backup(
-    State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
     State(agents): State<AgentCore>,
+    State(cfg_svc): State<ConfigServices>,
 ) -> impl IntoResponse {
-    let now = Utc::now();
-    match create_backup_internal(&infra.db, &auth.secrets, &agents.deps, RETENTION_DAYS).await {
+    let now = chrono::Utc::now();
+    let retention = cfg_svc.config.backup.retention_days as i64;
+    let container = cfg_svc.config.backup.postgres_container.clone();
+    match create_backup_internal(&auth.secrets, &agents.deps, retention, &container).await {
         Ok(filename) => {
             let filepath = format!("{BACKUP_DIR}/{filename}");
             Json(json!({
@@ -432,7 +543,8 @@ pub(crate) async fn api_create_backup(
             })).into_response()
         }
         Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
+            (StatusCode::INTERNAL_SERVER_ERROR,
+             Json(json!({"error": e.to_string()}))).into_response()
         }
     }
 }
@@ -444,16 +556,26 @@ pub(crate) async fn api_list_backups() -> impl IntoResponse {
     if let Ok(mut dir) = fs::read_dir(BACKUP_DIR).await {
         while let Ok(Some(entry)) = dir.next_entry().await {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "json") {
-                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                if let Ok(meta) = entry.metadata().await {
-                    let size_bytes = meta.len();
-                    let created_at = meta.modified().ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .and_then(|d| chrono::DateTime::<Utc>::from_timestamp(d.as_secs() as i64, 0))
-                        .map(|dt| dt.to_rfc3339());
-                    entries.push(BackupEntryDto { filename, size_bytes, created_at });
-                }
+            let name = path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_owned();
+            if !name.ends_with(".tar.gz") { continue; }
+            let filename = name.clone();
+            if let Ok(meta) = entry.metadata().await {
+                let size_bytes = meta.len();
+                let created_at = name
+                    .strip_prefix("hydeclaw-")
+                    .and_then(|s| s.strip_suffix(".tar.gz"))
+                    .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
+                    .map(|d| d.and_hms_opt(0, 0, 0).unwrap().and_utc().to_rfc3339())
+                    .or_else(|| {
+                        meta.modified().ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .and_then(|d| chrono::DateTime::<chrono::Utc>::from_timestamp(d.as_secs() as i64, 0))
+                            .map(|dt| dt.to_rfc3339())
+                    });
+                entries.push(BackupEntryDto { filename, size_bytes, created_at });
             }
         }
     }
@@ -472,7 +594,7 @@ pub(crate) async fn api_download_backup(Path(filename): Path<String>) -> impl In
     match fs::read(&filepath).await {
         Ok(bytes) => (
             [
-                (header::CONTENT_TYPE, "application/json".to_string()),
+                (header::CONTENT_TYPE, "application/gzip".to_string()),
                 (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\"")),
             ],
             bytes,

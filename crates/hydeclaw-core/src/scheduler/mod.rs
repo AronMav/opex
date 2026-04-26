@@ -505,7 +505,7 @@ impl Scheduler {
         &self,
         cron_expr: &str,
         retention_days: u32,
-        db: PgPool,
+        postgres_container: String,
         secrets: Arc<crate::secrets::SecretsManager>,
         agent_deps: Arc<tokio::sync::RwLock<crate::gateway::state::AgentDeps>>,
     ) -> Result<()> {
@@ -516,15 +516,15 @@ impl Scheduler {
         tracing::info!(cron = %cron_expr, retention_days, "scheduling automatic backup");
 
         let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
-            let db = db.clone();
             let secrets = secrets.clone();
             let agent_deps = agent_deps.clone();
+            let postgres_container = postgres_container.clone();
             Box::pin(async move {
                 match crate::gateway::create_backup_internal(
-                    &db,
                     &secrets,
                     &agent_deps,
                     i64::from(retention_days),
+                    &postgres_container,
                 ).await {
                     Ok(f) => tracing::info!(filename = %f, "scheduled backup created"),
                     Err(e) => tracing::error!(error = %e, "scheduled backup failed"),
