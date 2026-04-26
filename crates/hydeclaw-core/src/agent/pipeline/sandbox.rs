@@ -13,12 +13,16 @@ use crate::containers::sandbox::CodeSandbox;
 
 /// Top-level code_exec dispatcher: runs in Docker sandbox, or falls back to
 /// host execution for privileged agents without a sandbox.
+/// Snapshots workspace before/after to emit `__file__:` markers for any
+/// files the script creates or modifies.
 pub async fn handle_code_exec(
     args: &serde_json::Value,
     agent_name: &str,
     is_base: bool,
     sandbox: &Option<Arc<CodeSandbox>>,
     workspace_dir: &str,
+    secrets: &crate::secrets::SecretsManager,
+    ttl_secs: u64,
 ) -> String {
     let code = args.get("code").and_then(|v| v.as_str()).unwrap_or("");
     if code.is_empty() {
@@ -39,23 +43,52 @@ pub async fn handle_code_exec(
         })
         .unwrap_or_default();
 
-    // Privileged agents without Docker sandbox execute directly on host
-    if is_base && sandbox.is_none() {
-        return execute_host_code(code, language, &packages).await;
-    }
+    // Snapshot BEFORE so we can diff after.
+    let workspace_path = std::path::Path::new(workspace_dir);
+    let before = crate::agent::pipeline::artifact_hook::snapshot(workspace_path);
 
-    let sandbox = match sandbox {
-        Some(s) => s.clone(),
-        None => return "Error: Docker sandbox unavailable.".to_string(),
-    };
-    let host_path = std::fs::canonicalize(workspace_dir)
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    match sandbox
-        .execute(agent_name, code, language, &packages, &host_path, is_base)
-        .await
-    {
+    // Run the sandbox / host fallback path.
+    let host_fn = execute_host_code;
+    let outcome: Result<crate::containers::sandbox::ExecResult, anyhow::Error> =
+        if is_base && sandbox.is_none() {
+            let host_out = host_fn(code, language, &packages).await;
+            Ok(crate::containers::sandbox::ExecResult {
+                stdout: host_out,
+                stderr: String::new(),
+                exit_code: 0,
+            })
+        } else {
+            let sb = match sandbox {
+                Some(s) => s.clone(),
+                None => return "Error: Docker sandbox unavailable.".to_string(),
+            };
+            let host_path = std::fs::canonicalize(workspace_dir)
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            sb.execute(agent_name, code, language, &packages, &host_path, is_base).await
+        };
+
+    // Snapshot AFTER (always, even on Err — script may have written partial files).
+    let after = crate::agent::pipeline::artifact_hook::snapshot(workspace_path);
+    let changes = crate::agent::pipeline::artifact_hook::diff(&before, &after);
+
+    let key = secrets.get_upload_hmac_key();
+    let format_markers =
+        |changes: &[crate::agent::pipeline::artifact_hook::ArtifactChange]| -> String {
+            let mut s = String::new();
+            for change in changes {
+                let rel = change.rel_path.to_string_lossy();
+                let url = crate::uploads::mint_workspace_file_url(&rel, &key, ttl_secs);
+                let mime = crate::uploads::guess_mime_from_extension(&rel);
+                let json =
+                    serde_json::json!({"url": url, "mediaType": mime}).to_string();
+                s.push_str(&format!("\n{}{}", crate::agent::engine::FILE_PREFIX, json));
+            }
+            s
+        };
+
+    match outcome {
         Ok(result) => {
             let mut out = result.stdout;
             if !result.stderr.is_empty() {
@@ -65,9 +98,14 @@ pub async fn handle_code_exec(
             if out.is_empty() {
                 out = format!("Exit code: {}", result.exit_code);
             }
+            out.push_str(&format_markers(&changes));
             out
         }
-        Err(e) => format!("Error: {}", e),
+        Err(e) => {
+            let mut out = format!("Error: {}", e);
+            out.push_str(&format_markers(&changes));
+            out
+        }
     }
 }
 
@@ -320,5 +358,56 @@ pub async fn handle_process_kill(
             }
         }
         None => format!("Error: process '{}' has no known PID", process_id),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn test_secrets() -> crate::secrets::SecretsManager {
+        crate::secrets::SecretsManager::new_noop()
+    }
+
+    fn write_file(dir: &std::path::Path, rel: &str, content: &[u8]) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(content).unwrap();
+    }
+
+    /// Smoke test that the marker formatting produces one __file__: per change.
+    /// Bypasses the sandbox by invoking the underlying snapshot/diff +
+    /// asserting the marker construction.
+    #[tokio::test]
+    async fn format_markers_produces_one_per_change() {
+        use crate::agent::pipeline::artifact_hook::{snapshot, diff};
+
+        let dir = tempfile::tempdir().unwrap();
+        let before = snapshot(dir.path());
+        write_file(dir.path(), "out.csv", b"data");
+        write_file(dir.path(), "chart.png", b"\x89PNG");
+        let after = snapshot(dir.path());
+        let changes = diff(&before, &after);
+        assert_eq!(changes.len(), 2);
+
+        let secrets = test_secrets();
+        let key = secrets.get_upload_hmac_key();
+        let mut markers = String::new();
+        for change in &changes {
+            let rel = change.rel_path.to_string_lossy();
+            let url = crate::uploads::mint_workspace_file_url(&rel, &key, 3600);
+            let mime = crate::uploads::guess_mime_from_extension(&rel);
+            let json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
+            markers.push_str(&format!("
+{}{}", crate::agent::engine::FILE_PREFIX, json));
+        }
+        assert!(markers.contains("/workspace-files/out.csv?sig="));
+        assert!(markers.contains("/workspace-files/chart.png?sig="));
+        assert!(markers.contains("\"mediaType\":\"text/csv\""));
+        assert!(markers.contains("\"mediaType\":\"image/png\""));
     }
 }
