@@ -394,12 +394,27 @@ pub async fn write_workspace_file(
     }
 
     // Canonicalize before is_read_only to prevent symlink bypass:
-    // a symlink "notes.md" -> "SOUL.md" must be checked as "SOUL.md"
-    // Phase 64 SEC-02: use path_guard::resolve_workspace_path which
-    // fails closed on workspace escape and uses dunce::canonicalize
-    // for cross-platform consistency (no \\?\ prefix on Windows).
-    let check_path = resolve_workspace_path(workspace_dir, &path)
-        .with_context(|| format!("'{filename}' escapes workspace or cannot be resolved"))?;
+    // a symlink "notes.md" -> "SOUL.md" must be checked as "SOUL.md".
+    // We canonicalize `path` directly (parent dirs already exist from create_dir_all
+    // above) instead of calling resolve_workspace_path(), which would join the
+    // workspace root onto an already-workspace-prefixed relative path, producing a
+    // double-workspace path like /workspace/workspace/agents/… and then failing.
+    // Resolve symlinks for is_read_only (prevents "notes.md" → "SOUL.md" bypass).
+    // The file may not exist yet (new file), so canonicalize the parent directory
+    // (which was just created above) and reattach the filename.
+    let check_path = {
+        let parent = path.parent().ok_or_else(|| anyhow::anyhow!("path has no parent"))?;
+        let parent_canon = dunce::canonicalize(parent)
+            .with_context(|| format!("'{filename}' escapes workspace or cannot be resolved"))?;
+        let file = path.file_name().ok_or_else(|| anyhow::anyhow!("path has no filename"))?;
+        parent_canon.join(file)
+    };
+    // Verify the canonical path stays inside the workspace (symlink bypass prevention).
+    let ws_canon = dunce::canonicalize(workspace_dir)
+        .unwrap_or_else(|_| std::path::PathBuf::from(workspace_dir));
+    if !check_path.starts_with(&ws_canon) {
+        anyhow::bail!("'{filename}' resolves outside workspace");
+    }
     if is_read_only(workspace_dir, &check_path, base) {
         anyhow::bail!("'{filename}' is read-only and cannot be modified");
     }
