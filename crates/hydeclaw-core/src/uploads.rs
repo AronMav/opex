@@ -160,6 +160,10 @@ pub(crate) fn url_encode_keep_slash(s: &str) -> String {
 }
 
 /// Guess MIME type from filename extension (no external dep).
+/// Used by handlers in the binary tree (`workspace_write/edit`, code-exec
+/// sandbox, `/workspace-files/` endpoint). The lib facade doesn't expose
+/// these handlers, so this fn appears dead in the lib target — allow it.
+#[allow(dead_code)]
 pub(crate) fn guess_mime_from_extension(filename: &str) -> &'static str {
     match std::path::Path::new(filename)
         .extension()

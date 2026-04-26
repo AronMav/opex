@@ -363,7 +363,6 @@ pub async fn handle_process_kill(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::io::Write;
 
     fn test_secrets() -> crate::secrets::SecretsManager {
