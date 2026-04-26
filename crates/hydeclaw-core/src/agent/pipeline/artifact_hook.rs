@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct WorkspaceSnapshot {
     /// Map from path relative to workspace_dir to SHA-256 hash.
     pub(crate) entries: HashMap<PathBuf, [u8; 32]>,
@@ -53,7 +53,7 @@ pub async fn snapshot(workspace_dir: &Path) -> WorkspaceSnapshot {
     let dir = workspace_dir.to_owned();
     tokio::task::spawn_blocking(move || {
         let mut snap = WorkspaceSnapshot {
-            entries: HashMap::new(),
+            entries: HashMap::with_capacity(MAX_FILES),
             truncated: false,
         };
         let mut total_bytes: u64 = 0;
@@ -61,7 +61,10 @@ pub async fn snapshot(workspace_dir: &Path) -> WorkspaceSnapshot {
         snap
     })
     .await
-    .unwrap_or_else(|_| WorkspaceSnapshot { entries: HashMap::new(), truncated: false })
+    .unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "artifact_hook: spawn_blocking panicked, returning empty snapshot");
+        WorkspaceSnapshot::default()
+    })
 }
 
 /// Compare two snapshots; return Created and Modified changes only.

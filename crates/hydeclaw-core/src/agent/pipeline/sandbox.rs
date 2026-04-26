@@ -94,13 +94,7 @@ pub async fn handle_code_exec(
             s
         };
 
-    let truncation_warning = if after.truncated {
-        "\n⚠️ Artifact snapshot truncated — some created/modified files may not appear above (limit: 200 files / 100 MB)."
-    } else {
-        ""
-    };
-
-    match outcome {
+    let mut out = match outcome {
         Ok(result) => {
             let mut out = result.stdout;
             if !result.stderr.is_empty() {
@@ -110,17 +104,15 @@ pub async fn handle_code_exec(
             if out.is_empty() {
                 out = format!("Exit code: {}", result.exit_code);
             }
-            out.push_str(&format_markers(&changes));
-            out.push_str(truncation_warning);
             out
         }
-        Err(e) => {
-            let mut out = format!("Error: {}", e);
-            out.push_str(&format_markers(&changes));
-            out.push_str(truncation_warning);
-            out
-        }
+        Err(e) => format!("Error: {}", e),
+    };
+    out.push_str(&format_markers(&changes));
+    if after.truncated {
+        out.push_str("\n⚠️ Artifact snapshot truncated — some created/modified files may not appear above (limit: 200 files / 100 MB).");
     }
+    out
 }
 
 // ── Host code execution (base agents only) ──────────────────────────────────
