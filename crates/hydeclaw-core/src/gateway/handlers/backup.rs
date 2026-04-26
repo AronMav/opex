@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     Router,
     extract::{DefaultBodyLimit, Path, Request, State},
@@ -86,6 +86,50 @@ async fn discover_postgres_container(configured: &str) -> String {
         }
         _ => configured.to_owned(),
     }
+}
+
+/// Run pg_dump inside the postgres container and write output to `dest`.
+#[allow(dead_code)]
+async fn run_pg_dump(container: &str, dest: &std::path::Path) -> anyhow::Result<()> {
+    let mut cmd = tokio::process::Command::new("docker");
+    cmd.args(["exec", container, "pg_dump", "-U", "hydeclaw", "hydeclaw", "-Fc"]);
+    for table in EXCLUDED_TABLES {
+        cmd.args(["--exclude-table", table]);
+    }
+    let output = cmd.output().await.context("docker exec pg_dump: spawn failed")?;
+    if !output.status.success() {
+        anyhow::bail!("pg_dump failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    tokio::fs::write(dest, &output.stdout).await.context("write db.dump")?;
+    Ok(())
+}
+
+/// Get the PostgreSQL version string from inside the container for the manifest.
+#[allow(dead_code)]
+async fn get_pg_version(container: &str) -> anyhow::Result<String> {
+    let out = tokio::process::Command::new("docker")
+        .args(["exec", container, "psql", "-U", "hydeclaw", "-t", "-c", "SELECT version()"])
+        .output()
+        .await?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Copy directory contents to `dst` using `cp -r src/. dst/`.
+/// Creates `dst` if it does not exist.
+#[allow(dead_code)]
+async fn copy_dir_to(src: &str, dst: &std::path::Path) -> anyhow::Result<()> {
+    tokio::fs::create_dir_all(dst).await?;
+    let src_dot = format!("{src}/.");
+    let out = tokio::process::Command::new("cp")
+        .args(["-r", &src_dot])
+        .arg(dst)
+        .output()
+        .await
+        .with_context(|| format!("cp -r {src}/. failed"))?;
+    if !out.status.success() {
+        anyhow::bail!("cp failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    Ok(())
 }
 
 include!("backup_dto_structs.rs");
@@ -1766,5 +1810,27 @@ mod tests {
         assert!(EXCLUDED_TABLES.contains(&"messages"));
         assert!(EXCLUDED_TABLES.contains(&"pending_messages"));
         assert!(EXCLUDED_TABLES.contains(&"outbound_queue"));
+    }
+
+    #[test]
+    fn pg_dump_excludes_all_required_tables() {
+        // Build the args vector the same way run_pg_dump does, verify all tables present.
+        let mut args: Vec<String> = vec![
+            "exec".into(), "pg".into(),
+            "pg_dump".into(), "-U".into(), "hydeclaw".into(),
+            "hydeclaw".into(), "-Fc".into(),
+        ];
+        for t in EXCLUDED_TABLES {
+            args.push("--exclude-table".into());
+            args.push(t.to_string());
+        }
+        // secrets must be excluded
+        let pairs: Vec<_> = args.windows(2).collect();
+        assert!(pairs.iter().any(|w| w[0] == "--exclude-table" && w[1] == "secrets"));
+        assert!(pairs.iter().any(|w| w[0] == "--exclude-table" && w[1] == "messages"));
+        assert!(pairs.iter().any(|w| w[0] == "--exclude-table" && w[1] == "outbound_queue"));
+        // total --exclude-table flags == EXCLUDED_TABLES length
+        let count = args.iter().filter(|a| *a == "--exclude-table").count();
+        assert_eq!(count, EXCLUDED_TABLES.len());
     }
 }
