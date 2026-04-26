@@ -385,25 +385,12 @@ pub async fn write_workspace_file(
 ) -> Result<()> {
     let path = validate_workspace_path(workspace_dir, agent_name, filename).await?;
 
-    // Create parent directories BEFORE canonicalization:
-    // resolve_workspace_path calls dunce::canonicalize on the parent, which
-    // fails with ENOENT when subdirectories don't exist yet (e.g. "notes/x.md"
-    // redirected to "agents/Hyde/notes/x.md" where "notes/" is new).
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).await?;
-    }
-
-    // Canonicalize before is_read_only to prevent symlink bypass:
-    // a symlink "notes.md" -> "SOUL.md" must be checked as "SOUL.md".
-    // We canonicalize `path` directly (parent dirs already exist from create_dir_all
-    // above) instead of calling resolve_workspace_path(), which would join the
-    // workspace root onto an already-workspace-prefixed relative path, producing a
-    // double-workspace path like /workspace/workspace/agents/… and then failing.
-    // Resolve symlinks for is_read_only (prevents "notes.md" → "SOUL.md" bypass).
-    // The file may not exist yet (new file), so canonicalize the parent directory
-    // (which was just created above) and reattach the filename.
+    // Create parent dirs first, then canonicalize the parent to prevent symlink
+    // bypass (e.g. "notes.md" → "SOUL.md"). The file may not exist yet, so we
+    // canonicalize the parent (now guaranteed to exist) and reattach the filename.
+    let parent = path.parent().ok_or_else(|| anyhow::anyhow!("path has no parent"))?;
+    fs::create_dir_all(parent).await?;
     let check_path = {
-        let parent = path.parent().ok_or_else(|| anyhow::anyhow!("path has no parent"))?;
         let parent_canon = dunce::canonicalize(parent)
             .with_context(|| format!("'{filename}' escapes workspace or cannot be resolved"))?;
         let file = path.file_name().ok_or_else(|| anyhow::anyhow!("path has no filename"))?;
