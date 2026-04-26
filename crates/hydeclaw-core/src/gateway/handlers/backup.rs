@@ -156,7 +156,12 @@ async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow:
         .args([
             "exec", "-i", container,
             "pg_restore", "-U", "hydeclaw", "-d", "hydeclaw",
-            "--clean", "--if-exists", "--exit-on-error", "-Fc",
+            // --clean drops objects before recreating them; --if-exists prevents errors
+            // when objects don't exist yet. We intentionally omit --exit-on-error because
+            // excluded tables (e.g. cron_runs) may have FK constraints referencing included
+            // tables (e.g. scheduled_jobs), causing benign DROP CONSTRAINT failures in the
+            // --clean phase. We filter real data errors from these benign schema errors below.
+            "--clean", "--if-exists", "-Fc",
         ])
         .stdin(std::process::Stdio::from(file))
         .output()
@@ -164,7 +169,21 @@ async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow:
         .context("docker exec pg_restore: spawn failed")?;
 
     if !out.status.success() {
-        anyhow::bail!("pg_restore failed: {}", String::from_utf8_lossy(&out.stderr));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // Only fail on real data/schema errors — not on FK-dependency DROP errors
+        // that occur when excluded tables reference included tables.
+        let real_errors: Vec<&str> = stderr
+            .lines()
+            .filter(|l| l.starts_with("pg_restore: error:"))
+            .filter(|l| !l.contains("DROP CONSTRAINT") && !l.contains("drop constraint"))
+            .collect();
+        if !real_errors.is_empty() {
+            anyhow::bail!("pg_restore failed:\n{}", real_errors.join("\n"));
+        }
+        tracing::warn!(
+            "pg_restore: non-fatal FK dependency errors during --clean (expected \
+             when excluded tables have FK refs to included tables)"
+        );
     }
     Ok(())
 }
