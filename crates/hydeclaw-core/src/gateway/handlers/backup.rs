@@ -34,7 +34,6 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 const BACKUP_DIR: &str = "backups";
-const RETENTION_DAYS: i64 = 7;
 
 /// Tables excluded from pg_dump — ephemeral or too large to be useful in backups.
 pub(crate) const EXCLUDED_TABLES: &[&str] = &[

@@ -394,7 +394,15 @@ pub async fn write_workspace_file(
         let parent_canon = dunce::canonicalize(parent)
             .with_context(|| format!("'{filename}' escapes workspace or cannot be resolved"))?;
         let file = path.file_name().ok_or_else(|| anyhow::anyhow!("path has no filename"))?;
-        parent_canon.join(file)
+        let candidate = parent_canon.join(file);
+        // If the file itself is a symlink, resolve it to find the real target so
+        // is_read_only can block writes through e.g. "sneaky.md" → "SOUL.md".
+        // For new files (don't exist yet) symlink_metadata() returns Err → skip.
+        if candidate.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+            dunce::canonicalize(&candidate).unwrap_or(candidate)
+        } else {
+            candidate
+        }
     };
     // Verify the canonical path stays inside the workspace (symlink bypass prevention).
     let ws_canon = dunce::canonicalize(workspace_dir)
