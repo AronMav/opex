@@ -50,6 +50,7 @@ pub mod webhooks_dto;
 #[path = "../gateway/handlers/agents/approvals_dto_structs.rs"]
 pub mod approvals_dto;
 
-/// Phase A W3: Backup file list DTO
+/// Backup file list DTO
 #[path = "../gateway/handlers/backup_dto_structs.rs"]
 pub mod backup_dto;
+
