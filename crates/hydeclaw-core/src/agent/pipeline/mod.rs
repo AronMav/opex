@@ -15,6 +15,7 @@ pub mod context;
 pub mod llm_call;
 pub mod parallel;
 pub mod dispatch;
+pub mod artifact_hook;
 pub mod tool_defs;
 pub mod memory;
 pub mod commands;
