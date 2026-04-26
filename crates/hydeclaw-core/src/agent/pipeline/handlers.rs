@@ -11,11 +11,15 @@ use crate::secrets::SecretsManager;
 
 // ── Workspace handlers ──────────────────────────────────────────
 
-/// Internal tool: write a workspace file.
+/// Internal tool: write a workspace file. Emits a `__file__:` marker so the
+/// UI sees the new artifact without the agent having to do a separate
+/// canvas/rich_card call.
 pub async fn handle_workspace_write(
     workspace_dir: &str,
     agent_name: &str,
     is_base: bool,
+    secrets: &SecretsManager,
+    ttl_secs: u64,
     args: &serde_json::Value,
 ) -> String {
     let filename = args.get("filename").and_then(|v| v.as_str()).unwrap_or("");
@@ -33,7 +37,19 @@ pub async fn handle_workspace_write(
     match workspace::write_workspace_file(workspace_dir, agent_name, filename, &content, is_base)
         .await
     {
-        Ok(()) => format!("Successfully updated {} ({}B)", filename, content.len()),
+        Ok(()) => {
+            let key = secrets.get_upload_hmac_key();
+            let url = crate::uploads::mint_workspace_file_url(filename, &key, ttl_secs);
+            let mime = crate::uploads::guess_mime_from_extension(filename);
+            let marker_json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
+            format!(
+                "Successfully updated {} ({}B)\n{}{}",
+                filename,
+                content.len(),
+                crate::agent::engine::FILE_PREFIX,
+                marker_json,
+            )
+        }
         Err(e) => {
             tracing::error!(
                 filename = %filename,
@@ -82,11 +98,14 @@ pub async fn handle_workspace_list(
     }
 }
 
-/// Internal tool: edit a file by replacing a text substring.
+/// Internal tool: edit a file by replacing a text substring. Emits a `__file__:` marker so the
+/// UI sees the updated artifact without the agent having to do a separate canvas/rich_card call.
 pub async fn handle_workspace_edit(
     workspace_dir: &str,
     agent_name: &str,
     is_base: bool,
+    secrets: &SecretsManager,
+    ttl_secs: u64,
     args: &serde_json::Value,
 ) -> String {
     let filename = args.get("filename").and_then(|v| v.as_str()).unwrap_or("");
@@ -107,7 +126,18 @@ pub async fn handle_workspace_edit(
     )
     .await
     {
-        Ok(()) => format!("Successfully edited '{}'", filename),
+        Ok(()) => {
+            let key = secrets.get_upload_hmac_key();
+            let url = crate::uploads::mint_workspace_file_url(filename, &key, ttl_secs);
+            let mime = crate::uploads::guess_mime_from_extension(filename);
+            let marker_json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
+            format!(
+                "Successfully edited '{}'\n{}{}",
+                filename,
+                crate::agent::engine::FILE_PREFIX,
+                marker_json,
+            )
+        }
         Err(e) => format!("Error editing '{}': {}", filename, e),
     }
 }
@@ -800,6 +830,77 @@ pub async fn handle_tool_discover(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secrets::SecretsManager;
+
+    /// Build a SecretsManager backed by a zero key for tests.
+    fn test_secrets() -> SecretsManager {
+        SecretsManager::new_noop()
+    }
+
+    #[tokio::test]
+    async fn handle_workspace_write_appends_file_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = test_secrets();
+        let args = serde_json::json!({"filename": "x.md", "content": "hello"});
+        let result = handle_workspace_write(
+            dir.path().to_str().unwrap(),
+            "TestAgent",
+            true,
+            &secrets,
+            3600,
+            &args,
+        ).await;
+
+        assert!(result.starts_with("Successfully updated"), "{result}");
+        assert!(result.contains(crate::agent::engine::FILE_PREFIX), "{result}");
+        assert!(result.contains("/workspace-files/x.md?sig="), "{result}");
+        assert!(result.contains("\"mediaType\":\"text/markdown\""), "{result}");
+    }
+
+    #[tokio::test]
+    async fn handle_workspace_write_marker_uses_correct_mime_for_csv() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = test_secrets();
+        let args = serde_json::json!({"filename": "out.csv", "content": "a,b\n"});
+        let result = handle_workspace_write(
+            dir.path().to_str().unwrap(),
+            "TestAgent", true, &secrets, 3600, &args,
+        ).await;
+        assert!(result.contains("\"mediaType\":\"text/csv\""), "{result}");
+    }
+
+    #[tokio::test]
+    async fn handle_workspace_edit_appends_file_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        // Pre-create the file so edit can find old_text.
+        crate::agent::workspace::write_workspace_file(
+            dir.path().to_str().unwrap(),
+            "TestAgent",
+            "x.md",
+            "hello",
+            true,    // is_base — bypass policy guards in test
+        ).await.expect("pre-create file");
+
+        let secrets = test_secrets();
+        let args = serde_json::json!({
+            "filename": "x.md",
+            "old_text": "hello",
+            "new_text": "world",
+        });
+        let result = handle_workspace_edit(
+            dir.path().to_str().unwrap(),
+            "TestAgent",
+            true,
+            &secrets,
+            3600,
+            &args,
+        ).await;
+
+        assert!(result.starts_with("Successfully edited"), "{result}");
+        assert!(result.contains(crate::agent::engine::FILE_PREFIX), "{result}");
+        assert!(result.contains("/workspace-files/x.md?sig="), "{result}");
+        assert!(result.contains("\"mediaType\":\"text/markdown\""), "{result}");
+    }
 
     fn temp_workspace_with_skills(skills: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");

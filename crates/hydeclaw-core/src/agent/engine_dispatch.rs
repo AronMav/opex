@@ -149,10 +149,24 @@ impl AgentEngine {
 
             // 1. Internal tools — match dispatch table
             if let Some(result) = match name {
-                "workspace_write" => Some(ph::handle_workspace_write(&self.cfg().workspace_dir, &self.cfg().agent.name, self.cfg().agent.base, arguments).await),
+                "workspace_write" => Some(ph::handle_workspace_write(
+                    &self.cfg().workspace_dir,
+                    &self.cfg().agent.name,
+                    self.cfg().agent.base,
+                    self.secrets().as_ref(),
+                    self.cfg().app_config.uploads.signed_url_ttl_secs,
+                    arguments,
+                ).await),
                 "workspace_read" => Some(ph::handle_workspace_read(&self.cfg().workspace_dir, &self.cfg().agent.name, arguments).await),
                 "workspace_list" => Some(ph::handle_workspace_list(&self.cfg().workspace_dir, &self.cfg().agent.name, arguments).await),
-                "workspace_edit" => Some(ph::handle_workspace_edit(&self.cfg().workspace_dir, &self.cfg().agent.name, self.cfg().agent.base, arguments).await),
+                "workspace_edit" => Some(ph::handle_workspace_edit(
+                    &self.cfg().workspace_dir,
+                    &self.cfg().agent.name,
+                    self.cfg().agent.base,
+                    self.secrets().as_ref(),
+                    self.cfg().app_config.uploads.signed_url_ttl_secs,
+                    arguments,
+                ).await),
                 "workspace_delete" => Some(ph::handle_workspace_delete(&self.cfg().workspace_dir, &self.cfg().agent.name, arguments).await),
                 "workspace_rename" => Some(ph::handle_workspace_rename(&self.cfg().workspace_dir, &self.cfg().agent.name, arguments).await),
                 "memory" => Some(self.dispatch_memory_tool(arguments).await),
