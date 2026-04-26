@@ -518,6 +518,7 @@ async fn main() -> Result<()> {
             sandbox.clone(),
             process_manager.clone(),
             metrics.clone(),
+            secrets_manager.clone(),
         ),
         channels: gateway::clusters::ChannelBus::new(
             Arc::new(tokio::sync::RwLock::new(Vec::new())),

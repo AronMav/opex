@@ -155,6 +155,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::notifications::routes())   // /api/notifications/*
         .merge(handlers::csp::routes())             // Phase 64 SEC-05: /api/csp-report (report-only)
         .merge(handlers::media::routes())           // /uploads/*, /api/media/*
+        .merge(handlers::workspace_files::routes()) // /workspace-files/{*path}?sig=&exp=
         .merge(handlers::workspace::routes());      // /api/workspace/*
 
     // Auth middleware — REQUIRED. Refuse to start without a token.

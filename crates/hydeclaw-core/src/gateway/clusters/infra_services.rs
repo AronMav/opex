@@ -28,9 +28,13 @@ pub struct InfraServices {
     /// `GET /api/health/dashboard` and the Phase 62 RES-01 coalescer drop
     /// counter. Phase 65 OBS-02 layers OpenTelemetry meter wrappers on top.
     pub metrics: Arc<crate::metrics::MetricsRegistry>,
+    /// Secrets manager — provides HMAC key derivation for signed URLs
+    /// (workspace-files endpoint, upload verification).
+    pub secrets: Arc<crate::secrets::SecretsManager>,
 }
 
 impl InfraServices {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db: PgPool,
         memory_store: Arc<dyn MemoryService>,
@@ -39,8 +43,9 @@ impl InfraServices {
         sandbox: Option<Arc<crate::containers::sandbox::CodeSandbox>>,
         process_manager: Option<Arc<crate::process_manager::ProcessManager>>,
         metrics: Arc<crate::metrics::MetricsRegistry>,
+        secrets: Arc<crate::secrets::SecretsManager>,
     ) -> Self {
-        Self { db, memory_store, embedder, container_manager, sandbox, process_manager, metrics }
+        Self { db, memory_store, embedder, container_manager, sandbox, process_manager, metrics, secrets }
     }
 
     /// Construct a minimal `InfraServices` for unit tests.
@@ -57,6 +62,7 @@ impl InfraServices {
             sandbox: None,
             process_manager: None,
             metrics: Arc::new(crate::metrics::MetricsRegistry::new()),
+            secrets: Arc::new(crate::secrets::SecretsManager::new_noop()),
         }
     }
 }
