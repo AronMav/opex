@@ -169,26 +169,30 @@ pub struct YamlPaginationConfig {
     pub next_path: Option<String>,
 }
 
-// ── Execution context ────────────────────────────────────────────────────────
+// ── Execution context (test-only) ────────────────────────────────────────────
 
+#[cfg(test)]
 struct RateLimiterState {
     max_per_minute: u32,
     window_start: std::time::Instant,
     count: u32,
 }
 
+#[cfg(test)]
 struct CachedResponse {
     body: String,
     expires_at: std::time::Instant,
 }
 
 /// Shared execution state for YAML tools: rate limiters & response cache.
+/// Only used in tests — production callers never pass a context.
+#[cfg(test)]
 pub struct ToolExecutionContext {
     rate_limiters: tokio::sync::Mutex<HashMap<String, RateLimiterState>>,
     cache: tokio::sync::Mutex<HashMap<String, CachedResponse>>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 impl ToolExecutionContext {
     pub fn new() -> Self {
         Self {
@@ -238,6 +242,7 @@ impl ToolExecutionContext {
     }
 }
 
+#[cfg(test)]
 fn build_cache_key(tool_name: &str, params: &serde_json::Value, key_params: &[String]) -> String {
     let mut key = tool_name.to_string();
     if let Some(obj) = params.as_object() {
@@ -832,7 +837,7 @@ impl YamlToolDef {
         http_client: &reqwest::Client,
         env_resolver: Option<&dyn EnvResolver>,
     ) -> Result<String> {
-        self.execute_with_ctx(params, http_client, env_resolver, None, None).await
+        self.execute_with_ctx(params, http_client, env_resolver, None).await
     }
 
     /// Execute with OAuth context for provider-based auth.
@@ -843,35 +848,20 @@ impl YamlToolDef {
         env_resolver: Option<&dyn EnvResolver>,
         oauth_context: Option<&OAuthContext>,
     ) -> Result<String> {
-        self.execute_with_ctx(params, http_client, env_resolver, None, oauth_context).await
+        self.execute_with_ctx(params, http_client, env_resolver, oauth_context).await
     }
 
-    /// Execute with optional execution context (rate limiting, caching).
+    /// Execute with optional OAuth context.
     pub async fn execute_with_ctx(
         &self,
         params: &serde_json::Value,
         http_client: &reqwest::Client,
         env_resolver: Option<&dyn EnvResolver>,
-        ctx: Option<&ToolExecutionContext>,
         oauth_context: Option<&OAuthContext>,
     ) -> Result<String> {
-        // Rate limit check
-        if let (Some(rl), Some(ctx)) = (&self.rate_limit, ctx) {
-            ctx.check_rate_limit(&self.name, rl.max_calls_per_minute.unwrap_or(60)).await?;
-        }
-
-        // Cache check
-        if let (Some(cache_cfg), Some(ctx)) = (&self.cache, ctx) {
-            let key = build_cache_key(&self.name, params, &cache_cfg.key_params);
-            if let Some(cached) = ctx.get_cached(&key).await {
-                tracing::debug!(tool = %self.name, "cache hit");
-                return Ok(cached);
-            }
-        }
-
         // Pagination: auto-fetch multiple pages if configured
         if let Some(ref pagination) = self.pagination {
-            return self.execute_paginated(params, http_client, env_resolver, pagination, ctx, oauth_context).await;
+            return self.execute_paginated(params, http_client, env_resolver, pagination, oauth_context).await;
         }
 
         let start = std::time::Instant::now();
@@ -902,12 +892,6 @@ impl YamlToolDef {
                     elapsed_ms = elapsed.as_millis() as u64,
                     attempt = attempt + 1, "yaml tool executed"
                 );
-
-                // Store in cache
-                if let (Some(cache_cfg), Some(ctx)) = (&self.cache, ctx) {
-                    let key = build_cache_key(&self.name, params, &cache_cfg.key_params);
-                    ctx.set_cached(&key, &body, cache_cfg.ttl).await;
-                }
 
                 // Apply response_transform (JSONPath) then response_pipeline
                 let mut result_body = body;
@@ -952,7 +936,6 @@ impl YamlToolDef {
         http_client: &reqwest::Client,
         env_resolver: Option<&dyn EnvResolver>,
         pagination: &YamlPaginationConfig,
-        ctx: Option<&ToolExecutionContext>,
         oauth_context: Option<&OAuthContext>,
     ) -> Result<String> {
         let mut all_results: Vec<serde_json::Value> = Vec::new();
@@ -1012,13 +995,7 @@ impl YamlToolDef {
             }
         }
 
-        // Store combined results in cache
         let result = serde_json::to_string(&all_results)?;
-        if let (Some(cache_cfg), Some(ctx)) = (&self.cache, ctx) {
-            let key = build_cache_key(&self.name, params, &cache_cfg.key_params);
-            ctx.set_cached(&key, &result, cache_cfg.ttl).await;
-        }
-
         Ok(result)
     }
 
