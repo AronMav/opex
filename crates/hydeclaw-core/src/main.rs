@@ -321,6 +321,30 @@ async fn main() -> Result<()> {
             memory_store.clone(),
             tokio::runtime::Handle::current(),
         );
+        // First-run bootstrap: the watcher only handles file CHANGE events, so
+        // a fresh install with workspace files already on disk would have zero
+        // shared chunks until someone manually triggers `memory.reindex`. If
+        // we see no shared chunks at all, enqueue a one-shot reindex task —
+        // the memory worker picks it up and indexes the workspace (idempotent
+        // via DELETE-by-source + INSERT). Subsequent restarts skip the check.
+        let has_shared: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM memory_chunks WHERE scope = 'shared')",
+        )
+        .fetch_one(&db_pool)
+        .await
+        .unwrap_or(true);
+        if !has_shared {
+            match db::memory_queries::enqueue_reindex_task(
+                &db_pool,
+                serde_json::json!({"agent_id": "", "include_sessions": false}),
+            ).await {
+                Ok(task_id) => tracing::info!(
+                    %task_id,
+                    "no shared chunks — enqueued initial workspace reindex"
+                ),
+                Err(e) => tracing::warn!(error = %e, "failed to enqueue initial workspace reindex"),
+            }
+        }
     } else {
         tracing::info!("embedding not configured — memory features disabled");
     }
