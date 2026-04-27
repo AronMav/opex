@@ -78,23 +78,6 @@ impl ChannelActionRouter {
         Err("no channels connected".to_string())
     }
 
-    /// Check if any channel is connected.
-    #[allow(dead_code)]
-    pub async fn has_channels(&self) -> bool {
-        !self.channels.read().await.is_empty()
-    }
-
-    /// List connected channel types (unique, extracted from "type:uuid" keys).
-    #[allow(dead_code)]
-    pub async fn connected_types(&self) -> Vec<String> {
-        let channels = self.channels.read().await;
-        let mut types: Vec<String> = channels.keys()
-            .filter_map(|k| k.split(':').next().map(std::string::ToString::to_string))
-            .collect();
-        types.sort();
-        types.dedup();
-        types
-    }
 }
 
 /// Try to send an action to a bounded channel, formatting errors consistently.
