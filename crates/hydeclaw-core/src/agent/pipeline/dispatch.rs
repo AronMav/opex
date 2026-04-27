@@ -271,4 +271,21 @@ mod tests {
             groups: crate::config::ToolGroups::default(),
         }
     }
+
+    #[test]
+    fn system_tool_names_is_subset_of_all_system_tool_names() {
+        // SYSTEM_TOOL_NAMES is hand-maintained — catch typos and drift by
+        // asserting every entry exists in the derived all_system_tool_names().
+        // If a tool is renamed or removed in build_internal_tool_definitions()
+        // but not updated here, this test fails loudly.
+        use crate::agent::pipeline::tool_defs::all_system_tool_names;
+        let all = all_system_tool_names();
+        for name in SYSTEM_TOOL_NAMES {
+            assert!(
+                all.contains(name),
+                "SYSTEM_TOOL_NAMES contains {name:?} which is not in all_system_tool_names() — \
+                 typo or stale entry?"
+            );
+        }
+    }
 }

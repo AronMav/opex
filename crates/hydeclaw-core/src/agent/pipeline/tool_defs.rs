@@ -1054,4 +1054,30 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "workspace_write");
     }
+
+    #[test]
+    fn all_system_tool_names_has_expected_count() {
+        // Update this number when intentionally adding/removing tools.
+        // Catches accidental gating that would silently shrink the list.
+        let actual = all_system_tool_names().len();
+        assert!(
+            actual >= 28,
+            "expected >= 28 tools in all_system_tool_names(), got {actual}"
+        );
+    }
+
+    #[test]
+    fn all_system_tool_names_includes_known_tools() {
+        let names = all_system_tool_names();
+        for expected in [
+            "agent", "memory", "workspace_write", "workspace_read",
+            "code_exec", "process", "tool_create", "git", "session",
+            "web_fetch", "skill", "browser_action",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "{expected:?} missing from all_system_tool_names()"
+            );
+        }
+    }
 }
