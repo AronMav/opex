@@ -85,6 +85,15 @@ pub async fn handle(
     }
 
     tracing::info!(indexed, errors, total_files, session_indexed, "universal reindex complete");
+    // Treat "every file failed" as a task failure so the worker auto-retry
+    // mechanism picks it up (catches transient toolgate-down races where the
+    // first attempt fires before /v1/embeddings is ready). Partial successes
+    // stay 'done' — operator can re-trigger if they want full coverage.
+    if total_files > 0 && indexed == 0 && errors > 0 {
+        anyhow::bail!(
+            "reindex failed: 0 files indexed, {errors} errors out of {total_files} (likely transient embedding error)"
+        );
+    }
     Ok(json!({
         "indexed": indexed,
         "session_indexed": session_indexed,
@@ -283,6 +292,12 @@ async fn handle_legacy_directory(
     }
 
     tracing::info!(indexed, errors, total, "legacy reindex complete");
+    // Same fail-on-mass-error rule as the universal path above.
+    if total > 0 && indexed == 0 && errors > 0 {
+        anyhow::bail!(
+            "reindex failed: 0 files indexed, {errors} errors out of {total} (likely transient embedding error)"
+        );
+    }
     Ok(json!({"indexed": indexed, "errors": errors, "total": total}))
 }
 
