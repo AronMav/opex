@@ -53,8 +53,11 @@ impl ToolgateEmbedder {
     /// `embed_dim`: initial dimension hint (0 = auto-detect via probe).
     /// `embed_dimensions`: requested output dimensions (0 = use model default).
     pub fn new(db: sqlx::PgPool, toolgate_url: &str, embed_dim: u32, embed_dimensions: u32) -> Self {
+        // 60s tolerates cold-start of CPU-only embedding models on Pi/ARM64
+        // (observed ≥30s on first request after idle). Steady-state requests
+        // are sub-second, so the higher ceiling only kicks in for outliers.
         let http = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(60))
             .build()
             .unwrap_or_default();
         let embed_url = if toolgate_url.is_empty() {

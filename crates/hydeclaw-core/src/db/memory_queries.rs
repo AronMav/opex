@@ -179,8 +179,26 @@ pub async fn search_semantic(
     Ok(rows.iter().map(row_to_memory_result).collect())
 }
 
+/// Build an OR-tsquery string from free-text input.
+///
+/// Splits on whitespace, strips tsquery operators (`! & | < > ( )`) from each
+/// word, and joins remaining words with ` | `. Empty input → returns empty
+/// string (caller should treat as "match nothing"). Used by the lenient FTS
+/// fallback path when AND-mode search returns zero results.
+fn or_tsquery_from(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|w| w.replace(['!', '&', '|', '<', '>', '(', ')', ':', '\''], ""))
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
 /// Full-text search using `PostgreSQL` tsvector/tsquery.
 /// Filters by agent_id so that only the agent's own chunks (or shared chunks) are returned.
+///
+/// `or_mode` = false: uses `plainto_tsquery` (AND across all words — strict).
+/// `or_mode` = true:  uses `to_tsquery` with `|` (OR — lenient fallback).
 pub async fn search_fts(
     db: &PgPool,
     query: &str,
@@ -188,26 +206,58 @@ pub async fn search_fts(
     lang: &str,
     agent_id: &str,
 ) -> Result<Vec<MemoryResult>> {
+    search_fts_inner(db, query, limit, lang, agent_id, false).await
+}
+
+/// Lenient FTS fallback: matches any of the query words (OR), not all (AND).
+/// Use only when strict AND-mode search returns empty AND semantic also failed.
+pub async fn search_fts_or(
+    db: &PgPool,
+    query: &str,
+    limit: i64,
+    lang: &str,
+    agent_id: &str,
+) -> Result<Vec<MemoryResult>> {
+    search_fts_inner(db, query, limit, lang, agent_id, true).await
+}
+
+async fn search_fts_inner(
+    db: &PgPool,
+    query: &str,
+    limit: i64,
+    lang: &str,
+    agent_id: &str,
+    or_mode: bool,
+) -> Result<Vec<MemoryResult>> {
     validate_fts_lang(lang)?;
     // SAFETY: `lang` is validated by validate_fts_lang() whitelist
     // letters. Not user input -- comes from server config.
+    let (effective_query, tsquery_fn) = if or_mode {
+        let or_q = or_tsquery_from(query);
+        if or_q.is_empty() {
+            return Ok(vec![]);
+        }
+        (or_q, "to_tsquery")
+    } else {
+        (query.to_string(), "plainto_tsquery")
+    };
     let sql = format!(
         r"SELECT id::text,
                   content,
                   COALESCE(source, '') AS source,
                   pinned,
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
-                  ts_rank_cd(tsv, plainto_tsquery('{lang}', $1))::float8 AS similarity
+                  ts_rank_cd(tsv, {tsquery_fn}('{lang}', $1))::float8 AS similarity
            FROM memory_chunks
-           WHERE tsv @@ plainto_tsquery('{lang}', $1)
+           WHERE tsv @@ {tsquery_fn}('{lang}', $1)
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
-           ORDER BY ts_rank_cd(tsv, plainto_tsquery('{lang}', $1)) DESC,
+           ORDER BY ts_rank_cd(tsv, {tsquery_fn}('{lang}', $1)) DESC,
                     relevance_score DESC
            LIMIT $2",
     );
 
     let rows = sqlx::query(&sql)
-        .bind(query)
+        .bind(&effective_query)
         .bind(limit)
         .bind(agent_id)
         .fetch_all(db)

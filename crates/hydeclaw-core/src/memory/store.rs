@@ -91,7 +91,19 @@ impl MemoryStore {
                 Ok(results) if !results.is_empty() => (results, "hybrid"),
                 Ok(_) => {
                     let fts = self.search_fts(query, limit, agent_id).await?;
-                    (fts, "fts")
+                    if fts.is_empty() {
+                        // Last-resort fallback: AND-mode FTS returned nothing
+                        // (multi-word queries where the document doesn't contain
+                        // every word, e.g. "WSL Windows Subsystem Linux" against
+                        // a doc that has WSL/Windows/Linux but not "Subsystem").
+                        let lang = self.validated_fts_language()?;
+                        let fts_or = crate::db::memory_queries::search_fts_or(
+                            &self.db, query, limit as i64, &lang, agent_id,
+                        ).await?;
+                        (fts_or, "fts_or")
+                    } else {
+                        (fts, "fts")
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "hybrid search failed, falling back to FTS");
