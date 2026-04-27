@@ -502,11 +502,26 @@ pub(crate) async fn api_set_fts_language(
     state.memory_store.set_fts_language(&lang);
 
     match state.memory_store.rebuild_fts().await {
-        Ok(rows) => Json(json!({
-            "ok": true,
-            "language": lang,
-            "rows_rebuilt": rows,
-        })).into_response(),
+        Ok(rows) => {
+            // Persist so the change survives restarts (TOML override still wins
+            // if explicitly set; this writes to system_flags only).
+            if let Err(e) = sqlx::query(
+                "INSERT INTO system_flags (key, value) \
+                 VALUES ('memory.fts_language', $1::jsonb) \
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+            )
+            .bind(Value::String(lang.clone()))
+            .execute(&state.db)
+            .await
+            {
+                tracing::warn!(error = %e, "FTS language updated in-memory + tsv rebuilt, but failed to persist to system_flags");
+            }
+            Json(json!({
+                "ok": true,
+                "language": lang,
+                "rows_rebuilt": rows,
+            })).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),

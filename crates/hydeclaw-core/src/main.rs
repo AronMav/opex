@@ -311,7 +311,22 @@ async fn main() -> Result<()> {
         cfg.memory.embed_dim.unwrap_or(0),
         cfg.memory.embed_dimensions.unwrap_or(0),
     ));
-    let fts_lang = cfg.memory.fts_language.clone().unwrap_or_else(|| "simple".to_string());
+    // FTS language resolution order: TOML override → persisted DB value → "simple" placeholder
+    // (auto-detect runs later after agent_configs is loaded). Persisted value comes
+    // from `system_flags` so PUT /api/memory/fts-language survives restarts.
+    let fts_lang = if let Some(toml_lang) = cfg.memory.fts_language.clone() {
+        toml_lang
+    } else {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT value FROM system_flags WHERE key = 'memory.fts_language'",
+        )
+        .fetch_optional(&db_pool)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "simple".to_string())
+    };
     let memory_store = Arc::new(memory::MemoryStore::new(db_pool.clone(), embedder.clone(), fts_lang));
     if embedder.is_available() {
         tracing::info!("embedding configured — will initialize on first memory operation");
@@ -455,8 +470,12 @@ async fn main() -> Result<()> {
         "agent configs re-loaded after TOML migration"
     );
 
-    // Auto-detect FTS language from first agent's language (if not explicitly configured)
+    // Auto-detect FTS language from first agent's language ONLY when neither
+    // TOML override nor persisted DB value is present (i.e. memory_store is
+    // currently using the "simple" placeholder). On detect, persist to DB so
+    // future restarts skip the agent-order-dependent detection.
     if cfg.memory.fts_language.is_none()
+        && memory_store.fts_language() == "simple"
         && let Some(first) = agent_configs.first() {
             let detected = memory::admin::detect_fts_language(&first.agent.language);
             tracing::info!(
@@ -466,6 +485,17 @@ async fn main() -> Result<()> {
                 "auto-detected FTS language from first agent"
             );
             memory_store.set_fts_language(&detected);
+            if let Err(e) = sqlx::query(
+                "INSERT INTO system_flags (key, value) \
+                 VALUES ('memory.fts_language', $1::jsonb) \
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+            )
+            .bind(serde_json::Value::String(detected.clone()))
+            .execute(&db_pool)
+            .await
+            {
+                tracing::warn!(error = %e, "failed to persist auto-detected FTS language");
+            }
         }
 
     // UI event broadcast channel (shared between scheduler and WS handler)
