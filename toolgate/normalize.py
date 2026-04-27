@@ -3,7 +3,6 @@
 TTS-ONLY BY DESIGN: this module expands numbers, abbreviations, and
 transliterates English words to Cyrillic — operations that are DESTRUCTIVE
 for embedding/search. Do NOT call normalize_text from the indexing pipeline.
-For canonical indexing utilities see crates/hydeclaw-text/.
 
 Pipeline: pre_process (fast) -> normalize_via_llm (optional) -> post_process (fast)
 

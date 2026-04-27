@@ -1,5 +1,4 @@
 use crate::tasks::MemoryTask;
-use hydeclaw_text::split_text;
 use sqlx::PgPool;
 use serde_json::json;
 
@@ -297,12 +296,8 @@ async fn embed_and_insert(
     fts_language: &str,
     agent_id: &str,
 ) -> anyhow::Result<()> {
-    // Split into chunks
-    let chunks = split_text(content, 1500, 200);
-    let texts: Vec<&str> = chunks.iter().map(std::string::String::as_str).collect();
-
-    // Embed via toolgate
-    let body = serde_json::json!({"input": texts});
+    // Embed via toolgate (single call — chunking removed in m033)
+    let body = serde_json::json!({"input": [content]});
     let resp = http
         .post(format!("{}/v1/embeddings", toolgate_url.trim_end_matches('/')))
         .json(&body)
@@ -316,46 +311,42 @@ async fn embed_and_insert(
     }
 
     let resp_body: serde_json::Value = resp.json().await?;
-    let embeddings: Vec<Vec<f32>> = resp_body["data"]
+    let emb: Vec<f32> = resp_body["data"]
         .as_array()
-        .unwrap_or(&vec![])
-        .iter()
-        .filter_map(|d| {
-            d["embedding"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
-        })
-        .collect();
+        .and_then(|arr| arr.first())
+        .and_then(|d| d["embedding"].as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+        .ok_or_else(|| anyhow::anyhow!("missing embedding in response"))?;
 
-    if embeddings.len() != chunks.len() {
-        anyhow::bail!("embedding count mismatch: {} vs {}", embeddings.len(), chunks.len());
-    }
+    let vec_str = format!(
+        "[{}]",
+        emb.iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(",")
+    );
 
-    // Transaction: delete old + insert new
+    // Transaction: delete old + insert new.
+    // History (m033): WAS 11 columns including parent_id ($5) and chunk_index ($6),
+    // INSERT ran in a loop once per chunk. After m033: 9 columns, agent_id at $5,
+    // single INSERT, no chunking.
     let mut tx = db.begin().await?;
     sqlx::query("DELETE FROM memory_chunks WHERE source = $1")
         .bind(source)
         .execute(&mut *tx)
         .await?;
 
-    let parent_id = uuid::Uuid::new_v4().to_string();
+    let id = uuid::Uuid::new_v4().to_string();
     // fts_language is configurable per-deployment (e.g. 'russian', 'english') instead of hardcoded
     let insert_sql = format!(
-        "INSERT INTO memory_chunks (id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, agent_id, scope)
-         VALUES ($1::uuid, $2, $3::halfvec, $4, false, 1.0, to_tsvector('{fts_language}', $2), $5::uuid, $6, $7, 'shared')"
+        "INSERT INTO memory_chunks (id, content, embedding, source, pinned, relevance_score, tsv, agent_id, scope)
+         VALUES ($1::uuid, $2, $3::halfvec, $4, false, 1.0, to_tsvector('{fts_language}', $2), $5, 'shared')"
     );
-    for (i, (chunk, emb)) in chunks.iter().zip(embeddings.iter()).enumerate() {
-        let vec_str = format!(
-            "[{}]",
-            emb.iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(",")
-        );
-        let id = if i == 0 { parent_id.clone() } else { uuid::Uuid::new_v4().to_string() };
-        let parent = if i == 0 { None } else { Some(parent_id.as_str()) };
-        sqlx::query(&insert_sql)
-            .bind(&id).bind(chunk).bind(&vec_str).bind(source).bind(parent).bind(i as i32).bind(agent_id)
-            .execute(&mut *tx)
-            .await?;
-    }
+    sqlx::query(&insert_sql)
+        .bind(&id)        // $1
+        .bind(content)    // $2
+        .bind(&vec_str)   // $3 (embedding)
+        .bind(source)     // $4
+        .bind(agent_id)   // $5
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }

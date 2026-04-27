@@ -1,7 +1,0 @@
-[package]
-name = "hydeclaw-text"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-# Pure Rust stdlib — no external deps. Keep it that way.

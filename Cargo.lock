@@ -1101,7 +1101,6 @@ dependencies = [
  "hmac",
  "hydeclaw-db",
  "hydeclaw-gateway-util",
- "hydeclaw-text",
  "hydeclaw-types",
  "if-addrs 0.14.0",
  "insta",
@@ -1186,7 +1185,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "dotenv",
- "hydeclaw-text",
  "reqwest",
  "sd-notify",
  "serde",
@@ -1201,10 +1199,6 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
 ]
-
-[[package]]
-name = "hydeclaw-text"
-version = "0.23.0"
 
 [[package]]
 name = "hydeclaw-types"

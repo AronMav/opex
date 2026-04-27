@@ -23,7 +23,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 dotenv = "0.15"
-hydeclaw-text = { path = "../hydeclaw-text" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 sd-notify = "0.4"

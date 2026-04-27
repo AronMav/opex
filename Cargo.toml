@@ -5,7 +5,6 @@ members = [
     "crates/hydeclaw-types",
     "crates/hydeclaw-watchdog",
     "crates/hydeclaw-memory-worker",
-    "crates/hydeclaw-text",
     "crates/hydeclaw-db",
     "crates/hydeclaw-gateway-util",
 ]

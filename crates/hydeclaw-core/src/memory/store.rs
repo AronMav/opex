@@ -70,16 +70,6 @@ impl MemoryStore {
 
     // ── Search ───────────────────────────────────────────────────────────────
 
-    /// Deduplicate results: keep highest-scoring chunk per parent document.
-    /// Results are pre-sorted by similarity, so the first occurrence of each
-    /// `parent_id` is the best one.
-    fn dedup_by_parent(results: Vec<MemoryResult>) -> Vec<MemoryResult> {
-        let mut seen = std::collections::HashSet::with_capacity(results.len());
-        results.into_iter().filter(|r| {
-            seen.insert(r.parent_id.as_deref().unwrap_or(&r.id).to_owned())
-        }).collect()
-    }
-
     /// Search memory: hybrid (semantic + FTS via RRF) when embedding available, pure FTS fallback.
     /// Returns (results, `search_mode`) where `search_mode` is "hybrid", "semantic", or "fts".
     /// `exclude_ids`: chunk IDs already loaded via L0 pinned loading -- excluded from results (CTX-04).
@@ -95,7 +85,7 @@ impl MemoryStore {
             return Ok((vec![], "none"));
         }
 
-        let (results, mode) = if self.is_available() {
+        let (mut results, mode) = if self.is_available() {
             // Run semantic + FTS in parallel and merge via RRF
             match self.search_hybrid(query, limit, agent_id).await {
                 Ok(results) if !results.is_empty() => (results, "hybrid"),
@@ -113,9 +103,6 @@ impl MemoryStore {
             let fts = self.search_fts(query, limit, agent_id).await?;
             (fts, "fts")
         };
-
-        // Deduplicate: keep only the best chunk per parent document
-        let mut results = Self::dedup_by_parent(results);
 
         // L2 dedup: remove chunks already loaded via L0 pinned loading (CTX-04)
         if !exclude_ids.is_empty() {
@@ -245,8 +232,6 @@ impl MemoryStore {
     // ── Index ────────────────────────────────────────────────────────────────
 
     /// Generate embedding and insert a new memory chunk. Returns the new chunk UUID.
-    /// If content exceeds `DEFAULT_CHUNK_SIZE`, splits into overlapping chunks
-    /// linked by `parent_id`. Returns the parent chunk's UUID.
     /// `scope`: "private" (agent-only) or "shared" (visible to all agents).
     /// `agent_id`: the agent that owns this chunk (used for visibility filtering).
     pub async fn index(
@@ -258,56 +243,16 @@ impl MemoryStore {
         agent_id: &str,
     ) -> Result<String> {
         let lang = self.validated_fts_language()?;
-
-        let chunks = hydeclaw_text::split_text(
-            content,
-            hydeclaw_text::DEFAULT_CHUNK_SIZE,
-            hydeclaw_text::DEFAULT_CHUNK_OVERLAP,
-        );
-
-        if chunks.len() == 1 {
-            // Single chunk -- original path
-            let embedding = self.embedder.embed(&chunks[0]).await?;
-            let vec_str = fmt_vec(&embedding);
-            let id = uuid::Uuid::new_v4().to_string();
-            crate::db::memory_queries::insert_chunk(
-                &self.db, &id, &chunks[0], &vec_str, source, pinned, &lang, None, 0,
-                scope, agent_id,
-            ).await?;
-            return Ok(id);
-        }
-
-        // Multiple chunks -- batch embed and link via parent_id
-        let texts: Vec<&str> = chunks.iter().map(std::string::String::as_str).collect();
-        let embeddings = self.embedder.embed_batch(&texts).await?;
-        let parent_id = uuid::Uuid::new_v4().to_string();
-
-        for (i, (chunk, embedding)) in chunks.iter().zip(embeddings.iter()).enumerate() {
-            let vec_str = fmt_vec(embedding);
-            let id = if i == 0 {
-                parent_id.clone()
-            } else {
-                uuid::Uuid::new_v4().to_string()
-            };
-            let parent = if i == 0 { None } else { Some(parent_id.as_str()) };
-            crate::db::memory_queries::insert_chunk(
-                &self.db, &id, chunk, &vec_str, source, pinned, &lang, parent, i as i32,
-                scope, agent_id,
-            ).await?;
-        }
-
-        tracing::info!(
-            parent_id = %parent_id,
-            chunks = chunks.len(),
-            source = %source,
-            "indexed chunked document"
-        );
-        Ok(parent_id)
+        let embedding = self.embedder.embed(content).await?;
+        let vec_str = fmt_vec(&embedding);
+        let id = uuid::Uuid::new_v4().to_string();
+        crate::db::memory_queries::insert_chunk(
+            &self.db, &id, content, &vec_str, source, pinned, &lang, scope, agent_id,
+        ).await?;
+        Ok(id)
     }
 
     /// Batch index: embed multiple texts and insert them all. Returns chunk IDs.
-    /// Long texts (> `DEFAULT_CHUNK_SIZE`) are delegated to `index()` for auto-chunking.
-    /// Short texts are batch-embedded in a single request for efficiency.
     /// Tuple: (content, source, pinned, scope).
     /// `agent_id`: the agent that owns these chunks (used for visibility filtering).
     pub async fn index_batch(&self, items: &[(String, String, bool, String)], agent_id: &str) -> Result<Vec<String>> {
@@ -316,40 +261,22 @@ impl MemoryStore {
         }
 
         let lang = self.validated_fts_language()?;
-        let mut ids: Vec<(usize, String)> = Vec::with_capacity(items.len());
+        let texts: Vec<&str> = items.iter().map(|(c, _, _, _)| c.as_str()).collect();
+        let embeddings = self.embedder.embed_batch(&texts).await?;
 
-        // Split: long items use index() with chunking, short items batch-embed
-        let mut short_items: Vec<(usize, &str, &str, bool, &str)> = Vec::new();
-        for (idx, (content, source, pinned, scope)) in items.iter().enumerate() {
-            if content.len() > hydeclaw_text::DEFAULT_CHUNK_SIZE {
-                let id = self.index(content, source, *pinned, scope, agent_id).await
-                    .context("failed to index long item in batch")?;
-                ids.push((idx, id));
-            } else {
-                short_items.push((idx, content, source, *pinned, scope));
-            }
+        let mut tx = self.db.begin().await.context("failed to begin transaction for batch index")?;
+        let mut ids = Vec::with_capacity(items.len());
+        for (i, (content, source, pinned, scope)) in items.iter().enumerate() {
+            let vec_str = fmt_vec(&embeddings[i]);
+            let id = uuid::Uuid::new_v4().to_string();
+            crate::db::memory_queries::insert_chunk_tx(
+                &mut tx, &id, content, &vec_str, source, *pinned, &lang, scope, agent_id,
+            ).await
+            .context("failed to insert memory chunk in batch")?;
+            ids.push(id);
         }
-
-        if !short_items.is_empty() {
-            let texts: Vec<&str> = short_items.iter().map(|(_, c, _, _, _)| *c).collect();
-            let embeddings = self.embedder.embed_batch(&texts).await?;
-
-            let mut tx = self.db.begin().await.context("failed to begin transaction for batch index")?;
-            for (i, &(idx, content, source, pinned, scope)) in short_items.iter().enumerate() {
-                let vec_str = fmt_vec(&embeddings[i]);
-                let id = uuid::Uuid::new_v4().to_string();
-                crate::db::memory_queries::insert_chunk_tx(
-                    &mut tx, &id, content, &vec_str, source, pinned, &lang, None, 0,
-                    scope, agent_id,
-                ).await
-                .context("failed to insert memory chunk in batch")?;
-                ids.push((idx, id));
-            }
-            tx.commit().await.context("failed to commit batch index")?;
-        }
-
-        ids.sort_by_key(|(idx, _)| *idx);
-        Ok(ids.into_iter().map(|(_, id)| id).collect())
+        tx.commit().await.context("failed to commit batch index")?;
+        Ok(ids)
     }
 
     // ── Get ──────────────────────────────────────────────────────────────────
@@ -490,108 +417,4 @@ mod tests {
         assert!(!store2.is_available());
     }
 
-    fn make_result(id: &str, parent_id: Option<&str>, similarity: f64) -> MemoryResult {
-        MemoryResult {
-            id: id.into(),
-            content: String::new(),
-            source: String::new(),
-            pinned: false,
-            relevance_score: 1.0,
-            similarity,
-            parent_id: parent_id.map(|s| s.to_string()),
-            chunk_index: 0,
-        }
-    }
-
-    #[test]
-    fn dedup_by_parent_keeps_first_occurrence() {
-        let results = vec![
-            MemoryResult {
-                id: "id1".into(), content: "a".into(), source: "s".into(),
-                pinned: false, relevance_score: 1.0, similarity: 0.9,
-                parent_id: Some("parent1".into()), chunk_index: 0,
-            },
-            MemoryResult {
-                id: "id2".into(), content: "b".into(), source: "s".into(),
-                pinned: false, relevance_score: 1.0, similarity: 0.8,
-                parent_id: Some("parent1".into()), chunk_index: 1,
-            },
-            MemoryResult {
-                id: "id3".into(), content: "c".into(), source: "s2".into(),
-                pinned: false, relevance_score: 1.0, similarity: 0.7,
-                parent_id: None, chunk_index: 0,
-            },
-        ];
-        let deduped = MemoryStore::dedup_by_parent(results);
-        assert_eq!(deduped.len(), 2);
-        assert_eq!(deduped[0].id, "id1"); // best from parent1
-        assert_eq!(deduped[1].id, "id3"); // standalone
-    }
-
-    #[test]
-    fn dedup_empty_input() {
-        let results = MemoryStore::dedup_by_parent(vec![]);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn dedup_all_standalone() {
-        let results = vec![
-            make_result("a", None, 0.9),
-            make_result("b", None, 0.8),
-            make_result("c", None, 0.7),
-        ];
-        let deduped = MemoryStore::dedup_by_parent(results);
-        assert_eq!(deduped.len(), 3);
-    }
-
-    #[test]
-    fn dedup_three_chunks_same_parent() {
-        let results = vec![
-            make_result("c1", Some("p1"), 0.9),
-            make_result("c2", Some("p1"), 0.8),
-            make_result("c3", Some("p1"), 0.7),
-        ];
-        let deduped = MemoryStore::dedup_by_parent(results);
-        assert_eq!(deduped.len(), 1);
-        assert_eq!(deduped[0].id, "c1");
-    }
-
-    #[test]
-    fn dedup_parent_chunk_itself() {
-        // Parent (parent_id=None) and its children (parent_id=parent.id)
-        // Parent's dedup key = its own id. Children's dedup key = parent_id.
-        // These are DIFFERENT keys unless parent_id == parent.id
-        let results = vec![
-            make_result("parent", None, 0.95),     // key = "parent"
-            make_result("child1", Some("parent"), 0.90), // key = "parent"
-        ];
-        let deduped = MemoryStore::dedup_by_parent(results);
-        assert_eq!(deduped.len(), 1); // both have key "parent"
-        assert_eq!(deduped[0].id, "parent");
-    }
-
-    #[test]
-    fn dedup_preserves_order() {
-        let results = vec![
-            make_result("a", None, 0.9),
-            make_result("b", Some("x"), 0.8),
-            make_result("c", None, 0.7),
-            make_result("d", Some("x"), 0.6),
-        ];
-        let deduped = MemoryStore::dedup_by_parent(results);
-        assert_eq!(deduped.len(), 3); // a, b (first from x), c
-        assert_eq!(deduped[0].id, "a");
-        assert_eq!(deduped[1].id, "b");
-        assert_eq!(deduped[2].id, "c");
-    }
-
-    #[test]
-    fn needs_chunking_threshold() {
-        use hydeclaw_text::{split_text, DEFAULT_CHUNK_SIZE};
-        let short = "Hello";
-        let long = "A".repeat(DEFAULT_CHUNK_SIZE + 100);
-        assert_eq!(split_text(short, DEFAULT_CHUNK_SIZE, 200).len(), 1);
-        assert!(split_text(&long, DEFAULT_CHUNK_SIZE, 200).len() >= 2);
-    }
 }

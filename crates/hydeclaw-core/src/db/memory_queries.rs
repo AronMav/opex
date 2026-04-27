@@ -31,8 +31,6 @@ fn row_to_memory_result(r: &sqlx::postgres::PgRow) -> MemoryResult {
         pinned: r.get("pinned"),
         relevance_score: r.get("relevance_score"),
         similarity: r.get("similarity"),
-        parent_id: r.try_get::<Option<String>, _>("parent_id").ok().flatten(),
-        chunk_index: r.try_get::<i32, _>("chunk_index").unwrap_or(0),
     }
 }
 
@@ -164,9 +162,7 @@ pub async fn search_semantic(
                   COALESCE(source, '') AS source,
                   pinned,
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
-                  (1.0 - (embedding <=> $1::vector))::float8 AS similarity,
-                  parent_id::text,
-                  chunk_index
+                  (1.0 - (embedding <=> $1::vector))::float8 AS similarity
            FROM memory_chunks
            WHERE embedding IS NOT NULL
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
@@ -201,9 +197,7 @@ pub async fn search_fts(
                   COALESCE(source, '') AS source,
                   pinned,
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
-                  ts_rank_cd(tsv, plainto_tsquery('{lang}', $1))::float8 AS similarity,
-                  parent_id::text,
-                  chunk_index
+                  ts_rank_cd(tsv, plainto_tsquery('{lang}', $1))::float8 AS similarity
            FROM memory_chunks
            WHERE tsv @@ plainto_tsquery('{lang}', $1)
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
@@ -247,9 +241,7 @@ pub async fn fetch_recent(db: &PgPool, limit: i64) -> Result<Vec<MemoryResult>> 
                   COALESCE(source, '') AS source,
                   pinned,
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
-                  1.0::float8 AS similarity,
-                  parent_id::text,
-                  chunk_index
+                  1.0::float8 AS similarity
            FROM memory_chunks
            ORDER BY pinned DESC, COALESCE(accessed_at, created_at) DESC
            LIMIT $1",
@@ -274,8 +266,6 @@ pub async fn insert_chunk(
     source: &str,
     pinned: bool,
     lang: &str,
-    parent_id: Option<&str>,
-    chunk_index: i32,
     scope: &str,
     agent_id: &str,
 ) -> Result<()> {
@@ -283,14 +273,13 @@ pub async fn insert_chunk(
     // SAFETY: `lang` is validated by validate_fts_lang() whitelist
     // letters. Not user input -- comes from server config.
     //
-    // WAS: 13 columns (id, agent_id, content, embedding, source, pinned,
-    // relevance_score, tsv, parent_id, chunk_index, category, topic, scope) →
-    // VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('lang',$3),
-    // $7::uuid, $8, $9, $10, $11) with 11 binds. After dropping category ($9) and
-    // topic ($10), scope shifts from $11 → $9. Total: 11 columns, 9 unique binds.
+    // History:
+    //   m032 dropped category ($9) and topic ($10) — scope shifted $11 → $9
+    //   m033 dropped parent_id ($7) and chunk_index ($8) — scope shifted $9 → $7
+    // Current: 9 columns, 7 unique binds, scope at $7.
     let sql = format!(
-        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope)
-           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7::uuid, $8, $9)",
+        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)
+           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7)",
     );
 
     sqlx::query(&sql)
@@ -300,9 +289,7 @@ pub async fn insert_chunk(
         .bind(vec_str)      // $4 (embedding)
         .bind(source)       // $5
         .bind(pinned)       // $6
-        .bind(parent_id)    // $7
-        .bind(chunk_index)  // $8
-        .bind(scope)        // $9
+        .bind(scope)        // $7
         .execute(db)
         .await
         .context("failed to insert memory chunk")?;
@@ -321,18 +308,16 @@ pub async fn insert_chunk_tx(
     source: &str,
     pinned: bool,
     lang: &str,
-    parent_id: Option<&str>,
-    chunk_index: i32,
     scope: &str,
     agent_id: &str,
 ) -> Result<()> {
     validate_fts_lang(lang)?;
-    // SAFETY: `lang` is validated by validate_fts_lang() whitelist
-    // (mirrors insert_chunk above; same shape after category/topic drop:
-    // 11 columns, $1..$9 placeholders, scope occupies $9.)
+    // SAFETY: `lang` is validated by validate_fts_lang() whitelist.
+    // Mirrors insert_chunk above; same shape after m032 + m033 drops:
+    // 9 columns, $1..$7 placeholders, scope occupies $7.
     let sql = format!(
-        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope)
-           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7::uuid, $8, $9)",
+        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)
+           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7)",
     );
 
     sqlx::query(&sql)
@@ -342,9 +327,7 @@ pub async fn insert_chunk_tx(
         .bind(vec_str)      // $4 (embedding)
         .bind(source)       // $5
         .bind(pinned)       // $6
-        .bind(parent_id)    // $7
-        .bind(chunk_index)  // $8
-        .bind(scope)        // $9
+        .bind(scope)        // $7
         .execute(&mut **tx)
         .await
         .context("failed to insert memory chunk")?;
@@ -423,9 +406,9 @@ pub async fn rebuild_fts(db: &PgPool, lang: &str) -> Result<u64> {
     Ok(res.rows_affected())
 }
 
-/// Delete a memory chunk and its children (if it's a parent of a chunked document).
+/// Delete a memory chunk by id.
 pub async fn delete_chunk(db: &PgPool, chunk_id: &str) -> Result<bool> {
-    let res = sqlx::query("DELETE FROM memory_chunks WHERE id = $1::uuid OR parent_id = $1::uuid")
+    let res = sqlx::query("DELETE FROM memory_chunks WHERE id = $1::uuid")
         .bind(chunk_id)
         .execute(db)
         .await
@@ -469,43 +452,45 @@ mod tests {
     // (like the user_id NOT NULL bug caught in production).
 
     /// Verify insert_chunk SQL includes required columns (no user_id — dropped in m021;
-    /// no category/topic — dropped in m032).
+    /// no category/topic — dropped in m032; no parent_id/chunk_index — dropped in m033).
     #[test]
     fn insert_sql_includes_required_columns() {
-        let sql = r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope)";
+        let sql = r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)";
         assert!(sql.contains("agent_id"), "INSERT must include agent_id");
         assert!(sql.contains("scope"), "INSERT must include scope");
         assert!(!sql.contains("user_id"), "user_id column dropped in migration 021");
         assert!(!sql.contains("category"), "category column dropped in migration 032");
         assert!(!sql.contains("topic"), "topic column dropped in migration 032");
+        assert!(!sql.contains("parent_id"), "parent_id dropped in migration 033");
+        assert!(!sql.contains("chunk_index"), "chunk_index dropped in migration 033");
     }
 
     /// Verify insert_chunk uses ::vector not ::halfvec.
     #[test]
     fn insert_sql_uses_vector_not_halfvec() {
-        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7::uuid, $8, $9)";
+        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7)";
         assert!(sql.contains("$4::vector"), "embedding must be cast to ::vector (not ::halfvec)");
         assert!(!sql.contains("halfvec"), "halfvec has 4000 dim limit, must use vector");
     }
 
-    /// Verify insert_chunk has exactly 9 bind positions ($1 through $9).
-    /// After m032, scope occupies $9 (was $11; category $9 and topic $10 dropped).
+    /// Verify insert_chunk has exactly 7 bind positions ($1 through $7).
+    /// After m033, scope occupies $7 (parent_id $7 and chunk_index $8 dropped).
     #[test]
     fn insert_sql_bind_count() {
-        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7::uuid, $8, $9)";
-        for i in 1..=9 {
+        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7)";
+        for i in 1..=7 {
             let placeholder = format!("${}", i);
             assert!(sql.contains(&placeholder), "Missing bind placeholder {}", placeholder);
         }
-        assert!(!sql.contains("$10"), "Unexpected $10 — too many binds after m032");
+        assert!(!sql.contains("$8"), "Unexpected $8 — too many binds after m033");
     }
 
-    /// Verify INSERT column count matches VALUES count (11 columns post-m032).
+    /// Verify INSERT column count matches VALUES count (9 columns post-m033).
     #[test]
     fn insert_sql_column_value_parity() {
-        let columns = "id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope";
+        let columns = "id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope";
         let col_count = columns.split(',').count();
-        assert_eq!(col_count, 11, "Column count must be 11 (was 13 before m032 dropped category/topic)");
+        assert_eq!(col_count, 9, "Column count must be 9 (was 11 before m033 dropped parent_id/chunk_index)");
     }
 
     /// Verify search_semantic includes scope/agent filtering.
@@ -550,9 +535,10 @@ mod tests {
     /// Verify memory_chunks required NOT NULL columns are always included in INSERT.
     #[test]
     fn insert_covers_not_null_columns() {
-        // Required columns after migration 021 (user_id dropped) and m032
-        // (category/topic dropped): id, agent_id, content, scope.
-        let insert = "INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope)";
+        // Required columns after m021 (user_id dropped), m032 (category/topic
+        // dropped), and m033 (parent_id/chunk_index dropped): id, agent_id,
+        // content, scope.
+        let insert = "INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)";
         assert!(insert.contains("id"), "Must include id");
         assert!(insert.contains("content"), "Must include content");
         assert!(insert.contains("agent_id"), "Must include agent_id");
@@ -560,6 +546,8 @@ mod tests {
         assert!(!insert.contains("user_id"), "user_id dropped in migration 021");
         assert!(!insert.contains("category"), "category dropped in migration 032");
         assert!(!insert.contains("topic"), "topic dropped in migration 032");
+        assert!(!insert.contains("parent_id"), "parent_id dropped in migration 033");
+        assert!(!insert.contains("chunk_index"), "chunk_index dropped in migration 033");
     }
 }
 

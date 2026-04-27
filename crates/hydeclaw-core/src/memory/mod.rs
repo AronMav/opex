@@ -59,8 +59,6 @@ pub struct MemoryResult {
     pub pinned: bool,
     pub relevance_score: f64,
     pub similarity: f64,
-    pub parent_id: Option<String>,
-    pub chunk_index: i32,
 }
 
 pub struct MemoryChunk {

@@ -56,8 +56,6 @@ pub(crate) async fn api_list_memory(
                                 "relevance_score": r.relevance_score,
                                 "similarity": r.similarity,
                                 "pinned": r.pinned,
-                                "parent_id": r.parent_id,
-                                "chunk_index": r.chunk_index,
                             })
                         })
                         .collect();
@@ -75,7 +73,7 @@ pub(crate) async fn api_list_memory(
     // Admin endpoint: shows all chunks (no agent_id filter). Protected by auth middleware.
     // No query: list all chunks by relevance
     let result = sqlx::query_as::<_, MemoryChunkRow>(
-        "SELECT id, content, source, relevance_score, pinned, created_at, accessed_at, parent_id, chunk_index, scope, agent_id \
+        "SELECT id, content, source, relevance_score, pinned, created_at, accessed_at, scope, agent_id \
          FROM memory_chunks ORDER BY relevance_score DESC LIMIT $1 OFFSET $2",
     )
     .bind(limit as i64)
@@ -96,8 +94,6 @@ pub(crate) async fn api_list_memory(
                         "pinned": c.pinned,
                         "created_at": c.created_at.to_rfc3339(),
                         "accessed_at": c.accessed_at.to_rfc3339(),
-                        "parent_id": c.parent_id,
-                        "chunk_index": c.chunk_index,
                         "scope": c.scope,
                         "agent_id": c.agent_id,
                     })
@@ -122,8 +118,6 @@ pub(crate) struct MemoryChunkRow {
     pinned: bool,
     created_at: chrono::DateTime<chrono::Utc>,
     accessed_at: chrono::DateTime<chrono::Utc>,
-    parent_id: Option<uuid::Uuid>,
-    chunk_index: i32,
     #[sqlx(default)]
     scope: String,
     #[sqlx(default)]
@@ -131,22 +125,18 @@ pub(crate) struct MemoryChunkRow {
 }
 
 pub(crate) async fn api_memory_stats(State(state): State<InfraServices>) -> Json<MemoryStatsDto> {
+    // Post-m033: every chunk is its own document — `total` and `documents` are equal.
     let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks")
         .fetch_one(&state.db).await
         .inspect_err(|e| tracing::error!(error = %e, "stats: failed to count chunks"))
         .unwrap_or(0);
 
-    let documents: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks WHERE parent_id IS NULL")
-        .fetch_one(&state.db).await
-        .inspect_err(|e| tracing::error!(error = %e, "stats: failed to count documents"))
-        .unwrap_or(0);
-
-    let pinned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks WHERE pinned = true AND parent_id IS NULL")
+    let pinned: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks WHERE pinned = true")
         .fetch_one(&state.db).await
         .inspect_err(|e| tracing::error!(error = %e, "stats: failed to count pinned"))
         .unwrap_or(0);
 
-    let avg_score: f64 = sqlx::query_scalar("SELECT COALESCE(AVG(relevance_score), 0) FROM memory_chunks WHERE parent_id IS NULL")
+    let avg_score: f64 = sqlx::query_scalar("SELECT COALESCE(AVG(relevance_score), 0) FROM memory_chunks")
         .fetch_one(&state.db).await
         .inspect_err(|e| tracing::error!(error = %e, "stats: failed to get avg score"))
         .unwrap_or(0.0);
@@ -164,7 +154,7 @@ pub(crate) async fn api_memory_stats(State(state): State<InfraServices>) -> Json
     let embed_model = state.embedder.embed_model_name().unwrap_or_default();
 
     Json(MemoryStatsDto {
-        total: documents,
+        total,
         total_chunks: total,
         pinned,
         avg_score,
@@ -227,58 +217,23 @@ pub(crate) async fn api_list_documents(
         && !search.trim().is_empty() {
             return match state.memory_store.search(search, (limit * 5) as usize, &[], "").await {
                 Ok((results, mode)) => {
-                    // Group by document: COALESCE(parent_id, id), keep best similarity
-                    let mut seen = std::collections::HashMap::<String, (f64, &crate::memory::MemoryResult)>::new();
-                    for r in &results {
-                        let doc_id = r.parent_id.as_deref().unwrap_or(&r.id).to_string();
-                        match seen.entry(doc_id) {
-                            std::collections::hash_map::Entry::Vacant(e) => { e.insert((r.similarity, r)); }
-                            std::collections::hash_map::Entry::Occupied(mut e) => {
-                                if r.similarity > e.get().0 { e.insert((r.similarity, r)); }
-                            }
-                        }
-                    }
-                    let total_found = seen.len() as i64;
-                    let mut docs: Vec<_> = seen.into_values().collect();
-                    docs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-                    let page: Vec<_> = docs.into_iter().skip(offset as usize).take(limit as usize).collect();
+                    // Post-m033: every chunk is its own document (no parent grouping).
+                    let total_found = results.len() as i64;
+                    let page: Vec<_> = results.iter().skip(offset as usize).take(limit as usize).collect();
 
-                    // Batch fetch metadata for all docs in one query
-                    let doc_ids: Vec<String> = page.iter().map(|(_, r)| r.parent_id.as_deref().unwrap_or(&r.id).to_string()).collect();
-                    let meta_rows: Vec<(uuid::Uuid, i64, Option<i64>, Option<String>)> = if doc_ids.is_empty() { vec![] } else {
-                        sqlx::query_as(
-                            "SELECT m.id, \
-                               (SELECT COUNT(*) FROM memory_chunks WHERE parent_id = m.id) + 1, \
-                               (SELECT SUM(LENGTH(content)) FROM memory_chunks WHERE id = m.id OR parent_id = m.id), \
-                               LEFT(m.content, 200) \
-                             FROM memory_chunks m WHERE m.id = ANY($1::uuid[])"
-                        )
-                        .bind(&doc_ids)
-                        .fetch_all(&state.db)
-                        .await
-                        .unwrap_or_default()
-                    };
-                    let meta_map: std::collections::HashMap<String, (i64, Option<i64>, Option<String>)> =
-                        meta_rows.into_iter().map(|(id, cnt, chars, prev)| (id.to_string(), (cnt, chars, prev))).collect();
-
-                    let documents: Vec<MemoryDocumentDto> = page.iter().map(|(sim, r)| {
-                        let doc_id = r.parent_id.as_deref().unwrap_or(&r.id);
-                        let (chunks_count, total_chars, preview) = meta_map.get(doc_id)
-                            .cloned()
-                            .unwrap_or((1, None, None));
-                        MemoryDocumentDto {
-                            id: doc_id.to_string(),
-                            source: Some(r.source.clone()),
-                            pinned: r.pinned,
-                            relevance_score: r.relevance_score,
-                            similarity: Some(*sim),
-                            created_at: None,
-                            accessed_at: None,
-                            preview: preview.or_else(|| Some(r.content.chars().take(200).collect())),
-                            chunks_count,
-                            total_chars,
-                            scope: None,
-                        }
+                    let documents: Vec<MemoryDocumentDto> = page.iter().map(|r| MemoryDocumentDto {
+                        id: r.id.clone(),
+                        source: Some(r.source.clone()),
+                        pinned: r.pinned,
+                        relevance_score: r.relevance_score,
+                        similarity: Some(r.similarity),
+                        created_at: None,
+                        accessed_at: None,
+                        preview: Some(r.content.chars().take(200).collect()),
+                        // chunks_count is always 1 after m033; kept in DTO for shape compat.
+                        chunks_count: 1,
+                        total_chars: Some(r.content.len() as i64),
+                        scope: None,
                     }).collect();
                     Json(json!({ "documents": documents, "total": total_found, "search_mode": mode })).into_response()
                 }
@@ -286,23 +241,16 @@ pub(crate) async fn api_list_documents(
             };
         }
 
-    // List mode: CTE to avoid correlated subqueries
-    let sql = "WITH doc_stats AS ( \
-           SELECT parent_id, COUNT(*) AS child_count, SUM(LENGTH(content)) AS child_chars \
-           FROM memory_chunks WHERE parent_id IS NOT NULL \
-           GROUP BY parent_id \
-         ) \
-         SELECT \
+    // List mode: every chunk is a top-level document (post-m033).
+    let sql = "SELECT \
            m.id, m.source, m.pinned, \
            COALESCE(m.relevance_score, 1.0) AS relevance_score, \
            m.created_at, COALESCE(m.accessed_at, m.created_at) AS accessed_at, \
            LEFT(m.content, 200) AS preview, \
-           COALESCE(ds.child_count, 0) + 1 AS chunks_count, \
-           COALESCE(ds.child_chars, 0) + LENGTH(m.content) AS total_chars, \
+           1::bigint AS chunks_count, \
+           LENGTH(m.content)::bigint AS total_chars, \
            m.scope \
          FROM memory_chunks m \
-         LEFT JOIN doc_stats ds ON ds.parent_id = m.id \
-         WHERE m.parent_id IS NULL \
          ORDER BY COALESCE(m.accessed_at, m.created_at) DESC \
          LIMIT $1 OFFSET $2";
 
@@ -314,7 +262,7 @@ pub(crate) async fn api_list_documents(
 
     match rows {
         Ok(rows) => {
-            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks WHERE parent_id IS NULL")
+            let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM memory_chunks")
                 .fetch_one(&state.db).await.unwrap_or(0);
             let documents: Vec<MemoryDocumentDto> = rows.iter().map(|r| MemoryDocumentDto {
                 id: r.id.to_string(),
@@ -339,32 +287,18 @@ pub(crate) async fn api_get_document(
     State(state): State<InfraServices>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> impl IntoResponse {
-    let rows = sqlx::query_as::<_, (String, i32)>(
-        "SELECT content, chunk_index FROM memory_chunks \
-         WHERE id = $1 OR parent_id = $1 \
-         ORDER BY chunk_index"
+    // Post-m033: every chunk is its own document — single row.
+    let row = sqlx::query_as::<_, (String, Option<String>, bool, f64, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
+        "SELECT content, source, pinned, COALESCE(relevance_score,1.0), created_at, COALESCE(accessed_at,created_at) \
+         FROM memory_chunks WHERE id = $1"
     )
     .bind(id)
-    .fetch_all(&state.db)
+    .fetch_optional(&state.db)
     .await;
 
-    match rows {
-        Ok(rows) if !rows.is_empty() => {
-            let content: String = rows.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>().join("\n");
+    match row {
+        Ok(Some((content, source, pinned, score, created, accessed))) => {
             let total_chars = content.len();
-            let meta = sqlx::query_as::<_, (Option<String>, bool, f64, chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>(
-                "SELECT source, pinned, COALESCE(relevance_score,1.0), created_at, COALESCE(accessed_at,created_at) FROM memory_chunks WHERE id = $1"
-            ).bind(id).fetch_optional(&state.db).await;
-            let (source, pinned, score, created, accessed) = match meta {
-                Ok(Some(m)) => m,
-                Ok(None) => {
-                    tracing::warn!(id = %id, "document chunks exist but parent metadata missing");
-                    (None, false, 1.0, chrono::Utc::now(), chrono::Utc::now())
-                }
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-                }
-            };
             Json(json!({
                 "id": id,
                 "source": source,
@@ -373,11 +307,11 @@ pub(crate) async fn api_get_document(
                 "created_at": created.to_rfc3339(),
                 "accessed_at": accessed.to_rfc3339(),
                 "content": content,
-                "chunks_count": rows.len(),
+                "chunks_count": 1,
                 "total_chars": total_chars,
             })).into_response()
         }
-        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({"error": "document not found"}))).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"error": "document not found"}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
     }
 }
@@ -388,7 +322,7 @@ pub(crate) async fn api_patch_document(
     Json(req): Json<PatchMemoryRequest>,
 ) -> impl IntoResponse {
     if let Some(pinned) = req.pinned {
-        let result = sqlx::query("UPDATE memory_chunks SET pinned = $2 WHERE id = $1 OR parent_id = $1")
+        let result = sqlx::query("UPDATE memory_chunks SET pinned = $2 WHERE id = $1")
             .bind(id).bind(pinned).execute(&state.db).await;
         match result {
             Ok(r) if r.rows_affected() > 0 => {}
@@ -435,7 +369,7 @@ pub(crate) async fn api_delete_memory(
     State(state): State<InfraServices>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
 ) -> impl IntoResponse {
-    let result = sqlx::query("DELETE FROM memory_chunks WHERE id = $1 OR parent_id = $1")
+    let result = sqlx::query("DELETE FROM memory_chunks WHERE id = $1")
         .bind(id)
         .execute(&state.db)
         .await;
@@ -599,8 +533,8 @@ pub(crate) async fn api_export_memory(
     if total > EXPORT_LIMIT {
         tracing::warn!(total, limit = EXPORT_LIMIT, "memory export truncated");
     }
-    match sqlx::query_as::<_, (uuid::Uuid, String, Option<String>, bool, f64, chrono::DateTime<chrono::Utc>, Option<uuid::Uuid>, i32)>(
-        "SELECT id, content, source, pinned, relevance_score, created_at, parent_id, chunk_index \
+    match sqlx::query_as::<_, (uuid::Uuid, String, Option<String>, bool, f64, chrono::DateTime<chrono::Utc>)>(
+        "SELECT id, content, source, pinned, relevance_score, created_at \
          FROM memory_chunks ORDER BY created_at LIMIT $1",
     )
     .bind(EXPORT_LIMIT)
@@ -618,8 +552,6 @@ pub(crate) async fn api_export_memory(
                         "pinned": r.3,
                         "relevance_score": r.4,
                         "created_at": r.5.to_rfc3339(),
-                        "parent_id": r.6,
-                        "chunk_index": r.7,
                     })
                 })
                 .collect();
