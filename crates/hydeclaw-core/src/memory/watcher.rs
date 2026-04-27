@@ -108,7 +108,7 @@ pub fn spawn_workspace_watcher(
                                 if let Err(e) = mem.delete_by_source(&source).await {
                                     tracing::debug!(source = %source, error = %e, "no existing chunks to delete");
                                 }
-                                match mem.index(&content, &source, false, None, None, "shared", "").await {
+                                match mem.index(&content, &source, false, "shared", "").await {
                                     Ok(_) => indexed += 1,
                                     Err(e) => {
                                         tracing::debug!(error = %e, "embedding unavailable -- skipping workspace indexing");

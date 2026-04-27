@@ -28,22 +28,17 @@ pub trait MemoryService: Send + Sync {
         query: &str,
         limit: usize,
         exclude_ids: &[String],
-        category: Option<&str>,
-        topic: Option<&str>,
         agent_id: &str,
     ) -> Result<(Vec<crate::memory::MemoryResult>, String)>;
 
     /// Index a new memory chunk. Returns the new chunk UUID.
     /// `scope`: "private" (agent-only) or "shared" (visible to all agents).
     /// `agent_id`: the agent that owns this chunk.
-    #[allow(clippy::too_many_arguments)]
     async fn index(
         &self,
         content: &str,
         source: &str,
         pinned: bool,
-        category: Option<&str>,
-        topic: Option<&str>,
         scope: &str,
         agent_id: &str,
     ) -> Result<String>;
@@ -111,11 +106,9 @@ impl MemoryService for crate::memory::MemoryStore {
         query: &str,
         limit: usize,
         exclude_ids: &[String],
-        category: Option<&str>,
-        topic: Option<&str>,
         agent_id: &str,
     ) -> Result<(Vec<crate::memory::MemoryResult>, String)> {
-        let (results, mode) = crate::memory::MemoryStore::search(self, query, limit, exclude_ids, category, topic, agent_id).await?;
+        let (results, mode) = crate::memory::MemoryStore::search(self, query, limit, exclude_ids, agent_id).await?;
         Ok((results, mode.to_string()))
     }
 
@@ -124,12 +117,10 @@ impl MemoryService for crate::memory::MemoryStore {
         content: &str,
         source: &str,
         pinned: bool,
-        category: Option<&str>,
-        topic: Option<&str>,
         scope: &str,
         agent_id: &str,
     ) -> Result<String> {
-        crate::memory::MemoryStore::index(self, content, source, pinned, category, topic, scope, agent_id).await
+        crate::memory::MemoryStore::index(self, content, source, pinned, scope, agent_id).await
     }
 
     async fn index_batch(&self, items: &[(String, String, bool, String)], agent_id: &str) -> Result<Vec<String>> {
@@ -218,8 +209,6 @@ pub mod mock {
             _query: &str,
             _limit: usize,
             _exclude_ids: &[String],
-            _category: Option<&str>,
-            _topic: Option<&str>,
             _agent_id: &str,
         ) -> Result<(Vec<crate::memory::MemoryResult>, String)> {
             Ok((vec![], "mock".to_string()))
@@ -230,8 +219,6 @@ pub mod mock {
             _content: &str,
             _source: &str,
             _pinned: bool,
-            _category: Option<&str>,
-            _topic: Option<&str>,
             _scope: &str,
             _agent_id: &str,
         ) -> Result<String> {
@@ -304,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn mock_search_returns_empty_without_db() {
         let mock = MockMemoryService::available();
-        let (results, mode) = mock.search("test query", 5, &[], None, None, "agent1").await.unwrap();
+        let (results, mode) = mock.search("test query", 5, &[], "agent1").await.unwrap();
         assert!(results.is_empty());
         assert_eq!(mode, "mock");
     }
@@ -321,7 +308,7 @@ mod tests {
     async fn trait_object_dispatch_works() {
         let svc: Arc<dyn MemoryService> = Arc::new(MockMemoryService::available());
         assert!(svc.is_available());
-        let (results, mode) = svc.search("hello", 5, &[], None, None, "agent1").await.unwrap();
+        let (results, mode) = svc.search("hello", 5, &[], "agent1").await.unwrap();
         assert!(results.is_empty());
         assert_eq!(mode, "mock");
     }
@@ -331,14 +318,14 @@ mod tests {
     #[tokio::test]
     async fn index_with_private_scope() {
         let mock = MockMemoryService::available();
-        let id = mock.index("private fact", "test", false, None, None, "private", "Arty").await.unwrap();
+        let id = mock.index("private fact", "test", false, "private", "Arty").await.unwrap();
         assert_eq!(id, "mock-chunk-id");
     }
 
     #[tokio::test]
     async fn index_with_shared_scope() {
         let mock = MockMemoryService::available();
-        let id = mock.index("shared fact", "test", false, None, None, "shared", "Arty").await.unwrap();
+        let id = mock.index("shared fact", "test", false, "shared", "Arty").await.unwrap();
         assert_eq!(id, "mock-chunk-id");
     }
 
@@ -357,7 +344,7 @@ mod tests {
     async fn search_with_agent_id_filter() {
         let mock = MockMemoryService::available();
         // Mock returns empty regardless, but verify signature accepts agent_id
-        let (results, _) = mock.search("query", 5, &[], None, None, "Arty").await.unwrap();
+        let (results, _) = mock.search("query", 5, &[], "Arty").await.unwrap();
         assert!(results.is_empty());
     }
 
@@ -365,7 +352,7 @@ mod tests {
     async fn search_with_empty_agent_id_for_admin() {
         let mock = MockMemoryService::available();
         // Empty agent_id = admin context, returns all
-        let (results, _) = mock.search("query", 5, &[], None, None, "").await.unwrap();
+        let (results, _) = mock.search("query", 5, &[], "").await.unwrap();
         assert!(results.is_empty());
     }
 
@@ -374,7 +361,7 @@ mod tests {
     #[tokio::test]
     async fn index_then_get_by_source() {
         let mock = MockMemoryService::available();
-        let id = mock.index("test content", "test-source", false, None, None, "private", "Agent1").await.unwrap();
+        let id = mock.index("test content", "test-source", false, "private", "Agent1").await.unwrap();
         assert!(!id.is_empty());
         // Mock get returns empty but verifies signature
         let chunks = mock.get(None, Some("test-source"), 10).await.unwrap();
@@ -384,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn index_then_delete() {
         let mock = MockMemoryService::available();
-        let id = mock.index("to delete", "src", false, None, None, "private", "Agent1").await.unwrap();
+        let id = mock.index("to delete", "src", false, "private", "Agent1").await.unwrap();
         let deleted = mock.delete(&id).await.unwrap();
         assert!(!deleted); // Mock always returns false for delete
     }
@@ -416,15 +403,9 @@ mod tests {
     async fn search_with_exclude_ids() {
         let mock = MockMemoryService::available();
         let exclude = vec!["id1".to_string(), "id2".to_string()];
-        let (results, mode) = mock.search("query", 5, &exclude, None, None, "Agent1").await.unwrap();
+        let (results, mode) = mock.search("query", 5, &exclude, "Agent1").await.unwrap();
         assert!(results.is_empty());
         assert_eq!(mode, "mock");
     }
 
-    #[tokio::test]
-    async fn search_with_category_topic_filter() {
-        let mock = MockMemoryService::available();
-        let (results, _) = mock.search("query", 5, &[], Some("decision"), Some("investments"), "Agent1").await.unwrap();
-        assert!(results.is_empty());
-    }
 }

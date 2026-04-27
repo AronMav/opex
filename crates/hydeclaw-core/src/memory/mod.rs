@@ -61,12 +61,6 @@ pub struct MemoryResult {
     pub similarity: f64,
     pub parent_id: Option<String>,
     pub chunk_index: i32,
-    // `category` and `topic` are filled from the DB but not yet consumed in
-    // Rust. Part of the memory_palace feature (m009). Resolved in W3.
-    #[allow(dead_code)]
-    pub category: Option<String>,
-    #[allow(dead_code)]
-    pub topic: Option<String>,
 }
 
 pub struct MemoryChunk {
@@ -81,11 +75,4 @@ pub struct MemoryChunk {
     // currently unread. Kept for future use when struct-side decay runs locally.
     #[allow(dead_code)]
     pub accessed_at: DateTime<Utc>,
-    // `category` and `topic` are filled from the DB but not yet consumed in
-    // Rust. Part of the memory_palace feature (m009). Their usage will be
-    // resolved in W3 (behavioral feature analysis); marking allow for now.
-    #[allow(dead_code)]
-    pub category: Option<String>,
-    #[allow(dead_code)]
-    pub topic: Option<String>,
 }

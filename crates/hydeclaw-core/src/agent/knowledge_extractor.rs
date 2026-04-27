@@ -291,7 +291,7 @@ async fn update_rolling_summary(
     }
 
     // Save new summary as pinned chunk
-    match memory_store.index(&new_summary, &summary_source, true, None, None, "private", agent_name).await {
+    match memory_store.index(&new_summary, &summary_source, true, "private", agent_name).await {
         Ok(_) => tracing::info!(agent = agent_name, len = new_summary.len(), "rolling summary updated"),
         Err(e) => tracing::warn!(agent = agent_name, error = %e, "failed to save rolling summary"),
     }
@@ -360,11 +360,11 @@ async fn save_if_new_with_provider(
     }
 
     // Search for similar existing chunks
-    let (results, _) = match memory_store.search(text, 3, &[], None, None, agent_name).await {
+    let (results, _) = match memory_store.search(text, 3, &[], agent_name).await {
         Ok(r) => r,
         Err(e) => {
             tracing::debug!(error = %e, "dedup search failed, saving anyway");
-            return match memory_store.index(text, source, false, None, None, scope, agent_name).await {
+            return match memory_store.index(text, source, false, scope, agent_name).await {
                 Ok(_) => true,
                 Err(e) => { tracing::warn!(error = %e, "failed to save extracted knowledge"); false }
             };
@@ -386,7 +386,7 @@ async fn save_if_new_with_provider(
     }
 
     // New fact or low similarity — ADD
-    match memory_store.index(text, source, false, None, None, scope, agent_name).await {
+    match memory_store.index(text, source, false, scope, agent_name).await {
         Ok(_) => true,
         Err(e) => {
             tracing::warn!(error = %e, "failed to save extracted knowledge");
@@ -439,7 +439,7 @@ async fn resolve_conflict(
         Ok(Ok(r)) => r,
         _ => {
             // LLM failed — safe fallback: ADD
-            return memory_store.index(new_fact, source, false, None, None, scope, agent_name).await.is_ok();
+            return memory_store.index(new_fact, source, false, scope, agent_name).await.is_ok();
         }
     };
 
@@ -460,10 +460,10 @@ async fn resolve_conflict(
                     "memory conflict resolved"
                 );
             }
-            memory_store.index(new_fact, source, false, None, None, scope, agent_name).await.is_ok()
+            memory_store.index(new_fact, source, false, scope, agent_name).await.is_ok()
         }
         "ADD" => {
-            memory_store.index(new_fact, source, false, None, None, scope, agent_name).await.is_ok()
+            memory_store.index(new_fact, source, false, scope, agent_name).await.is_ok()
         }
         _ => {
             tracing::debug!(action = decision.action.as_str(), reason = decision.reason.as_str(), "conflict resolution: unknown action, skipping");

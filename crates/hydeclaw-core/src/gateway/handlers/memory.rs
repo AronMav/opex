@@ -44,7 +44,7 @@ pub(crate) async fn api_list_memory(
     // Search with query: semantic → FTS fallback (handled inside MemoryStore::search)
     if let Some(ref search) = q.query
         && !search.trim().is_empty() {
-            match state.memory_store.search(search, limit, &[], None, None, "").await {
+            match state.memory_store.search(search, limit, &[], "").await {
                 Ok((results, mode)) => {
                     let chunks: Vec<Value> = results
                         .iter()
@@ -204,8 +204,6 @@ struct DocumentRow {
     preview: Option<String>,
     chunks_count: i64,
     total_chars: Option<i64>,
-    category: Option<String>,
-    topic: Option<String>,
     #[sqlx(default)]
     scope: String,
 }
@@ -215,8 +213,6 @@ pub(crate) struct DocumentsQuery {
     query: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
-    category: Option<String>,
-    topic: Option<String>,
 }
 
 pub(crate) async fn api_list_documents(
@@ -229,7 +225,7 @@ pub(crate) async fn api_list_documents(
     // Search mode: search at chunk level, group by document
     if let Some(ref search) = q.query
         && !search.trim().is_empty() {
-            return match state.memory_store.search(search, (limit * 5) as usize, &[], None, None, "").await {
+            return match state.memory_store.search(search, (limit * 5) as usize, &[], "").await {
                 Ok((results, mode)) => {
                     // Group by document: COALESCE(parent_id, id), keep best similarity
                     let mut seen = std::collections::HashMap::<String, (f64, &crate::memory::MemoryResult)>::new();
@@ -281,8 +277,6 @@ pub(crate) async fn api_list_documents(
                             preview: preview.or_else(|| Some(r.content.chars().take(200).collect())),
                             chunks_count,
                             total_chars,
-                            category: r.category.clone(),
-                            topic: r.topic.clone(),
                             scope: None,
                         }
                     }).collect();
@@ -293,19 +287,7 @@ pub(crate) async fn api_list_documents(
         }
 
     // List mode: CTE to avoid correlated subqueries
-    // Build dynamic WHERE clause for category/topic filters
-    let mut where_extra = String::new();
-    let mut bind_idx = 3u32; // $1=limit, $2=offset
-    if q.category.is_some() {
-        where_extra.push_str(&format!(" AND m.category = ${bind_idx}"));
-        bind_idx += 1;
-    }
-    if q.topic.is_some() {
-        where_extra.push_str(&format!(" AND m.topic = ${bind_idx}"));
-    }
-
-    let sql = format!(
-        "WITH doc_stats AS ( \
+    let sql = "WITH doc_stats AS ( \
            SELECT parent_id, COUNT(*) AS child_count, SUM(LENGTH(content)) AS child_chars \
            FROM memory_chunks WHERE parent_id IS NOT NULL \
            GROUP BY parent_id \
@@ -317,24 +299,18 @@ pub(crate) async fn api_list_documents(
            LEFT(m.content, 200) AS preview, \
            COALESCE(ds.child_count, 0) + 1 AS chunks_count, \
            COALESCE(ds.child_chars, 0) + LENGTH(m.content) AS total_chars, \
-           m.category, m.topic, m.scope \
+           m.scope \
          FROM memory_chunks m \
          LEFT JOIN doc_stats ds ON ds.parent_id = m.id \
-         WHERE m.parent_id IS NULL{where_extra} \
+         WHERE m.parent_id IS NULL \
          ORDER BY COALESCE(m.accessed_at, m.created_at) DESC \
-         LIMIT $1 OFFSET $2"
-    );
+         LIMIT $1 OFFSET $2";
 
-    let mut query = sqlx::query_as::<_, DocumentRow>(&sql)
+    let rows = sqlx::query_as::<_, DocumentRow>(sql)
         .bind(limit)
-        .bind(offset);
-    if let Some(ref cat) = q.category {
-        query = query.bind(cat);
-    }
-    if let Some(ref top) = q.topic {
-        query = query.bind(top);
-    }
-    let rows = query.fetch_all(&state.db).await;
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await;
 
     match rows {
         Ok(rows) => {
@@ -351,8 +327,6 @@ pub(crate) async fn api_list_documents(
                 preview: r.preview.clone(),
                 chunks_count: r.chunks_count,
                 total_chars: r.total_chars,
-                category: r.category.clone(),
-                topic: r.topic.clone(),
                 scope: if r.scope.is_empty() { None } else { Some(r.scope.clone()) },
             }).collect();
             Json(json!({ "documents": documents, "total": total })).into_response()
@@ -447,7 +421,7 @@ pub(crate) async fn api_create_memory(
     let source = req.source.as_deref().unwrap_or("ui");
     let pinned = req.pinned.unwrap_or(false);
     // Admin-created chunks are shared so all agents can see them
-    match state.memory_store.index(&req.content, source, pinned, None, None, "shared", "").await {
+    match state.memory_store.index(&req.content, source, pinned, "shared", "").await {
         Ok(id) => Json(json!({"id": id, "ok": true})).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,

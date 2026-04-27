@@ -83,15 +83,12 @@ impl MemoryStore {
     /// Search memory: hybrid (semantic + FTS via RRF) when embedding available, pure FTS fallback.
     /// Returns (results, `search_mode`) where `search_mode` is "hybrid", "semantic", or "fts".
     /// `exclude_ids`: chunk IDs already loaded via L0 pinned loading -- excluded from results (CTX-04).
-    /// `category` / `topic`: optional post-query filters; only chunks with matching values are returned.
     /// `agent_id`: filter results to this agent's chunks plus shared chunks. Pass `""` to search all.
     pub async fn search(
         &self,
         query: &str,
         limit: usize,
         exclude_ids: &[String],
-        category: Option<&str>,
-        topic: Option<&str>,
         agent_id: &str,
     ) -> Result<(Vec<MemoryResult>, &'static str)> {
         if query.trim().is_empty() {
@@ -123,14 +120,6 @@ impl MemoryStore {
         // L2 dedup: remove chunks already loaded via L0 pinned loading (CTX-04)
         if !exclude_ids.is_empty() {
             results.retain(|r| !exclude_ids.contains(&r.id));
-        }
-
-        // Category/topic post-query filtering (CTX-05)
-        if let Some(cat) = category {
-            results.retain(|r| r.category.as_deref() == Some(cat));
-        }
-        if let Some(top) = topic {
-            results.retain(|r| r.topic.as_deref() == Some(top));
         }
 
         Ok((results, mode))
@@ -260,14 +249,11 @@ impl MemoryStore {
     /// linked by `parent_id`. Returns the parent chunk's UUID.
     /// `scope`: "private" (agent-only) or "shared" (visible to all agents).
     /// `agent_id`: the agent that owns this chunk (used for visibility filtering).
-    #[allow(clippy::too_many_arguments)]
     pub async fn index(
         &self,
         content: &str,
         source: &str,
         pinned: bool,
-        category: Option<&str>,
-        topic: Option<&str>,
         scope: &str,
         agent_id: &str,
     ) -> Result<String> {
@@ -286,7 +272,7 @@ impl MemoryStore {
             let id = uuid::Uuid::new_v4().to_string();
             crate::db::memory_queries::insert_chunk(
                 &self.db, &id, &chunks[0], &vec_str, source, pinned, &lang, None, 0,
-                category, topic, scope, agent_id,
+                scope, agent_id,
             ).await?;
             return Ok(id);
         }
@@ -306,7 +292,7 @@ impl MemoryStore {
             let parent = if i == 0 { None } else { Some(parent_id.as_str()) };
             crate::db::memory_queries::insert_chunk(
                 &self.db, &id, chunk, &vec_str, source, pinned, &lang, parent, i as i32,
-                category, topic, scope, agent_id,
+                scope, agent_id,
             ).await?;
         }
 
@@ -322,7 +308,6 @@ impl MemoryStore {
     /// Batch index: embed multiple texts and insert them all. Returns chunk IDs.
     /// Long texts (> `DEFAULT_CHUNK_SIZE`) are delegated to `index()` for auto-chunking.
     /// Short texts are batch-embedded in a single request for efficiency.
-    /// Category and topic are not supported in batch index (pass None/None per item).
     /// Tuple: (content, source, pinned, scope).
     /// `agent_id`: the agent that owns these chunks (used for visibility filtering).
     pub async fn index_batch(&self, items: &[(String, String, bool, String)], agent_id: &str) -> Result<Vec<String>> {
@@ -337,7 +322,7 @@ impl MemoryStore {
         let mut short_items: Vec<(usize, &str, &str, bool, &str)> = Vec::new();
         for (idx, (content, source, pinned, scope)) in items.iter().enumerate() {
             if content.len() > hydeclaw_text::DEFAULT_CHUNK_SIZE {
-                let id = self.index(content, source, *pinned, None, None, scope, agent_id).await
+                let id = self.index(content, source, *pinned, scope, agent_id).await
                     .context("failed to index long item in batch")?;
                 ids.push((idx, id));
             } else {
@@ -355,7 +340,7 @@ impl MemoryStore {
                 let id = uuid::Uuid::new_v4().to_string();
                 crate::db::memory_queries::insert_chunk_tx(
                     &mut tx, &id, content, &vec_str, source, pinned, &lang, None, 0,
-                    None, None, scope, agent_id,
+                    scope, agent_id,
                 ).await
                 .context("failed to insert memory chunk in batch")?;
                 ids.push((idx, id));
@@ -515,8 +500,6 @@ mod tests {
             similarity,
             parent_id: parent_id.map(|s| s.to_string()),
             chunk_index: 0,
-            category: None,
-            topic: None,
         }
     }
 
@@ -527,19 +510,16 @@ mod tests {
                 id: "id1".into(), content: "a".into(), source: "s".into(),
                 pinned: false, relevance_score: 1.0, similarity: 0.9,
                 parent_id: Some("parent1".into()), chunk_index: 0,
-                category: None, topic: None,
             },
             MemoryResult {
                 id: "id2".into(), content: "b".into(), source: "s".into(),
                 pinned: false, relevance_score: 1.0, similarity: 0.8,
                 parent_id: Some("parent1".into()), chunk_index: 1,
-                category: None, topic: None,
             },
             MemoryResult {
                 id: "id3".into(), content: "c".into(), source: "s2".into(),
                 pinned: false, relevance_score: 1.0, similarity: 0.7,
                 parent_id: None, chunk_index: 0,
-                category: None, topic: None,
             },
         ];
         let deduped = MemoryStore::dedup_by_parent(results);

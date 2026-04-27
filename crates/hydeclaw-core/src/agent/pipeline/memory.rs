@@ -61,7 +61,7 @@ pub async fn index_facts_to_memory(
             let mut ok = 0usize;
             let mut fail = 0usize;
             for (content, source, pinned, scope) in &items {
-                match memory_store.index(content, source, *pinned, None, None, scope, agent_name).await {
+                match memory_store.index(content, source, *pinned, scope, agent_name).await {
                     Ok(_) => ok += 1,
                     Err(ie) => {
                         fail += 1;
@@ -85,15 +85,13 @@ pub async fn handle_memory_search(
 ) -> String {
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(10) as usize;
-    let category = args.get("category").and_then(|v| v.as_str());
-    let topic = args.get("topic").and_then(|v| v.as_str());
 
     if query.is_empty() {
         return "Error: 'query' is required".to_string();
     }
 
     // Search long-term memory (exclude L0 pinned chunks to avoid duplication)
-    match memory_store.search(query, limit, pinned_ids, category, topic, agent_name).await {
+    match memory_store.search(query, limit, pinned_ids, agent_name).await {
         Ok((results, _)) if results.is_empty() => {
             "No relevant memories found.".to_string()
         }
@@ -123,8 +121,6 @@ pub async fn handle_memory_index(
     let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
     let source = args.get("source").and_then(|v| v.as_str()).unwrap_or("manual");
     let pinned = args.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
-    let category = args.get("category").and_then(|v| v.as_str());
-    let topic = args.get("topic").and_then(|v| v.as_str());
     let scope = match args.get("shared").and_then(|v| v.as_bool()).unwrap_or(false) {
         true => "shared",
         false => "private",
@@ -137,18 +133,7 @@ pub async fn handle_memory_index(
         return "Memory indexing is not available (embedding endpoint not configured).".to_string();
     }
 
-    // Validate category if provided
-    const VALID_CATEGORIES: &[&str] = &["decision", "preference", "event", "discovery", "advice", "general"];
-    if let Some(cat) = category
-        && !VALID_CATEGORIES.contains(&cat) {
-        return format!(
-            "Error: invalid category '{}'. Valid values: {}",
-            cat,
-            VALID_CATEGORIES.join(", ")
-        );
-    }
-
-    match memory_store.index(content, source, pinned, category, topic, scope, agent_name).await {
+    match memory_store.index(content, source, pinned, scope, agent_name).await {
         Ok(id) => format!("Indexed as {}", id),
         Err(e) => format!("Memory index error: {}", e),
     }

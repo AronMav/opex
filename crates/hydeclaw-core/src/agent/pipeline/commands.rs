@@ -340,7 +340,7 @@ where
                     Err(e) => return Some(Err(e)),
                 }
             } else {
-                match ctx.memory_store.search(query, 8, &[], None, None, ctx.agent_name).await {
+                match ctx.memory_store.search(query, 8, &[], ctx.agent_name).await {
                     Ok((r, m)) => (r, m),
                     Err(e) => return Some(Err(e)),
                 }

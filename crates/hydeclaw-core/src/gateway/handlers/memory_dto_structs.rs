@@ -30,8 +30,6 @@ pub struct MemoryDocumentDto {
     pub chunks_count: i64,
     #[cfg_attr(feature = "ts-gen", ts(type = "number | null"))]
     pub total_chars: Option<i64>,
-    pub category: Option<String>,
-    pub topic: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts-gen", ts(optional))]
     pub scope: Option<String>,

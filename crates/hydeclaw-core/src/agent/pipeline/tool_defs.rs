@@ -237,7 +237,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "memory".to_string(),
-            description: "Manage long-term memory. Actions: search, index, get, delete, update, compress. For index: set category and topic. Use pinned=true for permanent facts.".to_string(),
+            description: "Manage long-term memory. Actions: search, index, get, delete, update, compress. Use pinned=true for permanent facts.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -263,14 +263,6 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                         "type": "boolean",
                         "description": "Pin as permanent memory, no decay (for index)",
                         "default": false
-                    },
-                    "category": {
-                        "type": "string",
-                        "description": "Memory category (for index/search)"
-                    },
-                    "topic": {
-                        "type": "string",
-                        "description": "Topic tag (for index/search)"
                     },
                     "shared": {
                         "type": "boolean",

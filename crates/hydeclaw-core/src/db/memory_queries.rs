@@ -33,8 +33,6 @@ fn row_to_memory_result(r: &sqlx::postgres::PgRow) -> MemoryResult {
         similarity: r.get("similarity"),
         parent_id: r.try_get::<Option<String>, _>("parent_id").ok().flatten(),
         chunk_index: r.try_get::<i32, _>("chunk_index").unwrap_or(0),
-        category: r.try_get::<Option<String>, _>("category").ok().flatten(),
-        topic: r.try_get::<Option<String>, _>("topic").ok().flatten(),
     }
 }
 
@@ -49,8 +47,6 @@ fn row_to_memory_chunk(r: &sqlx::postgres::PgRow) -> MemoryChunk {
         relevance_score: r.get("relevance_score"),
         created_at: r.get("created_at"),
         accessed_at: r.get("accessed_at"),
-        category: r.try_get::<Option<String>, _>("category").ok().flatten(),
-        topic: r.try_get::<Option<String>, _>("topic").ok().flatten(),
     }
 }
 
@@ -141,8 +137,7 @@ pub async fn fetch_pinned(db: &PgPool, agent_id: &str) -> Result<Vec<MemoryChunk
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
-                  created_at, accessed_at,
-                  category, topic
+                  created_at, accessed_at
            FROM memory_chunks
            WHERE ($1 = '' OR agent_id = $1 OR scope = 'shared') AND pinned = true
            ORDER BY created_at ASC",
@@ -171,9 +166,7 @@ pub async fn search_semantic(
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
                   (1.0 - (embedding <=> $1::vector))::float8 AS similarity,
                   parent_id::text,
-                  chunk_index,
-                  category,
-                  topic
+                  chunk_index
            FROM memory_chunks
            WHERE embedding IS NOT NULL
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
@@ -210,9 +203,7 @@ pub async fn search_fts(
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
                   ts_rank_cd(tsv, plainto_tsquery('{lang}', $1))::float8 AS similarity,
                   parent_id::text,
-                  chunk_index,
-                  category,
-                  topic
+                  chunk_index
            FROM memory_chunks
            WHERE tsv @@ plainto_tsquery('{lang}', $1)
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
@@ -258,9 +249,7 @@ pub async fn fetch_recent(db: &PgPool, limit: i64) -> Result<Vec<MemoryResult>> 
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
                   1.0::float8 AS similarity,
                   parent_id::text,
-                  chunk_index,
-                  category,
-                  topic
+                  chunk_index
            FROM memory_chunks
            ORDER BY pinned DESC, COALESCE(accessed_at, created_at) DESC
            LIMIT $1",
@@ -287,17 +276,21 @@ pub async fn insert_chunk(
     lang: &str,
     parent_id: Option<&str>,
     chunk_index: i32,
-    category: Option<&str>,
-    topic: Option<&str>,
     scope: &str,
     agent_id: &str,
 ) -> Result<()> {
     validate_fts_lang(lang)?;
     // SAFETY: `lang` is validated by validate_fts_lang() whitelist
     // letters. Not user input -- comes from server config.
+    //
+    // WAS: 13 columns (id, agent_id, content, embedding, source, pinned,
+    // relevance_score, tsv, parent_id, chunk_index, category, topic, scope) →
+    // VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('lang',$3),
+    // $7::uuid, $8, $9, $10, $11) with 11 binds. After dropping category ($9) and
+    // topic ($10), scope shifts from $11 → $9. Total: 11 columns, 9 unique binds.
     let sql = format!(
-        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, category, topic, scope)
-           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7::uuid, $8, $9, $10, $11)",
+        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope)
+           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7::uuid, $8, $9)",
     );
 
     sqlx::query(&sql)
@@ -309,9 +302,7 @@ pub async fn insert_chunk(
         .bind(pinned)       // $6
         .bind(parent_id)    // $7
         .bind(chunk_index)  // $8
-        .bind(category)     // $9
-        .bind(topic)        // $10
-        .bind(scope)        // $11
+        .bind(scope)        // $9
         .execute(db)
         .await
         .context("failed to insert memory chunk")?;
@@ -332,16 +323,16 @@ pub async fn insert_chunk_tx(
     lang: &str,
     parent_id: Option<&str>,
     chunk_index: i32,
-    category: Option<&str>,
-    topic: Option<&str>,
     scope: &str,
     agent_id: &str,
 ) -> Result<()> {
     validate_fts_lang(lang)?;
     // SAFETY: `lang` is validated by validate_fts_lang() whitelist
+    // (mirrors insert_chunk above; same shape after category/topic drop:
+    // 11 columns, $1..$9 placeholders, scope occupies $9.)
     let sql = format!(
-        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, category, topic, scope)
-           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7::uuid, $8, $9, $10, $11)",
+        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope)
+           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7::uuid, $8, $9)",
     );
 
     sqlx::query(&sql)
@@ -353,9 +344,7 @@ pub async fn insert_chunk_tx(
         .bind(pinned)       // $6
         .bind(parent_id)    // $7
         .bind(chunk_index)  // $8
-        .bind(category)     // $9
-        .bind(topic)        // $10
-        .bind(scope)        // $11
+        .bind(scope)        // $9
         .execute(&mut **tx)
         .await
         .context("failed to insert memory chunk")?;
@@ -370,8 +359,7 @@ pub async fn get_chunk_by_id(db: &PgPool, id: &str) -> Result<Vec<MemoryChunk>> 
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
                   COALESCE(relevance_score,1.0)::float8 AS relevance_score,
-                  created_at, accessed_at,
-                  category, topic
+                  created_at, accessed_at
            FROM memory_chunks WHERE id = $1::uuid",
     )
     .bind(id)
@@ -390,8 +378,7 @@ pub async fn get_chunks_by_source(
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
                   COALESCE(relevance_score,1.0)::float8 AS relevance_score,
-                  created_at, accessed_at,
-                  category, topic
+                  created_at, accessed_at
            FROM memory_chunks WHERE source = $1
            ORDER BY created_at DESC LIMIT $2",
     )
@@ -408,8 +395,7 @@ pub async fn get_chunks_recent(db: &PgPool, limit: i64) -> Result<Vec<MemoryChun
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
                   COALESCE(relevance_score,1.0)::float8 AS relevance_score,
-                  created_at, accessed_at,
-                  category, topic
+                  created_at, accessed_at
            FROM memory_chunks
            ORDER BY accessed_at DESC LIMIT $1",
     )
@@ -482,40 +468,44 @@ mod tests {
     // These catch the class of bugs where column removal breaks INSERT/SELECT
     // (like the user_id NOT NULL bug caught in production).
 
-    /// Verify insert_chunk SQL includes required columns (no user_id — dropped in m021).
+    /// Verify insert_chunk SQL includes required columns (no user_id — dropped in m021;
+    /// no category/topic — dropped in m032).
     #[test]
     fn insert_sql_includes_required_columns() {
-        let sql = r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, category, topic, scope)";
+        let sql = r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope)";
         assert!(sql.contains("agent_id"), "INSERT must include agent_id");
         assert!(sql.contains("scope"), "INSERT must include scope");
         assert!(!sql.contains("user_id"), "user_id column dropped in migration 021");
+        assert!(!sql.contains("category"), "category column dropped in migration 032");
+        assert!(!sql.contains("topic"), "topic column dropped in migration 032");
     }
 
     /// Verify insert_chunk uses ::vector not ::halfvec.
     #[test]
     fn insert_sql_uses_vector_not_halfvec() {
-        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7::uuid, $8, $9, $10, $11)";
+        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7::uuid, $8, $9)";
         assert!(sql.contains("$4::vector"), "embedding must be cast to ::vector (not ::halfvec)");
         assert!(!sql.contains("halfvec"), "halfvec has 4000 dim limit, must use vector");
     }
 
-    /// Verify insert_chunk has exactly 11 bind positions ($1 through $11).
+    /// Verify insert_chunk has exactly 9 bind positions ($1 through $9).
+    /// After m032, scope occupies $9 (was $11; category $9 and topic $10 dropped).
     #[test]
     fn insert_sql_bind_count() {
-        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7::uuid, $8, $9, $10, $11)";
-        for i in 1..=11 {
+        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7::uuid, $8, $9)";
+        for i in 1..=9 {
             let placeholder = format!("${}", i);
             assert!(sql.contains(&placeholder), "Missing bind placeholder {}", placeholder);
         }
-        assert!(!sql.contains("$12"), "Unexpected $12 — too many binds");
+        assert!(!sql.contains("$10"), "Unexpected $10 — too many binds after m032");
     }
 
-    /// Verify INSERT column count matches VALUES count.
+    /// Verify INSERT column count matches VALUES count (11 columns post-m032).
     #[test]
     fn insert_sql_column_value_parity() {
-        let columns = "id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, category, topic, scope";
+        let columns = "id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope";
         let col_count = columns.split(',').count();
-        assert_eq!(col_count, 13, "Column count must be 13");
+        assert_eq!(col_count, 11, "Column count must be 11 (was 13 before m032 dropped category/topic)");
     }
 
     /// Verify search_semantic includes scope/agent filtering.
@@ -560,14 +550,16 @@ mod tests {
     /// Verify memory_chunks required NOT NULL columns are always included in INSERT.
     #[test]
     fn insert_covers_not_null_columns() {
-        // Required columns after migration 021 (user_id dropped):
-        // id, agent_id, content, scope
-        let insert = "INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, category, topic, scope)";
+        // Required columns after migration 021 (user_id dropped) and m032
+        // (category/topic dropped): id, agent_id, content, scope.
+        let insert = "INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, parent_id, chunk_index, scope)";
         assert!(insert.contains("id"), "Must include id");
         assert!(insert.contains("content"), "Must include content");
         assert!(insert.contains("agent_id"), "Must include agent_id");
         assert!(insert.contains("scope"), "Must include scope");
         assert!(!insert.contains("user_id"), "user_id dropped in migration 021");
+        assert!(!insert.contains("category"), "category dropped in migration 032");
+        assert!(!insert.contains("topic"), "topic dropped in migration 032");
     }
 }
 

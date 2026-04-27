@@ -392,8 +392,6 @@ mod tests {
             _query: &str,
             _limit: usize,
             _exclude_ids: &[String],
-            _category: Option<&str>,
-            _topic: Option<&str>,
             _agent_id: &str,
         ) -> anyhow::Result<(Vec<crate::memory::MemoryResult>, String)> {
             panic!("not called in Failed/Interrupted path")
@@ -404,8 +402,6 @@ mod tests {
             _content: &str,
             _source: &str,
             _pinned: bool,
-            _category: Option<&str>,
-            _topic: Option<&str>,
             _scope: &str,
             _agent_id: &str,
         ) -> anyhow::Result<String> {
