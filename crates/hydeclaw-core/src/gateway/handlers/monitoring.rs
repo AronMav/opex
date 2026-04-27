@@ -1333,12 +1333,15 @@ pub(crate) async fn api_doctor(
         drop(config);
 
         if enabled {
-            // Find most recent backup file
+            // Find most recent backup file (current format: hydeclaw-YYYY-MM-DD.tar.gz).
             let mut latest: Option<(String, u64, chrono::DateTime<chrono::Utc>)> = None;
             if let Ok(mut dir) = tokio::fs::read_dir("backups").await {
                 while let Ok(Some(entry)) = dir.next_entry().await {
                     let path = entry.path();
-                    if path.extension().is_some_and(|e| e == "json")
+                    let is_backup = path.file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.ends_with(".tar.gz"));
+                    if is_backup
                         && let Ok(meta) = entry.metadata().await {
                             let modified = meta.modified().ok()
                                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
