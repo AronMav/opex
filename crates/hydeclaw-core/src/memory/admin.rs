@@ -4,12 +4,10 @@
 /// that delegate to `crate::db::memory_queries`.
 use sqlx::PgPool;
 
-#[allow(dead_code)]
 pub struct MemoryAdmin {
     pub db: PgPool,
 }
 
-#[allow(dead_code)]
 impl MemoryAdmin {
     /// Auto-detect FTS language from agent language code (e.g. "ru" -> "russian").
     pub fn detect_fts_language(agent_lang: &str) -> String {
