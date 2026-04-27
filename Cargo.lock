@@ -1080,7 +1080,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hydeclaw-core"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1151,7 +1151,7 @@ dependencies = [
 
 [[package]]
 name = "hydeclaw-db"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "hydeclaw-gateway-util"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "axum",
  "futures-util",
@@ -1181,7 +1181,7 @@ dependencies = [
 
 [[package]]
 name = "hydeclaw-memory-worker"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1204,11 +1204,11 @@ dependencies = [
 
 [[package]]
 name = "hydeclaw-text"
-version = "0.22.0"
+version = "0.23.0"
 
 [[package]]
 name = "hydeclaw-types"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "hydeclaw-watchdog"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "anyhow",
  "chrono",
