@@ -7,7 +7,6 @@ Configuration loaded from Core API at startup.
 
 import logging
 import os
-import sys
 import secrets
 import time
 from contextlib import asynccontextmanager

@@ -27,8 +27,6 @@ interface CanvasStoreActions {
     title?: string | null;
   }, key?: string): void;
   clearCanvas(key: string): void;
-  /** @deprecated use clearCanvas(key) */
-  clearAgent(agent: string): void;
   togglePanel(): void;
   setPanelOpen(open: boolean): void;
 }
@@ -75,11 +73,6 @@ export const useCanvasStore = create<CanvasStoreState & CanvasStoreActions>()(
         });
         // Delete using agent name for backend API compatibility
         apiDelete(`/api/canvas/${key}`).catch((e) => console.error("[canvas] delete failed:", e));
-      },
-
-      clearAgent(agent: string) {
-        // Backward compat — delegates to clearCanvas
-        get().clearCanvas(agent);
       },
 
       togglePanel() {
