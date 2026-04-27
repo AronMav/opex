@@ -79,8 +79,20 @@ pub mod webhooks_dto;
 #[path = "../gateway/handlers/agents/approvals_dto_structs.rs"]
 pub mod approvals_dto;
 
-/// Backup file list DTO
+/// Backup file list DTO. The same source file is also `#[path]`-included by
+/// `gateway::handlers::backup` so the struct shape is single-sourced. The
+/// `register_ts_dto!()` call lives here to avoid double-registration (the file
+/// is compiled twice, once per `#[path]` host).
 #[cfg(feature = "ts-gen")]
 #[path = "../gateway/handlers/backup_dto_structs.rs"]
 pub mod backup_dto;
+
+#[cfg(feature = "ts-gen")]
+mod backup_dto_register {
+    // `register_ts_dto!()` uses `stringify!($t)` for the name field, so $t must
+    // resolve as a bare identifier (`BackupEntryDto`) — not a path. Bring it
+    // into a private module scope first, then register.
+    use super::backup_dto::BackupEntryDto;
+    crate::register_ts_dto!(BackupEntryDto);
+}
 

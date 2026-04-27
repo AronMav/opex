@@ -6,7 +6,6 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{get, post},
 };
-use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::fs;
@@ -16,6 +15,12 @@ use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices, InfraSer
 use crate::gateway::restore_stream_core::{
     check_content_length_cap, drain_body_with_cap, CapExceeded,
 };
+
+// Re-use the same file as dto_export::backup_dto so the struct definition has
+// a single source of truth (no possible drift between handler shape and TS type).
+#[path = "backup_dto_structs.rs"]
+mod backup_dto_structs;
+pub use backup_dto_structs::BackupEntryDto;
 
 pub(crate) fn routes() -> Router<AppState> {
     // Phase 64 SEC-04: `/api/restore` caps request body size via the per-handler
@@ -34,16 +39,6 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 const BACKUP_DIR: &str = "backups";
-
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
-#[cfg_attr(feature = "ts-gen", ts(export))]
-pub struct BackupEntryDto {
-    pub filename: String,
-    #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
-    pub size_bytes: u64,
-    pub created_at: Option<String>,
-}
 
 /// Parse the first non-empty container name from `docker ps` stdout.
 fn parse_container_name<'a>(docker_output: &'a str, fallback: &'a str) -> &'a str {
