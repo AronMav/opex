@@ -2,7 +2,7 @@
 //!
 //! Owns `SecretsEnvResolver` (impl `EnvResolver`), `make_resolver`,
 //! `make_oauth_context`, `invalidate_yaml_tools_cache`, `check_search_cache`,
-//! `store_search_cache`, `format_tool_error`, `truncate_preview`, and the
+//! `store_search_cache`, `format_tool_error`, and the
 //! `search_cache_key` helper + `CACHEABLE_SEARCH_TOOLS` list.
 //!
 //! Extracted from `engine/mod.rs` as part of plan 66-02. External callers
@@ -84,12 +84,6 @@ impl AgentEngine {
     /// Format a tool error as structured JSON for better LLM parsing.
     pub(super) fn format_tool_error(tool_name: &str, error: &str) -> String {
         crate::agent::pipeline::context::format_tool_error(tool_name, error)
-    }
-
-    /// Truncate a string to `max` chars with "..." suffix, preserving char boundaries.
-    #[allow(dead_code)]
-    pub(super) fn truncate_preview(s: &str, max: usize) -> String {
-        crate::agent::pipeline::context::truncate_preview(s, max)
     }
 }
 

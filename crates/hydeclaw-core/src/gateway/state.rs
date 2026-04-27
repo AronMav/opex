@@ -68,30 +68,6 @@ impl PollingDiagnostics {
             Ordering::Relaxed,
         );
     }
-
-    #[allow(dead_code)]
-    pub fn snapshot(&self) -> serde_json::Value {
-        let last_in = self.last_inbound_at.load(Ordering::Relaxed);
-        let last_out = self.last_outbound_at.load(Ordering::Relaxed);
-        serde_json::json!({
-            "messages_in": self.messages_in.load(Ordering::Relaxed),
-            "messages_out": self.messages_out.load(Ordering::Relaxed),
-            "last_inbound_at": if last_in > 0 {
-                chrono::DateTime::from_timestamp(last_in as i64, 0)
-                    .map(|t| t.to_rfc3339())
-                    .unwrap_or_default()
-            } else {
-                "never".to_string()
-            },
-            "last_outbound_at": if last_out > 0 {
-                chrono::DateTime::from_timestamp(last_out as i64, 0)
-                    .map(|t| t.to_rfc3339())
-                    .unwrap_or_default()
-            } else {
-                "never".to_string()
-            },
-        })
-    }
 }
 
 /// Cached WAN (public) IP address with CGNAT classification and a fetch timestamp.

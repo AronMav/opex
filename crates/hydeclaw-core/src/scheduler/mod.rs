@@ -937,20 +937,6 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Remove all agent-specific jobs (heartbeat) by agent name.
-    #[allow(dead_code)]
-    pub async fn remove_agent_jobs(&self, agent_name: &str) -> Result<()> {
-        let uuids = self.agent_jobs.write().await.remove(agent_name);
-        if let Some(uuids) = uuids {
-            for uuid in uuids {
-                if let Err(e) = self.scheduler.remove(&uuid).await {
-                    tracing::warn!(agent = %agent_name, job = %uuid, error = %e, "failed to remove agent job");
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Start the scheduler.
     pub async fn start(&self) -> Result<()> {
         self.scheduler.start().await?;
