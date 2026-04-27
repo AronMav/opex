@@ -140,7 +140,14 @@ Agent opts in via TOML: `[agent.channel.telegram] enabled = true`
 
 PostgreSQL pgvector. Hybrid search: semantic (halfvec) + FTS. MMR reranking. Two tiers: raw (time-decay) + pinned permanent. Embedding is delegated to Toolgate (`POST /v1/embeddings`), which proxies to the configured embedding backend via the `providers` table. Core never calls Ollama or any embedding service directly. Config: `[memory]` section in `hydeclaw.toml` — no `embed_url`/`embed_model` keys (those are managed through the providers registry). `embed_dim` is auto-detected at startup.
 
-**Text normalization SoT:** canonical chunking lives in `crates/hydeclaw-text/` (used by both core and memory-worker). TTS-specific normalization (numbers→words, English→Cyrillic transliteration) lives in `toolgate/normalize.py` and is **NOT** reused for indexing — it is destructive for embedding/search by design.
+**Text normalization SoT:** TTS-specific normalization (numbers→words, English→Cyrillic transliteration) lives in `toolgate/normalize.py` and is **NOT** reused for indexing — it is destructive for embedding/search by design.
+
+**`MEMORY.md` vs `memory_chunks`:** complementary, not redundant.
+
+- `workspace/agents/{Agent}/MEMORY.md` (and other workspace `.md`/`.txt` files) — **hand-edited agent state**, the canonical source of truth. Lives in git-friendly text files. Agents read it on every session start.
+- `memory_chunks` (PostgreSQL + pgvector) — **searchable index** of the same content plus runtime knowledge (session summaries, extracted facts). Powers hybrid semantic+FTS search.
+- Sync is one-way (file → DB) and event-driven: [memory/watcher.rs](crates/hydeclaw-core/src/memory/watcher.rs) listens for workspace file `Create`/`Modify` events and re-indexes the changed file as `scope='shared'`. Editing `MEMORY.md` updates `memory_chunks`; editing `memory_chunks` directly does NOT update `MEMORY.md`.
+- **First-run bootstrap:** the watcher is delta-only (no initial scan). On startup, if `memory_chunks` has zero `scope='shared'` rows, [main.rs](crates/hydeclaw-core/src/main.rs) enqueues a one-shot reindex task (after a toolgate-readiness probe) so workspace files get indexed without manual intervention. Subsequent restarts skip the bootstrap. Operator can re-trigger anytime via the `memory.reindex` agent action.
 
 ### Secrets (`src/secrets.rs`)
 
