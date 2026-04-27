@@ -83,19 +83,6 @@ pub async fn fail(db: &PgPool, id: Uuid, error: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Create a new task (used by core to enqueue work).
-#[allow(dead_code)]
-pub async fn create(db: &PgPool, task_type: &str, params: serde_json::Value) -> anyhow::Result<Uuid> {
-    let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO memory_tasks (task_type, params) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(task_type)
-    .bind(params)
-    .fetch_one(db)
-    .await?;
-    Ok(id)
-}
-
 /// Recover stuck 'processing' tasks on startup.
 /// Tasks left in 'processing' after a worker crash are reset to 'pending'.
 pub async fn recover_stuck(db: &PgPool) -> anyhow::Result<u64> {
