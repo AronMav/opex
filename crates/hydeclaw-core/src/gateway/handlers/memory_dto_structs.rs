@@ -26,8 +26,6 @@ pub struct MemoryDocumentDto {
     #[cfg_attr(feature = "ts-gen", ts(optional))]
     pub accessed_at: Option<String>,
     pub preview: Option<String>,
-    #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
-    pub chunks_count: i64,
     #[cfg_attr(feature = "ts-gen", ts(type = "number | null"))]
     pub total_chars: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]

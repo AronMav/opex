@@ -192,7 +192,6 @@ struct DocumentRow {
     created_at: chrono::DateTime<chrono::Utc>,
     accessed_at: chrono::DateTime<chrono::Utc>,
     preview: Option<String>,
-    chunks_count: i64,
     total_chars: Option<i64>,
     #[sqlx(default)]
     scope: String,
@@ -230,8 +229,6 @@ pub(crate) async fn api_list_documents(
                         created_at: None,
                         accessed_at: None,
                         preview: Some(r.content.chars().take(200).collect()),
-                        // chunks_count is always 1 after m033; kept in DTO for shape compat.
-                        chunks_count: 1,
                         total_chars: Some(r.content.len() as i64),
                         scope: None,
                     }).collect();
@@ -247,7 +244,6 @@ pub(crate) async fn api_list_documents(
            COALESCE(m.relevance_score, 1.0) AS relevance_score, \
            m.created_at, COALESCE(m.accessed_at, m.created_at) AS accessed_at, \
            LEFT(m.content, 200) AS preview, \
-           1::bigint AS chunks_count, \
            LENGTH(m.content)::bigint AS total_chars, \
            m.scope \
          FROM memory_chunks m \
@@ -273,7 +269,6 @@ pub(crate) async fn api_list_documents(
                 created_at: Some(r.created_at.to_rfc3339()),
                 accessed_at: Some(r.accessed_at.to_rfc3339()),
                 preview: r.preview.clone(),
-                chunks_count: r.chunks_count,
                 total_chars: r.total_chars,
                 scope: if r.scope.is_empty() { None } else { Some(r.scope.clone()) },
             }).collect();
@@ -307,7 +302,6 @@ pub(crate) async fn api_get_document(
                 "created_at": created.to_rfc3339(),
                 "accessed_at": accessed.to_rfc3339(),
                 "content": content,
-                "chunks_count": 1,
                 "total_chars": total_chars,
             })).into_response()
         }

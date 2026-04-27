@@ -52,7 +52,7 @@ export type GitHubRepo = { id: string, agent_id: string, owner: string, repo: st
 
 export type McpEntryDto = { name: string, url: string | null, container: string | null, port: number | null, mode: string, protocol: string, enabled: boolean, status: string | null, tool_count: number | null, };
 
-export type MemoryDocumentDto = { id: string, source: string | null, pinned: boolean, relevance_score: number, similarity?: number, created_at?: string, accessed_at?: string, preview: string | null, chunks_count: number, total_chars: number | null, scope?: string, };
+export type MemoryDocumentDto = { id: string, source: string | null, pinned: boolean, relevance_score: number, similarity?: number, created_at?: string, accessed_at?: string, preview: string | null, total_chars: number | null, scope?: string, };
 
 export type MemoryStatsDto = { total: number, total_chunks: number, pinned: number, avg_score: number, embed_model?: string, embed_dim?: number, tasks: MemoryTaskStatsDto, };
 
