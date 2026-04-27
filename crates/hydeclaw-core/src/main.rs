@@ -327,26 +327,75 @@ async fn main() -> Result<()> {
         // we see no shared chunks at all, enqueue a one-shot reindex task —
         // the memory worker picks it up and indexes the workspace (idempotent
         // via DELETE-by-source + INSERT). Subsequent restarts skip the check.
-        let has_shared: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM memory_chunks WHERE scope = 'shared')",
-        )
-        .fetch_one(&db_pool)
-        .await
-        .unwrap_or(true);
-        if has_shared {
-            tracing::debug!("shared chunks present — skipping initial workspace reindex");
-        } else {
-            match db::memory_queries::enqueue_reindex_task(
-                &db_pool,
-                serde_json::json!({"agent_id": "", "include_sessions": false}),
-            ).await {
-                Ok(task_id) => tracing::info!(
-                    %task_id,
-                    "no shared chunks — enqueued initial workspace reindex"
-                ),
-                Err(e) => tracing::warn!(error = %e, "failed to enqueue initial workspace reindex"),
+        //
+        // Run in a background task that waits for toolgate (managed child
+        // process spawned later in main) to come up. Without this delay the
+        // worker would dequeue immediately and fail every embedding call with
+        // a connection error, marking the task as 'done' with 0 indexed.
+        let bootstrap_pool = db_pool.clone();
+        let bootstrap_toolgate_url = toolgate_url.clone();
+        tokio::spawn(async move {
+            // Wait up to 90s for toolgate to be ready (POST /health 200).
+            let http = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .expect("reqwest client build");
+            let health_url = format!(
+                "{}/health",
+                bootstrap_toolgate_url.trim_end_matches('/')
+            );
+            let mut ready = false;
+            for attempt in 1..=18 {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if http.get(&health_url).send().await.is_ok_and(|r| r.status().is_success()) {
+                    tracing::info!(attempt, "memory bootstrap: toolgate ready");
+                    ready = true;
+                    break;
+                }
             }
-        }
+            if !ready {
+                tracing::warn!(
+                    "memory bootstrap: toolgate not reachable after 90s — skipping reindex enqueue"
+                );
+                return;
+            }
+
+            let has_shared: bool = match sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM memory_chunks WHERE scope = 'shared')",
+            )
+            .fetch_one(&bootstrap_pool)
+            .await
+            {
+                Ok(v) => {
+                    tracing::info!(has_shared = v, "memory bootstrap check");
+                    v
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "memory bootstrap probe failed — assuming shared chunks present"
+                    );
+                    true
+                }
+            };
+            if !has_shared {
+                match db::memory_queries::enqueue_reindex_task(
+                    &bootstrap_pool,
+                    serde_json::json!({"agent_id": "", "include_sessions": false}),
+                )
+                .await
+                {
+                    Ok(task_id) => tracing::info!(
+                        %task_id,
+                        "no shared chunks — enqueued initial workspace reindex"
+                    ),
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "failed to enqueue initial workspace reindex"
+                    ),
+                }
+            }
+        });
     } else {
         tracing::info!("embedding not configured — memory features disabled");
     }
