@@ -333,7 +333,9 @@ async fn main() -> Result<()> {
         .fetch_one(&db_pool)
         .await
         .unwrap_or(true);
-        if !has_shared {
+        if has_shared {
+            tracing::debug!("shared chunks present — skipping initial workspace reindex");
+        } else {
             match db::memory_queries::enqueue_reindex_task(
                 &db_pool,
                 serde_json::json!({"agent_id": "", "include_sessions": false}),
