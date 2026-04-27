@@ -117,11 +117,12 @@ tracing-opentelemetry = { workspace = true, optional = true }
 
 # TypeScript codegen (optional, behind `ts-gen` feature)
 ts-rs = { version = "12", optional = true, features = ["chrono-impl", "serde-json-impl", "uuid-impl"] }
+inventory = { version = "0.3", optional = true }
 
 [features]
 default = []
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
-ts-gen = ["dep:ts-rs", "hydeclaw-types/ts-gen", "hydeclaw-db/ts-gen"]
+ts-gen = ["dep:ts-rs", "dep:inventory", "hydeclaw-types/ts-gen", "hydeclaw-db/ts-gen"]
 
 # Systemd watchdog (Linux-only)
 [target.'cfg(target_os = "linux")'.dependencies]
