@@ -74,7 +74,7 @@ impl ToolgateEmbedder {
     }
 
     /// Create a disabled embedder (no URL). Used in tests when no embedding is needed.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn new_disabled() -> Self {
         Self {
             db: sqlx::PgPool::connect_lazy("postgres://invalid").unwrap(),
