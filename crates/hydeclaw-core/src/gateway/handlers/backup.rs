@@ -35,24 +35,6 @@ pub(crate) fn routes() -> Router<AppState> {
 
 const BACKUP_DIR: &str = "backups";
 
-/// Tables excluded from pg_dump — ephemeral or too large to be useful in backups.
-pub(crate) const EXCLUDED_TABLES: &[&str] = &[
-    "sessions", "messages", "session_events",
-    "usage_log",
-    "audit_log", "audit_events",
-    "notifications",
-    "pending_approvals",
-    "pending_messages", "outbound_queue",
-    "memory_tasks",
-    "pairing_codes",
-    "cron_runs",
-    "tool_execution_cache",
-    "stream_jobs",
-    "graph_extraction_queue",
-    "tasks", "task_steps",
-    "secrets",
-];
-
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
@@ -88,24 +70,66 @@ async fn discover_postgres_container(configured: &str) -> String {
     }
 }
 
-/// Run pg_dump inside the postgres container and write output to `dest`.
+/// Discover tables tagged as ephemeral via `COMMENT ON TABLE ... IS '@hydeclaw:ephemeral...'`.
+/// Used by `run_pg_dump` to build the `--exclude-table` list.
+///
+/// The tag must be at the start of the comment (anchored LIKE pattern).
+async fn ephemeral_tables(container: &str) -> anyhow::Result<Vec<String>> {
+    let out = tokio::process::Command::new("docker")
+        .args([
+            "exec", container, "psql", "-U", "hydeclaw", "hydeclaw",
+            "-tAc",  // tuple-only, unaligned, command — emits one name per line
+            "SELECT c.relname FROM pg_class c \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0 \
+             WHERE n.nspname='public' AND c.relkind='r' \
+               AND d.description LIKE '@hydeclaw:ephemeral%' \
+             ORDER BY c.relname",
+        ])
+        .output().await
+        .context("psql ephemeral table discovery failed")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "ephemeral discovery failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Run pg_dump inside the postgres container and stream output to `dest`.
+/// Excluded tables are discovered at runtime via `ephemeral_tables()`,
+/// plus a hardcoded `secrets` exclusion (secrets are exported in plaintext
+/// for cross-machine portability — see secrets.json in the backup bundle).
 async fn run_pg_dump(container: &str, dest: &std::path::Path) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
+
+    let ephemeral = ephemeral_tables(container).await?;
 
     let file = tokio::fs::File::create(dest).await
         .with_context(|| format!("create db.dump at {}", dest.display()))?;
 
     let mut cmd = tokio::process::Command::new("docker");
     cmd.args(["exec", container, "pg_dump", "-U", "hydeclaw", "hydeclaw", "-Fc"]);
-    for table in EXCLUDED_TABLES {
+    for table in &ephemeral {
         cmd.args(["--exclude-table", table]);
     }
+    // `secrets` is NOT ephemeral — it stores encrypted credentials. We exclude
+    // it from the binary dump because secrets are exported separately in
+    // plaintext (re-encrypted with the new master key on restore). Hardcoded
+    // here so removing the comment from `secrets` cannot accidentally include
+    // them in the dump.
+    cmd.args(["--exclude-table", "secrets"]);
+
     cmd.stdout(std::process::Stdio::piped())
        .stderr(std::process::Stdio::piped());
 
     let mut child = cmd.spawn().context("docker exec pg_dump: spawn failed")?;
-
-    // Copy pg_dump stdout → file without buffering in RAM
     let mut stdout = child.stdout.take().expect("stdout was piped");
     let mut writer = tokio::io::BufWriter::new(file);
     tokio::io::copy(&mut stdout, &mut writer).await
@@ -285,13 +309,16 @@ pub(crate) async fn create_backup_internal(
 
         // 3. Manifest
         let pg_version = get_pg_version(&container).await.unwrap_or_default();
+        let mut manifest_excluded = ephemeral_tables(&container).await.unwrap_or_default();
+        // Mirror the hardcoded `secrets` exclusion in `run_pg_dump` (see comment there).
+        manifest_excluded.push("secrets".to_string());
         tokio::fs::write(
             tmpdir.join("manifest.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "version": 3,
                 "created_at": now,
                 "pg_version": pg_version,
-                "excluded_tables": EXCLUDED_TABLES,
+                "excluded_tables": manifest_excluded,
             })).context("manifest serialize")?,
         ).await?;
 
@@ -717,34 +744,16 @@ mod tests {
         assert_eq!(parse_container_name("  my-pg-1  \n", "fb"), "my-pg-1");
     }
 
+    /// `ephemeral_tables()` parses psql -tAc output (one name per line, with
+    /// possible trailing whitespace). This test mirrors the parsing logic
+    /// (the actual function requires docker to test end-to-end).
     #[test]
-    fn excluded_tables_contains_secrets_and_sessions() {
-        assert!(EXCLUDED_TABLES.contains(&"secrets"));
-        assert!(EXCLUDED_TABLES.contains(&"sessions"));
-        assert!(EXCLUDED_TABLES.contains(&"messages"));
-        assert!(EXCLUDED_TABLES.contains(&"pending_messages"));
-        assert!(EXCLUDED_TABLES.contains(&"outbound_queue"));
-    }
-
-    #[test]
-    fn pg_dump_excludes_all_required_tables() {
-        // Build the args vector the same way run_pg_dump does, verify all tables present.
-        let mut args: Vec<String> = vec![
-            "exec".into(), "pg".into(),
-            "pg_dump".into(), "-U".into(), "hydeclaw".into(),
-            "hydeclaw".into(), "-Fc".into(),
-        ];
-        for t in EXCLUDED_TABLES {
-            args.push("--exclude-table".into());
-            args.push(t.to_string());
+    fn parse_ephemeral_lines_strips_whitespace_and_empties() {
+        fn parse(output: &str) -> Vec<String> {
+            output.lines().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect()
         }
-        // secrets must be excluded
-        let pairs: Vec<_> = args.windows(2).collect();
-        assert!(pairs.iter().any(|w| w[0] == "--exclude-table" && w[1] == "secrets"));
-        assert!(pairs.iter().any(|w| w[0] == "--exclude-table" && w[1] == "messages"));
-        assert!(pairs.iter().any(|w| w[0] == "--exclude-table" && w[1] == "outbound_queue"));
-        // total --exclude-table flags == EXCLUDED_TABLES length
-        let count = args.iter().filter(|a| *a == "--exclude-table").count();
-        assert_eq!(count, EXCLUDED_TABLES.len());
+        let raw = "messages\nsessions\n\n  outbound_queue  \n\n";
+        let got = parse(raw);
+        assert_eq!(got, vec!["messages", "sessions", "outbound_queue"]);
     }
 }
