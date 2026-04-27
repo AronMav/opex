@@ -17,6 +17,7 @@ pub struct ChannelRowDto {
     pub status: String,
     pub error_msg: Option<String>,
 }
+crate::register_ts_dto!(ChannelRowDto);
 
 // ── ActiveChannel DTO (GET /api/channels/active) ─────────────────────────────
 // Mirrors ConnectedChannel in gateway/state.rs (which cannot get ts-gen attrs
@@ -34,3 +35,4 @@ pub struct ActiveChannelDto {
     pub connected_at: String,
     pub last_activity: String,
 }
+crate::register_ts_dto!(ActiveChannelDto);

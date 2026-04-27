@@ -15,3 +15,4 @@ pub struct ApprovalEntryDto {
     pub resolved_at: Option<String>,
     pub resolved_by: Option<String>,
 }
+crate::register_ts_dto!(ApprovalEntryDto);

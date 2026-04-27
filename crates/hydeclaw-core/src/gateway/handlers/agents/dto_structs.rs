@@ -16,6 +16,7 @@ pub struct AgentDetailAccessDto {
     pub mode: String,
     pub owner_id: Option<String>,
 }
+crate::register_ts_dto!(AgentDetailAccessDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -25,6 +26,7 @@ pub struct AgentDetailHeartbeatDto {
     pub timezone: Option<String>,
     pub announce_to: Option<String>,
 }
+crate::register_ts_dto!(AgentDetailHeartbeatDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -35,6 +37,7 @@ pub struct AgentDetailToolGroupsDto {
     pub skill_editing: bool,
     pub session_tools: bool,
 }
+crate::register_ts_dto!(AgentDetailToolGroupsDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -46,6 +49,7 @@ pub struct AgentDetailToolsDto {
     pub deny_all_others: bool,
     pub groups: AgentDetailToolGroupsDto,
 }
+crate::register_ts_dto!(AgentDetailToolsDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -57,6 +61,7 @@ pub struct AgentDetailCompactionDto {
     pub preserve_last_n: u32,
     pub max_context_tokens: Option<u32>,
 }
+crate::register_ts_dto!(AgentDetailCompactionDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -67,6 +72,7 @@ pub struct AgentDetailSessionDto {
     pub max_messages: u32,
     pub prune_tool_output_after_turns: Option<usize>,
 }
+crate::register_ts_dto!(AgentDetailSessionDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -83,6 +89,7 @@ pub struct AgentDetailToolLoopDto {
     pub ngram_cycle_length: usize,
     // error_break_threshold is intentionally absent — internal executor hint, not exposed via API
 }
+crate::register_ts_dto!(AgentDetailToolLoopDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -95,6 +102,7 @@ pub struct AgentDetailApprovalDto {
     #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
     pub timeout_seconds: u64,
 }
+crate::register_ts_dto!(AgentDetailApprovalDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -108,6 +116,7 @@ pub struct AgentDetailRoutingDto {
     #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
     pub cooldown_secs: u64,
 }
+crate::register_ts_dto!(AgentDetailRoutingDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -117,6 +126,7 @@ pub struct AgentDetailWatchdogDto {
     #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
     pub inactivity_secs: u64,
 }
+crate::register_ts_dto!(AgentDetailWatchdogDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -125,6 +135,7 @@ pub struct AgentDetailHooksDto {
     pub log_all_tool_calls: bool,
     pub block_tools: Vec<String>,
 }
+crate::register_ts_dto!(AgentDetailHooksDto);
 
 // ── Top-level DTO ───────────────────────────────────────────────────────────
 
@@ -168,6 +179,7 @@ pub struct AgentDetailDto {
     #[cfg_attr(feature = "ts-gen", ts(optional))]
     pub voice: Option<String>,
 }
+crate::register_ts_dto!(AgentDetailDto);
 
 // ── AgentInfo DTOs (GET /api/agents) ────────────────────────────────────────
 
@@ -179,6 +191,7 @@ pub struct AgentInfoToolPolicyDto {
     pub deny: Vec<String>,
     pub allow_all: bool,
 }
+crate::register_ts_dto!(AgentInfoToolPolicyDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -208,3 +221,4 @@ pub struct AgentInfoDto {
     #[cfg_attr(feature = "ts-gen", ts(optional))]
     pub pending_delete: Option<bool>,
 }
+crate::register_ts_dto!(AgentInfoDto);

@@ -32,6 +32,7 @@ pub struct CronJobDto {
     #[cfg_attr(feature = "ts-gen", ts(type = "{ allow: string[]; deny: string[] }"))]
     pub tool_policy: Option<serde_json::Value>,
 }
+crate::register_ts_dto!(CronJobDto);
 
 // ── CronRun DTO (GET /api/cron/{id}/runs, GET /api/cron/runs) ────────────────
 
@@ -52,3 +53,4 @@ pub struct CronRunDto {
     pub error: Option<String>,
     pub response_preview: Option<String>,
 }
+crate::register_ts_dto!(CronRunDto);

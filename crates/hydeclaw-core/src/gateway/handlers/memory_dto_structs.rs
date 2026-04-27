@@ -36,6 +36,7 @@ pub struct MemoryDocumentDto {
     #[cfg_attr(feature = "ts-gen", ts(optional))]
     pub scope: Option<String>,
 }
+crate::register_ts_dto!(MemoryDocumentDto);
 
 // ── MemoryStats DTO (GET /api/memory/stats) ───────────────────────────────────
 // Drift fix: handler emits `tasks` sub-object but api.ts MemoryStats did not declare it.
@@ -53,6 +54,7 @@ pub struct MemoryTaskStatsDto {
     #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
     pub failed: i64,
 }
+crate::register_ts_dto!(MemoryTaskStatsDto);
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -73,3 +75,4 @@ pub struct MemoryStatsDto {
     pub embed_dim: Option<i32>,
     pub tasks: MemoryTaskStatsDto,
 }
+crate::register_ts_dto!(MemoryStatsDto);

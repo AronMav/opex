@@ -18,3 +18,4 @@ pub struct WebhookEntryDto {
     pub webhook_type: String,
     pub event_filter: Option<Vec<String>>,
 }
+crate::register_ts_dto!(WebhookEntryDto);

@@ -24,6 +24,7 @@ pub struct GitHubRepo {
     pub repo: String,
     pub added_at: chrono::DateTime<chrono::Utc>,
 }
+crate::register_ts_dto!(GitHubRepo);
 
 pub async fn list_repos(db: &PgPool, agent_id: &str) -> Result<Vec<GitHubRepo>> {
     let rows = sqlx::query_as::<_, GitHubRepo>(

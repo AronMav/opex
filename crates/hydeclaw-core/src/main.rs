@@ -3,6 +3,7 @@ mod channels;
 mod config;
 mod containers;
 mod db;
+mod dto_export;
 mod gateway;
 mod memory;
 mod metrics;

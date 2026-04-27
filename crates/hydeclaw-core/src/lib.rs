@@ -189,9 +189,9 @@ pub mod net {
 pub mod uploads;
 
 // ── ts-gen codegen surface ─────────────────────────────────────────────
-// Exposes DTO types for the `gen_ts_types` binary (feature-gated so
-// production builds never pull in ts-rs). All included modules are leaf
-// modules with zero crate-internal imports — safe to include here without
-// cascading config/memory/etc.
-#[cfg(feature = "ts-gen")]
+// Always-on so the `register_ts_dto!` macro is reachable from DTO call sites
+// regardless of feature flags (it's a no-op when ts-gen is OFF). All ts-rs-
+// dependent re-exports inside `dto_export/mod.rs` are individually gated
+// behind `#[cfg(feature = "ts-gen")]` — production builds still don't pull
+// in ts-rs.
 pub mod dto_export;

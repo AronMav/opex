@@ -9,3 +9,4 @@ pub struct BackupEntryDto {
     pub size_bytes: u64,
     pub created_at: Option<String>,
 }
+crate::register_ts_dto!(BackupEntryDto);

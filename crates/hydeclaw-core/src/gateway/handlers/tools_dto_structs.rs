@@ -18,6 +18,7 @@ pub struct ToolEntryDto {
     pub ui_path: Option<String>,
     pub managed: bool,
 }
+crate::register_ts_dto!(ToolEntryDto);
 
 #[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
@@ -34,3 +35,4 @@ pub struct McpEntryDto {
     #[cfg_attr(feature = "ts-gen", ts(type = "number | null"))]
     pub tool_count: Option<usize>,
 }
+crate::register_ts_dto!(McpEntryDto);
