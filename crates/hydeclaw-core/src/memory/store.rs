@@ -67,24 +67,6 @@ impl MemoryStore {
         *self.fts_language.write().unwrap_or_else(std::sync::PoisonError::into_inner) = lang.to_ascii_lowercase();
     }
 
-    /// Returns the detected embedding dimension (delegates to embedder).
-    #[allow(dead_code)]
-    pub fn embed_dim(&self) -> u32 {
-        self.embedder.embed_dim()
-    }
-
-    /// Returns the configured embedding model name (delegates to embedder).
-    #[allow(dead_code)]
-    pub fn embed_model_name(&self) -> String {
-        self.embedder.embed_model_name().unwrap_or_default()
-    }
-
-    /// Returns a reference to the database pool.
-    #[allow(dead_code)]
-    pub fn db(&self) -> &PgPool {
-        &self.db
-    }
-
     /// Returns a reference to the embedder.
     pub fn embedder(&self) -> &Arc<dyn EmbeddingService> {
         &self.embedder
