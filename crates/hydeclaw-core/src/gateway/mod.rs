@@ -31,7 +31,7 @@ pub mod clusters;
 mod handlers;
 pub use error::ApiError;
 pub use state::*;
-use middleware::{AuthRateLimiter, auth_middleware, RequestRateLimiter, WsConnectionBudget, request_rate_limit_middleware, csp_report_rate_limit_middleware};
+use middleware::{AuthRateLimiter, auth_middleware, RequestRateLimiter, request_rate_limit_middleware, csp_report_rate_limit_middleware};
 // Re-export for use by main.rs
 pub use handlers::agents::start_agent_from_config;
 pub use handlers::email_triggers::renew_expiring_gmail_watches;
@@ -60,7 +60,6 @@ pub(crate) use handlers::notifications::notify;
 static SHARED_TOKEN: OnceLock<Arc<str>> = OnceLock::new();
 static AUTH_LIMITER: OnceLock<Arc<AuthRateLimiter>> = OnceLock::new();
 static REQ_LIMITER: OnceLock<Arc<RequestRateLimiter>> = OnceLock::new();
-static WS_BUDGET: OnceLock<Arc<WsConnectionBudget>> = OnceLock::new();
 static CSP_LIMITER: OnceLock<Arc<handlers::csp::CspReportRateLimiter>> = OnceLock::new();
 
 /// Phase 66 REF-06: dashboard size accessor helper. Returns a cheap
@@ -190,14 +189,11 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     // Request rate limiting (per-IP, from config limits.max_requests_per_minute)
     let max_rpm = state.config.config.limits.max_requests_per_minute;
     let _ = REQ_LIMITER.set(Arc::new(RequestRateLimiter::new(max_rpm)));
-    let _ = WS_BUDGET.set(Arc::new(WsConnectionBudget::new(32)));
     let req_limiter = REQ_LIMITER.get().cloned().expect("REQ_LIMITER just set");
-    let ws_budget = WS_BUDGET.get().cloned().expect("WS_BUDGET just set");
     let app = {
         let req_limiter = req_limiter.clone();
-        let ws_budget = ws_budget.clone();
         app.layer(axum_mw::from_fn(move |req, next| {
-            request_rate_limit_middleware(req, next, req_limiter.clone(), ws_budget.clone())
+            request_rate_limit_middleware(req, next, req_limiter.clone())
         }))
     };
 

@@ -47,43 +47,6 @@ pub async fn rate_limiter_sizes() -> (u64, u64) {
     (auth_size, req_size)
 }
 
-/// Per-IP budget for concurrent WebSocket upgrades (pre-auth).
-/// Prevents `DoS` via mass WS upgrade requests before auth is checked.
-/// NOTE: currently bypassed because the budget is released on 101 response, not on WS close.
-/// Kept for future use when proper connection-lifetime tracking is implemented.
-#[allow(dead_code)]
-pub(crate) struct WsConnectionBudget {
-    max_per_ip: u32,
-    /// IP → active connection count
-    counts: Mutex<HashMap<String, u32>>,
-}
-
-#[allow(dead_code)]
-impl WsConnectionBudget {
-    pub(crate) fn new(max_per_ip: u32) -> Self {
-        Self { max_per_ip, counts: Mutex::new(HashMap::new()) }
-    }
-
-    pub(crate) async fn acquire(&self, ip: &str) -> bool {
-        let mut counts = self.counts.lock().await;
-        let count = counts.entry(ip.to_string()).or_insert(0);
-        if *count >= self.max_per_ip {
-            return false;
-        }
-        *count += 1;
-        true
-    }
-
-    pub(crate) async fn release(&self, ip: &str) {
-        let mut counts = self.counts.lock().await;
-        if let Some(count) = counts.get_mut(ip) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                counts.remove(ip);
-            }
-        }
-    }
-}
 
 /// Phase 64 SEC-05: dedicated per-IP rate limiter for `/api/csp-report`.
 ///
@@ -131,7 +94,6 @@ pub(crate) async fn request_rate_limit_middleware(
     req: Request<Body>,
     next: Next,
     limiter: Arc<RequestRateLimiter>,
-    _ws_budget: Arc<WsConnectionBudget>,
 ) -> impl IntoResponse {
     let path = req.uri().path();
     // Exempt health from rate limiting
