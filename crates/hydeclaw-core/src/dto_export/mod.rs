@@ -30,14 +30,24 @@ pub mod github_dto;
 /// Re-exported here so gen_ts_types can import from one predictable place.
 #[cfg(feature = "ts-gen")]
 pub use crate::db::approvals::AllowlistEntry;
+#[cfg(feature = "ts-gen")]
+crate::register_ts_dto!(AllowlistEntry);
 
 /// Phase A W1: DB notification types — already in always-on db::notifications.
 #[cfg(feature = "ts-gen")]
 pub use crate::db::notifications::{Notification, NotificationsResponseDto};
+#[cfg(feature = "ts-gen")]
+crate::register_ts_dto!(Notification);
+#[cfg(feature = "ts-gen")]
+crate::register_ts_dto!(NotificationsResponseDto);
 
 /// Phase A W1: DB session + message types — already in always-on db::sessions.
 #[cfg(feature = "ts-gen")]
 pub use crate::db::sessions::{Session, MessageRow};
+#[cfg(feature = "ts-gen")]
+crate::register_ts_dto!(Session);
+#[cfg(feature = "ts-gen")]
+crate::register_ts_dto!(MessageRow);
 
 /// Phase A W2: Channel row + active channel DTOs — leaf file, no crate::* imports.
 #[cfg(feature = "ts-gen")]
