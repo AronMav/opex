@@ -8,6 +8,9 @@
 //! `#[path]` attributes resolve relative to this file's directory (src/dto_export/),
 //! so `../gateway/...` navigates into the sibling gateway/ directory under src/.
 
+/// Distributed TypeScript export registry — used by gen_ts_types.
+pub mod registry;
+
 /// Phase B: AgentDetail DTO tree (12 structs).
 #[path = "../gateway/handlers/agents/dto_structs.rs"]
 pub mod agents_dto;
