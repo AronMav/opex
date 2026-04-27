@@ -25,21 +25,22 @@
 //! `application/reports+json` batch format is not yet accepted here.
 
 use std::net::IpAddr;
-use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use axum::http::StatusCode;
+use serde::Deserialize;
+
+use crate::metrics::MetricsRegistry;
+
+#[cfg(test)]
 use axum::{
     Router,
     body::Bytes,
     extract::{DefaultBodyLimit, State},
-    http::StatusCode,
     response::IntoResponse,
     routing::post,
 };
-use serde::Deserialize;
-
-use crate::metrics::MetricsRegistry;
 
 /// Route-level body-size cap: 64 KiB. Real CSP reports are <4 KiB; anything
 /// bigger is an abuse signal and returns 413 Payload Too Large via Axum's
@@ -145,9 +146,8 @@ pub fn api_csp_report_bytes_handler(
 /// — those are exercised in dedicated tests. The body-size cap IS applied
 /// (it lives on the route layer).
 ///
-/// Consumed only by `tests/integration_csp_report.rs`, so the lib itself
-/// never calls it.
-#[allow(dead_code)]
+/// Consumed only by `tests/integration_csp_report.rs` (re-exported via lib.rs).
+#[cfg(test)]
 pub fn routes_for_test(metrics: Arc<MetricsRegistry>) -> Router {
     Router::new()
         .route("/api/csp-report", post(api_csp_report_test))
@@ -157,7 +157,7 @@ pub fn routes_for_test(metrics: Arc<MetricsRegistry>) -> Router {
 
 /// Test-facing axum handler — extracts a bare `Arc<MetricsRegistry>` from
 /// state for `routes_for_test`. Accepts any content-type (matches production).
-#[allow(dead_code)]
+#[cfg(test)]
 async fn api_csp_report_test(
     State(metrics): State<Arc<MetricsRegistry>>,
     body: Bytes,
