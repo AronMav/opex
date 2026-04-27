@@ -383,7 +383,7 @@ async fn main() -> Result<()> {
     // Auto-detect FTS language from first agent's language (if not explicitly configured)
     if cfg.memory.fts_language.is_none()
         && let Some(first) = agent_configs.first() {
-            let detected = memory::MemoryAdmin::detect_fts_language(&first.agent.language);
+            let detected = memory::admin::detect_fts_language(&first.agent.language);
             tracing::info!(
                 agent = %first.agent.name,
                 agent_lang = %first.agent.language,

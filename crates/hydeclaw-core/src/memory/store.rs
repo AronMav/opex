@@ -53,13 +53,9 @@ impl MemoryStore {
 
     /// Returns the FTS language after validating it is safe for SQL interpolation.
     /// regconfig cannot be parameterized, so we must validate before format!().
+    /// Delegates to `crate::memory::admin::validated_fts_language` for the rule.
     pub fn validated_fts_language(&self) -> anyhow::Result<String> {
-        let lang = self.fts_language();
-        anyhow::ensure!(
-            !lang.is_empty() && lang.chars().all(|c| c.is_ascii_lowercase()),
-            "invalid FTS language: {lang}"
-        );
-        Ok(lang)
+        crate::memory::admin::validated_fts_language(&self.fts_language())
     }
 
     /// Update the FTS language at runtime (normalizes to lowercase).
