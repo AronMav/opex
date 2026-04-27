@@ -1139,8 +1139,14 @@ fn broadcast_session_event(
     tx.send(event.to_string()).ok();
 }
 
-/// Decay `relevance_score` for raw (non-pinned) memory chunks.
+/// Decay `relevance_score` for raw (non-pinned) PRIVATE memory chunks.
 /// `half_life` = 30 days. Deletes chunks with score < 0.05.
+///
+/// Excludes `scope = 'shared'`: those chunks are file-backed (workspace
+/// reindex / watcher) and represent persistent knowledge whose source
+/// outlives any access pattern. Decaying + deleting them silently breaks
+/// search for workspace files that haven't been touched in ~130 days,
+/// even though the source files still exist on disk.
 async fn run_memory_decay(db: &PgPool) -> Result<(u64, u64)> {
     // Exponential decay: score *= exp(-0.693 / 30 * days_since_access)
     let decay_result = sqlx::query(
@@ -1148,16 +1154,17 @@ async fn run_memory_decay(db: &PgPool) -> Result<(u64, u64)> {
          SET relevance_score = relevance_score * exp(-0.693 / 30.0 * \
              EXTRACT(EPOCH FROM (now() - accessed_at)) / 86400.0) \
          WHERE pinned = false \
+           AND scope != 'shared' \
            AND accessed_at < now() - interval '1 day'",
     )
     .execute(db)
     .await?;
     let decayed = decay_result.rows_affected();
 
-    // Delete chunks with very low scores
+    // Delete chunks with very low scores (private only — see fn doc).
     let delete_result = sqlx::query(
         "DELETE FROM memory_chunks \
-         WHERE pinned = false AND relevance_score < 0.05",
+         WHERE pinned = false AND scope != 'shared' AND relevance_score < 0.05",
     )
     .execute(db)
     .await?;
