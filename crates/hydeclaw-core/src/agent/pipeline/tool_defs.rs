@@ -10,43 +10,39 @@ use crate::config::ToolGroups;
 // ── Static catalogue ────────────────────────────────────────────────────
 
 /// All system (internal) tool names — single source of truth.
+///
+/// Derived at runtime from `build_internal_tool_definitions()` called with
+/// maximal context. Cached once via `OnceLock` so subsequent calls are O(1).
+///
 /// Used by the API to populate tool policy UI without needing an engine instance.
-/// Keep in sync with `build_internal_tool_definitions()` below.
 ///
 /// Related: [`crate::agent::pipeline::dispatch::SYSTEM_TOOL_NAMES`] is a
-/// **subset** of this list — only tools `filter_tools_by_policy` admits
-/// unconditionally. It excludes `memory` and the `tool_*` family because
-/// those go through dedicated gates (`memory_available`, `tool_management`
-/// group). For "is X a known tool?" questions always use this function.
+/// **different** list — only tools `filter_tools_by_policy` admits unconditionally
+/// (after the deny check). It is hand-maintained because the "policy passes
+/// through" semantic does not derive from `build_internal_tool_definitions`
+/// with any context. For "is X a known tool?" questions always use this function.
 pub fn all_system_tool_names() -> &'static [&'static str] {
-    &[
-        // Core workspace
-        "workspace_write", "workspace_read", "workspace_list", "workspace_edit",
-        "workspace_delete", "workspace_rename",
-        // Agent management
-        "agent",
-        // Communication
-        "web_fetch", "message",
-        // Memory
-        "memory",
-        // Scheduling
-        "cron",
-        // Tool management (group: tool_management)
-        "tool_create", "tool_list", "tool_test", "tool_verify", "tool_disable", "tool_discover",
-        // Skills (group: skill_editing)
-        "skill",
-        // Skill usage (on-demand loading)
-        "skill_use",
-        // Git (group: git)
-        "git",
-        // Sessions (group: session_tools)
-        "session",
-        // Misc
-        "agents_list", "secret_set", "canvas", "rich_card",
-        "browser_action", "code_exec",
-        // Process management (base)
-        "process",
-    ]
+    static ALL_NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    ALL_NAMES.get_or_init(|| {
+        static MAX_GROUPS: ToolGroups = ToolGroups {
+            git: true,
+            tool_management: true,
+            skill_editing: true,
+            session_tools: true,
+        };
+        let ctx = ToolDefsContext {
+            is_base: true,
+            groups: &MAX_GROUPS,
+            default_timezone: "UTC",
+            has_sandbox: true,
+            browser_renderer_url: "",
+        };
+        build_internal_tool_definitions(&ctx)
+            .into_iter()
+            .map(|d| Box::leak(d.name.into_boxed_str()) as &'static str)
+            .collect()
+    })
+    .as_slice()
 }
 
 // ── Context for building tool definitions ───────────────────────────────
