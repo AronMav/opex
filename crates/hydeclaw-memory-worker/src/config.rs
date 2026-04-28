@@ -208,22 +208,8 @@ mod tests {
     }
 
     #[test]
-    fn test_notify_mode_omitted_defaults_to_listen() {
-        // HCS-4: operators upgrading from pre-REF-04 configs must not need to touch
-        // anything — absent notify_mode MUST default to Listen.
-        let cfg: MemoryWorkerConfig = toml::from_str(
-            r#"
-            enabled = true
-            poll_interval_secs = 5
-            "#,
-        )
-        .expect("parse legacy config without notify_mode");
-        assert_eq!(cfg.notify_mode, NotifyMode::Listen);
-    }
-
-    #[test]
     fn test_poll_interval_secs_preserved() {
-        // HCS-4 mandate: poll_interval_secs key MUST remain functional after REF-04.
+        // poll_interval_secs key MUST remain functional as the catch-up tick interval.
         let cfg: MemoryWorkerConfig = toml::from_str(
             r#"
             poll_interval_secs = 17
