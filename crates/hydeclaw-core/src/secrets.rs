@@ -417,6 +417,107 @@ impl SecretsManager {
 mod tests {
     use super::*;
 
+    // ── Key validation helpers ──────────────────────────────────────────────
+
+    fn lazy_pool() -> PgPool {
+        PgPool::connect_lazy("postgres://invalid").expect("lazy pool never connects")
+    }
+
+    // ── new() hex validation ────────────────────────────────────────────────
+    // PgPool::connect_lazy() requires a tokio context even though it never
+    // actually connects, so all new() tests use #[tokio::test].
+
+    #[tokio::test]
+    async fn new_rejects_master_key_too_short() {
+        let short_key = "a".repeat(62); // 62 hex chars → 31 bytes
+        let result = SecretsManager::new(&short_key, lazy_pool());
+        assert!(result.is_err(), "expected Err for 62-char hex key");
+        let msg = result.err().unwrap().to_string();
+        // Should mention either the byte count or the word "bytes"
+        assert!(
+            msg.contains("32") || msg.contains("bytes") || msg.contains("hex"),
+            "error message should describe the key length constraint, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_rejects_master_key_too_long() {
+        let long_key = "a".repeat(66); // 66 hex chars → 33 bytes
+        let result = SecretsManager::new(&long_key, lazy_pool());
+        assert!(result.is_err(), "expected Err for 66-char hex key");
+    }
+
+    #[tokio::test]
+    async fn new_rejects_non_hex_master_key() {
+        let non_hex = "g".repeat(64); // 'g' is not a valid hex character
+        let result = SecretsManager::new(&non_hex, lazy_pool());
+        assert!(result.is_err(), "expected Err for non-hex key");
+        let msg = result.err().unwrap().to_string();
+        assert!(
+            msg.contains("hex") || msg.contains("invalid"),
+            "error should mention hex decoding failure, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn new_rejects_empty_key() {
+        let result = SecretsManager::new("", lazy_pool());
+        assert!(result.is_err(), "expected Err for empty key");
+    }
+
+    #[tokio::test]
+    async fn new_accepts_valid_64_char_hex_key() {
+        // All-lowercase 'a' repeated 64 times = valid 32-byte hex key.
+        // new() is synchronous and uses a lazy pool — no DB connection attempted.
+        let valid_key = "a".repeat(64);
+        let result = SecretsManager::new(&valid_key, lazy_pool());
+        assert!(result.is_ok(), "expected Ok for valid 64-char hex key, got: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn new_accepts_mixed_case_hex_key() {
+        // hex crate accepts both upper- and lower-case hex digits.
+        // 4 × "aAbBcCdDeEfF0123" = 64 chars = 32 bytes exactly.
+        let mixed = "aAbBcCdDeEfF0123".repeat(4);
+        let result = SecretsManager::new(&mixed, lazy_pool());
+        assert!(result.is_ok(), "expected Ok for mixed-case 64-char hex key, got: {:?}", result.err());
+    }
+
+    // ── In-memory cache reads ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn cache_get_returns_none_for_missing_key() {
+        let mgr = SecretsManager::new_noop();
+        // No env var should exist for this nonsense name.
+        let result = mgr.get("__hydeclaw_nonexistent_key_xyzzy__").await;
+        assert_eq!(result, None, "expected None for key that was never inserted");
+    }
+
+    #[tokio::test]
+    async fn cache_get_scoped_returns_none_for_missing_scoped_key() {
+        let mgr = SecretsManager::new_noop();
+        let result = mgr.get_scoped("__missing__", "SomeAgent").await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn cache_get_strict_returns_none_for_missing_key() {
+        let mgr = SecretsManager::new_noop();
+        let result = mgr.get_strict("__missing__").await;
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn export_decrypted_returns_empty_when_cache_empty() {
+        let mgr = SecretsManager::new_noop();
+        let exported = mgr.export_decrypted().await;
+        assert!(exported.is_ok(), "export_decrypted should not error on empty cache");
+        assert!(
+            exported.unwrap().is_empty(),
+            "export_decrypted should return empty vec when cache has no entries"
+        );
+    }
+
     /// Phase 64 SEC-03: master_key_bytes retention + HKDF accessor contract.
     ///
     ///  * Same master key must produce the same derived upload HMAC key
