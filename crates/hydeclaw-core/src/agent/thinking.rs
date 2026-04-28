@@ -507,7 +507,7 @@ mod tests {
         let long_output = "x".repeat(5000);
         let msgs = vec![tool_msg(&long_output)];
         let result = extract_result_text("", &msgs);
-        let preview_part = result.splitn(2, '\n').nth(1).unwrap_or("");
+        let preview_part = result.split_once('\n').map(|x| x.1).unwrap_or("");
         assert_eq!(
             preview_part.chars().count(),
             3000,
