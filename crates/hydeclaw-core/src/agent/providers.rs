@@ -27,11 +27,10 @@ mod claude_cli_impl;
 use claude_cli_impl::ClaudeCliProvider;
 
 pub mod timeouts;
-#[allow(unused_imports)] // first consumer arrives in Task 2 (ProviderOptions)
 pub use timeouts::TimeoutsConfig;
 
 pub mod error;
-#[allow(unused_imports)] // first consumer arrives in Task 12 (build_provider)
+#[allow(unused_imports)]
 pub use error::{LlmCallError, CancelReason, classify_reqwest_err};
 
 #[cfg(test)]
@@ -41,7 +40,7 @@ mod routing_tests;
 mod build_provider_tests;
 
 pub mod cancellable_stream;
-#[allow(unused_imports)] // first consumer arrives in Task 9 (stream_with_cancellation)
+#[allow(unused_imports)]
 pub use cancellable_stream::{CancelSlot, set_and_cancel};
 
 // ── UnconfiguredProvider sentinel ─────────────────────────────────────────────

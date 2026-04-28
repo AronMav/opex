@@ -14,12 +14,9 @@ import { useShallow } from "zustand/react/shallow";
 
 import { useChatStore } from "./chat-store";
 import type {
-  AgentState,
   ChatMessage,
   ChatState,
   ChatStore,
-  ConnectionPhase,
-  MessageSource,
 } from "./chat-types";
 import { getLiveMessages } from "./chat-types";
 import { getCachedHistoryMessages } from "./chat-history";
@@ -45,9 +42,6 @@ export const selectCurrentAgent = (s: ChatStoreState): string => s.currentAgent;
  * subscription, but callers that only read a subset SHOULD use the narrower
  * selectors below to avoid unnecessary re-renders.
  */
-export const selectAgentState = (agent: string) =>
-  (s: ChatStoreState): AgentState | undefined => s.agents[agent];
-
 /** Active session id for a given agent (null if none). */
 export const selectActiveSessionId = (agent: string) =>
   (s: ChatStoreState): string | null => s.agents[agent]?.activeSessionId ?? null;
@@ -56,13 +50,6 @@ export const selectActiveSessionId = (agent: string) =>
 export const selectCurrentActiveSessionId = (s: ChatStoreState): string | null =>
   s.agents[s.currentAgent]?.activeSessionId ?? null;
 
-/** Connection phase FSM value. */
-export const selectConnectionPhase = (agent: string) =>
-  (s: ChatStoreState): ConnectionPhase | undefined => s.agents[agent]?.connectionPhase;
-
-/** Message source discriminated union for an agent. */
-export const selectMessageSource = (agent: string) =>
-  (s: ChatStoreState): MessageSource | undefined => s.agents[agent]?.messageSource;
 
 /** Branch selection map (stable reference when empty). */
 export const selectSelectedBranches = (agent: string) =>

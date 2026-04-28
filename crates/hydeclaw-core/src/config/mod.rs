@@ -488,7 +488,7 @@ pub struct ProviderRouteConfig {
 }
 
 impl ProviderRouteConfig {
-    #[allow(dead_code)] // consumed by Task 18 routing loader; also exercised by tests below
+    #[allow(dead_code)]
     pub fn validate(&self) -> Result<(), String> {
         if self.cooldown_secs == 0 {
             return Err("cooldown_secs must be >= 1".into());
