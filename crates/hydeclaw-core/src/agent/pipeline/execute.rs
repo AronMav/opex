@@ -952,4 +952,114 @@ mod tests {
         assert!(msg.contains("repeating pattern"));
         assert!(msg.contains("LOOP DETECTED"));
     }
+
+    // ── extract_tool_result_events tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn tool_result_plain_text_passes_through() {
+        let mut sink = MockSink::new();
+        let parts = extract_tool_result_events("hello world", &mut sink).await;
+        assert_eq!(parts.display_result, "hello world");
+        assert_eq!(parts.db_result, "hello world");
+        // Plain text: no special events emitted
+        assert!(sink.events.is_empty(), "expected no events for plain text, got: {:?}", sink.events);
+    }
+
+    #[tokio::test]
+    async fn tool_result_rich_card_emits_event_and_sets_display() {
+        let mut sink = MockSink::new();
+        let payload = r#"__rich_card__:{"card_type":"table","data":[]}"#;
+        let parts = extract_tool_result_events(payload, &mut sink).await;
+        assert_eq!(parts.display_result, "Rich card displayed");
+        assert_eq!(parts.db_result, payload);
+        // A RichCard event must have been emitted
+        let rich_card_events: Vec<_> = sink.events.iter().filter(|e| {
+            matches!(e, PipelineEvent::Stream(StreamEvent::RichCard { .. }))
+        }).collect();
+        assert!(
+            !rich_card_events.is_empty(),
+            "expected a RichCard event, got: {:?}",
+            sink.events
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_result_invalid_rich_card_json_no_event() {
+        let mut sink = MockSink::new();
+        let payload = "__rich_card__:not-valid-json";
+        let parts = extract_tool_result_events(payload, &mut sink).await;
+        // Invalid JSON: no RichCard event emitted, db_result preserved verbatim
+        assert_eq!(parts.db_result, payload);
+        let rich_card_events: Vec<_> = sink.events.iter().filter(|e| {
+            matches!(e, PipelineEvent::Stream(StreamEvent::RichCard { .. }))
+        }).collect();
+        assert!(
+            rich_card_events.is_empty(),
+            "expected no RichCard event for invalid JSON, got: {:?}",
+            sink.events
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_result_file_strips_file_lines_from_display() {
+        let mut sink = MockSink::new();
+        let file_json = r#"{"url":"/uploads/test.png","mediaType":"image/png"}"#;
+        let payload = format!("Some text\n__file__:{}\nMore text", file_json);
+        let parts = extract_tool_result_events(&payload, &mut sink).await;
+        // Display should contain surrounding text but not the __file__ line
+        assert!(
+            parts.display_result.contains("Some text"),
+            "display_result missing 'Some text': {:?}",
+            parts.display_result
+        );
+        assert!(
+            parts.display_result.contains("More text"),
+            "display_result missing 'More text': {:?}",
+            parts.display_result
+        );
+        assert!(
+            !parts.display_result.contains("__file__"),
+            "display_result must not contain __file__ marker: {:?}",
+            parts.display_result
+        );
+        // DB result must preserve the full original payload
+        assert!(
+            parts.db_result.contains("__file__"),
+            "db_result must preserve __file__ marker: {:?}",
+            parts.db_result
+        );
+        // A File event must have been emitted
+        let file_events: Vec<_> = sink.events.iter().filter(|e| {
+            matches!(e, PipelineEvent::Stream(StreamEvent::File { .. }))
+        }).collect();
+        assert!(
+            !file_events.is_empty(),
+            "expected a File event, got: {:?}",
+            sink.events
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_result_file_only_shows_image_message() {
+        let mut sink = MockSink::new();
+        let file_json = r#"{"url":"/uploads/img.jpg","mediaType":"image/jpeg"}"#;
+        let payload = format!("__file__:{}", file_json);
+        let parts = extract_tool_result_events(&payload, &mut sink).await;
+        // When only a __file__ line is present (no surrounding text), display gets the fallback message
+        assert!(
+            parts.display_result.contains("Image displayed inline"),
+            "expected 'Image displayed inline' fallback, got: {:?}",
+            parts.display_result
+        );
+        assert_eq!(parts.db_result, payload);
+        // A File event must have been emitted
+        let file_events: Vec<_> = sink.events.iter().filter(|e| {
+            matches!(e, PipelineEvent::Stream(StreamEvent::File { .. }))
+        }).collect();
+        assert!(
+            !file_events.is_empty(),
+            "expected a File event, got: {:?}",
+            sink.events
+        );
+    }
 }
