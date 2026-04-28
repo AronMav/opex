@@ -27,41 +27,6 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    #[allow(dead_code)] // kept for call-sites that will migrate in Tasks 13-16
-    pub fn new(model: String, temperature: f64, max_tokens: Option<u32>, secrets: Arc<SecretsManager>) -> Self {
-        Self::with_options(model, temperature, max_tokens, secrets, None, None, false, None)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_options(
-        model: String,
-        temperature: f64,
-        max_tokens: Option<u32>,
-        secrets: Arc<SecretsManager>,
-        base_url: Option<String>,
-        api_key_env: Option<String>,
-        prompt_cache: bool,
-        timeout_secs: Option<u64>,
-    ) -> Self {
-        let (client, streaming_client) = super::build_provider_clients_legacy_secs(timeout_secs);
-        Self {
-            client,
-            streaming_client,
-            base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
-            api_key_name: api_key_env.unwrap_or_else(|| "ANTHROPIC_API_KEY".to_string()),
-            credential_scope: None,
-            secrets,
-            model: ModelOverride::new(model),
-            temperature,
-            max_tokens,
-            prompt_cache,
-            // Legacy `with_options` (test fixtures / fallback) gets defaults.
-            // Real runtime wiring flows through `new_from_row` + `build_provider`.
-            timeouts: super::TimeoutsConfig::default(),
-            cancel: tokio_util::sync::CancellationToken::new(),
-        }
-    }
-
     /// Build an `AnthropicProvider` from a `ProviderRow`, storing the shared
     /// `cancel` token + typed `timeouts` so `chat_stream` can thread them into
     /// `stream_with_cancellation`.
@@ -73,7 +38,6 @@ impl AnthropicProvider {
     /// prompt_cache. Resolution order: override → row/opts default → hardcoded
     /// last-resort. `prompt_cache` reads `ProviderOptions.prompt_cache` when
     /// the override is `None`.
-    #[allow(dead_code)] // consumed by super::build_provider
     pub(crate) fn new_from_row(
         row: &crate::db::providers::ProviderRow,
         secrets: Arc<SecretsManager>,
@@ -119,12 +83,38 @@ impl AnthropicProvider {
 
     /// Set vault credential scope (provider UUID) for `LLM_CREDENTIALS` lookup.
     ///
-    /// Now only used by the legacy `with_options` fixture path; `new_from_row`
-    /// builds the struct literally. Kept as a stable fluent API.
+    /// `new_from_row` builds the scope literally from the row UUID.
+    /// Kept as a stable fluent API for external consumers.
     #[allow(dead_code)]
     pub fn with_credential_scope(mut self, scope: String) -> Self {
         self.credential_scope = Some(scope);
         self
+    }
+
+    /// Minimal constructor for unit tests only — avoids depending on the
+    /// deleted `new()` / `with_options()` paths. Not compiled in production.
+    #[cfg(test)]
+    pub(super) fn for_tests(
+        model: String,
+        temperature: f64,
+        max_tokens: Option<u32>,
+        secrets: Arc<SecretsManager>,
+    ) -> Self {
+        let (client, streaming_client) = super::build_provider_clients(&super::TimeoutsConfig::default());
+        Self {
+            client,
+            streaming_client,
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key_name: "ANTHROPIC_API_KEY".to_string(),
+            credential_scope: None,
+            secrets,
+            model: ModelOverride::new(model),
+            temperature,
+            max_tokens,
+            prompt_cache: false,
+            timeouts: super::TimeoutsConfig::default(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        }
     }
 
     async fn resolve_api_key(&self) -> Option<String> {
@@ -634,7 +624,7 @@ mod tests {
 
         // Build using a minimal provider (no actual API call needed)
         let secrets = Arc::new(SecretsManager::new_noop());
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicProvider::for_tests(
             "claude-opus-4-6".to_string(),
             1.0,
             Some(1024),
@@ -675,7 +665,7 @@ mod tests {
         let messages = vec![msg];
 
         let secrets = Arc::new(SecretsManager::new_noop());
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicProvider::for_tests(
             "claude-opus-4-6".to_string(),
             1.0,
             Some(1024),

@@ -26,38 +26,6 @@ pub struct GoogleProvider {
 }
 
 impl GoogleProvider {
-    #[allow(dead_code)] // kept for call-sites that will migrate in Tasks 13-16
-    pub fn new(model: String, temperature: f64, max_tokens: Option<u32>, secrets: Arc<SecretsManager>) -> Self {
-        Self::with_options(model, temperature, max_tokens, secrets, None, None, None)
-    }
-
-    pub fn with_options(
-        model: String,
-        temperature: f64,
-        max_tokens: Option<u32>,
-        secrets: Arc<SecretsManager>,
-        base_url: Option<String>,
-        api_key_env: Option<String>,
-        timeout_secs: Option<u64>,
-    ) -> Self {
-        let (client, streaming_client) = super::build_provider_clients_legacy_secs(timeout_secs);
-        Self {
-            client,
-            streaming_client,
-            base_url: base_url.unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string()),
-            api_key_name: api_key_env.unwrap_or_else(|| "GOOGLE_API_KEY".to_string()),
-            credential_scope: None,
-            secrets,
-            model: ModelOverride::new(model),
-            temperature,
-            max_tokens,
-            // Legacy `with_options` (test fixtures / fallback) gets defaults.
-            // Real runtime wiring flows through `new_from_row` + `build_provider`.
-            timeouts: super::TimeoutsConfig::default(),
-            cancel: tokio_util::sync::CancellationToken::new(),
-        }
-    }
-
     /// Build a `GoogleProvider` from a `ProviderRow`, storing the shared
     /// `cancel` token + typed `timeouts` so `chat_stream` can thread them into
     /// `stream_with_cancellation`.
@@ -67,7 +35,6 @@ impl GoogleProvider {
     ///
     /// `overrides` supplies agent/route-level temperature, max_tokens, model.
     /// Resolution order: override → row default → hardcoded last-resort.
-    #[allow(dead_code)] // consumed by super::build_provider
     pub(crate) fn new_from_row(
         row: &crate::db::providers::ProviderRow,
         secrets: Arc<SecretsManager>,
@@ -111,8 +78,8 @@ impl GoogleProvider {
 
     /// Set vault credential scope (provider UUID) for `LLM_CREDENTIALS` lookup.
     ///
-    /// Now only used by the legacy `with_options` fixture path; `new_from_row`
-    /// builds the struct literally. Kept as a stable fluent API.
+    /// `new_from_row` builds the scope literally from the row UUID.
+    /// Kept as a stable fluent API for external consumers.
     #[allow(dead_code)]
     pub fn with_credential_scope(mut self, scope: String) -> Self {
         self.credential_scope = Some(scope);

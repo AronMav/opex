@@ -390,100 +390,11 @@ pub fn resolve_chat_url(provider_type: &str, base_url: &str) -> String {
 }
 
 /// Default base URL for a provider type (from `PROVIDER_TYPES`).
+#[allow(dead_code)]
 pub fn default_base_url_for_type(provider_type: &str) -> &'static str {
     PROVIDER_TYPES.iter()
         .find(|pt| pt.id == provider_type)
         .map_or("", |pt| pt.default_base_url)
-}
-
-/// Migrate legacy agents (using `provider` field) to named connections (using `provider_connection`).
-/// Runs once at startup. Idempotent — skips agents that already have `provider_connection`.
-pub async fn migrate_legacy_providers(
-    db: &sqlx::PgPool,
-    agent_configs: &mut [crate::config::AgentConfig],
-) {
-    for agent_cfg in agent_configs.iter_mut() {
-        // Skip if already migrated
-        if agent_cfg.agent.provider_connection.as_ref().is_some_and(|c| !c.is_empty()) {
-            continue;
-        }
-
-        // Skip if no legacy provider set
-        if agent_cfg.agent.provider.is_empty() {
-            continue;
-        }
-
-        let provider_name = format!("{}-default", agent_cfg.agent.provider);
-        let agent_name = agent_cfg.agent.name.clone();
-
-        // Check if provider already exists in DB
-        match crate::db::providers::get_provider_by_name(db, &provider_name).await {
-            Ok(Some(_)) => {
-                // Provider already exists, just link the agent
-            }
-            Ok(None) => {
-                // Create the provider
-                let input = crate::db::providers::CreateProvider {
-                    name: provider_name.clone(),
-                    category: "llm".to_string(),
-                    provider_type: agent_cfg.agent.provider.clone(),
-                    base_url: {
-                        let base = default_base_url_for_type(&agent_cfg.agent.provider);
-                        if base.is_empty() { None } else { Some(base.to_string()) }
-                    },
-                    default_model: Some(agent_cfg.agent.model.clone()),
-                    enabled: None,
-                    options: None,
-                    notes: Some(format!("Auto-migrated from legacy provider '{}'", agent_cfg.agent.provider)),
-                };
-                match crate::db::providers::create_provider(db, input).await {
-                    Ok(row) => {
-                        tracing::info!(
-                            agent = %agent_name,
-                            provider = %provider_name,
-                            model = ?row.default_model,
-                            "created LLM provider from legacy config"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            agent = %agent_name,
-                            provider = %provider_name,
-                            error = %e,
-                            "failed to create LLM provider during migration"
-                        );
-                        continue;
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!(agent = %agent_name, error = %e, "DB error during provider migration");
-                continue;
-            }
-        }
-
-        // Update agent config
-        agent_cfg.agent.provider_connection = Some(provider_name.clone());
-
-        // Save updated TOML
-        let path = format!("config/agents/{agent_name}.toml");
-        match agent_cfg.to_toml() {
-            Ok(toml_str) => {
-                if let Err(e) = std::fs::write(&path, &toml_str) {
-                    tracing::error!(agent = %agent_name, error = %e, "failed to save migrated agent TOML");
-                } else {
-                    tracing::info!(
-                        agent = %agent_name,
-                        provider_connection = %provider_name,
-                        "migrated agent to named provider connection"
-                    );
-                }
-            }
-            Err(e) => {
-                tracing::error!(agent = %agent_name, error = %e, "failed to serialize migrated agent config");
-            }
-        }
-    }
 }
 
 // ── Named connection provider types ───────────────────────────────────────────
@@ -850,28 +761,6 @@ pub(crate) async fn resolve_credential(
     None
 }
 
-/// Build HTTP clients (request + streaming) with configurable timeout (legacy).
-/// `None` → 120s default, `Some(0)` → no timeout, `Some(n)` → n seconds.
-/// Streaming client never has a request timeout (only `connect_timeout`) — chunks arrive over time.
-///
-/// Kept as an internal helper for the existing `new`/`with_options` constructors
-/// which still take `Option<u64>`. Tasks 13-16 migrate each provider's constructor
-/// to `TimeoutsConfig` natively — this helper is removed at that point.
-pub(crate) fn build_provider_clients_legacy_secs(timeout_secs: Option<u64>) -> (reqwest::Client, reqwest::Client) {
-    let timeout = timeout_secs.unwrap_or(120);
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10));
-    if timeout > 0 {
-        builder = builder.timeout(std::time::Duration::from_secs(timeout));
-    }
-    let client = builder.build().unwrap_or_default();
-    let streaming_client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap_or_default();
-    (client, streaming_client)
-}
-
 /// Build request + streaming HTTP clients from the timeout config.
 /// Request client has both `connect_timeout` and `request_timeout`.
 /// Streaming client has only `connect_timeout` — request body is governed by
@@ -1013,12 +902,12 @@ pub async fn build_cli_provider(
 }
 
 /// Resolve LLM provider for an agent from a named connection in the DB.
-/// The agent MUST have `provider_connection` set (auto-migrated at startup).
+/// The agent MUST have `provider_connection` set.
 ///
 /// Returns a sentinel "unconfigured" provider if no usable connection is found.
 /// Post-Task 12: no more free-form `provider`-field fallback path — that was the
-/// job of the removed `create_provider` function; the legacy migration runs
-/// before `resolve_provider_for_agent` (see `migrate_legacy_providers`).
+/// job of the removed `create_provider` function. Agents without a valid
+/// `provider_connection` get an `UnconfiguredProvider` sentinel.
 #[allow(clippy::too_many_arguments)]
 pub async fn resolve_provider_for_agent(
     db: &sqlx::PgPool,
@@ -1064,11 +953,9 @@ pub async fn resolve_provider_for_agent(
     }
 
     tracing::error!(agent = %agent_name, "no usable LLM provider configured; calls will fail");
-    let _ = (temperature, max_tokens); // sentinel path; values are consumed
-                                       // on the happy path via resolve_provider_from_row.
-    Arc::new(OpenAiCompatibleProvider::new(
-        "unconfigured", "http://invalid", "", agent.model.clone(), 0.0, None, secrets, None,
-    ))
+    let _ = (temperature, max_tokens, secrets); // sentinel path; values are consumed
+                                                // on the happy path via resolve_provider_from_row.
+    Arc::new(UnconfiguredProvider::new("no usable LLM provider configured for agent"))
 }
 
 /// Internal dispatch: build a provider from a DB row, applying per-agent model
@@ -1108,9 +995,7 @@ async fn resolve_provider_from_row(
                 Ok(p) => p,
                 Err(e) => {
                     tracing::error!(agent = %agent_name, error = %e, "failed to build CLI provider");
-                    Box::new(OpenAiCompatibleProvider::new(
-                        &row.provider_type, "http://invalid", "", row.default_model.clone().unwrap_or_default(), 0.0, None, secrets, None,
-                    ))
+                    Box::new(UnconfiguredProvider::new(format!("CLI provider build failed: {e}")))
                 }
             }
         }
@@ -1125,9 +1010,7 @@ async fn resolve_provider_from_row(
                 Ok(p) => p,
                 Err(e) => {
                     tracing::error!(provider = %row.name, error = %e, "failed to build provider");
-                    Box::new(OpenAiCompatibleProvider::new(
-                        &row.provider_type, "http://invalid", "", row.default_model.clone().unwrap_or_default(), 0.0, None, secrets, None,
-                    ))
+                    Box::new(UnconfiguredProvider::new(format!("HTTP provider build failed: {e}")))
                 }
             }
         }

@@ -432,11 +432,6 @@ async fn main() -> Result<()> {
     }
     tracing::info!(agents = agent_configs.len(), "agent configs loaded");
 
-    // Migrate legacy providers → named connections (one-time, idempotent).
-    // This mutates both the DB (inserts provider rows) AND the in-memory +
-    // on-disk agent TOMLs (sets `provider_connection`).
-    crate::agent::providers::migrate_legacy_providers(&db_pool, &mut agent_configs).await;
-
     // Migrate legacy inline-routing TOMLs → `connection = "<name>"` references
     // (Tasks 20 + 21 — atomic write, backup, per-agent marker, crash recovery).
     // Runs once at startup after DB migrations and before agent engines spawn.

@@ -36,40 +36,6 @@ pub struct OpenAiCompatibleProvider {
 }
 
 impl OpenAiCompatibleProvider {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        provider_name: &str,
-        url: &str,
-        api_key_name: &str,
-        model: String,
-        temperature: f64,
-        max_tokens: Option<u32>,
-        secrets: Arc<SecretsManager>,
-        timeout_secs: Option<u64>,
-    ) -> Self {
-        let (client, streaming_client) = super::build_provider_clients_legacy_secs(timeout_secs);
-        Self {
-            provider_name: provider_name.to_string(),
-            client,
-            streaming_client,
-            url: url.to_string(),
-            base_url_env: None,
-            url_suffix: String::new(),
-            api_key_name: api_key_name.to_string(),
-            api_key_names: Vec::new(),
-            key_counter: std::sync::atomic::AtomicUsize::new(0),
-            credential_scope: None,
-            secrets,
-            model: ModelOverride::new(model),
-            temperature,
-            max_tokens,
-            // Legacy constructors (fallback / CLI build-failure paths) get defaults.
-            // Real runtime wiring flows through `new_from_row` + `build_provider`.
-            timeouts: super::TimeoutsConfig::default(),
-            cancel: tokio_util::sync::CancellationToken::new(),
-        }
-    }
-
     /// Build an `OpenAiCompatibleProvider` from a `ProviderRow`, storing the
     /// shared `cancel` token + typed `timeouts` so `chat_stream` can thread
     /// them into `stream_with_cancellation`.
@@ -80,7 +46,6 @@ impl OpenAiCompatibleProvider {
     ///
     /// `overrides` supplies agent/route-level temperature, max_tokens, model.
     /// Resolution order: override → row default → hardcoded last-resort.
-    #[allow(dead_code)] // consumed by super::build_provider
     pub(crate) fn new_from_row(
         row: &crate::db::providers::ProviderRow,
         secrets: Arc<SecretsManager>,
@@ -141,9 +106,8 @@ impl OpenAiCompatibleProvider {
 
     /// Set vault credential scope (provider UUID) for `LLM_CREDENTIALS` lookup.
     ///
-    /// Now only used by the legacy `new()` callers (CLI/unconfigured fallback
-    /// paths); `new_from_row` builds the struct literally. Kept public for
-    /// external consumers and as a stable fluent API.
+    /// `new_from_row` builds the scope literally from the row UUID.
+    /// Kept public for external consumers as a stable fluent API.
     #[allow(dead_code)]
     pub fn with_credential_scope(mut self, scope: String) -> Self {
         self.credential_scope = Some(scope);
