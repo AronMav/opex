@@ -390,14 +390,13 @@ export default function ChatPage() {
   }, []);
 
   // Switch agent (including Group Chat virtual agent)
+  // Fix #7: do NOT eagerly clear the URL ?s= param here. Previously this
+  // wiped the deep-link before the new agent's restoration effect had a
+  // chance to honour it. Trust the URL-sync effect to overwrite ?s= with
+  // the new agent's activeSessionId once restoration completes (or to
+  // leave a foreign ?s= alone while the cross-agent resolver runs).
   const switchAgent = useCallback((target: string) => {
     restoredAgents.current.delete(target); // force session restore for new agent
-    // Clear URL session param — it belongs to the previous agent
-    const url = new URL(window.location.href);
-    if (url.searchParams.has("s")) {
-      url.searchParams.delete("s");
-      window.history.replaceState(null, "", url.pathname + url.search);
-    }
     useChatStore.getState().setCurrentAgent(target);
   }, []);
 

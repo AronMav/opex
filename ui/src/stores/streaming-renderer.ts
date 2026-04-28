@@ -50,6 +50,19 @@ export function createStreamingRenderer(store: StoreAccess) {
     _reconnectTimers.set(agent, timer);
   }
 
+  // Fix #6: Track the last time we saw any SSE traffic per agent. Browsers
+  // (especially Chrome) throttle / suspend SSE sockets on hidden tabs;
+  // when the tab returns we may have a half-open connection where the
+  // reader.read() is parked and no events are coming. The visibilitychange
+  // listener below forces a reconnect for any agent whose stream has been
+  // silent for more than VISIBILITY_STALE_MS while in an active phase.
+  const _lastEventTime = new Map<string, number>();
+  const VISIBILITY_STALE_MS = 30_000;
+
+  function recordEventActivity(agent: string): void {
+    _lastEventTime.set(agent, Date.now());
+  }
+
   // ── Internal helpers ────────────────────────────────────────────────────
 
   function ensure(agent: string): AgentState {
@@ -122,6 +135,10 @@ export function createStreamingRenderer(store: StoreAccess) {
       messageSource: { mode: "live" as const, messages: [] },
     });
 
+    // Seed _lastEventTime so visibilitychange recovery does not force-reconnect
+    // a freshly-submitted stream during the first-event window.
+    recordEventActivity(agent);
+
     const token = assertToken();
 
     fetch(`/api/chat/${sessionId}/stream`, {
@@ -167,6 +184,7 @@ export function createStreamingRenderer(store: StoreAccess) {
             getAgentState: (a) => store.get().agents[a],
             updateSessionParticipants: (sid, participants) => store.get().updateSessionParticipants(sid, participants),
             onStreamDone: () => saveUiState(agent),
+            onEventActivity: () => recordEventActivity(agent),
           },
         });
       })
@@ -189,6 +207,12 @@ export function createStreamingRenderer(store: StoreAccess) {
    * a new stream on the same agent. Calling /abort here would race with
    * the new stream's registration on the same session id and cancel it
    * prematurely.
+   *
+   * Fix #1 / #2: the pending reconnect timer is cleared FIRST so a
+   * setTimeout that just elapsed cannot race the abort and re-enter
+   * resumeStream against the (now-stale) generation. cleanupAgent()
+   * delegates to this same path during agent switch, so per-agent
+   * reconnect timers are also dropped when the user switches agent.
    */
   function abortLocalOnly(agent: string) {
     const timer = getReconnectTimer(agent);
@@ -198,6 +222,21 @@ export function createStreamingRenderer(store: StoreAccess) {
     // bumps `streamGeneration` atomically. No direct store mutation
     // here — the grep guard (Task 3.8) enforces that stream-state
     // fields are never touched outside StreamSession.
+    // Defensive: if the session was already disposed (no-op above),
+    // the agent state may still carry connectionPhase="reconnecting"
+    // from a setTimer-pending state. Force-reset to idle so the user
+    // never sees a stuck "reconnecting" badge after pressing Stop.
+    const st = store.get().agents[agent];
+    if (st && (st.connectionPhase === "reconnecting" || st.connectionPhase === "submitted" || st.connectionPhase === "streaming")) {
+      store.set((draft: any) => {
+        const a = draft.agents[agent];
+        if (!a) return;
+        a.connectionPhase = "idle";
+        a.connectionError = null;
+        a.reconnectAttempt = 0;
+        a.isLlmReconnecting = false;
+      });
+    }
   }
 
   /** Public: abort active stream AND notify backend (user Stop).
@@ -289,6 +328,9 @@ export function createStreamingRenderer(store: StoreAccess) {
       reconnectAttempt: 0,
       isLlmReconnecting: false,
     });
+    // Seed _lastEventTime so visibilitychange recovery does not force-reconnect
+    // a freshly-submitted stream during the first-event window.
+    recordEventActivity(agent);
     saveUiState(agent);
 
     // Build request body -- backend only uses the last user message + session_id
@@ -366,6 +408,7 @@ export function createStreamingRenderer(store: StoreAccess) {
             getAgentState: (a) => store.get().agents[a],
             updateSessionParticipants: (sid, participants) => store.get().updateSessionParticipants(sid, participants),
             onStreamDone: () => saveUiState(agent),
+            onEventActivity: () => recordEventActivity(agent),
           },
         });
       })
@@ -395,6 +438,52 @@ export function createStreamingRenderer(store: StoreAccess) {
   // ── Callback for saveLastSession (avoids circular import) ─────────────
   let _onSessionId: ((agent: string, sessionId: string) => void) | null = null;
 
+  // ── Fix #6: visibilitychange recovery ─────────────────────────────────
+  // Browsers may suspend an SSE socket on a hidden tab; when the tab returns
+  // we may have a half-open connection where `reader.read()` is parked and
+  // no events are flowing. On visibility=visible we walk every agent that
+  // believes it is in an active phase and force a soft reconnect when its
+  // last observed SSE event is older than VISIBILITY_STALE_MS.
+  function handleVisibilityChange() {
+    if (typeof document === "undefined") return;
+    if (document.visibilityState !== "visible") return;
+    const now = Date.now();
+    const agentsState = store.get().agents as Record<string, AgentState>;
+    for (const agent of Object.keys(agentsState)) {
+      const st = agentsState[agent];
+      if (!st) continue;
+      const phase = st.connectionPhase;
+      if (phase !== "streaming" && phase !== "reconnecting") continue;
+      const sid = st.activeSessionId;
+      if (!sid) continue;
+      const last = _lastEventTime.get(agent) ?? 0;
+      // If we never recorded activity OR the gap exceeds the threshold,
+      // the socket is almost certainly dead — abort and resume.
+      if (last !== 0 && now - last < VISIBILITY_STALE_MS) continue;
+      try {
+        // Local-only (no /abort POST): tab focus shouldn't tell the
+        // backend to cancel. resumeStream re-attaches to the live stream
+        // (or 204 + history if it has already finished).
+        abortLocalOnly(agent);
+        resumeStream(agent, sid);
+      } catch (e) {
+        if (process.env.NODE_ENV !== "production") {
+          // eslint-disable-next-line no-console
+          console.warn("[streaming-renderer] visibilitychange recovery failed", e);
+        }
+      }
+    }
+  }
+
+  let _visibilityListenerAttached = false;
+  function attachVisibilityListener() {
+    if (_visibilityListenerAttached) return;
+    if (typeof document === "undefined") return;
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    _visibilityListenerAttached = true;
+  }
+  attachVisibilityListener();
+
   // ── MEM-01: Agent cleanup ──────────────────────────────────────────────
 
   function cleanupAgent(agent: string) {
@@ -403,6 +492,7 @@ export function createStreamingRenderer(store: StoreAccess) {
     const timer = _reconnectTimers.get(agent);
     if (timer) clearTimeout(timer);
     _reconnectTimers.delete(agent);
+    _lastEventTime.delete(agent);
     // Clean up debounce timers
     clearTimeout(uiStateSaveTimers[agent]);
     delete uiStateSaveTimers[agent];

@@ -43,6 +43,12 @@ export interface StreamProcessorCallbacks {
    * the renderer to persist UI state (debounced PATCH to backend).
    */
   onStreamDone?: () => void;
+  /**
+   * Fix #6: invoked on every SSE event so the renderer can detect a stalled
+   * (tab-throttled) socket via a visibilitychange listener. Optional — purely
+   * for stale-detection telemetry.
+   */
+  onEventActivity?: () => void;
 }
 
 export interface StreamProcessorOpts {
@@ -94,6 +100,10 @@ export async function processSSEStream(
         if (session.signal.aborted || !session.isCurrent) {
           continue;
         }
+
+        // Fix #6: record event activity so the visibilitychange listener
+        // in streaming-renderer can detect a stalled socket on tab focus.
+        callbacks.onEventActivity?.();
 
         switch (event.type) {
           case "data-session-id": {
@@ -270,10 +280,16 @@ export async function processSSEStream(
           case "sync": {
             const { content: syncContent, status: syncStatus } = event;
             const syncParts: MessagePart[] = parseContentParts(syncContent || "");
+            // Fix #5: "interrupted" (Pi restarted mid-stream — emitted by
+            // api_chat_resume_stream after error_job marks a stale 'running'
+            // job) must surface as an error so the user sees the banner. The
+            // previous mapping silently classified it as "streaming", which
+            // left the chat looking healthy while the run was actually dead.
+            const isErrorLike = syncStatus === "error" || syncStatus === "interrupted" || syncStatus === "failed";
             const phase: ConnectionPhase =
-              syncStatus === "error" ? "error" :
+              isErrorLike ? "error" :
               (syncStatus === "done" || syncStatus === "finished") ? "idle" : "streaming";
-            const errorText = syncStatus === "error" ? (event.error ?? null) : null;
+            const errorText = isErrorLike ? (event.error ?? null) : null;
 
             // Single writeDraft — message + connectionPhase + error fields are atomic (fixes bugs b and c)
             session.writeDraft((agentDraft: AgentState) => {

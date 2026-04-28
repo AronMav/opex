@@ -126,6 +126,14 @@ export function createNavigationActions(deps: ActionDeps) {
       // stream finishes on its own (10-minute SSE safety net covers
       // worst-case abandonment) and the completed response is waiting
       // when the user returns.
+      //
+      // Fix #8: this also covers "user picks a different session in the
+      // sidebar while the current one is streaming" — abortLocalOnly()
+      // bumps the StreamSession generation, so any in-flight SSE events
+      // for the previous session bail out at session.isCurrent checks
+      // and won't leak writes into the newly-selected session's state.
+      // ChatThread's auto-resume effect picks up live continuation iff
+      // the target session is itself running.
       renderer.abortLocalOnly(agent);
 
       update(agent, {

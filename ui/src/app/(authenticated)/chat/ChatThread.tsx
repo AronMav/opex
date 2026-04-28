@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Component, useEffect, useMemo } from "react";
+import React, { Component, useEffect, useMemo, useRef } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
 import { useVisualViewport } from "@/hooks/use-visual-viewport";
@@ -96,12 +96,39 @@ export function ChatThread({
   const isHistory = useIsReplayingHistory(currentAgent);
   const liveHasContent = useLiveHasContent(currentAgent);
 
+  // Fix #4: track which (agent, sessionId) we have already attempted to
+  // auto-resume for in the current "stale-cache" window. Stale React Query
+  // cache (sessionRunStatus="running") can outlive a finished SSE stream by
+  // up to one polling tick, causing the effect below to re-fire after
+  // resumeStream returns 204 → mode=history. Without this guard the effect
+  // retriggers in a tight loop until the cache refetches.
+  //
+  // The guard is cleared:
+  //  * when activeSessionId / agent changes (different conversation)
+  //  * when connectionPhase enters an active phase (a real stream attached
+  //    successfully — once it ends and goes idle again, a follow-up run
+  //    on the same session is a legitimate idle→running transition that
+  //    must be allowed through)
+  const resumedSessionsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    resumedSessionsRef.current.clear();
+  }, [currentAgent, activeSessionId]);
+  useEffect(() => {
+    if (isActivePhase(connectionPhase)) {
+      resumedSessionsRef.current.clear();
+    }
+  }, [connectionPhase]);
+
   // Auto-resume SSE stream when engine is still processing. React 18+ batches
   // state updates; isActivePhase + isRunning guards prevent double-fire.
   useEffect(() => {
     if (!activeSessionId || isActivePhase(connectionPhase)) return;
     const isRunning = activeSessionIds.includes(activeSessionId) || sessionRunStatus === "running";
     if (!isRunning) return;
+    // Re-entry guard against stale React Query cache (Fix #4).
+    const key = `${currentAgent}::${activeSessionId}`;
+    if (resumedSessionsRef.current.has(key)) return;
+    resumedSessionsRef.current.add(key);
     useChatStore.getState().resumeStream(currentAgent, activeSessionId);
   }, [activeSessionId, activeSessionIds, sessionRunStatus, connectionPhase, currentAgent]);
 
@@ -214,8 +241,12 @@ export function ChatThread({
         />
       )}
 
-      {/* Error banner */}
-      {streamError && !isReadOnly && !isHistory && (
+      {/* Error banner — also shown when the engine was interrupted mid-stream
+          and the resume endpoint returns a sync event with status="interrupted"
+          (Fix #5). After such an event the stream falls into history mode but
+          the banner must still be visible so the user knows the previous run
+          died and didn't just finish silently. */}
+      {streamError && !isReadOnly && (
         <ErrorBanner
           error={streamError}
           hasMessages={hasMessages}
