@@ -221,11 +221,16 @@ impl Scheduler {
 
     /// Add session cleanup job (daily at 5:00 UTC — delete old sessions
     /// by age AND enforce per-agent entry cap).
+    ///
+    /// `batch_size` is threaded through to `prune_old_events_batched` for the
+    /// daily WAL prune so it honours the same `CleanupConfig::session_events_batch_size`
+    /// the hourly job uses — keeping both jobs consistent.
     pub async fn add_session_cleanup(
         &self,
         db: PgPool,
         ttl_days: u32,
         max_sessions_per_agent: u32,
+        batch_size: i64,
     ) -> Result<()> {
         if ttl_days == 0 && max_sessions_per_agent == 0 {
             tracing::info!("session cleanup disabled (ttl_days = 0 and cap = 0)");
@@ -234,6 +239,7 @@ impl Scheduler {
         tracing::info!(
             ttl_days,
             max_sessions_per_agent,
+            batch_size,
             "scheduling session cleanup (daily 05:00 UTC)"
         );
 
@@ -265,8 +271,12 @@ impl Scheduler {
                         "session cap enforcement failed"
                     ),
                 }
-                // Prune old WAL events alongside session cleanup
-                match crate::db::session_wal::prune_old_events(&db, ttl_days).await {
+                // Prune old WAL events alongside session cleanup. Uses the
+                // batched variant (Phase 62 RES-03) to avoid long table locks
+                // and WAL bloat — `batch_size` is sourced from
+                // `CleanupConfig::session_events_batch_size`, mirroring the
+                // hourly job.
+                match crate::db::session_wal::prune_old_events_batched(&db, ttl_days, batch_size).await {
                     Ok(pruned) => {
                         if pruned > 0 {
                             tracing::info!(pruned, "WAL event pruning completed");

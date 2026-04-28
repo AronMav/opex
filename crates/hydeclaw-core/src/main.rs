@@ -1024,7 +1024,15 @@ async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[conf
     // Session cleanup (based on max TTL in agent configs)
     let ttl_days = agent_configs.iter().filter_map(|c| c.agent.session.as_ref()).map(|s| s.ttl_days).max().unwrap_or(30);
     let max_sessions_per_agent = state.config.config.limits.max_sessions_per_agent;
-    sched.add_session_cleanup(db.clone(), ttl_days, max_sessions_per_agent).await.ok();
+    sched
+        .add_session_cleanup(
+            db.clone(),
+            ttl_days,
+            max_sessions_per_agent,
+            state.config.config.cleanup.session_events_batch_size,
+        )
+        .await
+        .ok();
 
     // One-shot enforcement of the per-agent session cap at startup. Protects
     // against cron/async-subagent backlogs that accumulated while the gateway

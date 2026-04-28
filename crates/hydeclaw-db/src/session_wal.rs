@@ -27,25 +27,7 @@ pub async fn log_event(
     Ok(())
 }
 
-/// Delete WAL events older than `days` to prevent unbounded table growth.
-///
-/// Unbounded single-statement DELETE — acquires a lock across the full scan
-/// and can bloat WAL. Retained as a thin wrapper for backward compatibility;
-/// new call sites should use `prune_old_events_batched` (Phase 62 RES-03).
-pub async fn prune_old_events(db: &PgPool, days: u32) -> Result<u64> {
-    if days == 0 {
-        return Ok(0);
-    }
-    let result = sqlx::query(
-        "DELETE FROM session_events WHERE created_at < now() - make_interval(days => $1)",
-    )
-    .bind(days as i32)
-    .execute(db)
-    .await?;
-    Ok(result.rows_affected())
-}
-
-/// Phase 62 RES-03: batched DELETE variant of `prune_old_events`.
+/// Phase 62 RES-03: batched DELETE for `session_events` rows older than `days`.
 ///
 /// PostgreSQL has no native `DELETE ... LIMIT`. We wrap with
 /// `DELETE FROM t WHERE id IN (SELECT id FROM t WHERE <cond> ORDER BY id LIMIT N)`
