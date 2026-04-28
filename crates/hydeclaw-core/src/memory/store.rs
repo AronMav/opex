@@ -458,12 +458,20 @@ mod tests {
         assert_eq!(store.validated_fts_language().unwrap(), "russian");
     }
 
-    #[test]
-    fn validated_fts_language_rejects_mixed_case() {
-        // set_fts_language always normalizes to lowercase, so mixed-case is prevented
-        // at the setter level. Verify the underlying admin validator also rejects them.
-        assert!(crate::memory::admin::validated_fts_language("Russian").is_err());
-        assert!(crate::memory::admin::validated_fts_language("english; DROP TABLE").is_err());
+    #[tokio::test]
+    async fn validated_fts_language_rejects_empty_lang_through_store() {
+        // Tests the full MemoryStore::validated_fts_language() delegation path.
+        // admin::validated_fts_language rejects: empty strings, uppercase, non-ASCII.
+        let store = MemoryStore::test_with_embedder(Arc::new(FakeEmbedder { available: false }));
+        *store.fts_language.write().unwrap() = String::new();
+        assert!(store.validated_fts_language().is_err(), "store must reject empty lang");
+    }
+
+    #[tokio::test]
+    async fn validated_fts_language_rejects_uppercase_through_store() {
+        let store = MemoryStore::test_with_embedder(Arc::new(FakeEmbedder { available: false }));
+        *store.fts_language.write().unwrap() = "Russian".to_string();
+        assert!(store.validated_fts_language().is_err(), "store must reject uppercase lang");
     }
 
 }

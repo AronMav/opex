@@ -965,7 +965,8 @@ mod tests {
             "messages": [{"role": "user", "content": "m", "created_at": "2026-04-27T10:05:00.000Z", "tool_calls": []}]
         });
         let md = format_session_as_markdown(&data);
-        assert!(md.contains("2026-04-27T10:05"));
+        assert!(md.contains("2026-04-27T10:05"), "truncated prefix must be present");
+        assert!(!md.contains("2026-04-27T10:05:00.000Z"), "full timestamp must not appear — truncated to 16 chars");
     }
 }
 

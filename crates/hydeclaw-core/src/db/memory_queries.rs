@@ -501,72 +501,6 @@ mod tests {
     // These catch the class of bugs where column removal breaks INSERT/SELECT
     // (like the user_id NOT NULL bug caught in production).
 
-    /// Verify insert_chunk SQL includes required columns (no user_id — dropped in m021;
-    /// no category/topic — dropped in m032; no parent_id/chunk_index — dropped in m033).
-    #[test]
-    fn insert_sql_includes_required_columns() {
-        let sql = r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)";
-        assert!(sql.contains("agent_id"), "INSERT must include agent_id");
-        assert!(sql.contains("scope"), "INSERT must include scope");
-        assert!(!sql.contains("user_id"), "user_id column dropped in migration 021");
-        assert!(!sql.contains("category"), "category column dropped in migration 032");
-        assert!(!sql.contains("topic"), "topic column dropped in migration 032");
-        assert!(!sql.contains("parent_id"), "parent_id dropped in migration 033");
-        assert!(!sql.contains("chunk_index"), "chunk_index dropped in migration 033");
-    }
-
-    /// Verify insert_chunk uses ::vector not ::halfvec.
-    #[test]
-    fn insert_sql_uses_vector_not_halfvec() {
-        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7)";
-        assert!(sql.contains("$4::vector"), "embedding must be cast to ::vector (not ::halfvec)");
-        assert!(!sql.contains("halfvec"), "halfvec has 4000 dim limit, must use vector");
-    }
-
-    /// Verify insert_chunk has exactly 7 bind positions ($1 through $7).
-    /// After m033, scope occupies $7 (parent_id $7 and chunk_index $8 dropped).
-    #[test]
-    fn insert_sql_bind_count() {
-        let sql = r"VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('english', $3), $7)";
-        for i in 1..=7 {
-            let placeholder = format!("${}", i);
-            assert!(sql.contains(&placeholder), "Missing bind placeholder {}", placeholder);
-        }
-        assert!(!sql.contains("$8"), "Unexpected $8 — too many binds after m033");
-    }
-
-    /// Verify INSERT column count matches VALUES count (9 columns post-m033).
-    #[test]
-    fn insert_sql_column_value_parity() {
-        let columns = "id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope";
-        let col_count = columns.split(',').count();
-        assert_eq!(col_count, 9, "Column count must be 9 (was 11 before m033 dropped parent_id/chunk_index)");
-    }
-
-    /// Verify search_semantic includes scope/agent filtering.
-    #[test]
-    fn search_semantic_sql_has_scope_filter() {
-        let sql = "WHERE embedding IS NOT NULL AND ($3 = '' OR agent_id = $3 OR scope = 'shared')";
-        assert!(sql.contains("agent_id = $3"), "search_semantic must filter by agent_id");
-        assert!(sql.contains("scope = 'shared'"), "search_semantic must include shared chunks");
-        assert!(sql.contains("$3 = ''"), "search_semantic must allow empty agent_id for admin");
-    }
-
-    /// Verify search_fts includes scope/agent filtering.
-    #[test]
-    fn search_fts_sql_has_scope_filter() {
-        let sql = "WHERE tsv @@ plainto_tsquery('russian', $1) AND ($3 = '' OR agent_id = $3 OR scope = 'shared')";
-        assert!(sql.contains("agent_id = $3"), "search_fts must filter by agent_id");
-        assert!(sql.contains("scope = 'shared'"), "search_fts must include shared chunks");
-    }
-
-    /// Verify fetch_pinned includes scope/agent filtering.
-    #[test]
-    fn fetch_pinned_sql_has_scope_filter() {
-        let sql = "WHERE ($1 = '' OR agent_id = $1 OR scope = 'shared') AND pinned = true";
-        assert!(sql.contains("scope = 'shared'"), "fetch_pinned must include shared pinned chunks");
-        assert!(sql.contains("pinned = true"), "fetch_pinned must filter pinned only");
-    }
 
     #[test]
     fn or_tsquery_joins_words_with_pipe() {
@@ -609,22 +543,10 @@ mod tests {
         assert!(super::validate_fts_lang("custom_dict").is_err(), "Must reject custom dicts");
     }
 
-    /// Verify memory_chunks required NOT NULL columns are always included in INSERT.
     #[test]
-    fn insert_covers_not_null_columns() {
-        // Required columns after m021 (user_id dropped), m032 (category/topic
-        // dropped), and m033 (parent_id/chunk_index dropped): id, agent_id,
-        // content, scope.
-        let insert = "INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)";
-        assert!(insert.contains("id"), "Must include id");
-        assert!(insert.contains("content"), "Must include content");
-        assert!(insert.contains("agent_id"), "Must include agent_id");
-        assert!(insert.contains("scope"), "Must include scope");
-        assert!(!insert.contains("user_id"), "user_id dropped in migration 021");
-        assert!(!insert.contains("category"), "category dropped in migration 032");
-        assert!(!insert.contains("topic"), "topic dropped in migration 032");
-        assert!(!insert.contains("parent_id"), "parent_id dropped in migration 033");
-        assert!(!insert.contains("chunk_index"), "chunk_index dropped in migration 033");
-    }
-}
+    fn or_tsquery_embedded_operators_within_word_are_stripped() {
+        // "foo&bar" → split_whitespace → ["foo&bar"] → strip '&' → "foobar" → "foobar"
+        // Distinct from "foo & bar" where '&' is a separate token
+        assert_eq!(super::or_tsquery_from("foo&bar"), "foobar");
+    }}
 

@@ -972,7 +972,7 @@ mod tests {
         let parts = extract_tool_result_events(payload, &mut sink).await;
         assert_eq!(parts.display_result, "Rich card displayed");
         assert_eq!(parts.db_result, payload);
-        // A RichCard event must have been emitted
+        // A RichCard event must have been emitted with correct card_type
         let rich_card_events: Vec<_> = sink.events.iter().filter(|e| {
             matches!(e, PipelineEvent::Stream(StreamEvent::RichCard { .. }))
         }).collect();
@@ -981,6 +981,9 @@ mod tests {
             "expected a RichCard event, got: {:?}",
             sink.events
         );
+        if let PipelineEvent::Stream(StreamEvent::RichCard { card_type, .. }) = &rich_card_events[0] {
+            assert_eq!(card_type, "table", "card_type must match JSON field");
+        }
     }
 
     #[tokio::test]
