@@ -854,7 +854,7 @@ impl YamlToolDef {
         self.execute_with_ctx(params, http_client, env_resolver, oauth_context).await
     }
 
-    /// Execute with optional OAuth context.
+    /// Execute the tool, injecting OAuth bearer credentials when `oauth_context` is provided.
     pub async fn execute_with_ctx(
         &self,
         params: &serde_json::Value,

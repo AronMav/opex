@@ -28,7 +28,6 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::metrics::MetricsRegistry;
@@ -37,6 +36,7 @@ use axum::{
     Router,
     body::Bytes,
     extract::{DefaultBodyLimit, State},
+    http::StatusCode,
     response::IntoResponse,
     routing::post,
 };
