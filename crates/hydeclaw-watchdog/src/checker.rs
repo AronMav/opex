@@ -1,4 +1,5 @@
 use crate::config::CheckConfig;
+use crate::status::ContainerInfo;
 
 pub struct CheckResult {
     pub ok: bool,
@@ -36,14 +37,6 @@ pub async fn run_check(cfg: &CheckConfig, http: &reqwest::Client) -> CheckResult
         latency_ms: start.elapsed().as_millis() as u64,
         error,
     }
-}
-
-pub struct ContainerInfo {
-    pub name: String,
-    pub docker_name: String,
-    pub status: String,
-    pub healthy: bool,
-    pub group: String,
 }
 
 /// Check all Docker containers — returns all non-MCP containers with health status.

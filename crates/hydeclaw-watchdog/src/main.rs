@@ -261,16 +261,6 @@ async fn main() -> anyhow::Result<()> {
 
         // Docker container check
         let all_containers = checker::check_docker_containers().await;
-        let container_statuses: Vec<status::ContainerInfo> = all_containers
-            .iter()
-            .map(|c| status::ContainerInfo {
-                name: c.name.clone(),
-                docker_name: c.docker_name.clone(),
-                status: c.status.clone(),
-                healthy: c.healthy,
-                group: c.group.clone(),
-            })
-            .collect();
         // Alert only for newly unhealthy containers (not already alerted)
         let mut current_unhealthy: HashMap<String, bool> = HashMap::new();
         let mut newly_unhealthy: Vec<String> = Vec::new();
@@ -294,7 +284,7 @@ async fn main() -> anyhow::Result<()> {
             uptime_secs: start_time.elapsed().as_secs(),
             checks: check_statuses.clone(),
             resources: resource_status.clone(),
-            containers: container_statuses,
+            containers: all_containers,
         });
 
         // Notify systemd watchdog (keeps WatchdogSec alive)
