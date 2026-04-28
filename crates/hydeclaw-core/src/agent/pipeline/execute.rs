@@ -938,4 +938,18 @@ mod tests {
         assert_eq!(resp.tool_calls.len(), 1, "fixture returns one tool call");
         assert_eq!(partial, "Let me think. ");
     }
+
+    #[test]
+    fn loop_nudge_uses_reason_when_provided() {
+        let msg = build_loop_nudge_message(Some("calling the same tool repeatedly"));
+        assert!(msg.contains("calling the same tool repeatedly"));
+        assert!(msg.contains("LOOP DETECTED"));
+    }
+
+    #[test]
+    fn loop_nudge_falls_back_to_default_reason() {
+        let msg = build_loop_nudge_message(None);
+        assert!(msg.contains("repeating pattern"));
+        assert!(msg.contains("LOOP DETECTED"));
+    }
 }

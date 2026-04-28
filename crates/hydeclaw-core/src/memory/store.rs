@@ -429,4 +429,41 @@ mod tests {
         assert!(!store2.is_available());
     }
 
+    #[tokio::test]
+    async fn set_fts_language_normalizes_to_lowercase() {
+        let store = MemoryStore::test_with_embedder(Arc::new(FakeEmbedder { available: false }));
+        store.set_fts_language("Russian");
+        assert_eq!(store.fts_language(), "russian");
+    }
+
+    #[tokio::test]
+    async fn set_fts_language_stores_lowercase_ascii() {
+        let store = MemoryStore::test_with_embedder(Arc::new(FakeEmbedder { available: false }));
+        store.set_fts_language("ENGLISH");
+        assert_eq!(store.fts_language(), "english");
+    }
+
+    #[tokio::test]
+    async fn fts_language_returns_initial_value() {
+        let store = MemoryStore::test_with_embedder(Arc::new(FakeEmbedder { available: false }));
+        // test_with_embedder initializes to "simple"
+        assert_eq!(store.fts_language(), "simple");
+    }
+
+    #[tokio::test]
+    async fn validated_fts_language_accepts_valid_lang() {
+        let store = MemoryStore::test_with_embedder(Arc::new(FakeEmbedder { available: false }));
+        store.set_fts_language("russian");
+        assert!(store.validated_fts_language().is_ok());
+        assert_eq!(store.validated_fts_language().unwrap(), "russian");
+    }
+
+    #[test]
+    fn validated_fts_language_rejects_mixed_case() {
+        // set_fts_language always normalizes to lowercase, so mixed-case is prevented
+        // at the setter level. Verify the underlying admin validator also rejects them.
+        assert!(crate::memory::admin::validated_fts_language("Russian").is_err());
+        assert!(crate::memory::admin::validated_fts_language("english; DROP TABLE").is_err());
+    }
+
 }

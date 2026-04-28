@@ -568,6 +568,33 @@ mod tests {
         assert!(sql.contains("pinned = true"), "fetch_pinned must filter pinned only");
     }
 
+    #[test]
+    fn or_tsquery_joins_words_with_pipe() {
+        assert_eq!(super::or_tsquery_from("foo bar baz"), "foo | bar | baz");
+    }
+
+    #[test]
+    fn or_tsquery_strips_tsquery_operators() {
+        // Characters ! & | < > ( ) : ' are stripped
+        assert_eq!(super::or_tsquery_from("foo & bar | baz"), "foo | bar | baz");
+    }
+
+    #[test]
+    fn or_tsquery_empty_input_returns_empty() {
+        assert_eq!(super::or_tsquery_from(""), "");
+    }
+
+    #[test]
+    fn or_tsquery_single_word() {
+        assert_eq!(super::or_tsquery_from("hello"), "hello");
+    }
+
+    #[test]
+    fn or_tsquery_filters_empty_tokens_after_strip() {
+        // A lone operator becomes empty after stripping, should be filtered
+        assert_eq!(super::or_tsquery_from("foo & bar"), "foo | bar");
+    }
+
     /// Verify FTS language validation rejects injection attempts.
     #[test]
     fn fts_lang_validation_blocks_injection() {

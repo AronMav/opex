@@ -244,3 +244,28 @@ pub async fn bootstrap<S: EventSink>(
         user_message_id,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_sender_agent_id_strips_prefix() {
+        assert_eq!(extract_sender_agent_id("agent:Arty"), Some("Arty"));
+    }
+
+    #[test]
+    fn extract_sender_agent_id_empty_name_returns_empty_str() {
+        assert_eq!(extract_sender_agent_id("agent:"), Some(""));
+    }
+
+    #[test]
+    fn extract_sender_agent_id_returns_none_for_human() {
+        assert_eq!(extract_sender_agent_id("human:ui"), None);
+    }
+
+    #[test]
+    fn extract_sender_agent_id_returns_none_for_bare_string() {
+        assert_eq!(extract_sender_agent_id("Arty"), None);
+    }
+}

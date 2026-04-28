@@ -469,6 +469,35 @@ mod tests {
         }
     }
 
+    #[test]
+    fn execute_status_done_maps_to_finalize_done() {
+        use crate::agent::pipeline::execute::ExecuteStatus;
+        let out = execute_status_to_finalize(ExecuteStatus::Done, "hello".into(), None);
+        assert!(matches!(out, FinalizeOutcome::Done { assistant_text, .. } if assistant_text == "hello"));
+    }
+
+    #[test]
+    fn execute_status_failed_preserves_reason() {
+        use crate::agent::pipeline::execute::ExecuteStatus;
+        let out = execute_status_to_finalize(ExecuteStatus::Failed("timeout".into()), "partial".into(), None);
+        assert!(matches!(out, FinalizeOutcome::Failed { reason, .. } if reason == "timeout"));
+    }
+
+    #[test]
+    fn execute_status_interrupted_preserves_partial() {
+        use crate::agent::pipeline::execute::ExecuteStatus;
+        let out = execute_status_to_finalize(ExecuteStatus::Interrupted("user"), "mid-text".into(), None);
+        assert!(matches!(out, FinalizeOutcome::Interrupted { partial, .. } if partial == "mid-text"));
+    }
+
+    #[test]
+    fn execute_status_done_preserves_thinking_json() {
+        use crate::agent::pipeline::execute::ExecuteStatus;
+        let json = serde_json::json!({"thinking": "step by step"});
+        let out = execute_status_to_finalize(ExecuteStatus::Done, "answer".into(), Some(json.clone()));
+        assert!(matches!(out, FinalizeOutcome::Done { thinking_json: Some(j), .. } if j == json));
+    }
+
     #[sqlx::test(migrations = "../../migrations")]
     async fn finalize_failed_emits_error_and_saves_partial(pool: PgPool) {
         let session_id =
