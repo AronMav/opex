@@ -426,44 +426,11 @@ async fn main() -> Result<()> {
 
     // Load agent configs — no default agent created; Setup Wizard handles first agent
     std::fs::create_dir_all("config/agents")?;
-    let mut agent_configs = config::load_agent_configs("config/agents")?;
+    let agent_configs = config::load_agent_configs("config/agents")?;
     if agent_configs.is_empty() {
         tracing::info!("no agent configs found — Setup Wizard will create the first agent");
     }
     tracing::info!(agents = agent_configs.len(), "agent configs loaded");
-
-    // Migrate legacy inline-routing TOMLs → `connection = "<name>"` references
-    // (Tasks 20 + 21 — atomic write, backup, per-agent marker, crash recovery).
-    // Runs once at startup after DB migrations and before agent engines spawn.
-    {
-        let providers_snapshot = crate::db::providers::list_providers(&db_pool)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "providers list failed; TOML migrator will see empty DB");
-                Vec::new()
-            });
-        let agents_dir = std::path::PathBuf::from("config/agents");
-        let migrator = crate::agent::toml_migrator::TomlMigrator {
-            config_dir: &agents_dir,
-            db_providers: &providers_snapshot,
-        };
-        migrator
-            .migrate_all()
-            .await
-            .map_err(|e| anyhow::anyhow!("TOML routing migration failed: {e}"))?;
-    }
-
-    // Issue E: the TOML migrator above may have rewritten agent TOMLs on disk
-    // (e.g. hoisting legacy inline-routing into `connection = "<name>"`). The
-    // `agent_configs` we loaded at the start of this block predates those
-    // rewrites, so every engine spawned from it would consume unmigrated data
-    // until the next restart. Re-read the configs now that both migrators have
-    // settled the on-disk representation.
-    agent_configs = config::load_agent_configs("config/agents")?;
-    tracing::info!(
-        agents = agent_configs.len(),
-        "agent configs re-loaded after TOML migration"
-    );
 
     // Auto-detect FTS language from first agent's language ONLY when neither
     // TOML override nor persisted DB value is present (i.e. memory_store is
