@@ -124,6 +124,17 @@ export default function ChatPage() {
   // Cross-agent URL deep-link resolver. When ?s= session is not in the current agent's
   // list, fetch the session to find its owning agent and switch to it. This handles
   // shared URLs where the recipient's localStorage points to a different agent.
+  //
+  // After switching, we DIRECTLY call selectSession(urlSessionId, targetAgent) to
+  // honour the deep link without depending on the restoration effect's race-prone
+  // state machine. The restoration effect for the new agent will see that
+  // activeSessionId is already set + mode=history and become a no-op (the
+  // "already viewing a real session — don't touch" branch).
+  //
+  // Pre-marking restoredAgents prevents the restoration effect from clobbering
+  // our deep-link selection if it happens to run between setCurrentAgent and
+  // selectSession (e.g. when Arty's sessions list arrives before our state
+  // updates have all flushed).
   const urlResolveFetched = useRef<string | null>(null);
   useEffect(() => {
     if (!urlSessionId || !sessionsReady || !currentAgent) return;
@@ -138,9 +149,15 @@ export default function ChatPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { agent_id?: string } | null) => {
         if (!data?.agent_id) return;
-        if (agents.includes(data.agent_id) && data.agent_id !== currentAgent) {
-          useChatStore.getState().setCurrentAgent(data.agent_id);
-        }
+        const targetAgent = data.agent_id;
+        if (!agents.includes(targetAgent) || targetAgent === currentAgent) return;
+        // Switch agent and immediately honour the deep link. Pre-marking
+        // restoredAgents.add(targetAgent) ensures the restoration effect
+        // does not race us (it would otherwise re-run for targetAgent and
+        // potentially overwrite messageSource based on stale state).
+        restoredAgents.current.add(targetAgent);
+        useChatStore.getState().setCurrentAgent(targetAgent);
+        useChatStore.getState().selectSession(urlSessionId, targetAgent);
       })
       .catch(() => {});
   }, [urlSessionId, sessionsReady, sessions, currentAgent, agents]);
