@@ -1,4 +1,5 @@
 /target
+crates/*/bindings/
 .auth-token
 /build-output
 /cache
