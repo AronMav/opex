@@ -13,11 +13,6 @@ pub async fn handle(
     let include_sessions = task.params["include_sessions"].as_bool().unwrap_or(true);
     let agent_id = task.params["agent_id"].as_str().unwrap_or("");
 
-    // Legacy compat: if "directory" field present, use old path-specific behavior
-    if let Some(dir) = task.params["directory"].as_str() {
-        return handle_legacy_directory(task, db, toolgate_url, workspace_dir, fts_language, dir).await;
-    }
-
     let workspace_root = std::path::Path::new(workspace_dir);
     const EXCLUDE_DIRS: &[&str] = &["tools", "skills", "mcp", "uploads", "agents"];
 
@@ -192,115 +187,6 @@ async fn index_sessions(
     Ok(indexed)
 }
 
-/// Legacy handler for tasks that still carry a "directory" field.
-async fn handle_legacy_directory(
-    task: &MemoryTask,
-    db: &PgPool,
-    toolgate_url: &str,
-    workspace_dir: &str,
-    fts_language: &str,
-    directory: &str,
-) -> anyhow::Result<serde_json::Value> {
-    let clear_existing = task.params["clear_existing"].as_bool().unwrap_or(false);
-    let agent_id = task.params["agent_id"].as_str().unwrap_or("");
-
-    // System directories must never be indexed — their contents (skills,
-    // tools, MCP configs, agent identity files) are not user knowledge and
-    // would poison long-term memory with prompt fragments.
-    const SYSTEM_DIRS: &[&str] = &["tools", "skills", "mcp", "uploads", "agents"];
-    if SYSTEM_DIRS.contains(&directory) {
-        anyhow::bail!("refusing to index system directory '{directory}'");
-    }
-
-    let base = std::path::PathBuf::from(workspace_dir).join(directory);
-    if !base.exists() || !base.is_dir() {
-        anyhow::bail!("directory '{directory}' not found");
-    }
-
-    // Collect .md files
-    let mut md_files: Vec<std::path::PathBuf> = Vec::new();
-    let mut stack = vec![base.clone()];
-    while let Some(dir) = stack.pop() {
-        let mut entries = tokio::fs::read_dir(&dir).await?;
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            if path.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if !name.starts_with('.') && !name.starts_with('_') {
-                    stack.push(path);
-                }
-            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-                md_files.push(path);
-            }
-        }
-    }
-
-    if md_files.is_empty() {
-        return Ok(json!({"indexed": 0, "total": 0}));
-    }
-
-    // Clear existing (scoped by agent_id)
-    if clear_existing {
-        if agent_id.is_empty() {
-            sqlx::query("DELETE FROM memory_chunks").execute(db).await?;
-        } else {
-            sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
-                .bind(agent_id)
-                .execute(db)
-                .await?;
-        }
-        tracing::info!(agent_id, "cleared memory data (legacy reindex)");
-    }
-
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-
-    let total = md_files.len();
-    let mut indexed = 0u32;
-    let mut errors = 0u32;
-
-    for path in &md_files {
-        let content = match tokio::fs::read_to_string(path).await {
-            Ok(c) if c.len() > 50 => c,
-            Ok(_) => continue,
-            Err(e) => {
-                tracing::warn!(path = ?path, error = %e, "failed to read");
-                errors += 1;
-                continue;
-            }
-        };
-        let source = path
-            .strip_prefix(&base)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .to_string();
-
-        match embed_and_insert(db, &http, toolgate_url, &content, &source, fts_language, agent_id).await {
-            Ok(()) => indexed += 1,
-            Err(e) => {
-                tracing::warn!(source = %source, error = %e, "index failed");
-                errors += 1;
-            }
-        }
-
-        if indexed.is_multiple_of(50) && indexed > 0 {
-            tracing::info!(indexed, total, "reindex progress");
-            #[cfg(target_os = "linux")]
-            let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Watchdog]);
-        }
-    }
-
-    tracing::info!(indexed, errors, total, "legacy reindex complete");
-    // Same fail-on-mass-error rule as the universal path above.
-    if total > 0 && indexed == 0 && errors > 0 {
-        anyhow::bail!(
-            "reindex failed: 0 files indexed, {errors} errors out of {total} (likely transient embedding error)"
-        );
-    }
-    Ok(json!({"indexed": indexed, "errors": errors, "total": total}))
-}
-
 /// Embed content and insert into `memory_chunks` (transactional replace).
 async fn embed_and_insert(
     db: &PgPool,
@@ -339,9 +225,6 @@ async fn embed_and_insert(
     );
 
     // Transaction: delete old + insert new.
-    // History (m033): WAS 11 columns including parent_id ($5) and chunk_index ($6),
-    // INSERT ran in a loop once per chunk. After m033: 9 columns, agent_id at $5,
-    // single INSERT, no chunking.
     let mut tx = db.begin().await?;
     sqlx::query("DELETE FROM memory_chunks WHERE source = $1")
         .bind(source)
