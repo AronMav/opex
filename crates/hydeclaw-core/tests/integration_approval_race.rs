@@ -1,14 +1,17 @@
-//! TEST-03: Characterization of `resolve_approval` race semantics on baseline v0.18.0.
+//! TEST-03: Characterization of approval-resolve race semantics.
 //!
 //! Asserts: when 100 concurrent callers attempt to resolve the SAME approval id,
-//! exactly one wins (Ok(true)) and 99 lose (Ok(false)). Wall time MUST be < 1 s.
+//! exactly one wins and 99 lose. Wall time MUST be < 1 s.
 //!
 //! Why this test exists:
-//! - REF-02 (Phase 66) will swap RwLock<HashMap> for DashMap in approval_manager.
-//! - DATA-04 (Phase 63) will tighten transactional isolation via SELECT FOR UPDATE.
-//! - This test pins the OBSERVABLE behavior so neither change can silently regress.
-//!
-//! Phase 61 invariant: this test passes on the UNMODIFIED v0.18.0 code today.
+//! - REF-02 (Phase 66) swapped RwLock<HashMap> for DashMap in approval_manager.
+//! - DATA-04 (Phase 63) tightened transactional isolation via SELECT FOR UPDATE
+//!   and replaced the `Result<bool>` shim with the typed `resolve_approval_strict`.
+//! - TIER 2.1 removed the legacy `resolve_approval` `Result<bool>` wrapper; the
+//!   tests below now call `resolve_approval_strict` directly and translate the
+//!   typed error variants to the same race-outcome contract.
+//! - This test pins the OBSERVABLE behavior so future changes can't silently
+//!   regress the exactly-once contract.
 //!
 //! Requires a functional Docker daemon for the ephemeral PostgreSQL container —
 //! CI matrix (Plan 06) provides this.
@@ -18,7 +21,7 @@ mod support;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hydeclaw_core::db::approvals::{create_approval, resolve_approval};
+use hydeclaw_core::db::approvals::{create_approval, resolve_approval_strict, ApprovalError};
 use serde_json::json;
 use support::TestHarness;
 use tokio::time::timeout;
@@ -44,7 +47,7 @@ async fn test_test_03_approval_race_exactly_once_db_layer() {
         .await
         .expect("create_approval must succeed against migrated schema");
 
-        // 2. Race: 100 concurrent resolve_approval calls.
+        // 2. Race: 100 concurrent resolve_approval_strict calls.
         //
         // `flavor = "multi_thread", worker_threads = 4` is REQUIRED — a single-
         // threaded runtime would serialize the 100 tasks and defeat the race.
@@ -55,7 +58,7 @@ async fn test_test_03_approval_race_exactly_once_db_layer() {
         for i in 0..N {
             let pool = Arc::clone(&pool);
             handles.push(tokio::spawn(async move {
-                resolve_approval(
+                resolve_approval_strict(
                     &pool,
                     approval_id,
                     "approved",
@@ -65,15 +68,17 @@ async fn test_test_03_approval_race_exactly_once_db_layer() {
             }));
         }
 
-        // 3. Collect outcomes.
+        // 3. Collect outcomes — translate typed errors to the legacy
+        //    win/loss/error contract that this characterization test pins.
         let mut wins = 0usize;
         let mut losses = 0usize;
         let mut errors = 0usize;
         for h in handles {
             match h.await.expect("task panicked") {
-                Ok(true) => wins += 1,
-                Ok(false) => losses += 1,
-                Err(_) => errors += 1,
+                Ok(()) => wins += 1,
+                Err(ApprovalError::AlreadyResolved { .. })
+                | Err(ApprovalError::NotFound { .. }) => losses += 1,
+                Err(ApprovalError::Db(_)) => errors += 1,
             }
         }
         let elapsed = start.elapsed();
@@ -110,17 +115,12 @@ async fn test_test_03_approval_race_exactly_once_db_layer() {
 
 /// Sensitivity probe: double-resolve of the SAME existing approval.
 ///
-/// Creates one approval row, then sequentially calls resolve_approval TWICE.
-/// Asserts: first call returns Ok(true) (transitioned pending → approved),
-/// second call returns Ok(false) (status no longer 'pending', WHERE clause
-/// matches zero rows). This proves the row-state path is the gating factor:
-/// if the test ever observed (true, true) it would mean the WHERE clause was
-/// removed and the exactly-once race assertion would degenerate to a tautology.
-///
-/// Why this shape (not "resolve a non-existent id"): `resolve_approval` returns
-/// Ok(false) for both "row missing" AND "row not pending" — those two paths
-/// are indistinguishable at this layer. Probing with double-resolve cleanly
-/// targets the row-state contract that the race relies on.
+/// Creates one approval row, then sequentially calls `resolve_approval_strict`
+/// TWICE. Asserts: first call returns `Ok(())` (transitioned pending → approved),
+/// second call returns `Err(AlreadyResolved)` (the SELECT FOR UPDATE sees the
+/// new status). This proves the row-state path is the gating factor: if the
+/// test ever observed two `Ok(())` it would mean the status check was removed
+/// and the exactly-once race assertion would degenerate to a tautology.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_test_03_approval_race_sensitivity_double_resolve_loses_second() {
     timeout(Duration::from_secs(30), async {
@@ -138,23 +138,20 @@ async fn test_test_03_approval_race_sensitivity_double_resolve_loses_second() {
         .await
         .expect("create_approval must succeed");
 
-        let first = resolve_approval(&pool, approval_id, "approved", "first")
+        resolve_approval_strict(&pool, approval_id, "approved", "first")
             .await
-            .expect("first resolve_approval must succeed (no DB error)");
-        assert!(
-            first,
-            "first resolve_approval against pending row must return Ok(true); got Ok(false)"
-        );
+            .expect("first resolve_approval_strict against pending row must return Ok(())");
 
-        let second = resolve_approval(&pool, approval_id, "approved", "second")
-            .await
-            .expect("second resolve_approval must succeed (no DB error)");
-        assert!(
-            !second,
-            "second resolve_approval against already-resolved row must return Ok(false); \
-             got Ok(true) — the WHERE status='pending' clause may have been removed, \
-             which would degenerate the exactly-once race assertion to a tautology"
-        );
+        let second = resolve_approval_strict(&pool, approval_id, "approved", "second").await;
+        match second {
+            Err(ApprovalError::AlreadyResolved { .. }) => {}
+            other => panic!(
+                "second resolve_approval_strict against already-resolved row must return \
+                 Err(AlreadyResolved); got {other:?} — the WHERE status='pending' check may \
+                 have been removed, which would degenerate the exactly-once race assertion \
+                 to a tautology"
+            ),
+        }
     })
     .await
     .expect("sensitivity test exceeded 30s");

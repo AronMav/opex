@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 /// Phase 63 DATA-04: structured error for [`resolve_approval_strict`].
 ///
-/// The legacy [`resolve_approval`] `-> Result<bool>` wrapper still exists and maps
-/// `NotFound` / `AlreadyResolved` → `Ok(false)` so the Phase 61-03 characterization
-/// test (`integration_approval_race.rs`) continues to pass UNCHANGED.
+/// `NotFound` and `AlreadyResolved` are surfaced explicitly so callers can
+/// distinguish "I won the race" (`Ok(())`) from "someone else won" or
+/// "the row is gone". `Db` wraps any underlying sqlx error.
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalError {
     #[error("approval {id} not found")]
@@ -115,33 +115,6 @@ pub async fn resolve_approval_strict(
             tx.commit().await?;
             Ok(())
         }
-    }
-}
-
-/// Legacy wrapper over [`resolve_approval_strict`]. Preserves the
-/// `Result<bool>` signature that Phase 61-03's characterization test
-/// (`integration_approval_race.rs`) depends on.
-///
-/// Mapping:
-///
-/// ```text
-///   Ok(())                         → Ok(true)    // this caller won the race
-///   Err(AlreadyResolved { .. })    → Ok(false)   // someone else won, or already resolved
-///   Err(NotFound { .. })           → Ok(false)   // row missing (legacy ambiguous semantics)
-///   Err(Db(e))                     → Err(anyhow!(e))
-/// ```
-pub async fn resolve_approval(
-    db: &PgPool,
-    id: Uuid,
-    status: &str,
-    resolved_by: &str,
-) -> Result<bool> {
-    match resolve_approval_strict(db, id, status, resolved_by).await {
-        Ok(()) => Ok(true),
-        Err(ApprovalError::AlreadyResolved { .. }) | Err(ApprovalError::NotFound { .. }) => {
-            Ok(false)
-        }
-        Err(ApprovalError::Db(e)) => Err(e.into()),
     }
 }
 

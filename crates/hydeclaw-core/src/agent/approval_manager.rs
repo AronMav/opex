@@ -242,21 +242,37 @@ impl ApprovalManager {
             Ok(Err(_)) => {
                 // Sender dropped (pruned or retain cleanup) — resolve DB record.
                 self.waiters.remove(&approval_id);
-                let _ = crate::db::approvals::resolve_approval(
+                let _ = crate::db::approvals::resolve_approval_strict(
                     &self.db, approval_id, "cancelled", "system",
                 ).await;
                 ApprovalOutcome::Cancelled
             }
             Err(_) => {
                 // Timeout — attempt to mark as timed out in DB.
-                let was_pending = crate::db::approvals::resolve_approval(
+                // `was_pending` is true iff our UPDATE actually transitioned the
+                // row pending → timeout (i.e. we won the race against any
+                // concurrent webhook resolver). Both AlreadyResolved/NotFound
+                // map to false; raw DB errors are logged and treated as false.
+                let was_pending = match crate::db::approvals::resolve_approval_strict(
                     &self.db,
                     approval_id,
                     "timeout",
                     "system",
                 )
                 .await
-                .unwrap_or(false);
+                {
+                    Ok(()) => true,
+                    Err(crate::db::approvals::ApprovalError::AlreadyResolved { .. })
+                    | Err(crate::db::approvals::ApprovalError::NotFound { .. }) => false,
+                    Err(crate::db::approvals::ApprovalError::Db(e)) => {
+                        tracing::warn!(
+                            approval_id = %approval_id,
+                            error = ?e,
+                            "resolve_approval_strict(timeout) DB error"
+                        );
+                        false
+                    }
+                };
 
                 // Drop the waiter. DashMap has no cross-await lock to hold, so
                 // the prior "release waiters lock before acquiring sse_event_tx"
