@@ -167,7 +167,6 @@ export default function ChatPage() {
 
     // Already restored this agent — skip
     if (restoredAgents.current.has(currentAgent)) return;
-    restoredAgents.current.add(currentAgent);
 
     const agentState = useChatStore.getState().agents[currentAgent];
 
@@ -179,17 +178,20 @@ export default function ChatPage() {
     // If has activeSessionId but UI shows new-chat — WS set the ID but didn't load the session.
     // Load it now.
     if (agentState?.activeSessionId && agentState?.messageSource?.mode === "new-chat") {
+      restoredAgents.current.add(currentAgent);
       useChatStore.getState().selectSession(agentState.activeSessionId, currentAgent);
       return;
     }
 
     // If already viewing a real session (live or history) — don't touch
     if (agentState?.activeSessionId && agentState?.messageSource?.mode !== "new-chat") {
+      restoredAgents.current.add(currentAgent);
       return;
     }
 
     // Priority 1: URL ?s= param (deep link)
     if (urlSessionId && sessions.some((s) => s.id === urlSessionId)) {
+      restoredAgents.current.add(currentAgent);
       const urlSession = sessions.find((s) => s.id === urlSessionId);
       useChatStore.getState().selectSession(urlSessionId, currentAgent);
       // If session is still running, mark it so ChatThread's auto-resume effect picks it up
@@ -199,8 +201,21 @@ export default function ChatPage() {
       return;
     }
 
+    // IMPORTANT: If urlSessionId exists but is NOT in current agent's sessions, it
+    // likely belongs to a different agent. Do NOT fall through to Priority 2
+    // (most-recent session) — selecting another session here triggers the URL-sync
+    // effect to overwrite ?s= with the wrong session id, clobbering the deep link
+    // before the cross-agent resolver effect has a chance to switch us to the
+    // correct agent. Bail out and let the resolver handle it; deliberately do NOT
+    // mark currentAgent as restored so a later visit (without deep link) still
+    // restores normally.
+    if (urlSessionId && !sessions.some((s) => s.id === urlSessionId)) {
+      return;
+    }
+
     // Priority 2: Most recent session
     if (sessions.length > 0) {
+      restoredAgents.current.add(currentAgent);
       useChatStore.getState().selectSession(sessions[0].id, currentAgent);
       if (sessions[0].run_status === "running") {
         useChatStore.getState().markSessionActive(currentAgent, sessions[0].id);
@@ -208,19 +223,33 @@ export default function ChatPage() {
       return;
     }
 
+    restoredAgents.current.add(currentAgent);
     useChatStore.getState().newChat();
   }, [sessionsReady, sessions, currentAgent, urlSessionId]);
 
-  // Sync activeSessionId → URL ?s= param
+  // Sync activeSessionId → URL ?s= param.
+  //
+  // Guard: if URL already carries a ?s= that points to a session NOT in the current
+  // agent's sessions list, the cross-agent resolver is likely mid-flight (it will
+  // switch agents to the deep link's owner). Don't overwrite ?s= in that window —
+  // doing so would clobber the deep link before the resolver completes.
   useEffect(() => {
     if (!activeSessionId) return;
     const currentUrlSession = searchParams.get("s");
-    if (currentUrlSession !== activeSessionId) {
-      const url = new URL(window.location.href);
-      url.searchParams.set("s", activeSessionId);
-      window.history.replaceState(null, "", url.pathname + url.search);
+    if (currentUrlSession === activeSessionId) return;
+
+    if (
+      currentUrlSession &&
+      sessions.length > 0 &&
+      !sessions.some((s) => s.id === currentUrlSession)
+    ) {
+      return;
     }
-  }, [activeSessionId, searchParams]);
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("s", activeSessionId);
+    window.history.replaceState(null, "", url.pathname + url.search);
+  }, [activeSessionId, searchParams, sessions]);
 
   // Refresh session list and currently viewed session when backend finishes processing
   useWsSubscription("session_updated", useCallback(() => {
