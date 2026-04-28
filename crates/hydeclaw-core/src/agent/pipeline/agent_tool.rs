@@ -196,7 +196,10 @@ pub async fn wait_for_agent_result(
         };
 
         if let Some(last_result) = result {
-            let result_text = last_result.unwrap_or_else(|| "(no result)".to_string());
+            let result_text = match last_result {
+                Some(s) if !s.trim().is_empty() => s,
+                _ => "(no result)".to_string(),
+            };
             return serde_json::json!({
                 "status": "completed",
                 "agent": target,
@@ -411,4 +414,37 @@ pub async fn handle_agent_collect(
 
     // Block until the agent completes (same logic as sync run).
     wait_for_agent_result(pools, session_id, target, std::time::Duration::from_secs(300)).await
+}
+
+#[cfg(test)]
+mod tests {
+    // Verify that an empty or whitespace-only last_result is treated identically to None.
+    // Regression for the bug where `run_subagent_with_session` returned Ok("") (reasoning model
+    // produced only <think> blocks) and the caller received {"result":""} instead of
+    // {"result":"(no result)"}.
+    #[test]
+    fn empty_last_result_yields_no_result_string() {
+        let cases: &[(&str, &str)] = &[
+            ("real result", "real result"),
+            ("", "(no result)"),
+            ("   ", "(no result)"),
+            ("\n\t", "(no result)"),
+        ];
+        for (input, expected) in cases {
+            let result_text = match Some(input.to_string()) {
+                Some(s) if !s.trim().is_empty() => s,
+                _ => "(no result)".to_string(),
+            };
+            assert_eq!(result_text, *expected, "input={input:?}");
+        }
+    }
+
+    #[test]
+    fn none_last_result_yields_no_result_string() {
+        let result_text: String = match None::<String> {
+            Some(s) if !s.trim().is_empty() => s,
+            _ => "(no result)".to_string(),
+        };
+        assert_eq!(result_text, "(no result)");
+    }
 }

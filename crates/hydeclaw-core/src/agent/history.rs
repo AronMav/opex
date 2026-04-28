@@ -1,5 +1,6 @@
 use anyhow::Result;
 use hydeclaw_types::{Message, MessageRole, ToolDefinition};
+use crate::agent::thinking::strip_thinking;
 
 use super::providers::LlmProvider;
 use super::tool_loop::LoopDetector;
@@ -173,16 +174,16 @@ pub async fn compact_if_needed(
         messages.push(sys);
     }
 
-    messages.push(Message {
-        role: MessageRole::System,
-        content: format!(
-            "[Previous conversation summary]\n{}",
-            summary_response.content
-        ),
-        tool_calls: None,
-        tool_call_id: None,
-        thinking_blocks: vec![],
-    });
+    let summary_text = strip_thinking(&summary_response.content);
+    if !summary_text.trim().is_empty() {
+        messages.push(Message {
+            role: MessageRole::System,
+            content: format!("[Previous conversation summary]\n{}", summary_text),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+        });
+    }
 
     messages.extend(preserved);
 
@@ -266,8 +267,35 @@ fn format_messages_for_compaction(messages: &[Message]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hydeclaw_types::{Message, MessageRole, ToolCall};
+    use async_trait::async_trait;
+    use hydeclaw_types::{LlmResponse, Message, MessageRole, ToolCall, ToolDefinition};
+    use tokio::sync::mpsc;
     use crate::agent::tool_loop::{LoopDetector, ToolLoopConfig};
+    use crate::agent::providers::LlmProvider;
+
+    struct StaticProvider(String);
+
+    #[async_trait]
+    impl LlmProvider for StaticProvider {
+        async fn chat(&self, _msgs: &[Message], _tools: &[ToolDefinition]) -> anyhow::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: self.0.clone(),
+                tool_calls: vec![],
+                usage: None,
+                finish_reason: None,
+                model: None,
+                provider: None,
+                fallback_notice: None,
+                tools_used: vec![],
+                iterations: 0,
+                thinking_blocks: vec![],
+            })
+        }
+        async fn chat_stream(&self, msgs: &[Message], tools: &[ToolDefinition], _tx: mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+            self.chat(msgs, tools).await
+        }
+        fn name(&self) -> &str { "static" }
+    }
 
     fn make_message(role: MessageRole, content: &str) -> Message {
         Message {
@@ -428,5 +456,72 @@ mod tests {
         remove_progress_header(&mut msgs);
         assert_eq!(msgs.len(), 2, "progress header system message should be removed");
         assert!(!msgs.iter().any(|m| m.content.starts_with("[Session Progress]")));
+    }
+
+    // ── compact_if_needed: thinking-block summary regression ────────────────
+
+    fn make_compactable_messages() -> Vec<Message> {
+        // Build enough tokens to trigger compaction (>80% of a small threshold).
+        // compact_if_needed threshold = max_tokens * 80/100.
+        // We pass max_tokens=1 to force compaction regardless of actual size.
+        vec![
+            make_message(MessageRole::System, "You are an assistant."),
+            make_message(MessageRole::User, "Hello"),
+            make_message(MessageRole::Assistant, "Hi there"),
+            make_message(MessageRole::User, "How are you"),
+            make_message(MessageRole::Assistant, "I'm fine"),
+            make_message(MessageRole::User, "What is 2+2"),
+            make_message(MessageRole::Assistant, "4"),
+        ]
+    }
+
+    #[tokio::test]
+    async fn compact_thinking_only_summary_skips_summary_message() {
+        // Regression: when a reasoning model returns only <think>…</think> as the compaction
+        // summary (no visible text), strip_thinking would produce "" and a useless
+        // "[Previous conversation summary]\n" message would be injected.
+        // Now it should be skipped entirely.
+        let provider = StaticProvider("<think>internal reasoning only</think>".to_string());
+        let mut msgs = make_compactable_messages();
+        compact_if_needed(&mut msgs, &provider, None, 1, 2, None).await.unwrap();
+
+        let summary_msgs: Vec<_> = msgs.iter()
+            .filter(|m| m.role == MessageRole::System && m.content.contains("[Previous conversation summary]"))
+            .collect();
+        assert!(
+            summary_msgs.is_empty(),
+            "thinking-only summary should be skipped, but got: {:?}",
+            summary_msgs.iter().map(|m| &m.content).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_real_summary_is_injected_stripped_of_thinking() {
+        // When the summary contains both thinking and visible text, only visible text is kept.
+        let provider = StaticProvider(
+            "<think>reasoning</think>Summary: user asked math questions.".to_string()
+        );
+        let mut msgs = make_compactable_messages();
+        compact_if_needed(&mut msgs, &provider, None, 1, 2, None).await.unwrap();
+
+        let summary_msg = msgs.iter().find(|m| {
+            m.role == MessageRole::System && m.content.contains("[Previous conversation summary]")
+        });
+        assert!(summary_msg.is_some(), "real summary should be injected");
+        let content = &summary_msg.unwrap().content;
+        assert!(content.contains("Summary: user asked math questions."), "got: {content}");
+        assert!(!content.contains("<think>"), "thinking tags must be stripped, got: {content}");
+    }
+
+    #[tokio::test]
+    async fn compact_empty_summary_skips_summary_message() {
+        let provider = StaticProvider(String::new());
+        let mut msgs = make_compactable_messages();
+        compact_if_needed(&mut msgs, &provider, None, 1, 2, None).await.unwrap();
+
+        let has_summary = msgs.iter().any(|m| {
+            m.role == MessageRole::System && m.content.contains("[Previous conversation summary]")
+        });
+        assert!(!has_summary, "empty summary should not inject a summary message");
     }
 }

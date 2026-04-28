@@ -1,7 +1,7 @@
 //! Thinking block handling — stripping `<think>`, `<thinking>`, `<thought>`, `<antthinking>`
 //! tags from LLM responses and streaming chunks.
 
-use hydeclaw_types::IncomingMessage;
+use hydeclaw_types::{IncomingMessage, Message, MessageRole};
 
 /// Check if thinking blocks should be stripped for this message.
 /// Returns false (don't strip) when /think directive is present in context.
@@ -207,6 +207,25 @@ pub(crate) fn looks_incomplete(text: &str) -> bool {
     let has_exclusion = exclusions.iter().any(|m| lower.contains(m));
 
     (has_marker || is_open_code_block || ends_with_list_marker) && !has_exclusion
+}
+
+/// Extract a non-empty result string from LLM `content` with a fallback to the last tool
+/// message in `messages`.
+///
+/// When a reasoning model outputs only `<think>…</think>` with no visible text, `strip_thinking`
+/// returns `""`. Rather than propagating an empty result, we fall back to the last tool-call
+/// output (which contains the agent's actual work). If there are no tool messages either, we
+/// return `"(no result)"`.
+pub(crate) fn extract_result_text(content: &str, messages: &[Message]) -> String {
+    let stripped = strip_thinking(content);
+    if !stripped.trim().is_empty() {
+        return stripped;
+    }
+    if let Some(last_tool) = messages.iter().rev().find(|m| m.role == MessageRole::Tool) {
+        let preview: String = last_tool.content.chars().take(3000).collect();
+        return format!("[No summary from agent. Last tool output:]\n{}", preview);
+    }
+    "(no result)".to_string()
 }
 
 #[cfg(test)]
@@ -417,5 +436,96 @@ mod tests {
         let out1 = f.process("hel");
         let out2 = f.process("lo");
         assert_eq!(out1 + &out2, "hello");
+    }
+
+    // ── extract_result_text ──────────────────────────────────────────────────
+
+    fn tool_msg(content: &str) -> Message {
+        Message {
+            role: MessageRole::Tool,
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: Some("tc1".to_string()),
+            thinking_blocks: vec![],
+        }
+    }
+
+    fn user_msg(content: &str) -> Message {
+        Message {
+            role: MessageRole::User,
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+        }
+    }
+
+    #[test]
+    fn extract_normal_text_returned_unchanged() {
+        assert_eq!(extract_result_text("Hello world", &[]), "Hello world");
+    }
+
+    #[test]
+    fn extract_strips_thinking_returns_visible_text() {
+        let result = extract_result_text("<think>reasoning</think>Here is my answer.", &[]);
+        assert_eq!(result, "Here is my answer.");
+    }
+
+    #[test]
+    fn extract_only_thinking_falls_back_to_last_tool_message() {
+        let msgs = vec![tool_msg("docker pull output: sha256:abc123")];
+        let result = extract_result_text("<think>only thinking here</think>", &msgs);
+        assert!(
+            result.starts_with("[No summary from agent. Last tool output:]"),
+            "expected fallback prefix, got: {result}"
+        );
+        assert!(result.contains("docker pull output: sha256:abc123"), "got: {result}");
+    }
+
+    #[test]
+    fn extract_empty_content_no_tool_messages_returns_no_result() {
+        assert_eq!(extract_result_text("", &[]), "(no result)");
+    }
+
+    #[test]
+    fn extract_empty_content_uses_last_tool_message() {
+        let msgs = vec![user_msg("do something"), tool_msg("search results here")];
+        let result = extract_result_text("", &msgs);
+        assert!(result.contains("search results here"), "got: {result}");
+    }
+
+    #[test]
+    fn extract_uses_last_of_multiple_tool_messages() {
+        let msgs = vec![tool_msg("first tool"), tool_msg("second tool")];
+        let result = extract_result_text("", &msgs);
+        assert!(result.contains("second tool"), "should use last tool msg, got: {result}");
+        assert!(!result.contains("first tool"), "should not use first tool msg, got: {result}");
+    }
+
+    #[test]
+    fn extract_tool_output_truncated_at_3000_chars() {
+        let long_output = "x".repeat(5000);
+        let msgs = vec![tool_msg(&long_output)];
+        let result = extract_result_text("", &msgs);
+        let preview_part = result.splitn(2, '\n').nth(1).unwrap_or("");
+        assert_eq!(
+            preview_part.chars().count(),
+            3000,
+            "preview should be capped at 3000 chars"
+        );
+    }
+
+    #[test]
+    fn extract_whitespace_only_content_treated_as_empty() {
+        let msgs = vec![tool_msg("fallback content")];
+        let result = extract_result_text("   \n\t  ", &msgs);
+        assert!(result.contains("fallback content"), "whitespace-only should fall back, got: {result}");
+    }
+
+    #[test]
+    fn extract_non_tool_messages_not_used_as_fallback() {
+        let msgs = vec![user_msg("user says something")];
+        let result = extract_result_text("", &msgs);
+        assert_eq!(result, "(no result)", "only tool messages should be used as fallback");
     }
 }

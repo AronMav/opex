@@ -7,7 +7,7 @@ use hydeclaw_types::{Message, MessageRole};
 use super::CommandContext;
 use crate::agent::context_builder::ContextBuilderDeps;
 use crate::agent::engine::AgentEngine;
-use crate::agent::thinking::strip_thinking;
+use crate::agent::thinking::extract_result_text;
 use crate::agent::tool_loop::LoopDetector;
 use crate::agent::workspace;
 
@@ -191,7 +191,7 @@ pub async fn handle_openai(
         }
     }
 
-    let final_response = strip_thinking(&final_response);
+    let final_response = extract_result_text(&final_response, &messages);
 
     // Send to chunk consumer if streaming requested (MiniMax sends full response at once)
     if let Some(ref tx) = chunk_tx

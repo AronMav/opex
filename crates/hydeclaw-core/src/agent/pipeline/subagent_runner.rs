@@ -9,7 +9,7 @@ use super::CommandContext;
 use crate::agent::context_builder::ContextBuilderDeps;
 use crate::agent::engine::AgentEngine;
 use crate::agent::subagent_state;
-use crate::agent::thinking::strip_thinking;
+use crate::agent::thinking::extract_result_text;
 use crate::agent::tool_loop::LoopDetector;
 use crate::agent::workspace;
 
@@ -128,7 +128,7 @@ pub async fn run_subagent_with_session(
             && std::time::Instant::now() > dl {
                 tracing::warn!(iteration, "subagent deadline reached, returning partial result");
                 let forced = cfg.provider.chat(&messages, &[]).await?;
-                return Ok(strip_thinking(&forced.content));
+                return Ok(extract_result_text(&forced.content, &messages));
             }
 
         let response = if loop_config.compact_on_overflow {
@@ -138,7 +138,7 @@ pub async fn run_subagent_with_session(
         };
 
         if response.tool_calls.is_empty() {
-            return Ok(strip_thinking(&response.content));
+            return Ok(extract_result_text(&response.content, &messages));
         }
 
         tracing::info!(
@@ -225,7 +225,7 @@ pub async fn run_subagent_with_session(
 
         if loop_broken || iteration == effective_max - 1 {
             let forced = cfg.provider.chat(&messages, &[]).await?;
-            return Ok(strip_thinking(&forced.content));
+            return Ok(extract_result_text(&forced.content, &messages));
         }
     }
 
