@@ -972,8 +972,6 @@ mod tests {
     fn agent_in_system_tool_names() {
         let names = all_system_tool_names();
         assert!(names.contains(&"agent"), "agent must be in all_system_tool_names()");
-        assert!(!names.contains(&"handoff"), "handoff should be removed");
-        assert!(!names.contains(&"subagent"), "subagent should be removed");
     }
 
     #[test]

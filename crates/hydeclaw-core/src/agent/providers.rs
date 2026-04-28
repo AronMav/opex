@@ -236,10 +236,6 @@ pub(crate) const OPENAI_COMPAT_PROVIDERS: &[(&str, &str, &str)] = &[
     ("perplexity", "https://api.perplexity.ai",      "PERPLEXITY_API_KEY"),
 ];
 
-// NOTE: `create_provider` (free-form provider_name path) was removed in Task 12
-// in favor of the unified `build_provider(row, timeouts, cancel)` entry point.
-// Legacy callers now go through DB lookup → ProviderRow → build_provider.
-
 /// Create a CLI provider from a preset with DB option overrides.
 /// Returns `None` if the preset ID is not recognized.
 #[allow(clippy::too_many_arguments, dead_code)]
@@ -259,10 +255,6 @@ pub fn create_cli_provider_with_options(
         preset_id, config, model.to_string(), sandbox, agent_name.to_string(), workspace_dir.to_string(), base, secrets, api_key,
     )))
 }
-
-// NOTE: `create_provider_from_route` was removed in Task 12. Routes now carry
-// only `connection` + overrides — the route factory goes through DB lookup +
-// `build_provider`.
 
 /// Create a routing provider from ordered route configs. Each route references a
 /// named DB provider via `connection`; this function resolves each to a
