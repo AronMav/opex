@@ -102,15 +102,6 @@ pub async fn mark_all_read(db: &PgPool) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
-/// Count unread notifications.
-#[allow(dead_code)]
-pub async fn unread_count(db: &PgPool) -> Result<i64> {
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notifications WHERE read = FALSE")
-        .fetch_one(db)
-        .await?;
-    Ok(count)
-}
-
 /// Delete notifications older than 30 days.
 pub async fn cleanup_old_notifications(db: &PgPool) -> anyhow::Result<u64> {
     let result = sqlx::query(

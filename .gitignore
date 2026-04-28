@@ -17,7 +17,6 @@ __pycache__/
 .pytest_cache/
 .next/
 out/
-ui-lit/
 .playwright-mcp/
 .claude/
 CLAUDE.md

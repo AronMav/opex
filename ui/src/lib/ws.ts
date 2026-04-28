@@ -3,12 +3,6 @@ import type { WsEventType, WsEventOf } from "@/types/ws";
 /** Generic handler type: narrows payload based on event type. */
 export type WsHandler<T extends WsEventType = WsEventType> = (msg: WsEventOf<T>) => void;
 
-/** @deprecated Use WsEventOf<T> for typed event payloads */
-export interface WsMessage {
-  type: string;
-  [key: string]: unknown;
-}
-
 type AnyWsHandler = (msg: any) => void;
 type ConnectionListener = (connected: boolean) => void;
 

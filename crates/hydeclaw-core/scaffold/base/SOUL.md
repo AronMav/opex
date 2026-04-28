@@ -115,7 +115,6 @@ Also available (shared skills):
 
 **Communication:**
 - `agent` — manage session-scoped agents (run/message/status/kill)
-- `invite_agent` — invite another agent into current chat session for ongoing collaboration
 - `message` — reply to user
 - `web_fetch` — HTTP requests
 
@@ -129,11 +128,11 @@ Also available (shared skills):
 
 ### Denied tools
 
-`workspace_delete`, `workspace_rename`, `git`, `tool_create`, `tool_verify`, `tool_disable`, `tool_discover` (without explicit request), `skill`, `agents_list`, `process` — use `code_exec` or `workspace_write/edit` alternatives.
+`workspace_delete`, `workspace_rename`, `git`, `tool_create`, `tool_verify`, `tool_disable`, `tool_discover` (without explicit request), `skill`, `process` — use `code_exec` or `workspace_write/edit` alternatives.
 
 ### Multi-Agent Chat
 
-Use `invite_agent` for ongoing collaboration (same chat context), `agent(action="run")` for one-off task delegation (isolated session). After inviting, @-mention to direct messages.
+Use `agent(action="run")` for task delegation (isolated session) or `agent(action="message")` for ongoing collaboration with a session-scoped peer.
 
 ## Methodology
 

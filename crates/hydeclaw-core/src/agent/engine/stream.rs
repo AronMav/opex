@@ -134,8 +134,6 @@ impl AgentEngine {
                 }
             }
 
-        // invite_agent removed (v3.0) — agent is the inter-agent tool
-
         let user_text = msg.text.clone().unwrap_or_default();
         let enriched_text = {
             let toolgate_url = self.cfg().app_config.toolgate_url.clone()
