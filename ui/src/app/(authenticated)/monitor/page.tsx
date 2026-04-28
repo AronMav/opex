@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState, useCallback, memo } from "react";
+import { Suspense, useEffect, useRef, useState, useCallback, memo, Fragment } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut } from "@/lib/api";
@@ -9,7 +9,7 @@ import { useAutoRefresh } from "@/hooks/use-auto-refresh";
 import { useTranslation } from "@/hooks/use-translation";
 import { useWsStore } from "@/stores/ws-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
-import { useUsage, useDailyUsage, useApprovals, useResolveApproval, useAudit } from "@/lib/queries";
+import { useUsage, useDailyUsage, useApprovals, useResolveApproval, useAudit, useSessionFailures } from "@/lib/queries";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,7 @@ import {
   ShieldCheck, Check, X,
   type LucideProps,
 } from "lucide-react";
-import type { StatusInfo, StatsInfo, UsageResponse, UsageSummary, DailyUsageResponse, AuditEvent } from "@/types/api";
+import type { StatusInfo, StatsInfo, UsageResponse, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry } from "@/types/api";
 import type { LogEntry } from "@/types/api";
 import type { WsLog } from "@/types/ws";
 import type { TranslationKey } from "@/i18n/types";
@@ -405,6 +405,21 @@ const EVENT_COLORS: Record<string, string> = {
 
 const AUDIT_PAGE_SIZE = 50;
 
+// ── Failures helpers ────────────────────────────────────────────────────────
+
+const FAILURE_KIND_BADGE: Record<string, string> = {
+  sub_agent_timeout: "bg-orange-500/15 text-orange-600 border-orange-500/30",
+  provider_error: "bg-destructive/15 text-destructive border-destructive/30",
+  llm_error: "bg-destructive/15 text-destructive border-destructive/30",
+  max_iterations: "bg-warning/15 text-warning border-warning/30",
+  tool_error: "bg-warning/15 text-warning border-warning/30",
+  other: "bg-muted text-muted-foreground border-border",
+};
+
+function failureKindClass(kind: string): string {
+  return FAILURE_KIND_BADGE[kind] ?? FAILURE_KIND_BADGE.other!;
+}
+
 const LOGS_LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"] as const;
 const LEVEL_PRIORITY: Record<string, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
 const LEVEL_COLORS: Record<string, string> = {
@@ -671,6 +686,19 @@ function MonitorPageInner() {
       })
     : auditEvents;
 
+  // ── Failures state ────────────────────────────────────────────────────────
+
+  const [failuresAgent, setFailuresAgent] = useState<string>("_all");
+  const [failuresExpandedId, setFailuresExpandedId] = useState<string | null>(null);
+  const failuresAgentParam = failuresAgent === "_all" ? null : failuresAgent;
+  const {
+    data: failuresData,
+    isFetching: failuresLoading,
+    refetch: failuresRefetch,
+  } = useSessionFailures(failuresAgentParam, 50);
+  const failures: SessionFailureEntry[] = failuresData?.failures ?? [];
+  const failuresTotal = failuresData?.total ?? 0;
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -684,6 +712,7 @@ function MonitorPageInner() {
             <TabsTrigger value="audit" className="text-xs">{t("monitor.tab_audit")}</TabsTrigger>
             <TabsTrigger value="statistics" className="text-xs">{t("monitor.tab_statistics")}</TabsTrigger>
             <TabsTrigger value="approvals" className="text-xs">{t("monitor.tab_approvals")}</TabsTrigger>
+            <TabsTrigger value="failures" className="text-xs">{t("monitor.tab_failures")}</TabsTrigger>
           </TabsList>
         </div>
 
@@ -1634,6 +1663,157 @@ function MonitorPageInner() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        {/* Failures tab */}
+        <TabsContent
+          value="failures"
+          forceMount
+          className={activeTab !== "failures" ? "hidden" : "flex-1 overflow-y-auto"}
+        >
+          <div className="p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+            <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="font-display text-lg font-bold tracking-tight text-foreground flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-warning" />
+                  {t("monitor.failures.title")}
+                </h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {t("monitor.failures.subtitle", { total: String(failuresTotal) })}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select value={failuresAgent} onValueChange={setFailuresAgent}>
+                  <SelectTrigger className="h-8 w-[180px] text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_all" className="text-xs">{t("monitor.failures.agent_all")}</SelectItem>
+                    {auditAgents.map((a) => (
+                      <SelectItem key={a} value={a} className="text-xs">{a}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => failuresRefetch()}
+                  disabled={failuresLoading}
+                >
+                  <RefreshCw className={`mr-2 h-4 w-4 ${failuresLoading ? "animate-spin" : ""}`} />
+                  {t("common.refresh")}
+                </Button>
+              </div>
+            </div>
+
+            {failures.length === 0 ? (
+              <EmptyState icon={CheckCircle2} text={t("monitor.failures.empty")} />
+            ) : (
+              <div className="rounded-lg border border-border bg-card overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/30 text-xs text-muted-foreground">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_time")}</th>
+                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_agent")}</th>
+                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_kind")}</th>
+                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_error")}</th>
+                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_tool")}</th>
+                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_provider")}</th>
+                      <th className="text-right px-3 py-2 font-medium">{t("monitor.failures.col_iter")}</th>
+                      <th className="text-right px-3 py-2 font-medium">{t("monitor.failures.col_dur")}</th>
+                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_session")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {failures.map((f) => {
+                      const expanded = failuresExpandedId === f.id;
+                      return (
+                        <Fragment key={f.id}>
+                          <tr
+                            className="border-t border-border/50 hover:bg-muted/20 cursor-pointer"
+                            onClick={() => setFailuresExpandedId(expanded ? null : f.id)}
+                          >
+                            <td className="px-3 py-2 whitespace-nowrap font-mono text-xs text-muted-foreground tabular-nums">
+                              {relativeTime(f.failed_at, locale)}
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs">{f.agent_id}</td>
+                            <td className="px-3 py-2">
+                              <Badge variant="outline" className={`text-[10px] ${failureKindClass(f.failure_kind)}`}>
+                                {f.failure_kind}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2 max-w-md">
+                              <span className="line-clamp-2 text-xs">{f.error_message}</span>
+                            </td>
+                            <td className="px-3 py-2 font-mono text-xs">{f.last_tool_name ?? "—"}</td>
+                            <td className="px-3 py-2 font-mono text-xs">
+                              {f.llm_provider ?? "—"}
+                              {f.llm_model ? <span className="text-muted-foreground">/{f.llm_model}</span> : null}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">
+                              {f.iteration_count ?? "—"}
+                            </td>
+                            <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">
+                              {f.duration_secs != null ? formatDuration(f.duration_secs * 1000) : "—"}
+                            </td>
+                            <td className="px-3 py-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  router.push(`/chat/?s=${f.session_id}`);
+                                }}
+                              >
+                                {t("monitor.failures.open_session")}
+                              </Button>
+                            </td>
+                          </tr>
+                          {expanded && (
+                            <tr className="bg-muted/10">
+                              <td colSpan={9} className="px-3 py-3">
+                                <div className="grid gap-3 md:grid-cols-2">
+                                  <div>
+                                    <p className="text-xs font-medium text-muted-foreground mb-1">
+                                      {t("monitor.failures.col_error")}
+                                    </p>
+                                    <pre className="font-mono text-xs whitespace-pre-wrap break-words bg-background/60 p-2 rounded border border-border/50">
+                                      {f.error_message}
+                                    </pre>
+                                  </div>
+                                  {f.last_tool_output && (
+                                    <div>
+                                      <p className="text-xs font-medium text-muted-foreground mb-1">
+                                        {t("monitor.failures.last_output")}
+                                      </p>
+                                      <pre className="font-mono text-xs whitespace-pre-wrap break-words bg-background/60 p-2 rounded border border-border/50 max-h-48 overflow-y-auto">
+                                        {f.last_tool_output}
+                                      </pre>
+                                    </div>
+                                  )}
+                                  {f.context && Object.keys(f.context).length > 0 && (
+                                    <div className="md:col-span-2">
+                                      <p className="text-xs font-medium text-muted-foreground mb-1">
+                                        {t("monitor.failures.context")}
+                                      </p>
+                                      <pre className="font-mono text-xs whitespace-pre-wrap break-words bg-background/60 p-2 rounded border border-border/50">
+                                        {JSON.stringify(f.context, null, 2)}
+                                      </pre>
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>

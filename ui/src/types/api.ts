@@ -314,3 +314,39 @@ export interface AgentTask {
   updated_at: string;
   steps: TaskStep[];
 }
+
+// ── Session failures ──────────────────────────────────────────────────────────
+// Source: crates/hydeclaw-core/src/gateway/handlers/session_failures.rs
+// Backed by migration 034.
+
+export type SessionFailureKind =
+  | "llm_error"
+  | "provider_error"
+  | "tool_error"
+  | "sub_agent_timeout"
+  | "max_iterations"
+  | "other"
+  | string; // free-form fallback
+
+export interface SessionFailureEntry {
+  id: string;
+  session_id: string;
+  agent_id: string;
+  failed_at: string;
+  failure_kind: SessionFailureKind;
+  error_message: string;
+  last_tool_name: string | null;
+  last_tool_output: string | null;
+  llm_provider: string | null;
+  llm_model: string | null;
+  iteration_count: number | null;
+  duration_secs: number | null;
+  context: Record<string, unknown> | null;
+}
+
+export interface SessionFailuresResponse {
+  failures: SessionFailureEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}

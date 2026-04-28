@@ -8,6 +8,7 @@ use crate::agent::pipeline::sink::{EventSink, PipelineEvent};
 use crate::agent::providers::LlmProvider;
 use crate::agent::session_manager::{SessionLifecycleGuard, SessionManager};
 use crate::agent::stream_event::StreamEvent;
+use crate::db::session_failures::{record_session_failure, NewSessionFailure};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tokio_util::task::TaskTracker;
@@ -112,6 +113,151 @@ pub(crate) fn notify_loop_detected(
     }
 }
 
+// ── Failure classification + recording ────────────────────────────────────────
+
+/// Classify a failure reason string into a stable `failure_kind` enum value.
+///
+/// The values are free-form `TEXT` in the DB but the writer sticks to this
+/// enum so dashboards / filters can group consistently.
+pub(crate) fn classify_failure_kind(reason: &str) -> &'static str {
+    let lower = reason.to_ascii_lowercase();
+    if lower.contains("did not complete within") || lower.contains("timed out waiting") {
+        "sub_agent_timeout"
+    } else if lower.starts_with("loop_detected")
+        || lower.contains("loop_detected")
+        || lower.contains("max loop nudges")
+        || lower.contains("failed") && lower.contains("times consecutively")
+    {
+        "tool_error"
+    } else if lower.starts_with("iteration_limit")
+        || lower.contains("max iterations")
+        || lower.contains("turn limit")
+    {
+        "max_iterations"
+    } else if lower.contains("ollama request error")
+        || lower.contains("request error")
+        || lower.contains("connection refused")
+        || lower.contains("connect timeout")
+        || lower.contains("dns error")
+        || lower.contains("tls handshake")
+    {
+        "provider_error"
+    } else if lower.contains("llm call failed")
+        || lower.contains("provider returned")
+        || lower.contains("model returned an error")
+        || lower.contains("api error")
+        || lower.contains("status: 4")
+        || lower.contains("status: 5")
+    {
+        "llm_error"
+    } else {
+        "other"
+    }
+}
+
+/// Persist a structured `session_failures` row in the background. Logs and
+/// swallows any error — failure logging must never break finalize.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_record_failure(
+    db: PgPool,
+    session_id: Uuid,
+    agent_name: String,
+    reason: String,
+    llm_provider: Option<String>,
+    llm_model: Option<String>,
+    tracker: &TaskTracker,
+) {
+    let kind = classify_failure_kind(&reason).to_string();
+    tracker.spawn(async move {
+        // Best-effort context gathering: pull last tool message + session
+        // start-time directly from the DB. None of these are fatal —
+        // missing fields just become NULL.
+        let last_tool: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT tool_call_id, content FROM messages \
+             WHERE session_id = $1 AND role = 'tool' \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(session_id)
+        .fetch_optional(&db)
+        .await
+        .ok()
+        .flatten();
+
+        // tool_call_id is opaque; resolve a tool_name by matching the
+        // matching assistant tool_calls payload. Best effort — None if
+        // the WAL lookup fails or the payload is missing.
+        let last_tool_name = match &last_tool {
+            Some((Some(tcid), _)) => {
+                let wal_match: Option<String> = sqlx::query_scalar(
+                    "SELECT payload->>'tool_name' \
+                     FROM session_events \
+                     WHERE session_id = $1 \
+                       AND event_type = 'tool_end' \
+                       AND payload->>'tool_call_id' = $2 \
+                     ORDER BY ts DESC LIMIT 1",
+                )
+                .bind(session_id)
+                .bind(tcid)
+                .fetch_optional(&db)
+                .await
+                .ok()
+                .flatten();
+                wal_match
+            }
+            _ => None,
+        };
+        let last_tool_output = last_tool.and_then(|(_, c)| c);
+
+        // Iteration count: count of tool_end events in WAL for this session.
+        let iteration_count: Option<i32> = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT COUNT(*)::BIGINT FROM session_events \
+             WHERE session_id = $1 AND event_type = 'tool_end'",
+        )
+        .bind(session_id)
+        .fetch_one(&db)
+        .await
+        .ok()
+        .and_then(|v| v.map(|n| i32::try_from(n).unwrap_or(i32::MAX)));
+
+        // Duration: NOW() - sessions.started_at.
+        let duration_secs: Option<i32> = sqlx::query_scalar::<_, Option<f64>>(
+            "SELECT EXTRACT(EPOCH FROM (NOW() - started_at))::DOUBLE PRECISION \
+             FROM sessions WHERE id = $1",
+        )
+        .bind(session_id)
+        .fetch_one(&db)
+        .await
+        .ok()
+        .and_then(|v| v.map(|secs| secs.round() as i32));
+
+        let context_json = serde_json::json!({
+            "kind": kind,
+        });
+
+        let input = NewSessionFailure {
+            session_id,
+            agent_id: agent_name,
+            failure_kind: kind.clone(),
+            error_message: reason,
+            last_tool_name,
+            last_tool_output,
+            llm_provider,
+            llm_model,
+            iteration_count,
+            duration_secs,
+            context_json: Some(context_json),
+        };
+
+        if let Err(e) = record_session_failure(&db, input).await {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                "failed to record session_failures row"
+            );
+        }
+    });
+}
+
 // ── FinalizeOutcome ───────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -154,6 +300,12 @@ pub struct FinalizeContext {
     /// Shared task tracker for fire-and-forget spawns (notifications, knowledge
     /// extraction). Ensures graceful shutdown waits for them.
     pub bg_tasks: Arc<TaskTracker>,
+    /// LLM provider name (e.g. `"openai"`, `"anthropic"`) — captured for
+    /// structured failure logging. `None` means the engine couldn't surface it.
+    pub llm_provider: Option<String>,
+    /// LLM model name (e.g. `"gpt-4o-mini"`) — captured for structured
+    /// failure logging.
+    pub llm_model: Option<String>,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -222,6 +374,17 @@ pub async fn finalize<S: EventSink>(
                     .await;
             }
             lifecycle_guard.fail(reason).await;
+            // Structured failure log: persist diagnostic row in the background.
+            // Never blocks finalize and never propagates an error.
+            spawn_record_failure(
+                ctx.db.clone(),
+                ctx.session_id,
+                ctx.agent_name.clone(),
+                reason.clone(),
+                ctx.llm_provider.clone(),
+                ctx.llm_model.clone(),
+                &ctx.bg_tasks,
+            );
             let _ = sink
                 .emit(PipelineEvent::Stream(StreamEvent::Error(reason.clone())))
                 .await;
@@ -299,6 +462,8 @@ pub fn finalize_context_from_engine(
         ui_event_tx: engine.state().ui_event_tx.clone(),
         max_iterations: engine.tool_loop_config().effective_max_iterations(),
         bg_tasks: engine.state().bg_tasks.clone(),
+        llm_provider: Some(engine.cfg().provider.name().to_string()),
+        llm_model: Some(engine.current_model()),
     }
 }
 
@@ -466,6 +631,8 @@ mod tests {
             ui_event_tx: None,
             max_iterations: 0,
             bg_tasks: Arc::new(TaskTracker::new()),
+            llm_provider: None,
+            llm_model: None,
         }
     }
 
@@ -488,6 +655,33 @@ mod tests {
         use crate::agent::pipeline::execute::ExecuteStatus;
         let out = execute_status_to_finalize(ExecuteStatus::Interrupted("user"), "mid-text".into(), None);
         assert!(matches!(out, FinalizeOutcome::Interrupted { partial, .. } if partial == "mid-text"));
+    }
+
+    #[test]
+    fn classify_failure_kind_matrix() {
+        use super::classify_failure_kind;
+        assert_eq!(
+            classify_failure_kind("agent did not complete within 30s"),
+            "sub_agent_timeout"
+        );
+        assert_eq!(
+            classify_failure_kind("loop_detected_max_nudges"),
+            "tool_error"
+        );
+        assert_eq!(
+            classify_failure_kind("tool 'foo' failed 3 times consecutively"),
+            "tool_error"
+        );
+        assert_eq!(classify_failure_kind("iteration_limit_reached"), "max_iterations");
+        assert_eq!(
+            classify_failure_kind("LLM call failed: ollama request error"),
+            "provider_error"
+        );
+        assert_eq!(
+            classify_failure_kind("LLM call failed: model returned an error"),
+            "llm_error"
+        );
+        assert_eq!(classify_failure_kind("something weird"), "other");
     }
 
     #[test]

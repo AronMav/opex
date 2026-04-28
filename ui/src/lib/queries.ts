@@ -4,7 +4,7 @@ import { toast } from "sonner"
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
 import { useWsSubscription } from "@/hooks/use-ws-subscription"
-import type { NotificationsResponse } from "@/types/api"
+import type { NotificationsResponse, SessionFailuresResponse } from "@/types/api"
 import type {
   AgentInfo,
   SecretInfo,
@@ -71,6 +71,8 @@ export const qk = {
   oauthBindings: (agent: string) => ["oauth", "bindings", agent] as const,
   notifications: ["notifications"] as const,
   agentTasks: (name: string) => ["agents", name, "tasks"] as const,
+  sessionFailures: (agent: string | null, limit: number) =>
+    ["session-failures", agent, limit] as const,
 }
 
 // ── Query Hooks ─────────────────────────────────────────────────────────────
@@ -203,6 +205,18 @@ export function useApprovals() {
     queryFn: () => apiGet<{ approvals: ApprovalEntry[] }>("/api/approvals"),
     select: (d) => d.approvals ?? [],
     refetchInterval: 5000,
+  })
+}
+
+export function useSessionFailures(agent: string | null, limit = 20) {
+  const params = new URLSearchParams()
+  if (agent) params.set("agent", agent)
+  params.set("limit", String(limit))
+  return useQuery({
+    queryKey: qk.sessionFailures(agent, limit),
+    queryFn: () =>
+      apiGet<SessionFailuresResponse>(`/api/sessions/failures?${params.toString()}`),
+    refetchInterval: 30_000,
   })
 }
 

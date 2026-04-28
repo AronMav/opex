@@ -132,6 +132,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::channel_ws::routes())      // /ws, /ws/channel/{agent_name}
         .merge(handlers::agents::routes())          // /api/agents/*, /api/approvals/*
         .merge(handlers::sessions::routes())        // /api/sessions/*, /api/messages/*
+        .merge(handlers::session_failures::routes())// /api/sessions/failures, /api/sessions/{id}/failures
         .merge(handlers::monitoring::routes(state.clone()))// /api/setup/*, /api/status, /api/stats, /api/usage/*, /api/doctor, /api/audit/*, /api/watchdog/*
         .merge(handlers::providers::routes())       // /api/providers/*, /api/provider-types, /api/media-drivers, /api/media-config, /api/provider-active
         .merge(handlers::network::routes())         // /api/network/addresses
