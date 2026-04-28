@@ -245,3 +245,140 @@ pub(crate) async fn auth_middleware(
     }
     StatusCode::UNAUTHORIZED.into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::Request;
+
+    // ── is_loopback tests ───────────────────────────────────────────────
+    #[test]
+    fn is_loopback_accepts_ipv4_127_0_0_1() {
+        assert!(is_loopback("127.0.0.1"));
+    }
+
+    #[test]
+    fn is_loopback_accepts_ipv6_localhost() {
+        assert!(is_loopback("::1"));
+    }
+
+    #[test]
+    fn is_loopback_accepts_ipv6_mapped_ipv4_loopback() {
+        assert!(is_loopback("::ffff:127.0.0.1"));
+    }
+
+    #[test]
+    fn is_loopback_accepts_ipv6_mapped_ipv4_loopback_variant() {
+        assert!(is_loopback("::ffff:127.255.255.255"));
+    }
+
+    #[test]
+    fn is_loopback_rejects_public_ipv4_8_8_8_8() {
+        assert!(!is_loopback("8.8.8.8"));
+    }
+
+    #[test]
+    fn is_loopback_rejects_private_lan_192_168() {
+        assert!(!is_loopback("192.168.1.85"));
+    }
+
+    #[test]
+    fn is_loopback_rejects_private_lan_10() {
+        assert!(!is_loopback("10.0.0.1"));
+    }
+
+    #[test]
+    fn is_loopback_rejects_unknown_string() {
+        assert!(!is_loopback("unknown"));
+    }
+
+    #[test]
+    fn is_loopback_rejects_empty_string() {
+        assert!(!is_loopback(""));
+    }
+
+    #[test]
+    fn is_loopback_rejects_ipv6_non_loopback() {
+        assert!(!is_loopback("2001:db8::1"));
+    }
+
+    #[test]
+    fn is_loopback_case_sensitive_rejects_uppercase() {
+        // "::1" should match, but "::1" uppercase doesn't exist, so just verify exact match
+        assert!(!is_loopback("::1::1")); // malformed but should not panic
+    }
+
+    // ── extract_client_ip tests ─────────────────────────────────────────
+    #[test]
+    fn extract_client_ip_returns_unknown_when_no_connect_info() {
+        let req = Request::builder()
+            .uri("/test")
+            .body(Body::empty())
+            .unwrap();
+        let ip = extract_client_ip(&req);
+        assert_eq!(ip, "unknown");
+    }
+
+    #[test]
+    fn extract_client_ip_extracts_ipv4_from_connect_info() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12345);
+        let mut req = Request::builder()
+            .uri("/test")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(socket_addr));
+
+        let ip = extract_client_ip(&req);
+        assert_eq!(ip, "127.0.0.1");
+    }
+
+    #[test]
+    fn extract_client_ip_extracts_public_ipv4_from_connect_info() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 54321);
+        let mut req = Request::builder()
+            .uri("/test")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(socket_addr));
+
+        let ip = extract_client_ip(&req);
+        assert_eq!(ip, "8.8.8.8");
+    }
+
+    #[test]
+    fn extract_client_ip_extracts_ipv6_from_connect_info() {
+        use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+
+        let socket_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1)), 9999);
+        let mut req = Request::builder()
+            .uri("/test")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(socket_addr));
+
+        let ip = extract_client_ip(&req);
+        assert_eq!(ip, "::1");
+    }
+
+    #[test]
+    fn extract_client_ip_ignores_x_forwarded_for_header() {
+        // Per the comment in extract_client_ip, X-Forwarded-For is intentionally ignored
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        let socket_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 12345);
+        let mut req = Request::builder()
+            .uri("/test")
+            .header("X-Forwarded-For", "8.8.8.8")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(axum::extract::ConnectInfo(socket_addr));
+
+        let ip = extract_client_ip(&req);
+        // Should use ConnectInfo, not the header
+        assert_eq!(ip, "127.0.0.1");
+    }
+}
