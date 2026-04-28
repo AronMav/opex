@@ -1,6 +1,6 @@
 ---
 name: multi-agent-coordination
-description: Task coordination between agents — delegation, parallel execution, orchestration with structured plans
+description: Task coordination between agents — delegation, parallel execution, multi-turn dialog
 triggers:
   - delegate
   - assign to agent
@@ -26,21 +26,31 @@ tools_required:
 ## Agent Tool — Reference
 
 The `agent` tool delegates tasks to other agents and manages their lifecycle.
+**Synchronous calls are the default** — you don't need to poll status loops.
 
 ### Actions
 
-| Action | Parameters | Behavior |
-| ------ | ---------- | -------- |
-| `run` | `target`, `task` | **Blocks** until agent completes (1-5 min). Returns result directly. |
-| `run` | `target`, `task`, `mode="async"` | Starts agent and returns immediately. Use `collect` to get result. |
-| `collect` | `target` | **Blocks** until async agent completes. Returns result. |
-| `message` | `target`, `text` | Sends follow-up to a running agent. Returns immediately. |
-| `status` | `target` (optional) | Without target: list all agents. With target: single agent details. |
-| `kill` | `target` | Terminates agent, frees resources. |
+| Action    | Default behavior                                                                              |
+| --------- | --------------------------------------------------------------------------------------------- |
+| `run`     | Spawn a peer agent and **block** until it finishes (~5 min cap), then auto-clean up.          |
+| `message` | Send a follow-up to a live agent and **block** until it returns its result (~6 min cap).      |
+| `status`  | Read state of one or all live agents (used only for inspection / fan-out polling).            |
+| `kill`    | Terminate a live agent and free its slot.                                                     |
+| `collect` | Block on an `async`-spawned agent until it completes (only needed after `run` with async).    |
 
-### Task Format
+Timeouts are layered: inner caps (sync `run` 300s, sync `message` 360s)
+fire first; an outer 600s safety-net wraps every `agent` call as
+defense-in-depth.
 
-Agents work in isolated contexts — they don't see your conversation history.
+### Parameters
+
+- `target` — name of the peer agent (required for run/message/kill/collect).
+- `task` — initial task text (run only).
+- `text` — message text (message only).
+- `mode` — `"sync"` (default) or `"async"` for `run`. Async returns immediately; pair with `collect` or `message`.
+- `wait_for_result` — `true` (default) or `false` for `message`. False = fire-and-forget after delivery.
+
+Agents work in isolated contexts — they do not see your conversation history. Send only the data they need.
 
 ```text
 Task: [specific description]
@@ -50,134 +60,71 @@ Response format: [what to return]
 
 ---
 
-## Patterns
+## Recommended Patterns
 
-### Single agent (1 tool call)
+### 1. Single delegated task (sync run)
 
 ```text
-agent(action="run", target="Alma", task="Analyze portfolio risk and return summary table")
-→ blocks 1-3 min → returns Alma's analysis directly
+agent(action="run", target="Alma", task="Analyze portfolio risk and return a summary table")
+→ blocks 1–5 min → returns Alma's analysis directly
+→ Alma is auto-removed from the session pool when done
 ```
 
-Use this for simple delegation.
+Use this whenever the answer is a one-shot delegation. No follow-ups, no cleanup.
 
-### Parallel agents (4 tool calls)
+### 2. Multi-turn dialog (async run + sync messages)
+
+When you need ongoing collaboration with the same peer, keep them alive:
 
 ```text
-agent(action="run", target="Alma", task="Task A", mode="async")
-→ "Agent Alma started"
+// 1. Spawn without blocking — short initial task
+agent(action="run", target="Alma", mode="async", task="Initialize portfolio analysis context")
 
-agent(action="run", target="Hyde", task="Task B", mode="async")
-→ "Agent Hyde started"
+// 2. Each message blocks until Alma finishes processing it
+agent(action="message", target="Alma", text="What's the risk for tech sector?")
+→ blocks → Alma's reply
 
+agent(action="message", target="Alma", text="Now compare with healthcare")
+→ blocks → updated reply
+
+// 3. Clean up explicitly
+agent(action="kill", target="Alma")
+```
+
+Sync `message` automatically waits for the target to become idle (up to 60s) before delivering — no need to manually poll status.
+
+### 3. Parallel fan-out (rare)
+
+When two or more peers can work simultaneously and you want to interleave:
+
+```text
+agent(action="run", target="Alma", mode="async", task="Analyze Q1 revenue")
+agent(action="run", target="Hyde", mode="async", task="Fetch latest market news")
+
+// Block on each result in turn
 agent(action="collect", target="Alma")
-→ blocks → Alma's result
-
 agent(action="collect", target="Hyde")
-→ blocks → Hyde's result
 ```
 
-Use when you need multiple agents working simultaneously.
-
-### Follow-up question (2 tool calls)
-
-```text
-agent(action="message", target="Alma", text="Compare your analysis with this: ...")
-→ "Message sent"
-
-agent(action="collect", target="Alma")
-→ blocks → updated analysis
-```
-
-### Chain delegation (agent calls agent)
-
-Agents can call other agents using the same `agent` tool:
-
-```text
-You → Arty: "Ask Alma to get weather from Hyde"
-Arty → agent(run, target=Alma, task="Use agent tool to ask Hyde for weather")
-  Alma → agent(run, target=Hyde, task="Weather in Moscow?")
-    Hyde → searches web → returns weather
-  Alma → returns weather
-Arty → returns weather to user
-```
+Or, if you also need follow-up after the initial run, swap `collect` for `message(wait_for_result=true)` — both are valid. Skip this pattern for ≤1 peer.
 
 ---
 
-## Orchestration with Plans
+## Anti-Patterns (don't do these)
 
-For complex multi-step tasks (3+ steps, dependencies between them), use a structured JSON plan file to track progress.
-
-### When to use a plan
-
-- 2+ agents with sequential dependencies
-- Progress must be visible to the user or other agents
-- Long-running task with checkpoints
-
-Single-agent tasks do NOT need a plan.
-
-### Plan format
-
-Plan files live at `tasks/task_YYYYMMDD_XXXXXX.json` in workspace.
-
-```json
-{
-  "task_id": "task_20260408_a1b2c3",
-  "agent": "AgentName",
-  "title": "Brief description",
-  "status": "planning",
-  "steps": [
-    {"id": "step_1", "title": "Fetch data", "status": "pending"},
-    {"id": "step_2", "title": "Analyze", "status": "pending"},
-    {"id": "step_3", "title": "Write report", "status": "pending"}
-  ]
-}
-```
-
-Status transitions: `pending` → `in_progress` → `done` | `error`
-
-### Plan workflow
-
-```text
-// 1. Write plan
-workspace_write(path="tasks/task_20260408_x9y8z7.json", content=<plan JSON>)
-
-// 2. Run step 1 (blocks until complete)
-result = agent(action="run", target="Alma", task="Fetch Q1 revenue data")
-
-// 3. Update plan: step_1 done, step_2 in_progress
-workspace_write(path="tasks/task_20260408_x9y8z7.json", content=<updated plan>)
-
-// 4. Run step 2... repeat
-```
-
-### Parallel steps in plans
-
-```text
-// Mark both steps in_progress in the plan first
-workspace_write(path="tasks/...", content=<steps 1+2 in_progress>)
-
-// Spawn both async
-agent(action="run", target="Alma", task="Task A", mode="async")
-agent(action="run", target="Hyde", task="Task B", mode="async")
-
-// Collect results
-result_a = agent(action="collect", target="Alma")
-result_b = agent(action="collect", target="Hyde")
-
-// Update plan with results
-```
-
-Always use `workspace_write` (full rewrite), NOT `workspace_edit`, for plan files.
+- **Polling `status` in a loop** — sync `run` and sync `message` already block server-side. No LLM-side polling needed.
+- **Sending `message` immediately after async `run` and giving up on a "queue full" error** — sync `message` waits for idle automatically (up to 60s).
+- **Using async mode for one-shot delegations** — sync `run` is simpler, auto-cleans the agent, and is what you want by default.
+- **Sending the entire conversation as `task`/`text`** — peers don't share your history; send only the slice they need.
+- **Delegating trivial tasks** — if you can answer in one tool call, just do it.
 
 ---
 
 ## Rules
 
-- Default `run` **blocks** — no polling needed
-- Agents take 1-5 minutes on this hardware — this is normal
-- Kill agents when done if using async mode
-- Do NOT poll `status` in a loop — use blocking `run` or `collect`
-- Do NOT send entire conversation — only what's needed
-- Do NOT delegate trivial tasks — faster to do yourself
-- Do NOT create plans for single-agent tasks — overhead not worth it
+- Default `run` and `message` **block** — no polling needed.
+- Agents take 1–5 minutes on this hardware — that is normal, not a hang.
+- Only use `mode="async"` when you have a clear reason (multi-turn dialog or parallel fan-out).
+- Always `kill` async agents when the dialog is done — they hold a slot in the session pool.
+- Send minimum context — peers don't see your chat history.
+- Don't create plan files for single-agent tasks — overhead isn't worth it.

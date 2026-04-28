@@ -14,6 +14,19 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+// ── Constants ────────────────────────────────────────────────────────────────
+
+/// Defense-in-depth safety net for the `agent` tool's outer timeout.
+///
+/// The `agent` tool has authoritative internal timeouts (sync `run` blocks
+/// up to 300s; sync `message` blocks up to ~360s = 60s wait_for_idle + 300s
+/// wait_for_result; `wait_for_agent_result` deadline 300s). Under normal
+/// conditions those inner caps fire first. This 600s outer timeout
+/// (= 2 × max_inner_timeout + slack) only fires on catastrophic hangs that
+/// bypass the deadline-enforced waits — e.g., a future contributor adding a
+/// new sync action that forgets to honour an inner deadline.
+const AGENT_SAFETY_TIMEOUT: Duration = Duration::from_secs(600);
+
 // ── Public types ─────────────────────────────────────────────────────────────
 
 /// Returned when the loop detector triggers a break mid-batch.
@@ -95,7 +108,16 @@ pub fn enrich_tool_args(
 /// - `executor`: implements [`ToolExecutor`] (typically `&AgentEngine`)
 /// - `yaml_tools`: pre-loaded YAML tool definitions
 /// - `model`: model name (for `truncate_tool_result`)
-/// - `subagent_timeout`: timeout for agent-type tool calls
+///
+/// # Timeouts
+/// Non-`agent` tool calls are wrapped in a 120s outer timeout. The `agent`
+/// tool has authoritative internal timeouts (sync `message` waits up to
+/// `MESSAGE_WAIT_FOR_IDLE_TIMEOUT` plus `MESSAGE_RESULT_TIMEOUT`, sync `run`
+/// blocks 300s; see `pipeline::agent_tool`) and is wrapped in a strictly
+/// larger 600s outer safety net (`AGENT_SAFETY_TIMEOUT`). Under normal
+/// conditions the inner caps fire first; the outer wrapper exists as
+/// defense-in-depth so that a future sync action which bypasses the
+/// deadline-enforced waits cannot hang the engine indefinitely.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_tool_calls_partitioned(
     tool_calls: &[ToolCall],
@@ -109,7 +131,6 @@ pub async fn execute_tool_calls_partitioned(
     db: &sqlx::PgPool,
     embedder: &Arc<dyn EmbeddingService>,
     yaml_tools: &HashMap<String, YamlToolDef>,
-    subagent_timeout: Duration,
     executor: &(dyn ToolExecutor + '_),
 ) -> Result<Vec<(String, String)>, LoopBreak> {
     let n = tool_calls.len();
@@ -200,27 +221,39 @@ pub async fn execute_tool_calls_partitioned(
             .map(|&i| {
                 let name = tool_calls[i].name.clone();
                 let args = enriched[i].clone();
-                let timeout = if name == "agent" {
-                    subagent_timeout
-                } else {
-                    default_timeout
-                };
                 async move {
-                    match tokio::time::timeout(
+                    // The `agent` tool owns authoritative internal timeouts
+                    // (sync run 300s; sync message ~360s). The 600s outer
+                    // wrapper here is a defense-in-depth safety net — it is
+                    // strictly larger than every inner cap, so under normal
+                    // conditions the inner timeouts fire first; only
+                    // catastrophic hangs hit the outer.
+                    let timeout = if name == "agent" {
+                        AGENT_SAFETY_TIMEOUT
+                    } else {
+                        default_timeout
+                    };
+                    let result = match tokio::time::timeout(
                         timeout,
                         executor.execute_tool_call(&name, &args),
                     )
                     .await
                     {
-                        Ok(r) => (
-                            i,
-                            super::context::truncate_tool_result(model, &r, current_context_chars),
+                        Ok(r) => r,
+                        Err(_) => format!(
+                            "Tool '{}' timed out after {}s",
+                            name,
+                            timeout.as_secs()
                         ),
-                        Err(_) => (
-                            i,
-                            format!("Tool '{}' timed out after {}s", name, timeout.as_secs()),
+                    };
+                    (
+                        i,
+                        super::context::truncate_tool_result(
+                            model,
+                            &result,
+                            current_context_chars,
                         ),
-                    }
+                    )
                 }
             })
             .collect();
@@ -294,15 +327,30 @@ pub async fn execute_tool_calls_partitioned(
             Some(&start_payload(&tool_calls[i])),
         )
         .await;
-        let res = match tokio::time::timeout(
-            Duration::from_secs(120),
+        // See note on the parallel branch: the `agent` tool owns its own
+        // longer sync timeouts (300s run, ~360s message). The outer wrapper
+        // here is a 600s defense-in-depth safety net — strictly larger than
+        // every inner cap so the inner timeouts fire first under normal
+        // conditions.
+        let timeout = if tool_calls[i].name == "agent" {
+            AGENT_SAFETY_TIMEOUT
+        } else {
+            default_timeout
+        };
+        let raw = match tokio::time::timeout(
+            timeout,
             executor.execute_tool_call(&tool_calls[i].name, &enriched[i]),
         )
         .await
         {
-            Ok(r) => super::context::truncate_tool_result(model, &r, current_context_chars),
-            Err(_) => format!("Tool '{}' timed out after 120s", tool_calls[i].name),
+            Ok(r) => r,
+            Err(_) => format!(
+                "Tool '{}' timed out after {}s",
+                tool_calls[i].name,
+                timeout.as_secs()
+            ),
         };
+        let res = super::context::truncate_tool_result(model, &raw, current_context_chars);
         if detect_loops {
             let success = !res.starts_with("Error:")
                 && !res.starts_with("tool error:")

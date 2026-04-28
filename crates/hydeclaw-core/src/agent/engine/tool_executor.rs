@@ -16,7 +16,6 @@ use hydeclaw_types::{Message, ToolDefinition};
 use uuid::Uuid;
 
 use super::{AgentEngine, LoopBreak};
-use crate::agent::pipeline::subagent::parse_subagent_timeout;
 use crate::agent::tool_loop::LoopDetector;
 
 impl AgentEngine {
@@ -85,10 +84,6 @@ impl AgentEngine {
             }
         };
 
-        let subagent_timeout =
-            parse_subagent_timeout(&self.cfg().app_config.subagents.in_process_timeout)
-                + std::time::Duration::from_secs(10);
-
         crate::agent::pipeline::parallel::execute_tool_calls_partitioned(
             tool_calls,
             context,
@@ -101,7 +96,6 @@ impl AgentEngine {
             &self.cfg().db,
             &self.cfg().embedder,
             &yaml_tools,
-            subagent_timeout,
             self,
         )
         .await

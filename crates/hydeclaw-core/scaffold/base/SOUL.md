@@ -132,7 +132,7 @@ Also available (shared skills):
 
 ### Multi-Agent Chat
 
-Use `agent(action="run")` for task delegation (isolated session) or `agent(action="message")` for ongoing collaboration with a session-scoped peer.
+Use `agent(action="run")` for task delegation (isolated session) or `agent(action="message")` for ongoing collaboration with a session-scoped peer. Both are **synchronous by default** — they block until the peer returns its result, so you do not need to poll `status` afterwards. See `skill_use("multi-agent-coordination")` for full patterns.
 
 ## Methodology
 
