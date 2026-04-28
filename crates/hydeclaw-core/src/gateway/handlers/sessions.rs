@@ -911,3 +911,61 @@ pub(crate) async fn api_active_path(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_session_markdown_basic_structure() {
+        let data = serde_json::json!({
+            "session": {"title": "Test", "agent_id": "Arty", "started_at": "2026-04-27T10:00:00Z"},
+            "messages": []
+        });
+        let md = format_session_as_markdown(&data);
+        assert!(md.contains("# Test"));
+        assert!(md.contains("**Agent:** Arty"));
+        assert!(md.contains("2026-04-27T10:00:00Z"));
+    }
+
+    #[test]
+    fn format_session_markdown_user_message() {
+        let data = serde_json::json!({
+            "session": {"title": "S", "agent_id": "A", "started_at": ""},
+            "messages": [{"role": "user", "content": "Hello", "created_at": "2026-04-27T10:01:00Z", "tool_calls": []}]
+        });
+        let md = format_session_as_markdown(&data);
+        assert!(md.contains("## User"));
+        assert!(md.contains("Hello"));
+    }
+
+    #[test]
+    fn format_session_markdown_tool_call() {
+        let data = serde_json::json!({
+            "session": {"title": "S", "agent_id": "A", "started_at": ""},
+            "messages": [{"role": "assistant", "content": "", "created_at": "2026-04-27T10:02:00Z",
+                "tool_calls": [{"name": "web_search", "arguments": {"q": "rust"}}]}]
+        });
+        let md = format_session_as_markdown(&data);
+        assert!(md.contains("### Tool: web_search"));
+        assert!(md.contains("```json"));
+    }
+
+    #[test]
+    fn format_session_markdown_missing_fields_use_defaults() {
+        let data = serde_json::json!({});
+        let md = format_session_as_markdown(&data);
+        assert!(md.contains("# Untitled"));
+        assert!(md.contains("**Agent:** unknown"));
+    }
+
+    #[test]
+    fn format_session_markdown_truncates_long_timestamp() {
+        let data = serde_json::json!({
+            "session": {"title": "S", "agent_id": "A", "started_at": ""},
+            "messages": [{"role": "user", "content": "m", "created_at": "2026-04-27T10:05:00.000Z", "tool_calls": []}]
+        });
+        let md = format_session_as_markdown(&data);
+        assert!(md.contains("2026-04-27T10:05"));
+    }
+}
+

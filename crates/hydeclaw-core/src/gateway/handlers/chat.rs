@@ -1235,3 +1235,54 @@ pub(crate) async fn api_chat_abort(
         (StatusCode::NOT_FOUND, Json(json!({"error": "no active stream for this session"}))).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_tools_json_empty_returns_none() {
+        let mut count = 0usize;
+        let mut cache = None;
+        assert!(build_tools_json(&[], &mut count, &mut cache).is_none());
+    }
+
+    #[test]
+    fn build_tools_json_first_call_builds_array() {
+        let tools = vec![serde_json::json!({"name": "search"})];
+        let mut count = 0usize;
+        let mut cache = None;
+        let result = build_tools_json(&tools, &mut count, &mut cache).unwrap();
+        assert_eq!(result, serde_json::json!([{"name": "search"}]));
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn build_tools_json_same_count_reuses_cache() {
+        let tools = vec![serde_json::json!({"name": "search"})];
+        let mut count = 0usize;
+        let mut cache = None;
+        build_tools_json(&tools, &mut count, &mut cache);
+        let sentinel = serde_json::json!("SENTINEL");
+        cache = Some(sentinel.clone());
+        // Same count → reuse cache, not rebuild
+        let result = build_tools_json(&tools, &mut count, &mut cache).unwrap();
+        assert_eq!(result, sentinel);
+    }
+
+    #[test]
+    fn build_tools_json_new_tool_invalidates_cache() {
+        let tools_1 = vec![serde_json::json!({"name": "search"})];
+        let mut count = 0usize;
+        let mut cache = None;
+        build_tools_json(&tools_1, &mut count, &mut cache);
+
+        let tools_2 = vec![
+            serde_json::json!({"name": "search"}),
+            serde_json::json!({"name": "write"}),
+        ];
+        let result = build_tools_json(&tools_2, &mut count, &mut cache).unwrap();
+        assert_eq!(result.as_array().unwrap().len(), 2);
+        assert_eq!(count, 2);
+    }
+}
