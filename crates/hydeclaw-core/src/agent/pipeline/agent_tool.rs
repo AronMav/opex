@@ -2,11 +2,30 @@
 //!
 //! Each function takes explicit dependencies instead of `&self` on `AgentEngine`.
 
+use std::time::Duration;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::agent::session_agent_pool::{self, SessionAgentPool, SessionPoolsMap};
 use crate::gateway::state::AgentMap;
+
+// ── Constants ────────────────────────────────────────────────────────────────
+
+/// How long to wait for a target agent to become idle before sending it a new
+/// message. After this timeout, `agent(action="message")` returns an error
+/// instead of blocking forever.
+const MESSAGE_WAIT_FOR_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long to wait for a target agent to finish processing the just-sent
+/// message and produce a `last_result`. Matches the timeout used by sync
+/// `run` / `collect`.
+const MESSAGE_RESULT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Polling cadence used by `wait_until_idle` and `wait_for_agent_result`.
+/// Both loops re-acquire the pool read lock once per tick to observe agent
+/// status; 1s is a balance between responsiveness and lock churn.
+const MESSAGE_POLL_INTERVAL: Duration = Duration::from_millis(1000);
 
 /// Extract session_id from enriched `_context` (per-invocation, race-free).
 pub fn extract_session_id(args: &serde_json::Value) -> Option<Uuid> {
@@ -166,7 +185,7 @@ pub async fn wait_for_agent_result(
 ) -> String {
     let start = std::time::Instant::now();
     loop {
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        tokio::time::sleep(MESSAGE_POLL_INTERVAL).await;
 
         // Check if agent is done
         let result = {
@@ -223,7 +242,64 @@ pub async fn wait_for_agent_result(
     }
 }
 
+/// Wait for a live agent to enter the IDLE state without consuming its
+/// `last_result`. Used by `handle_agent_message` to ensure the target is ready
+/// to receive a new message before we `try_send`.
+///
+/// Returns `Ok(())` once the agent is idle. Returns `Err(message)` on:
+///   - missing session pool / agent (already gone),
+///   - the agent's processing task having exited (crash / cancel),
+///   - timeout.
+async fn wait_until_idle(
+    pools: &SessionPoolsMap,
+    session_id: Uuid,
+    target: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    loop {
+        {
+            let pools_read = pools.read().await;
+            let pool = pools_read
+                .get(&session_id)
+                .ok_or_else(|| format!("Error: no agent pool for session {}", session_id))?;
+            let agent = pool
+                .get(target)
+                .ok_or_else(|| format!("Error: agent '{}' not found in session pool", target))?;
+            if agent.is_idle() {
+                return Ok(());
+            }
+            if agent.task_handle.is_finished() {
+                return Err(format!(
+                    "Error: agent '{}' processing loop has exited",
+                    target
+                ));
+            }
+        }
+
+        if start.elapsed() > timeout {
+            return Err(format!(
+                "Error: agent '{}' did not become idle within {} seconds — still processing previous message",
+                target,
+                timeout.as_secs()
+            ));
+        }
+
+        tokio::time::sleep(MESSAGE_POLL_INTERVAL).await;
+    }
+}
+
 /// `message` — send a follow-up message to an already-running live agent.
+///
+/// **Sync by default**: blocks until the target agent finishes processing the
+/// message and returns its `last_result`. This eliminates the race where an
+/// orchestrator sends messages while the target is still busy (which used to
+/// produce "queue is full" errors or silent message loss).
+///
+/// Pass `wait_for_result: false` for fire-and-forget broadcasts. In that mode
+/// the call still waits for the target to be idle before sending (so the
+/// message is guaranteed to be delivered), then returns immediately without
+/// waiting for the response.
 pub async fn handle_agent_message(
     session_pools: Option<&SessionPoolsMap>,
     args: &serde_json::Value,
@@ -237,6 +313,12 @@ pub async fn handle_agent_message(
         _ => return "Error: 'text' parameter is required".to_string(),
     };
 
+    // Default true: sync send-and-wait. Only false explicitly opts out.
+    let wait_for_result = args
+        .get("wait_for_result")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
     let session_id = match extract_session_id(args) {
         Some(id) if id != Uuid::nil() => id,
         _ => return "Error: no active session — session_id missing from _context".to_string(),
@@ -247,47 +329,98 @@ pub async fn handle_agent_message(
         None => return "Error: session_pools not available".to_string(),
     };
 
-    let pools_read = pools.read().await;
-    let pool = match pools_read.get(&session_id) {
-        Some(p) => p,
-        None => return format!("Error: no agent pool for session {}", session_id),
-    };
-    let agent = match pool.get(target) {
-        Some(a) => a,
-        None => return format!("Error: agent '{}' not found in session pool", target),
-    };
+    // Verify target exists up-front (cheap, gives a clean error before the wait loop).
+    {
+        let pools_read = pools.read().await;
+        let pool = match pools_read.get(&session_id) {
+            Some(p) => p,
+            None => return format!("Error: no agent pool for session {}", session_id),
+        };
+        if pool.get(target).is_none() {
+            return format!("Error: agent '{}' not found in session pool", target);
+        }
+    }
 
-    // Set PROCESSING *before* try_send to close TOCTOU window: if we set it after,
-    // the agent loop may process the message and go IDLE before our store, then we
-    // overwrite IDLE→PROCESSING causing collect/status to hang.
-    agent.status.store(
-        session_agent_pool::STATUS_PROCESSING,
-        std::sync::atomic::Ordering::Release,
-    );
-    match agent.message_tx.try_send(session_agent_pool::AgentMessage {
-        text: text.to_string(),
-    }) {
-        Ok(()) => serde_json::json!({
-            "status": "ok",
-            "agent": target,
-            "message": "Message sent",
-        })
-        .to_string(),
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            // Revert: send failed, agent didn't get the message
+    // Wait until the target is idle (or fail with a clear error).
+    if let Err(e) = wait_until_idle(pools, session_id, target, MESSAGE_WAIT_FOR_IDLE_TIMEOUT).await
+    {
+        return e;
+    }
+
+    // Re-acquire the agent reference under a fresh read lock to perform the send.
+    //
+    // Concurrency note: between `wait_until_idle` returning and this point, another
+    // sender may have observed IDLE in *its own* `wait_until_idle` and CAS'd the
+    // agent into PROCESSING. We must therefore use compare-exchange (not blind
+    // store) to mark PROCESSING, so we know whether *we* own the IDLE→PROCESSING
+    // transition. Only the CAS winner is allowed to revert to IDLE on send failure.
+    // If two senders race and both manage to enqueue, the agent's mpsc receiver
+    // will process them sequentially — that is fine.
+    let send_result = {
+        let pools_read = pools.read().await;
+        let pool = match pools_read.get(&session_id) {
+            Some(p) => p,
+            None => return format!("Error: no agent pool for session {}", session_id),
+        };
+        let agent = match pool.get(target) {
+            Some(a) => a,
+            None => return format!("Error: agent '{}' not found in session pool", target),
+        };
+
+        // CAS IDLE → PROCESSING. If another sender beat us to it, the agent is
+        // already PROCESSING; we still try to deliver (try_send), but we MUST NOT
+        // revert status on Full — only the CAS winner has that right.
+        let we_won_cas = agent
+            .status
+            .compare_exchange(
+                session_agent_pool::STATUS_IDLE,
+                session_agent_pool::STATUS_PROCESSING,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok();
+
+        let r = agent.message_tx.try_send(session_agent_pool::AgentMessage {
+            text: text.to_string(),
+        });
+        // On Full: revert to IDLE *only if we owned the IDLE→PROCESSING transition*.
+        // If CAS failed (someone else owns PROCESSING), reverting would clobber
+        // their state and falsely report idle while they are still in flight.
+        // On Closed: keep PROCESSING — wait_for_agent_result detects
+        // task_handle.is_finished() and returns the error rather than "(no result)".
+        if we_won_cas
+            && matches!(&r, Err(tokio::sync::mpsc::error::TrySendError::Full(_)))
+        {
             agent.status.store(
                 session_agent_pool::STATUS_IDLE,
                 std::sync::atomic::Ordering::Release,
             );
+        }
+        r
+    };
+
+    match send_result {
+        Ok(()) => {
+            if !wait_for_result {
+                return serde_json::json!({
+                    "status": "sent",
+                    "agent": target,
+                    "message": "Message sent (fire-and-forget)",
+                })
+                .to_string();
+            }
+            // Sync mode: wait for the result. Agent stays in the pool — only
+            // `kill` removes it.
+            wait_for_agent_result(pools, session_id, target, MESSAGE_RESULT_TIMEOUT).await
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            // Defense-in-depth: should be unreachable now that we wait for idle.
             format!(
                 "Error: agent '{}' message queue is full — it may still be processing",
                 target
             )
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            // Don't revert to IDLE — agent loop is dead. Leave PROCESSING so that
-            // collect/wait_for_agent_result detects task_handle.is_finished() and
-            // returns the error instead of silently returning "(no result)".
             format!("Error: agent '{}' processing loop has exited", target)
         }
     }
@@ -446,5 +579,257 @@ mod tests {
             _ => "(no result)".to_string(),
         };
         assert_eq!(result_text, "(no result)");
+    }
+
+    // ── handle_agent_message: early-return validation paths ──────────────────
+    //
+    // These tests exercise the argument-parsing and pool-lookup short-circuits
+    // without spawning a real LiveAgent (which would require an LLM provider).
+    // The sync send-and-wait happy path is covered by integration tests that
+    // run a full session (LLM mocking is out of scope here).
+
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    fn empty_pools() -> SessionPoolsMap {
+        Arc::new(RwLock::new(HashMap::new()))
+    }
+
+    #[tokio::test]
+    async fn message_missing_target_returns_error() {
+        let pools = empty_pools();
+        let args = serde_json::json!({
+            "action": "message",
+            "text": "hi",
+            "_context": { "session_id": Uuid::new_v4().to_string() },
+        });
+        let out = handle_agent_message(Some(&pools), &args).await;
+        assert!(out.starts_with("Error: 'target' parameter is required"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn message_missing_text_returns_error() {
+        let pools = empty_pools();
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "Bob",
+            "_context": { "session_id": Uuid::new_v4().to_string() },
+        });
+        let out = handle_agent_message(Some(&pools), &args).await;
+        assert!(out.starts_with("Error: 'text' parameter is required"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn message_missing_session_returns_error() {
+        let pools = empty_pools();
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "Bob",
+            "text": "hi",
+        });
+        let out = handle_agent_message(Some(&pools), &args).await;
+        assert!(out.contains("no active session"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn message_returns_error_if_no_session_pool() {
+        let pools = empty_pools();
+        let session_id = Uuid::new_v4();
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "Bob",
+            "text": "hi",
+            "_context": { "session_id": session_id.to_string() },
+        });
+        let out = handle_agent_message(Some(&pools), &args).await;
+        assert!(out.contains("no agent pool for session"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn message_returns_error_if_target_not_in_pool() {
+        let pools = empty_pools();
+        let session_id = Uuid::new_v4();
+        // Insert an empty pool for the session so we hit the "agent not found"
+        // branch rather than the "no agent pool" branch.
+        {
+            let mut pw = pools.write().await;
+            pw.insert(session_id, SessionAgentPool::new(session_id));
+        }
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "Bob",
+            "text": "hi",
+            "_context": { "session_id": session_id.to_string() },
+        });
+        let out = handle_agent_message(Some(&pools), &args).await;
+        assert!(
+            out.contains("agent 'Bob' not found in session pool"),
+            "got: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn message_no_session_pools_dependency_returns_error() {
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "Bob",
+            "text": "hi",
+            "_context": { "session_id": Uuid::new_v4().to_string() },
+        });
+        let out = handle_agent_message(None, &args).await;
+        assert!(out.contains("session_pools not available"), "got: {out}");
+    }
+
+    // wait_for_result default + opt-out parsing (without exercising the wait
+    // path, which needs a real spawned agent). We verify the parser by
+    // inspecting the JSON value directly.
+    #[test]
+    fn wait_for_result_defaults_to_true() {
+        let args = serde_json::json!({ "action": "message", "target": "x", "text": "y" });
+        let v = args
+            .get("wait_for_result")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        assert!(v, "default must be true");
+    }
+
+    #[test]
+    fn wait_for_result_false_is_respected() {
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "x",
+            "text": "y",
+            "wait_for_result": false,
+        });
+        let v = args
+            .get("wait_for_result")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        assert!(!v, "explicit false must be respected");
+    }
+
+    // ── Sync round-trip test (stub LiveAgent, no LLM) ───────────────────────
+    //
+    // Build a `LiveAgent` manually with a tokio task that just echoes incoming
+    // messages: sets PROCESSING, writes the text into `last_result`, sets IDLE.
+    // This exercises the full `handle_agent_message` send → wait_for_result
+    // path without needing an LLM provider or spawning a real subagent.
+
+    use crate::agent::session_agent_pool::{
+        AgentMessage, LiveAgent, STATUS_IDLE, STATUS_PROCESSING,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+    use std::time::Instant;
+
+    /// Spawn a stub `LiveAgent` whose processing loop simply echoes each
+    /// incoming message text back into `last_result` and returns to IDLE.
+    /// Starts in IDLE (the helper does not enqueue an initial task).
+    fn spawn_echo_agent(name: &str) -> LiveAgent {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AgentMessage>(32);
+        let status = Arc::new(AtomicU8::new(STATUS_IDLE));
+        let last_result = Arc::new(RwLock::new(None));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let iteration_count = Arc::new(AtomicUsize::new(0));
+
+        let status_for_task = status.clone();
+        let last_result_for_task = last_result.clone();
+        let cancel_for_task = cancel.clone();
+        let iteration_count_for_task = iteration_count.clone();
+
+        let task_handle = tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if cancel_for_task.load(Ordering::Relaxed) {
+                    break;
+                }
+                status_for_task.store(STATUS_PROCESSING, Ordering::Release);
+                // Tiny yield so observers can see PROCESSING if they're racing.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                *last_result_for_task.write().await = Some(format!("echo: {}", msg.text));
+                iteration_count_for_task.fetch_add(1, Ordering::Relaxed);
+                status_for_task.store(STATUS_IDLE, Ordering::Release);
+            }
+        });
+
+        LiveAgent {
+            name: name.to_string(),
+            message_tx: tx,
+            status,
+            last_result,
+            cancel,
+            created_at: Instant::now(),
+            iteration_count,
+            task_handle,
+        }
+    }
+
+    #[tokio::test]
+    async fn message_sync_round_trip_returns_echoed_last_result() {
+        let pools = empty_pools();
+        let session_id = Uuid::new_v4();
+        {
+            let mut pw = pools.write().await;
+            let mut pool = SessionAgentPool::new(session_id);
+            pool.insert(spawn_echo_agent("Echo"));
+            pw.insert(session_id, pool);
+        }
+
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "Echo",
+            "text": "ping",
+            // wait_for_result defaults to true (sync mode).
+            "_context": { "session_id": session_id.to_string() },
+        });
+
+        let out = handle_agent_message(Some(&pools), &args).await;
+        // Should return the echoed last_result, NOT a "Message sent" stub.
+        assert!(
+            out.contains("\"status\":\"completed\"") && out.contains("echo: ping"),
+            "expected completed status with echoed result, got: {out}"
+        );
+        // Sanity: the agent should be back to IDLE after completion.
+        let pr = pools.read().await;
+        let pool = pr.get(&session_id).expect("pool present");
+        let agent = pool.get("Echo").expect("agent present");
+        assert!(agent.is_idle(), "agent should be idle after completion");
+    }
+
+    #[tokio::test]
+    async fn message_fire_and_forget_returns_quickly() {
+        let pools = empty_pools();
+        let session_id = Uuid::new_v4();
+        {
+            let mut pw = pools.write().await;
+            let mut pool = SessionAgentPool::new(session_id);
+            pool.insert(spawn_echo_agent("Echo"));
+            pw.insert(session_id, pool);
+        }
+
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "Echo",
+            "text": "ping",
+            "wait_for_result": false,
+            "_context": { "session_id": session_id.to_string() },
+        });
+
+        let start = Instant::now();
+        let out = handle_agent_message(Some(&pools), &args).await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            out.contains("\"status\":\"sent\"") && out.contains("fire-and-forget"),
+            "expected fire-and-forget sent status, got: {out}"
+        );
+        // Echo task sleeps 20ms before writing last_result, but with
+        // wait_for_result=false we should return well before any wait_for_agent_result
+        // poll tick (1s). A 500ms ceiling gives plenty of slack on slow CI.
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "fire-and-forget took too long: {:?}",
+            elapsed
+        );
     }
 }

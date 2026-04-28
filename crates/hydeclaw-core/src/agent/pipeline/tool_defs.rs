@@ -184,7 +184,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                 Actions: 'run' — run an agent with a task and return result (blocks); \
                 'run' with mode='async' — start agent without waiting (for parallel spawning); \
                 'collect' — wait for an async agent to complete and return result (blocks); \
-                'message' — send a follow-up message to a running agent; \
+                'message' — send a follow-up message to a running agent; by default blocks until the target processes the message and returns its result, consuming your turn for up to 300 seconds while the target processes. Pass wait_for_result=false for fire-and-forget broadcasts (returns immediately after delivery); \
                 'status' — check agent status; \
                 'kill' — terminate an agent.".to_string(),
             input_schema: serde_json::json!({
@@ -211,6 +211,11 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                         "type": "string",
                         "enum": ["sync", "async"],
                         "description": "For run: 'sync' (default) blocks until result, 'async' returns immediately"
+                    },
+                    "wait_for_result": {
+                        "type": "boolean",
+                        "description": "For message: when true (default), blocks until the target finishes processing and returns its result. Set to false for fire-and-forget broadcast (returns immediately after the message is delivered).",
+                        "default": true
                     }
                 },
                 "required": ["action"]
