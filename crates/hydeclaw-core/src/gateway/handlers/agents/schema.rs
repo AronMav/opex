@@ -246,3 +246,146 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
     }
 }
 
+// ── Tests ────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── validate_agent_name ──────────────────────────────
+
+    #[test]
+    fn validate_agent_name_accepts_simple_name() {
+        assert!(validate_agent_name("Arty").is_ok());
+    }
+
+    #[test]
+    fn validate_agent_name_accepts_dash_and_underscore() {
+        assert!(validate_agent_name("my-agent_1").is_ok());
+    }
+
+    #[test]
+    fn validate_agent_name_accepts_single_char() {
+        assert!(validate_agent_name("A").is_ok());
+    }
+
+    #[test]
+    fn validate_agent_name_accepts_32_chars() {
+        assert!(validate_agent_name(&"a".repeat(32)).is_ok());
+    }
+
+    #[test]
+    fn validate_agent_name_rejects_empty() {
+        assert!(validate_agent_name("").is_err());
+    }
+
+    #[test]
+    fn validate_agent_name_rejects_33_chars() {
+        assert!(validate_agent_name(&"a".repeat(33)).is_err());
+    }
+
+    #[test]
+    fn validate_agent_name_rejects_space() {
+        assert!(validate_agent_name("my agent").is_err());
+    }
+
+    #[test]
+    fn validate_agent_name_rejects_at_sign() {
+        assert!(validate_agent_name("my@agent").is_err());
+    }
+
+    #[test]
+    fn validate_agent_name_rejects_dot() {
+        assert!(validate_agent_name("my.agent").is_err());
+    }
+
+    // ── build_agent_config ───────────────────────────────
+
+    fn minimal_payload(name: &str) -> AgentCreatePayload {
+        AgentCreatePayload {
+            name: name.to_string(),
+            language: None,
+            provider: "anthropic".to_string(),
+            model: "claude-3".to_string(),
+            provider_connection: None,
+            fallback_provider: None,
+            temperature: None,
+            max_tokens: None,
+            access: None,
+            heartbeat: None,
+            tools: None,
+            compaction: None,
+            session: None,
+            max_tools_in_context: None,
+            routing: None,
+            voice: None,
+            icon: None,
+            approval: None,
+            tool_loop: None,
+            watchdog: None,
+            hooks: None,
+            max_history_messages: None,
+            daily_budget_tokens: None,
+            max_agent_turns: None,
+            max_failover_attempts: None,
+        }
+    }
+
+    #[test]
+    fn build_agent_config_applies_defaults() {
+        let payload = minimal_payload("TestAgent");
+        let config = build_agent_config("TestAgent".to_string(), payload);
+        assert_eq!(config.agent.name, "TestAgent");
+        assert_eq!(config.agent.language, "ru");
+        assert_eq!(config.agent.provider, "anthropic");
+        assert_eq!(config.agent.model, "claude-3");
+        assert!((config.agent.temperature - 1.0).abs() < f64::EPSILON);
+        assert_eq!(config.agent.max_failover_attempts, 3);
+        assert!(!config.agent.base);
+        assert!(config.agent.access.is_none());
+        assert!(config.agent.heartbeat.is_none());
+        assert!(config.agent.tools.is_none());
+        assert!(config.agent.compaction.is_none());
+        assert!(config.agent.session.is_none());
+        assert!(config.agent.approval.is_none());
+        assert!(config.agent.tool_loop.is_none());
+        assert!(config.agent.watchdog.is_none());
+        assert!(config.agent.hooks.is_none());
+        assert_eq!(config.agent.daily_budget_tokens, 0);
+        assert!(config.agent.max_agent_turns.is_none());
+        assert!(config.agent.routing.is_empty());
+    }
+
+    #[test]
+    fn build_agent_config_uses_explicit_language() {
+        let mut payload = minimal_payload("TestAgent");
+        payload.language = Some("en".to_string());
+        let config = build_agent_config("TestAgent".to_string(), payload);
+        assert_eq!(config.agent.language, "en");
+    }
+
+    #[test]
+    fn build_agent_config_uses_explicit_temperature() {
+        let mut payload = minimal_payload("TestAgent");
+        payload.temperature = Some(0.5);
+        let config = build_agent_config("TestAgent".to_string(), payload);
+        assert!((config.agent.temperature - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn build_agent_config_name_comes_from_argument_not_payload() {
+        // The `name` argument to build_agent_config is the canonical name;
+        // payload.name is ignored in the builder.
+        let payload = minimal_payload("PayloadName");
+        let config = build_agent_config("ArgName".to_string(), payload);
+        assert_eq!(config.agent.name, "ArgName");
+    }
+
+    #[test]
+    fn build_agent_config_max_failover_attempts_explicit() {
+        let mut payload = minimal_payload("TestAgent");
+        payload.max_failover_attempts = Some(7);
+        let config = build_agent_config("TestAgent".to_string(), payload);
+        assert_eq!(config.agent.max_failover_attempts, 7);
+    }
+}
