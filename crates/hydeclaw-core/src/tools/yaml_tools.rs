@@ -139,6 +139,9 @@ fn default_content_type() -> String { "application/json".to_string() }
 
 // ── Cache config ─────────────────────────────────────────────────────────────
 
+// Fields are parsed from YAML for forward-compatibility; not used at runtime
+// since ToolExecutionContext (the cache runtime) is test-only.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct YamlCacheConfig {
     /// TTL in seconds.
