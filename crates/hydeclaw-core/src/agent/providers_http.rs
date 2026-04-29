@@ -154,6 +154,54 @@ pub const RETRYABLE_OPENAI: &[u16] = &[429, 500, 502, 503];
 /// Retryable codes for Anthropic (includes 529 overloaded).
 pub const RETRYABLE_ANTHROPIC: &[u16] = &[429, 500, 502, 503, 529];
 
+/// Typed error returned by [`send_with_retry`].
+#[derive(Debug)]
+pub enum SendError {
+    /// Non-2xx HTTP response after all retry attempts, or a 400 (no retry).
+    Http { status: u16, body: String },
+    /// Network / connection failure after all retry attempts.
+    Network(reqwest::Error),
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendError::Http { status, body } => write!(f, "HTTP {status}: {body}"),
+            SendError::Network(e) => write!(f, "network error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SendError::Network(e) => Some(e),
+            SendError::Http { .. } => None,
+        }
+    }
+}
+
+/// Low-level HTTP POST with exponential backoff retry.
+///
+/// Returns the raw `reqwest::Response` on success (body not yet consumed).
+/// Callers decide how to read the body (text for non-streaming, stream for SSE).
+///
+/// Error classification:
+/// - 400 → logged + `SendError::Http { status: 400 }` immediately (no retry)
+/// - retryable codes (e.g. 429/500/502/503) → retried up to `max_retries - 1` times
+/// - other non-2xx → `SendError::Http` immediately
+/// - network error → retried; final attempt → `SendError::Network`
+pub async fn send_with_retry(
+    _client: &reqwest::Client,
+    _url: &str,
+    _body: &serde_json::Value,
+    _provider_name: &str,
+    _retryable_codes: &[u16],
+    _customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, SendError> {
+    unimplemented!("send_with_retry not yet implemented")
+}
+
 /// Parse an SSE byte stream with cooperative cancellation + inactivity/max-duration timers.
 ///
 /// The `cancel` token and `timeouts` are threaded into `stream_with_cancellation`,
@@ -256,4 +304,82 @@ pub async fn parse_sse_stream(
 pub enum SseAction {
     Continue,
     Done,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// 503 twice → 200: send_with_retry should succeed on the third attempt.
+    /// Uses tokio time-pause so backoff sleeps are instant.
+    #[tokio::test(start_paused = true)]
+    async fn send_with_retry_retries_503_and_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("overloaded"))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/chat/completions", server.uri());
+        let result = send_with_retry(
+            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, |r| r,
+        ).await;
+        assert!(result.is_ok(), "expected Ok after retry, got {:?}", result.err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    /// 503 three times (all retries exhausted): should return SendError::Http { status: 503 }.
+    #[tokio::test(start_paused = true)]
+    async fn send_with_retry_fails_after_all_503s() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("overloaded"))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/chat/completions", server.uri());
+        let result = send_with_retry(
+            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, |r| r,
+        ).await;
+        assert!(
+            matches!(result, Err(SendError::Http { status: 503, .. })),
+            "expected Http(503), got {:?}", result
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    /// 400 should not be retried and returns immediately.
+    #[tokio::test]
+    async fn send_with_retry_no_retry_on_400() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let url = format!("{}/v1/chat/completions", server.uri());
+        let result = send_with_retry(
+            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, |r| r,
+        ).await;
+        assert!(
+            matches!(result, Err(SendError::Http { status: 400, .. })),
+            "expected Http(400), got {:?}", result
+        );
+        // exactly 1 request — no retry on 400
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
 }
