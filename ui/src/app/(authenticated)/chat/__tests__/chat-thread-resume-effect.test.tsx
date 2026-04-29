@@ -96,7 +96,8 @@ function setActiveSessionIds(ids: string[]) {
 }
 
 vi.mock("@/stores/chat-store", () => {
-  const getState = () => ({
+  // Re-read mutable closures on every call so re-renders pick up changes.
+  const buildState = () => ({
     currentAgent: "Arty",
     agents: {
       Arty: {
@@ -112,26 +113,8 @@ vi.mock("@/stores/chat-store", () => {
     loadEarlierMessages: vi.fn(),
   });
 
-  const useChatStore: any = (selector: any) => {
-    // Re-read mutable state on every selector call (picked up on re-render)
-    const state = {
-      currentAgent: "Arty",
-      agents: {
-        Arty: {
-          activeSessionId: "s1",
-          connectionPhase,
-          reconnectAttempt: 0,
-          maxReconnectAttempts: 3,
-          activeSessionIds,
-          renderLimit: 100,
-        },
-      },
-      resumeStream,
-      loadEarlierMessages: vi.fn(),
-    };
-    return selector(state);
-  };
-  useChatStore.getState = getState;
+  const useChatStore: any = (selector: any) => selector(buildState());
+  useChatStore.getState = buildState;
 
   return {
     useChatStore,

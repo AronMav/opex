@@ -14,35 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act } from "@testing-library/react";
 import React, { useRef, useState, useEffect } from "react";
 import { attachTailSentinel } from "../tail-sentinel";
-
-/** Reuse the same IO mock shape from the unit tests. */
-class MockIntersectionObserver {
-  static instances: MockIntersectionObserver[] = [];
-  readonly callback: IntersectionObserverCallback;
-  readonly options: IntersectionObserverInit | undefined;
-  readonly observed: Element[] = [];
-  disconnected = false;
-
-  constructor(cb: IntersectionObserverCallback, options?: IntersectionObserverInit) {
-    this.callback = cb;
-    this.options = options;
-    MockIntersectionObserver.instances.push(this);
-  }
-
-  observe(el: Element) { this.observed.push(el); }
-  unobserve() {}
-  disconnect() { this.disconnected = true; }
-  takeRecords() { return []; }
-
-  fire(isIntersecting: boolean) {
-    this.callback(
-      [{ isIntersecting, target: this.observed[0] } as unknown as IntersectionObserverEntry],
-      this as unknown as IntersectionObserver,
-    );
-  }
-
-  static last() { return this.instances.at(-1)!; }
-}
+import { MockIntersectionObserver } from "./mock-intersection-observer";
 
 beforeEach(() => {
   MockIntersectionObserver.instances = [];

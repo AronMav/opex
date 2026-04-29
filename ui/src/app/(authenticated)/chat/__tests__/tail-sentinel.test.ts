@@ -13,57 +13,7 @@ import {
   attachTailSentinel,
   DEFAULT_TAIL_ROOT_MARGIN,
 } from "../tail-sentinel";
-
-/** Hand-rolled IO mock so tests can both inspect construction args and
- * drive `isIntersecting` transitions synchronously. */
-class MockIntersectionObserver {
-  static instances: MockIntersectionObserver[] = [];
-
-  readonly callback: IntersectionObserverCallback;
-  readonly options: IntersectionObserverInit | undefined;
-  readonly observed: Element[] = [];
-  disconnected = false;
-
-  constructor(
-    cb: IntersectionObserverCallback,
-    options?: IntersectionObserverInit,
-  ) {
-    this.callback = cb;
-    this.options = options;
-    MockIntersectionObserver.instances.push(this);
-  }
-
-  observe(el: Element) {
-    this.observed.push(el);
-  }
-
-  unobserve() {
-    // not used by attachTailSentinel
-  }
-
-  disconnect() {
-    this.disconnected = true;
-  }
-
-  takeRecords(): IntersectionObserverEntry[] {
-    return [];
-  }
-
-  /** Drive an `isIntersecting` transition from the test. */
-  fire(isIntersecting: boolean) {
-    const entry = {
-      isIntersecting,
-      target: this.observed[0],
-      intersectionRatio: isIntersecting ? 1 : 0,
-      // remaining fields are never read by attachTailSentinel
-    } as unknown as IntersectionObserverEntry;
-    this.callback([entry], this as unknown as IntersectionObserver);
-  }
-
-  static last(): MockIntersectionObserver {
-    return MockIntersectionObserver.instances.at(-1)!;
-  }
-}
+import { MockIntersectionObserver } from "./mock-intersection-observer";
 
 beforeEach(() => {
   MockIntersectionObserver.instances = [];
