@@ -164,7 +164,12 @@ pub async fn handle_agent_ask(
     };
     let target_engine = {
         let map = agent_map.read().await;
-        match map.get(target) {
+        let handle = map.get(target).or_else(|| {
+            // Case-insensitive fallback: models often pass lowercase names
+            let lower = target.to_lowercase();
+            map.iter().find(|(k, _)| k.to_lowercase() == lower).map(|(_, v)| v)
+        });
+        match handle {
             Some(handle) => handle.engine.clone(),
             None => return format!("Error: agent '{target}' not found"),
         }
