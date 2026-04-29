@@ -920,6 +920,7 @@
   "chat.status_interrupted": "прервана",
   "chat.status_timeout": "таймаут",
   "chat.status_failed": "ошибка",
+  "chat.status_running": "выполняется",
   "chat.delete_selected": "Удалить выбранные",
   "chat.no_title": "Без названия",
   "usage.total_tokens_summary": "Всего токенов потрачено",

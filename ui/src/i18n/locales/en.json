@@ -920,6 +920,7 @@
   "chat.status_interrupted": "interrupted",
   "chat.status_timeout": "timeout",
   "chat.status_failed": "error",
+  "chat.status_running": "running",
   "chat.delete_selected": "Delete selected",
   "chat.no_title": "Untitled",
   "usage.total_tokens_summary": "Total tokens consumed",
