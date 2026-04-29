@@ -57,7 +57,19 @@ export default function AuthenticatedLayout({
     }
     if (!restoredRef.current) {
       restoredRef.current = true;
-      restore().then((ok) => init(ok));
+      restore().then((ok) => {
+        if (ok) {
+          init(true);
+          return;
+        }
+        // restore() returns false in two cases:
+        //  (a) 401 — token confirmed invalid: logout() already cleared the token
+        //  (b) network error — token is still present, server was transiently unavailable
+        // Only redirect for (a). For (b) proceed optimistically; individual API
+        // calls will handle 401 if the token is actually invalid.
+        const tokenStillExists = !!useAuthStore.getState().token;
+        init(tokenStillExists ? true : false);
+      });
     }
   }, [isAuthenticated, restore, router]);
 

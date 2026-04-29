@@ -106,16 +106,16 @@ export const useAuthStore = create<AuthState>()(
           // to sessionStorage and removes it. Audited in ARCH-03 (phase 34):
           // localStorage contains only UI preferences (lastSession, wizard progress) — no credentials.
           storage: createJSONStorage(() => {
-            // One-time migration: move token from localStorage to sessionStorage
+            // Migrate any token that was previously stored in sessionStorage back to localStorage.
+            // localStorage keeps the user logged in across tabs and page refreshes, which is
+            // appropriate for a personal home server where the user is the only operator.
             const key = "hydeclaw.auth.token";
-            if (!sessionStorage.getItem(key)) {
-              const legacy = localStorage.getItem(key);
-              if (legacy) {
-                sessionStorage.setItem(key, legacy);
-                localStorage.removeItem(key);
-              }
+            const sessionVal = sessionStorage.getItem(key);
+            if (sessionVal) {
+              if (!localStorage.getItem(key)) localStorage.setItem(key, sessionVal);
+              sessionStorage.removeItem(key);
             }
-            return sessionStorage;
+            return localStorage;
           }),
         },
       ),
