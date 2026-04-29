@@ -151,16 +151,6 @@ function assistantMsgWithAgent(id: string, text: string, agentId: string): ChatM
   };
 }
 
-function toolMsg(id: string, toolCallId: string, agentId: string): ChatMessage {
-  return {
-    id,
-    role: "assistant",
-    parts: [{ type: "tool", toolCallId, toolName: "search", state: "output-available", input: {}, output: "result" }],
-    createdAt: new Date().toISOString(),
-    agentId,
-  };
-}
-
 describe("mergeLiveOverlay — continuation merge (multi-turn tool loop)", () => {
   it("merges live continuation into last history assistant when same agent, no new user message", () => {
     // Scenario: iteration 1 done (in history), iteration 2 streaming (in live)

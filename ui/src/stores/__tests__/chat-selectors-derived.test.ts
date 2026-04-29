@@ -7,27 +7,15 @@ import {
   selectLiveHasContent,
 } from "../chat-selectors";
 import type { ChatState } from "../chat-types";
+import { emptyAgentState } from "../chat-types";
 
-// Minimal state factory — only shapes required by the selectors.
-function makeState(agent: string, overrides: Partial<any> = {}): ChatState {
+// Minimal state factory — uses emptyAgentState() so the shape stays in sync
+// with AgentState whenever new required fields are added.
+function makeState(agent: string, overrides: Partial<ReturnType<typeof emptyAgentState>> = {}): ChatState {
   return {
     currentAgent: agent,
     agents: {
-      [agent]: {
-        activeSessionId: null,
-        activeSessionIds: [],
-        messageSource: { mode: "new-chat" },
-        connectionPhase: "idle",
-        connectionError: null,
-        streamError: null,
-        streamGeneration: 0,
-        reconnectAttempt: 0,
-        selectedBranches: {},
-        renderLimit: 100,
-        turnLimitMessage: null,
-        maxReconnectAttempts: 3,
-        ...overrides,
-      },
+      [agent]: { ...emptyAgentState(), ...overrides },
     },
     sessionParticipants: {},
   } as unknown as ChatState;
