@@ -253,6 +253,25 @@ pub async fn execute_tool_calls_partitioned(
             .await;
         }
 
+        // Pre-allocate row ids and parent links in ORIGINAL index order so the
+        // chain is deterministic regardless of completion order. We can then
+        // spawn the persist insert immediately when each tool finishes — no
+        // second post-join_all loop, which previously left a micro-window where
+        // `tool_end` was logged but the persist hadn't been spawned yet.
+        let parallel_persist_meta: Vec<Option<(Uuid, Option<Uuid>)>> = if persist_ctx.is_some() {
+            let mut out: Vec<Option<(Uuid, Option<Uuid>)>> = vec![None; n];
+            for &i in &parallel_indices {
+                let new_id = Uuid::new_v4();
+                let parent_for_this = chain_parent;
+                out[i] = Some((new_id, parent_for_this));
+                persisted_ids[i] = Some(new_id);
+                chain_parent = Some(new_id);
+            }
+            out
+        } else {
+            Vec::new()
+        };
+
         let futs: Vec<_> = parallel_indices
             .iter()
             .map(|&i| {
@@ -345,32 +364,26 @@ pub async fn execute_tool_calls_partitioned(
                 Some(&end_payload(&tool_calls[i], &result)),
             )
             .await;
-        }
 
-        // Durable persist for the parallel batch. We walk in ORIGINAL index
-        // order so `parent_message_id` is deterministic (independent of the
-        // join_all completion order). Each insert is detached via
-        // `tokio::spawn` so it survives parent-task cancellation between
-        // here and `execute()` returning. Pre-generated ids are recorded in
-        // `persisted_ids` so callers can rebuild the chain head.
-        if let Some(pctx) = persist_ctx {
-            for &i in &parallel_indices {
-                let res_text = match &results[i] {
-                    Some(s) => s.clone(),
-                    None => continue,
-                };
-                let new_id = Uuid::new_v4();
-                persisted_ids[i] = Some(new_id);
+            // Durable persist for THIS tool — spawned immediately after its
+            // `tool_end` WAL so we don't leave a window where the WAL says
+            // "ended" but the row isn't queued for insert. Detached so the
+            // insert survives parent-task cancellation between here and
+            // `execute()` returning. Row id and parent link were pre-allocated
+            // in ORIGINAL index order above, so the chain is deterministic
+            // regardless of `join_all` completion order.
+            if let Some(pctx) = persist_ctx
+                && let Some((new_id, parent_for_this)) = parallel_persist_meta[i]
+            {
                 spawn_persist_tool_message(
                     db,
                     new_id,
                     session_id,
                     pctx.agent_name,
                     &tool_calls[i].id,
-                    &res_text,
-                    chain_parent,
+                    &result,
+                    parent_for_this,
                 );
-                chain_parent = Some(new_id);
             }
         }
     }
@@ -494,6 +507,15 @@ pub async fn execute_tool_calls_partitioned(
 /// `parent_message_id` chain is deterministic regardless of insert ordering.
 /// Idempotent against retry: `save_message_ex_with_id` uses
 /// `ON CONFLICT (id) DO NOTHING`.
+///
+/// NOTE: Uses bare `tokio::spawn` rather than `bg_tasks.spawn(...)` because
+/// `parallel.rs` is reachable from call sites without a `TaskTracker`
+/// (`openai_compat`, `subagent_runner`). The tradeoff: persist tasks aren't
+/// awaited by graceful-shutdown drain. Acceptable because the insert is short
+/// (single SQL `INSERT ... ON CONFLICT DO NOTHING`) and worst-case loss on
+/// SIGTERM mid-flight is one tool row, which the user can reproduce by
+/// re-asking. Threading `bg_tasks` through every persist-aware call site is a
+/// larger refactor and not the scope of this gap-fix.
 #[allow(clippy::too_many_arguments)]
 fn spawn_persist_tool_message(
     db: &sqlx::PgPool,
@@ -529,6 +551,64 @@ fn spawn_persist_tool_message(
                 tool_call_id = %tool_call_id,
                 msg_id = %id,
                 "failed to persist tool message (detached)"
+            );
+        }
+    });
+}
+
+/// Spawn a fire-and-forget tokio task that persists an INTERMEDIATE assistant
+/// message (the one that holds `tool_calls`) to the `messages` table.
+///
+/// Mirrors [`spawn_persist_tool_message`] for the assistant-with-tool-calls
+/// case in `pipeline::execute`. The synchronous-await variant
+/// (`SessionManager::save_message_ex(...).await`) leaves a cancellation gap:
+/// if the engine task is aborted during the await (e.g. SSE client disconnect),
+/// the row is never written and subsequent tool messages have no parent
+/// assistant — the chain is broken on reload.
+///
+/// Detached spawn closes that gap. The id is supplied by the caller
+/// (pre-generated synchronously) so the `parent_message_id` chain is
+/// deterministic regardless of insert ordering. Idempotent: `ON CONFLICT (id)
+/// DO NOTHING`.
+///
+/// See note in [`spawn_persist_tool_message`] re: bare `tokio::spawn` vs.
+/// `TaskTracker`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_persist_assistant_message(
+    db: &sqlx::PgPool,
+    id: Uuid,
+    session_id: Uuid,
+    agent_name: &str,
+    content: &str,
+    tool_calls_json: Option<&serde_json::Value>,
+    thinking_blocks_json: Option<&serde_json::Value>,
+    parent_id: Option<Uuid>,
+) {
+    let db = db.clone();
+    let agent_name = agent_name.to_string();
+    let content = content.to_string();
+    let tool_calls_owned = tool_calls_json.cloned();
+    let thinking_owned = thinking_blocks_json.cloned();
+    tokio::spawn(async move {
+        if let Err(e) = crate::db::sessions::save_message_ex_with_id(
+            &db,
+            id,
+            session_id,
+            "assistant",
+            &content,
+            tool_calls_owned.as_ref(),
+            None,
+            Some(&agent_name),
+            thinking_owned.as_ref(),
+            parent_id,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                msg_id = %id,
+                "failed to persist intermediate assistant message (detached)"
             );
         }
     });

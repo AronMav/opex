@@ -333,28 +333,30 @@ pub async fn execute<S: EventSink>(
 
         // Persist the intermediate assistant (with tool_calls) to DB so
         // reload-from-active-path can reconstruct tool-use history.
-        // Errors are logged but non-fatal — the in-memory context is already
-        // correct, only DB replay degrades.
+        //
+        // Detached via `spawn_persist_assistant_message` so the insert
+        // survives parent-task cancellation (e.g. SSE client disconnect →
+        // engine task abort) between here and the spawned tool-result inserts
+        // below. A synchronous `save_message_ex(...).await` here would leave
+        // a window: cancel during the await drops the assistant row, then
+        // tool messages persisted by `execute_batch` reference a parent_id
+        // that doesn't exist → chain broken on reload.
+        //
+        // Idempotency: pre-generated UUID + `ON CONFLICT (id) DO NOTHING` in
+        // `save_message_ex_with_id` mean retries are safe.
         let tc_json = serde_json::to_value(&response.tool_calls).ok();
-        match sm
-            .save_message_ex(
-                session_id,
-                "assistant",
-                &partial,
-                tc_json.as_ref(),
-                None,
-                Some(&agent_name),
-                None,
-                Some(last_msg_id),
-            )
-            .await
-        {
-            Ok(id) => last_msg_id = id,
-            Err(e) => tracing::warn!(
-                error = %e, session_id = %session_id,
-                "failed to save intermediate assistant to DB"
-            ),
-        }
+        let assistant_msg_id = uuid::Uuid::new_v4();
+        crate::agent::pipeline::parallel::spawn_persist_assistant_message(
+            &engine.cfg().db,
+            assistant_msg_id,
+            session_id,
+            &agent_name,
+            &partial,
+            tc_json.as_ref(),
+            None,
+            Some(last_msg_id),
+        );
+        last_msg_id = assistant_msg_id;
 
         // 9. Emit ToolCallStart + ToolCallArgs for each tool (UI feedback)
         for tc in &response.tool_calls {
