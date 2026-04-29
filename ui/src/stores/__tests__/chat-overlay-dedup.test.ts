@@ -139,6 +139,165 @@ describe("mergeLiveOverlay — assistant dedup", () => {
   });
 });
 
+// ── Continuation merge (multi-turn tool-loop) ────────────────────────────────
+
+function assistantMsgWithAgent(id: string, text: string, agentId: string): ChatMessage {
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "text", text }],
+    createdAt: new Date().toISOString(),
+    agentId,
+  };
+}
+
+function toolMsg(id: string, toolCallId: string, agentId: string): ChatMessage {
+  return {
+    id,
+    role: "assistant",
+    parts: [{ type: "tool", toolCallId, toolName: "search", state: "output-available", input: {}, output: "result" }],
+    createdAt: new Date().toISOString(),
+    agentId,
+  };
+}
+
+describe("mergeLiveOverlay — continuation merge (multi-turn tool loop)", () => {
+  it("merges live continuation into last history assistant when same agent, no new user message", () => {
+    // Scenario: iteration 1 done (in history), iteration 2 streaming (in live)
+    const history: ChatMessage[] = [
+      userMsg("u1", "Discuss in 3 cycles"),
+      assistantMsgWithAgent("a1", "Gathering data...", "Arty"),
+    ];
+    // Live has confirmed user (already in history) + current iteration assistant
+    const live: ChatMessage[] = [
+      userMsg("u1", "Discuss in 3 cycles"),     // confirmed, same text as history
+      assistantMsgWithAgent("live-a2", "Launching cycle 1...", "Arty"),
+    ];
+
+    const out = mergeLiveOverlay(history, live);
+
+    // Should be ONE merged bubble, not two
+    const assistants = out.filter(m => m.role === "assistant");
+    expect(assistants).toHaveLength(1);
+
+    // The merged assistant should have BOTH text parts
+    const textParts = assistants[0].parts.filter(p => p.type === "text");
+    expect(textParts.map((p: any) => p.text)).toContain("Gathering data...");
+    expect(textParts.map((p: any) => p.text)).toContain("Launching cycle 1...");
+  });
+
+  it("deduplicates repeated preamble text in live continuation (same text in history and live)", () => {
+    // Arty repeats "Gathering data..." at the start of EVERY iteration.
+    // Live buffer has: [text1(from_it1), text1(from_it2), new_tool]
+    // After tool dedup removes old tools, only text1(dup)+text1(dup)+new_tool remain.
+    // Text dedup should remove the duplicates.
+    const history: ChatMessage[] = [
+      userMsg("u1", "Discuss world"),
+      {
+        id: "a1",
+        role: "assistant",
+        agentId: "Arty",
+        parts: [
+          { type: "text", text: "Gathering data..." },
+          { type: "tool", toolCallId: "tc1", toolName: "search", state: "output-available", input: {}, output: "news" },
+        ],
+        createdAt: new Date().toISOString(),
+      } as ChatMessage,
+    ];
+
+    const live: ChatMessage[] = [
+      userMsg("u1", "Discuss world"),
+      {
+        id: "live-a2",
+        role: "assistant",
+        agentId: "Arty",
+        parts: [
+          { type: "tool", toolCallId: "tc1", toolName: "search", state: "output-available", input: {}, output: "news" }, // already in history → filtered
+          { type: "text", text: "Gathering data..." },  // duplicate → filtered
+          { type: "tool", toolCallId: "tc2", toolName: "agent", state: "output-available", input: {}, output: "result" }, // NEW
+          { type: "text", text: "Now analyzing..." }, // new text
+        ],
+        createdAt: new Date().toISOString(),
+      } as ChatMessage,
+    ];
+
+    const out = mergeLiveOverlay(history, live);
+    const assistants = out.filter(m => m.role === "assistant");
+    expect(assistants).toHaveLength(1); // merged into one bubble
+
+    const parts = assistants[0].parts;
+    // New tool should be present
+    expect(parts.some((p: any) => p.type === "tool" && p.toolCallId === "tc2")).toBe(true);
+    // New text should be present
+    expect(parts.some((p: any) => p.type === "text" && p.text === "Now analyzing...")).toBe(true);
+    // Duplicate text should NOT be duplicated in the merged output
+    const gatheringCount = parts.filter((p: any) => p.type === "text" && p.text === "Gathering data...").length;
+    expect(gatheringCount).toBe(1); // only from history, not duplicated
+  });
+
+  it("confirmed user message in history does NOT set liveHasNewUserMsg — continuation still merges", () => {
+    // Regression: before the fix, ANY user message in live set liveHasNewUserMsg=true,
+    // blocking continuation merge even when that user message was already confirmed in history.
+    const history: ChatMessage[] = [
+      userMsg("u1", "Discuss"),
+      assistantMsgWithAgent("a1", "Searching...", "Arty"),
+    ];
+    const live: ChatMessage[] = [
+      userMsg("u1", "Discuss"), // confirmed user — same text, already in history
+      assistantMsgWithAgent("live-a2", "Analyzing...", "Arty"), // continuation
+    ];
+
+    const out = mergeLiveOverlay(history, live);
+    const assistants = out.filter(m => m.role === "assistant");
+
+    // Must merge into one bubble (not two separate ones)
+    expect(assistants).toHaveLength(1);
+    // Both texts must be present in the merged bubble
+    const texts = assistants[0].parts.filter((p: any) => p.type === "text").map((p: any) => p.text);
+    expect(texts).toContain("Searching...");
+    expect(texts).toContain("Analyzing...");
+  });
+
+  it("genuinely new user message in live BLOCKS continuation merge (new turn)", () => {
+    // A new user message that is NOT in history means a new turn is starting.
+    // The live assistant should appear as a separate bubble after the user message.
+    const history: ChatMessage[] = [
+      userMsg("u1", "First question"),
+      assistantMsgWithAgent("a1", "First answer", "Arty"),
+    ];
+    const live: ChatMessage[] = [
+      userMsg("u2", "Second question"),  // new — NOT in history
+      assistantMsgWithAgent("live-a2", "Thinking...", "Arty"),
+    ];
+
+    const out = mergeLiveOverlay(history, live);
+    // History: user + assistant, Live overlay: new user + assistant
+    // Total: 4 messages (no merge because new user message is present)
+    expect(out).toHaveLength(4);
+    expect(out[2].role).toBe("user");
+    expect(out[3].role).toBe("assistant");
+  });
+
+  it("no continuation merge when live assistant has different agentId", () => {
+    // Only merge when both history last assistant and live assistant share the same agentId
+    const history: ChatMessage[] = [
+      userMsg("u1", "Hello"),
+      assistantMsgWithAgent("a1", "Hi from Arty", "Arty"),
+    ];
+    const live: ChatMessage[] = [
+      userMsg("u1", "Hello"),
+      assistantMsgWithAgent("live-a2", "Hi from Hyde", "Hyde"), // different agent
+    ];
+
+    const out = mergeLiveOverlay(history, live);
+    // Different agentId → no merge → two assistant bubbles
+    const assistants = out.filter(m => m.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0].id).toBe("a1");
+    expect(assistants[1].id).toBe("live-a2");
+  });
+});
+
 describe("mergeLiveOverlay — edge cases", () => {
   it("returns history unchanged when live is empty", () => {
     const history: ChatMessage[] = [assistantMsg("a1", "hi")];

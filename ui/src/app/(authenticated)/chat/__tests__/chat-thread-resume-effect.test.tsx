@@ -192,6 +192,42 @@ describe("ChatThread resume-effect (QUICK-260421-0w6)", () => {
     unmount();
   });
 
+  it("submitted→idle (204 response) does NOT clear the guard — prevents stale-cache loop", () => {
+    // Regression guard for the blinking-cursor loop:
+    //   connectionPhase=idle + sessionRunStatus="running" (stale cache)
+    //   → resumeStream fires → connectionPhase=submitted
+    //   (old code cleared resumedSessionsRef here because isActivePhase("submitted")=true)
+    //   → server returns 204 → connectionPhase=idle
+    //   (old code: guard cleared → resumeStream fires again → infinite loop)
+    //
+    // With the fix, "submitted" phase does NOT clear the guard.
+    // Only "streaming" or "reconnecting" (real data flowing) resets it.
+
+    // Step 1: mount with idle+running → first resume call
+    const { rerender } = renderThread();
+    expect(resumeStream).toHaveBeenCalledTimes(1);
+
+    // Step 2: simulate connectionPhase → submitted (resumeStream has started the fetch)
+    setPhase("submitted");
+    rerender(
+      <ChatThread streamError={null} isReadOnly={false} activeSession={undefined}
+        onClearError={vi.fn()} onRetry={vi.fn()} />,
+    );
+    expect(resumeStream).toHaveBeenCalledTimes(1); // no new calls while active
+
+    // Step 3: simulate 204 response → back to idle WITHOUT going through "streaming"
+    setPhase("idle");
+    rerender(
+      <ChatThread streamError={null} isReadOnly={false} activeSession={undefined}
+        onClearError={vi.fn()} onRetry={vi.fn()} />,
+    );
+
+    // CRITICAL: must NOT fire again — guard still holds because "submitted" phase
+    // did not clear resumedSessionsRef. The React Query cache still shows
+    // sessionRunStatus="running" (stale), but the guard blocks the re-trigger.
+    expect(resumeStream).toHaveBeenCalledTimes(1);
+  });
+
   it("resume re-fires when the same mounted component sees a second idle→running transition", () => {
     // Render once with connectionPhase="streaming" (effect exits early via isActivePhase)
     setPhase("streaming");

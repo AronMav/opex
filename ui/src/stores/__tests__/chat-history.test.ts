@@ -145,3 +145,99 @@ describe("convertHistory — streaming placeholder does not shadow tree root (Bu
     expect(ids).not.toContain("u2");
   });
 });
+
+describe("convertHistory — parallel tool results sorted by declared order", () => {
+  // Parallel tool calls complete fastest-first, so DB insertion order does NOT
+  // match the declared order in tool_calls[]. convertHistory must sort tool
+  // parts within each consecutive group back into declared order.
+  //
+  // Scenario: assistant declares [agents_list(call_00), search(call_01), search(call_02)]
+  // but results arrive in DB order: call_01 first, call_02 second, call_00 last.
+
+  it("sorts consecutive tool parts by declared tool_calls[] index, not DB arrival order", () => {
+    const rows: MessageRow[] = [
+      makeRow({
+        id: "u1",
+        role: "user",
+        content: "Discuss world in 3 cycles",
+        created_at: "2026-04-29T10:50:04Z",
+      }),
+      // Assistant declaring [agents_list(call_00), search(call_01), search(call_02)]
+      makeRow({
+        id: "a1",
+        role: "assistant",
+        agent_id: "Arty",
+        content: "",
+        tool_calls: [
+          { id: "call_00_agents", name: "agents_list",    arguments: {} },
+          { id: "call_01_search", name: "search_web_fresh", arguments: {} },
+          { id: "call_02_search", name: "search_web_fresh", arguments: {} },
+        ] as any,
+        created_at: "2026-04-29T10:50:15Z",
+      }),
+      // Tool results arrive in completion order: call_01 first (fastest), call_02, call_00 last
+      makeRow({ id: "t1", role: "tool", tool_call_id: "call_01_search", content: "search result 1", created_at: "2026-04-29T10:50:17.662Z" }),
+      makeRow({ id: "t2", role: "tool", tool_call_id: "call_02_search", content: "search result 2", created_at: "2026-04-29T10:50:17.676Z" }),
+      makeRow({ id: "t3", role: "tool", tool_call_id: "call_00_agents", content: "agents result",   created_at: "2026-04-29T10:50:17.800Z" }),
+    ];
+
+    const messages = convertHistory(rows, false, {});
+
+    // Find the assistant message
+    const assistant = messages.find(m => m.role === "assistant");
+    expect(assistant).toBeDefined();
+
+    const toolParts = assistant!.parts.filter(p => p.type === "tool") as Array<{ type: "tool"; toolCallId: string; toolName: string }>;
+
+    expect(toolParts).toHaveLength(3);
+
+    // DECLARED ORDER: agents_list(call_00) first, search(call_01) second, search(call_02) third
+    expect(toolParts[0].toolCallId).toBe("call_00_agents");
+    expect(toolParts[0].toolName).toBe("agents_list");
+    expect(toolParts[1].toolCallId).toBe("call_01_search");
+    expect(toolParts[2].toolCallId).toBe("call_02_search");
+  });
+
+  it("does not reorder tool parts from different iterations (text separator between groups)", () => {
+    // Iteration 1: search x2; Iteration 2: agent (separated by text "Analyzing...")
+    // Tools from different iterations must NOT be mixed when sorting.
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", content: "Hello", created_at: "2026-04-29T10:00:00Z" }),
+      makeRow({
+        id: "a1",
+        role: "assistant",
+        agent_id: "Arty",
+        content: "",
+        tool_calls: [
+          { id: "call_00_s", name: "search", arguments: {} },
+          { id: "call_01_s", name: "search", arguments: {} },
+        ] as any,
+        created_at: "2026-04-29T10:00:01Z",
+      }),
+      // Results arrive in reverse declared order
+      makeRow({ id: "t1", role: "tool", tool_call_id: "call_01_s", content: "r1", created_at: "2026-04-29T10:00:02Z" }),
+      makeRow({ id: "t2", role: "tool", tool_call_id: "call_00_s", content: "r2", created_at: "2026-04-29T10:00:03Z" }),
+      // Second iteration (merged into same bubble by virtual merging)
+      makeRow({
+        id: "a2",
+        role: "assistant",
+        agent_id: "Arty",
+        content: "Analyzing...",
+        tool_calls: [{ id: "call_00_a", name: "agent", arguments: {} }] as any,
+        created_at: "2026-04-29T10:00:04Z",
+      }),
+      makeRow({ id: "t3", role: "tool", tool_call_id: "call_00_a", content: "agent result", created_at: "2026-04-29T10:00:05Z" }),
+    ];
+
+    const messages = convertHistory(rows, false, {});
+    const assistant = messages.find(m => m.role === "assistant");
+    expect(assistant).toBeDefined();
+
+    const toolParts = assistant!.parts.filter(p => p.type === "tool") as Array<{ type: "tool"; toolCallId: string }>;
+    // Iteration 1 group: call_00_s FIRST (declared index 0), call_01_s second (declared index 1)
+    expect(toolParts[0].toolCallId).toBe("call_00_s");
+    expect(toolParts[1].toolCallId).toBe("call_01_s");
+    // Iteration 2 group: separated by text "Analyzing..." → agent tool last
+    expect(toolParts[2].toolCallId).toBe("call_00_a");
+  });
+});
