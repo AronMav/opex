@@ -18,6 +18,48 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/",
 }));
 
+// ── Mock: lucide-react (heavy icon library — stub all named exports) ────────
+// Loader2 passes className through so animate-spin tests continue to work.
+
+vi.mock("lucide-react", () => {
+  const Icon = () => null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Loader2 = ({ className }: any) => <svg className={className} />;
+  return {
+    Activity: Icon, AlertCircle: Icon, AlertTriangle: Icon, Archive: Icon,
+    ArrowDownRight: Icon, ArrowLeft: Icon, ArrowRight: Icon, ArrowUpRight: Icon,
+    BarChart3: Icon, Bell: Icon, BookOpen: Icon, Bot: Icon, Box: Icon, Brain: Icon,
+    Calendar: Icon, Camera: Icon, Check: Icon, CheckCircle: Icon, CheckCircle2: Icon,
+    CheckIcon: Icon, ChevronDown: Icon, ChevronDownIcon: Icon, ChevronLeft: Icon,
+    ChevronRight: Icon, ChevronRightIcon: Icon, ChevronUp: Icon, Circle: Icon,
+    CircleCheckIcon: Icon, CircleIcon: Icon, Clock: Icon, Copy: Icon,
+    CornerDownRight: Icon, Cpu: Icon, Database: Icon, DollarSign: Icon,
+    Download: Icon, Edit3: Icon, ExternalLink: Icon, Eye: Icon,
+    FileCode: Icon, FileCode2: Icon, FilePlus: Icon, FileText: Icon,
+    Folder: Icon, FolderMinus: Icon, Gamepad2: Icon, Gauge: Icon,
+    GitBranch: Icon, Globe: Icon, Hammer: Icon, Hash: Icon, HeartPulse: Icon,
+    History: Icon, Image: Icon, ImageIcon: Icon, InfoIcon: Icon,
+    Key: Icon, KeyRound: Icon, Keyboard: Icon, Languages: Icon,
+    Link: Icon, Link2: Icon, ListTodo: Icon, Loader: Icon, Loader2,
+    Loader2Icon: Icon, LogOut: Icon, LucideProps: Icon,
+    Mail: Icon, Maximize2: Icon, Menu: Icon, MessageSquare: Icon,
+    MessageSquareShare: Icon, Mic: Icon, Minimize2: Icon, Minus: Icon,
+    Monitor: Icon, Moon: Icon, MoreHorizontal: Icon, Network: Icon,
+    OctagonXIcon: Icon, PanelLeftIcon: Icon, PanelRight: Icon,
+    Paperclip: Icon, Pencil: Icon, Phone: Icon, Pin: Icon, PinOff: Icon,
+    Play: Icon, Plus: Icon, Power: Icon, PowerOff: Icon, Radio: Icon,
+    RefreshCw: Icon, RotateCcw: Icon, Save: Icon, Search: Icon, Send: Icon,
+    Settings: Icon, Settings2: Icon, Shield: Icon, ShieldAlert: Icon,
+    ShieldCheck: Icon, Square: Icon, Stethoscope: Icon, Sun: Icon,
+    Tag: Icon, ThumbsDown: Icon, ThumbsUp: Icon, Timer: Icon, Trash2: Icon,
+    TrendingDown: Icon, TrendingUp: Icon, TriangleAlertIcon: Icon,
+    Unlink: Icon, User: Icon, UserCheck: Icon, UserX: Icon,
+    Volume2: Icon, VolumeX: Icon, Webhook: Icon, Wifi: Icon, WifiOff: Icon,
+    Wrench: Icon, XCircle: Icon, XIcon: Icon, Zap: Icon,
+    ZoomIn: Icon, ZoomOut: Icon,
+  };
+});
+
 // ── Mock: sonner toast ─────────────────────────────────────────────────────
 
 vi.mock("sonner", () => ({
@@ -246,9 +288,9 @@ describe("Attachment button presence (INPT-03)", () => {
         onRetry={vi.fn()}
       />,
     );
-    // Paperclip icon renders as an SVG inside the attachment button
-    const paperclipIcons = container.querySelectorAll("svg");
-    expect(paperclipIcons.length).toBeGreaterThan(0);
+    // Hidden file input is the functional attachment element
+    const fileInput = container.querySelector("input[type='file']");
+    expect(fileInput).not.toBeNull();
   });
 });
 

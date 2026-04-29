@@ -272,50 +272,39 @@ describe("Session Management (SESS)", () => {
   // ── SESS-04: setCurrentAgent session carry-over ──────────────────────────
 
   describe("SESS-04: setCurrentAgent preserves multi-agent session", () => {
-    it("carries over session when new agent is a participant in the active session", () => {
-      // Test the Zustand store logic directly by importing the real store module.
-      // Since the store is mocked in this test file, we test the logic pattern
-      // by verifying the implementation's contract through code inspection.
-      //
-      // The implementation (chat-store.ts lines 916-939):
-      // 1. Gets activeSessionId from previous agent
-      // 2. Checks sessionParticipants[activeSessionId].includes(newAgent)
-      // 3. If yes: carries over activeSessionId, messageSource, connectionPhase
-      // 4. If no: resets to new-chat state
+    // ── Shared types ───────────────────────────────────────────────────────
 
-      // We verify this by testing the store's setCurrentAgent function directly.
-      // Import the real store for this specific test.
+    type MessageSource =
+      | { mode: "new-chat" }
+      | { mode: "live"; messages: unknown[] }
+      | { mode: "history"; sessionId: string };
+
+    type AgentState = {
+      activeSessionId: string | null;
+      messageSource: MessageSource;
+      connectionPhase: string;
+    };
+
+    type StoreState = {
+      currentAgent: string;
+      agents: Record<string, AgentState>;
+      sessionParticipants: Record<string, string[]>;
+      setCurrentAgent: (name: string) => void;
+    };
+
+    // ── Factory: minimal carry-over store for unit testing ──────────────
+
+    function makeAgentStore(opts: {
+      currentAgent: string;
+      agents: Record<string, AgentState>;
+      sessionParticipants: Record<string, string[]>;
+    }) {
       const { create } = require("zustand") as typeof import("zustand");
       const { immer } = require("zustand/middleware/immer") as typeof import("zustand/middleware/immer");
 
-      // Minimal recreation of the carry-over logic
-      type MessageSource = { mode: "new-chat" } | { mode: "live"; messages: unknown[] } | { mode: "history"; sessionId: string };
-      type AgentState = {
-        activeSessionId: string | null;
-        messageSource: MessageSource;
-        connectionPhase: string;
-      };
-
-      type StoreState = {
-        currentAgent: string;
-        agents: Record<string, AgentState>;
-        sessionParticipants: Record<string, string[]>;
-        setCurrentAgent: (name: string) => void;
-      };
-
-      const useTestStore = create<StoreState>()(
+      return create<StoreState>()(
         immer((set: (fn: (draft: StoreState) => void) => void, get: () => StoreState) => ({
-          currentAgent: "AgentA",
-          agents: {
-            AgentA: {
-              activeSessionId: "s1",
-              messageSource: { mode: "live", messages: [{ id: "msg1", text: "hello" }] },
-              connectionPhase: "idle",
-            },
-          },
-          sessionParticipants: {
-            s1: ["AgentA", "AgentB"],
-          },
+          ...opts,
           setCurrentAgent: (name: string) => {
             const prev = get().currentAgent;
             if (prev === name) return;
@@ -325,8 +314,7 @@ describe("Session Management (SESS)", () => {
 
             if (activeSessionId) {
               const participants = get().sessionParticipants[activeSessionId];
-              if (participants && participants.includes(name)) {
-                // Carry over
+              if (participants?.includes(name)) {
                 set((draft) => {
                   if (!draft.agents[name]) {
                     draft.agents[name] = { activeSessionId: null, messageSource: { mode: "new-chat" }, connectionPhase: "idle" };
@@ -340,7 +328,6 @@ describe("Session Management (SESS)", () => {
               }
             }
 
-            // No carry-over: reset
             set((draft) => {
               if (!draft.agents[name]) {
                 draft.agents[name] = { activeSessionId: null, messageSource: { mode: "new-chat" }, connectionPhase: "idle" };
@@ -353,136 +340,61 @@ describe("Session Management (SESS)", () => {
           },
         })),
       );
+    }
 
-      // Switch to AgentB (IS a participant in s1) -- should carry over
-      useTestStore.getState().setCurrentAgent("AgentB");
+    // ── Default fixture used by most tests ─────────────────────────────
 
-      expect(useTestStore.getState().currentAgent).toBe("AgentB");
-      expect(useTestStore.getState().agents.AgentB.activeSessionId).toBe("s1");
-      const agentBSource = useTestStore.getState().agents.AgentB.messageSource;
-      expect(agentBSource.mode).toBe("live");
-      if (agentBSource.mode === "live") {
-        expect(agentBSource.messages).toEqual([{ id: "msg1", text: "hello" }]);
+    const defaultAgents: Record<string, AgentState> = {
+      AgentA: {
+        activeSessionId: "s1",
+        messageSource: { mode: "live", messages: [{ id: "msg1", text: "hello" }] },
+        connectionPhase: "idle",
+      },
+    };
+
+    it("carries over session when new agent is a participant in the active session", () => {
+      const store = makeAgentStore({
+        currentAgent: "AgentA",
+        agents: { ...defaultAgents },
+        sessionParticipants: { s1: ["AgentA", "AgentB"] },
+      });
+
+      store.getState().setCurrentAgent("AgentB");
+
+      expect(store.getState().currentAgent).toBe("AgentB");
+      expect(store.getState().agents.AgentB.activeSessionId).toBe("s1");
+      const src = store.getState().agents.AgentB.messageSource;
+      expect(src.mode).toBe("live");
+      if (src.mode === "live") {
+        expect(src.messages).toEqual([{ id: "msg1", text: "hello" }]);
       }
     });
 
     it("does NOT carry over session when new agent is NOT a participant", () => {
-      const { create } = require("zustand") as typeof import("zustand");
-      const { immer } = require("zustand/middleware/immer") as typeof import("zustand/middleware/immer");
+      const store = makeAgentStore({
+        currentAgent: "AgentA",
+        agents: { ...defaultAgents },
+        sessionParticipants: { s1: ["AgentA", "AgentB"] },
+      });
 
-      type MessageSource = { mode: "new-chat" } | { mode: "live"; messages: unknown[] } | { mode: "history"; sessionId: string };
-      type AgentState = {
-        activeSessionId: string | null;
-        messageSource: MessageSource;
-        connectionPhase: string;
-      };
+      store.getState().setCurrentAgent("AgentC");
 
-      type StoreState = {
-        currentAgent: string;
-        agents: Record<string, AgentState>;
-        sessionParticipants: Record<string, string[]>;
-        setCurrentAgent: (name: string) => void;
-      };
-
-      const useTestStore = create<StoreState>()(
-        immer((set: (fn: (draft: StoreState) => void) => void, get: () => StoreState) => ({
-          currentAgent: "AgentA",
-          agents: {
-            AgentA: {
-              activeSessionId: "s1",
-              messageSource: { mode: "live", messages: [{ id: "msg1", text: "hello" }] },
-              connectionPhase: "idle",
-            },
-          },
-          sessionParticipants: {
-            s1: ["AgentA", "AgentB"],
-          },
-          setCurrentAgent: (name: string) => {
-            const prev = get().currentAgent;
-            if (prev === name) return;
-
-            const prevState = get().agents[prev];
-            const activeSessionId = prevState?.activeSessionId;
-
-            if (activeSessionId) {
-              const participants = get().sessionParticipants[activeSessionId];
-              if (participants && participants.includes(name)) {
-                set((draft) => {
-                  if (!draft.agents[name]) {
-                    draft.agents[name] = { activeSessionId: null, messageSource: { mode: "new-chat" }, connectionPhase: "idle" };
-                  }
-                  draft.agents[name].activeSessionId = activeSessionId;
-                  draft.agents[name].messageSource = prevState?.messageSource ?? { mode: "new-chat" };
-                  draft.agents[name].connectionPhase = prevState?.connectionPhase ?? "idle";
-                  draft.currentAgent = name;
-                });
-                return;
-              }
-            }
-
-            set((draft) => {
-              if (!draft.agents[name]) {
-                draft.agents[name] = { activeSessionId: null, messageSource: { mode: "new-chat" }, connectionPhase: "idle" };
-              }
-              draft.agents[name].activeSessionId = null;
-              draft.agents[name].messageSource = { mode: "new-chat" };
-              draft.agents[name].connectionPhase = "idle";
-              draft.currentAgent = name;
-            });
-          },
-        })),
-      );
-
-      // Switch to AgentC (NOT a participant in s1) -- should NOT carry over
-      useTestStore.getState().setCurrentAgent("AgentC");
-
-      expect(useTestStore.getState().currentAgent).toBe("AgentC");
-      expect(useTestStore.getState().agents.AgentC.activeSessionId).toBeNull();
-      expect(useTestStore.getState().agents.AgentC.messageSource).toEqual({ mode: "new-chat" });
+      expect(store.getState().currentAgent).toBe("AgentC");
+      expect(store.getState().agents.AgentC.activeSessionId).toBeNull();
+      expect(store.getState().agents.AgentC.messageSource).toEqual({ mode: "new-chat" });
     });
 
     it("no-ops when switching to the same agent", () => {
-      const { create } = require("zustand") as typeof import("zustand");
-      const { immer } = require("zustand/middleware/immer") as typeof import("zustand/middleware/immer");
+      const store = makeAgentStore({
+        currentAgent: "AgentA",
+        agents: { ...defaultAgents },
+        sessionParticipants: { s1: ["AgentA"] },
+      });
 
-      type MessageSource = { mode: "new-chat" } | { mode: "live"; messages: unknown[] } | { mode: "history"; sessionId: string };
-      type AgentState = {
-        activeSessionId: string | null;
-        messageSource: MessageSource;
-        connectionPhase: string;
-      };
+      store.getState().setCurrentAgent("AgentA");
 
-      type StoreState = {
-        currentAgent: string;
-        agents: Record<string, AgentState>;
-        sessionParticipants: Record<string, string[]>;
-        setCurrentAgent: (name: string) => void;
-      };
-
-      const useTestStore = create<StoreState>()(
-        immer((set: (fn: (draft: StoreState) => void) => void, get: () => StoreState) => ({
-          currentAgent: "AgentA",
-          agents: {
-            AgentA: {
-              activeSessionId: "s1",
-              messageSource: { mode: "live", messages: [{ id: "msg1", text: "hello" }] },
-              connectionPhase: "idle",
-            },
-          },
-          sessionParticipants: { s1: ["AgentA"] },
-          setCurrentAgent: (name: string) => {
-            const prev = get().currentAgent;
-            if (prev === name) return;
-            // Should not reach here for same agent
-          },
-        })),
-      );
-
-      // Switch to same agent -- nothing should change
-      useTestStore.getState().setCurrentAgent("AgentA");
-
-      expect(useTestStore.getState().currentAgent).toBe("AgentA");
-      expect(useTestStore.getState().agents.AgentA.activeSessionId).toBe("s1");
+      expect(store.getState().currentAgent).toBe("AgentA");
+      expect(store.getState().agents.AgentA.activeSessionId).toBe("s1");
     });
   });
 });
