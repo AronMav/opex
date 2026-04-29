@@ -533,6 +533,13 @@ mod tests {
         )
         .await
         .unwrap();
+        // Drop's fallback only fires when the session is currently 'running'
+        // (mark_session_run_status_if_running). create_new_session leaves
+        // run_status NULL, so we must transition to 'running' first to
+        // simulate the live-stream state we're emulating cancellation against.
+        crate::db::sessions::set_session_run_status(&pool, session_id, "running")
+            .await
+            .unwrap();
 
         let tracker = Arc::new(TaskTracker::new());
         {
