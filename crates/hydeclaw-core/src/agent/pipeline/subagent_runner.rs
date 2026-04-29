@@ -153,7 +153,7 @@ pub async fn run_subagent_with_session(
             content: response.content.clone(),
             tool_calls: Some(response.tool_calls.clone()),
             tool_call_id: None,
-            thinking_blocks: vec![],
+            thinking_blocks: response.thinking_blocks.clone(),
         });
 
         // Use an empty object (not Null) so enrich_tool_args can inject session_id into _context.

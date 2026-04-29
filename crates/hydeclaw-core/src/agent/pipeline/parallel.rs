@@ -539,31 +539,57 @@ fn spawn_persist_message_row(
     let tool_calls_owned = tool_calls_json.cloned();
     let thinking_owned = thinking_blocks_json.cloned();
     tokio::spawn(async move {
-        if let Err(e) = crate::db::sessions::save_message_ex_with_id(
-            &db,
-            id,
-            session_id,
-            role,
-            &content,
-            tool_calls_owned.as_ref(),
-            tool_call_id_owned.as_deref(),
-            Some(&agent_name),
-            thinking_owned.as_ref(),
-            parent_id,
-        )
-        .await
-        {
-            // Single source of truth for the detached-persist warn formatting.
-            // `tool_call_id` is logged when set so tool-row failures stay
-            // diagnosable; otherwise it is omitted via the `Option` Display
-            // contract baked into the format string.
+        // Retry up to 3 times with short backoff to handle the race where a
+        // parent message insert (also detached) hasn't committed yet when this
+        // child insert fires. Retryable: FK violation (parent not yet visible)
+        // and transient connection errors. Non-retryable errors bail immediately.
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 0..3u32 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(50 * (1 << attempt))).await;
+            }
+            match crate::db::sessions::save_message_ex_with_id(
+                &db,
+                id,
+                session_id,
+                role,
+                &content,
+                tool_calls_owned.as_ref(),
+                tool_call_id_owned.as_deref(),
+                Some(&agent_name),
+                thinking_owned.as_ref(),
+                parent_id,
+            )
+            .await
+            {
+                Ok(()) => return,
+                Err(e) => {
+                    let msg = e.to_string();
+                    let retryable = msg.contains("foreign key") || msg.contains("fkey")
+                        || msg.contains("connection") || msg.contains("pool");
+                    if !retryable {
+                        tracing::warn!(
+                            error = %e,
+                            session_id = %session_id,
+                            msg_id = %id,
+                            role = role,
+                            tool_call_id = ?tool_call_id_owned,
+                            "failed to persist message row (detached)"
+                        );
+                        return;
+                    }
+                    last_err = Some(e);
+                }
+            }
+        }
+        if let Some(e) = last_err {
             tracing::warn!(
                 error = %e,
                 session_id = %session_id,
                 msg_id = %id,
                 role = role,
                 tool_call_id = ?tool_call_id_owned,
-                "failed to persist message row (detached)"
+                "failed to persist message row after retries (detached)"
             );
         }
     });
