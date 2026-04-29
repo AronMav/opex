@@ -38,7 +38,18 @@ if !resp.status().is_success() {
 
 ### Fix
 
-**New primitive in `providers_http.rs`:**
+**Новый тип ошибки в `providers_http.rs`:**
+
+```rust
+pub enum SendError {
+    Http { status: u16, body: String }, // non-2xx после всех попыток
+    Network(reqwest::Error),            // сетевая / connection ошибка
+}
+```
+
+`SendError` реализует `std::error::Error` — нужно для совместимости с `?` в `anyhow`-контексте.
+
+**Новый примитив `send_with_retry()`:**
 
 ```rust
 pub async fn send_with_retry(
@@ -48,60 +59,65 @@ pub async fn send_with_retry(
     provider_name: &str,
     retryable_codes: &[u16],
     mut customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-) -> Result<reqwest::Response>
+) -> Result<reqwest::Response, SendError>
 ```
 
-Implements the same backoff loop as `retry_http_post_custom()`:
-- `BackoffPolicy::default()` — 3 attempts, base 1 s, factor 3.0, max 30 s, jitter 500 ms
-- 400 → log body dump, no retry (same as today)
-- Code in `retryable_codes` → sleep + retry
-- Network error → retry
-- Final attempt fails → `bail!`
-- Returns `reqwest::Response` on success (body not consumed)
+Логика идентична текущему `retry_http_post_custom()`:
+- `BackoffPolicy::default()` — 3 попытки, base 1 s, factor 3.0, max 30 s, jitter 500 ms
+- 400 → дамп request body в лог (сохраняется как сейчас), возвращает `SendError::Http { status: 400, .. }` без retry
+- Код в `retryable_codes` → sleep + retry; после последней попытки → `SendError::Http`
+- Сетевая ошибка → retry; после последней → `SendError::Network`
+- 2xx → возвращает `reqwest::Response` (тело не вычитано)
 
-**`retry_http_post_custom()` becomes a thin wrapper:**
+**`retry_http_post_custom()` становится тонкой обёрткой:**
 
 ```rust
 pub async fn retry_http_post_custom(...) -> Result<String> {
-    let resp = send_with_retry(client, url, body, provider_name, retryable_codes, customize).await?;
+    let resp = send_with_retry(client, url, body, provider_name, retryable_codes, customize)
+        .await
+        .map_err(|e| match e {
+            SendError::Http { status, body } => anyhow::anyhow!("{provider_name} API error {status}: {body}"),
+            SendError::Network(e) => anyhow::anyhow!("{provider_name} request error: {e}"),
+        })?;
     Ok(resp.text().await?)
 }
 ```
 
-`retry_http_post()` is unchanged (calls `_custom`).
+`retry_http_post()` без изменений (вызывает `_custom`).
 
-**`send_with_retry()` — typed error variant**
-
-`send_with_retry` returns `Result<reqwest::Response, SendError>` where:
+**`chat_stream()` заменяет блок отправки:**
 
 ```rust
-pub enum SendError {
-    Http { status: u16, body: String },  // non-2xx after all retries
-    Network(anyhow::Error),              // reqwest/connection error
-}
-```
-
-`retry_http_post_custom` maps `SendError` → `anyhow::Error` (backward compat unchanged). `chat_stream` maps `SendError` → the correct `LlmCallError` variant, preserving the existing 401/403 → `AuthError` classification:
-
-```rust
+let api_key_clone = api_key.clone();
 let resp = crate::agent::providers_http::send_with_retry(
-    &self.streaming_client, &effective_url, &body, &self.provider_name,
+    &self.streaming_client,
+    &effective_url,
+    &body,
+    &self.provider_name,
     crate::agent::providers_http::RETRYABLE_OPENAI,
     move |req| if api_key_clone.is_empty() { req } else { req.bearer_auth(&api_key_clone) },
-).await
+)
+.await
 .map_err(|e| match e {
     SendError::Http { status, .. } if status == 401 || status == 403 =>
-        anyhow::Error::new(LlmCallError::AuthError { provider: self.provider_name.clone(), status }),
-    SendError::Http { status, .. } if status >= 500 =>
-        anyhow::Error::new(LlmCallError::Server5xx { provider: self.provider_name.clone(), status }),
-    SendError::Http { status, body } =>
-        anyhow::anyhow!("{} API error {}: {}", self.provider_name, status, body),
+        anyhow::Error::new(LlmCallError::AuthError {
+            provider: self.provider_name.clone(), status,
+        }),
+    SendError::Http { status, .. } =>
+        anyhow::Error::new(LlmCallError::Server5xx {
+            provider: self.provider_name.clone(), status,
+        }),
     SendError::Network(e) =>
-        anyhow::Error::new(super::classify_reqwest_err_from(e, &self.provider_name, ...)),
+        anyhow::Error::new(super::classify_reqwest_err(
+            e,
+            &self.provider_name,
+            self.timeouts.connect_secs,
+            self.timeouts.request_secs,
+        )),
 })?;
 ```
 
-The existing error-classification block in `chat_stream` is removed — `send_with_retry` + the match above replaces it.
+Существующий блок классификации в `chat_stream` (401/403 → `AuthError`, 5xx → `Server5xx`, reqwest::Error → `classify_reqwest_err`) удаляется — его полностью заменяет `send_with_retry` + match выше.
 
 ### Files Changed
 
@@ -144,7 +160,12 @@ Add a warning at the top of both `chat()` and `chat_stream()` in `providers_open
 ```rust
 const LARGE_CONTEXT_CHARS: usize = 200_000; // ~50K tokens
 
-let ctx_chars: usize = messages.iter().map(|m| m.content.len()).sum();
+let ctx_chars: usize = messages.iter().map(|m| {
+    m.content.len()
+        + m.tool_calls.as_deref().unwrap_or(&[]).iter()
+            .map(|tc| tc.arguments.to_string().len())
+            .sum::<usize>()
+}).sum();
 if ctx_chars > LARGE_CONTEXT_CHARS {
     tracing::warn!(
         provider = %self.provider_name,
