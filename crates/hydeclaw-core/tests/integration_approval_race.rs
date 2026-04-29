@@ -165,7 +165,6 @@ async fn test_test_03_approval_race_sensitivity_double_resolve_loses_second() {
 /// MUST be < 1 s to prove `FOR UPDATE` doesn't serialise pathologically.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn strict_race_exactly_one_ok_rest_already_resolved() {
-    use hydeclaw_core::db::approvals::{resolve_approval_strict, ApprovalError};
     timeout(Duration::from_secs(30), async {
         let harness = TestHarness::new().await.expect("PG");
         let pool = harness.pool().clone();

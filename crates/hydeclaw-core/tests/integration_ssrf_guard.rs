@@ -31,6 +31,17 @@ use support::DnsRebindingResolver;
 async fn dns_rebinding_rejected() {
     // Build a rebinding resolver (public first, loopback second). The fixture
     // lives in tests/support/dns_fixture.rs and was delivered by Plan 01.
+    //
+    // NOTE: The DnsRebindingResolver fixture is NOT wired into preflight_resolve
+    // here because preflight_resolve performs a real system DNS lookup (it uses
+    // tokio::net::lookup_host internally). The fixture's own unit tests in
+    // dns_fixture.rs prove the flip-after-first-call behaviour.
+    //
+    // The TOCTOU protection (every connect re-checks via SsrfSafeResolver, not
+    // just the preflight) is enforced at the reqwest::Client level. The canonical
+    // integration evidence lives in the production code: ssrf_http_client() wires
+    // SsrfSafeResolver as the dns_resolver, so every TCP connection goes through
+    // the same is_private_ip filter that preflight_resolve uses.
     let rebind = Arc::new(DnsRebindingResolver::new(
         "evil.example",
         "8.8.8.8".parse::<IpAddr>().unwrap(),
@@ -57,7 +68,12 @@ async fn dns_rebinding_rejected() {
 
     // The SsrfSafeResolver impl MUST be constructible (zero-sized state) so
     // callers can plug it into `reqwest::Client::builder().dns_resolver(...)`.
+    // Verify that a client built with ssrf_http_client() also compiles and does
+    // not panic — this exercises the full builder path, not just the resolver.
     let _resolver = Arc::new(SsrfSafeResolver);
+    let _client = ssrf_http_client(std::time::Duration::from_secs(5));
+    // rebind fixture is not wired into a client here; its flip-on-second-call
+    // contract is covered by the unit tests in tests/support/dns_fixture.rs.
 }
 
 #[test]

@@ -84,6 +84,49 @@ fn mixed_case_path_stable() {
     }
 }
 
+/// `resolve_workspace_path` must reject paths with a null byte. The OS path
+/// canonicalization layer will reject them first, but the guard must surface the
+/// error rather than truncate silently or return an unexpected path.
+#[test]
+fn null_byte_in_path_blocked() {
+    let ws = TempDir::new().unwrap();
+    // Null byte embedded in a filename component — never a valid path on any
+    // supported OS (POSIX, Windows, macOS all treat it as a terminator).
+    let bad = PathBuf::from("foo\0bar.md");
+    let result = resolve_workspace_path(ws.path().to_str().unwrap(), &bad);
+    assert!(
+        result.is_err(),
+        "null byte in path must be rejected, got {result:?}"
+    );
+}
+
+/// URL-percent-encoded traversal (`..%2F`) should NOT produce a dot-dot
+/// component after the OS resolves the path. The guard sees the raw
+/// (not-yet-decoded) string as a `Path`; on all target OSes the literal
+/// string `"..%2F"` is treated as a single filename component (not a `..`
+/// followed by a slash), so `resolve_workspace_path` should accept it as a
+/// normal (non-existent) filename inside the workspace without escaping.
+///
+/// This differs from the shell expansion case and documents that the guard
+/// does NOT do URL-percent decoding itself — callers must decode first.
+#[test]
+fn percent_encoded_traversal_stays_inside_workspace() {
+    let ws = TempDir::new().unwrap();
+    // "..%2F" as a raw filesystem component is just an unusual filename, not
+    // an escape. Either it stays inside (Ok) or is rejected for another
+    // reason — it must never escape the workspace root.
+    let encoded = PathBuf::from("..%2Fetc%2Fpasswd");
+    let result = resolve_workspace_path(ws.path().to_str().unwrap(), &encoded);
+    if let Ok(ref p) = result {
+        let root = dunce::canonicalize(ws.path()).unwrap();
+        assert!(
+            p.starts_with(&root),
+            "percent-encoded path must not escape workspace: {p:?}"
+        );
+    }
+    // Err is also acceptable (file does not exist, or invalid component).
+}
+
 #[test]
 fn unc_or_standard_windows_path() {
     let ws = TempDir::new().unwrap();
