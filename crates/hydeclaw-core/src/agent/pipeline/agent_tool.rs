@@ -13,11 +13,6 @@ use crate::gateway::state::AgentMap;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-/// Polling cadence used by `wait_until_idle` and `wait_for_agent_result`.
-/// Both loops re-acquire the pool read lock once per tick to observe agent
-/// status; 1s is a balance between responsiveness and lock churn.
-const MESSAGE_POLL_INTERVAL: Duration = Duration::from_millis(1000);
-
 /// Per-call snapshot of UI-configurable timeouts — read once at dispatch time
 /// from `AgentToolConfig` and threaded through every helper. Plain `Copy` so
 /// it costs nothing to pass around. Callers obtain it via `From<&AgentToolConfig>`.
@@ -305,57 +300,61 @@ async fn ask_continue_existing(
     }
 }
 
-/// Block until a live agent becomes idle and return its last_result.
+/// Block until a live agent completes its current task, then return its result.
+///
+/// Uses `LiveAgent::result_notify` for near-zero latency instead of polling.
+/// Falls back to the timeout if the agent never transitions to idle.
 pub async fn wait_for_agent_result(
     pools: &SessionPoolsMap,
     session_id: Uuid,
     target: &str,
     timeout: std::time::Duration,
 ) -> String {
-    let start = std::time::Instant::now();
-    loop {
-        tokio::time::sleep(MESSAGE_POLL_INTERVAL).await;
+    let deadline = std::time::Instant::now() + timeout;
 
-        // Check if agent is done
-        let result = {
+    loop {
+        // Snapshot: is the agent done? If so, grab the result.
+        // If not, grab the Notify handle so we can wait for the next signal.
+        let maybe_notify = {
             let pools_read = pools.read().await;
-            if let Some(pool) = pools_read.get(&session_id) {
-                if let Some(agent) = pool.get(target) {
-                    if agent.is_idle() {
-                        let lr = agent.last_result.read().await.clone();
-                        Some(lr)
-                    } else if agent.task_handle.is_finished() {
-                        // Task exited (crash/cancel) while still "processing"
-                        let lr = agent.last_result.read().await.clone();
-                        Some(lr)
-                    } else {
-                        None // still processing
-                    }
-                } else {
-                    // Agent was removed (killed by someone else)
-                    Some(Some(format!(
-                        "Agent '{target}' was killed before completing"
-                    )))
-                }
-            } else {
-                Some(Some(format!("Session pool not found for {target}")))
+            let Some(pool) = pools_read.get(&session_id) else {
+                return serde_json::json!({
+                    "status": "error",
+                    "agent": target,
+                    "result": format!("Session pool not found for {target}"),
+                }).to_string();
+            };
+            let Some(agent) = pool.get(target) else {
+                return serde_json::json!({
+                    "status": "error",
+                    "agent": target,
+                    "result": format!("Agent '{target}' was removed before completing"),
+                }).to_string();
+            };
+
+            if agent.is_idle() || agent.task_handle.is_finished() {
+                // Done — read the result outside this lock scope.
+                let result_arc = agent.last_result.clone();
+                drop(pools_read);
+                let result = result_arc.read().await.clone();
+                let result_text = match result {
+                    Some(s) if !s.trim().is_empty() => s,
+                    _ => "(no result)".to_string(),
+                };
+                return serde_json::json!({
+                    "status": "completed",
+                    "agent": target,
+                    "result": result_text,
+                }).to_string();
             }
+
+            // Still processing — get the Notify handle.
+            agent.result_notify.clone()
         };
 
-        if let Some(last_result) = result {
-            let result_text = match last_result {
-                Some(s) if !s.trim().is_empty() => s,
-                _ => "(no result)".to_string(),
-            };
-            return serde_json::json!({
-                "status": "completed",
-                "agent": target,
-                "result": result_text,
-            })
-            .to_string();
-        }
-
-        if start.elapsed() > timeout {
+        // Check timeout before waiting.
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
             return serde_json::json!({
                 "status": "timeout",
                 "agent": target,
@@ -364,15 +363,19 @@ pub async fn wait_for_agent_result(
                     target,
                     timeout.as_secs()
                 ),
-            })
-            .to_string();
+            }).to_string();
         }
+
+        // Wait for the agent to signal completion (or timeout).
+        // `notify_one()` stores a permit, so if it fired between our check
+        // and this line, `notified()` returns immediately.
+        let _ = tokio::time::timeout(remaining, maybe_notify.notified()).await;
     }
 }
 
-/// Wait for a live agent to enter the IDLE state without consuming its
-/// `last_result`. Used by `ask_continue_existing` to ensure the target is ready
-/// to receive a new message before we `try_send`.
+/// Wait for a live agent to enter the IDLE state without consuming its result.
+///
+/// Uses `LiveAgent::result_notify` for near-zero latency instead of polling.
 ///
 /// Returns `Ok(())` once the agent is idle. Returns `Err(message)` on:
 ///   - missing session pool / agent (already gone),
@@ -384,9 +387,10 @@ async fn wait_until_idle(
     target: &str,
     timeout: Duration,
 ) -> Result<(), String> {
-    let start = std::time::Instant::now();
+    let deadline = std::time::Instant::now() + timeout;
+
     loop {
-        {
+        let maybe_notify = {
             let pools_read = pools.read().await;
             let pool = pools_read
                 .get(&session_id)
@@ -394,6 +398,7 @@ async fn wait_until_idle(
             let agent = pool
                 .get(target)
                 .ok_or_else(|| format!("Error: agent '{target}' not found in session pool"))?;
+
             if agent.is_idle() {
                 return Ok(());
             }
@@ -402,9 +407,12 @@ async fn wait_until_idle(
                     "Error: agent '{target}' processing loop has exited"
                 ));
             }
-        }
 
-        if start.elapsed() > timeout {
+            agent.result_notify.clone()
+        };
+
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
             return Err(format!(
                 "Error: agent '{}' did not become idle within {} seconds — still processing previous message",
                 target,
@@ -412,7 +420,7 @@ async fn wait_until_idle(
             ));
         }
 
-        tokio::time::sleep(MESSAGE_POLL_INTERVAL).await;
+        let _ = tokio::time::timeout(remaining, maybe_notify.notified()).await;
     }
 }
 
@@ -559,6 +567,7 @@ mod tests {
     };
     use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
     use std::time::Instant;
+    use tokio::sync::Notify;
 
     /// Spawn a stub `LiveAgent` whose processing loop simply echoes each
     /// incoming message text back into `last_result` and returns to IDLE.
@@ -569,11 +578,13 @@ mod tests {
         let last_result = Arc::new(RwLock::new(None));
         let cancel = Arc::new(AtomicBool::new(false));
         let iteration_count = Arc::new(AtomicUsize::new(0));
+        let result_notify = Arc::new(Notify::new());
 
         let status_for_task = status.clone();
         let last_result_for_task = last_result.clone();
         let cancel_for_task = cancel.clone();
         let iteration_count_for_task = iteration_count.clone();
+        let result_notify_for_task = result_notify.clone();
 
         let task_handle = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
@@ -586,6 +597,7 @@ mod tests {
                 *last_result_for_task.write().await = Some(format!("echo: {}", msg.text));
                 iteration_count_for_task.fetch_add(1, Ordering::Relaxed);
                 status_for_task.store(STATUS_IDLE, Ordering::Release);
+                result_notify_for_task.notify_one();
             }
         });
 
@@ -598,6 +610,7 @@ mod tests {
             created_at: Instant::now(),
             iteration_count,
             task_handle,
+            result_notify,
         }
     }
 

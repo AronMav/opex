@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, Notify, RwLock};
 use uuid::Uuid;
 
 use super::engine::AgentEngine;
@@ -36,6 +36,10 @@ pub struct LiveAgent {
     pub created_at: Instant,
     pub iteration_count: Arc<AtomicUsize>,
     pub task_handle: tokio::task::JoinHandle<()>,
+    /// Signaled (via `notify_one`) each time the agent transitions to IDLE.
+    /// Callers waiting in `wait_for_agent_result` / `wait_until_idle` await
+    /// this instead of polling — near-zero latency overhead.
+    pub result_notify: Arc<Notify>,
 }
 
 impl LiveAgent {
@@ -214,6 +218,7 @@ pub fn spawn_live_agent(
     let last_result = Arc::new(RwLock::new(None));
     let cancel = Arc::new(AtomicBool::new(false));
     let iteration_count = Arc::new(AtomicUsize::new(0));
+    let result_notify = Arc::new(Notify::new());
 
     let task_handle = tokio::spawn(agent_processing_loop(
         rx,
@@ -223,6 +228,7 @@ pub fn spawn_live_agent(
         cancel.clone(),
         iteration_count.clone(),
         session_id,
+        result_notify.clone(),
     ));
 
     // Send initial task synchronously — channel is fresh with capacity 32.
@@ -240,6 +246,7 @@ pub fn spawn_live_agent(
         created_at: Instant::now(),
         iteration_count,
         task_handle,
+        result_notify,
     })
 }
 
@@ -251,6 +258,7 @@ async fn agent_processing_loop(
     cancel: Arc<AtomicBool>,
     iteration_count: Arc<AtomicUsize>,
     session_id: Uuid,
+    result_notify: Arc<Notify>,
 ) {
     let max_iterations = engine.tool_loop_config().effective_max_iterations();
     let timeout = crate::agent::engine::parse_subagent_timeout(
@@ -287,6 +295,7 @@ async fn agent_processing_loop(
         iteration_count.fetch_add(1, Ordering::Relaxed);
         *last_result.write().await = Some(result_text);
         status.store(STATUS_IDLE, Ordering::Relaxed);
+        result_notify.notify_one();
 
         if cancel.load(Ordering::Relaxed) {
             break;
