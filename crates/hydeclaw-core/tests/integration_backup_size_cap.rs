@@ -179,7 +179,7 @@ async fn valid_100mb_backup_streams_200() {
     let rss_after = sample_rss_bytes();
     let delta = rss_after.saturating_sub(rss_before);
 
-    if sample_rss_bytes() > 0 {
+    if rss_before > 0 {
         assert!(
             delta < 250 * 1024 * 1024,
             "RSS delta must be <250MB per CONTEXT D-SEC-04, observed {} MB",

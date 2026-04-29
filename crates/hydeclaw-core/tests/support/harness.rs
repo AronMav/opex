@@ -13,7 +13,7 @@
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
-use testcontainers::core::{IntoContainerPort, WaitFor};
+use testcontainers::core::{ContainerRequest, IntoContainerPort, WaitFor};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
@@ -30,57 +30,46 @@ pub struct TestHarness {
     _container: ContainerAsync<GenericImage>,
 }
 
+/// Parse `image_spec` into `(repo, tag)` by splitting on the LAST `:`.
+/// This handles registry hosts with explicit ports, e.g.
+/// `registry.example.com:5000/pg:17` → `("registry.example.com:5000/pg", "17")`.
+fn parse_image_spec(image_spec: &str) -> Result<(String, String)> {
+    match image_spec.rsplit_once(':') {
+        Some((r, t)) if !r.is_empty() && !t.is_empty() => Ok((r.to_string(), t.to_string())),
+        _ => anyhow::bail!(
+            "{} must be of the form '<image>:<tag>', got: {:?}",
+            PG_IMAGE_ENV,
+            image_spec
+        ),
+    }
+}
+
+/// Build a base `ContainerRequest<GenericImage>` for the given repo/tag,
+/// ready for PG env-var injection and optional extra configuration.
+fn base_pg_image(repo: &str, tag: &str) -> ContainerRequest<GenericImage> {
+    GenericImage::new(repo, tag)
+        .with_exposed_port(5432.tcp())
+        .with_wait_for(WaitFor::message_on_stderr(
+            "database system is ready to accept connections",
+        ))
+        .with_env_var("POSTGRES_PASSWORD", "postgres")
+        .with_env_var("POSTGRES_USER", "postgres")
+        .with_env_var("POSTGRES_DB", "postgres")
+}
+
 impl TestHarness {
     /// Spin up a fresh PG container, run all migrations, return a connected harness.
     pub async fn new() -> Result<Self> {
         let image_spec = std::env::var(PG_IMAGE_ENV)
             .unwrap_or_else(|_| DEFAULT_PG_IMAGE.to_string());
+        let (repo, tag) = parse_image_spec(&image_spec)?;
 
-        // Split on the LAST ':' so e.g. `registry.example.com:5000/pg:17` parses correctly.
-        let (repo, tag) = match image_spec.rsplit_once(':') {
-            Some((r, t)) if !r.is_empty() && !t.is_empty() => (r.to_string(), t.to_string()),
-            _ => anyhow::bail!(
-                "{} must be of the form '<image>:<tag>', got: {:?}",
-                PG_IMAGE_ENV,
-                image_spec
-            ),
-        };
-
-        let image = GenericImage::new(&repo, &tag)
-            .with_exposed_port(5432.tcp())
-            .with_wait_for(WaitFor::message_on_stderr(
-                "database system is ready to accept connections",
-            ));
-
-        let container = image
-            .with_env_var("POSTGRES_PASSWORD", "postgres")
-            .with_env_var("POSTGRES_USER", "postgres")
-            .with_env_var("POSTGRES_DB", "postgres")
+        let container = base_pg_image(&repo, &tag)
             .start()
             .await
             .with_context(|| format!("starting ephemeral PostgreSQL container ({image_spec})"))?;
 
-        let host_port = container
-            .get_host_port_ipv4(5432)
-            .await
-            .context("resolving container host port")?;
-        let pg_url = format!(
-            "postgres://postgres:postgres@127.0.0.1:{host_port}/postgres"
-        );
-
-        let pool = PgPool::connect(&pg_url)
-            .await
-            .context("connecting to ephemeral PG")?;
-
-        super::migrations::apply_all(&pool)
-            .await
-            .context("applying migrations to ephemeral PG")?;
-
-        Ok(Self {
-            pool,
-            pg_url,
-            _container: container,
-        })
+        Self::from_container(container).await
     }
 
     /// Spin up a fresh PG container with `shared_preload_libraries=pg_stat_statements`
@@ -97,25 +86,9 @@ impl TestHarness {
     pub async fn new_with_pg_stat_statements() -> Result<Self> {
         let image_spec = std::env::var(PG_IMAGE_ENV)
             .unwrap_or_else(|_| DEFAULT_PG_IMAGE.to_string());
-        let (repo, tag) = match image_spec.rsplit_once(':') {
-            Some((r, t)) if !r.is_empty() && !t.is_empty() => (r.to_string(), t.to_string()),
-            _ => anyhow::bail!(
-                "{} must be of the form '<image>:<tag>', got: {:?}",
-                PG_IMAGE_ENV,
-                image_spec
-            ),
-        };
+        let (repo, tag) = parse_image_spec(&image_spec)?;
 
-        let image = GenericImage::new(&repo, &tag)
-            .with_exposed_port(5432.tcp())
-            .with_wait_for(WaitFor::message_on_stderr(
-                "database system is ready to accept connections",
-            ));
-
-        let container = image
-            .with_env_var("POSTGRES_PASSWORD", "postgres")
-            .with_env_var("POSTGRES_USER", "postgres")
-            .with_env_var("POSTGRES_DB", "postgres")
+        let container = base_pg_image(&repo, &tag)
             .with_cmd(vec![
                 "postgres".to_string(),
                 "-c".to_string(),
@@ -129,6 +102,19 @@ impl TestHarness {
                 format!("starting ephemeral PG with pg_stat_statements ({image_spec})")
             })?;
 
+        let harness = Self::from_container(container).await?;
+
+        // Extension must exist at the connection level to populate the view.
+        sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+            .execute(&harness.pool)
+            .await
+            .context("creating pg_stat_statements extension on ephemeral PG")?;
+
+        Ok(harness)
+    }
+
+    /// Shared container-to-harness wiring: resolve host port, connect pool, apply migrations.
+    async fn from_container(container: ContainerAsync<GenericImage>) -> Result<Self> {
         let host_port = container
             .get_host_port_ipv4(5432)
             .await
@@ -142,12 +128,6 @@ impl TestHarness {
         super::migrations::apply_all(&pool)
             .await
             .context("applying migrations to ephemeral PG")?;
-
-        // Extension must exist at the connection level to populate the view.
-        sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
-            .execute(&pool)
-            .await
-            .context("creating pg_stat_statements extension on ephemeral PG")?;
 
         Ok(Self {
             pool,
