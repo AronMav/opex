@@ -481,11 +481,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     provider: self.provider_name.clone(),
                     status,
                 }),
-            SendError::Http { status, .. } =>
+            SendError::Http { status, .. } if status >= 500 =>
                 anyhow::Error::new(LlmCallError::Server5xx {
                     provider: self.provider_name.clone(),
                     status,
                 }),
+            SendError::Http { status, body } =>
+                anyhow::anyhow!("{} API error {status}: {body}", self.provider_name),
             SendError::Network(e) =>
                 anyhow::Error::new(super::classify_reqwest_err(
                     e,
