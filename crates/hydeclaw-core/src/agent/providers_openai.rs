@@ -162,6 +162,13 @@ impl OpenAiCompatibleProvider {
         matches!(self.provider_name.as_str(), "openai" | "ollama")
     }
 
+    /// Whether this provider supports forced `tool_choice` (specific function forcing).
+    /// DeepSeek reasoner models reject tool_choice with a 400 error.
+    fn supports_forced_tool_choice(&self) -> bool {
+        let model = self.model.effective();
+        !model.contains("reasoner") && !model.contains("v4-pro") && !model.contains("r1")
+    }
+
     /// Resolve the current API key: vault-scoped → round-robin → legacy secret name → env.
     async fn resolve_api_key(&self) -> String {
         // Vault-scoped credential (provider UUID)
@@ -225,11 +232,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 .collect();
             body["tools"] = serde_json::Value::Array(tools_json);
             if let Some(tool_name) = super::forced_skill_tool(messages, tools) {
-                // Force a specific tool — parallel_tool_calls is incompatible with forced tool_choice
-                body["tool_choice"] = serde_json::json!({
-                    "type": "function",
-                    "function": {"name": tool_name}
-                });
+                if self.supports_forced_tool_choice() {
+                    body["tool_choice"] = serde_json::json!({
+                        "type": "function",
+                        "function": {"name": tool_name}
+                    });
+                }
+                // else: reasoner models reject tool_choice — let model pick skill_use naturally
             } else if self.supports_parallel_tools() {
                 body["parallel_tool_calls"] = serde_json::json!(true);
             }
@@ -428,10 +437,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 .collect();
             body["tools"] = serde_json::Value::Array(tools_json);
             if let Some(tool_name) = super::forced_skill_tool(messages, tools) {
-                body["tool_choice"] = serde_json::json!({
-                    "type": "function",
-                    "function": {"name": tool_name}
-                });
+                if self.supports_forced_tool_choice() {
+                    body["tool_choice"] = serde_json::json!({
+                        "type": "function",
+                        "function": {"name": tool_name}
+                    });
+                }
             } else if self.supports_parallel_tools() {
                 body["parallel_tool_calls"] = serde_json::json!(true);
             }
