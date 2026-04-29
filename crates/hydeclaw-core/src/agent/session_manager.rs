@@ -87,7 +87,13 @@ impl SessionManager {
     }
 
     /// Save a message with optional tool-call metadata.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Currently unused — the legacy `engine/stream.rs::handle_isolated()`
+    /// caller was migrated to detached `spawn_persist_assistant_message`
+    /// (closes a cancellation gap on intermediate-assistant rows). Kept as a
+    /// public API surface for parity with `save_message_ex` so external
+    /// callers / future paths don't have to thread the extended metadata.
+    #[allow(clippy::too_many_arguments, dead_code)]
     pub async fn save_message(
         &self,
         session_id: Uuid,

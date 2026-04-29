@@ -285,21 +285,34 @@ impl AgentEngine {
             });
             context_chars += cleaned_content.chars().count();
 
-            // Save assistant message with tool_calls to DB
+            // Persist intermediate assistant (with tool_calls) via detached spawn
+            // — mirrors `pipeline::execute` so the row survives parent-task
+            // cancellation between here and the spawned tool-result inserts
+            // below. A synchronous `save_message(...).await` here would leave a
+            // window: cancel during the await drops the assistant row, then
+            // tool messages persisted by `execute_tool_calls_partitioned`
+            // reference a parent_id that doesn't exist → chain broken on
+            // reload. Idempotent: pre-generated UUID + `ON CONFLICT (id) DO
+            // NOTHING` in `save_message_ex_with_id`.
             let tc_json = serde_json::to_value(&response.tool_calls).ok();
-            if let Err(e) = sm.save_message(
-                session_id, "assistant", &cleaned_content,
-                tc_json.as_ref(), None,
-            ).await {
-                tracing::warn!(error = %e, session_id = %session_id, "failed to save assistant message to DB");
-            }
+            let assistant_msg_id = uuid::Uuid::new_v4();
+            let agent_name_for_persist = self.cfg().agent.name.clone();
+            crate::agent::pipeline::parallel::spawn_persist_assistant_message(
+                &self.cfg().db,
+                assistant_msg_id,
+                session_id,
+                &agent_name_for_persist,
+                &cleaned_content,
+                tc_json.as_ref(),
+                None,
+                None,
+            );
 
             // Legacy stream path — detached persistence in `execute_tool_calls_partitioned`
             // also covers cancellation gaps for this code path.
-            let agent_name_for_persist = self.cfg().agent.name.clone();
             let persist_ctx = crate::agent::pipeline::parallel::ToolPersistCtx {
                 agent_name: agent_name_for_persist.as_str(),
-                initial_parent: None,
+                initial_parent: Some(assistant_msg_id),
             };
             let loop_broken = match self.execute_tool_calls_partitioned(
                 &response.tool_calls, &msg.context, session_id, &msg.channel,

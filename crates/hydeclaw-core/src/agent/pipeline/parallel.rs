@@ -497,11 +497,14 @@ pub async fn execute_tool_calls_partitioned(
         .collect())
 }
 
-// ── Detached persistence helper ──────────────────────────────────────────────
+// ── Detached persistence helpers ─────────────────────────────────────────────
 
-/// Spawn a fire-and-forget tokio task that persists a single tool result row
-/// to the `messages` table. Detached so it survives parent-task cancellation
-/// (e.g. SSE client disconnect → engine task abort).
+/// Internal: spawn a fire-and-forget tokio task that inserts one row into
+/// `messages` via `save_message_ex_with_id`. Single source of truth for the
+/// detached-persist scaffolding (`db.clone`, owned-string conversion,
+/// `tokio::spawn`, `tracing::warn` formatting on insert error). The two public
+/// wrappers below ([`spawn_persist_tool_message`],
+/// [`spawn_persist_assistant_message`]) shape arguments and delegate here.
 ///
 /// The id is supplied by the caller (pre-generated synchronously) so the
 /// `parent_message_id` chain is deterministic regardless of insert ordering.
@@ -513,10 +516,62 @@ pub async fn execute_tool_calls_partitioned(
 /// (`openai_compat`, `subagent_runner`). The tradeoff: persist tasks aren't
 /// awaited by graceful-shutdown drain. Acceptable because the insert is short
 /// (single SQL `INSERT ... ON CONFLICT DO NOTHING`) and worst-case loss on
-/// SIGTERM mid-flight is one tool row, which the user can reproduce by
-/// re-asking. Threading `bg_tasks` through every persist-aware call site is a
-/// larger refactor and not the scope of this gap-fix.
+/// SIGTERM mid-flight is one row, which the user can reproduce by re-asking.
+/// Threading `bg_tasks` through every persist-aware call site is a larger
+/// refactor and not the scope of this gap-fix.
 #[allow(clippy::too_many_arguments)]
+fn spawn_persist_message_row(
+    db: &sqlx::PgPool,
+    id: Uuid,
+    session_id: Uuid,
+    role: &'static str,
+    agent_name: &str,
+    content: &str,
+    tool_calls_json: Option<&serde_json::Value>,
+    thinking_blocks_json: Option<&serde_json::Value>,
+    tool_call_id: Option<&str>,
+    parent_id: Option<Uuid>,
+) {
+    let db = db.clone();
+    let agent_name = agent_name.to_string();
+    let content = content.to_string();
+    let tool_call_id_owned = tool_call_id.map(std::string::ToString::to_string);
+    let tool_calls_owned = tool_calls_json.cloned();
+    let thinking_owned = thinking_blocks_json.cloned();
+    tokio::spawn(async move {
+        if let Err(e) = crate::db::sessions::save_message_ex_with_id(
+            &db,
+            id,
+            session_id,
+            role,
+            &content,
+            tool_calls_owned.as_ref(),
+            tool_call_id_owned.as_deref(),
+            Some(&agent_name),
+            thinking_owned.as_ref(),
+            parent_id,
+        )
+        .await
+        {
+            // Single source of truth for the detached-persist warn formatting.
+            // `tool_call_id` is logged when set so tool-row failures stay
+            // diagnosable; otherwise it is omitted via the `Option` Display
+            // contract baked into the format string.
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                msg_id = %id,
+                role = role,
+                tool_call_id = ?tool_call_id_owned,
+                "failed to persist message row (detached)"
+            );
+        }
+    });
+}
+
+/// Spawn a fire-and-forget tokio task that persists a single tool result row
+/// to the `messages` table. Thin wrapper over [`spawn_persist_message_row`]
+/// fixing `role = "tool"` and `tool_calls_json = thinking_blocks_json = None`.
 fn spawn_persist_tool_message(
     db: &sqlx::PgPool,
     id: Uuid,
@@ -526,53 +581,32 @@ fn spawn_persist_tool_message(
     content: &str,
     parent_id: Option<Uuid>,
 ) {
-    let db = db.clone();
-    let agent_name = agent_name.to_string();
-    let tool_call_id = tool_call_id.to_string();
-    let content = content.to_string();
-    tokio::spawn(async move {
-        if let Err(e) = crate::db::sessions::save_message_ex_with_id(
-            &db,
-            id,
-            session_id,
-            "tool",
-            &content,
-            None,
-            Some(&tool_call_id),
-            Some(&agent_name),
-            None,
-            parent_id,
-        )
-        .await
-        {
-            tracing::warn!(
-                error = %e,
-                session_id = %session_id,
-                tool_call_id = %tool_call_id,
-                msg_id = %id,
-                "failed to persist tool message (detached)"
-            );
-        }
-    });
+    spawn_persist_message_row(
+        db,
+        id,
+        session_id,
+        "tool",
+        agent_name,
+        content,
+        None,
+        None,
+        Some(tool_call_id),
+        parent_id,
+    );
 }
 
 /// Spawn a fire-and-forget tokio task that persists an INTERMEDIATE assistant
-/// message (the one that holds `tool_calls`) to the `messages` table.
+/// message (the one that holds `tool_calls`) to the `messages` table. Thin
+/// wrapper over [`spawn_persist_message_row`] fixing `role = "assistant"` and
+/// `tool_call_id = None`.
 ///
 /// Mirrors [`spawn_persist_tool_message`] for the assistant-with-tool-calls
-/// case in `pipeline::execute`. The synchronous-await variant
-/// (`SessionManager::save_message_ex(...).await`) leaves a cancellation gap:
-/// if the engine task is aborted during the await (e.g. SSE client disconnect),
-/// the row is never written and subsequent tool messages have no parent
-/// assistant — the chain is broken on reload.
-///
-/// Detached spawn closes that gap. The id is supplied by the caller
-/// (pre-generated synchronously) so the `parent_message_id` chain is
-/// deterministic regardless of insert ordering. Idempotent: `ON CONFLICT (id)
-/// DO NOTHING`.
-///
-/// See note in [`spawn_persist_tool_message`] re: bare `tokio::spawn` vs.
-/// `TaskTracker`.
+/// case in `pipeline::execute` and the legacy `engine/stream.rs` path. The
+/// synchronous-await variant (`SessionManager::save_message_ex(...).await`)
+/// leaves a cancellation gap: if the engine task is aborted during the await
+/// (e.g. SSE client disconnect), the row is never written and subsequent tool
+/// messages have no parent assistant — the chain is broken on reload. Detached
+/// spawn closes that gap.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_persist_assistant_message(
     db: &sqlx::PgPool,
@@ -584,32 +618,16 @@ pub(crate) fn spawn_persist_assistant_message(
     thinking_blocks_json: Option<&serde_json::Value>,
     parent_id: Option<Uuid>,
 ) {
-    let db = db.clone();
-    let agent_name = agent_name.to_string();
-    let content = content.to_string();
-    let tool_calls_owned = tool_calls_json.cloned();
-    let thinking_owned = thinking_blocks_json.cloned();
-    tokio::spawn(async move {
-        if let Err(e) = crate::db::sessions::save_message_ex_with_id(
-            &db,
-            id,
-            session_id,
-            "assistant",
-            &content,
-            tool_calls_owned.as_ref(),
-            None,
-            Some(&agent_name),
-            thinking_owned.as_ref(),
-            parent_id,
-        )
-        .await
-        {
-            tracing::warn!(
-                error = %e,
-                session_id = %session_id,
-                msg_id = %id,
-                "failed to persist intermediate assistant message (detached)"
-            );
-        }
-    });
+    spawn_persist_message_row(
+        db,
+        id,
+        session_id,
+        "assistant",
+        agent_name,
+        content,
+        tool_calls_json,
+        thinking_blocks_json,
+        None,
+        parent_id,
+    );
 }
