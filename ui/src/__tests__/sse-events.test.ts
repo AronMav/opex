@@ -15,25 +15,29 @@ describe("parseSseEvent — full coverage", () => {
     expect(parseSseEvent(JSON.stringify({ type: "data-session-id" }))).toBeNull();
   });
 
-  it("parses start event with optional messageId", () => {
-    expect(parseSseEvent(JSON.stringify({ type: "start", messageId: "m1" }))).toEqual({
+  it("parses start event with optional messageId and agentName", () => {
+    expect(parseSseEvent(JSON.stringify({ type: "start", messageId: "m1", agentName: "Alice" }))).toEqual({
       type: "start",
       messageId: "m1",
+      agentName: "Alice",
     });
     expect(parseSseEvent(JSON.stringify({ type: "start" }))).toEqual({
       type: "start",
       messageId: undefined,
+      agentName: undefined,
     });
   });
 
-  it("parses text-start with optional id", () => {
-    expect(parseSseEvent(JSON.stringify({ type: "text-start", id: "t1" }))).toEqual({
+  it("parses text-start with optional id and agentName", () => {
+    expect(parseSseEvent(JSON.stringify({ type: "text-start", id: "t1", agentName: "Alice" }))).toEqual({
       type: "text-start",
       id: "t1",
+      agentName: "Alice",
     });
     expect(parseSseEvent(JSON.stringify({ type: "text-start" }))).toEqual({
       type: "text-start",
       id: undefined,
+      agentName: undefined,
     });
   });
 
@@ -137,6 +141,108 @@ describe("parseSseEvent — full coverage", () => {
   it("parses error event with default errorText", () => {
     const e = parseSseEvent(JSON.stringify({ type: "error" }));
     expect(e).toEqual({ type: "error", errorText: "Unknown error" });
+  });
+
+  it("parses step-start event", () => {
+    const e = parseSseEvent(JSON.stringify({ type: "step-start", stepId: "step-1" }));
+    expect(e).toEqual({ type: "step-start", stepId: "step-1" });
+  });
+
+  it("returns null for step-start without stepId", () => {
+    expect(parseSseEvent(JSON.stringify({ type: "step-start" }))).toBeNull();
+  });
+
+  it("parses step-finish event with optional finishReason default", () => {
+    expect(parseSseEvent(JSON.stringify({ type: "step-finish", stepId: "step-1", finishReason: "stop" }))).toEqual({
+      type: "step-finish",
+      stepId: "step-1",
+      finishReason: "stop",
+    });
+    expect(parseSseEvent(JSON.stringify({ type: "step-finish", stepId: "step-1" }))).toEqual({
+      type: "step-finish",
+      stepId: "step-1",
+      finishReason: "unknown",
+    });
+  });
+
+  it("parses reconnecting event with defaults", () => {
+    expect(parseSseEvent(JSON.stringify({ type: "reconnecting", attempt: 2, delay_ms: 2000 }))).toEqual({
+      type: "reconnecting",
+      attempt: 2,
+      delay_ms: 2000,
+    });
+    expect(parseSseEvent(JSON.stringify({ type: "reconnecting" }))).toEqual({
+      type: "reconnecting",
+      attempt: 1,
+      delay_ms: 2000,
+    });
+  });
+
+  it("parses tool-approval-needed event", () => {
+    const e = parseSseEvent(JSON.stringify({
+      type: "tool-approval-needed",
+      approvalId: "appr-1",
+      toolName: "workspace_write",
+      toolInput: { path: "/foo" },
+      timeoutMs: 60000,
+    }));
+    expect(e).toEqual({
+      type: "tool-approval-needed",
+      approvalId: "appr-1",
+      toolName: "workspace_write",
+      toolInput: { path: "/foo" },
+      timeoutMs: 60000,
+    });
+  });
+
+  it("defaults tool-approval-needed timeoutMs to 300000 and toolInput to empty object", () => {
+    const e = parseSseEvent(JSON.stringify({
+      type: "tool-approval-needed",
+      approvalId: "appr-1",
+      toolName: "workspace_write",
+    }));
+    expect(e).toEqual({
+      type: "tool-approval-needed",
+      approvalId: "appr-1",
+      toolName: "workspace_write",
+      toolInput: {},
+      timeoutMs: 300000,
+    });
+  });
+
+  it("returns null for tool-approval-needed without required fields", () => {
+    expect(parseSseEvent(JSON.stringify({ type: "tool-approval-needed", approvalId: "a" }))).toBeNull();
+    expect(parseSseEvent(JSON.stringify({ type: "tool-approval-needed", toolName: "x" }))).toBeNull();
+  });
+
+  it("parses tool-approval-resolved event for all action values", () => {
+    for (const action of ["approved", "rejected", "timeout_rejected"] as const) {
+      const e = parseSseEvent(JSON.stringify({ type: "tool-approval-resolved", approvalId: "appr-1", action }));
+      expect(e).toEqual({ type: "tool-approval-resolved", approvalId: "appr-1", action, modifiedInput: undefined });
+    }
+  });
+
+  it("parses tool-approval-resolved with modifiedInput", () => {
+    const e = parseSseEvent(JSON.stringify({
+      type: "tool-approval-resolved",
+      approvalId: "appr-1",
+      action: "approved",
+      modifiedInput: { path: "/bar" },
+    }));
+    expect(e).toEqual({
+      type: "tool-approval-resolved",
+      approvalId: "appr-1",
+      action: "approved",
+      modifiedInput: { path: "/bar" },
+    });
+  });
+
+  it("returns null for tool-approval-resolved with invalid action", () => {
+    expect(parseSseEvent(JSON.stringify({ type: "tool-approval-resolved", approvalId: "a", action: "unknown" }))).toBeNull();
+  });
+
+  it("returns null for tool-approval-resolved without approvalId", () => {
+    expect(parseSseEvent(JSON.stringify({ type: "tool-approval-resolved", action: "approved" }))).toBeNull();
   });
 
   it("returns null for non-object JSON", () => {

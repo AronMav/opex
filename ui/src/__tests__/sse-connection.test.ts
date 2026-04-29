@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SseConnection } from "@/lib/sse-connection";
-import type { SseConnectionConfig, SseConnectionCallbacks, SseConnectionCallbacksWithPhase } from "@/lib/sse-connection";
+import type { SseConnectionCallbacks, SseConnectionCallbacksWithPhase, SseEvent } from "@/lib/sse-connection";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -34,11 +34,11 @@ function mockFetchOk(chunks: string[]): void {
 }
 
 function makeCallbacks(): SseConnectionCallbacks & {
-  events: ReturnType<SseConnectionCallbacks["onEvent"] extends (...args: infer A) => any ? () => A[0] : never>[];
+  events: SseEvent[];
   errors: string[];
   doneCalled: number;
 } {
-  const events: any[] = [];
+  const events: SseEvent[] = [];
   const errors: string[] = [];
   let doneCalled = 0;
   return {
@@ -445,7 +445,7 @@ describe("SseConnection — reconnect lifecycle", () => {
     const connectPromise = conn.connect();
     await connectPromise;
     await vi.advanceTimersByTimeAsync(1000);
-    expect(cbs.doneCalled).toBeGreaterThan(0);
+    expect(cbs.doneCalled).toBe(1);
     expect(cbs.errors.length).toBe(0);
   });
 
@@ -473,7 +473,7 @@ describe("SseConnection — reconnect lifecycle", () => {
     await connectPromise;
     await vi.advanceTimersByTimeAsync(1000); // first retry → 503
     await vi.advanceTimersByTimeAsync(2000); // second retry → 204
-    expect(cbs.doneCalled).toBeGreaterThan(0);
+    expect(cbs.doneCalled).toBe(1);
   });
 
   it("does NOT reconnect when no sessionId is set (no session to resume)", async () => {
@@ -549,7 +549,7 @@ describe("SseConnection — lastEventId tracking and Last-Event-ID header", () =
 
     // Check that GET retry included Last-Event-ID header
     const getCalls = fetchMock.mock.calls.filter(([, init]) => (init as RequestInit)?.method === "GET");
-    expect(getCalls.length).toBeGreaterThan(0);
+    expect(getCalls).toHaveLength(1);
     const getHeaders = (getCalls[0][1] as RequestInit).headers as Record<string, string>;
     expect(getHeaders["Last-Event-ID"]).toBe("42");
   });
@@ -579,7 +579,7 @@ describe("SseConnection — lastEventId tracking and Last-Event-ID header", () =
     await vi.advanceTimersByTimeAsync(1000);
 
     const getCalls = fetchMock.mock.calls.filter(([, init]) => (init as RequestInit)?.method === "GET");
-    expect(getCalls.length).toBeGreaterThan(0);
+    expect(getCalls).toHaveLength(1);
     const getHeaders = (getCalls[0][1] as RequestInit).headers as Record<string, string>;
     expect(getHeaders["Last-Event-ID"]).toBeUndefined();
   });
@@ -608,7 +608,7 @@ describe("SseConnection — lastEventId tracking and Last-Event-ID header", () =
     await connectPromise;
     await vi.advanceTimersByTimeAsync(1000);
 
-    expect(cbs.doneCalled).toBeGreaterThan(0);
+    expect(cbs.doneCalled).toBe(1);
     expect(cbs.errors.length).toBe(0);
     expect(cbs.phases).toContain("done");
   });
@@ -628,16 +628,12 @@ describe("SseConnection.stop()", () => {
   });
 
   it("aborts an in-flight fetch on stop()", async () => {
-    const onEvent = vi.fn();
-    let resolveFetch!: (v: Response) => void;
     vi.spyOn(globalThis, "fetch").mockImplementation(
       (_url: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((resolve) => {
-          // Abort immediately cancels the promise
           init?.signal?.addEventListener("abort", () => {
             resolve(new Response(null, { status: 200 }));
           });
-          resolveFetch = resolve;
         }),
     );
 
