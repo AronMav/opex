@@ -1,4 +1,4 @@
-import { vi, describe, it, expect } from "vitest";
+import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 // Mock dependencies before importing chat-store
 vi.mock("@/lib/query-client", () => ({
@@ -40,7 +40,7 @@ function makeRow(overrides: Partial<MessageRow>): MessageRow {
     tool_call_id: null,
     created_at: "2026-01-01T00:00:00Z",
     agent_id: null,
-    status: "done",
+    status: "complete",
     feedback: 0,
     edited_at: null,
     thinking_blocks: null,
@@ -65,28 +65,22 @@ describe("convertHistory", () => {
     expect(msgs[1].parts[0]).toEqual({ type: "text", text: "Hi there" });
   });
 
-  it("filters out streaming messages when isAgentStreaming is true", () => {
+  it("always filters out status=streaming rows regardless of isAgentStreaming", () => {
+    // convertHistory unconditionally drops rows with status='streaming' (chat-history.ts line 50)
+    // — they are transient WAL artefacts. The isAgentStreaming param exists for legacy
+    // call-site compatibility but is unused in the function body.
     const rows: MessageRow[] = [
       makeRow({ id: "u1", role: "user", content: "Hi" }),
       makeRow({ id: "a1", role: "assistant", content: "partial...", status: "streaming" }),
       makeRow({ id: "a2", role: "assistant", content: "Full response", status: "complete" }),
     ];
-    const msgs = convertHistory(rows, true);
-    const assistantMsgs = msgs.filter(m => m.role === "assistant");
-    expect(assistantMsgs).toHaveLength(1);
-    expect(assistantMsgs[0].parts[0]).toEqual({ type: "text", text: "Full response" });
-  });
-
-  it("keeps streaming messages when isAgentStreaming is false/undefined", () => {
-    const rows: MessageRow[] = [
-      makeRow({ id: "u1", role: "user", content: "Hi" }),
-      makeRow({ id: "a1", role: "assistant", content: "partial...", status: "streaming" }),
-      makeRow({ id: "a2", role: "assistant", content: "Full response", status: "complete" }),
-    ];
-    const msgs = convertHistory(rows);
-    // Without isAgentStreaming, streaming messages are kept (Virtual Merging merges same-agent assistant msgs)
-    const assistantMsgs = msgs.filter(m => m.role === "assistant");
-    expect(assistantMsgs.length).toBeGreaterThanOrEqual(1);
+    const msgsWithFlag = convertHistory(rows, true);
+    const msgsWithout = convertHistory(rows);
+    // Both calls: streaming row dropped, only the complete row remains
+    expect(msgsWithFlag.filter(m => m.role === "assistant")).toHaveLength(1);
+    expect(msgsWithFlag.filter(m => m.role === "assistant")[0].parts[0]).toEqual({ type: "text", text: "Full response" });
+    expect(msgsWithout.filter(m => m.role === "assistant")).toHaveLength(1);
+    expect(msgsWithout.filter(m => m.role === "assistant")[0].parts[0]).toEqual({ type: "text", text: "Full response" });
   });
 
   it("extracts <think> blocks as reasoning parts", () => {
@@ -123,8 +117,8 @@ describe("convertHistory", () => {
       makeRow({ id: "a2", role: "assistant", content: "Here are your results." }),
     ];
     const msgs = convertHistory(rows);
-    // Should have: user, assistant (with tool part), assistant (text)
-    expect(msgs.length).toBeGreaterThanOrEqual(2);
+    // user + assistant(tool) + assistant(text) = 3 messages
+    expect(msgs).toHaveLength(3);
     const toolPart = msgs.flatMap(m => m.parts).find(p => p.type === "tool");
     expect(toolPart?.type).toBe("tool");
     if (toolPart?.type === "tool") {
@@ -247,6 +241,16 @@ describe("saveLastSession / getLastSessionId", () => {
 // ── STATE-01: history to live transition ────────────────────────────────────
 
 describe("STATE-01: history to live transition", () => {
+  beforeEach(async () => {
+    const { useChatStore } = await import("@/stores/chat-store");
+    useChatStore.setState({ agents: {}, currentAgent: "" });
+  });
+
+  afterEach(async () => {
+    const { useChatStore } = await import("@/stores/chat-store");
+    useChatStore.setState({ agents: {}, currentAgent: "" });
+  });
+
   it("sendMessage from history mode seeds messageSource atomically (no empty live transition)", async () => {
     const { useChatStore } = await import("@/stores/chat-store");
 

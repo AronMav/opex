@@ -12,7 +12,7 @@ function makeRow(overrides: Partial<MessageRow> & { id: string }): MessageRow {
     tool_call_id: null,
     created_at: new Date().toISOString(),
     agent_id: null,
-    status: "finished",
+    status: "complete",
     feedback: 0,
     edited_at: null,
     thinking_blocks: null,
@@ -82,10 +82,10 @@ describe("convertHistory — message identity", () => {
     expect(messages[0].agentId).toBe("Agent1");
     // First assistant has tool parts (tool result attaches to it)
     const toolParts = messages[0].parts.filter((p) => p.type === "tool");
-    expect(toolParts.length).toBeGreaterThan(0);
+    expect(toolParts).toHaveLength(1);
     // Second assistant has the text
     const textParts = messages[1].parts.filter((p) => p.type === "text");
-    expect(textParts.length).toBeGreaterThan(0);
+    expect(textParts).toHaveLength(1);
     expect(textParts.some(p => "text" in p && p.text.includes("Based on the search"))).toBe(true);
   });
 
@@ -125,7 +125,7 @@ describe("convertHistory — message identity", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0].agentId).toBe("Agent1");
     const toolParts = messages[0].parts.filter((p) => p.type === "tool");
-    expect(toolParts.length).toBeGreaterThan(0);
+    expect(toolParts).toHaveLength(1);
   });
 
   it("legacy messages without agent_id get agentId=undefined", () => {
@@ -194,10 +194,10 @@ describe("convertHistory — message identity", () => {
   });
 
   it("non-aborted rows do not set status or abortReason", () => {
-    // Sanity: a plain finished row must not carry the abort markers, else
+    // Sanity: a plain complete row must not carry the abort markers, else
     // the footer would render unconditionally on every history load.
     const rows: MessageRow[] = [
-      makeRow({ id: "a1", agent_id: "Agent1", content: "hello", status: "finished" }),
+      makeRow({ id: "a1", agent_id: "Agent1", content: "hello", status: "complete" }),
     ];
 
     const messages = convertHistory(rows);
