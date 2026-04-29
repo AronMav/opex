@@ -1648,8 +1648,11 @@ pub(super) fn messages_to_openai_format(messages: &[Message]) -> Vec<serde_json:
                             serde_json::Value::Array(tc_json),
                         );
 
-                        // DeepSeek: pass reasoning_content back on subsequent turns
-                        if !msg.thinking_blocks.is_empty() {
+                        // DeepSeek: pass reasoning_content back on subsequent turns.
+                        // Always include it for tool-calling turns — use actual content
+                        // when available, empty string for legacy sessions that were
+                        // saved before thinking_blocks persistence was wired up.
+                        {
                             let reasoning: String = msg.thinking_blocks.iter()
                                 .map(|tb| tb.thinking.as_str())
                                 .collect::<Vec<_>>()

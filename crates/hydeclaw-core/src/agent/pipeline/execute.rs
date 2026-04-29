@@ -345,6 +345,11 @@ pub async fn execute<S: EventSink>(
         // Idempotency: pre-generated UUID + `ON CONFLICT (id) DO NOTHING` in
         // `save_message_ex_with_id` mean retries are safe.
         let tc_json = serde_json::to_value(&response.tool_calls).ok();
+        let tb_json = if response.thinking_blocks.is_empty() {
+            None
+        } else {
+            serde_json::to_value(&response.thinking_blocks).ok()
+        };
         let assistant_msg_id = uuid::Uuid::new_v4();
         crate::agent::pipeline::parallel::spawn_persist_assistant_message(
             &engine.cfg().db,
@@ -353,7 +358,7 @@ pub async fn execute<S: EventSink>(
             &agent_name,
             &partial,
             tc_json.as_ref(),
-            None,
+            tb_json.as_ref(),
             Some(last_msg_id),
         );
         last_msg_id = assistant_msg_id;

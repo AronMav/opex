@@ -295,6 +295,11 @@ impl AgentEngine {
             // reload. Idempotent: pre-generated UUID + `ON CONFLICT (id) DO
             // NOTHING` in `save_message_ex_with_id`.
             let tc_json = serde_json::to_value(&response.tool_calls).ok();
+            let tb_json = if response.thinking_blocks.is_empty() {
+                None
+            } else {
+                serde_json::to_value(&response.thinking_blocks).ok()
+            };
             let assistant_msg_id = uuid::Uuid::new_v4();
             let agent_name_for_persist = self.cfg().agent.name.clone();
             crate::agent::pipeline::parallel::spawn_persist_assistant_message(
@@ -304,7 +309,7 @@ impl AgentEngine {
                 &agent_name_for_persist,
                 &cleaned_content,
                 tc_json.as_ref(),
-                None,
+                tb_json.as_ref(),
                 None,
             );
 
