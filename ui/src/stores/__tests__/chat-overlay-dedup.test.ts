@@ -96,13 +96,28 @@ describe("mergeLiveOverlay — assistant dedup", () => {
     expect(mergeLiveOverlay(history, live)).toEqual([]);
   });
 
-  it("strips text parts already in history by first-80-char fingerprint", () => {
+  it("does NOT dedupe live assistant text by content fingerprint (false positives ate new-message starts)", () => {
+    // Two assistant messages with identical text but different ids — e.g. the
+    // model repeats a planning sentence at the start of a new turn. Live copy
+    // must remain visible; only message-level ID dedup handles the genuine
+    // history-catches-up case (covered by the next test).
     const history: ChatMessage[] = [assistantMsg("db-a", "Hello world")];
     const live: ChatMessage[] = [assistantMsg("live-a", "Hello world")];
     const out = mergeLiveOverlay(history, live);
-    // Live copy's only part is a dup → entire message filtered out.
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(2);
     expect(out[0].id).toBe("db-a");
+    expect(out[1].id).toBe("live-a");
+  });
+
+  it("filters live assistant whose id matches a history row (history caught up)", () => {
+    // Server-side messageId is reused between SSE start event and the persisted
+    // DB row, so when history refetches the same id appears in both → message-
+    // level ID dedup hides the live duplicate cleanly.
+    const history: ChatMessage[] = [assistantMsg("msg_42", "Hello world")];
+    const live: ChatMessage[] = [assistantMsg("msg_42", "Hello world")];
+    const out = mergeLiveOverlay(history, live);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe("msg_42");
   });
 
   it("strips tool parts already in history by toolCallId", () => {
@@ -130,17 +145,21 @@ describe("mergeLiveOverlay — edge cases", () => {
     expect(mergeLiveOverlay(history, [])).toBe(history);
   });
 
-  it("returns history unchanged when live overlay has only duplicates", () => {
+  it("returns history unchanged when live overlay has only id-duplicates", () => {
+    // Live items must share IDs with history rows (which is what happens once
+    // server-side messageId echoes back through history refetch) for the
+    // overlay to collapse cleanly. Different-id live copies of identical text
+    // are intentionally preserved — see "does NOT dedupe live assistant text"
+    // above for the rationale.
     const history: ChatMessage[] = [
       userMsg("db-u", "Hello"),
       assistantMsg("db-a", "Hi there"),
     ];
     const live: ChatMessage[] = [
-      userMsg("live-u", "Hello", "confirmed"),
-      assistantMsg("live-a", "Hi there"),
+      userMsg("db-u", "Hello", "confirmed"),
+      assistantMsg("db-a", "Hi there"),
     ];
     const out = mergeLiveOverlay(history, live);
-    // All live items are duplicates → history returned verbatim.
     expect(out).toEqual(history);
   });
 });

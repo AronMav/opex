@@ -11,9 +11,12 @@
  *    message mirrored in history yet?". Prior logic gated on status === "sending"
  *    and caused the user bubble to disappear the instant the server acknowledged
  *    the send (data-session-id event) but before history refetched.
- *  - Assistant messages: dedup part-by-part. Tool parts dedup by toolCallId;
- *    text parts dedup by the first 80 chars (sufficient to survive streaming
- *    continuation without false positives).
+ *  - Assistant messages: dedup tool parts by toolCallId only. Text parts are
+ *    NOT deduped by content — false positives when the model repeats a phrase
+ *    across iterations (e.g. "Цикл 2 — взаимная критика. Отправляю ...") would
+ *    swallow the start of the new message until the live text diverged from
+ *    the previous saved one. Whole-message dedup by ID below covers history
+ *    catching up.
  *  - Empty assistant placeholders are filtered — ThinkingMessage handles them.
  */
 
@@ -28,13 +31,11 @@ export function mergeLiveOverlay(
   // Index history for O(1) lookups during overlay walk.
   const historyIds = new Set(historyMessages.map(m => m.id));
   const historyToolIds = new Set<string>();
-  const historyTextSet = new Set<string>();
   const historyUserTexts = new Set<string>();
   for (const m of historyMessages) {
     if (m.role === "assistant") {
       for (const p of m.parts) {
         if (p.type === "tool") historyToolIds.add(p.toolCallId);
-        if (p.type === "text" && p.text) historyTextSet.add(p.text.slice(0, 80));
       }
     } else if (m.role === "user") {
       const first = m.parts?.[0];
@@ -63,7 +64,6 @@ export function mergeLiveOverlay(
     if (m.role === "assistant") {
       const uniqueParts = m.parts.filter((p) => {
         if (p.type === "tool") return !historyToolIds.has(p.toolCallId);
-        if (p.type === "text" && p.text) return !historyTextSet.has(p.text.slice(0, 80));
         return true;
       });
       if (uniqueParts.length === 0) continue;
