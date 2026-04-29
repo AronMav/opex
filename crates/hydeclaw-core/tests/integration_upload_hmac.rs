@@ -24,19 +24,16 @@ fn now_unix() -> u64 {
         .as_secs()
 }
 
+/// Extract `?sig=&exp=` from a signed URL into a `SignedUploadQuery`.
+/// Delegates to `support::parse_signed_url` so query-parsing logic stays in
+/// one place (tests/support/signed_url_helper.rs).
 fn parse_q(url: &str) -> SignedUploadQuery {
-    let q = url.split('?').nth(1).unwrap_or("");
-    let mut sig = None;
-    let mut exp = None;
-    for kv in q.split('&') {
-        let mut it = kv.splitn(2, '=');
-        match (it.next(), it.next()) {
-            (Some("sig"), Some(v)) => sig = Some(v.to_string()),
-            (Some("exp"), Some(v)) => exp = v.parse().ok(),
-            _ => {}
-        }
+    let parsed = support::parse_signed_url(url)
+        .expect("parse_q: url must be a well-formed signed upload URL");
+    SignedUploadQuery {
+        sig: Some(parsed.sig_b64),
+        exp: Some(parsed.exp_unix),
     }
-    SignedUploadQuery { sig, exp }
 }
 
 #[test]
