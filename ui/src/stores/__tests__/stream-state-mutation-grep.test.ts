@@ -62,9 +62,12 @@ describe("stream-state mutation — forbidden outside allow-list", () => {
       const content = fs.readFileSync(file, "utf8");
       const lines = content.split("\n");
       for (let i = 0; i < lines.length; i++) {
+        // Skip comment lines — patterns in comments are documentation, not mutations.
+        const trimmed = lines[i].trimStart();
+        if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
         for (const pat of FORBIDDEN_PATTERNS) {
           if (pat.test(lines[i])) {
-            violations.push({ file: rel, pattern: pat.source, line: i + 1, text: lines[i].trim().slice(0, 120) });
+            violations.push({ file: rel, pattern: pat.source, line: i + 1, text: trimmed.slice(0, 120) });
           }
         }
       }
