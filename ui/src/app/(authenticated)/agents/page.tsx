@@ -44,7 +44,7 @@ const LANGUAGES: { value: string; labelKey?: TranslationKey; label?: string }[] 
   { value: "hi", label: "\u0939\u093f\u0928\u094d\u0926\u0940" },
 ];
 
-const emptyForm: FormState = {
+export const emptyForm: FormState = {
   name: "",
   language: "ru",
   provider: "minimax",
@@ -100,7 +100,7 @@ const emptyForm: FormState = {
   fallbackProvider: "",
 };
 
-function detailToForm(d: AgentDetail): FormState {
+export function detailToForm(d: AgentDetail): FormState {
   return {
     name: d.name,
     language: d.language || "ru",
@@ -166,7 +166,7 @@ function detailToForm(d: AgentDetail): FormState {
   };
 }
 
-function formToPayload(f: FormState) {
+export function formToPayload(f: FormState) {
   const splitList = (s: string) =>
     s.split(",").map((x) => x.trim()).filter(Boolean);
 
