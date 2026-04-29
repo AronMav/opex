@@ -181,19 +181,19 @@ Only `TransientHttp` and `Overloaded` are retried at the engine level (`is_retry
 HydeClaw has transitioned from a linear `handoff` loop (where control was passed from agent to agent) to a **polling-based live agent pool** model. This provides better scalability and allows a single parent agent to drive multiple sub-tasks in parallel.
 
 - **Legacy Handoff (Removed):** Used to pass control via synthetic user messages. Difficult to parallelize and prone to infinite loops.
-- **Modern Agent Tool:** Spawns subagents as background tasks in a session-scoped pool. The parent agent uses `agent(action="run")` to start a task and `agent(action="status")` to poll for the result.
+- **Modern Agent Tool:** Spawns subagents as background tasks in a session-scoped pool. The parent agent uses `agent(action="ask", target=…, text=…)` — a single canonical "talk to a peer" verb that auto-spawns on pool-miss, continues the dialog on pool-hit, and blocks until a result is available. `status` and `kill` round out the API for inspection and explicit teardown. See [`workspace/skills/multi-agent-coordination.md`](../workspace/skills/multi-agent-coordination.md) for patterns.
 - **Session Pooling:** Each session maintains its own `SessionAgentPool`, ensuring that agents are isolated and their lifecycle is tied to the current chat session.
 
 The `handoff` name is preserved in some legacy configuration fields (e.g., `max_handoff_context_chars`) for backward compatibility with existing `hydeclaw.toml` files, but functionally it now refers to the context transfer between the initiator and the subagent.
 
 ### Inter-Agent Communication
 
-`agent(action="run")` routes through the `AgentMap` (a `Arc<RwLock<HashMap<String, Arc<AgentEngine>>>>` shared across all agents):
+`agent(action="ask")` routes through the `AgentMap` (a `Arc<RwLock<HashMap<String, Arc<AgentEngine>>>>` shared across all agents):
 
 1. Looks up the target agent by name.
-2. Constructs a synthetic `IncomingMessage` with `channel = "inter_agent"`.
-3. Spawns a background tokio task running `engine.run_subagent()`.
-4. Returns the agent ID immediately; the caller polls via `agent(action="status")`.
+2. Looks up the target in the per-session `SessionAgentPool`. On miss, spawns a `LiveAgent` (background tokio task running `engine.run_subagent()`); on hit, sends `text` as the next user message in the existing dialog.
+3. Blocks until the peer's loop finishes, returning its `last_result` to the caller.
+4. Leaves the peer alive in the pool for follow-ups; explicit `kill` (or `fresh=true` on the next `ask`) frees the slot.
 
 The `agent` tool is stripped from the available tool list when the incoming message is itself an inter-agent call, preventing broadcast loops.
 

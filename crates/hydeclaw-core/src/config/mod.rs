@@ -118,13 +118,13 @@ impl Default for UploadsConfig {
 #[serde(deny_unknown_fields)]
 pub struct AgentToolConfig {
     /// How long to wait for a target agent to become idle before sending it a
-    /// new message. After this timeout, `agent(action="message")` returns an
-    /// error instead of blocking forever. Default: 60 seconds.
+    /// new message. After this timeout, `agent(action="ask")` (continue-dialog
+    /// path) returns an error instead of blocking forever. Default: 60 seconds.
     #[serde(default = "default_message_wait_for_idle_secs")]
     pub message_wait_for_idle_secs: u64,
     /// How long to wait for a target agent to finish processing the just-sent
-    /// message and produce a `last_result`. Same value used for sync `run`,
-    /// sync `message`, and `collect`. Default: 300 seconds.
+    /// message and produce a `last_result`. Used by `agent(action="ask")` for
+    /// both spawn-and-wait and continue-and-wait paths. Default: 300 seconds.
     #[serde(default = "default_message_result_secs")]
     pub message_result_secs: u64,
     /// Defense-in-depth outer timeout for any `agent` tool call in the

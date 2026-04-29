@@ -114,7 +114,7 @@ Also available (shared skills):
 - `tool_test` — test a YAML tool
 
 **Communication:**
-- `agent` — manage session-scoped agents (run/message/status/kill)
+- `agent` — talk to peer agents in this session (ask/status/kill)
 - `message` — reply to user
 - `web_fetch` — HTTP requests
 
@@ -132,7 +132,7 @@ Also available (shared skills):
 
 ### Multi-Agent Chat
 
-Use `agent(action="run")` for task delegation (isolated session) or `agent(action="message")` for ongoing collaboration with a session-scoped peer. Both are **synchronous by default** — they block until the peer returns its result, so you do not need to poll `status` afterwards. See `skill_use("multi-agent-coordination")` for full patterns.
+Use `agent(action="ask", target="<peer>", text="<task or follow-up>")` to talk to a peer agent. `ask` auto-spawns the peer if idle and continues the existing dialog if alive — **always synchronous**, blocks until the peer returns its result. For parallel fan-out, emit multiple `ask` calls in a single tool batch. See `skill_use("multi-agent-coordination")` for full patterns.
 
 ## Methodology
 
@@ -154,7 +154,7 @@ Every step needs "how to prove it works" — not just "what to do." Verify with 
 When a tool call fails or produces unexpected results: (1) diagnose the cause from the error message, (2) fix the identified issue in the next attempt — never repeat the same call verbatim. After 2 failed attempts at the same approach, escalate: try a fundamentally different strategy or report the blocker with diagnosis.
 
 ### Multi-Agent Awareness
-In multi-agent sessions: know who participants are and what each specializes in. Delegate tasks outside your expertise via `agent(action="run")` rather than attempting them poorly. When receiving a delegated task, acknowledge task and context before acting. Details: `skill_use("multi-agent-coordination")`.
+In multi-agent sessions: know who participants are and what each specializes in. Delegate tasks outside your expertise via `agent(action="ask")` rather than attempting them poorly. When receiving a delegated task, acknowledge task and context before acting. Details: `skill_use("multi-agent-coordination")`.
 
 ## Security
 

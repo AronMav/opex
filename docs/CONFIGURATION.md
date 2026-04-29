@@ -136,7 +136,7 @@ Configuration for the live agent pool system. Controls whether the `agent` tool 
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `enabled` | bool | `true` | Master switch. When false, `agent(action="run")` tool calls are rejected. |
+| `enabled` | bool | `true` | Master switch. When false, `agent` tool calls are rejected. |
 | `default_mode` | string | `"in-process"` | Where live agents run by default. `"in-process"` runs them as tokio tasks inside Core. `"docker"` runs them in a sandbox container. |
 | `max_concurrent_in_process` | integer | `5` | Maximum simultaneously running in-process sub-agents. |
 | `max_concurrent_docker` | integer | `3` | Maximum simultaneously running Docker sandbox sub-agents. |

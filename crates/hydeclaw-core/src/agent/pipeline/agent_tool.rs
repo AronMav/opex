@@ -62,7 +62,7 @@ pub fn extract_session_id(args: &serde_json::Value) -> Option<Uuid> {
 
 /// Dispatch `agent` tool calls to the appropriate sub-handler based on `action`.
 ///
-/// Actions: `run`, `message`, `status`, `kill`, `collect`.
+/// Actions: `ask`, `status`, `kill`. Anything else is rejected.
 ///
 /// `timeouts` is a per-call snapshot read from the live `AppConfig.agent_tool`
 /// section by the caller — see `engine_dispatch.rs`. Passing it explicitly
@@ -83,21 +83,29 @@ pub async fn handle_agent_tool(
         .unwrap_or("");
 
     match action {
-        "run" => handle_agent_run(session_pools, agent_map, db, agent_name, args, timeouts).await,
-        "message" => handle_agent_message(session_pools, args, timeouts).await,
+        "ask" => handle_agent_ask(session_pools, agent_map, db, agent_name, args, timeouts).await,
         "status" => handle_agent_status(session_pools, args).await,
         "kill" => handle_agent_kill(session_pools, args).await,
-        "collect" => handle_agent_collect(session_pools, args, timeouts).await,
         other => format!(
-            "Error: unknown agent action '{}'. Expected: run, message, status, kill, collect",
-            other
+            "Error: unknown action '{other}'. Use 'ask', 'status', or 'kill'."
         ),
     }
 }
 
-/// `run` — spawn a new live agent and wait for its result (blocking by default).
-/// With `mode: "async"`, returns immediately for parallel spawning (use `collect` to get results).
-pub async fn handle_agent_run(
+/// `ask` — single canonical "talk to a peer" verb.
+///
+/// - **Pool miss** → spawn the peer with `text` as its first user message and
+///   block until the peer produces a result. The peer is left alive in the
+///   pool for follow-ups (no auto-cleanup; this differs from the old `run`).
+/// - **Pool hit** → deliver `text` as the next user message in the existing
+///   dialog and block for the result.
+/// - `fresh = true` → kill any existing instance of `target` first, then
+///   fall through to the spawn path.
+///
+/// Always synchronous. No `mode`, no `wait_for_result`. Parallel fan-out is
+/// handled at the engine level (multiple `ask` tool calls in one batch are
+/// run concurrently by `pipeline::parallel`).
+pub async fn handle_agent_ask(
     session_pools: Option<&SessionPoolsMap>,
     agent_map: Option<&AgentMap>,
     db: &PgPool,
@@ -109,11 +117,14 @@ pub async fn handle_agent_run(
         Some(n) if !n.is_empty() => n,
         _ => return "Error: 'target' parameter is required".to_string(),
     };
-    let task = match args.get("task").and_then(|v| v.as_str()) {
+    let text = match args.get("text").and_then(|v| v.as_str()) {
         Some(t) if !t.is_empty() => t,
-        _ => return "Error: 'task' parameter is required".to_string(),
+        _ => return "Error: 'text' parameter is required".to_string(),
     };
-    let is_async = args.get("mode").and_then(|v| v.as_str()) == Some("async");
+    let fresh = args
+        .get("fresh")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let session_id = match extract_session_id(args) {
         Some(id) if id != Uuid::nil() => id,
@@ -123,6 +134,35 @@ pub async fn handle_agent_run(
         }
     };
 
+    let pools = match session_pools {
+        Some(p) => p,
+        None => return "Error: session_pools not available".to_string(),
+    };
+
+    // fresh=true: tear down any existing instance first. Tolerate "not found".
+    if fresh {
+        let mut pools_write = pools.write().await;
+        if let Some(pool) = pools_write.get_mut(&session_id) {
+            let _ = pool.remove(target);
+        }
+        // write lock dropped at end of scope before we proceed to lookup
+    }
+
+    // Pool hit check (read lock).
+    let target_in_pool = {
+        let pools_read = pools.read().await;
+        pools_read
+            .get(&session_id)
+            .map(|pool| pool.contains(target))
+            .unwrap_or(false)
+    };
+
+    if target_in_pool {
+        // Pool hit — continue dialog with the live agent.
+        return ask_continue_existing(pools, session_id, target, text, timeouts).await;
+    }
+
+    // Pool miss — spawn a fresh live agent and wait for its first result.
     let agent_map = match agent_map {
         Some(m) => m,
         None => return "Error: agent_map not available (subagent context)".to_string(),
@@ -131,250 +171,63 @@ pub async fn handle_agent_run(
         let map = agent_map.read().await;
         match map.get(target) {
             Some(handle) => handle.engine.clone(),
-            None => return format!("Error: agent '{}' not found", target),
+            None => return format!("Error: agent '{target}' not found"),
         }
     };
 
     let _ = crate::db::sessions::add_participant(db, session_id, target).await;
 
-    let pools = match session_pools {
-        Some(p) => p,
-        None => return "Error: session_pools not available".to_string(),
-    };
-
-    // Check for duplicate and insert — all under one write lock to prevent TOCTOU race.
+    // Single write lock for the spawn — prevents TOCTOU where two concurrent
+    // `ask` calls both observe pool-miss and both try to spawn.
     {
         let mut pools_write = pools.write().await;
         let pool = pools_write
             .entry(session_id)
             .or_insert_with(|| SessionAgentPool::new(session_id));
+        // Re-check under write lock: another `ask` may have raced us.
         if pool.contains(target) {
-            return format!(
-                "Error: {} is already running in this session. Use agent(action: \"message\") to communicate.",
-                target
-            );
+            // Fall through to the continue-existing path after dropping the lock.
+            drop(pools_write);
+            return ask_continue_existing(pools, session_id, target, text, timeouts).await;
         }
 
         let live_agent = match session_agent_pool::spawn_live_agent(
             target.to_string(),
             target_engine,
-            task.to_string(),
+            text.to_string(),
             session_id,
         ) {
             Some(la) => la,
             None => {
                 return format!(
-                    "Error: failed to deliver initial task to agent '{}'",
-                    target
+                    "Error: failed to deliver initial task to agent '{target}'"
                 )
             }
         };
         pool.insert(live_agent);
-    } // write lock released before blocking wait
+    }
 
     tracing::info!(
         from = %agent_name,
         target = %target,
-        mode = if is_async { "async" } else { "sync" },
-        "agent tool: spawned"
+        fresh,
+        "agent ask: spawned"
     );
 
-    if is_async {
-        // Async mode: return immediately, caller uses `collect` later.
-        return serde_json::json!({
-            "status": "started",
-            "agent": target,
-            "message": format!(
-                "Agent '{}' started. Use agent(action: \"collect\", target: \"{}\") to get the result.",
-                target, target
-            ),
-        })
-        .to_string();
-    }
-
-    // Sync mode (default): block until the agent completes or times out.
-    // Uses the operator-configured `message_result` deadline.
-    let result =
-        wait_for_agent_result(pools, session_id, target, timeouts.message_result).await;
-
-    // Clean up: remove the completed agent from the pool so a subsequent `run` with the
-    // same target doesn't get the "already running" error.
-    {
-        let mut pools_write = pools.write().await;
-        if let Some(pool) = pools_write.get_mut(&session_id) {
-            pool.remove(target);
-        }
-    }
-
-    result
+    // Block for the spawn-time result. The agent stays alive in the pool
+    // afterwards — no auto-cleanup (the old `run` removed it; we don't).
+    wait_for_agent_result(pools, session_id, target, timeouts.message_result).await
 }
 
-/// Block until a live agent becomes idle and return its last_result.
-pub async fn wait_for_agent_result(
+/// Continue an existing dialog with a live agent: wait for idle → CAS PROCESSING
+/// → try_send → wait for result. Mirrors the old `handle_agent_message` sync path.
+async fn ask_continue_existing(
     pools: &SessionPoolsMap,
     session_id: Uuid,
     target: &str,
-    timeout: std::time::Duration,
-) -> String {
-    let start = std::time::Instant::now();
-    loop {
-        tokio::time::sleep(MESSAGE_POLL_INTERVAL).await;
-
-        // Check if agent is done
-        let result = {
-            let pools_read = pools.read().await;
-            if let Some(pool) = pools_read.get(&session_id) {
-                if let Some(agent) = pool.get(target) {
-                    if agent.is_idle() {
-                        let lr = agent.last_result.read().await.clone();
-                        Some(lr)
-                    } else if agent.task_handle.is_finished() {
-                        // Task exited (crash/cancel) while still "processing"
-                        let lr = agent.last_result.read().await.clone();
-                        Some(lr)
-                    } else {
-                        None // still processing
-                    }
-                } else {
-                    // Agent was removed (killed by someone else)
-                    Some(Some(format!(
-                        "Agent '{}' was killed before completing",
-                        target
-                    )))
-                }
-            } else {
-                Some(Some(format!("Session pool not found for {}", target)))
-            }
-        };
-
-        if let Some(last_result) = result {
-            let result_text = match last_result {
-                Some(s) if !s.trim().is_empty() => s,
-                _ => "(no result)".to_string(),
-            };
-            return serde_json::json!({
-                "status": "completed",
-                "agent": target,
-                "result": result_text,
-            })
-            .to_string();
-        }
-
-        if start.elapsed() > timeout {
-            return serde_json::json!({
-                "status": "timeout",
-                "agent": target,
-                "message": format!(
-                    "Agent '{}' did not complete within {} seconds",
-                    target,
-                    timeout.as_secs()
-                ),
-            })
-            .to_string();
-        }
-    }
-}
-
-/// Wait for a live agent to enter the IDLE state without consuming its
-/// `last_result`. Used by `handle_agent_message` to ensure the target is ready
-/// to receive a new message before we `try_send`.
-///
-/// Returns `Ok(())` once the agent is idle. Returns `Err(message)` on:
-///   - missing session pool / agent (already gone),
-///   - the agent's processing task having exited (crash / cancel),
-///   - timeout.
-async fn wait_until_idle(
-    pools: &SessionPoolsMap,
-    session_id: Uuid,
-    target: &str,
-    timeout: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    loop {
-        {
-            let pools_read = pools.read().await;
-            let pool = pools_read
-                .get(&session_id)
-                .ok_or_else(|| format!("Error: no agent pool for session {}", session_id))?;
-            let agent = pool
-                .get(target)
-                .ok_or_else(|| format!("Error: agent '{}' not found in session pool", target))?;
-            if agent.is_idle() {
-                return Ok(());
-            }
-            if agent.task_handle.is_finished() {
-                return Err(format!(
-                    "Error: agent '{}' processing loop has exited",
-                    target
-                ));
-            }
-        }
-
-        if start.elapsed() > timeout {
-            return Err(format!(
-                "Error: agent '{}' did not become idle within {} seconds — still processing previous message",
-                target,
-                timeout.as_secs()
-            ));
-        }
-
-        tokio::time::sleep(MESSAGE_POLL_INTERVAL).await;
-    }
-}
-
-/// `message` — send a follow-up message to an already-running live agent.
-///
-/// **Sync by default**: blocks until the target agent finishes processing the
-/// message and returns its `last_result`. This eliminates the race where an
-/// orchestrator sends messages while the target is still busy (which used to
-/// produce "queue is full" errors or silent message loss).
-///
-/// Pass `wait_for_result: false` for fire-and-forget broadcasts. In that mode
-/// the call still waits for the target to be idle before sending (so the
-/// message is guaranteed to be delivered), then returns immediately without
-/// waiting for the response.
-pub async fn handle_agent_message(
-    session_pools: Option<&SessionPoolsMap>,
-    args: &serde_json::Value,
+    text: &str,
     timeouts: AgentToolTimeouts,
 ) -> String {
-    let target = match args.get("target").and_then(|v| v.as_str()) {
-        Some(n) if !n.is_empty() => n,
-        _ => return "Error: 'target' parameter is required".to_string(),
-    };
-    let text = match args.get("text").and_then(|v| v.as_str()) {
-        Some(t) if !t.is_empty() => t,
-        _ => return "Error: 'text' parameter is required".to_string(),
-    };
-
-    // Default true: sync send-and-wait. Only false explicitly opts out.
-    let wait_for_result = args
-        .get("wait_for_result")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    let session_id = match extract_session_id(args) {
-        Some(id) if id != Uuid::nil() => id,
-        _ => return "Error: no active session — session_id missing from _context".to_string(),
-    };
-
-    let pools = match session_pools {
-        Some(p) => p,
-        None => return "Error: session_pools not available".to_string(),
-    };
-
-    // Verify target exists up-front (cheap, gives a clean error before the wait loop).
-    {
-        let pools_read = pools.read().await;
-        let pool = match pools_read.get(&session_id) {
-            Some(p) => p,
-            None => return format!("Error: no agent pool for session {}", session_id),
-        };
-        if pool.get(target).is_none() {
-            return format!("Error: agent '{}' not found in session pool", target);
-        }
-    }
-
     // Wait until the target is idle (or fail with a clear error).
     if let Err(e) =
         wait_until_idle(pools, session_id, target, timeouts.message_wait_for_idle).await
@@ -395,11 +248,11 @@ pub async fn handle_agent_message(
         let pools_read = pools.read().await;
         let pool = match pools_read.get(&session_id) {
             Some(p) => p,
-            None => return format!("Error: no agent pool for session {}", session_id),
+            None => return format!("Error: no agent pool for session {session_id}"),
         };
         let agent = match pool.get(target) {
             Some(a) => a,
-            None => return format!("Error: agent '{}' not found in session pool", target),
+            None => return format!("Error: agent '{target}' not found in session pool"),
         };
 
         // CAS IDLE → PROCESSING. If another sender beat us to it, the agent is
@@ -436,28 +289,130 @@ pub async fn handle_agent_message(
 
     match send_result {
         Ok(()) => {
-            if !wait_for_result {
-                return serde_json::json!({
-                    "status": "sent",
-                    "agent": target,
-                    "message": "Message sent (fire-and-forget)",
-                })
-                .to_string();
-            }
-            // Sync mode: wait for the result. Agent stays in the pool — only
-            // `kill` removes it.
+            // Wait for the result. Agent stays in the pool — only `kill` /
+            // `fresh=true` / session end removes it.
             wait_for_agent_result(pools, session_id, target, timeouts.message_result).await
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             // Defense-in-depth: should be unreachable now that we wait for idle.
             format!(
-                "Error: agent '{}' message queue is full — it may still be processing",
-                target
+                "Error: agent '{target}' message queue is full — it may still be processing"
             )
         }
         Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            format!("Error: agent '{}' processing loop has exited", target)
+            format!("Error: agent '{target}' processing loop has exited")
         }
+    }
+}
+
+/// Block until a live agent becomes idle and return its last_result.
+pub async fn wait_for_agent_result(
+    pools: &SessionPoolsMap,
+    session_id: Uuid,
+    target: &str,
+    timeout: std::time::Duration,
+) -> String {
+    let start = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(MESSAGE_POLL_INTERVAL).await;
+
+        // Check if agent is done
+        let result = {
+            let pools_read = pools.read().await;
+            if let Some(pool) = pools_read.get(&session_id) {
+                if let Some(agent) = pool.get(target) {
+                    if agent.is_idle() {
+                        let lr = agent.last_result.read().await.clone();
+                        Some(lr)
+                    } else if agent.task_handle.is_finished() {
+                        // Task exited (crash/cancel) while still "processing"
+                        let lr = agent.last_result.read().await.clone();
+                        Some(lr)
+                    } else {
+                        None // still processing
+                    }
+                } else {
+                    // Agent was removed (killed by someone else)
+                    Some(Some(format!(
+                        "Agent '{target}' was killed before completing"
+                    )))
+                }
+            } else {
+                Some(Some(format!("Session pool not found for {target}")))
+            }
+        };
+
+        if let Some(last_result) = result {
+            let result_text = match last_result {
+                Some(s) if !s.trim().is_empty() => s,
+                _ => "(no result)".to_string(),
+            };
+            return serde_json::json!({
+                "status": "completed",
+                "agent": target,
+                "result": result_text,
+            })
+            .to_string();
+        }
+
+        if start.elapsed() > timeout {
+            return serde_json::json!({
+                "status": "timeout",
+                "agent": target,
+                "message": format!(
+                    "Agent '{}' did not complete within {} seconds",
+                    target,
+                    timeout.as_secs()
+                ),
+            })
+            .to_string();
+        }
+    }
+}
+
+/// Wait for a live agent to enter the IDLE state without consuming its
+/// `last_result`. Used by `ask_continue_existing` to ensure the target is ready
+/// to receive a new message before we `try_send`.
+///
+/// Returns `Ok(())` once the agent is idle. Returns `Err(message)` on:
+///   - missing session pool / agent (already gone),
+///   - the agent's processing task having exited (crash / cancel),
+///   - timeout.
+async fn wait_until_idle(
+    pools: &SessionPoolsMap,
+    session_id: Uuid,
+    target: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    loop {
+        {
+            let pools_read = pools.read().await;
+            let pool = pools_read
+                .get(&session_id)
+                .ok_or_else(|| format!("Error: no agent pool for session {session_id}"))?;
+            let agent = pool
+                .get(target)
+                .ok_or_else(|| format!("Error: agent '{target}' not found in session pool"))?;
+            if agent.is_idle() {
+                return Ok(());
+            }
+            if agent.task_handle.is_finished() {
+                return Err(format!(
+                    "Error: agent '{target}' processing loop has exited"
+                ));
+            }
+        }
+
+        if start.elapsed() > timeout {
+            return Err(format!(
+                "Error: agent '{}' did not become idle within {} seconds — still processing previous message",
+                target,
+                timeout.as_secs()
+            ));
+        }
+
+        tokio::time::sleep(MESSAGE_POLL_INTERVAL).await;
     }
 }
 
@@ -507,7 +462,7 @@ pub async fn handle_agent_status(
             })
             .to_string();
         } else {
-            return format!("Error: agent '{}' not found in session pool", target);
+            return format!("Error: agent '{target}' not found in session pool");
         }
     }
 
@@ -539,7 +494,7 @@ pub async fn handle_agent_kill(
     let mut pools_write = pools.write().await;
     let pool = match pools_write.get_mut(&session_id) {
         Some(p) => p,
-        None => return format!("Error: no agent pool for session {}", session_id),
+        None => return format!("Error: no agent pool for session {session_id}"),
     };
 
     match pool.remove(target) {
@@ -552,41 +507,17 @@ pub async fn handle_agent_kill(
             })
             .to_string()
         }
-        None => format!("Error: agent '{}' not found in session pool", target),
+        None => format!("Error: agent '{target}' not found in session pool"),
     }
-}
-
-/// `collect` — block until an async-spawned agent completes and return its result.
-/// Used after `agent(action="run", mode="async")` for parallel agent patterns.
-pub async fn handle_agent_collect(
-    session_pools: Option<&SessionPoolsMap>,
-    args: &serde_json::Value,
-    timeouts: AgentToolTimeouts,
-) -> String {
-    let target = match args.get("target").and_then(|v| v.as_str()) {
-        Some(t) if !t.is_empty() => t,
-        _ => return "Error: 'target' parameter is required".to_string(),
-    };
-
-    let session_id = match extract_session_id(args) {
-        Some(id) if id != Uuid::nil() => id,
-        _ => {
-            return "Error: no active session — agent tool requires session context via _context"
-                .to_string()
-        }
-    };
-
-    let pools = match session_pools {
-        Some(p) => p,
-        None => return "Error: session_pools not available".to_string(),
-    };
-
-    // Block until the agent completes (same logic as sync run).
-    wait_for_agent_result(pools, session_id, target, timeouts.message_result).await
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
     // Verify that an empty or whitespace-only last_result is treated identically to None.
     // Regression for the bug where `run_subagent_with_session` returned Ok("") (reasoning model
     // produced only <think> blocks) and the caller received {"result":""} instead of
@@ -617,141 +548,11 @@ mod tests {
         assert_eq!(result_text, "(no result)");
     }
 
-    // ── handle_agent_message: early-return validation paths ──────────────────
-    //
-    // These tests exercise the argument-parsing and pool-lookup short-circuits
-    // without spawning a real LiveAgent (which would require an LLM provider).
-    // The sync send-and-wait happy path is covered by integration tests that
-    // run a full session (LLM mocking is out of scope here).
-
-    use super::*;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-
     fn empty_pools() -> SessionPoolsMap {
         Arc::new(RwLock::new(HashMap::new()))
     }
 
-    #[tokio::test]
-    async fn message_missing_target_returns_error() {
-        let pools = empty_pools();
-        let args = serde_json::json!({
-            "action": "message",
-            "text": "hi",
-            "_context": { "session_id": Uuid::new_v4().to_string() },
-        });
-        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
-        assert!(out.starts_with("Error: 'target' parameter is required"), "got: {out}");
-    }
-
-    #[tokio::test]
-    async fn message_missing_text_returns_error() {
-        let pools = empty_pools();
-        let args = serde_json::json!({
-            "action": "message",
-            "target": "Bob",
-            "_context": { "session_id": Uuid::new_v4().to_string() },
-        });
-        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
-        assert!(out.starts_with("Error: 'text' parameter is required"), "got: {out}");
-    }
-
-    #[tokio::test]
-    async fn message_missing_session_returns_error() {
-        let pools = empty_pools();
-        let args = serde_json::json!({
-            "action": "message",
-            "target": "Bob",
-            "text": "hi",
-        });
-        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
-        assert!(out.contains("no active session"), "got: {out}");
-    }
-
-    #[tokio::test]
-    async fn message_returns_error_if_no_session_pool() {
-        let pools = empty_pools();
-        let session_id = Uuid::new_v4();
-        let args = serde_json::json!({
-            "action": "message",
-            "target": "Bob",
-            "text": "hi",
-            "_context": { "session_id": session_id.to_string() },
-        });
-        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
-        assert!(out.contains("no agent pool for session"), "got: {out}");
-    }
-
-    #[tokio::test]
-    async fn message_returns_error_if_target_not_in_pool() {
-        let pools = empty_pools();
-        let session_id = Uuid::new_v4();
-        // Insert an empty pool for the session so we hit the "agent not found"
-        // branch rather than the "no agent pool" branch.
-        {
-            let mut pw = pools.write().await;
-            pw.insert(session_id, SessionAgentPool::new(session_id));
-        }
-        let args = serde_json::json!({
-            "action": "message",
-            "target": "Bob",
-            "text": "hi",
-            "_context": { "session_id": session_id.to_string() },
-        });
-        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
-        assert!(
-            out.contains("agent 'Bob' not found in session pool"),
-            "got: {out}"
-        );
-    }
-
-    #[tokio::test]
-    async fn message_no_session_pools_dependency_returns_error() {
-        let args = serde_json::json!({
-            "action": "message",
-            "target": "Bob",
-            "text": "hi",
-            "_context": { "session_id": Uuid::new_v4().to_string() },
-        });
-        let out = handle_agent_message(None, &args, AgentToolTimeouts::legacy_defaults()).await;
-        assert!(out.contains("session_pools not available"), "got: {out}");
-    }
-
-    // wait_for_result default + opt-out parsing (without exercising the wait
-    // path, which needs a real spawned agent). We verify the parser by
-    // inspecting the JSON value directly.
-    #[test]
-    fn wait_for_result_defaults_to_true() {
-        let args = serde_json::json!({ "action": "message", "target": "x", "text": "y" });
-        let v = args
-            .get("wait_for_result")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        assert!(v, "default must be true");
-    }
-
-    #[test]
-    fn wait_for_result_false_is_respected() {
-        let args = serde_json::json!({
-            "action": "message",
-            "target": "x",
-            "text": "y",
-            "wait_for_result": false,
-        });
-        let v = args
-            .get("wait_for_result")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        assert!(!v, "explicit false must be respected");
-    }
-
-    // ── Sync round-trip test (stub LiveAgent, no LLM) ───────────────────────
-    //
-    // Build a `LiveAgent` manually with a tokio task that just echoes incoming
-    // messages: sets PROCESSING, writes the text into `last_result`, sets IDLE.
-    // This exercises the full `handle_agent_message` send → wait_for_result
-    // path without needing an LLM provider or spawning a real subagent.
+    // ── Stub LiveAgent (echo) helper ────────────────────────────────────────
 
     use crate::agent::session_agent_pool::{
         AgentMessage, LiveAgent, STATUS_IDLE, STATUS_PROCESSING,
@@ -800,10 +601,135 @@ mod tests {
         }
     }
 
+    // ── Validation paths ────────────────────────────────────────────────────
+
+    /// Build a fake `PgPool`. We never actually issue queries on the pool —
+    /// `handle_agent_ask` short-circuits on validation before reaching DB
+    /// access. The single DB call (`add_participant`) is on the spawn path,
+    /// which the unit tests below intentionally do not exercise (it requires
+    /// a real `AgentMap` + `AgentEngine`).
+    async fn fake_db() -> PgPool {
+        // Lazy connect option: returns immediately without contacting Postgres.
+        // Any actual query against this pool would hang/fail — tests must not
+        // hit a code path that touches the pool.
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/invalid")
+            .expect("lazy connect cannot fail")
+    }
+
     #[tokio::test]
-    async fn message_sync_round_trip_returns_echoed_last_result() {
+    async fn ask_rejects_empty_target() {
+        let pools = empty_pools();
+        let db = fake_db().await;
+        let args = serde_json::json!({
+            "action": "ask",
+            "text": "hi",
+            "_context": { "session_id": Uuid::new_v4().to_string() },
+        });
+        let out = handle_agent_ask(
+            Some(&pools),
+            None,
+            &db,
+            "Caller",
+            &args,
+            AgentToolTimeouts::legacy_defaults(),
+        )
+        .await;
+        assert!(
+            out.starts_with("Error: 'target' parameter is required"),
+            "got: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_rejects_empty_text() {
+        let pools = empty_pools();
+        let db = fake_db().await;
+        let args = serde_json::json!({
+            "action": "ask",
+            "target": "Bob",
+            "_context": { "session_id": Uuid::new_v4().to_string() },
+        });
+        let out = handle_agent_ask(
+            Some(&pools),
+            None,
+            &db,
+            "Caller",
+            &args,
+            AgentToolTimeouts::legacy_defaults(),
+        )
+        .await;
+        assert!(
+            out.starts_with("Error: 'text' parameter is required"),
+            "got: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ask_rejects_missing_session() {
+        let pools = empty_pools();
+        let db = fake_db().await;
+        let args = serde_json::json!({
+            "action": "ask",
+            "target": "Bob",
+            "text": "hi",
+        });
+        let out = handle_agent_ask(
+            Some(&pools),
+            None,
+            &db,
+            "Caller",
+            &args,
+            AgentToolTimeouts::legacy_defaults(),
+        )
+        .await;
+        assert!(out.contains("no active session"), "got: {out}");
+    }
+
+    /// Old actions (`run`, `message`, `collect`) must be rejected with a
+    /// clean error pointing at the new action set.
+    #[tokio::test]
+    async fn unknown_actions_rejected_cleanly() {
+        let pools = empty_pools();
+        let db = fake_db().await;
+        let session_id = Uuid::new_v4();
+
+        for old in ["run", "message", "collect", "garbage"] {
+            let args = serde_json::json!({
+                "action": old,
+                "target": "Bob",
+                "_context": { "session_id": session_id.to_string() },
+            });
+            let out = handle_agent_tool(
+                Some(&pools),
+                None,
+                &db,
+                "Caller",
+                &args,
+                AgentToolTimeouts::legacy_defaults(),
+            )
+            .await;
+            assert!(
+                out.contains(&format!("unknown action '{old}'"))
+                    && out.contains("'ask'")
+                    && out.contains("'status'")
+                    && out.contains("'kill'"),
+                "expected dispatcher rejection for action={old}, got: {out}"
+            );
+        }
+    }
+
+    // ── Pool-hit (continue dialog) — sync round-trip with stub LiveAgent ────
+    //
+    // Pool-miss (spawn) path is exercised indirectly by integration tests with
+    // a real `AgentEngine`; mocking `AgentMap` here is too invasive.
+
+    #[tokio::test]
+    async fn ask_continues_when_target_in_pool() {
         let pools = empty_pools();
         let session_id = Uuid::new_v4();
+        let db = fake_db().await;
         {
             let mut pw = pools.write().await;
             let mut pool = SessionAgentPool::new(session_id);
@@ -812,93 +738,81 @@ mod tests {
         }
 
         let args = serde_json::json!({
-            "action": "message",
+            "action": "ask",
             "target": "Echo",
             "text": "ping",
-            // wait_for_result defaults to true (sync mode).
             "_context": { "session_id": session_id.to_string() },
         });
 
-        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
-        // Should return the echoed last_result, NOT a "Message sent" stub.
+        let out = handle_agent_ask(
+            Some(&pools),
+            None,
+            &db,
+            "Caller",
+            &args,
+            AgentToolTimeouts::legacy_defaults(),
+        )
+        .await;
         assert!(
             out.contains("\"status\":\"completed\"") && out.contains("echo: ping"),
             "expected completed status with echoed result, got: {out}"
         );
-        // Sanity: the agent should be back to IDLE after completion.
+
+        // Agent must REMAIN in the pool after `ask` (no auto-cleanup). This is
+        // the behavior change vs. the old `run`.
         let pr = pools.read().await;
         let pool = pr.get(&session_id).expect("pool present");
+        assert!(
+            pool.contains("Echo"),
+            "Echo should still be in the pool after ask completion (no auto-cleanup)"
+        );
         let agent = pool.get("Echo").expect("agent present");
         assert!(agent.is_idle(), "agent should be idle after completion");
     }
 
     #[tokio::test]
-    async fn message_fire_and_forget_returns_quickly() {
-        let pools = empty_pools();
-        let session_id = Uuid::new_v4();
-        {
-            let mut pw = pools.write().await;
-            let mut pool = SessionAgentPool::new(session_id);
-            pool.insert(spawn_echo_agent("Echo"));
-            pw.insert(session_id, pool);
-        }
-
+    async fn ask_returns_error_if_no_session_pools_dependency() {
+        let db = fake_db().await;
         let args = serde_json::json!({
-            "action": "message",
-            "target": "Echo",
-            "text": "ping",
-            "wait_for_result": false,
-            "_context": { "session_id": session_id.to_string() },
+            "action": "ask",
+            "target": "Bob",
+            "text": "hi",
+            "_context": { "session_id": Uuid::new_v4().to_string() },
         });
-
-        let start = Instant::now();
-        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
-        let elapsed = start.elapsed();
-
-        assert!(
-            out.contains("\"status\":\"sent\"") && out.contains("fire-and-forget"),
-            "expected fire-and-forget sent status, got: {out}"
-        );
-        // Echo task sleeps 20ms before writing last_result, but with
-        // wait_for_result=false we should return well before any wait_for_agent_result
-        // poll tick (1s). A 500ms ceiling gives plenty of slack on slow CI.
-        assert!(
-            elapsed < Duration::from_millis(500),
-            "fire-and-forget took too long: {:?}",
-            elapsed
-        );
+        let out = handle_agent_ask(
+            None,
+            None,
+            &db,
+            "Caller",
+            &args,
+            AgentToolTimeouts::legacy_defaults(),
+        )
+        .await;
+        assert!(out.contains("session_pools not available"), "got: {out}");
     }
 
-    // ── AgentToolTimeouts plumbing ──────────────────────────────────────────
-    //
-    // Verify that a custom (very short) `message_wait_for_idle` deadline
-    // surfaces a "did not become idle" error — i.e., the value is actually
-    // threaded through to `wait_until_idle` rather than ignored in favour of a
-    // hardcoded constant.
-
+    /// `wait_for_idle` deadline must come from the per-call `AgentToolTimeouts`,
+    /// not a hardcoded constant. We force a target into PROCESSING and never let
+    /// it return — the call must error out fast (~1s) using the configured value.
     #[tokio::test]
-    async fn message_wait_for_idle_uses_configured_timeout() {
+    async fn ask_wait_for_idle_uses_configured_timeout() {
         let pools = empty_pools();
         let session_id = Uuid::new_v4();
+        let db = fake_db().await;
 
-        // Spawn a stub agent already marked PROCESSING with a frozen task —
-        // it will never enter IDLE on its own, so `wait_until_idle` must
-        // time out using the configured (1s) deadline rather than the old
-        // hardcoded 60s.
         {
             let mut pw = pools.write().await;
             let mut pool = SessionAgentPool::new(session_id);
             let echo = spawn_echo_agent("Frozen");
             // Force PROCESSING and never let the echo task return to IDLE
-            // (tx is dropped when LiveAgent is, so we keep the task alive
-            // by never sending a message; status stays PROCESSING forever).
+            // (we never send a message; status stays PROCESSING forever).
             echo.status.store(STATUS_PROCESSING, Ordering::Release);
             pool.insert(echo);
             pw.insert(session_id, pool);
         }
 
         let args = serde_json::json!({
-            "action": "message",
+            "action": "ask",
             "target": "Frozen",
             "text": "ping",
             "_context": { "session_id": session_id.to_string() },
@@ -911,7 +825,15 @@ mod tests {
         };
 
         let start = Instant::now();
-        let out = handle_agent_message(Some(&pools), &args, timeouts).await;
+        let out = handle_agent_ask(
+            Some(&pools),
+            None,
+            &db,
+            "Caller",
+            &args,
+            timeouts,
+        )
+        .await;
         let elapsed = start.elapsed();
 
         assert!(
@@ -923,6 +845,47 @@ mod tests {
             elapsed < Duration::from_secs(5),
             "wait_for_idle deadline ignored — elapsed = {:?}",
             elapsed
+        );
+    }
+
+    /// `fresh=true` against a non-existent target must not error — it should
+    /// tolerate "not found" and proceed to the spawn path. Without an
+    /// `AgentMap` we won't get past spawn, but the failure mode must be the
+    /// agent_map error, NOT a kill error.
+    #[tokio::test]
+    async fn ask_fresh_tolerates_missing_target() {
+        let pools = empty_pools();
+        let session_id = Uuid::new_v4();
+        let db = fake_db().await;
+
+        // Empty pool — no live agents. fresh=true should be a no-op here.
+        {
+            let mut pw = pools.write().await;
+            pw.insert(session_id, SessionAgentPool::new(session_id));
+        }
+
+        let args = serde_json::json!({
+            "action": "ask",
+            "target": "Ghost",
+            "text": "hello",
+            "fresh": true,
+            "_context": { "session_id": session_id.to_string() },
+        });
+        // No agent_map — the spawn path will fail with "agent_map not available",
+        // which proves we got past the fresh-kill phase without erroring on
+        // "not found".
+        let out = handle_agent_ask(
+            Some(&pools),
+            None,
+            &db,
+            "Caller",
+            &args,
+            AgentToolTimeouts::legacy_defaults(),
+        )
+        .await;
+        assert!(
+            out.contains("agent_map not available"),
+            "fresh=true should pass through to spawn path; got: {out}"
         );
     }
 }

@@ -180,42 +180,34 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "agent".to_string(),
-            description: "Run another agent and get the result. By default blocks until the agent completes (may take several minutes). \
-                Actions: 'run' — run an agent with a task and return result (blocks); \
-                'run' with mode='async' — start agent without waiting (for parallel spawning); \
-                'collect' — wait for an async agent to complete and return result (blocks); \
-                'message' — send a follow-up message to a running agent; by default blocks until the target processes the message and returns its result, consuming your turn for up to 300 seconds while the target processes. Pass wait_for_result=false for fire-and-forget broadcasts (returns immediately after delivery); \
-                'status' — check agent status; \
-                'kill' — terminate an agent.".to_string(),
+            description: "Talk to a peer agent and get its answer. \
+                'ask' — give the peer a task or follow-up question and wait for the result \
+                (auto-spawns if the peer is idle, continues the dialog if it is alive, \
+                pass fresh=true to reset). \
+                'status' — inspect what peers are doing. \
+                'kill' — free a peer's slot. \
+                For parallel fan-out, emit multiple 'ask' calls in a single tool batch — \
+                the engine runs them concurrently.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["run", "message", "status", "kill", "collect"],
+                        "enum": ["ask", "status", "kill"],
                         "description": "Action to perform"
                     },
                     "target": {
                         "type": "string",
-                        "description": "Agent name"
-                    },
-                    "task": {
-                        "type": "string",
-                        "description": "Task description (for run)"
+                        "description": "Agent name (required for ask & kill, optional for status)"
                     },
                     "text": {
                         "type": "string",
-                        "description": "Message text (for message)"
+                        "description": "Message / task text (required for ask)"
                     },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["sync", "async"],
-                        "description": "For run: 'sync' (default) blocks until result, 'async' returns immediately"
-                    },
-                    "wait_for_result": {
+                    "fresh": {
                         "type": "boolean",
-                        "description": "For message: when true (default), blocks until the target finishes processing and returns its result. Set to false for fire-and-forget broadcast (returns immediately after the message is delivered).",
-                        "default": true
+                        "description": "For ask: when true, kill any existing instance of target first and start fresh. Default: false (continue existing dialog if peer is alive).",
+                        "default": false
                     }
                 },
                 "required": ["action"]
@@ -1072,6 +1064,62 @@ mod tests {
             assert!(
                 names.contains(&expected),
                 "{expected:?} missing from all_system_tool_names()"
+            );
+        }
+    }
+
+    /// Pin the agent tool schema after the run/message/collect → ask merger.
+    /// Catches accidental reintroduction of the old action enum or params.
+    #[test]
+    fn agent_action_enum_is_three_values() {
+        let groups = ToolGroups {
+            git: false,
+            tool_management: false,
+            skill_editing: false,
+            session_tools: false,
+        };
+        let ctx = ToolDefsContext {
+            is_base: false,
+            groups: &groups,
+            default_timezone: "UTC",
+            has_sandbox: true,
+            browser_renderer_url: "disabled",
+        };
+        let tools = build_internal_tool_definitions(&ctx);
+        let agent = tools
+            .iter()
+            .find(|t| t.name == "agent")
+            .expect("agent tool present");
+
+        let actions = agent
+            .input_schema
+            .pointer("/properties/action/enum")
+            .and_then(|v| v.as_array())
+            .expect("action enum present");
+        let names: Vec<&str> = actions.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["ask", "status", "kill"],
+            "agent action enum drift — must be exactly ['ask', 'status', 'kill']"
+        );
+
+        // Removed params must not be present.
+        let props = agent
+            .input_schema
+            .pointer("/properties")
+            .and_then(|v| v.as_object())
+            .expect("agent properties");
+        for removed in ["task", "mode", "wait_for_result"] {
+            assert!(
+                !props.contains_key(removed),
+                "{removed:?} must be removed from agent tool schema"
+            );
+        }
+        // New params must be present.
+        for required in ["target", "text", "fresh"] {
+            assert!(
+                props.contains_key(required),
+                "{required:?} must exist in agent tool schema"
             );
         }
     }

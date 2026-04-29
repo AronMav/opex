@@ -106,11 +106,11 @@ pub fn enrich_tool_args(
 ///
 /// # Timeouts
 /// Non-`agent` tool calls are wrapped in a 120s outer timeout. The `agent`
-/// tool has authoritative internal timeouts (sync `message` waits up to
-/// `MESSAGE_WAIT_FOR_IDLE_TIMEOUT` plus `MESSAGE_RESULT_TIMEOUT`, sync `run`
-/// blocks 300s; see `pipeline::agent_tool`) and is wrapped in a strictly
-/// larger 600s outer safety net (`AGENT_SAFETY_TIMEOUT`). Under normal
-/// conditions the inner caps fire first; the outer wrapper exists as
+/// tool has authoritative internal timeouts (`ask` waits up to
+/// `message_wait_for_idle_secs` for idle plus `message_result_secs` for the
+/// result; see `pipeline::agent_tool`) and is wrapped in a strictly larger
+/// outer safety net read from `agent_safety_timeout()` (default 600s). Under
+/// normal conditions the inner caps fire first; the outer wrapper exists as
 /// defense-in-depth so that a future sync action which bypasses the
 /// deadline-enforced waits cannot hang the engine indefinitely.
 #[allow(clippy::too_many_arguments)]
@@ -219,10 +219,11 @@ pub async fn execute_tool_calls_partitioned(
                 let args = enriched[i].clone();
                 async move {
                     // The `agent` tool owns authoritative internal timeouts
-                    // (sync run / sync message — see `pipeline::agent_tool`).
-                    // The outer wrapper here is a defense-in-depth safety net
-                    // sized strictly larger than every inner cap; under normal
-                    // conditions the inner timeouts fire first.
+                    // (ask = wait_for_idle + wait_for_result; see
+                    // `pipeline::agent_tool`). The outer wrapper here is a
+                    // defense-in-depth safety net sized strictly larger than
+                    // every inner cap; under normal conditions the inner
+                    // timeouts fire first.
                     let timeout = if name == "agent" {
                         agent_safety_timeout
                     } else {

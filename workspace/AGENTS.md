@@ -68,5 +68,5 @@ Creating YAML tools, toolgate providers/routers, and channel adapters is the **b
 
 ```
 # Find base agent first, then delegate
-agent(action="run", target="<base_agent_name>", task="<description>")
+agent(action="ask", target="<base_agent_name>", text="<description>")
 ```

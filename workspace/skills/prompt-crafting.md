@@ -17,7 +17,7 @@ priority: 4
 
 ### When to apply
 
-- Formulating a task for a target agent via `agent(action="run")`
+- Formulating a task for a target agent via `agent(action="ask")`
 - User asks to compose a prompt or instruction
 - Need to improve the quality of an LLM response
 
@@ -54,7 +54,7 @@ Respond in the format:
 **Confidence**: high/medium/low
 ```
 
-### For agent tool tasks (agent(action="run"))
+### For agent tool tasks (agent(action="ask"))
 
 - Provide full context — the target agent does not see the conversation history
 - Specify the response format — the target agent must know what to return
