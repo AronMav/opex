@@ -327,7 +327,7 @@ pub async fn execute<S: EventSink>(
             content: partial.clone(),
             tool_calls: Some(response.tool_calls.clone()),
             tool_call_id: None,
-            thinking_blocks: vec![],
+            thinking_blocks: response.thinking_blocks.clone(),
         });
         context_chars += partial.chars().count();
 

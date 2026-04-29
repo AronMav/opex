@@ -1648,6 +1648,18 @@ pub(super) fn messages_to_openai_format(messages: &[Message]) -> Vec<serde_json:
                             serde_json::Value::Array(tc_json),
                         );
 
+                        // DeepSeek: pass reasoning_content back on subsequent turns
+                        if !msg.thinking_blocks.is_empty() {
+                            let reasoning: String = msg.thinking_blocks.iter()
+                                .map(|tb| tb.thinking.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            m.insert(
+                                "reasoning_content".to_string(),
+                                serde_json::Value::String(reasoning),
+                            );
+                        }
+
                         return serde_json::Value::Object(m);
                     }
 
@@ -1660,6 +1672,18 @@ pub(super) fn messages_to_openai_format(messages: &[Message]) -> Vec<serde_json:
                 m.insert(
                     "tool_call_id".to_string(),
                     serde_json::Value::String(tool_call_id.clone()),
+                );
+            }
+
+            // DeepSeek: pass reasoning_content back for assistant messages that have thinking blocks
+            if msg.role == MessageRole::Assistant && !msg.thinking_blocks.is_empty() {
+                let reasoning: String = msg.thinking_blocks.iter()
+                    .map(|tb| tb.thinking.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                m.insert(
+                    "reasoning_content".to_string(),
+                    serde_json::Value::String(reasoning),
                 );
             }
 

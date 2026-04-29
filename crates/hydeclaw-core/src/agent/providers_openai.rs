@@ -499,6 +499,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
         // Parse SSE stream: accumulate content (streamed) + tool calls (buffered)
         let mut full_content = String::new();
+        let mut full_reasoning = String::new(); // DeepSeek extended thinking (reasoning_content)
         let mut buffer = String::new();
         let mut thinking_filter = crate::agent::thinking::ThinkingFilter::new();
         // Indexed by tool_call index: (id, name, arguments)
@@ -563,6 +564,10 @@ impl LlmProvider for OpenAiCompatibleProvider {
                                     if !filtered.is_empty() {
                                         chunk_tx.send(filtered).ok();
                                     }
+                                }
+                                // Capture DeepSeek reasoning_content (not streamed to UI)
+                                if let Some(ref reasoning) = choice.delta.reasoning_content {
+                                    full_reasoning.push_str(reasoning);
                                 }
                                 // Accumulate tool call deltas by index
                                 for tc in &choice.delta.tool_calls {
@@ -699,7 +704,14 @@ impl LlmProvider for OpenAiCompatibleProvider {
             finish_reason,
             tools_used: vec![],
             iterations: 0,
-            thinking_blocks: vec![],
+            thinking_blocks: if full_reasoning.is_empty() {
+                vec![]
+            } else {
+                vec![hydeclaw_types::ThinkingBlock {
+                    thinking: full_reasoning,
+                    signature: String::new(),
+                }]
+            },
         })
     }
 
@@ -965,6 +977,8 @@ struct StreamChoice {
 #[derive(Debug, Deserialize)]
 struct StreamDelta {
     content: Option<String>,
+    /// DeepSeek extended thinking — must be captured and passed back on subsequent turns.
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<StreamToolCallDelta>,
 }

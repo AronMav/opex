@@ -281,7 +281,7 @@ impl AgentEngine {
                 content: cleaned_content.clone(),
                 tool_calls: Some(response.tool_calls.clone()),
                 tool_call_id: None,
-                thinking_blocks: vec![],
+                thinking_blocks: response.thinking_blocks.clone(),
             });
             context_chars += cleaned_content.chars().count();
 
