@@ -171,7 +171,7 @@ describe("Mutation hooks invalidate correct keys", () => {
   // Actual invalidation is tested by checking the hook source
   // returns a useMutation wrapper (verified by "is a function" test above).
 
-  const MUTATIONS: [string, string][] = [
+  const MUTATIONS: [string, string | null][] = [
     ["useUpsertSecret",       "secrets"],
     ["useDeleteSecret",       "secrets"],
     ["useUpdateAgent",        "agents"],
@@ -188,16 +188,15 @@ describe("Mutation hooks invalidate correct keys", () => {
     ["useDeleteCronJob",      "cron"],
     ["useRunCronJob",         "cron"],
     ["useResolveApproval",    "approvals"],
-    ["useRestartService",     "services" as any],  // no qk entry, just verify hook exists
-    ["useRebuildService",     "services" as any],
+    ["useRestartService",     null],  // no qk entry, just verify hook exists
+    ["useRebuildService",     null],
   ];
 
   for (const [hookName, keyName] of MUTATIONS) {
-    it(`${hookName} is exported and targets ${keyName}`, () => {
+    it(`${hookName} is exported and targets ${keyName ?? "no query key"}`, () => {
       expect(queries).toHaveProperty(hookName);
       expect(typeof (queries as Record<string, unknown>)[hookName]).toBe("function");
-      // Service hooks don't invalidate a specific query key
-      if (keyName && keyName in queries.qk) {
+      if (keyName !== null && keyName in queries.qk) {
         expect(queries.qk).toHaveProperty(keyName);
       }
     });

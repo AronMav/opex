@@ -158,13 +158,14 @@ describe("refreshIfStale", () => {
   it("calls restore when lastFetched is stale (>60s)", async () => {
     useAuthStore.setState({ token: "tok", lastFetched: Date.now() - 120_000 });
 
-    mockFetch
-      .mockResolvedValueOnce(jsonResponse({}))
-      .mockResolvedValueOnce(jsonResponse({ agents: ["X"], version: "v2" }));
+    // Resolve once fetch is actually called so we don't rely on arbitrary timers
+    let resolveFetch!: (v: Response) => void;
+    const fetchCalled = new Promise<Response>((res) => { resolveFetch = res; });
+    mockFetch.mockImplementationOnce(() => { resolveFetch(jsonResponse({ agents: [{ name: "X" }] })); return fetchCalled; });
+    mockFetch.mockResolvedValueOnce(jsonResponse({ version: "v2" }));
 
     useAuthStore.getState().refreshIfStale();
-    // Wait for async restore
-    await new Promise((r) => setTimeout(r, 50));
+    await fetchCalled;
 
     expect(mockFetch).toHaveBeenCalled();
   });
