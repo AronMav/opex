@@ -232,11 +232,39 @@ pub(crate) struct SessionLifecycleGuard {
     pub session_id: Uuid,
     pub outcome: SessionOutcome,
     bg_tasks: Option<std::sync::Arc<tokio_util::task::TaskTracker>>,
+    /// Agent that owns this session. Required for the Drop-path
+    /// `session_failures` insert (NOT NULL column). When `None`, Drop
+    /// can still mark the session as failed but skips the structured
+    /// failure row (best-effort — the WAL `failed` event still records).
+    agent_id: Option<String>,
+    /// Set to `true` once a structured failure row has been (or will be)
+    /// recorded by an explicit code path — namely:
+    ///
+    ///   - `fail(reason)`: caller (`finalize::finalize`) immediately spawns
+    ///     `spawn_record_failure` after this call;
+    ///   - `done()` / `interrupt()`: not a failure outcome, so Drop must
+    ///     not synthesize one even if its in-memory transition happened to
+    ///     fail at the DB level (outcome left `Running`).
+    ///
+    /// When `false` and Drop fires the fallback `mark-failed` path, we also
+    /// enqueue a `session_failures` insert with
+    /// `failure_kind = "guard_dropped"` so cancelled / early-exit sessions
+    /// stop being invisible to operators (previously only `session_events`
+    /// recorded "guard dropped (early exit)" while `session_failures`
+    /// stayed empty).
+    recorded: bool,
 }
 
 impl SessionLifecycleGuard {
     pub fn new(db: PgPool, session_id: Uuid) -> Self {
-        Self { db, session_id, outcome: SessionOutcome::Running, bg_tasks: None }
+        Self {
+            db,
+            session_id,
+            outcome: SessionOutcome::Running,
+            bg_tasks: None,
+            agent_id: None,
+            recorded: false,
+        }
     }
 
     pub fn with_tracker(mut self, tracker: std::sync::Arc<tokio_util::task::TaskTracker>) -> Self {
@@ -244,10 +272,25 @@ impl SessionLifecycleGuard {
         self
     }
 
+    /// Attach the owning agent's id. Required for the Drop-path
+    /// `session_failures` row (`agent_id` is NOT NULL in the schema).
+    pub fn with_agent(mut self, agent_id: impl Into<String>) -> Self {
+        self.agent_id = Some(agent_id.into());
+        self
+    }
+
     /// Mark session as done in DB. Sets outcome to `Done` only on DB success;
     /// on failure logs a warning and leaves `Running` so `Drop` fires fallback.
+    ///
+    /// Also flips `recorded = true` unconditionally so the Drop fallback never
+    /// synthesizes a fake `session_failures` row for a session the caller
+    /// explicitly considered successful — even if the DB transition failed.
     pub async fn done(&mut self) {
         warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Done, self.session_id);
+        // Set BEFORE DB call: if the DB write fails the outcome stays `Running`
+        // and Drop will run the mark-failed fallback, but we must not generate
+        // a structured failure row for a "done" outcome.
+        self.recorded = true;
         match crate::db::sessions::set_session_run_status(&self.db, self.session_id, "done").await
         {
             Ok(()) => {
@@ -266,8 +309,15 @@ impl SessionLifecycleGuard {
 
     /// Mark session as failed in DB with a reason. Sets outcome to `Failed` only on
     /// DB success; on failure logs a warning and leaves `Running` so `Drop` fires fallback.
+    ///
+    /// Sets `recorded = true` unconditionally because `finalize::finalize` calls
+    /// `spawn_record_failure` immediately after this returns — the failure row is
+    /// already in flight, so Drop must not insert another.
     pub async fn fail(&mut self, reason: &str) {
         warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Failed, self.session_id);
+        // See doc comment above — flipping unconditionally protects against
+        // a duplicate row when the DB transition fails.
+        self.recorded = true;
         match crate::db::sessions::set_session_run_status(&self.db, self.session_id, "failed")
             .await
         {
@@ -288,8 +338,13 @@ impl SessionLifecycleGuard {
     }
 
     /// Mark session as interrupted (client disconnected / user cancel).
+    ///
+    /// Like `done()`: interrupt is not a failure, so flip `recorded = true`
+    /// unconditionally to prevent the Drop fallback from synthesizing a
+    /// structured failure row.
     pub async fn interrupt(&mut self, reason: &str) {
         warn_invalid_transition(Some(SessionStatus::Running), SessionStatus::Interrupted, self.session_id);
+        self.recorded = true;
         match crate::db::sessions::set_session_run_status(&self.db, self.session_id, "interrupted").await {
             Ok(()) => {
                 self.outcome = SessionOutcome::Interrupted;
@@ -318,6 +373,10 @@ impl Drop for SessionLifecycleGuard {
             );
             let db = self.db.clone();
             let sid = self.session_id;
+            // Snapshot agent_id + recorded so the async block doesn't borrow
+            // `self` after Drop returns (Drop is sync — work happens via spawn).
+            let agent_id = self.agent_id.clone();
+            let already_recorded = self.recorded;
             let fut = async move {
                 // Conditional update: only transition `'running'` → `'failed'`.
                 // The chat handler's cancel-grace path may have already written
@@ -341,8 +400,8 @@ impl Drop for SessionLifecycleGuard {
                         );
                     }
                     Ok(_) => {
-                        let payload =
-                            serde_json::json!({ "reason": "guard dropped (early exit)" });
+                        let reason = "guard dropped (early exit)";
+                        let payload = serde_json::json!({ "reason": reason });
                         if let Err(e) =
                             crate::db::session_wal::log_event(&db, sid, "failed", Some(&payload))
                                 .await
@@ -352,6 +411,47 @@ impl Drop for SessionLifecycleGuard {
                                 session_id = %sid,
                                 "failed to log WAL failed event in Drop guard"
                             );
+                        }
+
+                        // Structured `session_failures` row — best-effort.
+                        // Skipped when the explicit failure path
+                        // (`finalize::finalize` Failed branch) already spawned
+                        // its own `spawn_record_failure`, signalled by
+                        // `recorded == true` on the guard before Drop fired.
+                        // Also skipped when we don't know the agent (NOT NULL
+                        // column) — the WAL event still serves as a forensic
+                        // breadcrumb in that case.
+                        if !already_recorded {
+                            if let Some(agent) = agent_id {
+                                let input = crate::db::session_failures::NewSessionFailure {
+                                    session_id: sid,
+                                    agent_id: agent,
+                                    failure_kind: "guard_dropped".to_string(),
+                                    error_message: reason.to_string(),
+                                    last_tool_name: None,
+                                    last_tool_output: None,
+                                    llm_provider: None,
+                                    llm_model: None,
+                                    iteration_count: None,
+                                    duration_secs: None,
+                                    context_json: Some(serde_json::json!({
+                                        "kind": "guard_dropped",
+                                        "source": "session_lifecycle_drop",
+                                    })),
+                                };
+                                if let Err(e) = crate::db::session_failures::record_session_failure(&db, input).await {
+                                    tracing::warn!(
+                                        error = %e,
+                                        session_id = %sid,
+                                        "failed to record session_failures row from Drop guard"
+                                    );
+                                }
+                            } else {
+                                tracing::debug!(
+                                    session_id = %sid,
+                                    "Drop guard skipped session_failures insert: agent_id not set on guard"
+                                );
+                            }
                         }
                     }
                     Err(e) => tracing::warn!(
@@ -414,6 +514,143 @@ mod tests {
         drop(guard);
         // After drop, one task was submitted to the tracker.
         assert!(!tracker.is_empty());
+    }
+
+    /// Drop on a still-Running guard with `with_agent` set inserts a
+    /// `session_failures` row with `failure_kind = 'guard_dropped'` —
+    /// covering the "cancelled mid-stream / SSE disconnect" path that
+    /// previously left `session_failures` empty.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lifecycle_guard_drop_records_session_failure(pool: sqlx::PgPool) {
+        use std::sync::Arc;
+        use tokio_util::task::TaskTracker;
+
+        let session_id = crate::db::sessions::create_new_session(
+            &pool,
+            "test-agent",
+            "test-user",
+            "test-channel",
+        )
+        .await
+        .unwrap();
+
+        let tracker = Arc::new(TaskTracker::new());
+        {
+            // Build the guard, attach agent + tracker, then drop without
+            // calling done/fail/interrupt — simulates cancellation / early-exit.
+            let _guard = SessionLifecycleGuard::new(pool.clone(), session_id)
+                .with_tracker(tracker.clone())
+                .with_agent("test-agent");
+        } // <-- Drop fires here
+
+        // Wait for the spawned task to flush.
+        tracker.close();
+        tracker.wait().await;
+
+        // 1. Session marked failed.
+        let status: String =
+            sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "failed");
+
+        // 2. WAL event recorded.
+        let event_type: String = sqlx::query_scalar(
+            "SELECT event_type FROM session_events WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(session_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(event_type, "failed");
+
+        // 3. session_failures row inserted with the right shape.
+        let rows = crate::db::session_failures::get_session_failures_for_session(&pool, session_id)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "exactly one failure row recorded");
+        let row = &rows[0];
+        assert_eq!(row.failure_kind, "guard_dropped");
+        assert_eq!(row.agent_id, "test-agent");
+        assert_eq!(row.error_message, "guard dropped (early exit)");
+    }
+
+    /// After `fail(reason)` the `recorded` flag is set, so even if Drop fires
+    /// the fallback (e.g. because the DB transition failed and outcome stayed
+    /// Running) it must NOT insert a duplicate `session_failures` row — the
+    /// caller (`finalize::finalize`) is responsible for that path via
+    /// `spawn_record_failure`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lifecycle_guard_fail_then_drop_does_not_duplicate(pool: sqlx::PgPool) {
+        use std::sync::Arc;
+        use tokio_util::task::TaskTracker;
+
+        let session_id = crate::db::sessions::create_new_session(
+            &pool,
+            "test-agent",
+            "test-user",
+            "test-channel",
+        )
+        .await
+        .unwrap();
+
+        let tracker = Arc::new(TaskTracker::new());
+        {
+            let mut guard = SessionLifecycleGuard::new(pool.clone(), session_id)
+                .with_tracker(tracker.clone())
+                .with_agent("test-agent");
+            guard.fail("explicit failure").await;
+            // Drop fires here — but recorded == true means no extra row.
+        }
+
+        tracker.close();
+        tracker.wait().await;
+
+        let rows = crate::db::session_failures::get_session_failures_for_session(&pool, session_id)
+            .await
+            .unwrap();
+        assert!(
+            rows.is_empty(),
+            "explicit fail() leaves session_failures recording to finalize::spawn_record_failure; Drop must not double-insert (got {} rows)",
+            rows.len()
+        );
+    }
+
+    /// `done()` and `interrupt()` are not failures: even if Drop's fallback
+    /// path were to fire (it won't here because outcome != Running after a
+    /// successful transition), the `recorded` flag would still suppress an
+    /// erroneous failure row.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn lifecycle_guard_done_drop_records_no_failure(pool: sqlx::PgPool) {
+        use std::sync::Arc;
+        use tokio_util::task::TaskTracker;
+
+        let session_id = crate::db::sessions::create_new_session(
+            &pool,
+            "test-agent",
+            "test-user",
+            "test-channel",
+        )
+        .await
+        .unwrap();
+
+        let tracker = Arc::new(TaskTracker::new());
+        {
+            let mut guard = SessionLifecycleGuard::new(pool.clone(), session_id)
+                .with_tracker(tracker.clone())
+                .with_agent("test-agent");
+            guard.done().await;
+        }
+
+        tracker.close();
+        tracker.wait().await;
+
+        let rows = crate::db::session_failures::get_session_failures_for_session(&pool, session_id)
+            .await
+            .unwrap();
+        assert!(rows.is_empty(), "done() must not produce a failure row");
     }
 }
 

@@ -106,9 +106,13 @@ pub async fn bootstrap<S: EventSink>(
     let _ = sink.emit(PipelineEvent::Phase(ProcessingPhase::Thinking)).await;
 
     // 4. Lifecycle guard (kept in Option so the adapter can .take() it for finalize)
+    //    `with_agent` is required for the Drop-path `session_failures` insert
+    //    (NOT NULL column). Without it the Drop fallback still marks the session
+    //    `failed` in `sessions` + WAL but skips the structured failure row.
     let lifecycle_guard = Some(
         SessionLifecycleGuard::new(engine.cfg().db.clone(), session_id)
-            .with_tracker(engine.state().bg_tasks.clone()),
+            .with_tracker(engine.state().bg_tasks.clone())
+            .with_agent(engine.cfg().agent.name.clone()),
     );
 
     // 5. ProcessingGuard — broadcasts "typing" via ui_event_tx (independent of sink)

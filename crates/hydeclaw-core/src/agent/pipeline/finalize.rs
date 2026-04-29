@@ -121,7 +121,12 @@ pub(crate) fn notify_loop_detected(
 /// enum so dashboards / filters can group consistently.
 pub(crate) fn classify_failure_kind(reason: &str) -> &'static str {
     let lower = reason.to_ascii_lowercase();
-    if lower.contains("did not complete within") || lower.contains("timed out waiting") {
+    if lower.contains("guard dropped") || lower.contains("early exit") {
+        // Synthesized by `SessionLifecycleGuard::Drop` when the engine task
+        // exited without reaching `lifecycle_guard.fail()` (cancellation,
+        // SSE disconnect, internal timeout cascading, panic-in-tokio-spawn).
+        "guard_dropped"
+    } else if lower.contains("did not complete within") || lower.contains("timed out waiting") {
         "sub_agent_timeout"
     } else if lower.starts_with("loop_detected")
         || lower.contains("loop_detected")
@@ -660,6 +665,10 @@ mod tests {
     #[test]
     fn classify_failure_kind_matrix() {
         use super::classify_failure_kind;
+        assert_eq!(
+            classify_failure_kind("guard dropped (early exit)"),
+            "guard_dropped"
+        );
         assert_eq!(
             classify_failure_kind("agent did not complete within 30s"),
             "sub_agent_timeout"
