@@ -174,6 +174,53 @@ describe("formToPayload", () => {
     const payload = formToPayload({ ...base, dailyBudgetTokens: "0" });
     expect(payload.daily_budget_tokens).toBe(0);
   });
+
+  it('temperature: "NaN" → falls back to 1.0', () => {
+    const payload = formToPayload({ ...base, temperature: "NaN" });
+    expect(payload.temperature).toBe(1.0);
+  });
+
+  it('temperature: "abc" → falls back to 1.0', () => {
+    const payload = formToPayload({ ...base, temperature: "abc" });
+    expect(payload.temperature).toBe(1.0);
+  });
+
+  it("compEnabled: true maps compaction fields correctly", () => {
+    const payload = formToPayload({
+      ...base,
+      compEnabled: true,
+      compThreshold: "0.75",
+      compPreserveLastN: "5",
+    });
+    expect(payload.compaction).not.toBeNull();
+    expect(payload.compaction!.threshold).toBe(0.75);
+    expect(payload.compaction!.preserve_last_n).toBe(5);
+  });
+
+  it("compEnabled: false → compaction: null", () => {
+    const payload = formToPayload({ ...base, compEnabled: false });
+    expect(payload.compaction).toBeNull();
+  });
+
+  it("tlEnabled: false → tool_loop: null", () => {
+    const payload = formToPayload({ ...base, tlEnabled: false });
+    expect(payload.tool_loop).toBeNull();
+  });
+
+  it("sessionEnabled: false → session: null", () => {
+    const payload = formToPayload({ ...base, sessionEnabled: false });
+    expect(payload.session).toBeNull();
+  });
+
+  it("approvalEnabled: false → approval: null", () => {
+    const payload = formToPayload({ ...base, approvalEnabled: false });
+    expect(payload.approval).toBeNull();
+  });
+
+  it("hbEnabled: false → heartbeat: null", () => {
+    const payload = formToPayload({ ...base, hbEnabled: false });
+    expect(payload.heartbeat).toBeNull();
+  });
 });
 
 // ── detailToForm tests ──────────────────────────────────────────────────────
