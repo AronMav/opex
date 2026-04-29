@@ -4,6 +4,35 @@ import { parseContentParts } from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
 
+// ── Tool ordering helper ─────────────────────────────────────────────────────
+
+/**
+ * Sort consecutive runs of tool parts back into their declared order.
+ * Parallel tool calls complete (and are saved to DB) in execution order, not
+ * declaration order — so search_web_fresh may appear before agents_list even
+ * when agents_list was declared first in tool_calls[].
+ * Text / file / rich-card parts are left in place as separators between groups.
+ */
+function sortToolGroups(parts: MessagePart[], orderMap: Map<string, number>): MessagePart[] {
+  let changed = false;
+  const result: MessagePart[] = [];
+  let i = 0;
+  while (i < parts.length) {
+    if (parts[i].type !== "tool") { result.push(parts[i++]); continue; }
+    const start = i;
+    while (i < parts.length && parts[i].type === "tool") i++;
+    const group = parts.slice(start, i);
+    const sorted = [...group].sort((a, b) => {
+      const ia = a.type === "tool" ? (orderMap.get(a.toolCallId) ?? Infinity) : Infinity;
+      const ib = b.type === "tool" ? (orderMap.get(b.toolCallId) ?? Infinity) : Infinity;
+      return ia - ib;
+    });
+    if (sorted.some((p, j) => p !== group[j])) changed = true;
+    result.push(...sorted);
+  }
+  return changed ? result : parts;
+}
+
 // ── History conversion (MessageRow[] -> ChatMessage[]) ───────────────────────
 
 /**
@@ -30,15 +59,22 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
   let lastAssistantMsg: ChatMessage | null = null;
   let lastAgentId: string | undefined = undefined;
 
-  // Tool call map for resolving tool names/inputs from the main assistant record
+  // Tool call map for resolving tool names/inputs from the main assistant record,
+  // and order map for sorting parallel tool results back into declared order.
+  // Parallel tool calls complete out of order (fastest first), so DB insertion
+  // timestamps don't match the declared order in tool_calls[].
   const toolCallMap = new Map<string, { name: string; arguments: unknown }>();
+  const toolCallOrderMap = new Map<string, number>();
   for (const m of filtered) {
     if (m.role === "assistant" && m.tool_calls) {
       const calls = m.tool_calls as Array<{ id: string; name: string; arguments?: unknown }>;
       if (Array.isArray(calls)) {
-        for (const tc of calls) {
-          if (tc.id) toolCallMap.set(tc.id, { name: tc.name || "tool", arguments: tc.arguments ?? {} });
-        }
+        calls.forEach((tc, idx) => {
+          if (tc.id) {
+            toolCallMap.set(tc.id, { name: tc.name || "tool", arguments: tc.arguments ?? {} });
+            toolCallOrderMap.set(tc.id, idx);
+          }
+        });
       }
     }
   }
@@ -141,8 +177,13 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
 
   if (lastAssistantMsg) messages.push(lastAssistantMsg);
 
-  // Final pass: filter empty messages and stabilize referential identity
-  return messages.filter(m => m.parts.length > 0);
+  // Final pass: filter empty messages, then sort tool parts within each consecutive
+  // group back into declared order (parallel tool calls complete out of order in DB).
+  return messages.filter(m => m.parts.length > 0).map(m => {
+    if (m.role !== "assistant") return m;
+    const sorted = sortToolGroups(m.parts, toolCallOrderMap);
+    return sorted === m.parts ? m : { ...m, parts: sorted };
+  });
 }
 
 /**
