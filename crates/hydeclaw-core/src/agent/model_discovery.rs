@@ -88,38 +88,6 @@ async fn fetch_openai_models(url: &str, api_key: Option<&str>) -> Result<Vec<Mod
     Ok(models)
 }
 
-/// Fetch models from Ollama `/api/tags`.
-async fn fetch_ollama_models(base_url: &str) -> Result<Vec<ModelInfo>> {
-    reject_dangerous_ports(base_url)?;
-    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()?;
-
-    let resp = client.get(&url).send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("ollama returned {}", resp.status());
-    }
-
-    let body: serde_json::Value = resp.json().await?;
-    let models = body["models"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| {
-                    let name = m["name"].as_str()?.to_string();
-                    Some(ModelInfo {
-                        id: name,
-                        owned_by: Some("ollama".to_string()),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    Ok(models)
-}
-
 /// Fetch models from Anthropic `/v1/models` (non-OpenAI format: requires anthropic-version header).
 async fn fetch_anthropic_models(api_key: Option<&str>, base_url: Option<&str>) -> Result<Vec<ModelInfo>> {
     let base = base_url.unwrap_or("https://api.anthropic.com");
@@ -216,13 +184,11 @@ pub async fn discover_models(
             fetch_google_models(key.as_deref(), base_url_override).await
         }
 
-        "ollama" => {
-            let base = base_url_override
-                .map(std::string::ToString::to_string)
-                .or_else(|| std::env::var("OLLAMA_URL").ok())
-                .unwrap_or_else(|| "http://localhost:11434".to_string());
-            fetch_ollama_models(&base).await
-        }
+        // Ollama — discovery disabled. Tier-aware tag conventions
+        // (`:cloud` suffixes, account-specific catalogue) make automatic
+        // listing unreliable. Operators set the model name manually in
+        // each agent's TOML / UI.
+        "ollama" => Ok(Vec::new()),
 
         "openai" | "codex-cli" => {
             let base = base_url_override
@@ -277,13 +243,8 @@ async fn discover_models_with_resolved_key(
         "google" | "gemini" | "gemini-cli" => {
             fetch_google_models(key, base_url_override).await
         }
-        "ollama" => {
-            let base = base_url_override
-                .map(std::string::ToString::to_string)
-                .or_else(|| std::env::var("OLLAMA_URL").ok())
-                .unwrap_or_else(|| "http://localhost:11434".to_string());
-            fetch_ollama_models(&base).await
-        }
+        // Ollama — discovery disabled (see note in `discover_models`).
+        "ollama" => Ok(Vec::new()),
         "openai" | "codex-cli" => {
             let base = base_url_override
                 .map(std::string::ToString::to_string)
