@@ -737,6 +737,44 @@ export default function ProvidersPage() {
                   />
                 )}
 
+                {/* Max retries — hidden for CLI providers */}
+                {!isCli && (
+                  <fieldset className="border rounded-md p-3 space-y-2">
+                    <legend className="text-sm font-medium">
+                      {t("providers.max_retries_section")}
+                    </legend>
+                    <label className="flex items-center justify-between gap-4">
+                      <span className="text-sm">{t("providers.max_retries_label")}</span>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          aria-label={t("providers.max_retries_label")}
+                          value={(form.options as ProviderOptions | undefined)?.max_retries ?? 3}
+                          onChange={(e) => {
+                            const v = Number(e.target.value);
+                            setForm((f) => ({
+                              ...f,
+                              options: {
+                                ...((f.options as ProviderOptions | undefined) ?? {}),
+                                max_retries: v,
+                              },
+                            }));
+                          }}
+                          className="w-24 rounded border bg-background px-2 py-1 text-sm"
+                          min={1}
+                          max={10}
+                        />
+                        {(() => {
+                          const v = (form.options as ProviderOptions | undefined)?.max_retries ?? 3;
+                          return (v < 1 || v > 10) ? (
+                            <span className="text-xs text-destructive">{t("providers.max_retries_error")}</span>
+                          ) : null;
+                        })()}
+                      </div>
+                    </label>
+                  </fieldset>
+                )}
+
                 {/* Test Connection for CLI providers */}
                 {isCli && isEditing && (
                   <div className="space-y-2">

@@ -44,6 +44,8 @@ use serde_json::Value;
 /// `serde_json::Value`) catches typos in known field names — misspelled
 /// keys (e.g., `timeout` instead of `timeouts`) land in `extra` and the
 /// loader emits a WARN log listing unknown keys.
+fn default_max_retries() -> u32 { 3 }
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProviderOptions {
     #[serde(default)]
@@ -55,6 +57,9 @@ pub struct ProviderOptions {
     /// which removed duplicated per-route provider fields.
     #[serde(default)]
     pub prompt_cache: bool,
+    /// Max HTTP retry attempts on transient errors (429/5xx). Default 3, range 1–10.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -99,7 +104,11 @@ impl TimeoutsConfig {
 
 impl ProviderOptions {
     pub fn validate(&self) -> Result<(), String> {
-        self.timeouts.validate()
+        self.timeouts.validate()?;
+        if !(1..=10).contains(&self.max_retries) {
+            return Err(format!("max_retries must be in 1..=10 (got {})", self.max_retries));
+        }
+        Ok(())
     }
 }
 

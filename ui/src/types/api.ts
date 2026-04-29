@@ -243,6 +243,7 @@ export type TimeoutsConfig = {
 export type ProviderOptions = {
   timeouts?: Partial<TimeoutsConfig>;
   api_key_envs?: string[];
+  max_retries?: number;  // 1..=10, default 3
   // Unknown fields land here — UI will preserve them on round-trip.
   [extra: string]: unknown;
 };

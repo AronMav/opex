@@ -34,6 +34,8 @@ pub struct OpenAiCompatibleProvider {
     /// Engine-level shutdown or user cancel flips this; the stream drains and
     /// `chat_stream` surfaces a typed `LlmCallError`.
     cancel: tokio_util::sync::CancellationToken,
+    /// Max HTTP retry attempts on transient errors (429/5xx). Configurable per-provider via UI.
+    max_retries: u32,
 }
 
 impl OpenAiCompatibleProvider {
@@ -97,6 +99,7 @@ impl OpenAiCompatibleProvider {
             max_tokens,
             timeouts,
             cancel,
+            max_retries: opts.max_retries,
         };
 
         if !opts.api_key_envs.is_empty() {
@@ -280,6 +283,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             &api_key,
             &self.provider_name,
             crate::agent::providers_http::RETRYABLE_OPENAI,
+            self.max_retries,
         ).await?;
         let api_resp: ChatCompletionResponse = serde_json::from_str(&body_text)
             .map_err(|e| {
@@ -483,6 +487,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             &body,
             &self.provider_name,
             crate::agent::providers_http::RETRYABLE_OPENAI,
+            self.max_retries,
             move |req| if api_key_clone.is_empty() { req } else { req.bearer_auth(&api_key_clone) },
         )
         .await

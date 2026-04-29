@@ -1042,5 +1042,8 @@
   "providers.timeout_request": "Запрос (не-стриминг)",
   "providers.timeout_stream_inactivity": "Неактивность потока",
   "providers.timeout_stream_max": "Макс. длительность потока",
-  "providers.timeout_error": "должно быть >= {{lo}} и <= {{hi}}"
+  "providers.timeout_error": "должно быть >= {{lo}} и <= {{hi}}",
+  "providers.max_retries_section": "Повторы",
+  "providers.max_retries_label": "Макс. попыток (1–10)",
+  "providers.max_retries_error": "должно быть от 1 до 10"
 }

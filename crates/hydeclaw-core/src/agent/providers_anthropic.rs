@@ -24,6 +24,8 @@ pub struct AnthropicProvider {
     /// Engine-level shutdown or user cancel flips this; the stream drains and
     /// `chat_stream` surfaces a typed `LlmCallError`.
     cancel: tokio_util::sync::CancellationToken,
+    /// Max HTTP retry attempts on transient errors (429/5xx). Configurable per-provider via UI.
+    max_retries: u32,
 }
 
 impl AnthropicProvider {
@@ -77,6 +79,7 @@ impl AnthropicProvider {
             prompt_cache,
             timeouts,
             cancel,
+            max_retries: opts.max_retries,
         };
         Ok(provider)
     }
@@ -114,6 +117,7 @@ impl AnthropicProvider {
             prompt_cache: false,
             timeouts: super::TimeoutsConfig::default(),
             cancel: tokio_util::sync::CancellationToken::new(),
+            max_retries: 3,
         }
     }
 
@@ -347,6 +351,7 @@ impl LlmProvider for AnthropicProvider {
         let body_text = crate::agent::providers_http::retry_http_post_custom(
             &self.client, &url, &body, "anthropic",
             crate::agent::providers_http::RETRYABLE_ANTHROPIC,
+            self.max_retries,
             |req| {
                 let req = req.header("anthropic-version", "2023-06-01");
                 if let Some(ref key) = api_key

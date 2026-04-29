@@ -1043,5 +1043,8 @@
   "providers.timeout_request": "Request (non-streaming)",
   "providers.timeout_stream_inactivity": "Stream inactivity",
   "providers.timeout_stream_max": "Stream max duration",
-  "providers.timeout_error": "must be >= {{lo}} and <= {{hi}}"
+  "providers.timeout_error": "must be >= {{lo}} and <= {{hi}}",
+  "providers.max_retries_section": "Retry",
+  "providers.max_retries_label": "Max retries (1–10)",
+  "providers.max_retries_error": "must be between 1 and 10"
 }

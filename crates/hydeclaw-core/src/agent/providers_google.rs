@@ -23,6 +23,8 @@ pub struct GoogleProvider {
     /// Engine-level shutdown or user cancel flips this; the stream drains and
     /// `chat_stream` surfaces a typed `LlmCallError`.
     cancel: tokio_util::sync::CancellationToken,
+    /// Max HTTP retry attempts on transient errors (429/5xx). Configurable per-provider via UI.
+    max_retries: u32,
 }
 
 impl GoogleProvider {
@@ -40,7 +42,7 @@ impl GoogleProvider {
         secrets: Arc<SecretsManager>,
         timeouts: super::TimeoutsConfig,
         cancel: tokio_util::sync::CancellationToken,
-        _opts: super::timeouts::ProviderOptions,
+        opts: super::timeouts::ProviderOptions,
         overrides: super::ProviderOverrides,
     ) -> anyhow::Result<Self> {
         let model = overrides
@@ -72,6 +74,7 @@ impl GoogleProvider {
             max_tokens,
             timeouts,
             cancel,
+            max_retries: opts.max_retries,
         };
         Ok(provider)
     }
@@ -267,6 +270,7 @@ impl LlmProvider for GoogleProvider {
         let body_text = crate::agent::providers_http::retry_http_post(
             &self.client, &url, &body, "",
             "google", crate::agent::providers_http::RETRYABLE_OPENAI,
+            self.max_retries,
         ).await?;
 
         let api_resp: GeminiResponse = serde_json::from_str(&body_text).map_err(|e| {

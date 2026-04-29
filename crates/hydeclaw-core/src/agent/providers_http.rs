@@ -47,8 +47,9 @@ pub async fn retry_http_post(
     api_key: &str,
     provider_name: &str,
     retryable_codes: &[u16],
+    max_retries: u32,
 ) -> Result<String> {
-    retry_http_post_custom(client, url, body, provider_name, retryable_codes, |req| {
+    retry_http_post_custom(client, url, body, provider_name, retryable_codes, max_retries, |req| {
         if api_key.is_empty() {
             req
         } else {
@@ -70,10 +71,11 @@ pub async fn retry_http_post_custom(
     body: &serde_json::Value,
     provider_name: &str,
     retryable_codes: &[u16],
+    max_retries: u32,
     customize: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<String> {
     for body_attempt in 0..2u32 {
-        let resp = send_with_retry(client, url, body, provider_name, retryable_codes, |req| customize(req))
+        let resp = send_with_retry(client, url, body, provider_name, retryable_codes, max_retries, |req| customize(req))
             .await
             .map_err(|e| match e {
                 SendError::Http { status, body: b } =>
@@ -146,9 +148,10 @@ pub async fn send_with_retry(
     body: &serde_json::Value,
     provider_name: &str,
     retryable_codes: &[u16],
+    max_retries: u32,
     mut customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, SendError> {
-    let policy = BackoffPolicy::default();
+    let policy = BackoffPolicy { max_retries, ..Default::default() };
 
     for attempt in 0..policy.max_retries {
         let start = std::time::Instant::now();
@@ -328,6 +331,8 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    const DEFAULT_RETRIES: u32 = 3;
+
     /// 503 twice → 200: send_with_retry should succeed on the third attempt.
     /// Uses tokio time-pause so backoff sleeps are instant.
     #[tokio::test(start_paused = true)]
@@ -348,10 +353,10 @@ mod tests {
         let client = reqwest::Client::new();
         let url = format!("{}/v1/chat/completions", server.uri());
         let result = send_with_retry(
-            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, |r| r,
+            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, DEFAULT_RETRIES, |r| r,
         ).await;
         assert!(result.is_ok(), "expected Ok after retry, got {:?}", result.err());
-        assert_eq!(server.received_requests().await.unwrap().len(), 3); // 3 = BackoffPolicy::default().max_retries
+        assert_eq!(server.received_requests().await.unwrap().len(), 3); // 2 failures + 1 success
     }
 
     /// 503 three times (all retries exhausted): should return SendError::Http { status: 503 }.
@@ -367,13 +372,13 @@ mod tests {
         let client = reqwest::Client::new();
         let url = format!("{}/v1/chat/completions", server.uri());
         let result = send_with_retry(
-            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, |r| r,
+            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, DEFAULT_RETRIES, |r| r,
         ).await;
         assert!(
             matches!(result, Err(SendError::Http { status: 503, .. })),
             "expected Http(503), got {:?}", result
         );
-        assert_eq!(server.received_requests().await.unwrap().len(), 3); // 3 = BackoffPolicy::default().max_retries
+        assert_eq!(server.received_requests().await.unwrap().len(), DEFAULT_RETRIES as usize);
     }
 
     /// 400 should not be retried and returns immediately.
@@ -389,7 +394,7 @@ mod tests {
         let client = reqwest::Client::new();
         let url = format!("{}/v1/chat/completions", server.uri());
         let result = send_with_retry(
-            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, |r| r,
+            &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, DEFAULT_RETRIES, |r| r,
         ).await;
         assert!(
             matches!(result, Err(SendError::Http { status: 400, .. })),
