@@ -309,6 +309,8 @@ export default function ProvidersPage() {
     if (!dialog.open || dialog.category === "") return false;
     if (form.name.trim().length === 0) return false;
     if (dialog.category === "text") {
+      const mr = (form.options as ProviderOptions | undefined)?.max_retries ?? 3;
+      if (mr < 1 || mr > 10) return false;
       return (
         form.provider_type.length > 0 &&
         (selectedType?.requires_api_key === false || dialog.editing?.has_api_key || apiKeyValue.trim().length > 0) &&

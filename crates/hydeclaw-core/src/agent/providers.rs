@@ -1605,7 +1605,8 @@ pub(super) fn strip_orphaned_tool_messages(messages: &[Message]) -> Vec<Message>
 
 /// - tool messages: include `tool_call_id` at top level
 /// - assistant content must be null (not empty string) when only `tool_calls` present
-pub(super) fn messages_to_openai_format(messages: &[Message]) -> Vec<serde_json::Value> {
+/// - `include_reasoning`: pass `true` only for DeepSeek — other providers reject unknown fields
+pub(super) fn messages_to_openai_format(messages: &[Message], include_reasoning: bool) -> Vec<serde_json::Value> {
     let messages = strip_orphaned_tool_messages(messages);
     messages
         .iter()
@@ -1648,11 +1649,9 @@ pub(super) fn messages_to_openai_format(messages: &[Message]) -> Vec<serde_json:
                             serde_json::Value::Array(tc_json),
                         );
 
-                        // DeepSeek: pass reasoning_content back on subsequent turns.
-                        // Always include it for tool-calling turns — use actual content
-                        // when available, empty string for legacy sessions that were
-                        // saved before thinking_blocks persistence was wired up.
-                        {
+                        // DeepSeek: pass reasoning_content back on tool-calling turns.
+                        // Gated by include_reasoning — other providers reject unknown fields.
+                        if include_reasoning {
                             let reasoning: String = msg.thinking_blocks.iter()
                                 .map(|tb| tb.thinking.as_str())
                                 .collect::<Vec<_>>()
@@ -1678,8 +1677,9 @@ pub(super) fn messages_to_openai_format(messages: &[Message]) -> Vec<serde_json:
                 );
             }
 
-            // DeepSeek: pass reasoning_content back for assistant messages that have thinking blocks
-            if msg.role == MessageRole::Assistant && !msg.thinking_blocks.is_empty() {
+            // DeepSeek: pass reasoning_content back for assistant messages that have thinking blocks.
+            // Gated by include_reasoning — other providers reject unknown fields.
+            if include_reasoning && msg.role == MessageRole::Assistant && !msg.thinking_blocks.is_empty() {
                 let reasoning: String = msg.thinking_blocks.iter()
                     .map(|tb| tb.thinking.as_str())
                     .collect::<Vec<_>>()
@@ -2075,7 +2075,7 @@ mod tests {
     #[test]
     fn openai_basic_user_and_assistant_messages() {
         let msgs = vec![user_msg("Hello"), assistant_msg("Hi!")];
-        let result = messages_to_openai_format(&msgs);
+        let result = messages_to_openai_format(&msgs, false);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0]["role"], "user");
         assert_eq!(result[0]["content"], "Hello");
@@ -2090,7 +2090,7 @@ mod tests {
             assistant_with_calls("", vec![("tc1", "search")]),
             tool_msg("tc1", "result"),
         ];
-        let result = messages_to_openai_format(&msgs);
+        let result = messages_to_openai_format(&msgs, false);
         let asst = &result[1];
         assert_eq!(asst["content"], serde_json::Value::Null);
         let tc_arr = asst["tool_calls"].as_array().expect("tool_calls array");
@@ -2107,7 +2107,7 @@ mod tests {
             assistant_with_calls("", vec![("call-42", "my_tool")]),
             tool_msg("call-42", "tool output"),
         ];
-        let result = messages_to_openai_format(&msgs);
+        let result = messages_to_openai_format(&msgs, false);
         let tool = &result[2];
         assert_eq!(tool["role"], "tool");
         assert_eq!(tool["content"], "tool output");
@@ -2117,7 +2117,7 @@ mod tests {
     #[test]
     fn openai_system_message_preserved() {
         let msgs = vec![system_msg("You are an AI."), user_msg("Hi")];
-        let result = messages_to_openai_format(&msgs);
+        let result = messages_to_openai_format(&msgs, false);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0]["role"], "system");
         assert_eq!(result[0]["content"], "You are an AI.");
@@ -2130,7 +2130,7 @@ mod tests {
             assistant_with_calls("Let me search for that.", vec![("tc1", "search")]),
             tool_msg("tc1", "found it"),
         ];
-        let result = messages_to_openai_format(&msgs);
+        let result = messages_to_openai_format(&msgs, false);
         let asst = &result[1];
         // non-empty content should be preserved (not null)
         assert_eq!(asst["content"], "Let me search for that.");

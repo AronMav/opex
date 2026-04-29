@@ -151,8 +151,10 @@ pub(crate) fn classify_failure_kind(reason: &str) -> &'static str {
         || lower.contains("provider returned")
         || lower.contains("model returned an error")
         || lower.contains("api error")
-        || lower.contains("status: 4")
-        || lower.contains("status: 5")
+        || lower.contains(" 4xx")
+        || lower.contains(" 5xx")
+        || (lower.contains("status") && (lower.contains(" 4") || lower.contains(" 5"))
+            && lower.contains("error"))
     {
         "llm_error"
     } else {

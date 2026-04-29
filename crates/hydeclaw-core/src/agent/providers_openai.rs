@@ -165,11 +165,29 @@ impl OpenAiCompatibleProvider {
         matches!(self.provider_name.as_str(), "openai" | "ollama")
     }
 
+    fn context_size(messages: &[Message]) -> usize {
+        messages.iter().map(|m| {
+            m.content.len()
+                + m.tool_calls.as_deref().unwrap_or(&[]).iter()
+                    .map(|tc| serde_json::to_string(&tc.arguments).map(|s| s.len()).unwrap_or(0))
+                    .sum::<usize>()
+        }).sum()
+    }
+
     /// Whether this provider supports forced `tool_choice` (specific function forcing).
     /// DeepSeek reasoner models reject tool_choice with a 400 error.
+    fn uses_reasoning_content(&self) -> bool {
+        self.provider_name == "deepseek"
+            || self.model.effective().to_lowercase().contains("deepseek")
+    }
+
     fn supports_forced_tool_choice(&self) -> bool {
-        let model = self.model.effective();
-        !model.contains("reasoner") && !model.contains("v4-pro") && !model.contains("r1")
+        let m = self.model.effective().to_lowercase();
+        !(m.contains("reasoner")
+            || m.contains("v4-pro")
+            || m.starts_with("deepseek-r1")
+            || m.contains("/r1")
+            || m.ends_with("-r1"))
     }
 
     /// Resolve the current API key: vault-scoped → round-robin → legacy secret name → env.
@@ -212,7 +230,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let effective_model = self.model.effective();
         let mut body = serde_json::json!({
             "model": effective_model,
-            "messages": messages_to_openai_format(messages),
+            "messages": messages_to_openai_format(messages, self.uses_reasoning_content()),
             "temperature": self.temperature,
         });
         if let Some(mt) = self.max_tokens {
@@ -258,12 +276,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         );
 
         const LARGE_CONTEXT_CHARS: usize = 200_000;
-        let ctx_bytes: usize = messages.iter().map(|m| {
-            m.content.len()
-                + m.tool_calls.as_deref().unwrap_or(&[]).iter()
-                    .map(|tc| serde_json::to_string(&tc.arguments).map(|s| s.len()).unwrap_or(0))
-                    .sum::<usize>()
-        }).sum();
+        let ctx_bytes = Self::context_size(messages);
         if ctx_bytes > LARGE_CONTEXT_CHARS {
             tracing::warn!(
                 provider = %self.provider_name,
@@ -413,7 +426,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let effective_model = self.model.effective();
         let mut body = serde_json::json!({
             "model": effective_model,
-            "messages": messages_to_openai_format(messages),
+            "messages": messages_to_openai_format(messages, self.uses_reasoning_content()),
             "temperature": self.temperature,
             "stream": true,
             // Opt into the usage block on the final chunk. OpenAI-compatible
@@ -461,12 +474,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         );
 
         const LARGE_CONTEXT_CHARS: usize = 200_000;
-        let ctx_bytes: usize = messages.iter().map(|m| {
-            m.content.len()
-                + m.tool_calls.as_deref().unwrap_or(&[]).iter()
-                    .map(|tc| serde_json::to_string(&tc.arguments).map(|s| s.len()).unwrap_or(0))
-                    .sum::<usize>()
-        }).sum();
+        let ctx_bytes = Self::context_size(messages);
         if ctx_bytes > LARGE_CONTEXT_CHARS {
             tracing::warn!(
                 provider = %self.provider_name,

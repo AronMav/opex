@@ -46,7 +46,7 @@ use serde_json::Value;
 /// loader emits a WARN log listing unknown keys.
 fn default_max_retries() -> u32 { 3 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderOptions {
     #[serde(default)]
     pub timeouts: TimeoutsConfig,
@@ -99,6 +99,18 @@ impl TimeoutsConfig {
             ));
         }
         Ok(())
+    }
+}
+
+impl Default for ProviderOptions {
+    fn default() -> Self {
+        Self {
+            timeouts: TimeoutsConfig::default(),
+            api_key_envs: Vec::new(),
+            prompt_cache: false,
+            max_retries: default_max_retries(),
+            extra: HashMap::new(),
+        }
     }
 }
 

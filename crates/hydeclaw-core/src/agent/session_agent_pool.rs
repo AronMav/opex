@@ -250,6 +250,7 @@ pub fn spawn_live_agent(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn agent_processing_loop(
     mut rx: mpsc::Receiver<AgentMessage>,
     engine: Arc<AgentEngine>,

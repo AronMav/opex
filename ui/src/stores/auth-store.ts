@@ -101,10 +101,10 @@ export const useAuthStore = create<AuthState>()(
         {
           name: "hydeclaw.auth.token",
           partialize: (state) => ({ token: state.token }),
-          // Security: auth token stored in sessionStorage (not localStorage) to limit
-          // exposure window. Legacy migration below moves any old localStorage token
-          // to sessionStorage and removes it. Audited in ARCH-03 (phase 34):
-          // localStorage contains only UI preferences (lastSession, wizard progress) — no credentials.
+          // Security: auth token stored in localStorage for cross-tab login persistence.
+          // Accepted trade-off for a personal home server: XSS would expose the token
+          // persistently, but the alternative (sessionStorage) requires re-login on every tab.
+          // Legacy migration below moves any old sessionStorage token to localStorage.
           storage: createJSONStorage(() => {
             // Migrate any token that was previously stored in sessionStorage back to localStorage.
             // localStorage keeps the user logged in across tabs and page refreshes, which is

@@ -1,9 +1,8 @@
-//! Shared HTTP utilities for LLM providers: retry loop, SSE parsing.
+//! Shared HTTP utilities for LLM providers: retry loop.
 
 use anyhow::Result;
 use rand::Rng;
 use std::time::Duration;
-use tokio::sync::mpsc;
 
 /// Configurable backoff policy for HTTP retries.
 pub struct BackoffPolicy {
@@ -75,7 +74,7 @@ pub async fn retry_http_post_custom(
     customize: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<String> {
     for body_attempt in 0..2u32 {
-        let resp = send_with_retry(client, url, body, provider_name, retryable_codes, max_retries, |req| customize(req))
+        let resp = send_with_retry(client, url, body, provider_name, retryable_codes, max_retries, &customize)
             .await
             .map_err(|e| match e {
                 SendError::Http { status, body: b } =>
@@ -221,109 +220,6 @@ pub async fn send_with_retry(
     unreachable!("loop always returns on the final attempt")
 }
 
-/// Parse an SSE byte stream with cooperative cancellation + inactivity/max-duration timers.
-///
-/// The `cancel` token and `timeouts` are threaded into `stream_with_cancellation`,
-/// which backs the returned byte stream with a producer task that enforces
-/// `stream_inactivity_secs` / `stream_max_duration_secs` and respects token
-/// cancellation. On cancellation the returned error is a typed `LlmCallError`
-/// wrapped in `anyhow::Error` — callers can `downcast_ref::<LlmCallError>()`
-/// to classify (see `LlmCallError::is_failover_worthy`).
-///
-/// Note: this helper currently has no active runtime callers — provider
-/// integrations inlined their own copies of this loop for maximum control
-/// over per-chunk accumulation (see `providers_openai.rs`, `providers_anthropic.rs`,
-/// `providers_google.rs`). Kept available for a future generic SSE path.
-#[allow(dead_code)]
-pub async fn parse_sse_stream(
-    resp: reqwest::Response,
-    chunk_tx: &mpsc::UnboundedSender<String>,
-    mut on_data: impl FnMut(&str, &mut crate::agent::thinking::ThinkingFilter, &mpsc::UnboundedSender<String>) -> SseAction,
-    cancel: tokio_util::sync::CancellationToken,
-    timeouts: crate::agent::providers::TimeoutsConfig,
-    provider_name: &str,
-) -> Result<()> {
-    let mut buffer = String::new();
-    let mut thinking_filter = crate::agent::thinking::ThinkingFilter::new();
-    let mut partial_text = String::new();
-
-    use tokio_stream::StreamExt;
-    use crate::agent::providers::{CancelSlot, LlmCallError, cancellable_stream::stream_with_cancellation};
-
-    let slot = CancelSlot::new();
-    // TODO: use cancel.child_token() here for retry isolation once this function has active callers.
-    let byte_stream = stream_with_cancellation(
-        resp.bytes_stream(),
-        cancel.clone(),
-        slot.clone(),
-        timeouts,
-    );
-    let mut byte_stream = std::pin::pin!(byte_stream);
-    while let Some(chunk_result) = StreamExt::next(&mut byte_stream).await {
-        let chunk_bytes = match chunk_result {
-            Ok(b) => b,
-            Err(e) => {
-                return Err(anyhow::Error::new(LlmCallError::from(e)));
-            }
-        };
-        buffer.push_str(&String::from_utf8_lossy(&chunk_bytes));
-        while let Some(line_end) = buffer.find('\n') {
-            let line = buffer[..line_end].trim().to_string();
-            buffer = buffer[line_end + 1..].to_string();
-            if line.is_empty() || line.starts_with(':') {
-                continue;
-            }
-            if let Some(data) = line.strip_prefix("data: ") {
-                if data == "[DONE]" {
-                    return Ok(());
-                }
-                // Tee the payload into `partial_text` so cancellation errors
-                // can surface whatever the caller has already observed. The
-                // `on_data` handler still drives per-line accumulation into
-                // `chunk_tx` as before.
-                partial_text.push_str(data);
-                match on_data(data, &mut thinking_filter, chunk_tx) {
-                    SseAction::Continue => {}
-                    SseAction::Done => return Ok(()),
-                }
-            }
-        }
-    }
-
-    // Stream exited. If cancellation fired, surface the typed reason.
-    if let Some(reason) = slot.get() {
-        use crate::agent::providers::error::{CancelReason, PartialState};
-        let partial_state = if !partial_text.is_empty() {
-            PartialState::Text(partial_text.clone())
-        } else {
-            PartialState::Empty
-        };
-        let err = match reason {
-            CancelReason::InactivityTimeout { silent_secs } => LlmCallError::InactivityTimeout {
-                provider: provider_name.to_string(),
-                silent_secs,
-                partial_state,
-            },
-            CancelReason::MaxDurationExceeded { elapsed_secs } => LlmCallError::MaxDurationExceeded {
-                provider: provider_name.to_string(),
-                elapsed_secs,
-                partial_state,
-            },
-            CancelReason::UserCancelled => LlmCallError::UserCancelled { partial_state },
-            CancelReason::ShutdownDrain => LlmCallError::ShutdownDrain { partial_state },
-        };
-        return Err(anyhow::Error::new(err));
-    }
-
-    Ok(())
-}
-
-/// Control flow from SSE data handler.
-#[allow(dead_code)]
-pub enum SseAction {
-    Continue,
-    Done,
-}
 
 #[cfg(test)]
 mod tests {
