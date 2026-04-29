@@ -246,17 +246,17 @@ impl LlmProvider for OpenAiCompatibleProvider {
         );
 
         const LARGE_CONTEXT_CHARS: usize = 200_000;
-        let ctx_chars: usize = messages.iter().map(|m| {
+        let ctx_bytes: usize = messages.iter().map(|m| {
             m.content.len()
                 + m.tool_calls.as_deref().unwrap_or(&[]).iter()
-                    .map(|tc| tc.arguments.to_string().len())
+                    .map(|tc| serde_json::to_string(&tc.arguments).map(|s| s.len()).unwrap_or(0))
                     .sum::<usize>()
         }).sum();
-        if ctx_chars > LARGE_CONTEXT_CHARS {
+        if ctx_bytes > LARGE_CONTEXT_CHARS {
             tracing::warn!(
                 provider = %self.provider_name,
                 model = %self.model,
-                context_chars = ctx_chars,
+                context_bytes = ctx_bytes,
                 threshold = LARGE_CONTEXT_CHARS,
                 "large context being sent to LLM — provider may reject with 5xx or truncate silently"
             );
@@ -446,17 +446,17 @@ impl LlmProvider for OpenAiCompatibleProvider {
         );
 
         const LARGE_CONTEXT_CHARS: usize = 200_000;
-        let ctx_chars: usize = messages.iter().map(|m| {
+        let ctx_bytes: usize = messages.iter().map(|m| {
             m.content.len()
                 + m.tool_calls.as_deref().unwrap_or(&[]).iter()
-                    .map(|tc| tc.arguments.to_string().len())
+                    .map(|tc| serde_json::to_string(&tc.arguments).map(|s| s.len()).unwrap_or(0))
                     .sum::<usize>()
         }).sum();
-        if ctx_chars > LARGE_CONTEXT_CHARS {
+        if ctx_bytes > LARGE_CONTEXT_CHARS {
             tracing::warn!(
                 provider = %self.provider_name,
                 model = %self.model,
-                context_chars = ctx_chars,
+                context_bytes = ctx_bytes,
                 threshold = LARGE_CONTEXT_CHARS,
                 "large context being sent to LLM — provider may reject with 5xx or truncate silently"
             );
