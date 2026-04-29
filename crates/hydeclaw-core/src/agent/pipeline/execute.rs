@@ -374,11 +374,22 @@ pub async fn execute<S: EventSink>(
         }
 
         // 10. Execute tool batch via ToolExecutor (loop detection inside execute_batch)
+        //
+        // Pass `persist_ctx` so each tool result is persisted via a detached
+        // `tokio::spawn` BEFORE `execute_batch` returns. This closes the
+        // cancellation gap that previously left tool messages unsaved when
+        // the engine task was aborted between batch return and the for-loop
+        // below (e.g. SSE client disconnect). See parallel.rs::ToolPersistCtx
+        // and `spawn_persist_tool_message`.
         let tool_executor = engine
             .tool_executor
             .get()
             .expect("tool_executor not initialized");
 
+        let persist_ctx = crate::agent::pipeline::parallel::ToolPersistCtx {
+            agent_name: agent_name.as_str(),
+            initial_parent: Some(last_msg_id),
+        };
         let loop_broken = match tool_executor
             .execute_batch(
                 &response.tool_calls,
@@ -388,16 +399,19 @@ pub async fn execute<S: EventSink>(
                 messages.iter().map(|m| m.content.len()).sum(),
                 &mut loop_detector,
                 loop_config.detect_loops,
+                Some(&persist_ctx),
             )
             .await
         {
             Ok(results) => {
-                for (tc_id, tool_result) in &results {
+                for batch in &results {
+                    let tc_id = &batch.tool_call_id;
+                    let tool_result = &batch.result;
                     // Extract rich-card / __file__: markers and emit File/RichCard
                     // stream events; for plain text both halves are the raw string.
                     let ToolResultParts {
                         display_result,
-                        db_result,
+                        db_result: _, // already persisted in execute_batch
                     } = extract_tool_result_events(tool_result, sink).await;
 
                     let _ = sink
@@ -417,26 +431,13 @@ pub async fn execute<S: EventSink>(
                     });
                     context_chars += display_len;
 
-                    // Persist tool result to DB with raw markers preserved so
-                    // reload-from-active-path can reinstate File/RichCard events.
-                    match sm
-                        .save_message_ex(
-                            session_id,
-                            "tool",
-                            &db_result,
-                            None,
-                            Some(tc_id),
-                            None,
-                            None,
-                            Some(last_msg_id),
-                        )
-                        .await
-                    {
-                        Ok(id) => last_msg_id = id,
-                        Err(e) => tracing::warn!(
-                            error = %e, session_id = %session_id,
-                            "failed to save tool result to DB"
-                        ),
+                    // Tool message persistence is now handled inside
+                    // `execute_batch` (detached `tokio::spawn` so it
+                    // survives parent-task cancellation). We only thread
+                    // `last_msg_id` through the chain so the final
+                    // assistant reply links onto the tail.
+                    if let Some(persisted) = batch.tool_msg_id {
+                        last_msg_id = persisted;
                     }
                 }
                 false // loop continues
@@ -531,6 +532,10 @@ pub async fn execute<S: EventSink>(
 /// so reload/active_path rebuild can recover the full marker set.
 struct ToolResultParts {
     display_result: String,
+    /// Raw tool result with markers preserved. Persistence now happens
+    /// upstream (detached, inside `execute_batch`) so this field is unused
+    /// in the production path; kept for tests that assert marker preservation.
+    #[allow(dead_code)]
     db_result: String,
 }
 

@@ -163,18 +163,20 @@ pub async fn handle_openai(
             thinking_blocks: vec![],
         });
 
+        // OpenAI-compat path uses Uuid::nil() session_id and does NO DB
+        // persistence — pass `None` for `persist_ctx`.
         let loop_broken = match executor.execute_tool_calls_partitioned(
             &response.tool_calls, &serde_json::Value::Null, uuid::Uuid::nil(), crate::agent::channel_kind::channel::INTER_AGENT,
             messages.iter().map(|m| m.content.len()).sum(),
-            &mut detector, loop_config.detect_loops,
+            &mut detector, loop_config.detect_loops, None,
         ).await {
             Ok(results) => {
-                for (tc_id, tool_result) in &results {
+                for batch in &results {
                     messages.push(Message {
                         role: MessageRole::Tool,
-                        content: tool_result.clone(),
+                        content: batch.result.clone(),
                         tool_calls: None,
-                        tool_call_id: Some(tc_id.clone()),
+                        tool_call_id: Some(batch.tool_call_id.clone()),
                         thinking_blocks: vec![],
                     });
                 }

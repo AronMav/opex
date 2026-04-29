@@ -19,6 +19,38 @@ use uuid::Uuid;
 /// Returned when the loop detector triggers a break mid-batch.
 pub struct LoopBreak(pub Option<String>);
 
+/// One persisted tool result.
+///
+/// `tool_msg_id` is the row id assigned to the tool message. It is generated
+/// upfront (before the detached `tokio::spawn` insert fires) so callers can
+/// thread `parent_message_id` through the chain without waiting on the
+/// detached insert.
+pub struct ToolBatchResult {
+    pub tool_call_id: String,
+    pub result: String,
+    pub tool_msg_id: Option<Uuid>,
+}
+
+/// Context required for the durable per-tool persistence path inside
+/// `execute_tool_calls_partitioned`.
+///
+/// When `Some(_)` is supplied, each tool result is persisted to the
+/// `messages` table immediately after its `tool_end` WAL entry, via a
+/// detached `tokio::spawn` so the insert survives parent-task cancellation
+/// (e.g. SSE client disconnect → engine task abort). Each tool's row id is
+/// pre-generated synchronously and threaded into `parent_message_id` so the
+/// chain is deterministic regardless of detached insert ordering.
+///
+/// When `None`, no DB save is performed and `ToolBatchResult::tool_msg_id`
+/// is `None` for every result. Used by transport-less call sites
+/// (openai_compat — nil session_id; subagent_runner — no DB writes).
+pub struct ToolPersistCtx<'a> {
+    pub agent_name: &'a str,
+    /// Initial parent — typically the id of the assistant message that
+    /// emitted the tool calls.
+    pub initial_parent: Option<Uuid>,
+}
+
 /// Trait abstracting single-tool execution so the free function doesn't depend
 /// on `AgentEngine` directly.
 pub trait ToolExecutor: Send + Sync {
@@ -127,9 +159,18 @@ pub async fn execute_tool_calls_partitioned(
     embedder: &Arc<dyn EmbeddingService>,
     yaml_tools: &HashMap<String, YamlToolDef>,
     executor: &(dyn ToolExecutor + '_),
-) -> Result<Vec<(String, String)>, LoopBreak> {
+    persist_ctx: Option<&ToolPersistCtx<'_>>,
+) -> Result<Vec<ToolBatchResult>, LoopBreak> {
     let n = tool_calls.len();
     let mut results: Vec<Option<String>> = vec![None; n];
+    // Pre-generated row ids for each tool's persisted message — assigned only
+    // when persist_ctx is Some(_). Threaded into parent_message_id so the
+    // chain stays deterministic even though inserts run in detached spawns.
+    let mut persisted_ids: Vec<Option<Uuid>> = vec![None; n];
+    // Walking parent — starts at initial_parent and advances to the last
+    // tool's pre-generated id as we visit them in original order. Used as
+    // parent for the next persisted tool message.
+    let mut chain_parent: Option<Uuid> = persist_ctx.and_then(|p| p.initial_parent);
 
     // 1. Enrich args
     let enriched: Vec<Value> = tool_calls
@@ -305,6 +346,33 @@ pub async fn execute_tool_calls_partitioned(
             )
             .await;
         }
+
+        // Durable persist for the parallel batch. We walk in ORIGINAL index
+        // order so `parent_message_id` is deterministic (independent of the
+        // join_all completion order). Each insert is detached via
+        // `tokio::spawn` so it survives parent-task cancellation between
+        // here and `execute()` returning. Pre-generated ids are recorded in
+        // `persisted_ids` so callers can rebuild the chain head.
+        if let Some(pctx) = persist_ctx {
+            for &i in &parallel_indices {
+                let res_text = match &results[i] {
+                    Some(s) => s.clone(),
+                    None => continue,
+                };
+                let new_id = Uuid::new_v4();
+                persisted_ids[i] = Some(new_id);
+                spawn_persist_tool_message(
+                    db,
+                    new_id,
+                    session_id,
+                    pctx.agent_name,
+                    &tool_calls[i].id,
+                    &res_text,
+                    chain_parent,
+                );
+                chain_parent = Some(new_id);
+            }
+        }
     }
 
     // 4b. Sequential
@@ -385,12 +453,83 @@ pub async fn execute_tool_calls_partitioned(
             Some(&end_payload(&tool_calls[i], &res)),
         )
         .await;
+
+        // Durable persist for this sequential tool. Detached so it survives
+        // parent-task cancellation between here and `execute()` returning.
+        if let Some(pctx) = persist_ctx {
+            let new_id = Uuid::new_v4();
+            persisted_ids[i] = Some(new_id);
+            spawn_persist_tool_message(
+                db,
+                new_id,
+                session_id,
+                pctx.agent_name,
+                &tool_calls[i].id,
+                &res,
+                chain_parent,
+            );
+            chain_parent = Some(new_id);
+        }
     }
 
     // 5. Final reassemble
     Ok(tool_calls
         .iter()
         .enumerate()
-        .map(|(i, tc)| (tc.id.clone(), results[i].take().unwrap_or_default()))
+        .map(|(i, tc)| ToolBatchResult {
+            tool_call_id: tc.id.clone(),
+            result: results[i].take().unwrap_or_default(),
+            tool_msg_id: persisted_ids[i],
+        })
         .collect())
+}
+
+// ── Detached persistence helper ──────────────────────────────────────────────
+
+/// Spawn a fire-and-forget tokio task that persists a single tool result row
+/// to the `messages` table. Detached so it survives parent-task cancellation
+/// (e.g. SSE client disconnect → engine task abort).
+///
+/// The id is supplied by the caller (pre-generated synchronously) so the
+/// `parent_message_id` chain is deterministic regardless of insert ordering.
+/// Idempotent against retry: `save_message_ex_with_id` uses
+/// `ON CONFLICT (id) DO NOTHING`.
+#[allow(clippy::too_many_arguments)]
+fn spawn_persist_tool_message(
+    db: &sqlx::PgPool,
+    id: Uuid,
+    session_id: Uuid,
+    agent_name: &str,
+    tool_call_id: &str,
+    content: &str,
+    parent_id: Option<Uuid>,
+) {
+    let db = db.clone();
+    let agent_name = agent_name.to_string();
+    let tool_call_id = tool_call_id.to_string();
+    let content = content.to_string();
+    tokio::spawn(async move {
+        if let Err(e) = crate::db::sessions::save_message_ex_with_id(
+            &db,
+            id,
+            session_id,
+            "tool",
+            &content,
+            None,
+            Some(&tool_call_id),
+            Some(&agent_name),
+            None,
+            parent_id,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                session_id = %session_id,
+                tool_call_id = %tool_call_id,
+                msg_id = %id,
+                "failed to persist tool message (detached)"
+            );
+        }
+    });
 }

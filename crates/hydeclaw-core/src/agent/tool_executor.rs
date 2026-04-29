@@ -24,6 +24,11 @@ use crate::agent::tool_loop::LoopDetector;
 #[async_trait]
 pub trait ToolExecutor: Send + Sync {
     /// Execute a batch of tool calls with loop detection and partitioned parallelism.
+    ///
+    /// When `persist_ctx` is `Some(_)`, each tool result is persisted to the
+    /// `messages` table inside the call (via a detached `tokio::spawn` so the
+    /// insert survives parent-task cancellation). When `None`, no DB save
+    /// happens and `ToolBatchResult::tool_msg_id` is `None`.
     #[allow(clippy::too_many_arguments)]
     async fn execute_batch(
         &self,
@@ -34,7 +39,8 @@ pub trait ToolExecutor: Send + Sync {
         current_context_chars: usize,
         detector: &mut LoopDetector,
         detect_loops: bool,
-    ) -> Result<Vec<(String, String)>, LoopBreak>;
+        persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
+    ) -> Result<Vec<crate::agent::pipeline::parallel::ToolBatchResult>, LoopBreak>;
 }
 
 // ── ToolExecutorDeps private trait ───────────────────────────────────────────
@@ -55,7 +61,8 @@ pub(crate) trait ToolExecutorDeps: Send + Sync {
         current_context_chars: usize,
         detector: &mut LoopDetector,
         detect_loops: bool,
-    ) -> Result<Vec<(String, String)>, LoopBreak>;
+        persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
+    ) -> Result<Vec<crate::agent::pipeline::parallel::ToolBatchResult>, LoopBreak>;
 }
 
 // ── DefaultToolExecutor ───────────────────────────────────────────────────────
@@ -191,7 +198,8 @@ impl ToolExecutor for DefaultToolExecutor {
         current_context_chars: usize,
         detector: &mut LoopDetector,
         detect_loops: bool,
-    ) -> Result<Vec<(String, String)>, LoopBreak> {
+        persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
+    ) -> Result<Vec<crate::agent::pipeline::parallel::ToolBatchResult>, LoopBreak> {
         // Weak upgrade is structurally safe: active requests hold a strong Arc<AgentEngine>
         // from the spawned task in chat.rs, so the engine cannot be dropped mid-request.
         let deps = self.deps.upgrade().expect(
@@ -206,6 +214,7 @@ impl ToolExecutor for DefaultToolExecutor {
                 current_context_chars,
                 detector,
                 detect_loops,
+                persist_ctx,
             )
             .await
     }

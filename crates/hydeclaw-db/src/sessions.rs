@@ -245,6 +245,49 @@ pub async fn save_message_ex(
     Ok(id)
 }
 
+/// Same as [`save_message_ex`] but the caller supplies the row `id` explicitly.
+///
+/// This exists for durability paths (e.g. tool-result persistence in
+/// `pipeline::parallel`) where the persist work is detached via
+/// `tokio::spawn` so it can survive parent-task cancellation. The caller
+/// pre-generates the UUID synchronously so the chain (`parent_message_id`)
+/// can be stitched without waiting for the detached insert to return.
+///
+/// Idempotent against retries: ON CONFLICT (id) DO NOTHING. The first
+/// insert wins; duplicate calls with the same id are no-ops.
+#[allow(clippy::too_many_arguments)]
+pub async fn save_message_ex_with_id(
+    db: &PgPool,
+    id: Uuid,
+    session_id: Uuid,
+    role: &str,
+    content: &str,
+    tool_calls: Option<&serde_json::Value>,
+    tool_call_id: Option<&str>,
+    agent_id: Option<&str>,
+    thinking_blocks: Option<&serde_json::Value>,
+    parent_id: Option<Uuid>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, agent_id, thinking_blocks, parent_message_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(id)
+    .bind(session_id)
+    .bind(role)
+    .bind(content)
+    .bind(tool_calls)
+    .bind(tool_call_id)
+    .bind(agent_id)
+    .bind(thinking_blocks)
+    .bind(parent_id)
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
 
 
 /// Load messages for a session. If `limit` is `Some`, returns at most that many rows.

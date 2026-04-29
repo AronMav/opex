@@ -294,13 +294,23 @@ impl AgentEngine {
                 tracing::warn!(error = %e, session_id = %session_id, "failed to save assistant message to DB");
             }
 
+            // Legacy stream path — detached persistence in `execute_tool_calls_partitioned`
+            // also covers cancellation gaps for this code path.
+            let agent_name_for_persist = self.cfg().agent.name.clone();
+            let persist_ctx = crate::agent::pipeline::parallel::ToolPersistCtx {
+                agent_name: agent_name_for_persist.as_str(),
+                initial_parent: None,
+            };
             let loop_broken = match self.execute_tool_calls_partitioned(
                 &response.tool_calls, &msg.context, session_id, &msg.channel,
                 messages.iter().map(|m| m.content.len()).sum(),
                 &mut detector, loop_config.detect_loops,
+                Some(&persist_ctx),
             ).await {
                 Ok(results) => {
-                    for (tc_id, tool_result) in &results {
+                    for batch in &results {
+                        let tc_id = &batch.tool_call_id;
+                        let tool_result = &batch.result;
                         messages.push(Message {
                             role: MessageRole::Tool,
                             content: tool_result.clone(),
@@ -309,11 +319,8 @@ impl AgentEngine {
                             thinking_blocks: vec![],
                         });
                         context_chars += tool_result.chars().count();
-                        if let Err(e) = sm.save_message(
-                            session_id, "tool", tool_result, None, Some(tc_id),
-                        ).await {
-                            tracing::warn!(error = %e, session_id = %session_id, "failed to save tool result to DB");
-                        }
+                        // tool message already persisted (detached) inside
+                        // execute_tool_calls_partitioned.
                     }
                     false
                 }

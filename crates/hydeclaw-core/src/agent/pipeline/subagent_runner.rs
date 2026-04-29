@@ -159,18 +159,20 @@ pub async fn run_subagent_with_session(
         // Use an empty object (not Null) so enrich_tool_args can inject session_id into _context.
         let effective_session_id = session_id.unwrap_or_else(uuid::Uuid::nil);
         let subagent_context = serde_json::json!({});
+        // Subagent runner does not persist tool messages to the DB
+        // (subagent context is in-memory only) — pass `None`.
         let loop_broken = match executor.execute_tool_calls_partitioned(
             &response.tool_calls, &subagent_context, effective_session_id, crate::agent::channel_kind::channel::INTER_AGENT,
             messages.iter().map(|m| m.content.len()).sum(),
-            &mut detector, loop_config.detect_loops,
+            &mut detector, loop_config.detect_loops, None,
         ).await {
             Ok(results) => {
-                for (tc_id, tool_result) in &results {
+                for batch in &results {
                     messages.push(Message {
                         role: MessageRole::Tool,
-                        content: tool_result.clone(),
+                        content: batch.result.clone(),
                         tool_calls: None,
-                        tool_call_id: Some(tc_id.clone()),
+                        tool_call_id: Some(batch.tool_call_id.clone()),
                         thinking_blocks: vec![],
                     });
                 }
