@@ -27,6 +27,47 @@ import {
 import { KeyRound, Plus, RefreshCw, Trash2, Edit3, Eye } from "lucide-react";
 import { toast } from "sonner";
 
+// ── Form helpers (extracted for testability) ────────────────────────────────
+
+export function buildAddSecretBody(
+  name: string,
+  value: string,
+  desc: string,
+  scope: string,
+): { name: string; value: string; description?: string; scope?: string } | null {
+  if (!name.trim() || !value.trim()) return null;
+  const body: { name: string; value: string; description?: string; scope?: string } = {
+    name: name.trim(),
+    value: value.trim(),
+  };
+  const trimmedDesc = desc.trim();
+  if (trimmedDesc) body.description = trimmedDesc;
+  if (scope && scope !== "__global__") body.scope = scope;
+  return body;
+}
+
+export function buildEditSecretBody(
+  editTarget: string,
+  value: string,
+  desc: string,
+  scope: string,
+): { name: string; value: string; description?: string; scope?: string } | null {
+  if (!value.trim()) return null;
+  const body: { name: string; value: string; description?: string; scope?: string } = {
+    name: editTarget,
+    value: value.trim(),
+  };
+  const trimmedDesc = desc.trim();
+  if (trimmedDesc) body.description = trimmedDesc;
+  if (scope) body.scope = scope;
+  return body;
+}
+
+export function buildRevealUrl(name: string, scope: string): string {
+  const scopeParam = scope ? `&scope=${encodeURIComponent(scope)}` : "";
+  return `/api/secrets/${encodeURIComponent(name)}?reveal=true${scopeParam}`;
+}
+
 export default function SecretsPage() {
   const { t, locale } = useTranslation();
   const { data: secrets = [], isLoading, error, refetch } = useSecrets();

@@ -113,6 +113,27 @@ type DialogState =
   | { open: false }
   | { open: true; category: ProviderCategory | ""; editing: Provider | null };
 
+// ── Build provider body (extracted for testability) ──────────────────────────
+
+export function buildProviderBody(
+  form: CreateProviderInput,
+  apiKeyValue: string,
+  category: string,
+): CreateProviderInput {
+  const body: CreateProviderInput = {
+    ...form,
+    type: category,
+    base_url: form.base_url || undefined,
+    default_model: form.default_model || undefined,
+    notes: form.notes || undefined,
+  };
+  const trimmedKey = apiKeyValue.trim();
+  if (trimmedKey) {
+    body.api_key = trimmedKey;
+  }
+  return body;
+}
+
 // ── Main page ────────────────────────────────────────────────────────────────
 
 export default function ProvidersPage() {
