@@ -66,86 +66,17 @@ pub async fn retry_http_post_custom(
     body: &serde_json::Value,
     provider_name: &str,
     retryable_codes: &[u16],
-    mut customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<String> {
-    let policy = BackoffPolicy::default();
-    let mut last_error = String::new();
-
-    for attempt in 0..policy.max_retries {
-        let start = std::time::Instant::now();
-        let req = client.post(url).json(body);
-        let req = customize(req);
-
-        let resp_result = req.send().await;
-        let elapsed = start.elapsed();
-
-        match resp_result {
-            Ok(resp) => {
-                let status = resp.status();
-                tracing::info!(
-                    provider = %provider_name,
-                    status = %status,
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    attempt,
-                    "LLM API responded"
-                );
-
-                if status.is_success() {
-                    return Ok(resp.text().await?);
-                }
-
-                let err_text = resp.text().await.unwrap_or_default();
-                last_error = format!("{provider_name} API error {status}: {err_text}");
-
-                if status.as_u16() == 400 {
-                    let body_preview = serde_json::to_string(body).unwrap_or_default();
-                    let mut end = body_preview.len().min(4000);
-                    while end > 0 && !body_preview.is_char_boundary(end) { end -= 1; }
-                    let truncated = &body_preview[..end];
-                    tracing::error!(
-                        provider = %provider_name,
-                        request_body = %truncated,
-                        "400 Bad Request — dumping request body for diagnosis"
-                    );
-                }
-
-                let retryable = retryable_codes.contains(&status.as_u16());
-                if !retryable || attempt == policy.max_retries - 1 {
-                    anyhow::bail!("{last_error}");
-                }
-
-                let backoff = policy.delay(attempt);
-                tracing::warn!(
-                    provider = %provider_name,
-                    status = %status,
-                    attempt,
-                    backoff_ms = backoff.as_millis() as u64,
-                    "retrying LLM request"
-                );
-                tokio::time::sleep(backoff).await;
-            }
-            Err(e) => {
-                last_error = format!("{provider_name} request error: {e}");
-                tracing::warn!(
-                    provider = %provider_name,
-                    error = %e,
-                    attempt,
-                    "LLM request failed"
-                );
-
-                if attempt == policy.max_retries - 1 {
-                    anyhow::bail!("{last_error}");
-                }
-
-                tokio::time::sleep(policy.delay(attempt)).await;
-            }
-        }
-    }
-
-    if !last_error.is_empty() {
-        anyhow::bail!("{last_error}");
-    }
-    anyhow::bail!("{provider_name} request failed after all retries")
+    let resp = send_with_retry(client, url, body, provider_name, retryable_codes, customize)
+        .await
+        .map_err(|e| match e {
+            SendError::Http { status, body: b } =>
+                anyhow::anyhow!("{provider_name} API error {status}: {b}"),
+            SendError::Network(e) =>
+                anyhow::anyhow!("{provider_name} request error: {e}"),
+        })?;
+    Ok(resp.text().await?)
 }
 
 /// Standard retryable HTTP status codes for OpenAI-compatible providers.
