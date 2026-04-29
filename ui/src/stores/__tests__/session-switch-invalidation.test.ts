@@ -53,20 +53,18 @@ vi.mock("@/lib/api", () => ({
 
 import { useChatStore } from "@/stores/chat-store";
 
-// Match the shape returned by qk.sessionMessages(sid) — the exact array is
-// an implementation detail, so we just assert the sessionId appears somewhere
-// in the invalidate call's queryKey.
+// Match the shape returned by qk.sessionMessages(sid) → ["sessions", sid, "messages"].
+// The sessionId sits at index 1; we extract it by position to avoid magic-number
+// length heuristics that could break if other key segments happen to be long strings.
 function invalidatedSessionIds(): string[] {
   return mockInvalidate.mock.calls
     .map((call) => {
       const arg = call[0] as { queryKey?: unknown[] } | undefined;
       const key = arg?.queryKey;
-      if (!Array.isArray(key)) return null;
-      // Session-messages keys start with "session-messages" or similar and
-      // include the sessionId as a later element.
-      return key.find((x) => typeof x === "string" && x.length > 8) as string | undefined;
+      if (!Array.isArray(key) || key[0] !== "sessions") return null;
+      return typeof key[1] === "string" ? key[1] : null;
     })
-    .filter((x): x is string => typeof x === "string");
+    .filter((x): x is string => x !== null);
 }
 
 beforeEach(() => {

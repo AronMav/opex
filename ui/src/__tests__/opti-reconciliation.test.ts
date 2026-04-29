@@ -13,7 +13,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { contentHash, reconcileLiveWithHistory } from "@/stores/chat-store";
-import type { ChatMessage } from "@/stores/chat-store";
+import type { ChatMessage } from "@/stores/chat-types";
 
 // ── Helper ─────────────────────────────────────────────────────────────────
 
