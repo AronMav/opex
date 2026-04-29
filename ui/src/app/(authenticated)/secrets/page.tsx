@@ -27,6 +27,47 @@ import {
 import { KeyRound, Plus, RefreshCw, Trash2, Edit3, Eye } from "lucide-react";
 import { toast } from "sonner";
 
+// ── Form helpers (extracted for testability) ────────────────────────────────
+
+export function buildAddSecretBody(
+  name: string,
+  value: string,
+  desc: string,
+  scope: string,
+): { name: string; value: string; description?: string; scope?: string } | null {
+  if (!name.trim() || !value.trim()) return null;
+  const body: { name: string; value: string; description?: string; scope?: string } = {
+    name: name.trim(),
+    value: value.trim(),
+  };
+  const trimmedDesc = desc.trim();
+  if (trimmedDesc) body.description = trimmedDesc;
+  if (scope && scope !== "__global__") body.scope = scope;
+  return body;
+}
+
+export function buildEditSecretBody(
+  editTarget: string,
+  value: string,
+  desc: string,
+  scope: string,
+): { name: string; value: string; description?: string; scope?: string } | null {
+  if (!value.trim()) return null;
+  const body: { name: string; value: string; description?: string; scope?: string } = {
+    name: editTarget,
+    value: value.trim(),
+  };
+  const trimmedDesc = desc.trim();
+  if (trimmedDesc) body.description = trimmedDesc;
+  if (scope) body.scope = scope;
+  return body;
+}
+
+export function buildRevealUrl(name: string, scope: string): string {
+  const scopeParam = scope ? `&scope=${encodeURIComponent(scope)}` : "";
+  return `/api/secrets/${encodeURIComponent(name)}?reveal=true${scopeParam}`;
+}
+
 export default function SecretsPage() {
   const { t, locale } = useTranslation();
   const { data: secrets = [], isLoading, error, refetch } = useSecrets();
@@ -53,13 +94,9 @@ export default function SecretsPage() {
     "";
 
   const addSecret = useCallback(async () => {
-    if (!newName.trim() || !newValue.trim()) return;
-    await upsertSecret.mutateAsync({
-      name: newName.trim(),
-      value: newValue.trim(),
-      description: newDesc.trim() || undefined,
-      scope: newScope && newScope !== "__global__" ? newScope : undefined,
-    });
+    const body = buildAddSecretBody(newName, newValue, newDesc, newScope);
+    if (!body) return;
+    await upsertSecret.mutateAsync(body);
     setNewName("");
     setNewValue("");
     setNewDesc("");
@@ -70,17 +107,12 @@ export default function SecretsPage() {
 
   const doEdit = useCallback(async () => {
     if (!editTarget) return;
-    if (!editValue.trim()) {
+    const body = buildEditSecretBody(editTarget, editValue, editDesc, editScope);
+    if (!body) {
       setEditValidation(t("secrets.value_required"));
       return;
     }
     setEditValidation("");
-    const body: { name: string; value: string; description?: string; scope?: string } = {
-      name: editTarget,
-      value: editValue.trim(),
-    };
-    if (editDesc.trim()) body.description = editDesc.trim();
-    if (editScope) body.scope = editScope;
     await upsertSecret.mutateAsync(body);
     setEditTarget(null);
     setEditValue("");
@@ -107,8 +139,7 @@ export default function SecretsPage() {
 
   const revealSecret = useCallback(async (name: string, scope: string) => {
     try {
-      const scopeParam = scope ? `&scope=${encodeURIComponent(scope)}` : "";
-      const result = await apiGet<{ name: string; value: string }>(`/api/secrets/${encodeURIComponent(name)}?reveal=true${scopeParam}`);
+      const result = await apiGet<{ name: string; value: string }>(buildRevealUrl(name, scope));
       setRevealedSecret({ name, value: result.value });
     } catch (e) {
       toast.error(`${e}`);
