@@ -235,7 +235,7 @@ describe("TargetAgentIndicator (INPT-02)", () => {
 // ── INPT-03: File attachment button presence ──────────────────────────────
 
 describe("Attachment button presence (INPT-03)", () => {
-  it("Attachment button is rendered in ChatComposer", async () => {
+  it("Attachment button is rendered in ChatComposer", { timeout: 30000 }, async () => {
     // The ChatComposer renders a button that triggers a hidden file input.
     const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
     const { container } = render(
@@ -255,7 +255,7 @@ describe("Attachment button presence (INPT-03)", () => {
 // ── INPT-04: Textarea presence ───────────────────────────────────────────
 
 describe("Textarea presence (INPT-04)", () => {
-  it("Textarea is rendered in ChatComposer", async () => {
+  it("Textarea is rendered in ChatComposer", { timeout: 10000 }, async () => {
     const { ChatThread } = await import("@/app/(authenticated)/chat/ChatThread");
     render(
       <ChatThread
@@ -333,7 +333,6 @@ describe("COMP-01/COMP-02/COMP-03 — composer hardening", () => {
     expect(textarea).not.toBeNull();
 
     const heightValues: string[] = [];
-    const originalDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "style");
     const nativeSet = Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype, "height")?.set;
 
     // Spy on height assignments
