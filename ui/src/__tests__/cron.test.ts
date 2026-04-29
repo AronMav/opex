@@ -12,12 +12,31 @@ describe("isValidCron", () => {
   it("rejects invalid expressions", () => {
     expect(isValidCron("")).toBe(false);
     expect(isValidCron("* * *")).toBe(false);
-    expect(isValidCron("0 9 * * * *")).toBe(false);
     expect(isValidCron("hello")).toBe(false);
   });
 
-  it("handles whitespace", () => {
+  it("rejects 6-field expressions (seconds field not supported)", () => {
+    expect(isValidCron("0 9 * * * *")).toBe(false);
+  });
+
+  it("rejects 4-field expressions", () => {
+    expect(isValidCron("0 9 * *")).toBe(false);
+  });
+
+  it("handles extra whitespace between fields", () => {
     expect(isValidCron("  0  9  *  *  *  ")).toBe(true);
+  });
+
+  it("accepts step-only expression /* * * * */", () => {
+    expect(isValidCron("*/5 * * * *")).toBe(true);
+  });
+
+  it("accepts monthly expression (0 0 1 * *)", () => {
+    expect(isValidCron("0 0 1 * *")).toBe(true);
+  });
+
+  it("rejects single asterisk as the whole expression", () => {
+    expect(isValidCron("*")).toBe(false);
   });
 });
 
@@ -68,6 +87,15 @@ describe("describeCron", () => {
   it("handles weekday filter", () => {
     expect(describeCron("0 9 * * 1-5", t as any)).toBe("At 9:00 (Mon–Fri)");
   });
+
+  it("handles custom dow (e.g. 1,3,5)", () => {
+    const result = describeCron("0 9 * * 1,3,5", t as any);
+    expect(result).toContain("days: 1,3,5");
+  });
+
+  it("returns raw expression for too-few fields", () => {
+    expect(describeCron("* * *", t as any)).toBe("* * *");
+  });
 });
 
 describe("CRON_PRESETS", () => {
@@ -92,5 +120,9 @@ describe("TIMEZONES", () => {
 
   it("includes Europe/Moscow", () => {
     expect(TIMEZONES.some((tz) => tz.value === "Europe/Moscow")).toBe(true);
+  });
+
+  it("includes UTC", () => {
+    expect(TIMEZONES.some((tz) => tz.value === "UTC")).toBe(true);
   });
 });

@@ -33,6 +33,18 @@ describe("cleanContent", () => {
   it("passes through normal text unchanged", () => {
     expect(cleanContent("Hello world")).toBe("Hello world");
   });
+
+  it("trims surrounding whitespace", () => {
+    expect(cleanContent("  hello  ")).toBe("hello");
+  });
+
+  it("returns empty for whitespace-only content", () => {
+    expect(cleanContent("   ")).toBe("");
+  });
+
+  it("removes unclosed [TOOL_CALL] at end", () => {
+    expect(cleanContent("text [TOOL_CALL]partial")).toBe("text");
+  });
 });
 
 describe("formatDuration", () => {
@@ -55,6 +67,18 @@ describe("formatDuration", () => {
   it("handles zero", () => {
     expect(formatDuration(0)).toBe("0s");
   });
+
+  it("formats exactly 59 seconds as seconds", () => {
+    expect(formatDuration(59)).toBe("59s");
+  });
+
+  it("formats exactly 60 seconds as minutes", () => {
+    expect(formatDuration(60)).toBe("1m");
+  });
+
+  it("formats exactly 3600 seconds as 1h (no minutes)", () => {
+    expect(formatDuration(3600)).toBe("1h");
+  });
 });
 
 describe("formatBytes", () => {
@@ -76,5 +100,13 @@ describe("formatBytes", () => {
 
   it("handles zero", () => {
     expect(formatBytes(0)).toBe("0 B");
+  });
+
+  it("formats exactly 1023 bytes as B (below KB threshold)", () => {
+    expect(formatBytes(1023)).toBe("1023 B");
+  });
+
+  it("formats exactly 1024 bytes as 1.0 KB", () => {
+    expect(formatBytes(1024)).toBe("1.0 KB");
   });
 });
