@@ -70,14 +70,19 @@ export function mergeLiveOverlay(
     if (m.role === "assistant" && historyIds.has(m.id)) continue;
 
     if (m.role === "user") {
-      liveHasNewUserMsg = true;
       const firstText = m.parts?.[0]?.type === "text" ? (m.parts[0] as { text: string }).text : "";
+      let isNew = false;
       if (!firstText) {
         // H5: empty / attachment-only messages all map to "" — fall back to ID dedup
-        if (!historyIds.has(m.id)) overlay.push(m);
+        if (!historyIds.has(m.id)) { overlay.push(m); isNew = true; }
       } else if (!historyUserTexts.has(firstText)) {
         overlay.push(m);
+        isNew = true;
       }
+      // Only mark as "new user turn" when the user message itself is new (not yet
+      // in history). If history already has it (confirmed), the assistant streaming
+      // is a continuation of the same turn and continuation-merge must still apply.
+      if (isNew) liveHasNewUserMsg = true;
       continue;
     }
 
