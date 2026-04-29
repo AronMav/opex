@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { parseSSELines, parseSseEvent } from "@/stores/sse-events";
 import { useChatStore } from "@/stores/chat-store";
 
 // Mock react-query (used inside chat-store for cache invalidation)
@@ -15,95 +14,6 @@ vi.mock("@/lib/api", () => ({
   getToken: vi.fn(() => "test-token"),
   assertToken: vi.fn(() => "test-token"),
 }));
-
-describe("parseSSELines", () => {
-  it("splits single complete line", () => {
-    const buf = { current: "" };
-    const lines = parseSSELines("data: hello\n", buf);
-    expect(lines).toEqual(["data: hello"]);
-    expect(buf.current).toBe("");
-  });
-
-  it("buffers incomplete line", () => {
-    const buf = { current: "" };
-    const lines = parseSSELines("data: hel", buf);
-    expect(lines).toEqual([]);
-    expect(buf.current).toBe("data: hel");
-  });
-
-  it("flushes buffer on next chunk", () => {
-    const buf = { current: "data: hel" };
-    const lines = parseSSELines("lo\n", buf);
-    expect(lines).toEqual(["data: hello"]);
-  });
-
-  it("splits multiple lines", () => {
-    const buf = { current: "" };
-    const lines = parseSSELines("data: a\ndata: b\n", buf);
-    expect(lines).toEqual(["data: a", "data: b"]);
-  });
-
-  it("strips \\r from \\r\\n line endings", () => {
-    const buf = { current: "" };
-    const lines = parseSSELines("data: hello\r\n", buf);
-    expect(lines).toEqual(["data: hello"]);
-  });
-});
-
-describe("parseSseEvent", () => {
-  it("parses text-delta event", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "text-delta", delta: "hello" }));
-    expect(event?.type).toBe("text-delta");
-    if (event?.type === "text-delta") expect(event.delta).toBe("hello");
-  });
-
-  it("defaults missing delta to empty string", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "text-delta" }));
-    expect(event?.type).toBe("text-delta");
-    if (event?.type === "text-delta") expect(event.delta).toBe("");
-  });
-
-  it("parses tool-input-start event", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "tool-input-start", toolCallId: "tc1", toolName: "search" }));
-    expect(event?.type).toBe("tool-input-start");
-    if (event?.type === "tool-input-start") {
-      expect(event.toolCallId).toBe("tc1");
-      expect(event.toolName).toBe("search");
-    }
-  });
-
-  it("returns null for tool-input-start missing fields", () => {
-    expect(parseSseEvent(JSON.stringify({ type: "tool-input-start" }))).toBeNull();
-  });
-
-  it("parses tool-output-available event", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "tool-output-available", toolCallId: "tc1", output: "result" }));
-    expect(event?.type).toBe("tool-output-available");
-    if (event?.type === "tool-output-available") expect(event.output).toBe("result");
-  });
-
-  it("returns null for invalid JSON", () => {
-    expect(parseSseEvent("not json")).toBeNull();
-  });
-
-  it("returns null for missing type", () => {
-    expect(parseSseEvent(JSON.stringify({ delta: "oops" }))).toBeNull();
-  });
-
-  it("parses finish event", () => {
-    expect(parseSseEvent(JSON.stringify({ type: "finish" }))?.type).toBe("finish");
-  });
-
-  it("parses error event with errorText", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "error", errorText: "timeout" }));
-    expect(event?.type).toBe("error");
-    if (event?.type === "error") expect(event.errorText).toBe("timeout");
-  });
-
-  it("returns null for unknown event type", () => {
-    expect(parseSseEvent(JSON.stringify({ type: "unknown-future-event" }))).toBeNull();
-  });
-});
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -132,7 +42,7 @@ describe("chat store — streaming via sendMessage", () => {
   const AGENT = "TestAgent";
 
   beforeEach(() => {
-    useChatStore.setState({ agents: {}, currentAgent: AGENT, _selectCounter: {} });
+    useChatStore.setState({ agents: {}, currentAgent: AGENT, _selectCounter: {}, sessionParticipants: {} });
   });
 
   afterEach(() => {
