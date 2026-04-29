@@ -245,6 +245,23 @@ impl LlmProvider for OpenAiCompatibleProvider {
             "calling LLM API"
         );
 
+        const LARGE_CONTEXT_CHARS: usize = 200_000;
+        let ctx_chars: usize = messages.iter().map(|m| {
+            m.content.len()
+                + m.tool_calls.as_deref().unwrap_or(&[]).iter()
+                    .map(|tc| tc.arguments.to_string().len())
+                    .sum::<usize>()
+        }).sum();
+        if ctx_chars > LARGE_CONTEXT_CHARS {
+            tracing::warn!(
+                provider = %self.provider_name,
+                model = %self.model,
+                context_chars = ctx_chars,
+                threshold = LARGE_CONTEXT_CHARS,
+                "large context being sent to LLM — provider may reject with 5xx or truncate silently"
+            );
+        }
+
         let api_key = self.resolve_api_key().await;
         let effective_url = self.resolve_url().await;
         let body_text = crate::agent::providers_http::retry_http_post(
@@ -427,6 +444,23 @@ impl LlmProvider for OpenAiCompatibleProvider {
             tools = tools.len(),
             "calling LLM API (streaming)"
         );
+
+        const LARGE_CONTEXT_CHARS: usize = 200_000;
+        let ctx_chars: usize = messages.iter().map(|m| {
+            m.content.len()
+                + m.tool_calls.as_deref().unwrap_or(&[]).iter()
+                    .map(|tc| tc.arguments.to_string().len())
+                    .sum::<usize>()
+        }).sum();
+        if ctx_chars > LARGE_CONTEXT_CHARS {
+            tracing::warn!(
+                provider = %self.provider_name,
+                model = %self.model,
+                context_chars = ctx_chars,
+                threshold = LARGE_CONTEXT_CHARS,
+                "large context being sent to LLM — provider may reject with 5xx or truncate silently"
+            );
+        }
 
         let start = std::time::Instant::now();
         let api_key = self.resolve_api_key().await;
