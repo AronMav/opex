@@ -60,23 +60,41 @@ pub async fn retry_http_post(
 /// Like [`retry_http_post`] but accepts a closure to customize each request
 /// (e.g. add custom auth headers). The closure receives a `RequestBuilder`
 /// that already has URL and JSON body set, and must return the builder.
+///
+/// Also retries once if the response body fails to decode — this can happen
+/// when two concurrent subagents hit a thinking-mode LLM (DeepSeek) and the
+/// server closes the connection before the large reasoning_content is fully sent.
 pub async fn retry_http_post_custom(
     client: &reqwest::Client,
     url: &str,
     body: &serde_json::Value,
     provider_name: &str,
     retryable_codes: &[u16],
-    customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    customize: impl Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<String> {
-    let resp = send_with_retry(client, url, body, provider_name, retryable_codes, customize)
-        .await
-        .map_err(|e| match e {
-            SendError::Http { status, body: b } =>
-                anyhow::anyhow!("{provider_name} API error {status}: {b}"),
-            SendError::Network(e) =>
-                anyhow::anyhow!("{provider_name} request error: {e}"),
-        })?;
-    Ok(resp.text().await?)
+    for body_attempt in 0..2u32 {
+        let resp = send_with_retry(client, url, body, provider_name, retryable_codes, |req| customize(req))
+            .await
+            .map_err(|e| match e {
+                SendError::Http { status, body: b } =>
+                    anyhow::anyhow!("{provider_name} API error {status}: {b}"),
+                SendError::Network(e) =>
+                    anyhow::anyhow!("{provider_name} request error: {e}"),
+            })?;
+        match resp.text().await {
+            Ok(text) => return Ok(text),
+            Err(e) if body_attempt == 0 => {
+                tracing::warn!(
+                    provider = %provider_name,
+                    error = %e,
+                    "response body read failed, retrying request"
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(e) => return Err(anyhow::anyhow!("{provider_name} error reading response body: {e}")),
+        }
+    }
+    unreachable!()
 }
 
 /// Standard retryable HTTP status codes for OpenAI-compatible providers.
