@@ -127,14 +127,29 @@ pub async fn run_subagent_with_session(
         if let Some(dl) = deadline
             && std::time::Instant::now() > dl {
                 tracing::warn!(iteration, "subagent deadline reached, returning partial result");
-                let forced = cfg.provider.chat(&messages, &[]).await?;
+                // Use streaming client for the forced-finish call too — no total-body timeout.
+                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let forced = cfg.provider.chat_stream(&messages, &[], tx).await?;
                 return Ok(extract_result_text(&forced.content, &messages));
             }
 
+        // Use chat_stream() instead of chat() so the streaming HTTP client is used.
+        // The streaming client has no per-request total timeout, whereas the non-streaming
+        // client has request_secs=120s.  Thinking-mode models (DeepSeek V4 Pro) generate
+        // very large reasoning_content, and parallel subagents can easily exceed 120s
+        // waiting for the full non-streaming body — leading to "error decoding response body".
+        // Chunks are discarded (subagents don't stream to the UI); only the final LlmResponse is used.
+        let (chunk_tx, _chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let response = if loop_config.compact_on_overflow {
-            executor.chat_with_overflow_recovery(&mut messages, &available_tools).await?
+            crate::agent::pipeline::llm_call::chat_stream_with_overflow_recovery(
+                cfg.provider.as_ref(),
+                &mut messages,
+                &available_tools,
+                chunk_tx,
+                executor,
+            ).await?
         } else {
-            cfg.provider.chat(&messages, &available_tools).await?
+            cfg.provider.chat_stream(&messages, &available_tools, chunk_tx).await?
         };
 
         if response.tool_calls.is_empty() {
