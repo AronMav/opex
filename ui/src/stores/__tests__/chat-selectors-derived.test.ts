@@ -56,7 +56,7 @@ describe("chat-selectors (derived)", () => {
 
   describe("selectLiveHasContent", () => {
     it("returns true for live mode with ≥1 message", () => {
-      const msg = { id: "m1", role: "assistant", parts: [], createdAt: new Date().toISOString() };
+      const msg = { id: "m1", role: "assistant" as const, parts: [], createdAt: new Date().toISOString() };
       expect(selectLiveHasContent(makeState(agent, { messageSource: { mode: "live", messages: [msg] } }), agent)).toBe(true);
     });
     it("returns false for live mode with 0 messages", () => {

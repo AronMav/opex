@@ -43,10 +43,10 @@ pub fn resolve_workspace_path(
     // separator. These are never legitimate leaf names.
     if let Some(name) = user_supplied.file_name() {
         let bytes = name.to_string_lossy();
-        if bytes == ".." || bytes.contains('/') || bytes.contains('\\') {
+        if bytes == ".." || bytes.contains('/') || bytes.contains('\\') || bytes.contains('\0') {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("invalid leaf component: {}", bytes),
+                format!("invalid leaf component: {}", bytes.escape_default()),
             ));
         }
     }
