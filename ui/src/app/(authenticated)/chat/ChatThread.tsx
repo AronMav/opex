@@ -114,7 +114,12 @@ export function ChatThread({
     resumedSessionsRef.current.clear();
   }, [currentAgent, activeSessionId]);
   useEffect(() => {
-    if (isActivePhase(connectionPhase)) {
+    // Clear the resume guard only when actual streaming data arrives ("streaming"),
+    // NOT on "submitted" alone. A 204 response goes submitted→idle without real data
+    // and must not reset the guard — otherwise the stale sessionRunStatus="running"
+    // cache would loop: idle→resumeStream→submitted (guard cleared)→204→idle→repeat,
+    // keeping connectionPhase in an active phase and showing the blinking cursor.
+    if (connectionPhase === "streaming" || connectionPhase === "reconnecting") {
       resumedSessionsRef.current.clear();
     }
   }, [connectionPhase]);
