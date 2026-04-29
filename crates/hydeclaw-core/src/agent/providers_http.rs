@@ -335,7 +335,7 @@ mod tests {
             &client, &url, &serde_json::json!({}), "test", RETRYABLE_OPENAI, |r| r,
         ).await;
         assert!(result.is_ok(), "expected Ok after retry, got {:?}", result.err());
-        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3); // 3 = BackoffPolicy::default().max_retries
     }
 
     /// 503 three times (all retries exhausted): should return SendError::Http { status: 503 }.
@@ -357,7 +357,7 @@ mod tests {
             matches!(result, Err(SendError::Http { status: 503, .. })),
             "expected Http(503), got {:?}", result
         );
-        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+        assert_eq!(server.received_requests().await.unwrap().len(), 3); // 3 = BackoffPolicy::default().max_retries
     }
 
     /// 400 should not be retried and returns immediately.
