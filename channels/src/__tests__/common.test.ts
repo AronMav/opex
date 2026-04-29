@@ -6,6 +6,13 @@ import {
   decodeBase64Param,
   parseUserCommand,
   emojiToSlackShortcode,
+  classifyMediaType,
+  convertTablesToCodeBlocks,
+  commonMarkToMarkdownV2,
+  commonMarkToDiscord,
+  commonMarkToSlack,
+  commonMarkToWhatsApp,
+  commonMarkToIrc,
 } from "../drivers/common";
 
 // ── splitText ───────────────────────────────────────────────────────────
@@ -48,10 +55,11 @@ describe("splitText", () => {
   });
 
   test("handles multibyte characters", () => {
-    // Each Cyrillic char is 2 bytes in UTF-8
-    const text = "БББББ"; // 10 bytes
+    // splitText measures JS string length (codepoints), not UTF-8 bytes.
+    // "БББББ" has JS length 5; with maxLen=4 it splits into ["ББББ", "Б"].
+    const text = "БББББ"; // JS length = 5
     const parts = splitText(text, 4);
-    expect(parts).toEqual(["ББ", "ББ", "Б"]);
+    expect(parts).toEqual(["ББББ", "Б"]);
   });
 
   test("preserves code blocks when enabled", () => {
@@ -305,5 +313,193 @@ describe("emojiToSlackShortcode", () => {
     expect(emojiToSlackShortcode(toolEmoji("shell_run"))).toBe("technologist");
     expect(emojiToSlackShortcode(toolEmoji("memory_recall"))).toBe("brain");
     expect(emojiToSlackShortcode(toolEmoji("unknown_tool"))).toBe("fire");
+  });
+});
+
+// ── classifyMediaType ───────────────────────────────────────────────────
+
+describe("classifyMediaType", () => {
+  test("image/* → image", () => {
+    expect(classifyMediaType("image/png")).toBe("image");
+    expect(classifyMediaType("image/jpeg")).toBe("image");
+  });
+
+  test("audio/* → audio", () => {
+    expect(classifyMediaType("audio/mpeg")).toBe("audio");
+    expect(classifyMediaType("audio/ogg")).toBe("audio");
+  });
+
+  test("video/* → video", () => {
+    expect(classifyMediaType("video/mp4")).toBe("video");
+  });
+
+  test("application/* → document", () => {
+    expect(classifyMediaType("application/pdf")).toBe("document");
+    expect(classifyMediaType("application/zip")).toBe("document");
+  });
+
+  test("undefined → document", () => {
+    expect(classifyMediaType(undefined)).toBe("document");
+  });
+
+  test("empty string → document", () => {
+    expect(classifyMediaType("")).toBe("document");
+  });
+});
+
+// ── convertTablesToCodeBlocks ───────────────────────────────────────────
+
+describe("convertTablesToCodeBlocks", () => {
+  test("converts simple markdown table", () => {
+    const table = "| A | B |\n|---|---|\n| 1 | 2 |";
+    const out = convertTablesToCodeBlocks(table);
+    expect(out).toContain("```");
+    expect(out).toContain("A");
+    expect(out).toContain("B");
+  });
+
+  test("passes through non-table text unchanged", () => {
+    const text = "just plain text\nno table here";
+    expect(convertTablesToCodeBlocks(text)).toBe(text);
+  });
+
+  test("table with single data row is not converted (needs ≥2 data rows)", () => {
+    const table = "| A | B |\n|---|---|\n";
+    const out = convertTablesToCodeBlocks(table);
+    expect(out).not.toContain("```");
+  });
+});
+
+// ── commonMarkToMarkdownV2 ──────────────────────────────────────────────
+
+describe("commonMarkToMarkdownV2", () => {
+  test("bold **text**", () => {
+    const out = commonMarkToMarkdownV2("**hello**");
+    expect(out).toContain("*hello*");
+  });
+
+  test("italic *text*", () => {
+    const out = commonMarkToMarkdownV2("*world*");
+    expect(out).toContain("_world_");
+  });
+
+  test("escapes special MarkdownV2 characters in plain text", () => {
+    const out = commonMarkToMarkdownV2("hello. world!");
+    expect(out).toContain("\\.");
+    expect(out).toContain("\\!");
+  });
+
+  test("inline code is not escaped", () => {
+    const out = commonMarkToMarkdownV2("`foo.bar`");
+    expect(out).toBe("`foo.bar`");
+  });
+
+  test("fenced code block is preserved", () => {
+    const out = commonMarkToMarkdownV2("```\nhello\n```");
+    expect(out).toContain("```");
+    expect(out).toContain("hello");
+  });
+
+  test("link [text](url)", () => {
+    const out = commonMarkToMarkdownV2("[click](https://example.com)");
+    expect(out).toContain("[click]");
+    expect(out).toContain("https://example.com");
+  });
+
+  test("strikethrough ~~text~~", () => {
+    const out = commonMarkToMarkdownV2("~~removed~~");
+    expect(out).toContain("~removed~");
+  });
+
+  test("empty string returns empty", () => {
+    expect(commonMarkToMarkdownV2("")).toBe("");
+  });
+});
+
+// ── commonMarkToDiscord ─────────────────────────────────────────────────
+
+describe("commonMarkToDiscord", () => {
+  test("passes most markdown through unchanged", () => {
+    const text = "**bold** and *italic*";
+    expect(commonMarkToDiscord(text)).toBe(text);
+  });
+
+  test("converts tables to code blocks", () => {
+    const table = "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |";
+    expect(commonMarkToDiscord(table)).toContain("```");
+  });
+});
+
+// ── commonMarkToSlack ───────────────────────────────────────────────────
+
+describe("commonMarkToSlack", () => {
+  test("converts **bold** to *bold*", () => {
+    expect(commonMarkToSlack("**hello**")).toBe("*hello*");
+  });
+
+  test("converts [text](url) to <url|text>", () => {
+    expect(commonMarkToSlack("[click](https://example.com)")).toBe(
+      "<https://example.com|click>"
+    );
+  });
+
+  test("converts ## header to *header*", () => {
+    expect(commonMarkToSlack("## Title")).toBe("*Title*");
+  });
+});
+
+// ── commonMarkToWhatsApp ────────────────────────────────────────────────
+
+describe("commonMarkToWhatsApp", () => {
+  test("converts **bold** to *bold*", () => {
+    expect(commonMarkToWhatsApp("**hello**")).toBe("*hello*");
+  });
+
+  test("converts [text](url) to text (url)", () => {
+    expect(commonMarkToWhatsApp("[click](https://example.com)")).toBe(
+      "click (https://example.com)"
+    );
+  });
+
+  test("converts ## header to *header*", () => {
+    expect(commonMarkToWhatsApp("## Title")).toBe("*Title*");
+  });
+});
+
+// ── commonMarkToIrc ─────────────────────────────────────────────────────
+
+describe("commonMarkToIrc", () => {
+  test("strips **bold**", () => {
+    expect(commonMarkToIrc("**hello**")).toBe("hello");
+  });
+
+  test("strips *italic*", () => {
+    expect(commonMarkToIrc("*italic*")).toBe("italic");
+  });
+
+  test("strips ~~strikethrough~~", () => {
+    expect(commonMarkToIrc("~~removed~~")).toBe("removed");
+  });
+
+  test("strips code fences and keeps content", () => {
+    expect(commonMarkToIrc("```\ncode here\n```")).toBe("code here");
+  });
+
+  test("strips inline code backticks", () => {
+    expect(commonMarkToIrc("`foo`")).toBe("foo");
+  });
+
+  test("converts [text](url) to text - url", () => {
+    expect(commonMarkToIrc("[link](https://example.com)")).toBe(
+      "link - https://example.com"
+    );
+  });
+
+  test("strips blockquote marker", () => {
+    expect(commonMarkToIrc("> quote")).toBe("quote");
+  });
+
+  test("strips ## header", () => {
+    expect(commonMarkToIrc("## Title")).toBe("Title");
   });
 });
