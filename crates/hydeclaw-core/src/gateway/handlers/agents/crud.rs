@@ -389,7 +389,11 @@ pub(crate) async fn api_update_agent(
         }
         if payload.icon.is_none() { payload.icon = a.icon.clone(); }
         if payload.provider_connection.is_none() { payload.provider_connection = a.provider_connection.clone(); }
-        if payload.fallback_provider.is_none() { payload.fallback_provider = a.fallback_provider.clone(); }
+        match payload.fallback_provider.as_deref() {
+            None => payload.fallback_provider = a.fallback_provider.clone(),
+            Some("") => payload.fallback_provider = None,
+            Some(_) => {}
+        }
         if payload.approval.is_none() {
             payload.approval = Some(a.approval.as_ref().map(|ap| ApprovalPayload {
                 enabled: Some(ap.enabled),

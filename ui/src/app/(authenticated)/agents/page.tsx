@@ -254,7 +254,7 @@ function formToPayload(f: FormState) {
       : null,
     max_history_messages: f.maxHistoryMessages ? parseInt(f.maxHistoryMessages) : null,
     daily_budget_tokens: parseInt(f.dailyBudgetTokens) || 0,
-    fallback_provider: f.fallbackProvider || null,
+    fallback_provider: f.fallbackProvider,
   };
 }
 

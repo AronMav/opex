@@ -168,7 +168,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
             provider: p.provider,
             model: p.model,
             provider_connection: p.provider_connection,
-            fallback_provider: p.fallback_provider,
+            fallback_provider: p.fallback_provider.filter(|s| !s.is_empty()),
             temperature: p.temperature.unwrap_or(1.0),
             max_tokens: p.max_tokens,
             access: p.access.flatten().map(|a| AgentAccessConfig {
