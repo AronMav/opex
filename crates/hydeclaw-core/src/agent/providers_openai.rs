@@ -2,6 +2,7 @@
 //! extracted from providers.rs for readability.
 
 use super::{async_trait, Deserialize, Arc, SecretsManager, ModelOverride, LlmProvider, Message, ToolDefinition, Result, LlmResponse, messages_to_openai_format, mpsc};
+use crate::agent::providers_http::SendError;
 
 // ── OpenAI-Compatible Provider (works with MiniMax, OpenAI, Ollama, etc.) ──
 
@@ -430,60 +431,35 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let start = std::time::Instant::now();
         let api_key = self.resolve_api_key().await;
         let effective_url = self.resolve_url().await;
-        let mut req = self.streaming_client.post(&effective_url).json(&body);
-        if !api_key.is_empty() {
-            req = req.bearer_auth(&api_key);
-        }
-        let resp = match req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(anyhow::Error::new(super::classify_reqwest_err(
+        let api_key_clone = api_key.clone();
+        let resp = crate::agent::providers_http::send_with_retry(
+            &self.streaming_client,
+            &effective_url,
+            &body,
+            &self.provider_name,
+            crate::agent::providers_http::RETRYABLE_OPENAI,
+            move |req| if api_key_clone.is_empty() { req } else { req.bearer_auth(&api_key_clone) },
+        )
+        .await
+        .map_err(|e| match e {
+            SendError::Http { status, .. } if status == 401 || status == 403 =>
+                anyhow::Error::new(LlmCallError::AuthError {
+                    provider: self.provider_name.clone(),
+                    status,
+                }),
+            SendError::Http { status, .. } =>
+                anyhow::Error::new(LlmCallError::Server5xx {
+                    provider: self.provider_name.clone(),
+                    status,
+                }),
+            SendError::Network(e) =>
+                anyhow::Error::new(super::classify_reqwest_err(
                     e,
                     &self.provider_name,
                     self.timeouts.connect_secs,
                     self.timeouts.request_secs,
-                )));
-            }
-        };
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let code = status.as_u16();
-            let retry_after = resp.headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .map(std::string::ToString::to_string);
-            let err_text = resp.text().await.unwrap_or_default();
-            if code == 400 {
-                let body_preview = serde_json::to_string(&body).unwrap_or_default();
-                let mut end = body_preview.len().min(4000);
-                while end > 0 && !body_preview.is_char_boundary(end) { end -= 1; }
-                let truncated = &body_preview[..end];
-                tracing::error!(
-                    provider = %self.provider_name,
-                    request_body = %truncated,
-                    "400 Bad Request (stream) — dumping request body for diagnosis"
-                );
-            }
-            // Typed classification for response status errors: feeds
-            // RoutingProvider failover + AuthError cooldown floor.
-            if code == 401 || code == 403 {
-                return Err(anyhow::Error::new(LlmCallError::AuthError {
-                    provider: self.provider_name.clone(),
-                    status: code,
-                }));
-            }
-            if code >= 500 {
-                return Err(anyhow::Error::new(LlmCallError::Server5xx {
-                    provider: self.provider_name.clone(),
-                    status: code,
-                }));
-            }
-            if let Some(ra) = retry_after {
-                anyhow::bail!("{} API error (retry-after: {}): {}", self.provider_name, ra, err_text);
-            }
-            anyhow::bail!("{} API error: {}", self.provider_name, err_text);
-        }
+                )),
+        })?;
 
         // Parse SSE stream: accumulate content (streamed) + tool calls (buffered)
         let mut full_content = String::new();
