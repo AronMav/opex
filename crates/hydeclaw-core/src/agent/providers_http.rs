@@ -192,14 +192,81 @@ impl std::error::Error for SendError {
 /// - other non-2xx → `SendError::Http` immediately
 /// - network error → retried; final attempt → `SendError::Network`
 pub async fn send_with_retry(
-    _client: &reqwest::Client,
-    _url: &str,
-    _body: &serde_json::Value,
-    _provider_name: &str,
-    _retryable_codes: &[u16],
-    _customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+    client: &reqwest::Client,
+    url: &str,
+    body: &serde_json::Value,
+    provider_name: &str,
+    retryable_codes: &[u16],
+    mut customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, SendError> {
-    unimplemented!("send_with_retry not yet implemented")
+    let policy = BackoffPolicy::default();
+
+    for attempt in 0..policy.max_retries {
+        let start = std::time::Instant::now();
+        let req = customize(client.post(url).json(body));
+
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                tracing::info!(
+                    provider = %provider_name,
+                    status = %status,
+                    elapsed_ms = start.elapsed().as_millis() as u64,
+                    attempt,
+                    "LLM API responded"
+                );
+
+                if status.is_success() {
+                    return Ok(resp);
+                }
+
+                let code = status.as_u16();
+                let err_text = resp.text().await.unwrap_or_default();
+
+                if code == 400 {
+                    let body_preview = serde_json::to_string(body).unwrap_or_default();
+                    let mut end = body_preview.len().min(4000);
+                    while end > 0 && !body_preview.is_char_boundary(end) { end -= 1; }
+                    tracing::error!(
+                        provider = %provider_name,
+                        request_body = %&body_preview[..end],
+                        "400 Bad Request — dumping request body for diagnosis"
+                    );
+                    return Err(SendError::Http { status: code, body: err_text });
+                }
+
+                if !retryable_codes.contains(&code) || attempt == policy.max_retries - 1 {
+                    return Err(SendError::Http { status: code, body: err_text });
+                }
+
+                let backoff = policy.delay(attempt);
+                tracing::warn!(
+                    provider = %provider_name,
+                    status = %status,
+                    attempt,
+                    backoff_ms = backoff.as_millis() as u64,
+                    "retrying LLM request"
+                );
+                tokio::time::sleep(backoff).await;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    provider = %provider_name,
+                    error = %e,
+                    attempt,
+                    "LLM request failed"
+                );
+
+                if attempt == policy.max_retries - 1 {
+                    return Err(SendError::Network(e));
+                }
+
+                tokio::time::sleep(policy.delay(attempt)).await;
+            }
+        }
+    }
+
+    unreachable!("loop always returns on the final attempt")
 }
 
 /// Parse an SSE byte stream with cooperative cancellation + inactivity/max-duration timers.
