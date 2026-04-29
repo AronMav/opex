@@ -36,4 +36,12 @@ describe("wsToHttp", () => {
   test("preserves path and query", () => {
     expect(wsToHttp("ws://host:8080/api?q=1")).toBe("http://host:8080/api?q=1");
   });
+
+  test("passes http:// through unchanged", () => {
+    expect(wsToHttp("http://localhost:18789")).toBe("http://localhost:18789");
+  });
+
+  test("passes https:// through unchanged", () => {
+    expect(wsToHttp("https://example.com")).toBe("https://example.com");
+  });
 });
