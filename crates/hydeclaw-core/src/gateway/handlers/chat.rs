@@ -541,7 +541,29 @@ pub(crate) async fn api_chat_sse(
         crate::agent::engine_event_sender::EngineEventSender::new(raw_tx);
 
     // Engine task: process message and emit StreamEvents.
-    // Inter-agent communication now happens via the `agent` tool (polling model),
+    //
+    // Architectural invariant (Fix 3 — see commit message): the engine task is
+    // INTENTIONALLY decoupled from the SSE client lifetime.
+    //
+    //   * Spawned via `bus.bg_tasks.spawn(...)` (TaskTracker) so graceful
+    //     shutdown waits for it to complete normally before the runtime exits.
+    //   * Writes events to `raw_tx` → coalescer → `event_tx`. The downstream
+    //     converter task ALWAYS buffers events into `StreamRegistry`
+    //     (broadcast-backed) regardless of whether the SSE client is still
+    //     connected — see the `send_and_buffer!` macro below.
+    //   * If the SSE client disconnects, the converter sets
+    //     `client_gone_since` but keeps draining engine events to the registry
+    //     so reconnects via `/api/chat/{id}/stream` see a complete reply.
+    //   * The only paths that abort the engine task externally are:
+    //       (a) the 30s grace window after an explicit user-initiated cancel
+    //           (POST /api/chat/{id}/abort), and
+    //       (b) the 600s runaway-protection window after the SSE client is
+    //           confirmed gone with no resume.
+    //   Neither path runs unless the converter task observes a deliberate
+    //   signal — converter panics, channel hiccups, or transient client
+    //   drops do NOT cancel the engine.
+    //
+    // Inter-agent communication happens via the `agent` tool (polling model),
     // so no turn loop is needed — a single handle_sse call suffices.
     let ui_tx = bus.ui_event_tx.clone();
     let agent_for_broadcast = msg.agent_id.clone();
@@ -553,7 +575,7 @@ pub(crate) async fn api_chat_sse(
     // pipeline_cancel.cancel() → engine_cancel propagates into execute().
     let pipeline_cancel = CancellationToken::new();
     let engine_cancel = pipeline_cancel.clone();
-    let engine_handle = tokio::spawn(async move {
+    let engine_handle = bus.bg_tasks.spawn(async move {
         let current_agent_name = engine.name().to_string();
         if let Err(e) = engine.handle_sse(&msg, engine_event_tx.clone(), session_id, force_new_session, engine_cancel).await {
             tracing::error!(error = %e, "SSE chat error (agent: {})", current_agent_name);
