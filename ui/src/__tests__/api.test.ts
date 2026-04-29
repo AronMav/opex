@@ -55,6 +55,7 @@ describe("apiGet", () => {
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toBe("/api/test");
     expect(init.headers["Authorization"]).toBe("Bearer test-token");
+    expect(init.headers["Content-Type"]).toBe("application/json");
   });
 
   it("throws Session expired when no token", async () => {
@@ -98,6 +99,15 @@ describe("apiPost", () => {
     const [, init] = mockFetch.mock.calls[0];
     expect(init.method).toBe("POST");
     expect(init.body).toBeUndefined();
+  });
+
+  it("merges extraHeaders into request headers", async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ ok: true }));
+    await apiPost("/api/action", { x: 1 }, { "X-Custom": "value" });
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers["X-Custom"]).toBe("value");
+    expect(init.headers["Authorization"]).toBe("Bearer test-token");
   });
 });
 
