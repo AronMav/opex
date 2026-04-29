@@ -91,3 +91,12 @@ notify_mode = "listen"
 enabled = true
 cron = "0 3 * * *"
 retention_days = 7
+
+# ═══ Multi-agent timeouts (`agent` tool: run/message/collect/status/kill) ═══
+# Hot-reloadable via config watcher and PUT /api/config.
+# Invariant (warned-only): safety_timeout_secs > message_wait_for_idle_secs + message_result_secs.
+
+[agent_tool]
+message_wait_for_idle_secs = 60   # how long to wait for target agent to become idle before sending a message
+message_result_secs = 300         # how long sync run/message/collect blocks waiting for a result
+safety_timeout_secs = 600         # outer defense-in-depth wrapper (must be > 60 + 300)

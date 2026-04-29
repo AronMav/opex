@@ -350,3 +350,15 @@ export interface SessionFailuresResponse {
   limit: number;
   offset: number;
 }
+
+/**
+ * `[agent_tool]` section of `AppConfig` — multi-agent timeouts.
+ *
+ * Field names mirror the Rust `AgentToolConfig` struct in
+ * `crates/hydeclaw-core/src/config/mod.rs` exactly.
+ */
+export interface AgentToolConfig {
+  message_wait_for_idle_secs: number;
+  message_result_secs: number;
+  safety_timeout_secs: number;
+}

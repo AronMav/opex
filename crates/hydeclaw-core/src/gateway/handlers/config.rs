@@ -214,6 +214,11 @@ pub(crate) async fn api_get_config(
             "cron": config.backup.cron,
             "retention_days": config.backup.retention_days,
         },
+        "agent_tool": {
+            "message_wait_for_idle_secs": config.agent_tool.message_wait_for_idle_secs,
+            "message_result_secs": config.agent_tool.message_result_secs,
+            "safety_timeout_secs": config.agent_tool.safety_timeout_secs,
+        },
     }))
 }
 
@@ -233,6 +238,10 @@ pub(crate) struct ConfigUpdatePayload {
     backup_enabled: Option<bool>,
     backup_cron: Option<String>,
     backup_retention_days: Option<u32>,
+    // [agent_tool] — multi-agent timeouts (UI-configurable).
+    agent_tool_message_wait_for_idle_secs: Option<u64>,
+    agent_tool_message_result_secs: Option<u64>,
+    agent_tool_safety_timeout_secs: Option<u64>,
 }
 
 pub(crate) async fn api_update_config(
@@ -357,6 +366,20 @@ pub(crate) async fn api_update_config(
             restore_and_fail!("failed to update backup config", e);
         }
 
+    // Update [agent_tool] section (multi-agent timeouts)
+    if (payload.agent_tool_message_wait_for_idle_secs.is_some()
+        || payload.agent_tool_message_result_secs.is_some()
+        || payload.agent_tool_safety_timeout_secs.is_some())
+        && let Err(e) = crate::config::update_agent_tool_config(
+            "config/hydeclaw.toml",
+            payload.agent_tool_message_wait_for_idle_secs,
+            payload.agent_tool_message_result_secs,
+            payload.agent_tool_safety_timeout_secs,
+        )
+    {
+        restore_and_fail!("failed to update agent_tool config", e);
+    }
+
     // Validate the written config can be fully deserialized before proceeding
     if let Err(e) = crate::config::AppConfig::load(config_path) {
         // Restore backup — config is broken
@@ -383,6 +406,7 @@ pub(crate) async fn api_update_config(
     // Reload shared config from file (hot-reload)
     match crate::config::AppConfig::load("config/hydeclaw.toml") {
         Ok(new_config) => {
+            new_config.agent_tool.warn_if_invariant_violated();
             let mut config = cfg_svc.shared_config.write().await;
             *config = new_config;
         }

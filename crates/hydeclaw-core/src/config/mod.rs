@@ -62,6 +62,10 @@ pub struct AppConfig {
     /// Phase 64 SEC-03 upload URL signing config.
     #[serde(default)]
     pub uploads: UploadsConfig,
+    /// Multi-agent (`agent` tool) timeouts. Hot-reloadable via the config
+    /// watcher and the `/api/config` PUT endpoint.
+    #[serde(default)]
+    pub agent_tool: AgentToolConfig,
 }
 
 // ── UploadsConfig (Phase 64 SEC-03) ───────────────────────────────────────────
@@ -89,6 +93,84 @@ impl Default for UploadsConfig {
         Self {
             signed_url_ttl_secs: default_signed_url_ttl(),
             require_signature: default_require_signature(),
+        }
+    }
+}
+
+// ── AgentToolConfig (multi-agent timeouts) ────────────────────────────────────
+
+/// Timeouts for the multi-agent `agent` tool (run/message/collect/status/kill).
+///
+/// All values are in seconds. The defaults match the previous compile-time
+/// constants:
+/// - `message_wait_for_idle_secs` = 60 (how long to wait for the target agent
+///   to become idle before sending it a new message).
+/// - `message_result_secs` = 300 (how long sync `run`, sync `message`, and
+///   `collect` block waiting for the target's `last_result`).
+/// - `safety_timeout_secs` = 600 (defense-in-depth outer wrapper around any
+///   `agent` tool call in `pipeline::parallel`).
+///
+/// Invariant (warned on violation, never rejected — operators can override):
+///   `safety_timeout_secs > message_wait_for_idle_secs + message_result_secs`
+/// so the safety net never fires before the inner sync deadlines under
+/// normal conditions.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentToolConfig {
+    /// How long to wait for a target agent to become idle before sending it a
+    /// new message. After this timeout, `agent(action="message")` returns an
+    /// error instead of blocking forever. Default: 60 seconds.
+    #[serde(default = "default_message_wait_for_idle_secs")]
+    pub message_wait_for_idle_secs: u64,
+    /// How long to wait for a target agent to finish processing the just-sent
+    /// message and produce a `last_result`. Same value used for sync `run`,
+    /// sync `message`, and `collect`. Default: 300 seconds.
+    #[serde(default = "default_message_result_secs")]
+    pub message_result_secs: u64,
+    /// Defense-in-depth outer timeout for any `agent` tool call in the
+    /// pipeline-level executor. Should be strictly larger than
+    /// `message_wait_for_idle_secs + message_result_secs` so the inner
+    /// authoritative timeouts fire first. Default: 600 seconds.
+    #[serde(default = "default_safety_timeout_secs")]
+    pub safety_timeout_secs: u64,
+}
+
+fn default_message_wait_for_idle_secs() -> u64 { 60 }
+fn default_message_result_secs() -> u64 { 300 }
+fn default_safety_timeout_secs() -> u64 { 600 }
+
+impl Default for AgentToolConfig {
+    fn default() -> Self {
+        Self {
+            message_wait_for_idle_secs: default_message_wait_for_idle_secs(),
+            message_result_secs: default_message_result_secs(),
+            safety_timeout_secs: default_safety_timeout_secs(),
+        }
+    }
+}
+
+impl AgentToolConfig {
+    /// Returns true if the safety net is strictly larger than the maximum
+    /// expected inner sync latency (`message_wait_for_idle + message_result`).
+    /// Operators that prefer a tighter safety net (e.g. for testing) can
+    /// override this — we only emit a warning.
+    pub fn invariant_holds(&self) -> bool {
+        self.safety_timeout_secs
+            > self.message_wait_for_idle_secs.saturating_add(self.message_result_secs)
+    }
+
+    /// Emit a `tracing::warn` if the invariant is violated. Called from
+    /// startup and on hot-reload.
+    pub fn warn_if_invariant_violated(&self) {
+        if !self.invariant_holds() {
+            tracing::warn!(
+                safety = self.safety_timeout_secs,
+                wait_for_idle = self.message_wait_for_idle_secs,
+                result = self.message_result_secs,
+                "agent_tool: safety_timeout_secs is not strictly greater than \
+                 message_wait_for_idle_secs + message_result_secs — outer safety net \
+                 may fire before inner deadlines under normal conditions"
+            );
         }
     }
 }
@@ -1161,6 +1243,41 @@ pub fn update_backup_config(
     Ok(())
 }
 
+/// Update [agent_tool] section in TOML config file.
+pub fn update_agent_tool_config(
+    config_path: &str,
+    message_wait_for_idle_secs: Option<u64>,
+    message_result_secs: Option<u64>,
+    safety_timeout_secs: Option<u64>,
+) -> Result<()> {
+    let content = std::fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read config: {config_path}"))?;
+
+    let mut doc: toml_edit::DocumentMut = content.parse()
+        .with_context(|| "failed to parse config TOML for editing")?;
+
+    if doc.get("agent_tool").is_none() {
+        doc["agent_tool"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    if let Some(v) = message_wait_for_idle_secs {
+        doc["agent_tool"]["message_wait_for_idle_secs"] = toml_edit::value(v as i64);
+    }
+
+    if let Some(v) = message_result_secs {
+        doc["agent_tool"]["message_result_secs"] = toml_edit::value(v as i64);
+    }
+
+    if let Some(v) = safety_timeout_secs {
+        doc["agent_tool"]["safety_timeout_secs"] = toml_edit::value(v as i64);
+    }
+
+    std::fs::write(config_path, doc.to_string())
+        .with_context(|| format!("failed to write config: {config_path}"))?;
+
+    Ok(())
+}
+
 // ── Config hot-reload ──
 
 use std::sync::Arc;
@@ -1226,6 +1343,7 @@ pub fn spawn_config_watcher(config_path: String, shared: SharedConfig, api_write
 
                     match AppConfig::load(&config_path) {
                         Ok(new_config) => {
+                            new_config.agent_tool.warn_if_invariant_violated();
                             let shared = shared.clone();
                             rt.spawn(async move {
                                 let mut config = shared.write().await;
@@ -1914,6 +2032,93 @@ max_inter_agent_context_chars = 500
         // Other fields should get defaults
         assert_eq!(cfg.max_requests_per_minute, 300);
         assert_eq!(cfg.max_agent_turns, 5);
+    }
+
+    // ── AgentToolConfig (multi-agent timeouts) ──────────────────────────────
+
+    /// Empty TOML must produce all three defaults (60/300/600).
+    #[test]
+    fn agent_tool_config_defaults_when_missing() {
+        let toml_str = r#""#;
+        let cfg: AgentToolConfig = toml::from_str(toml_str).expect("empty must parse to defaults");
+        assert_eq!(cfg.message_wait_for_idle_secs, 60);
+        assert_eq!(cfg.message_result_secs, 300);
+        assert_eq!(cfg.safety_timeout_secs, 600);
+        assert!(cfg.invariant_holds(), "default invariant must hold");
+    }
+
+    /// AppConfig parses without an `[agent_tool]` section and falls back to defaults.
+    #[test]
+    fn app_config_agent_tool_section_defaults() {
+        let toml_str = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+"#;
+        let cfg: AppConfig = toml::from_str(toml_str).expect("parse minimal");
+        assert_eq!(cfg.agent_tool.message_wait_for_idle_secs, 60);
+        assert_eq!(cfg.agent_tool.message_result_secs, 300);
+        assert_eq!(cfg.agent_tool.safety_timeout_secs, 600);
+    }
+
+    /// Operator-set values are picked up cleanly.
+    #[test]
+    fn agent_tool_config_custom_values() {
+        let toml_str = r#"
+[agent_tool]
+message_wait_for_idle_secs = 30
+message_result_secs = 600
+safety_timeout_secs = 1200
+"#;
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            agent_tool: AgentToolConfig,
+        }
+        let w: Wrapper = toml::from_str(toml_str).expect("custom values");
+        assert_eq!(w.agent_tool.message_wait_for_idle_secs, 30);
+        assert_eq!(w.agent_tool.message_result_secs, 600);
+        assert_eq!(w.agent_tool.safety_timeout_secs, 1200);
+        assert!(w.agent_tool.invariant_holds());
+    }
+
+    /// Partial section: only one field present, others fall back to per-field defaults.
+    #[test]
+    fn agent_tool_config_partial_uses_per_field_defaults() {
+        let toml_str = r#"
+message_result_secs = 900
+"#;
+        let cfg: AgentToolConfig = toml::from_str(toml_str).expect("parse partial");
+        assert_eq!(cfg.message_wait_for_idle_secs, 60);
+        assert_eq!(cfg.message_result_secs, 900);
+        assert_eq!(cfg.safety_timeout_secs, 600);
+        // 600 < 60 + 900 = 960 → invariant violated, but config still loads.
+        assert!(!cfg.invariant_holds());
+    }
+
+    /// Invariant violation: warn-only path (just verifies the predicate without
+    /// rejecting). `warn_if_invariant_violated` is exercised here purely so the
+    /// branch is covered; it logs via `tracing` and returns `()`.
+    #[test]
+    fn agent_tool_config_invariant_violation_does_not_panic() {
+        let cfg = AgentToolConfig {
+            message_wait_for_idle_secs: 100,
+            message_result_secs: 500,
+            safety_timeout_secs: 300, // less than 100 + 500 = 600
+        };
+        assert!(!cfg.invariant_holds());
+        cfg.warn_if_invariant_violated(); // must not panic
+    }
+
+    /// Unknown fields are rejected (defense against typos).
+    #[test]
+    fn agent_tool_config_rejects_unknown_fields() {
+        let toml_str = r#"
+foo_bar_baz = 42
+"#;
+        let result: Result<AgentToolConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "deny_unknown_fields must reject typo");
     }
 
 }

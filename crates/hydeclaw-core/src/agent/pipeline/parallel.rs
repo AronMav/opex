@@ -14,19 +14,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-/// Defense-in-depth safety net for the `agent` tool's outer timeout.
-///
-/// The `agent` tool has authoritative internal timeouts (sync `run` blocks
-/// up to 300s; sync `message` blocks up to ~360s = 60s wait_for_idle + 300s
-/// wait_for_result; `wait_for_agent_result` deadline 300s). Under normal
-/// conditions those inner caps fire first. This 600s outer timeout
-/// (= 2 × max_inner_timeout + slack) only fires on catastrophic hangs that
-/// bypass the deadline-enforced waits — e.g., a future contributor adding a
-/// new sync action that forgets to honour an inner deadline.
-const AGENT_SAFETY_TIMEOUT: Duration = Duration::from_secs(600);
-
 // ── Public types ─────────────────────────────────────────────────────────────
 
 /// Returned when the loop detector triggers a break mid-batch.
@@ -42,6 +29,14 @@ pub trait ToolExecutor: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>>;
 
     fn needs_approval(&self, tool_name: &str) -> bool;
+
+    /// Defense-in-depth safety-net duration applied to the `agent` tool's
+    /// outer wrapper. Reads from the live `AppConfig.agent_tool.safety_timeout_secs`.
+    /// Default implementation returns the hardcoded 600s used before this
+    /// became configurable, so existing test stubs continue to compile.
+    fn agent_safety_timeout(&self) -> Duration {
+        Duration::from_secs(600)
+    }
 }
 
 // ── Helper predicates ────────────────────────────────────────────────────────
@@ -186,6 +181,7 @@ pub async fn execute_tool_calls_partitioned(
 
     // 4. Execute
     let default_timeout = Duration::from_secs(120);
+    let agent_safety_timeout = executor.agent_safety_timeout();
 
     let start_payload = |tc: &ToolCall| -> Value {
         serde_json::json!({
@@ -223,13 +219,12 @@ pub async fn execute_tool_calls_partitioned(
                 let args = enriched[i].clone();
                 async move {
                     // The `agent` tool owns authoritative internal timeouts
-                    // (sync run 300s; sync message ~360s). The 600s outer
-                    // wrapper here is a defense-in-depth safety net — it is
-                    // strictly larger than every inner cap, so under normal
-                    // conditions the inner timeouts fire first; only
-                    // catastrophic hangs hit the outer.
+                    // (sync run / sync message — see `pipeline::agent_tool`).
+                    // The outer wrapper here is a defense-in-depth safety net
+                    // sized strictly larger than every inner cap; under normal
+                    // conditions the inner timeouts fire first.
                     let timeout = if name == "agent" {
-                        AGENT_SAFETY_TIMEOUT
+                        agent_safety_timeout
                     } else {
                         default_timeout
                     };
@@ -328,12 +323,11 @@ pub async fn execute_tool_calls_partitioned(
         )
         .await;
         // See note on the parallel branch: the `agent` tool owns its own
-        // longer sync timeouts (300s run, ~360s message). The outer wrapper
-        // here is a 600s defense-in-depth safety net — strictly larger than
-        // every inner cap so the inner timeouts fire first under normal
-        // conditions.
+        // longer sync timeouts. The outer wrapper here is a defense-in-depth
+        // safety net — strictly larger than every inner cap so the inner
+        // timeouts fire first under normal conditions.
         let timeout = if tool_calls[i].name == "agent" {
-            AGENT_SAFETY_TIMEOUT
+            agent_safety_timeout
         } else {
             default_timeout
         };

@@ -148,6 +148,14 @@ impl crate::agent::pipeline::parallel::ToolExecutor for AgentEngine {
     fn needs_approval(&self, tool_name: &str) -> bool {
         self.needs_approval(tool_name)
     }
+
+    /// Reads `AppConfig.agent_tool.safety_timeout_secs` at call time so config
+    /// hot-reload takes effect on the next tool batch.
+    fn agent_safety_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.cfg().app_config.agent_tool.safety_timeout_secs,
+        )
+    }
 }
 
 // ── pipeline::llm_call::Compactor impl (from engine_provider.rs) ─────────────

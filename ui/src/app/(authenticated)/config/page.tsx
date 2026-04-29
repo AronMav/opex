@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Settings, Gauge, Box, GitBranch, Keyboard, Loader2, RotateCcw, Save } from "lucide-react";
+import { Settings, Gauge, Box, GitBranch, Keyboard, Loader2, RotateCcw, Save, Timer } from "lucide-react";
 import { toast } from "sonner";
 
 interface ConfigData {
@@ -63,6 +63,11 @@ export default function ConfigPage() {
   const [editMaxToolConcurrency, setEditMaxToolConcurrency] = useState("");
   const [editMaxAgentTurns, setEditMaxAgentTurns] = useState("");
   const [editEmbedDimensions, setEditEmbedDimensions] = useState("");
+  // [agent_tool] — multi-agent timeouts
+  const [editAgentToolWaitForIdle, setEditAgentToolWaitForIdle] = useState("");
+  const [editAgentToolResult, setEditAgentToolResult] = useState("");
+  const [editAgentToolSafety, setEditAgentToolSafety] = useState("");
+  const [savingAgentTool, setSavingAgentTool] = useState(false);
   const [savingFields, setSavingFields] = useState(false);
   const [schema, setSchema] = useState<Record<string, unknown> | null>(null);
 
@@ -82,6 +87,10 @@ export default function ConfigPage() {
         setEditMaxAgentTurns(String(limits?.max_agent_turns ?? ""));
         const memory = d.memory as Record<string, unknown> | undefined;
         setEditEmbedDimensions(String(memory?.embed_dimensions ?? ""));
+        const agentTool = d.agent_tool as Record<string, unknown> | undefined;
+        setEditAgentToolWaitForIdle(String(agentTool?.message_wait_for_idle_secs ?? ""));
+        setEditAgentToolResult(String(agentTool?.message_result_secs ?? ""));
+        setEditAgentToolSafety(String(agentTool?.safety_timeout_secs ?? ""));
       })
       .catch((e) => setError(`${e}`));
   }, []);
@@ -107,6 +116,29 @@ export default function ConfigPage() {
       toast.error(`${e}`);
     } finally {
       setSubagentsToggling(false);
+    }
+  };
+
+  const saveAgentToolFields = async () => {
+    setSavingAgentTool(true);
+    try {
+      const payload: Record<string, unknown> = {};
+      if (editAgentToolWaitForIdle.trim()) {
+        payload.agent_tool_message_wait_for_idle_secs = Number(editAgentToolWaitForIdle);
+      }
+      if (editAgentToolResult.trim()) {
+        payload.agent_tool_message_result_secs = Number(editAgentToolResult);
+      }
+      if (editAgentToolSafety.trim()) {
+        payload.agent_tool_safety_timeout_secs = Number(editAgentToolSafety);
+      }
+      await apiPut("/api/config", payload);
+      toast.success(t("config.saved"));
+      loadConfig();
+    } catch (e) {
+      toast.error(`${e}`);
+    } finally {
+      setSavingAgentTool(false);
     }
   };
 
@@ -197,7 +229,7 @@ export default function ConfigPage() {
         )}
 
         {config && (() => {
-          const serviceKeys = new Set(["toolgate_url", "public_url", "tts_proxy_url", "searxng_url", "tools", "mcp", "tools_count", "mcp_count", "memory", "subagents", "database", "gateway", "discussion", "typing"]);
+          const serviceKeys = new Set(["toolgate_url", "public_url", "tts_proxy_url", "searxng_url", "tools", "mcp", "tools_count", "mcp_count", "memory", "subagents", "database", "gateway", "discussion", "typing", "agent_tool"]);
           const sections: Record<string, Record<string, unknown>> = {};
           const topLevel: Record<string, unknown> = {};
           for (const [key, val] of Object.entries(config)) {
@@ -346,6 +378,86 @@ export default function ConfigPage() {
                       </Button>
                     </div>
                   </div>
+                <div className="neu-flat p-4 md:p-5">
+                  <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
+                    <Timer className="h-4 w-4 text-primary" />
+                    <h3 className="text-sm font-semibold text-foreground">{t("config.agent_tool.title")}</h3>
+                  </div>
+                  <div className="space-y-4">
+                    <p className="text-xs text-muted-foreground/70 leading-relaxed">
+                      {t("config.agent_tool.description")}
+                    </p>
+                    <div className="space-y-1.5">
+                      <label className="font-mono text-xs text-muted-foreground">message_wait_for_idle_secs</label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={3600}
+                            value={editAgentToolWaitForIdle}
+                            onChange={(e) => setEditAgentToolWaitForIdle(e.target.value)}
+                            placeholder="60"
+                            className="font-mono text-sm h-9"
+                          />
+                        </TooltipTrigger>
+                        {(() => { const d = getFieldDescription(schema, ["agent_tool", "message_wait_for_idle_secs"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
+                      </Tooltip>
+                      <p className="text-xs text-muted-foreground/60">
+                        {t("config.agent_tool.message_wait_for_idle")}
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="font-mono text-xs text-muted-foreground">message_result_secs</label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={3600}
+                            value={editAgentToolResult}
+                            onChange={(e) => setEditAgentToolResult(e.target.value)}
+                            placeholder="300"
+                            className="font-mono text-sm h-9"
+                          />
+                        </TooltipTrigger>
+                        {(() => { const d = getFieldDescription(schema, ["agent_tool", "message_result_secs"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
+                      </Tooltip>
+                      <p className="text-xs text-muted-foreground/60">
+                        {t("config.agent_tool.message_result")}
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="font-mono text-xs text-muted-foreground">safety_timeout_secs</label>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={3600}
+                            value={editAgentToolSafety}
+                            onChange={(e) => setEditAgentToolSafety(e.target.value)}
+                            placeholder="600"
+                            className="font-mono text-sm h-9"
+                          />
+                        </TooltipTrigger>
+                        {(() => { const d = getFieldDescription(schema, ["agent_tool", "safety_timeout_secs"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
+                      </Tooltip>
+                      <p className="text-xs text-muted-foreground/60">
+                        {t("config.agent_tool.safety_timeout")}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={saveAgentToolFields}
+                      disabled={savingAgentTool}
+                      className="gap-1.5"
+                    >
+                      {savingAgentTool ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      {t("common.save")}
+                    </Button>
+                  </div>
+                </div>
                 {Object.keys(topLevel).length > 0 && (
                   <div className="neu-flat p-4 md:p-5">
                     <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">

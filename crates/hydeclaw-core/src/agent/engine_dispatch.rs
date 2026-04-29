@@ -178,6 +178,9 @@ impl AgentEngine {
                     &self.cfg().db,
                     &self.cfg().agent.name,
                     arguments,
+                    crate::agent::pipeline::agent_tool::AgentToolTimeouts::from(
+                        &self.cfg().app_config.agent_tool,
+                    ),
                 ).await),
                 "web_fetch" => {
                     let toolgate_url = self.cfg().app_config.toolgate_url.clone()

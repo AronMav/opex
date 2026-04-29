@@ -258,6 +258,10 @@ async fn main() -> Result<()> {
 
     tracing::info!(listen = %cfg.gateway.listen, "HydeClaw Core starting...");
 
+    // Multi-agent timeout invariant: warn (don't reject) on config that lets
+    // the outer safety net fire before the inner sync deadlines.
+    cfg.agent_tool.warn_if_invariant_violated();
+
     // systemd unit installation is handled by setup.sh (see "Systemd service"
     // stage). Core no longer writes unit files at runtime — that was a
     // hot-path side effect that belonged to the installer.

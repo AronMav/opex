@@ -8,24 +8,49 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::agent::session_agent_pool::{self, SessionAgentPool, SessionPoolsMap};
+use crate::config::AgentToolConfig;
 use crate::gateway::state::AgentMap;
 
 // ── Constants ────────────────────────────────────────────────────────────────
-
-/// How long to wait for a target agent to become idle before sending it a new
-/// message. After this timeout, `agent(action="message")` returns an error
-/// instead of blocking forever.
-const MESSAGE_WAIT_FOR_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// How long to wait for a target agent to finish processing the just-sent
-/// message and produce a `last_result`. Matches the timeout used by sync
-/// `run` / `collect`.
-const MESSAGE_RESULT_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Polling cadence used by `wait_until_idle` and `wait_for_agent_result`.
 /// Both loops re-acquire the pool read lock once per tick to observe agent
 /// status; 1s is a balance between responsiveness and lock churn.
 const MESSAGE_POLL_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// Per-call snapshot of UI-configurable timeouts — read once at dispatch time
+/// from `AgentToolConfig` and threaded through every helper. Plain `Copy` so
+/// it costs nothing to pass around. Callers obtain it via `From<&AgentToolConfig>`.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentToolTimeouts {
+    pub message_wait_for_idle: Duration,
+    pub message_result: Duration,
+    #[allow(dead_code)] // consumed by parallel.rs, kept here for symmetry
+    pub safety: Duration,
+}
+
+impl From<&AgentToolConfig> for AgentToolTimeouts {
+    fn from(cfg: &AgentToolConfig) -> Self {
+        Self {
+            message_wait_for_idle: Duration::from_secs(cfg.message_wait_for_idle_secs),
+            message_result: Duration::from_secs(cfg.message_result_secs),
+            safety: Duration::from_secs(cfg.safety_timeout_secs),
+        }
+    }
+}
+
+#[cfg(test)]
+impl AgentToolTimeouts {
+    /// Test-only helper that mirrors the previous compile-time constants
+    /// (60s / 300s / 600s).
+    pub fn legacy_defaults() -> Self {
+        Self {
+            message_wait_for_idle: Duration::from_secs(60),
+            message_result: Duration::from_secs(300),
+            safety: Duration::from_secs(600),
+        }
+    }
+}
 
 /// Extract session_id from enriched `_context` (per-invocation, race-free).
 pub fn extract_session_id(args: &serde_json::Value) -> Option<Uuid> {
@@ -38,12 +63,19 @@ pub fn extract_session_id(args: &serde_json::Value) -> Option<Uuid> {
 /// Dispatch `agent` tool calls to the appropriate sub-handler based on `action`.
 ///
 /// Actions: `run`, `message`, `status`, `kill`, `collect`.
+///
+/// `timeouts` is a per-call snapshot read from the live `AppConfig.agent_tool`
+/// section by the caller — see `engine_dispatch.rs`. Passing it explicitly
+/// (rather than reading a global) keeps hot-reload deterministic: each
+/// invocation observes the timeout values that were live when the tool was
+/// dispatched.
 pub async fn handle_agent_tool(
     session_pools: Option<&SessionPoolsMap>,
     agent_map: Option<&AgentMap>,
     db: &PgPool,
     agent_name: &str,
     args: &serde_json::Value,
+    timeouts: AgentToolTimeouts,
 ) -> String {
     let action = args
         .get("action")
@@ -51,11 +83,11 @@ pub async fn handle_agent_tool(
         .unwrap_or("");
 
     match action {
-        "run" => handle_agent_run(session_pools, agent_map, db, agent_name, args).await,
-        "message" => handle_agent_message(session_pools, args).await,
+        "run" => handle_agent_run(session_pools, agent_map, db, agent_name, args, timeouts).await,
+        "message" => handle_agent_message(session_pools, args, timeouts).await,
         "status" => handle_agent_status(session_pools, args).await,
         "kill" => handle_agent_kill(session_pools, args).await,
-        "collect" => handle_agent_collect(session_pools, args).await,
+        "collect" => handle_agent_collect(session_pools, args, timeouts).await,
         other => format!(
             "Error: unknown agent action '{}'. Expected: run, message, status, kill, collect",
             other
@@ -71,6 +103,7 @@ pub async fn handle_agent_run(
     db: &PgPool,
     agent_name: &str,
     args: &serde_json::Value,
+    timeouts: AgentToolTimeouts,
 ) -> String {
     let target = match args.get("target").and_then(|v| v.as_str()) {
         Some(n) if !n.is_empty() => n,
@@ -160,9 +193,9 @@ pub async fn handle_agent_run(
     }
 
     // Sync mode (default): block until the agent completes or times out.
+    // Uses the operator-configured `message_result` deadline.
     let result =
-        wait_for_agent_result(pools, session_id, target, std::time::Duration::from_secs(300))
-            .await;
+        wait_for_agent_result(pools, session_id, target, timeouts.message_result).await;
 
     // Clean up: remove the completed agent from the pool so a subsequent `run` with the
     // same target doesn't get the "already running" error.
@@ -303,6 +336,7 @@ async fn wait_until_idle(
 pub async fn handle_agent_message(
     session_pools: Option<&SessionPoolsMap>,
     args: &serde_json::Value,
+    timeouts: AgentToolTimeouts,
 ) -> String {
     let target = match args.get("target").and_then(|v| v.as_str()) {
         Some(n) if !n.is_empty() => n,
@@ -342,7 +376,8 @@ pub async fn handle_agent_message(
     }
 
     // Wait until the target is idle (or fail with a clear error).
-    if let Err(e) = wait_until_idle(pools, session_id, target, MESSAGE_WAIT_FOR_IDLE_TIMEOUT).await
+    if let Err(e) =
+        wait_until_idle(pools, session_id, target, timeouts.message_wait_for_idle).await
     {
         return e;
     }
@@ -411,7 +446,7 @@ pub async fn handle_agent_message(
             }
             // Sync mode: wait for the result. Agent stays in the pool — only
             // `kill` removes it.
-            wait_for_agent_result(pools, session_id, target, MESSAGE_RESULT_TIMEOUT).await
+            wait_for_agent_result(pools, session_id, target, timeouts.message_result).await
         }
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
             // Defense-in-depth: should be unreachable now that we wait for idle.
@@ -526,6 +561,7 @@ pub async fn handle_agent_kill(
 pub async fn handle_agent_collect(
     session_pools: Option<&SessionPoolsMap>,
     args: &serde_json::Value,
+    timeouts: AgentToolTimeouts,
 ) -> String {
     let target = match args.get("target").and_then(|v| v.as_str()) {
         Some(t) if !t.is_empty() => t,
@@ -546,7 +582,7 @@ pub async fn handle_agent_collect(
     };
 
     // Block until the agent completes (same logic as sync run).
-    wait_for_agent_result(pools, session_id, target, std::time::Duration::from_secs(300)).await
+    wait_for_agent_result(pools, session_id, target, timeouts.message_result).await
 }
 
 #[cfg(test)]
@@ -605,7 +641,7 @@ mod tests {
             "text": "hi",
             "_context": { "session_id": Uuid::new_v4().to_string() },
         });
-        let out = handle_agent_message(Some(&pools), &args).await;
+        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
         assert!(out.starts_with("Error: 'target' parameter is required"), "got: {out}");
     }
 
@@ -617,7 +653,7 @@ mod tests {
             "target": "Bob",
             "_context": { "session_id": Uuid::new_v4().to_string() },
         });
-        let out = handle_agent_message(Some(&pools), &args).await;
+        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
         assert!(out.starts_with("Error: 'text' parameter is required"), "got: {out}");
     }
 
@@ -629,7 +665,7 @@ mod tests {
             "target": "Bob",
             "text": "hi",
         });
-        let out = handle_agent_message(Some(&pools), &args).await;
+        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
         assert!(out.contains("no active session"), "got: {out}");
     }
 
@@ -643,7 +679,7 @@ mod tests {
             "text": "hi",
             "_context": { "session_id": session_id.to_string() },
         });
-        let out = handle_agent_message(Some(&pools), &args).await;
+        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
         assert!(out.contains("no agent pool for session"), "got: {out}");
     }
 
@@ -663,7 +699,7 @@ mod tests {
             "text": "hi",
             "_context": { "session_id": session_id.to_string() },
         });
-        let out = handle_agent_message(Some(&pools), &args).await;
+        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
         assert!(
             out.contains("agent 'Bob' not found in session pool"),
             "got: {out}"
@@ -678,7 +714,7 @@ mod tests {
             "text": "hi",
             "_context": { "session_id": Uuid::new_v4().to_string() },
         });
-        let out = handle_agent_message(None, &args).await;
+        let out = handle_agent_message(None, &args, AgentToolTimeouts::legacy_defaults()).await;
         assert!(out.contains("session_pools not available"), "got: {out}");
     }
 
@@ -783,7 +819,7 @@ mod tests {
             "_context": { "session_id": session_id.to_string() },
         });
 
-        let out = handle_agent_message(Some(&pools), &args).await;
+        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
         // Should return the echoed last_result, NOT a "Message sent" stub.
         assert!(
             out.contains("\"status\":\"completed\"") && out.contains("echo: ping"),
@@ -816,7 +852,7 @@ mod tests {
         });
 
         let start = Instant::now();
-        let out = handle_agent_message(Some(&pools), &args).await;
+        let out = handle_agent_message(Some(&pools), &args, AgentToolTimeouts::legacy_defaults()).await;
         let elapsed = start.elapsed();
 
         assert!(
@@ -829,6 +865,63 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(500),
             "fire-and-forget took too long: {:?}",
+            elapsed
+        );
+    }
+
+    // ── AgentToolTimeouts plumbing ──────────────────────────────────────────
+    //
+    // Verify that a custom (very short) `message_wait_for_idle` deadline
+    // surfaces a "did not become idle" error — i.e., the value is actually
+    // threaded through to `wait_until_idle` rather than ignored in favour of a
+    // hardcoded constant.
+
+    #[tokio::test]
+    async fn message_wait_for_idle_uses_configured_timeout() {
+        let pools = empty_pools();
+        let session_id = Uuid::new_v4();
+
+        // Spawn a stub agent already marked PROCESSING with a frozen task —
+        // it will never enter IDLE on its own, so `wait_until_idle` must
+        // time out using the configured (1s) deadline rather than the old
+        // hardcoded 60s.
+        {
+            let mut pw = pools.write().await;
+            let mut pool = SessionAgentPool::new(session_id);
+            let echo = spawn_echo_agent("Frozen");
+            // Force PROCESSING and never let the echo task return to IDLE
+            // (tx is dropped when LiveAgent is, so we keep the task alive
+            // by never sending a message; status stays PROCESSING forever).
+            echo.status.store(STATUS_PROCESSING, Ordering::Release);
+            pool.insert(echo);
+            pw.insert(session_id, pool);
+        }
+
+        let args = serde_json::json!({
+            "action": "message",
+            "target": "Frozen",
+            "text": "ping",
+            "_context": { "session_id": session_id.to_string() },
+        });
+
+        let timeouts = AgentToolTimeouts {
+            message_wait_for_idle: Duration::from_secs(1),
+            message_result: Duration::from_secs(60),
+            safety: Duration::from_secs(120),
+        };
+
+        let start = Instant::now();
+        let out = handle_agent_message(Some(&pools), &args, timeouts).await;
+        let elapsed = start.elapsed();
+
+        assert!(
+            out.contains("did not become idle"),
+            "expected idle-timeout error, got: {out}"
+        );
+        // Must time out fast (~1s), not after 60s. Allow 5s ceiling for slow CI.
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "wait_for_idle deadline ignored — elapsed = {:?}",
             elapsed
         );
     }
