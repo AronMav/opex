@@ -119,13 +119,7 @@ class TestForgedXFF:
     def test_empty_trusted_proxies_ignores_xff(self):
         """SEC-02: TRUSTED_PROXIES='' → XFF header completely ignored."""
         mod = _make_mod(trusted_proxies="", auth_token="secret")
-
-        mock_request = MagicMock()
-        mock_request.client = MagicMock()
-        mock_request.client.host = "203.0.113.5"
-        mock_request.headers = {"x-forwarded-for": "127.0.0.1, 10.0.0.1"}
-
-        result = mod._get_real_client_ip(mock_request)
+        result = mod._get_real_client_ip(_mock_request("203.0.113.5", xff="127.0.0.1, 10.0.0.1"))
         assert result == "203.0.113.5"
 
 
@@ -133,62 +127,32 @@ class TestTrustedProxyXFF:
     def test_trusted_proxy_xff_rightmost(self):
         """SEC-01: sender in TRUSTED_PROXIES, XFF='192.168.1.5, 127.0.0.1' → uses 192.168.1.5."""
         mod = _make_mod(internal_network="127.0.0.0/8", trusted_proxies="127.0.0.0/8", auth_token="secret")
-
-        mock_request = MagicMock()
-        mock_request.client = MagicMock()
-        mock_request.client.host = "127.0.0.1"
-        mock_request.headers = {"x-forwarded-for": "192.168.1.5, 127.0.0.1"}
-
-        result = mod._get_real_client_ip(mock_request)
+        result = mod._get_real_client_ip(_mock_request("127.0.0.1", xff="192.168.1.5, 127.0.0.1"))
         assert result == "192.168.1.5"
 
     def test_trusted_proxy_xff_internal_client(self):
         """Trusted proxy with XFF '127.0.0.2' → real IP is 127.0.0.2 → internal → 200."""
         mod = _make_mod(internal_network="127.0.0.0/8", trusted_proxies="127.0.0.0/8", auth_token="secret")
-
-        mock_request = MagicMock()
-        mock_request.client = MagicMock()
-        mock_request.client.host = "127.0.0.1"
-        mock_request.headers = {"x-forwarded-for": "127.0.0.2, 127.0.0.1"}
-
-        result = mod._get_real_client_ip(mock_request)
+        result = mod._get_real_client_ip(_mock_request("127.0.0.1", xff="127.0.0.2, 127.0.0.1"))
         assert result == "127.0.0.2"
 
     def test_trusted_proxy_cidr_range(self):
         """TRUSTED_PROXIES='172.16.0.0/12,10.0.0.0/8' parses correctly."""
         mod = _make_mod(trusted_proxies="172.16.0.0/12,10.0.0.0/8", auth_token="secret")
-
-        mock_request = MagicMock()
-        mock_request.client = MagicMock()
-        mock_request.client.host = "10.0.0.1"
-        mock_request.headers = {"x-forwarded-for": "8.8.8.8"}
-
-        result = mod._get_real_client_ip(mock_request)
+        result = mod._get_real_client_ip(_mock_request("10.0.0.1", xff="8.8.8.8"))
         assert result == "8.8.8.8"
 
     def test_trusted_proxy_empty_xff(self):
         """Trusted proxy sends empty XFF → falls back to sender IP."""
         mod = _make_mod(trusted_proxies="127.0.0.0/8", auth_token="secret")
-
-        mock_request = MagicMock()
-        mock_request.client = MagicMock()
-        mock_request.client.host = "127.0.0.1"
-        mock_request.headers = {"x-forwarded-for": ""}
-
-        result = mod._get_real_client_ip(mock_request)
+        result = mod._get_real_client_ip(_mock_request("127.0.0.1", xff=""))
         assert result == "127.0.0.1"
 
     def test_multiple_xff_entries_rightmost_wins(self):
         """XFF 'attacker_forged, real_client, proxy1' with only proxy1 trusted → real_client."""
         mod = _make_mod(trusted_proxies="10.0.0.0/8", auth_token="secret")
-
-        mock_request = MagicMock()
-        mock_request.client = MagicMock()
-        mock_request.client.host = "10.0.0.1"
-        mock_request.headers = {"x-forwarded-for": "1.2.3.4, 5.6.7.8, 10.0.0.1"}
-
         # Walking from right: 10.0.0.1 is trusted, 5.6.7.8 is NOT trusted → return 5.6.7.8
-        result = mod._get_real_client_ip(mock_request)
+        result = mod._get_real_client_ip(_mock_request("10.0.0.1", xff="1.2.3.4, 5.6.7.8, 10.0.0.1"))
         assert result == "5.6.7.8"
 
 
@@ -196,23 +160,13 @@ class TestGetRealClientIpUnit:
     def test_get_real_client_ip_unit_no_client(self):
         """request.client is None → returns '' (external)."""
         mod = _make_mod(trusted_proxies="", auth_token="secret")
-
-        mock_request = MagicMock()
-        mock_request.client = None
-
-        result = mod._get_real_client_ip(mock_request)
+        result = mod._get_real_client_ip(_mock_request(None))
         assert result == ""
 
     def test_get_real_client_ip_no_trusted_proxies(self):
         """No trusted proxies → always return sender IP."""
         mod = _make_mod(trusted_proxies="", auth_token="secret")
-
-        mock_request = MagicMock()
-        mock_request.client = MagicMock()
-        mock_request.client.host = "203.0.113.1"
-        mock_request.headers = {"x-forwarded-for": "127.0.0.1"}
-
-        result = mod._get_real_client_ip(mock_request)
+        result = mod._get_real_client_ip(_mock_request("203.0.113.1", xff="127.0.0.1"))
         assert result == "203.0.113.1"
 
 
