@@ -80,6 +80,8 @@ pub async fn execute<S: EventSink>(
         enriched_text: _,
         command_output: _,
         user_message_id,
+        incoming_context,
+        channel,
     } = bootstrap_outcome;
 
     // last_msg_id threads the DB parent chain through intermediate assistant
@@ -427,9 +429,9 @@ pub async fn execute<S: EventSink>(
         let loop_broken = match tool_executor
             .execute_batch(
                 &response.tool_calls,
-                &serde_json::Value::Null, // context — callers with msg can pass msg.context; Task 6b uses Null
+                &incoming_context, // chat_id/message_id from originating channel (Telegram, etc.)
                 session_id,
-                "",   // channel — not available in the unified pipeline path
+                channel.as_str(),
                 messages.iter().map(|m| m.content.len()).sum(),
                 &mut loop_detector,
                 loop_config.detect_loops,

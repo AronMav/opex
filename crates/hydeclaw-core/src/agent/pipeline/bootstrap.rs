@@ -29,6 +29,12 @@ pub struct BootstrapOutcome {
     pub command_output: Option<String>,
     /// ID of the user message just persisted; used by finalize as parent for the assistant reply.
     pub user_message_id: Uuid,
+    /// Opaque context echoed from the incoming message (e.g. `{"chat_id": 123}` for Telegram).
+    /// Empty `Value::Null` for UI / internal callers. Threaded through to channel_actions
+    /// so YAML tools with `channel_action: send_voice` can deliver media to the originating chat.
+    pub incoming_context: serde_json::Value,
+    /// Channel name (e.g. "telegram", "ui"); empty string when unavailable.
+    pub channel: String,
 }
 
 /// Input context for the bootstrap phase.
@@ -256,6 +262,8 @@ pub async fn bootstrap<S: EventSink>(
         lifecycle_guard,
         command_output,
         user_message_id,
+        incoming_context: ctx.msg.context.clone(),
+        channel: ctx.msg.channel.clone(),
     })
 }
 
