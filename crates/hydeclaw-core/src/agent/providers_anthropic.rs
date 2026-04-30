@@ -469,10 +469,16 @@ fn process_sse_event(
     }
 }
 
+/// Test helper that mirrors production behavior: emit_thinking is discarded (as in chat_stream),
+/// emit_text goes to text_chunks. Returns (text_chunks, thinking_chunks, blocks) where
+/// thinking_chunks captures what emit_thinking would have sent (for assertion purposes only).
 #[cfg(test)]
-fn process_sse_events_for_test(lines: &[String]) -> (Vec<String>, Vec<hydeclaw_types::ThinkingBlock>) {
+fn process_sse_events_for_test(
+    lines: &[String],
+) -> (Vec<String>, Vec<String>, Vec<hydeclaw_types::ThinkingBlock>) {
     use std::cell::RefCell;
-    let chunks: RefCell<Vec<String>> = RefCell::new(vec![]);
+    let text_chunks: RefCell<Vec<String>> = RefCell::new(vec![]);
+    let thinking_chunks: RefCell<Vec<String>> = RefCell::new(vec![]);
     let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
     let mut thinking_content = String::new();
     let mut current_signature = String::new();
@@ -490,11 +496,11 @@ fn process_sse_events_for_test(lines: &[String]) -> (Vec<String>, Vec<hydeclaw_t
             &mut current_signature,
             &mut in_thinking_block,
             &mut thinking_blocks,
-            |chunk| chunks.borrow_mut().push(chunk),
-            |chunk| chunks.borrow_mut().push(chunk),
+            |chunk| thinking_chunks.borrow_mut().push(chunk),
+            |chunk| text_chunks.borrow_mut().push(chunk),
         );
     }
-    (chunks.into_inner(), thinking_blocks)
+    (text_chunks.into_inner(), thinking_chunks.into_inner(), thinking_blocks)
 }
 
 #[async_trait]
@@ -996,12 +1002,33 @@ mod streaming_thinking_tests {
             make_sse_line(r#"{"type":"content_block_stop","index":1}"#),
         ];
 
-        let (chunks, blocks) = process_sse_events_for_test(&events);
+        let (text_chunks, thinking_chunks, blocks) = process_sse_events_for_test(&events);
 
-        assert!(chunks.contains(&"<thinking>".to_string()), "missing <thinking> open tag; got {chunks:?}");
-        assert!(chunks.iter().any(|c| c.contains("Let me reason")), "missing thinking content; got {chunks:?}");
-        assert!(chunks.contains(&"</thinking>".to_string()), "missing </thinking> close tag; got {chunks:?}");
-        assert!(chunks.iter().any(|c| c.contains("Answer here")), "missing text content; got {chunks:?}");
+        // Text stream (what the UI receives): only actual text, no thinking fragments
+        assert!(
+            text_chunks.iter().any(|c| c.contains("Answer here")),
+            "text stream missing answer; got {text_chunks:?}"
+        );
+        assert!(
+            !text_chunks.iter().any(|c| c.contains("thinking")),
+            "text stream must not contain thinking fragments; got {text_chunks:?}"
+        );
+
+        // Thinking stream (discarded in production, collected here for assertion)
+        assert!(
+            thinking_chunks.contains(&"<thinking>".to_string()),
+            "missing <thinking> open tag; got {thinking_chunks:?}"
+        );
+        assert!(
+            thinking_chunks.iter().any(|c| c.contains("Let me reason")),
+            "missing thinking content; got {thinking_chunks:?}"
+        );
+        assert!(
+            thinking_chunks.contains(&"</thinking>".to_string()),
+            "missing </thinking> close tag; got {thinking_chunks:?}"
+        );
+
+        // Structured thinking blocks
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].thinking, "Let me reason...");
         assert_eq!(blocks[0].signature, "abc123");
