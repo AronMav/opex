@@ -5,18 +5,38 @@
 // Unknown model → null (ContextBar hides itself).
 
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
+  // Anthropic Claude
   "claude-opus-4": 200_000,
   "claude-opus-4.7": 1_000_000,
   "claude-sonnet-4": 200_000,
   "claude-sonnet-4.7": 200_000,
   "claude-haiku-4": 200_000,
+  // OpenAI
   "gpt-4o": 128_000,
   "gpt-4o-mini": 128_000,
   "gpt-4.1": 1_047_576,
   "o1": 200_000,
+  // Google Gemini
   "gemini-2.0-flash": 1_048_576,
   "gemini-2.5-flash": 1_048_576,
   "gemini-2.5-pro": 1_048_576,
+  // Zhipu GLM (:cloud suffix stripped by prefix match)
+  "glm-5.1": 128_000,
+  "glm-5": 128_000,
+  "glm-4": 128_000,
+  // Moonshot Kimi
+  "kimi-k2": 131_072,
+  "kimi-k1.5": 131_072,
+  // DeepSeek
+  "deepseek-v4": 64_000,
+  "deepseek-v3": 64_000,
+  "deepseek-chat": 64_000,
+  "deepseek-r1": 64_000,
+  // Ollama local (common)
+  "qwen2.5": 32_768,
+  "qwen3": 32_768,
+  "llama3": 8_192,
+  "mistral": 32_768,
 };
 
 /**
