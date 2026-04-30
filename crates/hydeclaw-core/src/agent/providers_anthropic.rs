@@ -387,13 +387,21 @@ pub(super) fn parse_anthropic_response(api_resp: AnthropicResponse, model: &str)
     }
 
     let usage = api_resp.usage.map(|u| {
-        if let Some(cache_read) = u.cache_read_input_tokens {
-            tracing::info!(cache_read, cache_create = u.cache_creation_input_tokens, "anthropic cache hit");
+        if let Some(cache_read) = u.cache_read_input_tokens
+            && cache_read > 0
+        {
+            tracing::info!(
+                cache_read,
+                cache_create = u.cache_creation_input_tokens,
+                "anthropic cache hit"
+            );
         }
         hydeclaw_types::TokenUsage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
-            ..Default::default()
+            cache_read_tokens: u.cache_read_input_tokens,
+            cache_creation_tokens: u.cache_creation_input_tokens,
+            reasoning_tokens: None,
         }
     });
 
@@ -867,6 +875,28 @@ mod tests {
         assert_eq!(content[1]["type"], "tool_use");
         assert_eq!(content[1]["id"], "call_1");
         assert_eq!(content[1]["name"], "my_tool");
+    }
+
+    #[test]
+    fn anthropic_usage_maps_cache_fields() {
+        let json = serde_json::json!({
+            "content": [{"type": "text", "text": "hi"}],
+            "usage": {
+                "input_tokens": 1000,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 200,
+                "cache_read_input_tokens": 700
+            }
+        });
+        let resp: AnthropicResponse = serde_json::from_value(json).unwrap();
+        let result = parse_anthropic_response(resp, "claude-sonnet-4-6");
+        let usage = result.usage.expect("usage");
+
+        assert_eq!(usage.input_tokens, 1000);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.cache_read_tokens, Some(700));
+        assert_eq!(usage.cache_creation_tokens, Some(200));
+        assert_eq!(usage.reasoning_tokens, None);
     }
 }
 
