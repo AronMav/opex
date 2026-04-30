@@ -246,6 +246,58 @@ pub async fn search_fts_or(
     search_fts_inner(db, query, limit, lang, agent_id, true).await
 }
 
+/// Trigram similarity search using pg_trgm.
+///
+/// Uses operator `%` so the GIN index `idx_memory_chunks_content_trgm`
+/// (gin_trgm_ops) is actually used. The threshold is set per-session via
+/// `set_limit($threshold)` immediately before the SELECT.
+///
+/// `agent_id`: filter to agent's own chunks plus shared chunks. Empty string = no filter.
+pub async fn search_trigram(
+    db: &PgPool,
+    query: &str,
+    limit: i64,
+    threshold: f32,
+    agent_id: &str,
+) -> Result<Vec<MemoryResult>> {
+    if query.trim().is_empty() {
+        return Ok(vec![]);
+    }
+
+    // set_limit + select must run on the same connection — use a transaction.
+    let mut tx = db.begin().await.context("begin trigram tx")?;
+
+    sqlx::query("SELECT set_limit($1)")
+        .bind(threshold)
+        .execute(&mut *tx)
+        .await
+        .context("set_limit")?;
+
+    let rows = sqlx::query(
+        r"SELECT id::text,
+                  content,
+                  COALESCE(source, '') AS source,
+                  pinned,
+                  COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
+                  similarity(content, $1)::float8 AS similarity
+           FROM memory_chunks
+           WHERE content % $1
+             AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
+           ORDER BY similarity DESC
+           LIMIT $2",
+    )
+    .bind(query)
+    .bind(limit)
+    .bind(agent_id)
+    .fetch_all(&mut *tx)
+    .await
+    .context("trigram search query failed")?;
+
+    tx.commit().await.context("commit trigram tx")?;
+
+    Ok(rows.iter().map(row_to_memory_result).collect())
+}
+
 async fn search_fts_inner(
     db: &PgPool,
     query: &str,
