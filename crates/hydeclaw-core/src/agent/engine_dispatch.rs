@@ -336,6 +336,7 @@ impl AgentEngine {
             tokio::spawn(async move {
                 if let Err(e) = crate::db::usage::record_usage(
                     &db, &agent, &provider, &model, input, output, session_id,
+                    None, None, None,
                 ).await {
                     tracing::debug!(error = %e, "failed to record usage");
                 }

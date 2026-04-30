@@ -260,6 +260,7 @@ pub async fn execute<S: EventSink>(
             tokio::spawn(async move {
                 if let Err(e) = crate::db::usage::record_usage(
                     &db, &agent, &provider_name, &model, input, output, Some(session_id),
+                    None, None, None,
                 )
                 .await
                 {
