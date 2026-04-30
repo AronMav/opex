@@ -17,6 +17,7 @@ export { ToolCallPartView } from "@/components/chat/ToolCallPartView";
 export { FileDataPartView } from "@/components/chat/FileDataPartView";
 
 import { MessageList, MessageSkeleton } from "./MessageList";
+import { SearchBar } from "./SearchBar";
 import { ReconnectingIndicator } from "@/components/chat/ReconnectingIndicator";
 import { EmptyState } from "./EmptyState";
 import { ReadOnlyFooter } from "./read-only/ReadOnlyFooter";
@@ -27,6 +28,7 @@ import { useRenderMessages } from "./hooks/use-render-messages";
 import { useIsLive } from "./hooks/use-is-live";
 import { useIsReplayingHistory } from "./hooks/use-is-replaying-history";
 import { useLiveHasContent } from "./hooks/use-live-has-content";
+import { useMessageSearch } from "./hooks/use-message-search";
 
 // ── Props ────────────────────────────────────────────────────────────────────
 
@@ -224,6 +226,31 @@ export function ChatThread({
     && (connectionPhase === "submitted" || connectionPhase === "streaming" || connectionPhase === "reconnecting"
         || engineRunning || sessionRunStatus === "running");
 
+  // ── Message search (Ctrl+Shift+F) ────────────────────────────────────────
+  const search = useMessageSearch(allMessages);
+
+  // Global Ctrl+Shift+F shortcut — opens in-app search and prevents browser find.
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        if (search.isOpen) {
+          search.close();
+        } else {
+          search.open();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKey);
+    return () => window.removeEventListener("keydown", handleGlobalKey);
+  }, [search]);
+
+  // Pre-compute matched message IDs for dimming (stable Set reference).
+  const searchMatchIds = useMemo(() => {
+    if (!search.isOpen || !search.query) return null;
+    return new Set(search.matches.map((m) => m.messageId));
+  }, [search.isOpen, search.query, search.matches]);
+
   // Only show loading skeleton when there is truly no data to display (Fix D).
   // If we have cached history, skip the skeleton.
   // Regression 2026-04-17: previously `messageSource.mode !== "live"` skipped
@@ -252,6 +279,7 @@ export function ChatThread({
       className="flex flex-1 flex-col min-h-0 relative"
       style={keyboardHeight > 0 ? { paddingBottom: keyboardHeight } : undefined}
     >
+      {search.isOpen && <SearchBar search={search} />}
       <MessageList
         messages={allMessages}
         isStreaming={isStreaming}
@@ -260,6 +288,8 @@ export function ChatThread({
         emptyState={<EmptyState />}
         hiddenCount={hiddenCount}
         onLoadEarlier={() => loadEarlierMessages(currentAgent)}
+        searchMatchIds={searchMatchIds ?? undefined}
+        searchActive={search.isOpen && !!search.query}
       />
 
       {/* Reconnecting indicator — SSE transport reconnect OR LLM-level retry */}

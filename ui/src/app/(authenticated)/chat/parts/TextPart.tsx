@@ -1,15 +1,69 @@
 "use client";
 
-import { memo } from "react";
+import React, { memo } from "react";
 import { cleanContent } from "@/lib/format";
 import { MessageContent } from "@/components/ui/message";
 import { useChatStore } from "@/stores/chat-store";
 import { useSmoothedText } from "@/hooks/use-smoothed-text";
 
-export const TextPart = memo(function TextPart({ text }: { text: string }) {
+export interface HighlightRange {
+  start: number;
+  end: number;
+}
+
+interface TextPartProps {
+  text: string;
+  /** Optional ranges to highlight within the raw text (before cleanContent). */
+  highlightRanges?: HighlightRange[];
+  /** When true, the active match gets a stronger highlight color. */
+  isActive?: boolean;
+}
+
+/**
+ * Render raw text with optional search highlight spans.
+ * Highlights are applied to the raw text and wrapped in inline <mark> elements.
+ * When highlightRanges is empty/undefined, falls back to the normal smoothed markdown path.
+ */
+function HighlightedText({ text, ranges, isActive }: { text: string; ranges: HighlightRange[]; isActive?: boolean }) {
+  if (ranges.length === 0) return <span>{text}</span>;
+
+  const parts: React.ReactNode[] = [];
+  let pos = 0;
+  for (const range of ranges) {
+    if (range.start > pos) {
+      parts.push(<React.Fragment key={`t-${pos}`}>{text.slice(pos, range.start)}</React.Fragment>);
+    }
+    parts.push(
+      <mark
+        key={`h-${range.start}`}
+        className={isActive ? "bg-yellow-400/80 rounded-sm" : "bg-yellow-300/60 rounded-sm"}
+      >
+        {text.slice(range.start, range.end)}
+      </mark>,
+    );
+    pos = range.end;
+  }
+  if (pos < text.length) {
+    parts.push(<React.Fragment key={`t-end`}>{text.slice(pos)}</React.Fragment>);
+  }
+  return <span>{parts}</span>;
+}
+
+export const TextPart = memo(function TextPart({ text, highlightRanges, isActive }: TextPartProps) {
   const isStreaming = useChatStore(
     (s) => s.agents[s.currentAgent]?.connectionPhase === "streaming"
   );
+
+  // When highlight ranges are provided, render plain text with inline marks.
+  // Skip cleanContent + markdown rendering to avoid losing character offsets.
+  if (highlightRanges && highlightRanges.length > 0) {
+    return (
+      <p className="leading-relaxed text-foreground text-[15px] whitespace-pre-wrap">
+        <HighlightedText text={text} ranges={highlightRanges} isActive={isActive} />
+      </p>
+    );
+  }
+
   const cleaned = cleanContent(text);
   const smoothed = useSmoothedText(cleaned, isStreaming);
   if (!smoothed) return null;
