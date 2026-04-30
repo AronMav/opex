@@ -210,7 +210,10 @@ pub async fn execute_yaml_channel_action(
     // Return file marker (for UI) + channel result
     match (file_marker, channel_result) {
         (Some(marker), Some(ch_res)) => format!("{}\n{}", marker, ch_res),
-        (Some(marker), None) => format!("{}\nMedia delivered inline. Do NOT call this tool again or describe what was sent.", marker),
+        (Some(marker), None) => format!(
+            "{}\nUI session: media rendered inline as a player/preview. The user already sees/hears it. Do NOT claim it was sent to Telegram or any other channel — there is no chat_id here. Do NOT call this tool again for the same content.",
+            marker
+        ),
         (None, Some(ch_res)) => ch_res,
         (None, None) => "Error: no channel connection and failed to save media".to_string(),
     }
