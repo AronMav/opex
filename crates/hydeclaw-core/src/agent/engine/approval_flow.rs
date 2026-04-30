@@ -37,6 +37,7 @@ impl AgentEngine {
             cfg: self.cfg(),
             state: self.state(),
             tex: self.tex(),
+            subagent_depth: 0,
         };
         crate::agent::pipeline::approval::resolve_approval(&ctx, approval_id, approved, resolved_by, modified_input).await
     }
