@@ -367,7 +367,8 @@ impl MemoryStore {
 
         for chunk in chunks.iter().skip(skip_count) {
             let source = if chunk.source.is_empty() { "memory" } else { &chunk.source };
-            text_parts.push(format!("- [{}] {}", source, chunk.content));
+            let content = crate::agent::pipeline::memory::truncate_chunk_content(&chunk.content);
+            text_parts.push(format!("- [{}] {}", source, content));
             ids.push(chunk.id.clone());
         }
 
