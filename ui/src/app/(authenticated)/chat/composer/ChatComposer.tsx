@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { assertToken } from "@/lib/api";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { SlashMenu } from "../parts/SlashMenu";
 import { MentionAutocomplete } from "./MentionAutocomplete";
 import { ModelDropdown } from "./ModelDropdown";
+import { useVoiceRecorder } from "../hooks/use-voice-recorder";
+import { useProviderActive } from "@/lib/queries";
 import {
   Send,
   Square,
@@ -18,6 +20,7 @@ import {
   Paperclip,
   X,
   Loader2,
+  Mic,
 } from "lucide-react";
 
 // ── Draft persistence helpers ─────────────────────────────────────────────────
@@ -57,6 +60,14 @@ export function ChatComposer() {
   const isStreaming = isActivePhase(connectionPhase);
   const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? null);
   const hasMessages = messageSource.mode !== "new-chat";
+
+  // ── Voice recorder ───────────────────────────────────────────────────────
+  const voice = useVoiceRecorder();
+  const { data: activeProviders } = useProviderActive();
+  const hasSttProvider = useMemo(
+    () => activeProviders?.some((p) => p.capability === "stt" && p.provider_name) ?? false,
+    [activeProviders],
+  );
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [resolvedMention, setResolvedMention] = useState<string | null>(null);
@@ -283,6 +294,30 @@ export function ChatComposer() {
     }
   }, [handleFileAdd]);
 
+  const handleMicClick = useCallback(async () => {
+    if (voice.state === "recording") {
+      const text = await voice.stop();
+      if (text) {
+        const ta = textareaRef.current;
+        if (ta) {
+          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+          const newVal = (ta.value ? ta.value + " " : "") + text;
+          setter?.call(ta, newVal);
+          ta.dispatchEvent(new Event("input", { bubbles: true }));
+          ta.focus();
+        }
+      }
+    } else if (voice.state === "idle") {
+      await voice.start();
+    }
+  }, [voice]);
+
+  const formatElapsed = (secs: number): string => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
   return (
     <div className="shrink-0 w-full p-3 md:p-4 border-t border-border/50 bg-background/80 backdrop-blur-sm">
       <div className="mx-auto max-w-4xl">
@@ -400,6 +435,39 @@ export function ChatComposer() {
               >
                 <Paperclip className="h-4 w-4" />
               </button>
+              {hasSttProvider && (
+                <button
+                  type="button"
+                  aria-label={
+                    voice.state === "recording"
+                      ? `Стоп ${formatElapsed(voice.elapsed)}`
+                      : "Голосовой ввод"
+                  }
+                  title={
+                    voice.state === "recording"
+                      ? `Запись: ${formatElapsed(voice.elapsed)}`
+                      : voice.state === "transcribing"
+                        ? "Распознавание…"
+                        : "Записать голос"
+                  }
+                  disabled={voice.state === "transcribing"}
+                  onClick={handleMicClick}
+                  className={cn(
+                    "rounded p-3 md:p-2 transition-colors",
+                    voice.state === "recording"
+                      ? "text-red-500 animate-pulse ring-2 ring-red-500/40 rounded-full"
+                      : voice.state === "transcribing"
+                        ? "text-muted-foreground/30 cursor-not-allowed"
+                        : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50",
+                  )}
+                >
+                  {voice.state === "transcribing" ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Mic className="h-4 w-4" />
+                  )}
+                </button>
+              )}
               {agents.length > 1 && (
                 <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50 bg-muted/30 px-2 py-0.5 rounded">
                   {currentAgent}

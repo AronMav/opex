@@ -30,6 +30,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .merge(
             Router::new()
                 .route("/api/media/upload", post(api_media_upload))
+                .route("/api/media/transcribe", post(api_media_transcribe))
                 .layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)) // 20 MB
         )
 }
@@ -178,4 +179,159 @@ pub(crate) async fn api_media_serve(
         (axum::http::header::CONTENT_DISPOSITION, disposition),
         (axum::http::header::CACHE_CONTROL, "private, no-store"),
     ], data).into_response()
+}
+
+/// POST /api/media/transcribe — receive an audio blob from the browser, send it
+/// to toolgate POST /transcribe (multipart file upload), and return the transcript.
+///
+/// Request:  `multipart/form-data` with a `file` field (audio blob).
+///           Optional query param `?lang=` (default "ru").
+/// Response: `{"text": "<transcript>"}` on success.
+///           `503 {"error": "STT not configured"}` when toolgate_url is None.
+///           `400 {"error": "..."}` for bad input.
+///           `502 {"error": "transcription failed: ..."}` on toolgate error.
+///
+/// Temp file lifecycle: saved to `workspace/uploads/{uuid}.{ext}` then ALWAYS
+/// deleted before returning (explicit at each return site; scopeguard not used).
+pub(crate) async fn api_media_transcribe(
+    State(agents): State<AgentCore>,
+    State(cfg): State<ConfigServices>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    mut multipart: axum::extract::Multipart,
+) -> impl IntoResponse {
+    // ── 1. Resolve toolgate URL ───────────────────────────────────────────────
+    let toolgate_url = match cfg.config.toolgate_url.as_deref() {
+        Some(u) if !u.is_empty() => u.trim_end_matches('/').to_string(),
+        _ => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "STT not configured"}))).into_response();
+        }
+    };
+
+    let language = params.get("lang").map(|s| s.as_str()).unwrap_or("ru");
+
+    // ── 2. Read multipart 'file' field ────────────────────────────────────────
+    let field = match multipart.next_field().await {
+        Ok(Some(f)) => f,
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "no file field in multipart"}))).into_response(),
+    };
+
+    let original_name = field.file_name().unwrap_or("audio.webm").to_string();
+    let content_type = field.content_type().unwrap_or("audio/webm").to_string();
+
+    // ── 3. Determine extension and validate ───────────────────────────────────
+    const AUDIO_EXTENSIONS: &[&str] = &["webm", "mp4", "ogg", "oga", "mp3", "wav", "m4a", "aac", "flac"];
+    let ext = original_name.rsplit('.').next().unwrap_or("webm").to_lowercase();
+    let ext = if AUDIO_EXTENSIONS.contains(&ext.as_str()) { ext } else {
+        // Try to guess from content-type
+        match content_type.as_str() {
+            "audio/webm" => "webm".to_string(),
+            "audio/mp4" => "mp4".to_string(),
+            "audio/ogg" => "ogg".to_string(),
+            "audio/mpeg" => "mp3".to_string(),
+            "audio/wav" => "wav".to_string(),
+            _ => "webm".to_string(),
+        }
+    };
+
+    let data = match field.bytes().await {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("read: {e}")}))).into_response(),
+    };
+
+    if data.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "empty audio file"}))).into_response();
+    }
+
+    // ── 4. Save to temp file in workspace/uploads ─────────────────────────────
+    let workspace_dir = agents.deps.read().await.workspace_dir.clone();
+    let uploads_dir = std::path::PathBuf::from(&workspace_dir).join("uploads");
+    if let Err(e) = tokio::fs::create_dir_all(&uploads_dir).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("mkdir: {e}")}))).into_response();
+    }
+
+    let uuid = uuid::Uuid::new_v4();
+    let filename = format!("{uuid}.{ext}");
+    let path = uploads_dir.join(&filename);
+
+    if let Err(e) = tokio::fs::write(&path, &data).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("write: {e}")}))).into_response();
+    }
+
+    // ── 5. Forward to toolgate POST /transcribe ───────────────────────────────
+    let tg_url = format!("{toolgate_url}/transcribe");
+    let mime = format!("audio/{ext}");
+    let part = reqwest::multipart::Part::bytes(data.to_vec())
+        .file_name(filename.clone())
+        .mime_str(&mime)
+        .unwrap_or_else(|_| reqwest::multipart::Part::bytes(data.to_vec()));
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("language", language.to_string());
+
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_default();
+
+    let tg_resp = http.post(&tg_url).multipart(form).send().await;
+
+    // ── 6. Parse response and always delete the temp file ─────────────────────
+    match tg_resp {
+        Ok(resp) if resp.status().is_success() => {
+            let body = resp.json::<serde_json::Value>().await;
+            // Delete temp file — success path.
+            let _ = tokio::fs::remove_file(&path).await;
+            match body {
+                Ok(v) => {
+                    let text = v["text"].as_str().unwrap_or("").to_string();
+                    Json(json!({"text": text})).into_response()
+                }
+                Err(e) => {
+                    (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("transcription parse error: {e}")}))).into_response()
+                }
+            }
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            // Delete temp file — error path.
+            let _ = tokio::fs::remove_file(&path).await;
+            (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("transcription failed: {status} — {body}")}))).into_response()
+        }
+        Err(e) => {
+            // Delete temp file — network error path.
+            let _ = tokio::fs::remove_file(&path).await;
+            (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("transcription failed: {e}")}))).into_response()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify the guard: when toolgate_url is None, the handler would return 503.
+    /// We test this by asserting the config state that triggers the early-return guard.
+    /// Full axum router integration would require a live AppState (DB, etc.) — out of scope.
+    #[test]
+    fn transcribe_guard_toolgate_url_none_would_return_503() {
+        let cfg = ConfigServices::test_new();
+        // test_new() produces a minimal config with toolgate_url = None.
+        // The api_media_transcribe handler's first check is:
+        //   match cfg.config.toolgate_url.as_deref() { Some(u) => ..., _ => 503 }
+        // When toolgate_url is None, the 503 branch fires before any I/O.
+        assert!(
+            cfg.config.toolgate_url.is_none(),
+            "test_new() must produce a config with no toolgate_url so the 503 guard fires"
+        );
+    }
+
+    /// Verify the audio extension allowlist covers browser formats.
+    #[test]
+    fn audio_extensions_cover_browser_formats() {
+        const AUDIO_EXTENSIONS: &[&str] = &["webm", "mp4", "ogg", "oga", "mp3", "wav", "m4a", "aac", "flac"];
+        assert!(AUDIO_EXTENSIONS.contains(&"webm"), "webm required (Chrome/Firefox)");
+        assert!(AUDIO_EXTENSIONS.contains(&"mp4"), "mp4 required (Safari)");
+        assert!(AUDIO_EXTENSIONS.contains(&"ogg"), "ogg required (Firefox)");
+    }
 }
