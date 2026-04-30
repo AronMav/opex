@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::agent::session_agent_pool::{self, SessionAgentPool, SessionPoolsMap};
-use crate::config::AgentToolConfig;
+use crate::config::{AgentToolConfig, DelegationConfig};
 use crate::gateway::state::AgentMap;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -53,6 +53,38 @@ pub fn extract_session_id(args: &serde_json::Value) -> Option<Uuid> {
         .and_then(|ctx| ctx.get("session_id"))
         .and_then(|s| s.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
+}
+
+/// Extract the caller's subagent recursion depth from enriched `_context`.
+///
+/// Returns 0 (top-level) when absent or unparseable — the top-level user
+/// dispatch path does not inject `subagent_depth`, so missing == top-level.
+/// Subagent runners inject `subagent_depth = N` into the `_context` they
+/// build, so nested `agent` tool calls observe their parent's depth here.
+pub fn extract_subagent_depth(args: &serde_json::Value) -> u8 {
+    args.get("_context")
+        .and_then(|ctx| ctx.get("subagent_depth"))
+        .and_then(|v| v.as_u64())
+        .map(|n| n.min(u8::MAX as u64) as u8)
+        .unwrap_or(0)
+}
+
+/// Check whether a subagent at `current_depth` is allowed to spawn another subagent.
+///
+/// Returns `Ok(())` if `current_depth < cfg.max_depth`, otherwise an error with
+/// the canonical "depth limit reached" message used in tool-result feedback.
+pub fn check_depth_limit(current_depth: u8, cfg: &DelegationConfig) -> anyhow::Result<()> {
+    if current_depth >= cfg.max_depth {
+        anyhow::bail!(
+            "agent tool depth limit reached (depth={}, max={}). \
+             Subagents cannot spawn further subagents by default. \
+             Set [agent.delegation] max_depth = {} to allow nested delegation.",
+            current_depth,
+            cfg.max_depth,
+            cfg.max_depth + 1
+        );
+    }
+    Ok(())
 }
 
 /// Dispatch `agent` tool calls to the appropriate sub-handler based on `action`.
@@ -162,6 +194,37 @@ pub async fn handle_agent_ask(
         Some(m) => m,
         None => return "Error: agent_map not available (subagent context)".to_string(),
     };
+
+    // Enforce subagent recursion depth limit.
+    //
+    // The caller's `subagent_depth` rides on `_context` (injected by the
+    // pipeline that dispatched this tool call — top-level path defaults to
+    // 0; subagent_runner injects the running subagent's depth). The caller's
+    // `DelegationConfig` lives on its `AgentEngine` config and is looked up
+    // via `agent_map`. If we cannot find the caller's config (e.g. agent was
+    // just deleted) we fall through to the default (max_depth = 1).
+    let caller_depth = extract_subagent_depth(args);
+    let delegation_cfg = {
+        let map = agent_map.read().await;
+        map.get(agent_name)
+            .or_else(|| {
+                let lower = agent_name.to_lowercase();
+                map.iter()
+                    .find(|(k, _)| k.to_lowercase() == lower)
+                    .map(|(_, v)| v)
+            })
+            .map(|h| h.engine.cfg().agent.delegation.clone())
+            .unwrap_or_default()
+    };
+    if let Err(e) = check_depth_limit(caller_depth, &delegation_cfg) {
+        return format!("Error: {e}");
+    }
+    // Computed but threaded through to spawn_live_agent only after T10 widens
+    // its signature. Silenced here to keep T9 compile-clean as a stand-alone
+    // commit; T10 replaces this with the real call argument.
+    let new_depth = caller_depth.saturating_add(1);
+    let _ = new_depth;
+
     let target_engine = {
         let map = agent_map.read().await;
         let handle = map.get(target).or_else(|| {
