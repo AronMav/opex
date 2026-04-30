@@ -955,12 +955,31 @@ pub(crate) async fn api_chat_sse(
                     }
                     continue;
                 }
-                StreamEvent::Usage { input_tokens, output_tokens } => {
-                    let data = serde_json::json!({
+                StreamEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    reasoning_tokens,
+                } => {
+                    let mut payload = serde_json::json!({
                         "type": sse_types::USAGE,
                         "inputTokens": input_tokens,
                         "outputTokens": output_tokens,
-                    }).to_string();
+                    });
+                    // Extended fields — subsets of input/output (not additive). Only emit
+                    // when present so older clients see no change in payload size for
+                    // providers that don't report them.
+                    if let Some(v) = cache_read_tokens {
+                        payload["cacheReadTokens"] = serde_json::Value::from(v);
+                    }
+                    if let Some(v) = cache_creation_tokens {
+                        payload["cacheCreationTokens"] = serde_json::Value::from(v);
+                    }
+                    if let Some(v) = reasoning_tokens {
+                        payload["reasoningTokens"] = serde_json::Value::from(v);
+                    }
+                    let data = payload.to_string();
                     let _ = send_and_buffer!(data);
                     continue;
                 }
