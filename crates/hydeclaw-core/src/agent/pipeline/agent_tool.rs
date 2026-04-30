@@ -219,11 +219,7 @@ pub async fn handle_agent_ask(
     if let Err(e) = check_depth_limit(caller_depth, &delegation_cfg) {
         return format!("Error: {e}");
     }
-    // Computed but threaded through to spawn_live_agent only after T10 widens
-    // its signature. Silenced here to keep T9 compile-clean as a stand-alone
-    // commit; T10 replaces this with the real call argument.
     let new_depth = caller_depth.saturating_add(1);
-    let _ = new_depth;
 
     let target_engine = {
         let map = agent_map.read().await;
@@ -259,6 +255,7 @@ pub async fn handle_agent_ask(
             target_engine,
             text.to_string(),
             session_id,
+            new_depth,
         ) {
             Some(la) => la,
             None => {

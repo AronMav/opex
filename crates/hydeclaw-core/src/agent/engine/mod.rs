@@ -398,9 +398,14 @@ impl AgentEngine {
         handle: Option<Arc<tokio::sync::RwLock<crate::agent::subagent_state::SubagentHandle>>>,
         allowed_tools: Option<Vec<String>>,
     ) -> Result<String> {
-        self.run_subagent_with_session(task, max_iterations, deadline, cancel, handle, allowed_tools, None).await
+        self.run_subagent_with_session(task, max_iterations, deadline, cancel, handle, allowed_tools, None, 0).await
     }
 
+    /// `depth` is the subagent recursion depth this run is operating at.
+    /// Top-level entry points (gateway dispatch, cron) pass `0`. The session
+    /// agent pool's processing loop forwards the depth that was assigned to
+    /// the live agent at spawn time, so nested `agent` tool calls can be
+    /// gated by `[agent.delegation] max_depth`.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_subagent_with_session(
         &self,
@@ -411,13 +416,16 @@ impl AgentEngine {
         handle: Option<Arc<tokio::sync::RwLock<crate::agent::subagent_state::SubagentHandle>>>,
         allowed_tools: Option<Vec<String>>,
         session_id: Option<uuid::Uuid>,
+        depth: u8,
     ) -> Result<String> {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
-        // Top-level entry from the engine API: depth = 0. Recursive subagent
-        // dispatch (T8/T9) will route through pipeline-level helpers that
-        // increment depth from `ctx.subagent_depth`.
+        let ctx = crate::agent::pipeline::CommandContext {
+            cfg: self.cfg(),
+            state: self.state(),
+            tex: self.tex(),
+            subagent_depth: depth,
+        };
         crate::agent::pipeline::subagent_runner::run_subagent_with_session(
-            &ctx, self, task, max_iterations, deadline, cancel, handle, allowed_tools, session_id, 0,
+            &ctx, self, task, max_iterations, deadline, cancel, handle, allowed_tools, session_id, depth,
         ).await
     }
 }

@@ -207,11 +207,18 @@ pub struct AgentPoolEntry {
 /// Spawn a new `LiveAgent` with a background processing loop.
 /// Returns `None` if the initial task could not be delivered (channel closed).
 /// `session_id` is passed to `run_subagent_with_session` so pool agents can use the `agent` tool.
+///
+/// `depth` is the subagent recursion depth assigned to this live agent. The
+/// caller (`handle_agent_ask`) computes `caller_depth + 1`. The processing
+/// loop forwards `depth` into every `run_subagent_with_session` call so any
+/// nested `agent` tool dispatch sees the correct depth and `check_depth_limit`
+/// can gate further spawns via `[agent.delegation] max_depth`.
 pub fn spawn_live_agent(
     name: String,
     engine: Arc<AgentEngine>,
     initial_task: String,
     session_id: Uuid,
+    depth: u8,
 ) -> Option<LiveAgent> {
     let (tx, rx) = mpsc::channel::<AgentMessage>(32);
     let status = Arc::new(AtomicU8::new(STATUS_PROCESSING));
@@ -229,6 +236,7 @@ pub fn spawn_live_agent(
         iteration_count.clone(),
         session_id,
         result_notify.clone(),
+        depth,
     ));
 
     // Send initial task synchronously — channel is fresh with capacity 32.
@@ -260,6 +268,7 @@ async fn agent_processing_loop(
     iteration_count: Arc<AtomicUsize>,
     session_id: Uuid,
     result_notify: Arc<Notify>,
+    depth: u8,
 ) {
     let max_iterations = engine.tool_loop_config().effective_max_iterations();
     let timeout = crate::agent::engine::parse_subagent_timeout(
@@ -274,7 +283,9 @@ async fn agent_processing_loop(
         let deadline = Some(Instant::now() + timeout);
 
         // Pass session_id via run_subagent_with_session so the `agent` tool can find the
-        // correct SessionAgentPool through enriched `_context`.
+        // correct SessionAgentPool through enriched `_context`. `depth` is the depth
+        // this live agent was spawned at — forwarded so nested `agent` tool calls
+        // observe the parent's depth via enriched `_context.subagent_depth`.
 
         let result = engine
             .run_subagent_with_session(
@@ -285,6 +296,7 @@ async fn agent_processing_loop(
                 None,
                 None,
                 Some(session_id),
+                depth,
             )
             .await;
 
