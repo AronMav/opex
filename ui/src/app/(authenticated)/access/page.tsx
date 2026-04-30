@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { apiGet, apiPost, apiDelete } from "@/lib/api";
-import { useAgents, useUpdateAgent } from "@/lib/queries";
+import { apiGet, apiPost, apiDelete, apiPut } from "@/lib/api";
+import { useAgents, qk } from "@/lib/queries";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -44,7 +45,7 @@ interface AccessSettings {
 export default function AccessPage() {
   const { t, locale } = useTranslation();
   const { data: agentInfos = [], isLoading: agentsLoading, error: agentsError, refetch } = useAgents();
-  const updateAgent = useUpdateAgent();
+  const qc = useQueryClient();
 
   const agents = agentInfos.map((a) => a.name);
 
@@ -55,6 +56,7 @@ export default function AccessPage() {
   const [actionError, setActionError] = useState("");
   const [removeTarget, setRemoveTarget] = useState<{ agent: string; userId: string; name: string } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [savingAgents, setSavingAgents] = useState<Set<string>>(new Set());
 
   const error = agentsError ? `${agentsError}` : actionError;
 
@@ -112,19 +114,22 @@ export default function AccessPage() {
     const settings = accessSettings[agent];
     if (!detail || !settings) return;
 
+    setSavingAgents(prev => new Set(prev).add(agent));
     setActionError("");
     try {
-      // Send full detail with updated access to avoid overwriting other fields
-      await updateAgent.mutateAsync({
+      await apiPut(`/api/agents/${agent}`, {
         ...detail,
         access: settings.enabled
           ? { mode: settings.mode, owner_id: settings.owner_id || null }
           : null,
       });
-      await loadAgentDetails([agent]);
+      qc.invalidateQueries({ queryKey: qk.agents });
+      await Promise.all([loadAgentDetails([agent]), loadAccess([agent])]);
       toast.success(`${agent}: ${t("access.settings_saved")}`);
     } catch (e) {
       toast.error(t("access.save_failed", { error: `${e}` }));
+    } finally {
+      setSavingAgents(prev => { const s = new Set(prev); s.delete(agent); return s; });
     }
   };
 
@@ -201,7 +206,7 @@ export default function AccessPage() {
             const agentPending = pending[agent] ?? [];
             const agentUsers = users[agent] ?? [];
             const isExpanded = expanded[agent] ?? false;
-            const isSaving = updateAgent.isPending;
+            const isSaving = savingAgents.has(agent);
 
             return (
               <div key={agent} className="rounded-xl border border-border/60 bg-card/50 overflow-hidden">
@@ -335,7 +340,7 @@ export default function AccessPage() {
                                 <span className="font-mono text-[10px] text-muted-foreground/50 truncate">{u.channel_user_id}</span>
                               </div>
                               <span className="text-[9px] text-muted-foreground/30 font-mono hidden sm:block shrink-0">
-                                {formatDate(u.approved_at, locale)}
+                                {t("access.granted_at", { date: formatDate(u.approved_at, locale) })}
                               </span>
                               <Button
                                 variant="ghost"
