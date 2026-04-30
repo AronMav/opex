@@ -610,4 +610,17 @@ mod tests {
             .expect("expected Ok even when content missing");
         assert_eq!(out, "", "no title + no content → empty string, not Err");
     }
+
+    // ── compute_denied_tools ────────────────────────────────────────────────
+
+    #[test]
+    fn compute_denied_tools_default_matches_const() {
+        let denied = compute_denied_tools(&DelegationConfig::default());
+        for tool in SUBAGENT_DENIED_TOOLS {
+            assert!(denied.iter().any(|d| d == *tool),
+                "default DelegationConfig must include all SUBAGENT_DENIED_TOOLS, missing: {}", tool);
+        }
+        assert_eq!(denied.len(), SUBAGENT_DENIED_TOOLS.len(),
+            "default has no extras, length must match SUBAGENT_DENIED_TOOLS");
+    }
 }
