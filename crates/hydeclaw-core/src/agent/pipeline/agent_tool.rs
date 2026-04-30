@@ -866,6 +866,46 @@ mod tests {
         );
     }
 
+    // ── check_depth_limit (T8 — TDD red) ────────────────────────────────────
+
+    use crate::config::DelegationConfig;
+
+    #[test]
+    fn depth_zero_can_spawn_subagent() {
+        let cfg = DelegationConfig::default(); // max_depth=1
+        let result = check_depth_limit(0, &cfg);
+        assert!(result.is_ok(), "depth=0 → max_depth=1: spawn should be allowed");
+    }
+
+    #[test]
+    fn depth_at_max_blocks_spawn() {
+        let cfg = DelegationConfig::default(); // max_depth=1
+        let result = check_depth_limit(1, &cfg);
+        assert!(result.is_err(), "depth=1 → max_depth=1: spawn must be blocked");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("depth limit reached"),
+            "error must mention depth limit: {}",
+            err
+        );
+        assert!(
+            err.contains("max=1"),
+            "error must show current max_depth: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn higher_max_depth_allows_nested_spawn() {
+        let cfg = DelegationConfig {
+            max_depth: 2,
+            ..Default::default()
+        };
+        assert!(check_depth_limit(0, &cfg).is_ok());
+        assert!(check_depth_limit(1, &cfg).is_ok());
+        assert!(check_depth_limit(2, &cfg).is_err());
+    }
+
     /// `fresh=true` against a non-existent target must not error — it should
     /// tolerate "not found" and proceed to the spawn path. Without an
     /// `AgentMap` we won't get past spawn, but the failure mode must be the
