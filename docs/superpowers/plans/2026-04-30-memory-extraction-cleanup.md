@@ -45,14 +45,17 @@ struct ExtractedKnowledge {
 - [ ] **Step 2: Verify compile fails at the expected spots**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "error\[" | head -15
+cargo check -p hydeclaw-core 2>&1 | grep "error\[" | head -20
 ```
 
-Expected: errors at lines 520, 543, 552, 561, 590, 631 — all `result.tool_insights` or `extracted.tool_insights` references inside `#[cfg(test)]`.
+Expected errors at:
+- Lines 520, 543, 552, 561, 590, 631 — `result.tool_insights` in `parse_extraction` tests
+- Lines 652–653 — `tool_insights: vec![...]` in `rolling_summary_collects_only_user_facts_outcomes_feedback`
+- Lines 853–854 — `tool_insights: vec![...]` in `rolling_summary_empty_when_only_tool_insights`
 
-- [ ] **Step 3: Fix `parse_extraction` tests — remove `tool_insights` assertions and inputs**
+- [ ] **Step 3: Fix all `tool_insights` compile errors in the test block**
 
-Replace these six tests in the `#[cfg(test)]` block:
+**3a. Replace six `parse_extraction` tests** (remove `tool_insights` from JSON inputs and assertions):
 
 ```rust
 #[test]
@@ -105,6 +108,39 @@ fn parse_with_feedback_field() {
     assert_eq!(result.feedback.len(), 2);
     assert_eq!(result.feedback[0], "User approved the analysis");
 }
+```
+
+**3b. Rewrite `rolling_summary_collects_only_user_facts_outcomes_feedback` (lines 647–665):**
+
+Replace the whole test — it constructs `ExtractedKnowledge` with `tool_insights` which no longer exists:
+
+```rust
+#[test]
+fn rolling_summary_collects_from_all_three_categories() {
+    let extracted = ExtractedKnowledge {
+        user_facts: vec!["User works in IT".into()],
+        outcomes: vec!["Decided to use GraphQL".into()],
+        feedback: vec!["User approved analysis".into()],
+    };
+    let mut facts: Vec<&str> = Vec::new();
+    for f in &extracted.user_facts { facts.push(f); }
+    for f in &extracted.outcomes { facts.push(f); }
+    for f in &extracted.feedback { facts.push(f); }
+    assert_eq!(facts.len(), 3);
+    assert!(facts.iter().any(|f| f.contains("IT")));
+    assert!(facts.iter().any(|f| f.contains("GraphQL")));
+    assert!(facts.iter().any(|f| f.contains("approved")));
+}
+```
+
+**3c. Delete `rolling_summary_empty_when_only_tool_insights` (lines 849–861):**
+
+Delete the entire test — it tests behavior that no longer exists (tool_insights being excluded):
+
+```rust
+// DELETE this test:
+#[test]
+fn rolling_summary_empty_when_only_tool_insights() { ... }
 ```
 
 - [ ] **Step 4: Run tests — expect all to pass**
@@ -231,9 +267,21 @@ Delete the entire block from `/// Similarity thresholds for conflict resolution.
 - `ConflictDecision`
 - `parse_conflict_decision`
 
-- [ ] **Step 4: Delete `save_if_new` tests (lines ~593–625)**
+- [ ] **Step 4: Delete all test blocks that call deleted functions**
 
-Delete from `// ── save_if_new tests ───────────` through the closing `}` of `save_if_new_accepts_shared_scope`. This removes 4 `#[tokio::test]` functions. Keep the `// ── scope assignment tests` header only if there are non-`save_if_new` tests below it — if the header becomes orphaned (no tests below it), delete it too.
+There are three groups to delete:
+
+**4a. `parse_conflict_*` tests (lines 667–796)** — call `parse_conflict_decision` which is deleted:
+
+Delete from `// ── conflict resolution tests` (line 667) through `parse_conflict_empty_json` closing `}` (line 796). This covers 11 tests: `parse_conflict_update`, `parse_conflict_add`, `parse_conflict_noop`, `parse_conflict_delete`, `parse_conflict_with_think_blocks`, `parse_conflict_malformed_defaults_to_add`, `parse_conflict_with_markdown_fences`, `parse_conflict_missing_target_defaults_to_zero`, `parse_conflict_missing_reason`, `parse_conflict_unknown_action_preserved`, `parse_conflict_empty_json`.
+
+**4b. `save_if_new_*` tests (lines 593–625 and 798–827)** — call `save_if_new` which is deleted:
+
+Delete from `// ── save_if_new tests` (line 593) through `save_if_new_accepts_shared_scope` (line 625). Then also delete from `// ── save_if_new threshold tests` (line 798) through `save_if_new_unavailable_store_returns_false` (line 827). This removes 8 `#[tokio::test]` functions total.
+
+**4c. `extraction_scope_assignment` test (lines 829–846)** — documents the old 4-field design:
+
+Delete from `// ── scope consistency tests` (line 829) through the closing `}` of `extraction_scope_assignment` (line 846).
 
 - [ ] **Step 5: Add the schema regression test**
 
