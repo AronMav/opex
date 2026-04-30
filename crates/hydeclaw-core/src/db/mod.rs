@@ -1,5 +1,6 @@
 // ── Extracted to hydeclaw-db (leaf modules, zero crate::* refs) ─────────
 pub use hydeclaw_db::approvals;
+pub use hydeclaw_db::memory_queries;
 pub use hydeclaw_db::notifications;
 pub use hydeclaw_db::session_failures;
 pub use hydeclaw_db::session_wal;
@@ -11,7 +12,6 @@ pub mod access;
 pub mod audit_queue;
 pub mod audit;
 pub mod github;
-pub mod memory_queries;
 pub mod outbound;
 pub mod pending;
 pub mod providers;
