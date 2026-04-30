@@ -27,13 +27,19 @@ pub async fn run_subagent(
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     handle: Option<Arc<tokio::sync::RwLock<subagent_state::SubagentHandle>>>,
     allowed_tools: Option<Vec<String>>,
+    depth: u8,
 ) -> Result<String> {
-    run_subagent_with_session(ctx, executor, task, max_iterations, deadline, cancel, handle, allowed_tools, None).await
+    run_subagent_with_session(
+        ctx, executor, task, max_iterations, deadline, cancel, handle, allowed_tools, None, depth,
+    ).await
 }
 
 /// Like `run_subagent` but with an explicit session_id for tool context enrichment.
 /// When `session_id` is Some, it is passed to `execute_tool_calls_partitioned` so tools
 /// like `agent` can find the correct SessionAgentPool via enriched `_context`.
+///
+/// `depth` is the subagent recursion depth carried in the inner `CommandContext`.
+/// Used by max-depth enforcement (see Tasks 8/9 of the iso-subagent-isolation plan).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_subagent_with_session(
     ctx: &CommandContext<'_>,
@@ -45,7 +51,12 @@ pub async fn run_subagent_with_session(
     handle: Option<Arc<tokio::sync::RwLock<subagent_state::SubagentHandle>>>,
     allowed_tools: Option<Vec<String>>,
     session_id: Option<uuid::Uuid>,
+    depth: u8,
 ) -> Result<String> {
+    // `depth` is the subagent recursion depth this run is operating at.
+    // Currently propagated for future use (T8/T9: max-depth enforcement);
+    // the existing body of this function does not yet branch on it.
+    let _ = depth;
     let cfg = ctx.cfg;
     let ws_prompt =
         workspace::load_workspace_prompt(&cfg.workspace_dir, &cfg.agent.name).await?;

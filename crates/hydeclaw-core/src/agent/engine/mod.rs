@@ -413,8 +413,11 @@ impl AgentEngine {
         session_id: Option<uuid::Uuid>,
     ) -> Result<String> {
         let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
+        // Top-level entry from the engine API: depth = 0. Recursive subagent
+        // dispatch (T8/T9) will route through pipeline-level helpers that
+        // increment depth from `ctx.subagent_depth`.
         crate::agent::pipeline::subagent_runner::run_subagent_with_session(
-            &ctx, self, task, max_iterations, deadline, cancel, handle, allowed_tools, session_id,
+            &ctx, self, task, max_iterations, deadline, cancel, handle, allowed_tools, session_id, 0,
         ).await
     }
 }
