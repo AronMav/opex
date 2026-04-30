@@ -100,6 +100,14 @@ pub async fn bootstrap<S: EventSink>(
             tracing::warn!(session_id = %session_id, error = %e, "claim_session_running failed");
         }
     }
+
+    // Clean up any streaming message left by a previous crashed run before loading context.
+    match crate::db::sessions::cleanup_session_streaming_messages(&engine.cfg().db, session_id).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(session=%session_id, count=%n, "cleaned orphaned streaming messages"),
+        Err(e) => tracing::warn!(session=%session_id, error=%e, "cleanup_session_streaming_messages failed"),
+    }
+
     log_wal_running_with_retry(&sm, session_id).await;
 
     // 3. Emit first Phase event (silently dropped by SseSink; routed by ChannelStatusSink)
