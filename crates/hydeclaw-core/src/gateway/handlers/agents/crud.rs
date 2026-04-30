@@ -219,10 +219,13 @@ pub(crate) async fn api_create_agent(
     // Hot-start the agent
     match start_agent_from_config(&cfg, &agents, &infra, &auth, &bus, &cfg_svc, &status).await {
         Ok((handle, guard)) => {
-            agents.map.write().await.insert(name.clone(), handle);
+            // Guard must be inserted before the handle: channel adapters reconnect
+            // as soon as the handle appears in agents.map, so the guard must already
+            // be present when they call AccessCheck.
             if let Some(guard) = guard {
                 auth.access_guards.write().await.insert(name.clone(), guard);
             }
+            agents.map.write().await.insert(name.clone(), handle);
 
             // Ensure Docker sandbox for non-base agents (base run on host)
             if !cfg.agent.base
@@ -572,10 +575,11 @@ pub(crate) async fn api_update_agent(
 
     match start_agent_from_config(&cfg, &agents, &infra, &auth, &bus, &cfg_svc, &status).await {
         Ok((handle, guard)) => {
-            agents.map.write().await.insert(new_name.clone(), handle);
+            // Guard before handle — same reasoning as api_create_agent.
             if let Some(guard) = guard {
                 auth.access_guards.write().await.insert(new_name.clone(), guard);
             }
+            agents.map.write().await.insert(new_name.clone(), handle);
 
             // Ensure Docker sandbox for non-base agents (base run on host)
             if !cfg.agent.base

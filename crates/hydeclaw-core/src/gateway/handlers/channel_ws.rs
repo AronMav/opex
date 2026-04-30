@@ -695,7 +695,10 @@ async fn channel_ws_loop(
                         }
                     }
                     ChannelInbound::AccessCheck { request_id, user_id } => {
-                        let (allowed, is_owner) = if let Some(guard) = access_guard {
+                        // Re-fetch guard on every check: the agent may have been restarted with a
+                        // new access config after this WS session was established.
+                        let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
+                        let (allowed, is_owner) = if let Some(guard) = live_guard {
                             let allowed = guard.is_allowed(&user_id).await;
                             let is_owner = guard.is_owner(&user_id);
                             tracing::debug!(
@@ -713,7 +716,8 @@ async fn channel_ws_loop(
                         ws_sink.send(ws_json(&msg)).await.ok();
                     }
                     ChannelInbound::PairingCreate { request_id, user_id, display_name } => {
-                        let code = if let Some(guard) = access_guard {
+                        let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
+                        let code = if let Some(guard) = live_guard {
                             let c = guard.create_pairing_code(&user_id, display_name.as_deref()).await;
                             tracing::info!(agent = %agent_name, user_id = %user_id, code = %c, "pairing code created");
                             {
@@ -740,7 +744,8 @@ async fn channel_ws_loop(
                         ws_sink.send(ws_json(&msg)).await.ok();
                     }
                     ChannelInbound::PairingApprove { request_id, code } => {
-                        let (success, error) = if let Some(guard) = access_guard {
+                        let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
+                        let (success, error) = if let Some(guard) = live_guard {
                             let (ok, info) = guard.approve_pairing(&code, "owner").await;
                             // Always pass info — on success it's the display name, on failure the error reason
                             (ok, Some(info))
@@ -751,7 +756,8 @@ async fn channel_ws_loop(
                         ws_sink.send(ws_json(&msg)).await.ok();
                     }
                     ChannelInbound::PairingReject { request_id, code } => {
-                        if let Some(guard) = access_guard {
+                        let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
+                        if let Some(guard) = live_guard {
                             guard.reject_pairing(&code).await;
                         }
                         let msg = ChannelOutbound::PairingResult { request_id, success: true, error: None };
