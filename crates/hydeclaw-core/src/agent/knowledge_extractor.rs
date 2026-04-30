@@ -29,8 +29,6 @@ struct ExtractedKnowledge {
     #[serde(default)]
     outcomes: Vec<String>,
     #[serde(default)]
-    tool_insights: Vec<String>,
-    #[serde(default)]
     feedback: Vec<String>,
 }
 
@@ -103,17 +101,15 @@ async fn extract_and_save_inner(
     // 4. Call LLM for extraction
     let prompt = format!(
         "You are a knowledge extraction assistant. Analyze the conversation below and extract information worth remembering long-term.\n\n\
-         Return a JSON object with four arrays:\n\
+         Return a JSON object with three arrays:\n\
          {{\n\
            \"user_facts\": [\"...\"],\n\
            \"outcomes\": [\"...\"],\n\
-           \"tool_insights\": [\"...\"],\n\
            \"feedback\": [\"...\"]\n\
          }}\n\n\
          Categories:\n\
          - user_facts: Facts about the user (preferences, context, identity, goals)\n\
          - outcomes: Decisions made, conclusions reached, recommendations given\n\
-         - tool_insights: What tools were used, what worked/failed, performance notes\n\
          - feedback: User preferences and reactions — what they approved, rejected, asked to redo, liked or disliked\n\n\
          Rules:\n\
          - Only extract non-trivial information. Skip greetings, small talk, obvious context.\n\
@@ -158,11 +154,6 @@ async fn extract_and_save_inner(
             saved += 1;
         }
     }
-    for insight in &extracted.tool_insights {
-        if save_if_new_with_provider(memory_store, insight, &format!("{}:tool", source_prefix), agent_name, "private", Some(provider)).await {
-            saved += 1;
-        }
-    }
     for fb in &extracted.feedback {
         if save_if_new_with_provider(memory_store, fb, &format!("{}:feedback", source_prefix), agent_name, "shared", Some(provider)).await {
             saved += 1;
@@ -176,7 +167,6 @@ async fn extract_and_save_inner(
             saved,
             user_facts = extracted.user_facts.len(),
             outcomes = extracted.outcomes.len(),
-            tool_insights = extracted.tool_insights.len(),
             feedback = extracted.feedback.len(),
             "knowledge extracted from session"
         );
@@ -513,11 +503,10 @@ mod tests {
 
     #[test]
     fn parse_clean_json() {
-        let input = r#"{"user_facts":["User works in IT"],"outcomes":["Decided to use GraphQL"],"tool_insights":["API responded in 2s"]}"#;
+        let input = r#"{"user_facts":["User works in IT"],"outcomes":["Decided to use GraphQL"],"feedback":[]}"#;
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["User works in IT"]);
         assert_eq!(result.outcomes, vec!["Decided to use GraphQL"]);
-        assert_eq!(result.tool_insights, vec!["API responded in 2s"]);
     }
 
     #[test]
@@ -536,20 +525,19 @@ mod tests {
 
     #[test]
     fn parse_with_surrounding_text() {
-        let input = "Based on my analysis, here are the extracted facts:\n\n{\"user_facts\":[\"A\"],\"outcomes\":[\"B\"],\"tool_insights\":[\"C\"]}\n\nI hope this helps!";
+        let input = "Based on my analysis:\n\n{\"user_facts\":[\"A\"],\"outcomes\":[\"B\"],\"feedback\":[]}\n\nI hope this helps!";
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["A"]);
         assert_eq!(result.outcomes, vec!["B"]);
-        assert_eq!(result.tool_insights, vec!["C"]);
     }
 
     #[test]
     fn parse_empty_arrays() {
-        let input = r#"{"user_facts":[],"outcomes":[],"tool_insights":[]}"#;
+        let input = r#"{"user_facts":[],"outcomes":[],"feedback":[]}"#;
         let result = parse_extraction(input).unwrap();
         assert!(result.user_facts.is_empty());
         assert!(result.outcomes.is_empty());
-        assert!(result.tool_insights.is_empty());
+        assert!(result.feedback.is_empty());
     }
 
     #[test]
@@ -558,7 +546,7 @@ mod tests {
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["Only this"]);
         assert!(result.outcomes.is_empty());
-        assert!(result.tool_insights.is_empty());
+        assert!(result.feedback.is_empty());
     }
 
     #[test]
@@ -583,11 +571,11 @@ mod tests {
 
     #[test]
     fn parse_multiple_items_per_category() {
-        let input = r#"{"user_facts":["F1","F2","F3"],"outcomes":["O1","O2"],"tool_insights":["T1"]}"#;
+        let input = r#"{"user_facts":["F1","F2","F3"],"outcomes":["O1","O2"],"feedback":["FB1"]}"#;
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts.len(), 3);
         assert_eq!(result.outcomes.len(), 2);
-        assert_eq!(result.tool_insights.len(), 1);
+        assert_eq!(result.feedback.len(), 1);
     }
 
     // ── save_if_new tests ───────────────────────────────────────────
@@ -628,7 +616,7 @@ mod tests {
 
     #[test]
     fn parse_with_feedback_field() {
-        let input = r#"{"user_facts":["F1"],"outcomes":["O1"],"tool_insights":["T1"],"feedback":["User approved the analysis","User rejected the recommendation"]}"#;
+        let input = r#"{"user_facts":["F1"],"outcomes":["O1"],"feedback":["User approved the analysis","User rejected the recommendation"]}"#;
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.feedback.len(), 2);
         assert_eq!(result.feedback[0], "User approved the analysis");
@@ -644,21 +632,17 @@ mod tests {
     // ── rolling summary tests ───────────────────────────────────────
 
     #[test]
-    fn rolling_summary_collects_only_user_facts_outcomes_feedback() {
-        // Verify that tool_insights are excluded from summary input
+    fn rolling_summary_collects_from_all_three_categories() {
         let extracted = ExtractedKnowledge {
             user_facts: vec!["User works in IT".into()],
             outcomes: vec!["Decided to use GraphQL".into()],
-            tool_insights: vec!["API took 2s".into()],
             feedback: vec!["User approved analysis".into()],
         };
         let mut facts: Vec<&str> = Vec::new();
         for f in &extracted.user_facts { facts.push(f); }
         for f in &extracted.outcomes { facts.push(f); }
         for f in &extracted.feedback { facts.push(f); }
-        // tool_insights NOT included
         assert_eq!(facts.len(), 3);
-        assert!(!facts.iter().any(|f| f.contains("API took")));
         assert!(facts.iter().any(|f| f.contains("IT")));
         assert!(facts.iter().any(|f| f.contains("GraphQL")));
         assert!(facts.iter().any(|f| f.contains("approved")));
@@ -830,33 +814,17 @@ Some trailing explanation here."#;
 
     #[test]
     fn extraction_scope_assignment() {
-        // Verify the design: user_facts=shared, outcomes=shared, tool_insights=private, feedback=shared
+        // Verify the design: user_facts=shared, outcomes=shared, feedback=shared
         let scopes = [
             ("user_facts", "shared"),
             ("outcomes", "shared"),
-            ("tool_insights", "private"),
             ("feedback", "shared"),
         ];
         // This is a documentation test — the actual scope assignment is in extract_and_save_inner
         // but we verify the design contract
         assert_eq!(scopes[0].1, "shared");
         assert_eq!(scopes[1].1, "shared");
-        assert_eq!(scopes[2].1, "private");
-        assert_eq!(scopes[3].1, "shared");
+        assert_eq!(scopes[2].1, "shared");
     }
 
-    #[test]
-    fn rolling_summary_empty_when_only_tool_insights() {
-        let extracted = ExtractedKnowledge {
-            user_facts: vec![],
-            outcomes: vec![],
-            tool_insights: vec!["some insight".into()],
-            feedback: vec![],
-        };
-        let mut facts: Vec<&str> = Vec::new();
-        for f in &extracted.user_facts { facts.push(f); }
-        for f in &extracted.outcomes { facts.push(f); }
-        for f in &extracted.feedback { facts.push(f); }
-        assert!(facts.is_empty()); // No summary needed
-    }
 }
