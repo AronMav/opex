@@ -403,6 +403,93 @@ pub(super) fn parse_anthropic_response(api_resp: AnthropicResponse, model: &str)
     }
 }
 
+/// Process one parsed Anthropic SSE event. Calls `emit_thinking` for thinking content
+/// (open/close tags + deltas) and `emit_text` for text_delta content.
+fn process_sse_event(
+    event: &serde_json::Value,
+    thinking_content: &mut String,
+    current_signature: &mut String,
+    in_thinking_block: &mut bool,
+    thinking_blocks: &mut Vec<hydeclaw_types::ThinkingBlock>,
+    mut emit_thinking: impl FnMut(String),
+    mut emit_text: impl FnMut(String),
+) {
+    match event.get("type").and_then(|t| t.as_str()) {
+        Some("content_block_start") => {
+            if event
+                .get("content_block")
+                .and_then(|b| b.get("type"))
+                .and_then(|t| t.as_str())
+                == Some("thinking")
+            {
+                *in_thinking_block = true;
+                emit_thinking("<thinking>".to_string());
+            }
+        }
+        Some("content_block_stop") => {
+            if *in_thinking_block {
+                emit_thinking("</thinking>".to_string());
+                thinking_blocks.push(hydeclaw_types::ThinkingBlock {
+                    thinking: std::mem::take(thinking_content),
+                    signature: std::mem::take(current_signature),
+                });
+                *in_thinking_block = false;
+            }
+        }
+        Some("content_block_delta") => {
+            let delta = event.get("delta");
+            match delta.and_then(|d| d.get("type")).and_then(|t| t.as_str()) {
+                Some("text_delta") => {
+                    if let Some(text) = delta.and_then(|d| d.get("text")).and_then(|t| t.as_str()) {
+                        emit_text(text.to_string());
+                    }
+                }
+                Some("thinking_delta") => {
+                    if let Some(text) = delta.and_then(|d| d.get("thinking")).and_then(|t| t.as_str()) {
+                        thinking_content.push_str(text);
+                        emit_thinking(text.to_string());
+                    }
+                }
+                Some("signature_delta") => {
+                    if let Some(sig) = delta.and_then(|d| d.get("signature")).and_then(|s| s.as_str()) {
+                        current_signature.push_str(sig);
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+fn process_sse_events_for_test(lines: &[String]) -> (Vec<String>, Vec<hydeclaw_types::ThinkingBlock>) {
+    use std::cell::RefCell;
+    let chunks: RefCell<Vec<String>> = RefCell::new(vec![]);
+    let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
+    let mut thinking_content = String::new();
+    let mut current_signature = String::new();
+    let mut in_thinking_block = false;
+
+    for line in lines {
+        let data = match line.strip_prefix("data: ") {
+            Some(d) => d,
+            None => continue,
+        };
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+        process_sse_event(
+            &event,
+            &mut thinking_content,
+            &mut current_signature,
+            &mut in_thinking_block,
+            &mut thinking_blocks,
+            |chunk| chunks.borrow_mut().push(chunk),
+            |chunk| chunks.borrow_mut().push(chunk),
+        );
+    }
+    (chunks.into_inner(), thinking_blocks)
+}
+
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
     async fn chat(
@@ -535,7 +622,10 @@ impl LlmProvider for AnthropicProvider {
 
         let mut full_content = String::new();
         let mut buffer = String::new();
-        let mut thinking_filter = crate::agent::thinking::ThinkingFilter::new();
+        let mut thinking_content = String::new();
+        let mut current_signature = String::new();
+        let mut in_thinking_block = false;
+        let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
 
         use tokio_stream::StreamExt;
         use crate::agent::providers::{CancelSlot, LlmCallError, cancellable_stream::stream_with_cancellation};
@@ -566,19 +656,20 @@ impl LlmProvider for AnthropicProvider {
                 }
 
                 if let Some(data) = line.strip_prefix("data: ") {
-                    // Anthropic SSE: content_block_delta with delta.text
-                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(data)
-                        && event.get("type").and_then(|t| t.as_str()) == Some("content_block_delta")
-                            && let Some(text) = event.get("delta")
-                                .and_then(|d| d.get("text"))
-                                .and_then(|t| t.as_str())
-                            {
-                                full_content.push_str(text);
-                                let filtered = thinking_filter.process(text);
-                                if !filtered.is_empty() {
-                                    chunk_tx.send(filtered).ok();
-                                }
-                            }
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                        process_sse_event(
+                            &event,
+                            &mut thinking_content,
+                            &mut current_signature,
+                            &mut in_thinking_block,
+                            &mut thinking_blocks,
+                            |_| {},
+                            |text| {
+                                full_content.push_str(&text);
+                                chunk_tx.send(text).ok();
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -627,7 +718,7 @@ impl LlmProvider for AnthropicProvider {
             fallback_notice: None,
             tools_used: vec![],
             iterations: 0,
-            thinking_blocks: vec![],
+            thinking_blocks,
         })
     }
 
@@ -869,5 +960,37 @@ mod thinking_config_tests {
         let temp = body["temperature"].as_f64().unwrap();
         assert!((temp - 0.7).abs() < f64::EPSILON);
         assert!(body.get("thinking").is_none());
+    }
+}
+
+#[cfg(test)]
+mod streaming_thinking_tests {
+    use super::*;
+
+    fn make_sse_line(json: &str) -> String {
+        format!("data: {json}")
+    }
+
+    #[test]
+    fn streaming_emits_thinking_tags_and_populates_thinking_blocks() {
+        let events = vec![
+            make_sse_line(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#),
+            make_sse_line(r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me reason..."}}"#),
+            make_sse_line(r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc123"}}"#),
+            make_sse_line(r#"{"type":"content_block_stop","index":0}"#),
+            make_sse_line(r#"{"type":"content_block_start","index":1,"content_block":{"type":"text"}}"#),
+            make_sse_line(r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer here."}}"#),
+            make_sse_line(r#"{"type":"content_block_stop","index":1}"#),
+        ];
+
+        let (chunks, blocks) = process_sse_events_for_test(&events);
+
+        assert!(chunks.contains(&"<thinking>".to_string()), "missing <thinking> open tag; got {chunks:?}");
+        assert!(chunks.iter().any(|c| c.contains("Let me reason")), "missing thinking content; got {chunks:?}");
+        assert!(chunks.contains(&"</thinking>".to_string()), "missing </thinking> close tag; got {chunks:?}");
+        assert!(chunks.iter().any(|c| c.contains("Answer here")), "missing text content; got {chunks:?}");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].thinking, "Let me reason...");
+        assert_eq!(blocks[0].signature, "abc123");
     }
 }
