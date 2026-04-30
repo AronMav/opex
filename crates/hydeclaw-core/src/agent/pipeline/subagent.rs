@@ -5,6 +5,7 @@
 use anyhow::Result;
 
 use crate::agent::url_tools::{enrich_with_attachments, extract_urls};
+use crate::config::DelegationConfig;
 
 /// Tools denied to subagents by default (prevent recursive spawning, destructive operations, and dangerous ops).
 /// workspace_write and workspace_edit are allowed so subagents can write shared state files (SUB-01).
@@ -12,6 +13,26 @@ pub const SUBAGENT_DENIED_TOOLS: &[&str] = &[
     "workspace_delete",
     "workspace_rename", "cron", "secret_set", "process",
 ];
+
+/// Compute effective deny list for subagent tool filtering, given a delegation config.
+///
+/// Logic:
+/// - If `blocked_tools_override` is non-empty: use it as the complete deny list
+///   (replaces SUBAGENT_DENIED_TOOLS)
+/// - Otherwise: SUBAGENT_DENIED_TOOLS + blocked_tools_extra (deduplicated)
+pub fn compute_denied_tools(cfg: &DelegationConfig) -> Vec<String> {
+    if !cfg.blocked_tools_override.is_empty() {
+        return cfg.blocked_tools_override.clone();
+    }
+
+    let mut denied: Vec<String> = SUBAGENT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect();
+    for extra in &cfg.blocked_tools_extra {
+        if !denied.contains(extra) {
+            denied.push(extra.clone());
+        }
+    }
+    denied
+}
 
 /// Parse a duration string like "2m", "30s" for subagent timeout.
 /// Defaults to 2m (120s) on invalid input — matches the config default.
