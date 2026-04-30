@@ -4,6 +4,12 @@ import { useChatStore } from "@/stores/chat-store";
 import { useSessions } from "@/lib/queries";
 import { isActivePhase } from "@/stores/chat-types";
 
+// Stable empty fallback — prevents new array reference on every render
+// when activeSessionIds is absent, which would cause Zustand to treat the
+// selector result as changed on every store update and re-render the
+// subscriber unnecessarily.
+const EMPTY_ACTIVE_IDS: string[] = [];
+
 /**
  * Single source of truth for "is the engine processing for this agent?".
  *
@@ -19,9 +25,13 @@ import { isActivePhase } from "@/stores/chat-types";
 export function useEngineRunning(agent: string): boolean {
   const activeSessionId = useChatStore((s) => s.agents[agent]?.activeSessionId ?? null);
   const connectionPhase = useChatStore((s) => s.agents[agent]?.connectionPhase ?? "idle");
-  const activeSessionIds = useChatStore((s) => s.agents[agent]?.activeSessionIds ?? []);
+  const activeSessionIds = useChatStore(
+    (s) => s.agents[agent]?.activeSessionIds ?? EMPTY_ACTIVE_IDS,
+  );
   const { data: sessionsData } = useSessions(agent);
-  const sessionRunStatus = sessionsData?.sessions?.find((s: { id: string }) => s.id === activeSessionId)?.run_status;
+  const sessionRunStatus = sessionsData?.sessions?.find(
+    (s: { id: string }) => s.id === activeSessionId,
+  )?.run_status;
 
   return !!activeSessionId && (
     isActivePhase(connectionPhase) ||

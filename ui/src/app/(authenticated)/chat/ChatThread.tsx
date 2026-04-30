@@ -7,6 +7,11 @@ import { useVisualViewport } from "@/hooks/use-visual-viewport";
 import { useSessionMessages, useSessions } from "@/lib/queries";
 
 import type { SessionRow } from "@/types/api";
+
+// Stable empty fallback — prevents new array reference on every render (avoids
+// infinite useEffect loop when activeSessionIds is absent during WS reconnect).
+const EMPTY_ACTIVE_IDS: string[] = [];
+
 // ── Re-exports for backward compatibility ────────────────────────────────────
 export { ToolCallPartView } from "@/components/chat/ToolCallPartView";
 export { FileDataPartView } from "@/components/chat/FileDataPartView";
@@ -83,7 +88,7 @@ export function ChatThread({
   const reconnectAttempt = useChatStore((s) => s.agents[s.currentAgent]?.reconnectAttempt ?? 0);
   const maxReconnectAttempts = useChatStore((s) => s.agents[s.currentAgent]?.maxReconnectAttempts ?? 3);
   const isLlmReconnecting = useChatStore((s) => s.agents[s.currentAgent]?.isLlmReconnecting ?? false);
-  const activeSessionIds = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionIds ?? []);
+  const activeSessionIds = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE_IDS);
   // Engine running: either WS says it's active, OR React Query sessions list says run_status=running
   const { data: sessionsData } = useSessions(currentAgent);
   const sessionRunStatus = sessionsData?.sessions?.find((s: { id: string }) => s.id === activeSessionId)?.run_status;
