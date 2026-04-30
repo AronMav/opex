@@ -19,8 +19,6 @@ const MIN_MESSAGES: usize = 5;
 const MAX_CONTEXT_MESSAGES: usize = 20;
 /// LLM call timeout.
 const EXTRACTION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-/// Similarity threshold for dedup — skip saving if existing chunk is this similar.
-const DEDUP_THRESHOLD: f64 = 0.9;
 
 #[derive(Debug, Deserialize)]
 struct ExtractedKnowledge {
@@ -142,39 +140,7 @@ async fn extract_and_save_inner(
     // 5. Parse JSON from response
     let extracted = parse_extraction(&response.content)?;
 
-    // 6. Dedup and save each fact
-    let mut saved = 0u32;
-    let source_prefix = format!("auto:session:{}", session_id);
-
-    for fact in &extracted.user_facts {
-        if save_if_new_with_provider(memory_store, fact, &format!("{}:user", source_prefix), agent_name, "shared", Some(provider)).await {
-            saved += 1;
-        }
-    }
-    for outcome in &extracted.outcomes {
-        if save_if_new_with_provider(memory_store, outcome, &format!("{}:outcome", source_prefix), agent_name, "shared", Some(provider)).await {
-            saved += 1;
-        }
-    }
-    for fb in &extracted.feedback {
-        if save_if_new_with_provider(memory_store, fb, &format!("{}:feedback", source_prefix), agent_name, "shared", Some(provider)).await {
-            saved += 1;
-        }
-    }
-
-    if saved > 0 {
-        tracing::info!(
-            session_id = %session_id,
-            agent = %agent_name,
-            saved,
-            user_facts = extracted.user_facts.len(),
-            outcomes = extracted.outcomes.len(),
-            feedback = extracted.feedback.len(),
-            "knowledge extracted from session"
-        );
-    }
-
-    // 7. Update rolling agent summary
+    // 6. Update rolling agent summary
     update_rolling_summary(agent_name, provider, memory_store, &extracted).await;
 
     Ok(())
@@ -320,183 +286,6 @@ fn parse_extraction(content: &str) -> Result<ExtractedKnowledge> {
     anyhow::bail!("no JSON object found in extraction response")
 }
 
-/// Similarity thresholds for conflict resolution.
-const CONFLICT_THRESHOLD: f64 = 0.5;
-
-/// Save a fact to memory using Mem0-style conflict resolution.
-/// - similarity >= 0.9 → SKIP (exact duplicate)
-/// - similarity 0.5-0.9 → LLM decides ADD/UPDATE/DELETE/NOOP
-/// - similarity < 0.5 → ADD (new fact)
-#[cfg_attr(not(test), allow(dead_code))]
-async fn save_if_new(
-    memory_store: &Arc<dyn MemoryService>,
-    text: &str,
-    source: &str,
-    agent_name: &str,
-    scope: &str,
-) -> bool {
-    save_if_new_with_provider(memory_store, text, source, agent_name, scope, None).await
-}
-
-async fn save_if_new_with_provider(
-    memory_store: &Arc<dyn MemoryService>,
-    text: &str,
-    source: &str,
-    agent_name: &str,
-    scope: &str,
-    provider: Option<&Arc<dyn LlmProvider>>,
-) -> bool {
-    let text = text.trim();
-    if text.is_empty() || text.len() < 10 {
-        return false;
-    }
-
-    // Search for similar existing chunks
-    let (results, _) = match memory_store.search(text, 3, &[], agent_name).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!(error = %e, "dedup search failed, saving anyway");
-            return match memory_store.index(text, source, false, scope, agent_name).await {
-                Ok(_) => true,
-                Err(e) => { tracing::warn!(error = %e, "failed to save extracted knowledge"); false }
-            };
-        }
-    };
-
-    if let Some(top) = results.first() {
-        if top.similarity >= DEDUP_THRESHOLD {
-            return false; // Exact duplicate — skip
-        }
-
-        if top.similarity >= CONFLICT_THRESHOLD {
-            // Potential conflict — ask LLM to resolve if provider available
-            if let Some(provider) = provider {
-                return resolve_conflict(memory_store, provider, text, source, scope, agent_name, &results).await;
-            }
-            // No provider — fall through to ADD (safe default)
-        }
-    }
-
-    // New fact or low similarity — ADD
-    match memory_store.index(text, source, false, scope, agent_name).await {
-        Ok(_) => true,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to save extracted knowledge");
-            false
-        }
-    }
-}
-
-/// Mem0-style conflict resolution: LLM decides ADD/UPDATE/DELETE/NOOP.
-async fn resolve_conflict(
-    memory_store: &Arc<dyn MemoryService>,
-    provider: &Arc<dyn LlmProvider>,
-    new_fact: &str,
-    source: &str,
-    scope: &str,
-    agent_name: &str,
-    existing: &[crate::memory::MemoryResult],
-) -> bool {
-    // Format existing memories for LLM
-    let existing_text = existing.iter().enumerate()
-        .map(|(i, r)| format!("[{}] {}", i, r.content))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let prompt = format!(
-        "You manage a memory store. A new fact needs to be stored, but similar memories already exist.\n\n\
-         Existing memories:\n{}\n\n\
-         New fact: {}\n\n\
-         Decide the action. Return ONLY a JSON object:\n\
-         {{\"action\": \"ADD|UPDATE|DELETE|NOOP\", \"target\": 0, \"reason\": \"...\"}}\n\n\
-         - ADD: new fact is different/complementary, keep both\n\
-         - UPDATE: new fact supersedes existing[target], replace it\n\
-         - DELETE: existing[target] is outdated, delete it and add new\n\
-         - NOOP: new fact adds nothing, skip it",
-        existing_text, new_fact
-    );
-
-    let messages = vec![Message {
-        role: MessageRole::User,
-        content: prompt,
-        tool_calls: None,
-        tool_call_id: None,
-        thinking_blocks: vec![],
-    }];
-
-    let response = match tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        provider.chat(&messages, &[]),
-    ).await {
-        Ok(Ok(r)) => r,
-        _ => {
-            // LLM failed — safe fallback: ADD
-            return memory_store.index(new_fact, source, false, scope, agent_name).await.is_ok();
-        }
-    };
-
-    // Parse decision
-    let decision = parse_conflict_decision(&response.content);
-
-    match decision.action.as_str() {
-        "UPDATE" | "DELETE" => {
-            // Delete the target existing chunk, then add new
-            let target_idx = decision.target.min(existing.len().saturating_sub(1));
-            if let Some(target) = existing.get(target_idx) {
-                let _ = memory_store.delete(&target.id).await;
-                tracing::debug!(
-                    action = decision.action.as_str(),
-                    old = target.content.chars().take(50).collect::<String>(),
-                    new = new_fact.chars().take(50).collect::<String>(),
-                    reason = decision.reason.as_str(),
-                    "memory conflict resolved"
-                );
-            }
-            memory_store.index(new_fact, source, false, scope, agent_name).await.is_ok()
-        }
-        "ADD" => {
-            memory_store.index(new_fact, source, false, scope, agent_name).await.is_ok()
-        }
-        _ => {
-            tracing::debug!(action = decision.action.as_str(), reason = decision.reason.as_str(), "conflict resolution: unknown action, skipping");
-            false
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ConflictDecision {
-    action: String,
-    target: usize,
-    reason: String,
-}
-
-fn parse_conflict_decision(content: &str) -> ConflictDecision {
-    let default = ConflictDecision { action: "ADD".into(), target: 0, reason: "parse failed".into() };
-
-    // Strip think blocks
-    let mut cleaned = content.to_string();
-    while let Some(start) = cleaned.find("<think>") {
-        if let Some(end) = cleaned.find("</think>") {
-            cleaned = format!("{}{}", &cleaned[..start], &cleaned[end + 8..]);
-        } else { break; }
-    }
-    let cleaned = cleaned.replace("```json", "").replace("```", "");
-
-    let start = match cleaned.find('{') { Some(s) => s, None => return default };
-    let end = match cleaned.rfind('}') { Some(e) => e, None => return default };
-
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cleaned[start..=end]) {
-        ConflictDecision {
-            action: v.get("action").and_then(|a| a.as_str()).unwrap_or("ADD").to_uppercase(),
-            target: v.get("target").and_then(|t| t.as_u64()).unwrap_or(0) as usize,
-            reason: v.get("reason").and_then(|r| r.as_str()).unwrap_or("").to_string(),
-        }
-    } else {
-        default
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -580,40 +369,6 @@ mod tests {
         assert_eq!(result.feedback.len(), 1);
     }
 
-    // ── save_if_new tests ───────────────────────────────────────────
-
-    #[tokio::test]
-    async fn save_if_new_skips_short_text() {
-        let mock = Arc::new(crate::agent::memory_service::mock::MockMemoryService::available()) as Arc<dyn MemoryService>;
-        assert!(!save_if_new(&mock, "", "src", "agent", "private").await);
-        assert!(!save_if_new(&mock, "short", "src", "agent", "private").await);
-        assert!(!save_if_new(&mock, "  ", "src", "agent", "private").await);
-    }
-
-    #[tokio::test]
-    async fn save_if_new_saves_valid_text() {
-        let mock = Arc::new(crate::agent::memory_service::mock::MockMemoryService::available()) as Arc<dyn MemoryService>;
-        // Mock search returns empty results → no duplicate → should save
-        let result = save_if_new(&mock, "This is a long enough fact to save", "auto:test", "agent", "shared").await;
-        assert!(result);
-    }
-
-    // ── scope assignment tests ──────────────────────────────────────
-
-    #[tokio::test]
-    async fn save_if_new_accepts_private_scope() {
-        let mock = Arc::new(crate::agent::memory_service::mock::MockMemoryService::available()) as Arc<dyn MemoryService>;
-        let result = save_if_new(&mock, "Tool insight only for this agent", "auto:test:tool", "Arty", "private").await;
-        assert!(result);
-    }
-
-    #[tokio::test]
-    async fn save_if_new_accepts_shared_scope() {
-        let mock = Arc::new(crate::agent::memory_service::mock::MockMemoryService::available()) as Arc<dyn MemoryService>;
-        let result = save_if_new(&mock, "User works in IT sector", "auto:test:user", "Arty", "shared").await;
-        assert!(result);
-    }
-
     // ── feedback parsing tests ──────────────────────────────────────
 
     #[test]
@@ -648,53 +403,6 @@ mod tests {
         assert!(facts.iter().any(|f| f.contains("IT")));
         assert!(facts.iter().any(|f| f.contains("GraphQL")));
         assert!(facts.iter().any(|f| f.contains("approved")));
-    }
-
-    // ── conflict resolution tests ─────────────────────────────────
-
-    #[test]
-    fn parse_conflict_update() {
-        let input = r#"{"action": "UPDATE", "target": 1, "reason": "new data supersedes old"}"#;
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "UPDATE");
-        assert_eq!(d.target, 1);
-        assert!(d.reason.contains("supersedes"));
-    }
-
-    #[test]
-    fn parse_conflict_add() {
-        let input = r#"{"action": "ADD", "target": 0, "reason": "complementary info"}"#;
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "ADD");
-    }
-
-    #[test]
-    fn parse_conflict_noop() {
-        let input = r#"{"action": "NOOP", "target": 0, "reason": "nothing new"}"#;
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "NOOP");
-    }
-
-    #[test]
-    fn parse_conflict_delete() {
-        let input = r#"{"action": "delete", "target": 2, "reason": "outdated"}"#;
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "DELETE"); // lowercased input → uppercased
-        assert_eq!(d.target, 2);
-    }
-
-    #[test]
-    fn parse_conflict_with_think_blocks() {
-        let input = r#"<think>analyzing...</think>{"action": "UPDATE", "target": 0, "reason": "newer"}"#;
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "UPDATE");
-    }
-
-    #[test]
-    fn parse_conflict_malformed_defaults_to_add() {
-        let input = "I'm not sure what to do here.";
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "ADD"); // Safe default
     }
 
     // ── edge case: extraction with unicode/multilingual ────────
@@ -741,92 +449,13 @@ Some trailing explanation here."#;
         assert!(result.outcomes[0].contains("$50,000"));
     }
 
-    // ── conflict resolution edge cases ──────────────────────
-
     #[test]
-    fn parse_conflict_with_markdown_fences() {
-        let input = "```json\n{\"action\": \"UPDATE\", \"target\": 0, \"reason\": \"newer info\"}\n```";
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "UPDATE");
-    }
-
-    #[test]
-    fn parse_conflict_missing_target_defaults_to_zero() {
-        let input = r#"{"action": "DELETE", "reason": "outdated"}"#;
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "DELETE");
-        assert_eq!(d.target, 0);
-    }
-
-    #[test]
-    fn parse_conflict_missing_reason() {
-        let input = r#"{"action": "ADD", "target": 1}"#;
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "ADD");
-        assert!(d.reason.is_empty());
-    }
-
-    #[test]
-    fn parse_conflict_unknown_action_preserved() {
-        let input = r#"{"action": "MERGE", "target": 0, "reason": "combine"}"#;
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "MERGE"); // uppercased, not mapped to known action
-    }
-
-    #[test]
-    fn parse_conflict_empty_json() {
-        let input = "{}";
-        let d = parse_conflict_decision(input);
-        assert_eq!(d.action, "ADD"); // default
-        assert_eq!(d.target, 0);
-    }
-
-    // ── save_if_new threshold tests ─────────────────────────
-
-    #[tokio::test]
-    async fn save_if_new_rejects_exactly_10_chars() {
-        let mock = Arc::new(crate::agent::memory_service::mock::MockMemoryService::available()) as Arc<dyn MemoryService>;
-        // Exactly 10 chars — boundary case (len < 10 returns false, so 10 should pass)
-        assert!(save_if_new(&mock, "1234567890", "src", "agent", "private").await);
-    }
-
-    #[tokio::test]
-    async fn save_if_new_rejects_9_chars() {
-        let mock = Arc::new(crate::agent::memory_service::mock::MockMemoryService::available()) as Arc<dyn MemoryService>;
-        assert!(!save_if_new(&mock, "123456789", "src", "agent", "private").await);
-    }
-
-    #[tokio::test]
-    async fn save_if_new_trims_whitespace() {
-        let mock = Arc::new(crate::agent::memory_service::mock::MockMemoryService::available()) as Arc<dyn MemoryService>;
-        // "  short  " trims to "short" (5 chars) → rejected
-        assert!(!save_if_new(&mock, "  short  ", "src", "agent", "private").await);
-    }
-
-    #[tokio::test]
-    async fn save_if_new_unavailable_store_returns_false() {
-        let mock = Arc::new(crate::agent::memory_service::mock::MockMemoryService::unavailable()) as Arc<dyn MemoryService>;
-        // Store unavailable — should still save if called directly (save_if_new doesn't check availability)
-        let result = save_if_new(&mock, "This is a long enough fact to save", "src", "agent", "shared").await;
-        // MockMemoryService.unavailable() still returns Ok for index() — it just flags is_available=false
-        assert!(result);
-    }
-
-    // ── scope consistency tests ─────────────────────────────
-
-    #[test]
-    fn extraction_scope_assignment() {
-        // Verify the design: user_facts=shared, outcomes=shared, feedback=shared
-        let scopes = [
-            ("user_facts", "shared"),
-            ("outcomes", "shared"),
-            ("feedback", "shared"),
-        ];
-        // This is a documentation test — the actual scope assignment is in extract_and_save_inner
-        // but we verify the design contract
-        assert_eq!(scopes[0].1, "shared");
-        assert_eq!(scopes[1].1, "shared");
-        assert_eq!(scopes[2].1, "shared");
+    fn extracted_knowledge_has_no_tool_insights_field() {
+        let json = r#"{"user_facts":["x"],"outcomes":[],"feedback":[]}"#;
+        let parsed: ExtractedKnowledge = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.user_facts, vec!["x"]);
+        assert!(parsed.outcomes.is_empty());
+        assert!(parsed.feedback.is_empty());
     }
 
 }
