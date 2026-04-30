@@ -26,7 +26,7 @@ Rolling summary (`source="rolling_summary:{agent_name}"`) is the single persiste
 
 | File | Change |
 |------|--------|
-| `crates/hydeclaw-core/src/agent/knowledge_extractor.rs` | Remove individual fact persistence; improve extraction prompt; remove `tool_insights` from schema; raise `DEDUP_THRESHOLD` |
+| `crates/hydeclaw-core/src/agent/knowledge_extractor.rs` | Remove individual fact persistence; improve extraction prompt; remove `tool_insights` from schema; delete dead code |
 | DB (one-time) | `DELETE FROM memory_chunks WHERE source LIKE 'auto:session:%'` — run on deploy |
 
 ---
@@ -43,7 +43,8 @@ struct ExtractedKnowledge {
 }
 ```
 
-`tool_insights` was the noisiest category ("used memory_search to search") and has no destination without individual storage.
+`tool_insights` was the noisiest category and has no destination without individual storage.
+`update_rolling_summary` already skips `tool_insights` — removing the field does not affect it.
 
 ---
 
@@ -68,28 +69,30 @@ Replace current vague "only extract non-trivial information" with explicit filte
 
 ## Code Changes — `knowledge_extractor.rs`
 
-### Remove individual fact persistence
+### 1. Remove individual fact persistence block (lines 148–183)
+
+The entire block starting at `let mut saved = 0u32;` through the closing `tracing::info!` of the save loop is deleted. Only the rolling summary call remains:
 
 ```rust
-// DELETE the entire block in extract_and_save_inner:
-let mut saved = 0u32;
-let source_prefix = format!("auto:session:{}", session_id);
-for fact in &extracted.user_facts {
-    if save_if_new_with_provider(...).await { saved += 1; }
-}
-// ... all four category loops
+// DELETE lines 148–183 (saved counter, source_prefix, four category loops, info log)
 
-// KEEP only:
+// KEEP:
 update_rolling_summary(agent_name, provider, memory_store, &extracted).await;
 ```
 
-### Raise dedup threshold
+### 2. Delete dead code
 
-```rust
-const DEDUP_THRESHOLD: f64 = 0.95;  // was 0.90
-```
+After removing the persistence block, the following become dead code and must be deleted:
 
-The `save_if_new` / `save_if_new_with_provider` functions are **deleted** — grep confirms they are only called from the individual fact saving block being removed. Their unit tests (~lines 593–824) are deleted with them. `resolve_conflict` is only called from `save_if_new_with_provider`, so it is deleted too.
+- `save_if_new` (lines ~339–347)
+- `save_if_new_with_provider` (lines ~349–395)
+- `resolve_conflict` (lines ~397–450) — only called from `save_if_new_with_provider`
+- `DEDUP_THRESHOLD` constant (line 23) — only referenced in `save_if_new_with_provider`
+- All `save_if_new` unit tests (lines ~595–827, 8 `#[tokio::test]` functions)
+
+### 3. Update `parse_extraction` tests
+
+Tests at lines ~515–591 reference `result.tool_insights` directly (e.g. asserting it is empty or has expected values). These will fail to compile after `tool_insights` is removed from `ExtractedKnowledge`. Update each assertion to remove the `tool_insights` field access.
 
 ---
 
@@ -101,57 +104,51 @@ Run on deploy (before service restart):
 DELETE FROM memory_chunks WHERE source LIKE 'auto:session:%';
 ```
 
-Can be run directly on Pi via `docker exec` into Postgres container, or via an agent `memory_delete` action targeting the source prefix. No migration required — it is a data cleanup, not a schema change.
+Can be run directly on Pi via `docker exec` into Postgres container. No migration required — data cleanup only.
 
 ---
 
 ## Testing
 
-### Existing tests
-Unit tests for `save_if_new_with_provider` (line ~798 in `knowledge_extractor.rs`) are unaffected — the function is retained.
+### Tests deleted
+All `save_if_new` / `save_if_new_with_provider` tests (~lines 595–827) — deleted with the functions.
+
+### Tests updated
+`parse_extraction` tests (~lines 515–591) — remove `tool_insights` field assertions.
 
 ### New tests
 
 ```rust
-#[tokio::test]
-async fn extract_and_save_does_not_index_individual_facts() {
-    // Mock memory_store: assert index() is never called
-    // Assert update_rolling_summary is called once
-    // Verify no auto:session:* writes
-}
-
 #[test]
 fn extracted_knowledge_schema_has_no_tool_insights() {
-    // Compile-time guarantee via serde roundtrip
     let json = r#"{"user_facts":["x"],"outcomes":[],"feedback":[]}"#;
     let parsed: ExtractedKnowledge = serde_json::from_str(json).unwrap();
-    let _ = parsed; // field access would fail to compile if tool_insights present
+    let _ = parsed;
+    // Compile-time guarantee: code won't compile if tool_insights field is re-added
 }
 ```
 
 ### Verification on Pi (after deploy)
 
 ```bash
-# Before cleanup:
+# Before cleanup — count existing auto:session:* entries:
 docker exec $(docker ps -q --filter name=postgres) \
   psql -U hydeclaw -d hydeclaw \
   -c "SELECT COUNT(*) FROM memory_chunks WHERE source LIKE 'auto:session:%';"
 
-# Run cleanup SQL, then:
-# After cleanup → count must be 0
+# After deploy + cleanup SQL — must return 0
 
-# After one complete session:
-# Verify no new auto:session:* entries appear
-# Verify rolling_summary chunk was updated
+# After one complete session — verify:
+# 1. No new auto:session:* entries appear
+# 2. rolling_summary chunk updated (source = 'rolling_summary:AgentName')
 ```
 
 ---
 
 ## What Does NOT Change
 
-- `update_rolling_summary` logic — unchanged
-- `save_if_new_with_provider` function — kept, used by rolling summary path
-- `CONFLICT_THRESHOLD: 0.5` — kept (rolling summary conflict resolution)
+- `update_rolling_summary` logic — unchanged; calls `memory_store.index()` directly
+- `CONFLICT_THRESHOLD: 0.5` — kept (used inside `update_rolling_summary`)
 - `MIN_MESSAGES: 5` — kept
 - `MAX_CONTEXT_MESSAGES: 20` — kept
 - Workspace file indexing (`scope="shared"` from watcher) — unaffected
