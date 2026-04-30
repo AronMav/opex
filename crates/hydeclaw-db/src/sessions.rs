@@ -457,6 +457,25 @@ pub async fn claim_session_running(db: &PgPool, session_id: Uuid) -> Result<bool
     Ok(rows > 0)
 }
 
+/// Mark any `status='streaming'` messages in `session_id` as `'interrupted'`.
+///
+/// Called in bootstrap just after `claim_session_running` so that a streaming
+/// message left by a previous crashed run does not pollute the context of the
+/// new run. Returns the number of rows updated (0 if none were streaming).
+pub async fn cleanup_session_streaming_messages(
+    db: &PgPool,
+    session_id: Uuid,
+) -> sqlx::Result<u64> {
+    let res = sqlx::query(
+        "UPDATE messages SET status = 'interrupted'
+         WHERE session_id = $1 AND status = 'streaming'",
+    )
+    .bind(session_id)
+    .execute(db)
+    .await?;
+    Ok(res.rows_affected())
+}
+
 /// Transition `run_status` from `'running'` to `new_status`. No-op if the
 /// session is already in any terminal state (`'done'`, `'failed'`,
 /// `'interrupted'`, `'timeout'`, `'cancelled'`).
