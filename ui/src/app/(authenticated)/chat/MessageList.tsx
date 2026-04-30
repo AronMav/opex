@@ -157,6 +157,8 @@ export function MessageList({
   emptyState,
   hiddenCount,
   onLoadEarlier,
+  searchMatchIds,
+  searchActive,
 }: {
   messages: ChatMessage[];
   isStreaming: boolean;
@@ -165,6 +167,10 @@ export function MessageList({
   emptyState: ReactNode;
   hiddenCount: number;
   onLoadEarlier: () => void;
+  /** Set of messageIds that matched the current search query. */
+  searchMatchIds?: Set<string>;
+  /** When true, non-matching messages are dimmed. */
+  searchActive?: boolean;
 }) {
   const { t } = useTranslation();
   const currentAgent = useChatStore((s) => s.currentAgent);
@@ -275,8 +281,16 @@ export function MessageList({
 
           const isNew = (!isStreaming && isNewMessage(msg)) || (showSeparator && isStreaming);
 
+          const isDimmed = searchActive && searchMatchIds && !searchMatchIds.has(msg.id);
+
           return (
-            <div className="mx-auto w-full max-w-4xl px-3 md:px-6">
+            <div
+              id={`msg-${msg.id}`}
+              className={cn(
+                "mx-auto w-full max-w-4xl px-3 md:px-6 transition-opacity duration-150",
+                isDimmed && "opacity-40",
+              )}
+            >
               {showSeparator && <AgentTransitionDivider agentName={msg.agentId!} />}
               <div className={cn(
                 isNew && "animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out",

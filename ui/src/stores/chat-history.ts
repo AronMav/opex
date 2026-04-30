@@ -269,6 +269,47 @@ export function resolveActivePath(
   return path;
 }
 
+// ── Message search ────────────────────────────────────────────────────────────
+
+export interface SearchMatch {
+  messageId: string;
+  partIndex: number;
+  ranges: { start: number; end: number }[];
+}
+
+/**
+ * Search all text parts of the given messages for the query string.
+ * Returns one SearchMatch per (message, partIndex) pair that contains at least one match.
+ * - Case-insensitive.
+ * - Uses indexOf in a loop — NOT RegExp (avoids escaping hazards on user input).
+ * - Skips non-text parts (tool, file, rich-card, approval, step-group, reasoning).
+ * - Empty query returns [].
+ */
+export function searchMessages(query: string, messages: ChatMessage[]): SearchMatch[] {
+  if (!query) return [];
+  const lower = query.toLowerCase();
+  const results: SearchMatch[] = [];
+  for (const msg of messages) {
+    msg.parts.forEach((part, partIndex) => {
+      if (part.type !== "text") return;
+      const text = (part as { type: "text"; text: string }).text;
+      const textLower = text.toLowerCase();
+      const ranges: { start: number; end: number }[] = [];
+      let pos = 0;
+      while (true) {
+        const idx = textLower.indexOf(lower, pos);
+        if (idx === -1) break;
+        ranges.push({ start: idx, end: idx + lower.length });
+        pos = idx + lower.length;
+      }
+      if (ranges.length > 0) {
+        results.push({ messageId: msg.id, partIndex, ranges });
+      }
+    });
+  }
+  return results;
+}
+
 /** Find all sibling messages (sharing the same parent, same role). */
 export function findSiblings(rows: MessageRow[], messageId: string): { siblings: MessageRow[]; index: number } {
   const msg = rows.find(r => r.id === messageId);
