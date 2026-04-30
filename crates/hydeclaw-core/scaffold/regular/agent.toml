@@ -1,0 +1,9 @@
+# Agent Configuration Scaffold (Regular Agent)
+# ── Subagent delegation policy ──────────────────────────────────────────
+# Controls how this agent's `agent` tool spawns subagents.
+# Section is OPTIONAL — defaults are sane.
+#
+# [agent.delegation]
+# max_depth = 1                       # Default. Subagents CANNOT recurse.
+# blocked_tools_extra = ["code_exec"] # Added on top of built-in deny list.
+# blocked_tools_override = []          # Replaces built-in deny list if non-empty.

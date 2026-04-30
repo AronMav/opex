@@ -95,6 +95,16 @@ Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/p
 - Both flags are **never** changed via PUT API — preserved from disk on every update
 - Agent rename updates 19 DB tables in a transaction (sessions, messages, usage_log, webhooks, etc.)
 
+**Subagent delegation:** `[agent.delegation]` section (optional) controls how the
+`agent` tool spawns subagents:
+
+- `max_depth = 1` (default) — subagents CANNOT recursively spawn further
+  subagents
+- `blocked_tools_extra = [...]` — extends the built-in deny-list
+  (`SUBAGENT_DENIED_TOOLS`)
+- `blocked_tools_override = [...]` — if non-empty, replaces the built-in
+  deny-list entirely (use with caution)
+
 ### Gateway (`src/gateway/`)
 
 Axum HTTP API on port 18789. **Sub-router pattern:** 27 handler modules each export `pub(crate) fn routes() -> Router<AppState>`; `mod.rs` composes them via `.merge()`. Key handlers:
