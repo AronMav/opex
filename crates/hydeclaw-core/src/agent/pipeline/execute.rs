@@ -260,10 +260,15 @@ pub async fn execute<S: EventSink>(
             let model = response.model.clone().unwrap_or_default();
             let input = usage.input_tokens;
             let output = usage.output_tokens;
+            // Extended fields — subsets of input/output (NOT additive). Persisting
+            // them lets dashboards split the bill by cache hits + reasoning.
+            let cache_read = usage.cache_read_tokens;
+            let cache_creation = usage.cache_creation_tokens;
+            let reasoning = usage.reasoning_tokens;
             tokio::spawn(async move {
                 if let Err(e) = crate::db::usage::record_usage(
                     &db, &agent, &provider_name, &model, input, output, Some(session_id),
-                    None, None, None,
+                    cache_read, cache_creation, reasoning,
                 )
                 .await
                 {
