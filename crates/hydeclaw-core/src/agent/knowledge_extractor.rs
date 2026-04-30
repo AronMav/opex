@@ -1,7 +1,7 @@
 //! Post-session knowledge extraction.
 //!
 //! After a session completes with ≥ 5 messages, extracts user facts, outcomes,
-//! and tool insights via LLM and saves them to long-term memory.
+//! and feedback via LLM and uses them to update the rolling summary in memory.
 
 use std::sync::Arc;
 use anyhow::Result;
@@ -108,15 +108,17 @@ async fn extract_and_save_inner(
            \"feedback\": [\"...\"]\n\
          }}\n\n\
          Categories:\n\
-         - user_facts: Facts about the user (preferences, context, identity, goals)\n\
-         - outcomes: Decisions made, conclusions reached, recommendations given\n\
-         - feedback: User preferences and reactions — what they approved, rejected, asked to redo, liked or disliked\n\n\
-         Rules:\n\
-         - Only extract non-trivial information. Skip greetings, small talk, obvious context.\n\
-         - Each item should be a self-contained sentence that makes sense without the conversation.\n\
+         - user_facts: Stable facts about the user — preferences, domain knowledge, long-term goals, identity\n\
+         - outcomes: Durable decisions, agreements, or corrections that affect future sessions\n\
+         - feedback: User's explicit reactions — what they approved, rejected, asked to redo\n\n\
+         Rules (STRICTLY enforce):\n\
+         - TIMELESS TEST: would this fact still matter in 6 months? If no — skip it.\n\
+         - DO NOT extract what happened in this session: actions taken, requests made, things fixed/deleted/deployed.\n\
+         - DO NOT extract facts implied by the conversation topic itself.\n\
+         - Each item must be self-contained and make sense without reading the session.\n\
          - Write in the same language as the conversation.\n\
-         - Return empty arrays if nothing worth saving.\n\
-         - Maximum 5 items per category.\n\n\
+         - Maximum 3 items per category.\n\
+         - Return empty arrays if nothing passes the timeless test.\n\n\
          Conversation:\n{}", conversation
     );
 
