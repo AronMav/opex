@@ -195,6 +195,7 @@ impl AnthropicProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
+        opts: CallOptions,
     ) -> (Option<String>, serde_json::Value) {
         // Extract system message
         let system_text: Option<String> = messages
@@ -258,12 +259,24 @@ impl AnthropicProvider {
             })
             .collect();
 
+        let effective_max_tokens = self.max_tokens.unwrap_or(8_192);
+        let effective_model = self.model.effective();
+        let temperature = if opts.thinking_level > 0 {
+            self.temperature.max(1.0)
+        } else {
+            self.temperature
+        };
+
         let mut body = serde_json::json!({
-            "model": self.model.effective(),
+            "model": effective_model,
             "messages": api_messages,
-            "max_tokens": self.max_tokens.unwrap_or(8192),
-            "temperature": self.temperature,
+            "max_tokens": effective_max_tokens,
+            "temperature": temperature,
         });
+
+        if let Some(thinking_json) = thinking_config(opts.thinking_level, &effective_model, effective_max_tokens) {
+            body["thinking"] = thinking_json;
+        }
 
         if let Some(ref sys) = system_text {
             if self.prompt_cache {
@@ -398,8 +411,7 @@ impl LlmProvider for AnthropicProvider {
         tools: &[ToolDefinition],
         opts: CallOptions,
     ) -> Result<LlmResponse> {
-        let _ = opts;  // forwarded to build_request_body in Task 9
-        let (_, body) = self.build_request_body(messages, tools);
+        let (_, body) = self.build_request_body(messages, tools, opts);
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
         tracing::info!(
@@ -466,7 +478,7 @@ impl LlmProvider for AnthropicProvider {
             return Ok(response);
         }
 
-        let (_, mut body) = self.build_request_body(messages, tools);
+        let (_, mut body) = self.build_request_body(messages, tools, opts);
         body["stream"] = serde_json::Value::Bool(true);
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
@@ -700,7 +712,7 @@ mod tests {
             Some(1024),
             secrets,
         );
-        let (_, body) = provider.build_request_body(&messages, &[]);
+        let (_, body) = provider.build_request_body(&messages, &[], CallOptions::default());
         let api_messages = body["messages"].as_array().unwrap();
         assert_eq!(api_messages.len(), 1);
 
@@ -741,7 +753,7 @@ mod tests {
             Some(1024),
             secrets,
         );
-        let (_, body) = provider.build_request_body(&messages, &[]);
+        let (_, body) = provider.build_request_body(&messages, &[], CallOptions::default());
         let api_messages = body["messages"].as_array().unwrap();
         let content = api_messages[0]["content"].as_array().unwrap();
 
@@ -823,5 +835,39 @@ mod thinking_config_tests {
     #[test]
     fn thinking_mode_haiku45_is_manual() {
         assert!(matches!(thinking_mode("claude-haiku-4-5"), ThinkingMode::Manual));
+    }
+
+    #[tokio::test]
+    async fn temperature_enforced_to_1_when_thinking_enabled() {
+        use std::sync::Arc;
+        let secrets = Arc::new(crate::secrets::SecretsManager::new_noop());
+        let provider = AnthropicProvider::for_tests(
+            "claude-opus-4-7".to_string(),
+            0.3,
+            Some(16_000),
+            secrets,
+        );
+        let opts = CallOptions { thinking_level: 3 };
+        let (_, body) = provider.build_request_body(&[], &[], opts);
+        let temp = body["temperature"].as_f64().expect("temperature must be in body");
+        assert!(temp >= 1.0, "expected temperature >= 1.0 when thinking enabled, got {temp}");
+        assert!(body.get("thinking").is_some(), "thinking field must be present");
+    }
+
+    #[tokio::test]
+    async fn temperature_unchanged_when_thinking_disabled() {
+        use std::sync::Arc;
+        let secrets = Arc::new(crate::secrets::SecretsManager::new_noop());
+        let provider = AnthropicProvider::for_tests(
+            "claude-opus-4-7".to_string(),
+            0.7,
+            Some(16_000),
+            secrets,
+        );
+        let opts = CallOptions { thinking_level: 0 };
+        let (_, body) = provider.build_request_body(&[], &[], opts);
+        let temp = body["temperature"].as_f64().unwrap();
+        assert!((temp - 0.7).abs() < f64::EPSILON);
+        assert!(body.get("thinking").is_none());
     }
 }
