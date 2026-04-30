@@ -32,6 +32,7 @@ fn event_type_label(ev: &StreamEvent) -> &'static str {
         StreamEvent::Finish { .. } => "finish",
         StreamEvent::Error(_) => "error",
         StreamEvent::Reconnecting { .. } => "reconnecting",
+        StreamEvent::Usage { .. } => "usage",
     }
 }
 

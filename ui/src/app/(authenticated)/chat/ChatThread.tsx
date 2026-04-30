@@ -185,6 +185,26 @@ export function ChatThread({
 
   const isStreaming = isActivePhase(connectionPhase);
 
+  // ── Pending message queue drain ────────────────────────────────────────────
+  // When connectionPhase transitions to 'idle' (clean success), drain the
+  // single-slot pending queue set by queueMessage (Shift+Enter while streaming).
+  // On 'error', discard the pending message.
+  const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? null);
+  const prevPhaseRef = useRef<string>(connectionPhase);
+  useEffect(() => {
+    const prevPhase = prevPhaseRef.current;
+    prevPhaseRef.current = connectionPhase;
+
+    if (connectionPhase === "idle" && prevPhase !== "idle" && pendingMessage) {
+      // Clean transition to idle — drain queue.
+      useChatStore.getState().sendMessage(pendingMessage.content, pendingMessage.attachments);
+      useChatStore.getState().clearPending(currentAgent);
+    } else if (connectionPhase === "error" && pendingMessage) {
+      // Stream ended in error — discard queue so user sees the error first.
+      useChatStore.getState().clearPending(currentAgent);
+    }
+  }, [connectionPhase, pendingMessage, currentAgent]);
+
   const lastMsg = sourceMessages[sourceMessages.length - 1];
   // Show thinking when assistant hasn't produced text yet — covers "waiting for
   // first response" and "tool-call loop still running" (parts exist but no text).

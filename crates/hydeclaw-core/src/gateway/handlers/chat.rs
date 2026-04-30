@@ -955,6 +955,15 @@ pub(crate) async fn api_chat_sse(
                     }
                     continue;
                 }
+                StreamEvent::Usage { input_tokens, output_tokens } => {
+                    let data = serde_json::json!({
+                        "type": sse_types::USAGE,
+                        "inputTokens": input_tokens,
+                        "outputTokens": output_tokens,
+                    }).to_string();
+                    let _ = send_and_buffer!(data);
+                    continue;
+                }
                 StreamEvent::Reconnecting { attempt, delay_ms } => {
                     let data = serde_json::json!({
                         "type": sse_types::RECONNECTING,
