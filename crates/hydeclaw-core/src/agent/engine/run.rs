@@ -83,6 +83,8 @@ impl AgentEngine {
             mut command_output,
             enriched_text,
             user_message_id,
+            incoming_context,
+            channel,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
 
@@ -103,6 +105,8 @@ impl AgentEngine {
             processing_guard,
             enriched_text,
             user_message_id,
+            incoming_context,
+            channel,
         };
 
         // Slash-command early exit
@@ -212,6 +216,8 @@ impl AgentEngine {
             mut command_output,
             enriched_text,
             user_message_id,
+            incoming_context,
+            channel,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
         let boot_for_execute = BootstrapOutcome {
@@ -224,6 +230,8 @@ impl AgentEngine {
             processing_guard,
             enriched_text,
             user_message_id,
+            incoming_context,
+            channel,
         };
 
         // Channel adapters render slash commands as plain TextDelta
@@ -305,6 +313,8 @@ impl AgentEngine {
             mut command_output,
             enriched_text,
             user_message_id,
+            incoming_context,
+            channel,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
         let boot_for_execute = BootstrapOutcome {
@@ -317,6 +327,8 @@ impl AgentEngine {
             processing_guard,
             enriched_text,
             user_message_id,
+            incoming_context,
+            channel,
         };
 
         if let Some(text) = command_output.take() {
