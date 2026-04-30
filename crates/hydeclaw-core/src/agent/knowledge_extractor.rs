@@ -302,14 +302,14 @@ mod tests {
 
     #[test]
     fn parse_with_markdown_fences() {
-        let input = "Here is the result:\n```json\n{\"user_facts\":[\"Fact one\"],\"outcomes\":[],\"tool_insights\":[]}\n```";
+        let input = "Here is the result:\n```json\n{\"user_facts\":[\"Fact one\"],\"outcomes\":[],\"feedback\":[]}\n```";
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["Fact one"]);
     }
 
     #[test]
     fn parse_with_think_blocks() {
-        let input = "<think>Let me analyze this...</think>\n{\"user_facts\":[\"Important fact\"],\"outcomes\":[],\"tool_insights\":[]}";
+        let input = "<think>Let me analyze this...</think>\n{\"user_facts\":[\"Important fact\"],\"outcomes\":[],\"feedback\":[]}";
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["Important fact"]);
     }
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn parse_nested_think_blocks() {
-        let input = "<think>first</think>Some text<think>second</think>{\"user_facts\":[\"X\"],\"outcomes\":[],\"tool_insights\":[]}";
+        let input = "<think>first</think>Some text<think>second</think>{\"user_facts\":[\"X\"],\"outcomes\":[],\"feedback\":[]}";
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["X"]);
     }
@@ -381,35 +381,16 @@ mod tests {
 
     #[test]
     fn parse_without_feedback_defaults_empty() {
-        let input = r#"{"user_facts":["F1"],"outcomes":[],"tool_insights":[]}"#;
+        let input = r#"{"user_facts":["F1"],"outcomes":[]}"#;
         let result = parse_extraction(input).unwrap();
         assert!(result.feedback.is_empty());
-    }
-
-    // ── rolling summary tests ───────────────────────────────────────
-
-    #[test]
-    fn rolling_summary_collects_from_all_three_categories() {
-        let extracted = ExtractedKnowledge {
-            user_facts: vec!["User works in IT".into()],
-            outcomes: vec!["Decided to use GraphQL".into()],
-            feedback: vec!["User approved analysis".into()],
-        };
-        let mut facts: Vec<&str> = Vec::new();
-        for f in &extracted.user_facts { facts.push(f); }
-        for f in &extracted.outcomes { facts.push(f); }
-        for f in &extracted.feedback { facts.push(f); }
-        assert_eq!(facts.len(), 3);
-        assert!(facts.iter().any(|f| f.contains("IT")));
-        assert!(facts.iter().any(|f| f.contains("GraphQL")));
-        assert!(facts.iter().any(|f| f.contains("approved")));
     }
 
     // ── edge case: extraction with unicode/multilingual ────────
 
     #[test]
     fn parse_russian_content() {
-        let input = r#"{"user_facts":["Пользователь работает в IT"],"outcomes":["Рекомендовано снизить нефтегаз до 25%"],"tool_insights":[],"feedback":["Одобрил анализ Alma"]}"#;
+        let input = r#"{"user_facts":["Пользователь работает в IT"],"outcomes":["Рекомендовано снизить нефтегаз до 25%"],"feedback":["Одобрил анализ Alma"]}"#;
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts[0], "Пользователь работает в IT");
         assert_eq!(result.outcomes[0], "Рекомендовано снизить нефтегаз до 25%");
@@ -418,7 +399,7 @@ mod tests {
 
     #[test]
     fn parse_mixed_languages() {
-        let input = r#"{"user_facts":["User has BCS portfolio worth 525K RUB"],"outcomes":["Решено использовать GraphQL"],"tool_insights":[],"feedback":[]}"#;
+        let input = r#"{"user_facts":["User has BCS portfolio worth 525K RUB"],"outcomes":["Решено использовать GraphQL"],"feedback":[]}"#;
         let result = parse_extraction(input).unwrap();
         assert!(result.user_facts[0].contains("525K RUB"));
         assert!(result.outcomes[0].contains("GraphQL"));
@@ -428,7 +409,7 @@ mod tests {
 
     #[test]
     fn parse_json_with_trailing_text_after_brace() {
-        let input = r#"{"user_facts":["A"],"outcomes":[],"tool_insights":[],"feedback":[]}
+        let input = r#"{"user_facts":["A"],"outcomes":[],"feedback":[]}
 Some trailing explanation here."#;
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["A"]);
@@ -436,26 +417,17 @@ Some trailing explanation here."#;
 
     #[test]
     fn parse_empty_string_items_preserved() {
-        let input = r#"{"user_facts":["","valid fact",""],"outcomes":[],"tool_insights":[],"feedback":[]}"#;
+        let input = r#"{"user_facts":["","valid fact",""],"outcomes":[],"feedback":[]}"#;
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts.len(), 3); // serde preserves empty strings
     }
 
     #[test]
     fn parse_special_characters_in_facts() {
-        let input = r#"{"user_facts":["User's email: test@example.com"],"outcomes":["Budget: $50,000 (≈3.5M RUB)"],"tool_insights":[],"feedback":[]}"#;
+        let input = r#"{"user_facts":["User's email: test@example.com"],"outcomes":["Budget: $50,000 (≈3.5M RUB)"],"feedback":[]}"#;
         let result = parse_extraction(input).unwrap();
         assert!(result.user_facts[0].contains("test@example.com"));
         assert!(result.outcomes[0].contains("$50,000"));
-    }
-
-    #[test]
-    fn extracted_knowledge_has_no_tool_insights_field() {
-        let json = r#"{"user_facts":["x"],"outcomes":[],"feedback":[]}"#;
-        let parsed: ExtractedKnowledge = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.user_facts, vec!["x"]);
-        assert!(parsed.outcomes.is_empty());
-        assert!(parsed.feedback.is_empty());
     }
 
 }
