@@ -400,7 +400,16 @@ export function createTelegramDriver(
       return;
     }
 
-    // Non-approval callbacks — forward via WS bridge as message
+    // Non-approval callbacks — access check required before forwarding.
+    const { allowed, isOwner } = await bridge.checkAccess(userId);
+    if (!allowed && !isOwner) {
+      const displayName = ctx.callbackQuery.from.first_name || userId;
+      const code = await bridge.createPairingCode(userId, displayName);
+      await ctx.answerCallbackQuery().catch(() => {});
+      await ctx.reply(strings.accessRestricted(code), { parse_mode: "MarkdownV2" }).catch(() => {});
+      return;
+    }
+
     await ctx.answerCallbackQuery().catch(() => {});
     bridge.sendMessage({
       user_id: userId,

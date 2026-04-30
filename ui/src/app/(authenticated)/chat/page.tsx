@@ -68,6 +68,7 @@ import { TaskPlanPanel } from "@/components/TaskPlanPanel";
 
 const EMPTY_SESSIONS: SessionRow[] = [];
 const EMPTY_ACTIVE: string[] = [];
+const EMPTY_MESSAGE_SOURCE = { mode: "new-chat" as const };
 
 export default function ChatPage() {
   const { t, locale } = useTranslation();
@@ -85,7 +86,7 @@ export default function ChatPage() {
   const sessionsTotal = sessionsData?.total ?? sessions.length;
   const activeSessionId = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionId ?? null);
   const activeSessionIds = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE);
-  const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? { mode: "new-chat" as const });
+  const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? EMPTY_MESSAGE_SOURCE);
   const viewingHistory = messageSource.mode === "history";
   const streamError = useChatStore((s) => s.agents[s.currentAgent]?.streamError ?? null);
   const isStreaming = isActivePhase(useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle"));

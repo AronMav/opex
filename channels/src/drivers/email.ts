@@ -71,7 +71,7 @@ export function createEmailDriver(
         try {
           // Search for UNSEEN messages, then fetch each
           const unseenUids = await client.search({ seen: false });
-          if (unseenUids.length === 0) { lock.release(); await new Promise(r => setTimeout(r, pollInterval)); continue; }
+          if (unseenUids.length === 0) { lock.release(); await new Promise(r => setTimeout(r, 30_000)); continue; }
           for await (let msg of client.fetch(unseenUids, { envelope: true, source: true })) {
             const parsed = await simpleParser(msg.source);
             const from = parsed.from?.value[0]?.address || "";

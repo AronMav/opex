@@ -1110,6 +1110,9 @@ fn setup_sighup_handler(state: gateway::AppState) {
                     //    the map — new requests receive "agent not found" (acceptable for the
                     //    drain window, typically < 1s for idle agents, up to 10s worst-case).
                     let old_handle = state.agents.map.write().await.remove(&name);
+                    // Remove old guard now so channel adapters don't re-fetch a stale one
+                    // during the creation window. Saved so we can restore it on failure.
+                    let old_guard = state.auth.access_guards.write().await.remove(&name);
 
                     // 2. Cancel + drain on the extracted handle (write lock already released).
                     //    No race: old engine is no longer in the map, so no new request can
@@ -1120,7 +1123,8 @@ fn setup_sighup_handler(state: gateway::AppState) {
                         h.engine.state.wait_drain(std::time::Duration::from_secs(10)).await;
                     }
 
-                    // 3. Create new engine, insert into map, then shut down old engine cleanly.
+                    // 3. Create new engine. Guard inserted before handle (same ordering as
+                    //    api_create_agent/api_update_agent) to avoid a reconnect race.
                     match crate::gateway::start_agent_from_config(
                         &cfg,
                         &state.agents,
@@ -1134,20 +1138,23 @@ fn setup_sighup_handler(state: gateway::AppState) {
                             if let Some(old) = old_handle {
                                 old.shutdown(&state.agents.scheduler).await;
                             }
-                            state.agents.map.write().await.insert(name.clone(), new_handle);
                             if let Some(g) = guard {
                                 state.auth.access_guards.write().await.insert(name.clone(), g);
                             }
+                            // old_guard is intentionally dropped here — superseded by new config.
+                            state.agents.map.write().await.insert(name.clone(), new_handle);
                             tracing::info!(agent = %name, "SIGHUP: agent reloaded");
                         }
                         Err(e) => {
                             tracing::error!(agent = %name, error = %e, "SIGHUP: failed to create new engine");
-                            // Restore old handle if new engine failed to start, so the agent
-                            // is not permanently absent from the map.
+                            // Restore both handle and guard so the agent remains reachable.
                             if let Some(old) = old_handle {
                                 state.agents.map.write().await.insert(name.clone(), old);
-                                tracing::warn!(agent = %name, "SIGHUP: restored old engine after create failure");
                             }
+                            if let Some(og) = old_guard {
+                                state.auth.access_guards.write().await.insert(name.clone(), og);
+                            }
+                            tracing::warn!(agent = %name, "SIGHUP: restored old engine after create failure");
                         }
                     }
                 }

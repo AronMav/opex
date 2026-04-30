@@ -82,22 +82,23 @@ async fn handle_channel_ws(socket: WebSocket, ctx: CwsCtx, agent_name: String) {
     tracing::info!(agent = %agent_name, "channel adapter connected");
 
     // Subscribe to channel actions (non-exclusive — multiple channels per agent).
-    let (engine, access_guard) = {
+    let engine = {
         let agents_map = ctx.agents.map.read().await;
         let handle = if let Some(h) = agents_map.get(&agent_name) { h } else {
             tracing::warn!(agent = %agent_name, "agent disappeared before WS upgrade");
             return;
         };
-
         let engine = handle.engine.clone();
-        let guard = ctx.auth.access_guards.read().await.get(&agent_name).cloned();
-        tracing::info!(agent = %agent_name, has_guard = guard.is_some(), "channel WS: access guard resolved");
-        (engine, guard)
+        // Log whether a guard exists at connect-time for diagnostics; access checks
+        // always re-fetch live from ctx.auth.access_guards so this is informational only.
+        let has_guard = ctx.auth.access_guards.read().await.contains_key(&agent_name);
+        tracing::info!(agent = %agent_name, has_guard, "channel WS: connected");
+        engine
     };
 
     // Run the main WS loop — channel_action_rx is created inside after Ready handshake.
     let connected_channel_type = channel_ws_loop(
-        socket, &ctx, &agent_name, &engine, &access_guard,
+        socket, &ctx, &agent_name, &engine,
     ).await;
 
     // Deregister from connected channels registry
@@ -119,7 +120,6 @@ async fn channel_ws_loop(
     ctx: &CwsCtx,
     agent_name: &str,
     engine: &Arc<crate::agent::engine::AgentEngine>,
-    access_guard: &Option<Arc<crate::channels::access::AccessGuard>>,
 ) -> String {
     use futures_util::{SinkExt, StreamExt};
     use hydeclaw_types::{ChannelInbound, ChannelOutbound, ChannelActionDto};
@@ -372,8 +372,10 @@ async fn channel_ws_loop(
                             if let Some(approval_id_str) = text.strip_prefix("approve:").or_else(|| text.strip_prefix("reject:")) {
                                 let approved = text.starts_with("approve:");
                                 let user_id = msg.user_id.clone();
-                                // Security: only the owner can resolve approvals
-                                let is_owner = access_guard.as_ref().is_none_or(|g| g.is_owner(&user_id));
+                                // Security: only the owner can resolve approvals. Re-fetch the live
+                                // guard so an agent config change is reflected immediately.
+                                let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
+                                let is_owner = live_guard.as_ref().is_none_or(|g| g.is_owner(&user_id));
                                 if !is_owner {
                                     tracing::warn!(user_id = %user_id, "non-owner attempted to resolve approval via callback");
                                     let reply = ChannelOutbound::Error {

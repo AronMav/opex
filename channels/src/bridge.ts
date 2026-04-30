@@ -112,15 +112,21 @@ export class BridgeHandle {
     };
   }
 
-  /** Check access for a user via core WebSocket. */
+  /** Check access for a user via core WebSocket. Fail-closed after 10 s if Core doesn't respond. */
   checkAccess(userId: string): Promise<{ allowed: boolean; isOwner: boolean }> {
     const requestId = genRequestId();
 
-    const promise = new Promise<{ allowed: boolean; isOwner: boolean }>(
-      (resolve) => {
-        this.pendingAccess.set(requestId, resolve);
-      },
-    );
+    const promise = new Promise<{ allowed: boolean; isOwner: boolean }>((resolve) => {
+      this.pendingAccess.set(requestId, resolve);
+
+      setTimeout(() => {
+        if (this.pendingAccess.has(requestId)) {
+          this.pendingAccess.delete(requestId);
+          console.warn(`[bridge] access check timeout for user ${userId}`);
+          resolve({ allowed: false, isOwner: false }); // fail-closed
+        }
+      }, 10_000);
+    });
 
     this.send({
       type: "access_check",
@@ -294,6 +300,8 @@ export class BridgeHandle {
   clearAll(): void {
     const err = new Error("session closed");
     for (const [, p] of this.pendingRequests) p.reject(err);
+    // Fail-closed: deny access on disconnect rather than hanging forever.
+    for (const [, resolve] of this.pendingAccess) resolve({ allowed: false, isOwner: false });
     this.pendingRequests.clear();
     this.pendingAccess.clear();
     this.pendingPairing.clear();
