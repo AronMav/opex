@@ -99,6 +99,7 @@ impl AgentEngine {
             tools,
             chunk_tx,
             self,
+            crate::agent::providers::CallOptions::default(),
         )
         .await
     }
@@ -119,6 +120,7 @@ impl AgentEngine {
             tools,
             chunk_tx,
             self,
+            crate::agent::providers::CallOptions::default(),
         )
         .await;
         self.record_llm_metrics(self.cfg().provider.as_ref(), start.elapsed(), result.as_ref());
@@ -162,6 +164,7 @@ impl AgentEngine {
             tools,
             chunk_tx,
             self,
+            crate::agent::providers::CallOptions::default(),
         )
         .await;
         self.record_llm_metrics(provider.as_ref(), start.elapsed(), result.as_ref());

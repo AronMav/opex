@@ -87,6 +87,7 @@ impl LlmProvider for UnconfiguredProvider {
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
+        _opts: CallOptions,
     ) -> Result<LlmResponse> {
         Err(self.err())
     }
@@ -96,6 +97,7 @@ impl LlmProvider for UnconfiguredProvider {
         _messages: &[Message],
         _tools: &[ToolDefinition],
         _chunk_tx: mpsc::UnboundedSender<String>,
+        _opts: CallOptions,
     ) -> Result<LlmResponse> {
         Err(self.err())
     }
@@ -109,6 +111,16 @@ impl LlmProvider for UnconfiguredProvider {
     }
 }
 
+/// Per-call LLM options. Passed through the entire call chain from execute.rs
+/// to the provider. All providers except AnthropicProvider ignore this.
+#[derive(Default, Clone, Copy, Debug)]
+pub struct CallOptions {
+    /// Thinking level set by /think command.
+    /// 0 = off. For adaptive models (Opus 4.6+): 1–2 = low, 3 = medium, 4+ = high effort.
+    /// For manual models (Sonnet 3.7, Haiku 4.5, etc.): 1→1024, 2→4096, 3→10000, 4→20000, 5+→32000 budget_tokens.
+    pub thinking_level: u8,
+}
+
 /// Pluggable LLM provider trait.
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
@@ -116,6 +128,7 @@ pub trait LlmProvider: Send + Sync {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
+        opts: CallOptions,
     ) -> Result<LlmResponse>;
 
     /// Streaming chat: sends content chunks via mpsc channel.
@@ -125,9 +138,10 @@ pub trait LlmProvider: Send + Sync {
         messages: &[Message],
         tools: &[ToolDefinition],
         chunk_tx: mpsc::UnboundedSender<String>,
+        opts: CallOptions,
     ) -> Result<LlmResponse> {
         // Default: fall back to non-streaming and send entire content at once
-        let response = self.chat(messages, tools).await?;
+        let response = self.chat(messages, tools, opts).await?;
         if response.tool_calls.is_empty() {
             let filtered = super::thinking::strip_thinking(&response.content);
             if !filtered.is_empty() {
@@ -1331,6 +1345,7 @@ impl LlmProvider for RoutingProvider {
         &self,
         messages: &[hydeclaw_types::Message],
         tools: &[hydeclaw_types::ToolDefinition],
+        opts: CallOptions,
     ) -> Result<hydeclaw_types::LlmResponse> {
         let primary = self.select_route(messages, tools)?;
         let primary_key = primary.key.clone();
@@ -1351,7 +1366,7 @@ impl LlmProvider for RoutingProvider {
             tracing::debug!(provider = %primary_display, "primary on cooldown, skipping");
             pending_reason = Some("cooldown");
         } else {
-            match primary.provider.chat(messages, tools).await {
+            match primary.provider.chat(messages, tools, opts).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => match self.handle_provider_error(&e, &primary_key, primary_cooldown) {
                     None => {
@@ -1390,7 +1405,7 @@ impl LlmProvider for RoutingProvider {
                     Self::record_failover(&last_failed_key, &fb.key, reason);
                 }
                 tracing::info!(provider = %fb.provider.name(), "trying fallback provider");
-                match fb.provider.chat(messages, tools).await {
+                match fb.provider.chat(messages, tools, opts).await {
                     Ok(mut resp) => {
                         let reason = if primary_skipped { "cooldown" } else { "primary_failed" };
                         resp.fallback_notice = Some(format!("↪️ {} → {} ({})", primary_display, fb.provider.name(), reason));
@@ -1416,6 +1431,7 @@ impl LlmProvider for RoutingProvider {
         messages: &[hydeclaw_types::Message],
         tools: &[hydeclaw_types::ToolDefinition],
         chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        opts: CallOptions,
     ) -> Result<hydeclaw_types::LlmResponse> {
         let primary = self.select_route(messages, tools)?;
         let primary_key = primary.key.clone();
@@ -1444,7 +1460,7 @@ impl LlmProvider for RoutingProvider {
                 })
             };
 
-            match primary.provider.chat_stream(messages, tools, tracking_tx).await {
+            match primary.provider.chat_stream(messages, tools, tracking_tx, opts).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
                     // tracking_tx is now consumed/dropped by the call above.
@@ -1500,7 +1516,7 @@ impl LlmProvider for RoutingProvider {
                     Self::record_failover(&last_failed_key, &fb.key, reason);
                 }
                 tracing::info!(provider = %fb.provider.name(), "trying streaming fallback provider");
-                match fb.provider.chat_stream(messages, tools, chunk_tx.clone()).await {
+                match fb.provider.chat_stream(messages, tools, chunk_tx.clone(), opts).await {
                     Ok(mut resp) => {
                         let reason = if primary_skipped { "cooldown" } else { "primary_failed" };
                         resp.fallback_notice = Some(format!("↪️ {} → {} ({})", primary_display, fb.provider.name(), reason));
@@ -2135,5 +2151,16 @@ mod tests {
         // non-empty content should be preserved (not null)
         assert_eq!(asst["content"], "Let me search for that.");
         assert!(asst.get("tool_calls").is_some());
+    }
+}
+
+#[cfg(test)]
+mod call_options_tests {
+    use super::*;
+
+    #[test]
+    fn call_options_default_thinking_level_is_zero() {
+        let opts = CallOptions::default();
+        assert_eq!(opts.thinking_level, 0);
     }
 }

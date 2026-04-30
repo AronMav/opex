@@ -205,6 +205,7 @@ impl LlmProvider for GoogleProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
+        _opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         let api_key = self.resolve_api_key().await
             .ok_or_else(|| anyhow::anyhow!("Google API key not found ({})", self.api_key_name))?;
@@ -341,9 +342,10 @@ impl LlmProvider for GoogleProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         chunk_tx: mpsc::UnboundedSender<String>,
+        _opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         if !tools.is_empty() {
-            let response = self.chat(messages, tools).await?;
+            let response = self.chat(messages, tools, _opts).await?;
             if response.tool_calls.is_empty() {
                 let filtered = crate::agent::thinking::strip_thinking(&response.content);
                 if !filtered.is_empty() {

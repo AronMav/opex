@@ -179,6 +179,9 @@ pub async fn execute<S: EventSink>(
         let (chunk_tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let provider = engine.cfg().provider.as_ref();
         let run_max = provider.run_max_duration_secs();
+        let call_opts = crate::agent::providers::CallOptions {
+            thinking_level: engine.state().thinking_level.load(std::sync::atomic::Ordering::Relaxed),
+        };
         let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
             provider,
             &mut messages,
@@ -189,6 +192,7 @@ pub async fn execute<S: EventSink>(
             run_max,
             session_id,
             &sm,
+            call_opts,
         );
 
         // 5. Drive the LLM future and the chunk forwarder concurrently.

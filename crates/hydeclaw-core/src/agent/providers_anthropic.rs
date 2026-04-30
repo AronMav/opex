@@ -1,7 +1,76 @@
 //! Anthropic Messages API provider —
 //! extracted from providers.rs for readability.
 
-use super::{Deserialize, async_trait, Arc, SecretsManager, ModelOverride, Message, ToolDefinition, MessageRole, LlmProvider, LlmResponse, Result, mpsc};
+use super::{Deserialize, async_trait, Arc, SecretsManager, ModelOverride, Message, ToolDefinition, MessageRole, LlmProvider, LlmResponse, Result, mpsc, CallOptions};
+
+// ── Extended thinking support ─────────────────────────────────────────────────
+
+#[derive(Debug, PartialEq)]
+enum ThinkingMode {
+    /// Opus 4.7+ and Mythos: only adaptive supported (manual → 400 error).
+    AdaptiveOnly,
+    /// Opus 4.6, Sonnet 4.6: adaptive recommended, manual deprecated.
+    Adaptive,
+    /// All others: manual budget_tokens.
+    Manual,
+}
+
+fn thinking_mode(model: &str) -> ThinkingMode {
+    if model.contains("claude-opus-4-7") || model.contains("claude-mythos") {
+        ThinkingMode::AdaptiveOnly
+    } else if model.contains("claude-opus-4-6") || model.contains("claude-sonnet-4-6") {
+        ThinkingMode::Adaptive
+    } else {
+        ThinkingMode::Manual
+    }
+}
+
+/// Returns the thinking config JSON value, or None if thinking should be disabled.
+/// `effective_max_tokens` = `self.max_tokens.unwrap_or(8_192)`.
+fn thinking_config(level: u8, model: &str, effective_max_tokens: u32) -> Option<serde_json::Value> {
+    if level == 0 {
+        return None;
+    }
+    match thinking_mode(model) {
+        ThinkingMode::AdaptiveOnly | ThinkingMode::Adaptive => {
+            let effort = match level {
+                1 | 2 => "low",
+                3 => "medium",
+                _ => "high",
+            };
+            Some(serde_json::json!({
+                "type": "adaptive",
+                "effort": effort,
+                "display": "summarized"
+            }))
+        }
+        ThinkingMode::Manual => {
+            let budget: u32 = match level {
+                1 => 1_024,
+                2 => 4_096,
+                3 => 10_000,
+                4 => 20_000,
+                _ => 32_000,
+            };
+            let clamped = budget.min(effective_max_tokens.saturating_sub(1_000));
+            if clamped < 1_024 {
+                tracing::warn!(
+                    thinking_level = level,
+                    model,
+                    effective_max_tokens,
+                    budget,
+                    clamped,
+                    "thinking disabled: budget after clamping is below 1024 — increase max_tokens"
+                );
+                return None;
+            }
+            Some(serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": clamped
+            }))
+        }
+    }
+}
 
 // ── Anthropic Messages API Provider ──────────────────────────────────────────
 
@@ -133,6 +202,7 @@ impl AnthropicProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
+        opts: CallOptions,
     ) -> (Option<String>, serde_json::Value) {
         // Extract system message
         let system_text: Option<String> = messages
@@ -196,12 +266,24 @@ impl AnthropicProvider {
             })
             .collect();
 
+        let effective_max_tokens = self.max_tokens.unwrap_or(8_192);
+        let effective_model = self.model.effective();
+        let temperature = if opts.thinking_level > 0 {
+            self.temperature.max(1.0)
+        } else {
+            self.temperature
+        };
+
         let mut body = serde_json::json!({
-            "model": self.model.effective(),
+            "model": effective_model,
             "messages": api_messages,
-            "max_tokens": self.max_tokens.unwrap_or(8192),
-            "temperature": self.temperature,
+            "max_tokens": effective_max_tokens,
+            "temperature": temperature,
         });
+
+        if let Some(thinking_json) = thinking_config(opts.thinking_level, &effective_model, effective_max_tokens) {
+            body["thinking"] = thinking_json;
+        }
 
         if let Some(ref sys) = system_text {
             if self.prompt_cache {
@@ -328,14 +410,108 @@ pub(super) fn parse_anthropic_response(api_resp: AnthropicResponse, model: &str)
     }
 }
 
+/// Process one parsed Anthropic SSE event. Calls `emit_thinking` for thinking content
+/// (open/close tags + deltas) and `emit_text` for text_delta content.
+fn process_sse_event(
+    event: &serde_json::Value,
+    thinking_content: &mut String,
+    current_signature: &mut String,
+    in_thinking_block: &mut bool,
+    thinking_blocks: &mut Vec<hydeclaw_types::ThinkingBlock>,
+    mut emit_thinking: impl FnMut(String),
+    mut emit_text: impl FnMut(String),
+) {
+    match event.get("type").and_then(|t| t.as_str()) {
+        Some("content_block_start") => {
+            if event
+                .get("content_block")
+                .and_then(|b| b.get("type"))
+                .and_then(|t| t.as_str())
+                == Some("thinking")
+            {
+                *in_thinking_block = true;
+                emit_thinking("<thinking>".to_string());
+            }
+        }
+        Some("content_block_stop") => {
+            if *in_thinking_block {
+                emit_thinking("</thinking>".to_string());
+                thinking_blocks.push(hydeclaw_types::ThinkingBlock {
+                    thinking: std::mem::take(thinking_content),
+                    signature: std::mem::take(current_signature),
+                });
+                *in_thinking_block = false;
+            }
+        }
+        Some("content_block_delta") => {
+            let delta = event.get("delta");
+            match delta.and_then(|d| d.get("type")).and_then(|t| t.as_str()) {
+                Some("text_delta") => {
+                    if let Some(text) = delta.and_then(|d| d.get("text")).and_then(|t| t.as_str()) {
+                        emit_text(text.to_string());
+                    }
+                }
+                Some("thinking_delta") => {
+                    if let Some(text) = delta.and_then(|d| d.get("thinking")).and_then(|t| t.as_str()) {
+                        thinking_content.push_str(text);
+                        emit_thinking(text.to_string());
+                    }
+                }
+                Some("signature_delta") => {
+                    if let Some(sig) = delta.and_then(|d| d.get("signature")).and_then(|s| s.as_str()) {
+                        current_signature.push_str(sig);
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Test helper that mirrors production behavior: emit_thinking is discarded (as in chat_stream),
+/// emit_text goes to text_chunks. Returns (text_chunks, thinking_chunks, blocks) where
+/// thinking_chunks captures what emit_thinking would have sent (for assertion purposes only).
+#[cfg(test)]
+fn process_sse_events_for_test(
+    lines: &[String],
+) -> (Vec<String>, Vec<String>, Vec<hydeclaw_types::ThinkingBlock>) {
+    use std::cell::RefCell;
+    let text_chunks: RefCell<Vec<String>> = RefCell::new(vec![]);
+    let thinking_chunks: RefCell<Vec<String>> = RefCell::new(vec![]);
+    let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
+    let mut thinking_content = String::new();
+    let mut current_signature = String::new();
+    let mut in_thinking_block = false;
+
+    for line in lines {
+        let data = match line.strip_prefix("data: ") {
+            Some(d) => d,
+            None => continue,
+        };
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+        process_sse_event(
+            &event,
+            &mut thinking_content,
+            &mut current_signature,
+            &mut in_thinking_block,
+            &mut thinking_blocks,
+            |chunk| thinking_chunks.borrow_mut().push(chunk),
+            |chunk| text_chunks.borrow_mut().push(chunk),
+        );
+    }
+    (text_chunks.into_inner(), thinking_chunks.into_inner(), thinking_blocks)
+}
+
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
     async fn chat(
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
+        opts: CallOptions,
     ) -> Result<LlmResponse> {
-        let (_, body) = self.build_request_body(messages, tools);
+        let (_, body) = self.build_request_body(messages, tools, opts);
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
         tracing::info!(
@@ -389,9 +565,10 @@ impl LlmProvider for AnthropicProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         chunk_tx: mpsc::UnboundedSender<String>,
+        opts: CallOptions,
     ) -> Result<LlmResponse> {
         if !tools.is_empty() {
-            let response = self.chat(messages, tools).await?;
+            let response = self.chat(messages, tools, opts).await?;
             if response.tool_calls.is_empty() {
                 let filtered = crate::agent::thinking::strip_thinking(&response.content);
                 if !filtered.is_empty() {
@@ -401,7 +578,7 @@ impl LlmProvider for AnthropicProvider {
             return Ok(response);
         }
 
-        let (_, mut body) = self.build_request_body(messages, tools);
+        let (_, mut body) = self.build_request_body(messages, tools, opts);
         body["stream"] = serde_json::Value::Bool(true);
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
@@ -458,7 +635,10 @@ impl LlmProvider for AnthropicProvider {
 
         let mut full_content = String::new();
         let mut buffer = String::new();
-        let mut thinking_filter = crate::agent::thinking::ThinkingFilter::new();
+        let mut thinking_content = String::new();
+        let mut current_signature = String::new();
+        let mut in_thinking_block = false;
+        let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
 
         use tokio_stream::StreamExt;
         use crate::agent::providers::{CancelSlot, LlmCallError, cancellable_stream::stream_with_cancellation};
@@ -489,19 +669,20 @@ impl LlmProvider for AnthropicProvider {
                 }
 
                 if let Some(data) = line.strip_prefix("data: ") {
-                    // Anthropic SSE: content_block_delta with delta.text
-                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(data)
-                        && event.get("type").and_then(|t| t.as_str()) == Some("content_block_delta")
-                            && let Some(text) = event.get("delta")
-                                .and_then(|d| d.get("text"))
-                                .and_then(|t| t.as_str())
-                            {
-                                full_content.push_str(text);
-                                let filtered = thinking_filter.process(text);
-                                if !filtered.is_empty() {
-                                    chunk_tx.send(filtered).ok();
-                                }
-                            }
+                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
+                        process_sse_event(
+                            &event,
+                            &mut thinking_content,
+                            &mut current_signature,
+                            &mut in_thinking_block,
+                            &mut thinking_blocks,
+                            |_| {},
+                            |text| {
+                                full_content.push_str(&text);
+                                chunk_tx.send(text).ok();
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -550,7 +731,7 @@ impl LlmProvider for AnthropicProvider {
             fallback_notice: None,
             tools_used: vec![],
             iterations: 0,
-            thinking_blocks: vec![],
+            thinking_blocks,
         })
     }
 
@@ -635,7 +816,7 @@ mod tests {
             Some(1024),
             secrets,
         );
-        let (_, body) = provider.build_request_body(&messages, &[]);
+        let (_, body) = provider.build_request_body(&messages, &[], CallOptions::default());
         let api_messages = body["messages"].as_array().unwrap();
         assert_eq!(api_messages.len(), 1);
 
@@ -676,7 +857,7 @@ mod tests {
             Some(1024),
             secrets,
         );
-        let (_, body) = provider.build_request_body(&messages, &[]);
+        let (_, body) = provider.build_request_body(&messages, &[], CallOptions::default());
         let api_messages = body["messages"].as_array().unwrap();
         let content = api_messages[0]["content"].as_array().unwrap();
 
@@ -685,5 +866,171 @@ mod tests {
         assert_eq!(content[1]["type"], "tool_use");
         assert_eq!(content[1]["id"], "call_1");
         assert_eq!(content[1]["name"], "my_tool");
+    }
+}
+
+#[cfg(test)]
+mod thinking_config_tests {
+    use super::*;
+
+    #[test]
+    fn level_zero_returns_none() {
+        assert!(thinking_config(0, "claude-opus-4-7", 8_192).is_none());
+    }
+
+    #[test]
+    fn opus47_level1_adaptive_low() {
+        let cfg = thinking_config(1, "claude-opus-4-7", 8_192).unwrap();
+        assert_eq!(cfg["type"], "adaptive");
+        assert_eq!(cfg["effort"], "low");
+        assert_eq!(cfg["display"], "summarized");
+    }
+
+    #[test]
+    fn opus47_level3_adaptive_medium() {
+        let cfg = thinking_config(3, "claude-opus-4-7", 8_192).unwrap();
+        assert_eq!(cfg["type"], "adaptive");
+        assert_eq!(cfg["effort"], "medium");
+        assert_eq!(cfg["display"], "summarized");
+    }
+
+    #[test]
+    fn opus46_level5_adaptive_high() {
+        let cfg = thinking_config(5, "claude-opus-4-6", 16_000).unwrap();
+        assert_eq!(cfg["type"], "adaptive");
+        assert_eq!(cfg["effort"], "high");
+        assert_eq!(cfg["display"], "summarized");
+    }
+
+    #[test]
+    fn sonnet37_level3_manual_exact_budget() {
+        let cfg = thinking_config(3, "claude-sonnet-3-7", 16_000).unwrap();
+        assert_eq!(cfg["type"], "enabled");
+        assert_eq!(cfg["budget_tokens"], 10_000_u64);
+    }
+
+    #[test]
+    fn sonnet37_level3_budget_clamped() {
+        let cfg = thinking_config(3, "claude-sonnet-3-7", 8_192).unwrap();
+        assert_eq!(cfg["budget_tokens"], 7_192_u64);
+    }
+
+    #[test]
+    fn tight_max_tokens_returns_none() {
+        assert!(thinking_config(5, "claude-haiku-4-5", 2_000).is_none());
+    }
+
+    #[test]
+    fn thinking_mode_opus47_is_adaptive_only() {
+        assert!(matches!(thinking_mode("claude-opus-4-7"), ThinkingMode::AdaptiveOnly));
+    }
+
+    #[test]
+    fn thinking_mode_sonnet46_is_adaptive() {
+        assert!(matches!(thinking_mode("claude-sonnet-4-6"), ThinkingMode::Adaptive));
+    }
+
+    #[test]
+    fn thinking_mode_sonnet37_is_manual() {
+        assert!(matches!(thinking_mode("claude-sonnet-3-7"), ThinkingMode::Manual));
+    }
+
+    #[test]
+    fn thinking_mode_haiku45_is_manual() {
+        assert!(matches!(thinking_mode("claude-haiku-4-5"), ThinkingMode::Manual));
+    }
+
+    #[tokio::test]
+    async fn temperature_enforced_to_1_when_thinking_enabled() {
+        use std::sync::Arc;
+        let secrets = Arc::new(crate::secrets::SecretsManager::new_noop());
+        let provider = AnthropicProvider::for_tests(
+            "claude-opus-4-7".to_string(),
+            0.3,
+            Some(16_000),
+            secrets,
+        );
+        let opts = CallOptions { thinking_level: 3 };
+        let (_, body) = provider.build_request_body(&[], &[], opts);
+        let temp = body["temperature"].as_f64().expect("temperature must be in body");
+        assert!(temp >= 1.0, "expected temperature >= 1.0 when thinking enabled, got {temp}");
+        assert!(body.get("thinking").is_some(), "thinking field must be present");
+    }
+
+    #[tokio::test]
+    async fn temperature_unchanged_when_thinking_disabled() {
+        use std::sync::Arc;
+        let secrets = Arc::new(crate::secrets::SecretsManager::new_noop());
+        let provider = AnthropicProvider::for_tests(
+            "claude-opus-4-7".to_string(),
+            0.7,
+            Some(16_000),
+            secrets,
+        );
+        let opts = CallOptions { thinking_level: 0 };
+        let (_, body) = provider.build_request_body(&[], &[], opts);
+        let temp = body["temperature"].as_f64().unwrap();
+        assert!((temp - 0.7).abs() < f64::EPSILON);
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn manual_thinking_config_has_no_display_field() {
+        let cfg = thinking_config(3, "claude-sonnet-3-7", 16_000).unwrap();
+        assert_eq!(cfg["type"], "enabled");
+        assert!(cfg.get("display").is_none(), "manual config must not contain 'display' field; got: {cfg}");
+    }
+}
+
+#[cfg(test)]
+mod streaming_thinking_tests {
+    use super::*;
+
+    fn make_sse_line(json: &str) -> String {
+        format!("data: {json}")
+    }
+
+    #[test]
+    fn streaming_emits_thinking_tags_and_populates_thinking_blocks() {
+        let events = vec![
+            make_sse_line(r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#),
+            make_sse_line(r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me reason..."}}"#),
+            make_sse_line(r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc123"}}"#),
+            make_sse_line(r#"{"type":"content_block_stop","index":0}"#),
+            make_sse_line(r#"{"type":"content_block_start","index":1,"content_block":{"type":"text"}}"#),
+            make_sse_line(r#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer here."}}"#),
+            make_sse_line(r#"{"type":"content_block_stop","index":1}"#),
+        ];
+
+        let (text_chunks, thinking_chunks, blocks) = process_sse_events_for_test(&events);
+
+        // Text stream (what the UI receives): only actual text, no thinking fragments
+        assert!(
+            text_chunks.iter().any(|c| c.contains("Answer here")),
+            "text stream missing answer; got {text_chunks:?}"
+        );
+        assert!(
+            !text_chunks.iter().any(|c| c.contains("thinking")),
+            "text stream must not contain thinking fragments; got {text_chunks:?}"
+        );
+
+        // Thinking stream (discarded in production, collected here for assertion)
+        assert!(
+            thinking_chunks.contains(&"<thinking>".to_string()),
+            "missing <thinking> open tag; got {thinking_chunks:?}"
+        );
+        assert!(
+            thinking_chunks.iter().any(|c| c.contains("Let me reason")),
+            "missing thinking content; got {thinking_chunks:?}"
+        );
+        assert!(
+            thinking_chunks.contains(&"</thinking>".to_string()),
+            "missing </thinking> close tag; got {thinking_chunks:?}"
+        );
+
+        // Structured thinking blocks
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].thinking, "Let me reason...");
+        assert_eq!(blocks[0].signature, "abc123");
     }
 }

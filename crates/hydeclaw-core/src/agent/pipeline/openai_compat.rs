@@ -131,7 +131,7 @@ pub async fn handle_openai(
         let response = if loop_config.compact_on_overflow {
             executor.chat_with_overflow_recovery(&mut messages, &available_tools).await?
         } else {
-            cfg.provider.chat(&messages, &available_tools).await?
+            cfg.provider.chat(&messages, &available_tools, crate::agent::providers::CallOptions::default()).await?
         };
         last_usage = response.usage.clone();
 
@@ -186,7 +186,7 @@ pub async fn handle_openai(
         };
 
         if loop_broken || iteration == loop_config.effective_max_iterations() - 1 {
-            let forced = cfg.provider.chat(&messages, &[]).await?;
+            let forced = cfg.provider.chat(&messages, &[], crate::agent::providers::CallOptions::default()).await?;
             last_usage = forced.usage.clone();
             final_response = forced.content.clone();
             break;

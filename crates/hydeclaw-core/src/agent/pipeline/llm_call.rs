@@ -146,7 +146,7 @@ pub async fn chat_with_overflow_recovery(
     let mut last_error = None;
 
     for compact_attempt in 0..=max_compact_attempts {
-        let result = provider.chat(messages, tools).await;
+        let result = provider.chat(messages, tools, crate::agent::providers::CallOptions::default()).await;
         match result {
             Ok(resp) => return Ok(resp),
             Err(e)
@@ -181,13 +181,14 @@ pub async fn chat_stream_with_overflow_recovery(
     tools: &[ToolDefinition],
     chunk_tx: mpsc::UnboundedSender<String>,
     compact: &impl Compactor,
+    opts: crate::agent::providers::CallOptions,
 ) -> Result<hydeclaw_types::LlmResponse> {
     let max_compact_attempts: u8 = 3;
     let mut last_error = None;
 
     for compact_attempt in 0..=max_compact_attempts {
         let result = provider
-            .chat_stream(messages, tools, chunk_tx.clone())
+            .chat_stream(messages, tools, chunk_tx.clone(), opts)
             .await;
         match result {
             Ok(resp) => return Ok(resp),
@@ -267,6 +268,7 @@ pub async fn chat_stream_with_transient_retry(
     tools: &[ToolDefinition],
     chunk_tx: mpsc::UnboundedSender<String>,
     compact: &impl Compactor,
+    opts: crate::agent::providers::CallOptions,
 ) -> Result<hydeclaw_types::LlmResponse> {
     let config = error_classify::RetryConfig::default();
     let mut last_error: Option<anyhow::Error> = None;
@@ -278,6 +280,7 @@ pub async fn chat_stream_with_transient_retry(
             tools,
             chunk_tx.clone(),
             compact,
+            opts,
         )
         .await;
         match result {
@@ -323,12 +326,12 @@ pub async fn chat_with_transient_retry_using(
     let mut last_error: Option<anyhow::Error> = None;
 
     for attempt in 0..config.max_attempts {
-        let result = match provider.chat(messages, tools).await {
+        let result = match provider.chat(messages, tools, crate::agent::providers::CallOptions::default()).await {
             Ok(resp) => Ok(resp),
             Err(e) if crate::agent::tool_loop::is_context_overflow(&e) => {
                 tracing::warn!("context overflow on fallback provider, compacting and retrying");
                 compact.compact(messages).await;
-                provider.chat(messages, tools).await
+                provider.chat(messages, tools, crate::agent::providers::CallOptions::default()).await
             }
             Err(e) => Err(e),
         };
@@ -371,13 +374,14 @@ pub async fn chat_stream_with_transient_retry_using(
     tools: &[ToolDefinition],
     chunk_tx: mpsc::UnboundedSender<String>,
     compact: &impl Compactor,
+    opts: crate::agent::providers::CallOptions,
 ) -> Result<hydeclaw_types::LlmResponse> {
     let config = error_classify::RetryConfig::default();
     let mut last_error: Option<anyhow::Error> = None;
 
     for attempt in 0..config.max_attempts {
         let result = match provider
-            .chat_stream(messages, tools, chunk_tx.clone())
+            .chat_stream(messages, tools, chunk_tx.clone(), opts)
             .await
         {
             Ok(resp) => Ok(resp),
@@ -386,7 +390,7 @@ pub async fn chat_stream_with_transient_retry_using(
                     "context overflow on fallback provider (stream), compacting and retrying"
                 );
                 compact.compact(messages).await;
-                provider.chat_stream(messages, tools, chunk_tx.clone()).await
+                provider.chat_stream(messages, tools, chunk_tx.clone(), opts).await
             }
             Err(e) => Err(e),
         };
@@ -466,6 +470,7 @@ async fn deadline_retry_inner(
     session_cancel: &tokio_util::sync::CancellationToken,
     run_max_duration_secs: u64,
     on_retry: impl Fn(u32, u64),
+    opts: crate::agent::providers::CallOptions,
 ) -> Result<hydeclaw_types::LlmResponse> {
     use crate::agent::providers::error::{LlmCallError, PartialState};
     use hydeclaw_types::{Message, MessageRole};
@@ -504,6 +509,7 @@ async fn deadline_retry_inner(
             tools,
             chunk_tx.clone(),
             compact,
+            opts,
         ).await;
 
         match result {
@@ -597,6 +603,7 @@ pub async fn chat_stream_with_deadline_retry(
     run_max_duration_secs: u64,
     session_id: uuid::Uuid,
     sm: &crate::agent::session_manager::SessionManager,
+    opts: crate::agent::providers::CallOptions,
 ) -> Result<hydeclaw_types::LlmResponse> {
     deadline_retry_inner(
         provider, messages, tools, chunk_tx, compact, session_cancel, run_max_duration_secs,
@@ -611,6 +618,7 @@ pub async fn chat_stream_with_deadline_retry(
                 sm2.log_wal_event(session_id, "llm_retry", Some(&details)).await.ok();
             });
         },
+        opts,
     ).await
 }
 
@@ -627,6 +635,7 @@ pub(crate) async fn chat_stream_with_deadline_retry_no_wal(
     deadline_retry_inner(
         provider, messages, tools, chunk_tx, compact, session_cancel, run_max_duration_secs,
         |_attempt, _delay_ms| {},
+        crate::agent::providers::CallOptions::default(),
     ).await
 }
 
@@ -668,10 +677,10 @@ mod deadline_retry_tests {
 
     #[async_trait::async_trait]
     impl crate::agent::providers::LlmProvider for RetryOnceProvider {
-        async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition]) -> anyhow::Result<LlmResponse> {
+        async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
             Ok(ok_response())
         }
-        async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+        async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
             let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n == 0 {
                 return Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
@@ -716,8 +725,8 @@ mod deadline_retry_tests {
         struct AlwaysInactiveProvider;
         #[async_trait::async_trait]
         impl crate::agent::providers::LlmProvider for AlwaysInactiveProvider {
-            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition]) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
-            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
+            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
                 Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
                     provider: "test".into(), silent_secs: 60, partial_state: PartialState::Empty,
                 }))
@@ -755,8 +764,8 @@ mod deadline_retry_tests {
         struct ConnectFailProvider;
         #[async_trait::async_trait]
         impl crate::agent::providers::LlmProvider for ConnectFailProvider {
-            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition]) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
-            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
+            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
                 Err(anyhow::Error::new(LlmCallError::ConnectTimeout { provider: "test".into(), elapsed_secs: 10 }))
             }
             fn name(&self) -> &str { "connect-fail" }
@@ -801,10 +810,10 @@ mod deadline_retry_tests {
 
         #[async_trait::async_trait]
         impl crate::agent::providers::LlmProvider for PrefillCapturingProvider {
-            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition]) -> anyhow::Result<LlmResponse> {
+            async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
                 Ok(ok_response())
             }
-            async fn chat_stream(&self, m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
+            async fn chat_stream(&self, m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
                 self.received_messages.lock().unwrap().push(m.to_vec());
                 let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if n == 0 {

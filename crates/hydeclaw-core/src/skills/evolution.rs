@@ -57,7 +57,7 @@ pub async fn analyze_and_evolve(
         thinking_blocks: vec![],
     };
 
-    let analysis = match provider.chat(&[msg], &[]).await {
+    let analysis = match provider.chat(&[msg], &[], crate::agent::providers::CallOptions::default()).await {
         Ok(resp) => resp.content,
         Err(e) => {
             tracing::debug!(error = %e, "skill evolution analysis failed");
