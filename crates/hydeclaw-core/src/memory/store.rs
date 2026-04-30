@@ -9,6 +9,19 @@ use std::sync::{Arc, RwLock};
 use super::embedding::{fmt_vec, EmbeddingService};
 use super::{MemoryChunk, MemoryResult};
 
+// ── Hybrid search RRF tuning ────────────────────────────────────────────
+// Reciprocal Rank Fusion weights for the three search branches.
+// Updated 2026-04-30: trigram added as third branch (Sprint 1 P0.4).
+//
+// Why hardcoded? RRF tuning has no user pressure for runtime changes.
+// If future need arises, expose via MemoryStore::new + RwLock<f64>
+// (mirror the fts_language pattern).
+const RRF_K: f64 = 60.0;
+const W_SEM: f64 = 0.6;   // было 0.7 до добавления trigram
+const W_FTS: f64 = 0.25;  // было 0.3
+const W_TRGM: f64 = 0.15; // новое
+const TRGM_SIMILARITY_THRESHOLD: f32 = 0.3;  // pg_trgm default
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 pub struct MemoryStore {
