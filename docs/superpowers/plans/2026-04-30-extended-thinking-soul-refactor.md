@@ -446,7 +446,19 @@ Expected: PASS (struct compiles). Other tests will fail — that's expected at t
 - Modify: `crates/hydeclaw-core/src/agent/providers_google.rs`
 - Modify: `crates/hydeclaw-core/src/agent/providers_claude_cli.rs`
 
-- [ ] **Step 1: Update `AnthropicProvider::chat` signature (providers_anthropic.rs ~line 333)**
+- [ ] **Step 1: Add `CallOptions` to the `use super::` import at the top of `providers_anthropic.rs`**
+
+Find the existing `use super::{...}` line (currently imports `Deserialize, async_trait, Arc, SecretsManager, ...`) and add `CallOptions`:
+
+```rust
+use super::{Deserialize, async_trait, Arc, SecretsManager, ModelOverride, Message,
+            ToolDefinition, MessageRole, LlmProvider, LlmResponse, Result, mpsc,
+            CallOptions};  // NEW
+```
+
+This makes `CallOptions` available in the module scope and in all `#[cfg(test)]` blocks via `use super::*`.
+
+- [ ] **Step 2: Update `AnthropicProvider::chat` signature (providers_anthropic.rs ~line 333)**
 
 ```rust
 async fn chat(
@@ -455,12 +467,11 @@ async fn chat(
     tools: &[ToolDefinition],
     opts: CallOptions,
 ) -> Result<LlmResponse> {
-    let (_, body) = self.build_request_body(messages, tools);  // opts added in Task 9
+    let _ = opts;  // forwarded to build_request_body in Task 9
+    let (_, body) = self.build_request_body(messages, tools);
 ```
 
-Note: `build_request_body` gets `opts` in Task 9. For now pass it through but don't use it yet.
-
-- [ ] **Step 2: Update `AnthropicProvider::chat_stream` signature (providers_anthropic.rs ~line 387)**
+- [ ] **Step 3: Update `AnthropicProvider::chat_stream` signature (providers_anthropic.rs ~line 387)**
 
 ```rust
 async fn chat_stream(
@@ -922,7 +933,7 @@ fn temperature_enforced_to_1_when_thinking_enabled() {
         Some(16_000),
         secrets,
     );
-    let opts = super::super::providers::CallOptions { thinking_level: 3 };
+    let opts = CallOptions { thinking_level: 3 };  // CallOptions in scope via use super::*
     let (_, body) = provider.build_request_body(&[], &[], opts);
     let temp = body["temperature"].as_f64().expect("temperature must be in body");
     assert!(temp >= 1.0, "expected temperature >= 1.0 when thinking enabled, got {temp}");
@@ -939,15 +950,13 @@ fn temperature_unchanged_when_thinking_disabled() {
         Some(16_000),
         secrets,
     );
-    let opts = super::super::providers::CallOptions { thinking_level: 0 };
+    let opts = CallOptions { thinking_level: 0 };
     let (_, body) = provider.build_request_body(&[], &[], opts);
     let temp = body["temperature"].as_f64().unwrap();
     assert!((temp - 0.7).abs() < f64::EPSILON);
     assert!(body.get("thinking").is_none());
 }
 ```
-
-Note: if `SecretsManager::new_in_memory()` doesn't exist, check the test infrastructure in `secrets.rs` for the correct test constructor (look for `#[cfg(test)]` factory methods).
 
 - [ ] **Step 2: Run to verify tests fail**
 
@@ -980,6 +989,7 @@ At the start of the function body, before building `body`, add:
 
 ```rust
 let effective_max_tokens = self.max_tokens.unwrap_or(8_192);
+let effective_model = self.model.effective();  // String — used in body + thinking_config
 let temperature = if opts.thinking_level > 0 {
     self.temperature.max(1.0)
 } else {
@@ -991,7 +1001,7 @@ Replace the `let mut body = serde_json::json!({...})` block (currently uses `sel
 
 ```rust
 let mut body = serde_json::json!({
-    "model": self.model.effective(),
+    "model": effective_model,
     "messages": api_messages,
     "max_tokens": effective_max_tokens,
     "temperature": temperature,
@@ -1003,7 +1013,7 @@ After the system prompt block and before the tools block, add:
 ```rust
 if let Some(thinking_json) = thinking_config(
     opts.thinking_level,
-    self.model.effective(),
+    &effective_model,          // &str via Deref from String
     effective_max_tokens,
 ) {
     body["thinking"] = thinking_json;
