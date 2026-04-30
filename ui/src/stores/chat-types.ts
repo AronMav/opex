@@ -190,6 +190,19 @@ export interface AgentState {
    * Null if no usage event has been received yet.
    */
   contextTokens: number | null;
+  /**
+   * Output token count from the most recent LLM response (from the "usage" SSE event).
+   * Surfaced in the ContextBar tooltip breakdown. Null if no usage event yet.
+   */
+  contextOutputTokens: number | null;
+  /**
+   * Extended token breakdown from the most recent "usage" SSE event. All values
+   * are SUBSETS of input/output (not additive) and may be null if the provider
+   * did not report them. Used for tooltip display in ContextBar.
+   */
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  reasoningTokens: number | null;
 }
 
 // ── Store interface ─────────────────────────────────────────────────────────
@@ -255,5 +268,9 @@ export function emptyAgentState(): AgentState {
     selectedBranches: {},
     pendingMessage: null,
     contextTokens: null,
+    contextOutputTokens: null,
+    cacheReadTokens: null,
+    cacheCreationTokens: null,
+    reasoningTokens: null,
   };
 }

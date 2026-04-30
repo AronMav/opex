@@ -85,6 +85,9 @@ export function parseSseEvent(raw: string): SseEvent | null {
         type,
         inputTokens: typeof e.inputTokens === "number" ? e.inputTokens : 0,
         outputTokens: typeof e.outputTokens === "number" ? e.outputTokens : 0,
+        cacheReadTokens: typeof e.cacheReadTokens === "number" ? e.cacheReadTokens : undefined,
+        cacheCreationTokens: typeof e.cacheCreationTokens === "number" ? e.cacheCreationTokens : undefined,
+        reasoningTokens: typeof e.reasoningTokens === "number" ? e.reasoningTokens : undefined,
       };
     case "tool-approval-needed": {
       if (typeof e.approvalId !== "string" || typeof e.toolName !== "string") return null;
