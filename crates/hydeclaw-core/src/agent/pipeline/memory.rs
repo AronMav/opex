@@ -118,7 +118,8 @@ pub async fn handle_memory_search(
                 .enumerate()
                 .map(|(i, r)| {
                     let pin = if r.pinned { "\u{1f4cc} " } else { "" };
-                    format!("{}. [{}] {}{}  (id: {})", i + 1, r.source, pin, r.content, r.id)
+                    let content = truncate_chunk_content(&r.content);
+                    format!("{}. [{}] {}{}  (id: {})", i + 1, r.source, pin, content, r.id)
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -242,9 +243,10 @@ pub async fn handle_memory_get(
             .iter()
             .map(|c| {
                 let pin = if c.pinned { "\u{1f4cc} " } else { "" };
+                let content = truncate_chunk_content(&c.content);
                 format!(
                     "[{}] {}(score:{:.2}) {}\n  id: {} | created: {}",
-                    c.source, pin, c.relevance_score, c.content,
+                    c.source, pin, c.relevance_score, content,
                     c.id, c.created_at.format("%Y-%m-%d %H:%M")
                 )
             })
