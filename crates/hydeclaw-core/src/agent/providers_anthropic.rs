@@ -54,6 +54,14 @@ fn thinking_config(level: u8, model: &str, effective_max_tokens: u32) -> Option<
             };
             let clamped = budget.min(effective_max_tokens.saturating_sub(1_000));
             if clamped < 1_024 {
+                tracing::warn!(
+                    thinking_level = level,
+                    model,
+                    effective_max_tokens,
+                    budget,
+                    clamped,
+                    "thinking disabled: budget after clamping is below 1024 — increase max_tokens"
+                );
                 return None;
             }
             Some(serde_json::json!({
