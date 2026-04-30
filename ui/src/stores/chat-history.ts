@@ -63,16 +63,19 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
   // and order map for sorting parallel tool results back into declared order.
   // Parallel tool calls complete out of order (fastest first), so DB insertion
   // timestamps don't match the declared order in tool_calls[].
+  // Global index (not per-message) prevents mis-sorting when consecutive assistant
+  // messages share a tool-result run because an intermediate message has no text.
   const toolCallMap = new Map<string, { name: string; arguments: unknown }>();
   const toolCallOrderMap = new Map<string, number>();
+  let globalToolIdx = 0;
   for (const m of filtered) {
     if (m.role === "assistant" && m.tool_calls) {
       const calls = m.tool_calls as Array<{ id: string; name: string; arguments?: unknown }>;
       if (Array.isArray(calls)) {
-        calls.forEach((tc, idx) => {
+        calls.forEach((tc) => {
           if (tc.id) {
             toolCallMap.set(tc.id, { name: tc.name || "tool", arguments: tc.arguments ?? {} });
-            toolCallOrderMap.set(tc.id, idx);
+            toolCallOrderMap.set(tc.id, globalToolIdx++);
           }
         });
       }
@@ -247,6 +250,15 @@ export function resolveActivePath(
     path.push(current);
     const children = childrenOf.get(current.id);
     if (!children || children.length === 0) break;
+
+    // Parallel tool batches: all results are siblings with the same parent.
+    // Include every sibling in path order, then continue from the last one
+    // (which is the parent of the next assistant message in the chain).
+    if (children.length > 1 && children.every(c => c.role === "tool")) {
+      path.push(...children.slice(0, -1));
+      current = children[children.length - 1];
+      continue;
+    }
 
     const selectedId: string | undefined = selectedBranches[current.id];
     current = selectedId

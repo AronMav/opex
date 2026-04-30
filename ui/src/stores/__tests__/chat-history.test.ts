@@ -146,6 +146,79 @@ describe("convertHistory — streaming placeholder does not shadow tree root (Bu
   });
 });
 
+describe("resolveActivePath — parallel tool siblings (all share same parent)", () => {
+  it("includes all sibling tool messages when a node has multiple tool children", () => {
+    // After the parallel.rs fix, all parallel tool results share the same parent
+    // (the assistant message). resolveActivePath must include ALL of them, not
+    // just the last child.
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", parent_message_id: null, created_at: "2026-04-30T10:00:00Z" }),
+      makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", created_at: "2026-04-30T10:00:01Z" }),
+      // Three parallel tool results all share parent=a1
+      makeRow({ id: "t1", role: "tool", parent_message_id: "a1", tool_call_id: "c1", created_at: "2026-04-30T10:00:02Z" }),
+      makeRow({ id: "t2", role: "tool", parent_message_id: "a1", tool_call_id: "c2", created_at: "2026-04-30T10:00:03Z" }),
+      makeRow({ id: "t3", role: "tool", parent_message_id: "a1", tool_call_id: "c3", created_at: "2026-04-30T10:00:04Z" }),
+      // Next assistant chains off the last tool (t3)
+      makeRow({ id: "a2", role: "assistant", parent_message_id: "t3", created_at: "2026-04-30T10:00:05Z" }),
+    ];
+
+    const path = resolveActivePath(rows, {});
+    const ids = path.map(r => r.id);
+    // All three tools must be in the path
+    expect(ids).toEqual(["u1", "a1", "t1", "t2", "t3", "a2"]);
+  });
+
+  it("single tool child still works (sequential case unchanged)", () => {
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", parent_message_id: null, created_at: "2026-04-30T10:00:00Z" }),
+      makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", created_at: "2026-04-30T10:00:01Z" }),
+      makeRow({ id: "t1", role: "tool", parent_message_id: "a1", tool_call_id: "c1", created_at: "2026-04-30T10:00:02Z" }),
+      makeRow({ id: "a2", role: "assistant", parent_message_id: "t1", created_at: "2026-04-30T10:00:03Z" }),
+    ];
+
+    const path = resolveActivePath(rows, {});
+    expect(path.map(r => r.id)).toEqual(["u1", "a1", "t1", "a2"]);
+  });
+});
+
+describe("convertHistory — global tool index prevents mis-sort when intermediate assistant has no text", () => {
+  it("orders tool results correctly when assistant[n] has no text content (no text separator in parts)", () => {
+    // assistant[a1] makes call_first, tool[t1] returns error.
+    // assistant[a2] retries with call_second, NO TEXT — so t2 lands in the
+    // same consecutive tool-part run as t1. Without global index, both calls
+    // have per-message idx=0 and sort is undefined.
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", parent_message_id: null, content: "hello", created_at: "2026-04-30T10:00:00Z" }),
+      makeRow({
+        id: "a1", role: "assistant", agent_id: "Arty", parent_message_id: "u1",
+        content: "Starting...",
+        tool_calls: [{ id: "call_first", name: "search", arguments: {} }] as any,
+        created_at: "2026-04-30T10:00:01Z",
+      }),
+      makeRow({ id: "t1", role: "tool", parent_message_id: "a1", tool_call_id: "call_first",
+        content: "Error: bad query", created_at: "2026-04-30T10:00:02Z" }),
+      // No text in a2 — its merge adds no text separator, so t2 joins t1's run
+      makeRow({
+        id: "a2", role: "assistant", agent_id: "Arty", parent_message_id: "t1",
+        content: "",
+        tool_calls: [{ id: "call_second", name: "search", arguments: {} }] as any,
+        created_at: "2026-04-30T10:00:03Z",
+      }),
+      makeRow({ id: "t2", role: "tool", parent_message_id: "a2", tool_call_id: "call_second",
+        content: "Good result", created_at: "2026-04-30T10:00:04Z" }),
+    ];
+
+    const messages = convertHistory(rows, false, {});
+    const assistant = messages.find(m => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    const toolParts = assistant!.parts.filter(p => p.type === "tool") as Array<{ type: "tool"; toolCallId: string }>;
+    // call_first (global=0) must appear before call_second (global=1)
+    expect(toolParts).toHaveLength(2);
+    expect(toolParts[0].toolCallId).toBe("call_first");
+    expect(toolParts[1].toolCallId).toBe("call_second");
+  });
+});
+
 describe("convertHistory — parallel tool results sorted by declared order", () => {
   // Parallel tool calls complete fastest-first, so DB insertion order does NOT
   // match the declared order in tool_calls[]. convertHistory must sort tool

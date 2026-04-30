@@ -258,14 +258,27 @@ pub async fn execute_tool_calls_partitioned(
         // spawn the persist insert immediately when each tool finishes — no
         // second post-join_all loop, which previously left a micro-window where
         // `tool_end` was logged but the persist hadn't been spawned yet.
+        //
+        // All parallel tool messages share the SAME parent (the assistant message
+        // that emitted the calls). Chaining them to each other was a workaround
+        // that made resolveActivePath traversal work but produced a semantically
+        // wrong tree — parallel results are siblings, not a linear chain.
+        // chain_parent advances to the LAST parallel tool after all are allocated
+        // so the next message (the following assistant turn) still chains correctly.
         let parallel_persist_meta: Vec<Option<(Uuid, Option<Uuid>)>> = if persist_ctx.is_some() {
+            let shared_parent = chain_parent;
             let mut out: Vec<Option<(Uuid, Option<Uuid>)>> = vec![None; n];
             for &i in &parallel_indices {
                 let new_id = Uuid::new_v4();
-                let parent_for_this = chain_parent;
-                out[i] = Some((new_id, parent_for_this));
+                out[i] = Some((new_id, shared_parent));
                 persisted_ids[i] = Some(new_id);
-                chain_parent = Some(new_id);
+            }
+            // Advance chain_parent to the last parallel tool (by declaration order)
+            // so the subsequent sequential tools / assistant message chain off it.
+            if let Some(&last_i) = parallel_indices.last() {
+                if let Some((last_id, _)) = out[last_i] {
+                    chain_parent = Some(last_id);
+                }
             }
             out
         } else {
