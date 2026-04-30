@@ -58,8 +58,7 @@ fn thinking_config(level: u8, model: &str, effective_max_tokens: u32) -> Option<
             }
             Some(serde_json::json!({
                 "type": "enabled",
-                "budget_tokens": clamped,
-                "display": "summarized"
+                "budget_tokens": clamped
             }))
         }
     }
@@ -894,7 +893,6 @@ mod thinking_config_tests {
         let cfg = thinking_config(3, "claude-sonnet-3-7", 16_000).unwrap();
         assert_eq!(cfg["type"], "enabled");
         assert_eq!(cfg["budget_tokens"], 10_000_u64);
-        assert_eq!(cfg["display"], "summarized");
     }
 
     #[test]
@@ -960,6 +958,13 @@ mod thinking_config_tests {
         let temp = body["temperature"].as_f64().unwrap();
         assert!((temp - 0.7).abs() < f64::EPSILON);
         assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn manual_thinking_config_has_no_display_field() {
+        let cfg = thinking_config(3, "claude-sonnet-3-7", 16_000).unwrap();
+        assert_eq!(cfg["type"], "enabled");
+        assert!(cfg.get("display").is_none(), "manual config must not contain 'display' field; got: {cfg}");
     }
 }
 
