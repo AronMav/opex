@@ -999,26 +999,32 @@ async function executeAction(
       }
 
       case "send_voice": {
-        const audioData = action.params.audio_data as string;
-        if (audioData) {
-          const buffer = Buffer.from(audioData, "base64");
-          const blob = new Blob([buffer], { type: "audio/ogg" });
-          const file = new File([blob], "voice.ogg", { type: "audio/ogg" });
-          await bot.api.sendVoice(chatId, file, {
-            reply_parameters: safeReplyParams(messageId),
-          });
-        }
+        // Core sends raw bytes as base64 (Pi-NAT-friendly: Telegram's bot API
+        // accepts InputFile uploads, so we don't depend on a public URL).
+        const audioBase64 = action.params.audio_base64 as string | undefined;
+        if (!audioBase64) break;
+        const buffer = Buffer.from(audioBase64, "base64");
+        const blob = new Blob([buffer], { type: "audio/ogg" });
+        const file = new File([blob], "voice.ogg", { type: "audio/ogg" });
+        await bot.api.sendVoice(chatId, file, {
+          caption: action.params.caption as string | undefined,
+          reply_parameters: safeReplyParams(messageId),
+        });
         break;
       }
 
       case "send_photo": {
-        const url = action.params.url as string;
-        if (url) {
-          await bot.api.sendPhoto(chatId, url, {
-            caption: action.params.caption as string | undefined,
-            reply_parameters: safeReplyParams(messageId),
-          });
-        }
+        // Same byte-upload contract as send_voice — Core saves to /uploads/ for
+        // UI delivery and additionally streams base64 over the bridge for chats.
+        const imageBase64 = action.params.image_base64 as string | undefined;
+        if (!imageBase64) break;
+        const buffer = Buffer.from(imageBase64, "base64");
+        const blob = new Blob([buffer], { type: "image/png" });
+        const file = new File([blob], "photo.png", { type: "image/png" });
+        await bot.api.sendPhoto(chatId, file, {
+          caption: action.params.caption as string | undefined,
+          reply_parameters: safeReplyParams(messageId),
+        });
         break;
       }
 
