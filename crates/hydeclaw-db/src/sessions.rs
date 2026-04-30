@@ -467,7 +467,8 @@ pub async fn cleanup_session_streaming_messages(
     session_id: Uuid,
 ) -> sqlx::Result<u64> {
     let res = sqlx::query(
-        "UPDATE messages SET status = 'interrupted'
+        "UPDATE messages SET status = 'interrupted',
+                content = COALESCE(NULLIF(content, ''), '[interrupted]')
          WHERE session_id = $1 AND status = 'streaming'",
     )
     .bind(session_id)

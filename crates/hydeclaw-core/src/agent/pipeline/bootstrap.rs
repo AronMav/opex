@@ -101,7 +101,9 @@ pub async fn bootstrap<S: EventSink>(
         }
     }
 
-    // Clean up any streaming message left by a previous crashed run before loading context.
+    // Clean up any streaming message left by a previous crashed run.
+    // Runs after build_context; startup cleanup_interrupted_sessions() handles the immediate
+    // post-crash case, this call handles re-entry within the same process lifetime.
     match crate::db::sessions::cleanup_session_streaming_messages(&engine.cfg().db, session_id).await {
         Ok(0) => {}
         Ok(n) => tracing::info!(session=%session_id, count=%n, "cleaned orphaned streaming messages"),
