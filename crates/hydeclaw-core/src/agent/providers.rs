@@ -115,7 +115,9 @@ impl LlmProvider for UnconfiguredProvider {
 /// to the provider. All providers except AnthropicProvider ignore this.
 #[derive(Default, Clone, Copy, Debug)]
 pub struct CallOptions {
-    /// Thinking level set by /think command (0 = off, 1–5 = increasing budget).
+    /// Thinking level set by /think command.
+    /// 0 = off. For adaptive models (Opus 4.6+): 1–2 = low, 3 = medium, 4+ = high effort.
+    /// For manual models (Sonnet 3.7, Haiku 4.5, etc.): 1→1024, 2→4096, 3→10000, 4→20000, 5+→32000 budget_tokens.
     pub thinking_level: u8,
 }
 
