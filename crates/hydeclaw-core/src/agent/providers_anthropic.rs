@@ -393,6 +393,7 @@ pub(super) fn parse_anthropic_response(api_resp: AnthropicResponse, model: &str)
         hydeclaw_types::TokenUsage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
+            ..Default::default()
         }
     });
 

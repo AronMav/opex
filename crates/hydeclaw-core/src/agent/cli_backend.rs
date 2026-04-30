@@ -848,6 +848,7 @@ fn parse_cli_json(raw: &str) -> CliOutput {
                 (Some(inp), Some(out)) => Some(hydeclaw_types::TokenUsage {
                     input_tokens: inp,
                     output_tokens: out,
+                    ..Default::default()
                 }),
                 _ => {
                     // Try nested usage object
@@ -860,6 +861,7 @@ fn parse_cli_json(raw: &str) -> CliOutput {
                             Some(hydeclaw_types::TokenUsage {
                                 input_tokens: inp,
                                 output_tokens: out,
+                                ..Default::default()
                             })
                         } else {
                             None
@@ -922,6 +924,7 @@ fn parse_cli_jsonl(raw: &str) -> CliOutput {
                     usage = Some(hydeclaw_types::TokenUsage {
                         input_tokens: inp,
                         output_tokens: out,
+                        ..Default::default()
                     });
                 }
             }

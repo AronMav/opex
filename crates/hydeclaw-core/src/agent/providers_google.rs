@@ -311,6 +311,7 @@ impl LlmProvider for GoogleProvider {
         let usage = api_resp.usage_metadata.map(|u| hydeclaw_types::TokenUsage {
             input_tokens: u.prompt_token_count.unwrap_or(0),
             output_tokens: u.candidates_token_count.unwrap_or(0),
+            ..Default::default()
         });
 
         tracing::info!(

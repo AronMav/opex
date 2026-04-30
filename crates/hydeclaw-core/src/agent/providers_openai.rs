@@ -392,6 +392,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let usage = api_resp.usage.map(|u| hydeclaw_types::TokenUsage {
             input_tokens: u.prompt_tokens,
             output_tokens: u.completion_tokens,
+            ..Default::default()
         });
 
         tracing::info!(
@@ -723,6 +724,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             usage: usage.map(|(inp, out)| hydeclaw_types::TokenUsage {
                 input_tokens: inp,
                 output_tokens: out,
+                ..Default::default()
             }),
             model: Some(effective_model),
             provider: Some(self.provider_name.clone()),
