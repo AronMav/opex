@@ -107,8 +107,8 @@ pub async fn send_channel_message(
 
 /// Execute a system YAML tool that has a channel_action (e.g. TTS -> send_voice, screenshot -> send_photo).
 /// Calls the tool HTTP endpoint for binary data, then sends it via channel router.
-/// For image actions (send_photo), also saves to uploads/ and returns a FILE_PREFIX marker
-/// so the UI can display the image inline.
+/// For media actions (send_photo, send_voice), also saves to uploads/ and returns a FILE_PREFIX marker
+/// so the UI can display the media inline (image preview / audio player).
 pub async fn execute_yaml_channel_action(
     ctx: &CommandContext<'_>,
     tool: &crate::tools::yaml_tools::YamlToolDef,
@@ -134,7 +134,7 @@ pub async fn execute_yaml_channel_action(
     // Phase 64 SEC-03: signed URL — key via HKDF from master, TTL from config.
     let media_hint = match ca.action.as_str() {
         "send_photo" => Some("image"),
-        "send_voice" | "send_audio" => Some("audio"),
+        "send_voice" => Some("audio"),
         _ => None,
     };
     let file_marker = if let Some(hint) = media_hint {
