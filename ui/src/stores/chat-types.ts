@@ -184,6 +184,12 @@ export interface AgentState {
    * connectionPhase transitions to idle (clean success only).
    */
   pendingMessage: { content: string; attachments?: Array<any> } | null;
+  /**
+   * Input token count from the most recent LLM response (from the "usage" SSE event).
+   * Only inputTokens is stored — outputTokens do not consume context window for display.
+   * Null if no usage event has been received yet.
+   */
+  contextTokens: number | null;
 }
 
 // ── Store interface ─────────────────────────────────────────────────────────
@@ -248,5 +254,6 @@ export function emptyAgentState(): AgentState {
     isLlmReconnecting: false,
     selectedBranches: {},
     pendingMessage: null,
+    contextTokens: null,
   };
 }

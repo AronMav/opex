@@ -25,7 +25,8 @@ export type SseEvent =
   | { type: "tool-approval-resolved"; approvalId: string; action: "approved" | "rejected" | "timeout_rejected"; modifiedInput?: Record<string, unknown> }
   | { type: "finish"; agentName?: string }
   | { type: "error"; errorText: string }
-  | { type: "reconnecting"; attempt: number; delay_ms: number };
+  | { type: "reconnecting"; attempt: number; delay_ms: number }
+  | { type: "usage"; inputTokens: number; outputTokens: number };
 
 /**
  * Parse and validate a single SSE data payload.
@@ -100,6 +101,12 @@ export function parseSseEvent(raw: string): SseEvent | null {
         type,
         attempt: typeof e.attempt === "number" ? e.attempt : 1,
         delay_ms: typeof e.delay_ms === "number" ? e.delay_ms : 2000,
+      };
+    case "usage":
+      return {
+        type,
+        inputTokens: typeof e.inputTokens === "number" ? e.inputTokens : 0,
+        outputTokens: typeof e.outputTokens === "number" ? e.outputTokens : 0,
       };
     case "tool-approval-needed": {
       if (typeof e.approvalId !== "string" || typeof e.toolName !== "string") return null;

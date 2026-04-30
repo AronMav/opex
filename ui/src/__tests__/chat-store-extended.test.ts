@@ -275,6 +275,7 @@ describe("STATE-01: history to live transition", () => {
           isLlmReconnecting: false,
           selectedBranches: {},
           pendingMessage: null,
+          contextTokens: null,
         };
       } else {
         s.agents["TestAgent"].messageSource = { mode: "history", sessionId: "sess-history" };

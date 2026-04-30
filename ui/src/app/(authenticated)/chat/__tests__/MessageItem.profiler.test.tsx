@@ -110,6 +110,7 @@ describe("MessageItem re-render count (REF-05)", () => {
         isLlmReconnecting: false,
         selectedBranches: {},
         pendingMessage: null,
+        contextTokens: null,
       };
     });
 
