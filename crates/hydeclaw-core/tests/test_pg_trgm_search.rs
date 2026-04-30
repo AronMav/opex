@@ -62,3 +62,69 @@ async fn trigram_finds_russian_partial_match() {
 
     cleanup(&db, "TRG_TEST_RUS_").await;
 }
+
+#[tokio::test]
+async fn trigram_finds_cjk_substring() {
+    let db = pool().await;
+    let agent = format!("test-trg-cjk-{}", uuid::Uuid::new_v4());
+    cleanup(&db, "TRG_TEST_CJK_").await;
+
+    insert_chunk(&db, "TRG_TEST_CJK_東京タワー", &agent).await;
+    insert_chunk(&db, "TRG_TEST_CJK_大阪城", &agent).await;
+
+    let results = memory_queries::search_trigram(&db, "東京", 10, 0.2, &agent)
+        .await
+        .expect("search_trigram CJK");
+
+    let contents: Vec<String> = results.iter().map(|r| r.content.clone()).collect();
+    assert!(
+        contents.iter().any(|c| c.contains("東京タワー")),
+        "expected 東京タワー match for query 東京, got: {:?}", contents
+    );
+
+    cleanup(&db, "TRG_TEST_CJK_").await;
+}
+
+#[tokio::test]
+async fn trigram_handles_typo() {
+    let db = pool().await;
+    let agent = format!("test-trg-typo-{}", uuid::Uuid::new_v4());
+    cleanup(&db, "TRG_TEST_TYPO_").await;
+
+    insert_chunk(&db, "TRG_TEST_TYPO_пользователь", &agent).await;
+
+    // Опечатка: "пользоветель" вместо "пользователь" (одна буква отличается).
+    let results = memory_queries::search_trigram(&db, "пользоветель", 10, 0.4, &agent)
+        .await
+        .expect("search_trigram typo");
+
+    let contents: Vec<String> = results.iter().map(|r| r.content.clone()).collect();
+    assert!(
+        contents.iter().any(|c| c.contains("пользователь")),
+        "typo 'пользоветель' should still match 'пользователь', got: {:?}", contents
+    );
+
+    cleanup(&db, "TRG_TEST_TYPO_").await;
+}
+
+#[tokio::test]
+async fn trigram_threshold_filters_garbage() {
+    let db = pool().await;
+    let agent = format!("test-trg-thr-{}", uuid::Uuid::new_v4());
+    cleanup(&db, "TRG_TEST_THR_").await;
+
+    insert_chunk(&db, "TRG_TEST_THR_хороший контент про пингвинов", &agent).await;
+
+    // Single character query → должно вернуть пусто при threshold 0.3.
+    let results = memory_queries::search_trigram(&db, "x", 10, 0.3, &agent)
+        .await
+        .expect("search_trigram threshold");
+
+    assert!(
+        results.is_empty(),
+        "single-char query should not match anything at threshold 0.3, got {} results",
+        results.len()
+    );
+
+    cleanup(&db, "TRG_TEST_THR_").await;
+}
