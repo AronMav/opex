@@ -364,6 +364,8 @@ function DeleteMessageButton({ messageId }: { messageId: string }) {
 
 // ── Main MessageActions component ───────────────────────────────────────────
 
+const EMPTY_MESSAGE_SOURCE = { mode: "new-chat" as const };
+
 export function MessageActions({
   message,
   showReload,
@@ -372,7 +374,7 @@ export function MessageActions({
   showReload?: boolean;
 }) {
   const { t } = useTranslation();
-  const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? { mode: "new-chat" as const });
+  const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? EMPTY_MESSAGE_SOURCE);
 
   return (
     <div className="flex items-center gap-0.5 md:opacity-0 md:group-hover:opacity-100 transition-opacity">

@@ -39,6 +39,8 @@ export function clearDraft(agent: string) {
 
 // ── Composer ──────────────────────────────────────────────────────────────────
 
+const EMPTY_MESSAGE_SOURCE = { mode: "new-chat" as const };
+
 interface AttachmentEntry {
   id: string;
   name: string;
@@ -50,7 +52,7 @@ export function ChatComposer() {
   const { t } = useTranslation();
   const currentAgent = useChatStore((s) => s.currentAgent);
   const agents = useAuthStore((s) => s.agents);
-  const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? { mode: "new-chat" as const });
+  const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? EMPTY_MESSAGE_SOURCE);
   const connectionPhase = useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle");
   const isStreaming = isActivePhase(connectionPhase);
   const hasMessages = messageSource.mode !== "new-chat";
