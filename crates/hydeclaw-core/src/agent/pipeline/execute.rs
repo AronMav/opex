@@ -239,6 +239,15 @@ pub async fn execute<S: EventSink>(
             }
         };
 
+        // Emit Usage event BEFORE fire-and-forget DB record so a sink disconnect
+        // during the DB await doesn't lose the event for the UI context bar.
+        if let Some(ref usage) = response.usage {
+            let _ = sink.emit(PipelineEvent::Stream(StreamEvent::Usage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+            })).await;
+        }
+
         // Fire-and-forget usage recording (mirrors engine_sse.rs line 405)
         if let Some(ref usage) = response.usage {
             let db = engine.cfg().db.clone();
@@ -396,6 +405,20 @@ pub async fn execute<S: EventSink>(
             .tool_executor
             .get()
             .expect("tool_executor not initialized");
+
+        // Cancel check immediately before tool dispatch so a user pressing Stop
+        // during a long tool run (code_exec, heavy workspace_write) gets an
+        // ~1s response instead of waiting for the full tool to complete.
+        if cancel.is_cancelled() {
+            tracing::info!(session = %session_id, "request cancelled — before tool dispatch");
+            return Ok(ExecuteOutcome {
+                status: ExecuteStatus::Interrupted("cancel_token"),
+                final_text,
+                thinking_json: None,
+                messages_len_at_end: messages.len(),
+                final_parent_msg_id: last_msg_id,
+            });
+        }
 
         let persist_ctx = crate::agent::pipeline::parallel::ToolPersistCtx {
             agent_name: agent_name.as_str(),

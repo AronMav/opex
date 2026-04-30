@@ -178,6 +178,12 @@ export interface AgentState {
   isLlmReconnecting: boolean;
   /** Branch selection state: parentMessageId -> selectedChildId. */
   selectedBranches: Record<string, string>;
+  /**
+   * Single-slot message queue. When the user presses Shift+Enter while streaming,
+   * the message is stored here. A useEffect in ChatThread drains it when
+   * connectionPhase transitions to idle (clean success only).
+   */
+  pendingMessage: { content: string; attachments?: Array<any> } | null;
 }
 
 // ── Store interface ─────────────────────────────────────────────────────────
@@ -196,6 +202,9 @@ export interface ChatStore {
   clearError: () => void;
 
   sendMessage: (text: string, attachments?: Array<any>) => void;
+  interruptAndSend: (text: string, attachments?: Array<any>) => Promise<void>;
+  queueMessage: (text: string, attachments?: Array<any>) => void;
+  clearPending: (agent?: string) => void;
   stopStream: () => void;
   regenerate: () => void;
   regenerateFrom: (messageId: string) => void;
@@ -238,5 +247,6 @@ export function emptyAgentState(): AgentState {
     maxReconnectAttempts: 3,
     isLlmReconnecting: false,
     selectedBranches: {},
+    pendingMessage: null,
   };
 }

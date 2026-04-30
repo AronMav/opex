@@ -274,6 +274,7 @@ describe("STATE-01: history to live transition", () => {
           maxReconnectAttempts: 3,
           isLlmReconnecting: false,
           selectedBranches: {},
+          pendingMessage: null,
         };
       } else {
         s.agents["TestAgent"].messageSource = { mode: "history", sessionId: "sess-history" };

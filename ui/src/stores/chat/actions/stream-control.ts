@@ -20,7 +20,14 @@ export function createStreamActions(deps: ActionDeps) {
       const agent = store.currentAgent;
       const st = store.agents[agent] ?? emptyAgentState();
 
-      if (isActivePhase(st.connectionPhase)) return;
+      // If streaming is active, interrupt and send instead of silently dropping the message.
+      if (isActivePhase(st.connectionPhase)) {
+        // Fire-and-forget: interruptAndSend is async but sendMessage is sync by interface.
+        // We call it without awaiting — the caller can use interruptAndSend directly for
+        // explicit async control.
+        get().interruptAndSend(text, attachments);
+        return;
+      }
 
       let sessionId = st.activeSessionId;
       let seedMessages: ChatMessage[] = [];
@@ -34,6 +41,55 @@ export function createStreamActions(deps: ActionDeps) {
       }
 
       renderer.startStream(agent, sessionId, seedMessages, text, attachments);
+    },
+
+    interruptAndSend: async (text: string, attachments?: Array<any>) => {
+      const store = get();
+      const agent = store.currentAgent;
+      const st = store.agents[agent] ?? emptyAgentState();
+
+      // Abort the current stream (POST /abort + local teardown).
+      renderer.abortActiveStream(agent);
+
+      // Poll up to 1500ms for connectionPhase to reach idle.
+      const POLL_INTERVAL_MS = 100;
+      const MAX_WAIT_MS = 1500;
+      const deadline = Date.now() + MAX_WAIT_MS;
+      while (Date.now() < deadline) {
+        await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        const phase = get().agents[agent]?.connectionPhase;
+        if (!phase || phase === "idle") break;
+      }
+
+      // Send regardless of whether we reached idle (timeout safety).
+      const currentSt = get().agents[agent] ?? emptyAgentState();
+      const sessionId = currentSt.activeSessionId;
+      let seedMessages: ChatMessage[] = [];
+
+      if (currentSt.messageSource.mode === "history") {
+        seedMessages = getCachedHistoryMessages(sessionId, currentSt.selectedBranches);
+      } else if (currentSt.messageSource.mode === "live" && currentSt.messageSource.messages.length > 0) {
+        seedMessages = currentSt.messageSource.messages;
+      }
+
+      renderer.startStream(agent, sessionId, seedMessages, text, attachments);
+    },
+
+    queueMessage: (text: string, attachments?: Array<any>) => {
+      const agent = get().currentAgent;
+      set((draft: any) => {
+        if (!draft.agents[agent]) draft.agents[agent] = emptyAgentState();
+        draft.agents[agent].pendingMessage = { content: text, attachments };
+      });
+    },
+
+    clearPending: (agent?: string) => {
+      const targetAgent = agent ?? get().currentAgent;
+      set((draft: any) => {
+        if (draft.agents[targetAgent]) {
+          draft.agents[targetAgent].pendingMessage = null;
+        }
+      });
     },
 
     stopStream: () => {

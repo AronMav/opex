@@ -55,6 +55,7 @@ export function ChatComposer() {
   const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? EMPTY_MESSAGE_SOURCE);
   const connectionPhase = useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle");
   const isStreaming = isActivePhase(connectionPhase);
+  const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? null);
   const hasMessages = messageSource.mode !== "new-chat";
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -205,6 +206,7 @@ export function ChatComposer() {
     e.preventDefault();
     const text = textareaRef.current?.value?.trim() ?? "";
     if (!text && attachments.length === 0) return;
+    // sendMessage is now interrupt-aware: if streaming it calls interruptAndSend.
     useChatStore.getState().sendMessage(text, attachments);
     clearDraft(useChatStore.getState().currentAgent);
     setAttachments([]);
@@ -218,9 +220,28 @@ export function ChatComposer() {
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
+      // When streaming: form submit triggers sendMessage → interruptAndSend.
       formRef.current?.requestSubmit();
+    } else if (e.key === "Enter" && e.shiftKey) {
+      // Shift+Enter while idle: newline (default behavior, do nothing here).
+      // Shift+Enter while streaming: queue the message instead of sending.
+      const phase = useChatStore.getState().agents[useChatStore.getState().currentAgent]?.connectionPhase;
+      if (isActivePhase(phase)) {
+        e.preventDefault();
+        const text = textareaRef.current?.value?.trim() ?? "";
+        if (!text) return;
+        useChatStore.getState().queueMessage(text, attachments.length > 0 ? attachments : undefined);
+        clearDraft(useChatStore.getState().currentAgent);
+        setAttachments([]);
+        setHasInput(false);
+        if (textareaRef.current) {
+          textareaRef.current.value = "";
+          textareaRef.current.style.height = "auto";
+        }
+      }
+      // If idle: let default newline behavior proceed.
     }
-  }, []);
+  }, [attachments]);
 
   // ── Paste and drag-drop file attachment ──────────────────────────────────
 
@@ -315,6 +336,21 @@ export function ChatComposer() {
               </button>
             </div>
           ))}
+          {pendingMessage && (
+            <div className="flex items-center gap-2 px-4 pt-2 pb-1 text-xs text-muted-foreground border-b border-border/30">
+              <span className="flex-1 truncate">
+                В очереди: «{pendingMessage.content.slice(0, 60)}{pendingMessage.content.length > 60 ? "…" : ""}»
+              </span>
+              <button
+                type="button"
+                aria-label="Отменить очередь"
+                onClick={() => useChatStore.getState().clearPending()}
+                className="shrink-0 rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          )}
           <textarea
             ref={textareaRef}
             rows={1}
@@ -397,8 +433,9 @@ export function ChatComposer() {
               <Button
                 type="submit"
                 size="icon"
-                aria-label={t("chat.send")}
-                disabled={(!hasInput && attachments.length === 0) || isUploading || isStreaming}
+                aria-label={isStreaming ? "Отправить — прервёт текущую генерацию" : t("chat.send")}
+                title={isStreaming ? "Отправить — прервёт текущую генерацию" : undefined}
+                disabled={(!hasInput && attachments.length === 0) || isUploading}
                 className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-primary/30 bg-primary/15 text-primary hover:bg-primary/25 hover:border-primary/50 shadow-sm disabled:opacity-30 disabled:shadow-none group/send animate-in fade-in zoom-in-90"
               >
                 {isUploading

@@ -61,4 +61,7 @@ pub enum StreamEvent {
     Error(String),
     /// LLM deadline retry: model timed out and is being retried after `delay_ms`.
     Reconnecting { attempt: u32, delay_ms: u64 },
+    /// Token usage from the most recent LLM response. Emitted by pipeline/execute
+    /// after each LLM call so the UI can display a context window indicator.
+    Usage { input_tokens: u32, output_tokens: u32 },
 }
