@@ -58,6 +58,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatThread } from "./ChatThread";
+import { ContextBar } from "./ContextBar";
 import { CanvasPanel } from "./CanvasPanel";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
@@ -90,6 +91,13 @@ export default function ChatPage() {
   const viewingHistory = messageSource.mode === "history";
   const streamError = useChatStore((s) => s.agents[s.currentAgent]?.streamError ?? null);
   const isStreaming = isActivePhase(useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle"));
+  const contextTokens = useChatStore((s) => (s.agents[s.currentAgent] as any)?.contextTokens ?? null);
+  const modelOverride = useChatStore((s) => s.agents[s.currentAgent]?.modelOverride ?? null);
+  const { data: agentsData } = useAgents();
+  const currentAgentModel = useMemo(() => {
+    if (modelOverride) return modelOverride;
+    return agentsData?.find((a) => a.name === currentAgent)?.model ?? null;
+  }, [modelOverride, agentsData, currentAgent]);
 
   // Track which agents have been auto-restored (per-agent, not global boolean)
   // This preserves "new chat" state when switching A → B → A
@@ -706,6 +714,7 @@ export default function ChatPage() {
             <ParticipantBar sessionId={activeSessionId} currentAgent={currentAgent} />
             <ChatCanvasTabs />
           </div>
+          <ContextBar tokens={contextTokens} model={currentAgentModel} />
           {/* HISTORY / Return to live badge removed — confusing for users during agent switch */}
           {streamError && (
             <div className="ml-auto flex items-center gap-1 text-destructive/60">

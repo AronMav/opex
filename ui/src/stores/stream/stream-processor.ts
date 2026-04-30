@@ -349,6 +349,15 @@ export async function processSSEStream(
             break;
           }
 
+          case "usage": {
+            // Write inputTokens to contextTokens for the ContextBar indicator.
+            // outputTokens are not stored — they don't consume context window.
+            session.writeDraft((agentDraft: AgentState) => {
+              (agentDraft as any).contextTokens = event.inputTokens;
+            });
+            break;
+          }
+
           case "reconnecting": {
             session.writeDraft((agentDraft: AgentState) => {
               agentDraft.isLlmReconnecting = true;
