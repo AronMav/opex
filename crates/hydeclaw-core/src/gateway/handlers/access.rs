@@ -24,7 +24,7 @@ pub(crate) async fn api_access_pending(
     axum::extract::Path(agent): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let Some(guard) = auth.access_guards.read().await.get(&agent).cloned() else {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))).into_response();
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "access control not configured for this agent"}))).into_response();
     };
     let pairings = guard.pending_pairings_list().await;
     Json(json!({ "pending": pairings })).into_response()
@@ -36,7 +36,7 @@ pub(crate) async fn api_access_approve(
     axum::extract::Path((agent, code)): axum::extract::Path<(String, String)>,
 ) -> impl IntoResponse {
     let Some(guard) = auth.access_guards.read().await.get(&agent).cloned() else {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))).into_response();
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "access control not configured for this agent"}))).into_response();
     };
     let approver = guard.owner_id.as_deref().unwrap_or("ui");
     let (success, info) = guard.approve_pairing(&code, approver).await;
@@ -54,7 +54,7 @@ pub(crate) async fn api_access_reject(
     axum::extract::Path((agent, code)): axum::extract::Path<(String, String)>,
 ) -> impl IntoResponse {
     let Some(guard) = auth.access_guards.read().await.get(&agent).cloned() else {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))).into_response();
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "access control not configured for this agent"}))).into_response();
     };
     let removed = guard.reject_pairing(&code).await;
     if removed {
@@ -68,7 +68,7 @@ pub(crate) async fn api_access_list_users(
     axum::extract::Path(agent): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let Some(guard) = auth.access_guards.read().await.get(&agent).cloned() else {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))).into_response();
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "access control not configured for this agent"}))).into_response();
     };
     match crate::db::access::list_allowed_users(&guard.db, &agent).await {
         Ok(users) => {
@@ -88,7 +88,7 @@ pub(crate) async fn api_access_remove_user(
     axum::extract::Path((agent, user_id)): axum::extract::Path<(String, String)>,
 ) -> impl IntoResponse {
     let Some(guard) = auth.access_guards.read().await.get(&agent).cloned() else {
-        return (StatusCode::NOT_FOUND, Json(json!({"error": "agent not found"}))).into_response();
+        return (StatusCode::NOT_FOUND, Json(json!({"error": "access control not configured for this agent"}))).into_response();
     };
     match crate::db::access::remove_allowed_user(&guard.db, &agent, &user_id).await {
         Ok(deleted) => Json(json!({"ok": deleted})).into_response(),
