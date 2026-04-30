@@ -132,13 +132,18 @@ pub async fn execute_yaml_channel_action(
 
     // --- Save image/media to uploads/ for UI display ---
     // Phase 64 SEC-03: signed URL — key via HKDF from master, TTL from config.
-    let file_marker = if ca.action == "send_photo" {
+    let media_hint = match ca.action.as_str() {
+        "send_photo" => Some("image"),
+        "send_voice" | "send_audio" => Some("audio"),
+        _ => None,
+    };
+    let file_marker = if let Some(hint) = media_hint {
         let upload_key = ctx.tex.secrets.get_upload_hmac_key();
         let ttl_secs = ctx.cfg.app_config.uploads.signed_url_ttl_secs;
         match ph::save_binary_to_uploads(
             &ctx.cfg.workspace_dir,
             &data_bytes,
-            "image",
+            hint,
             &upload_key,
             ttl_secs,
         ).await {
@@ -147,7 +152,7 @@ pub async fn execute_yaml_channel_action(
                 Some(format!("{}{}", crate::agent::engine::FILE_PREFIX, meta))
             }
             Err(e) => {
-                tracing::warn!(error = %e, "failed to save image to uploads for UI");
+                tracing::warn!(error = %e, hint = %hint, "failed to save media to uploads for UI");
                 None
             }
         }
@@ -205,7 +210,7 @@ pub async fn execute_yaml_channel_action(
     // Return file marker (for UI) + channel result
     match (file_marker, channel_result) {
         (Some(marker), Some(ch_res)) => format!("{}\n{}", marker, ch_res),
-        (Some(marker), None) => format!("{}\nImage displayed inline. Do NOT use canvas or other tools to show it again.", marker),
+        (Some(marker), None) => format!("{}\nMedia delivered inline. Do NOT call this tool again or describe what was sent.", marker),
         (None, Some(ch_res)) => ch_res,
         (None, None) => "Error: no channel connection and failed to save media".to_string(),
     }
