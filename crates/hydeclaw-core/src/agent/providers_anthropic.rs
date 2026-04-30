@@ -3,6 +3,68 @@
 
 use super::{Deserialize, async_trait, Arc, SecretsManager, ModelOverride, Message, ToolDefinition, MessageRole, LlmProvider, LlmResponse, Result, mpsc, CallOptions};
 
+// ── Extended thinking support ─────────────────────────────────────────────────
+
+#[derive(Debug, PartialEq)]
+enum ThinkingMode {
+    /// Opus 4.7+ and Mythos: only adaptive supported (manual → 400 error).
+    AdaptiveOnly,
+    /// Opus 4.6, Sonnet 4.6: adaptive recommended, manual deprecated.
+    Adaptive,
+    /// All others: manual budget_tokens.
+    Manual,
+}
+
+fn thinking_mode(model: &str) -> ThinkingMode {
+    if model.contains("claude-opus-4-7") || model.contains("claude-mythos") {
+        ThinkingMode::AdaptiveOnly
+    } else if model.contains("claude-opus-4-6") || model.contains("claude-sonnet-4-6") {
+        ThinkingMode::Adaptive
+    } else {
+        ThinkingMode::Manual
+    }
+}
+
+/// Returns the thinking config JSON value, or None if thinking should be disabled.
+/// `effective_max_tokens` = `self.max_tokens.unwrap_or(8_192)`.
+fn thinking_config(level: u8, model: &str, effective_max_tokens: u32) -> Option<serde_json::Value> {
+    if level == 0 {
+        return None;
+    }
+    match thinking_mode(model) {
+        ThinkingMode::AdaptiveOnly | ThinkingMode::Adaptive => {
+            let effort = match level {
+                1 | 2 => "low",
+                3 => "medium",
+                _ => "high",
+            };
+            Some(serde_json::json!({
+                "type": "adaptive",
+                "effort": effort,
+                "display": "summarized"
+            }))
+        }
+        ThinkingMode::Manual => {
+            let budget: u32 = match level {
+                1 => 1_024,
+                2 => 4_096,
+                3 => 10_000,
+                4 => 20_000,
+                _ => 32_000,
+            };
+            let clamped = budget.min(effective_max_tokens.saturating_sub(1_000));
+            if clamped < 1_024 {
+                return None;
+            }
+            Some(serde_json::json!({
+                "type": "enabled",
+                "budget_tokens": clamped,
+                "display": "summarized"
+            }))
+        }
+    }
+}
+
 // ── Anthropic Messages API Provider ──────────────────────────────────────────
 
 pub struct AnthropicProvider {
@@ -688,5 +750,78 @@ mod tests {
         assert_eq!(content[1]["type"], "tool_use");
         assert_eq!(content[1]["id"], "call_1");
         assert_eq!(content[1]["name"], "my_tool");
+    }
+}
+
+#[cfg(test)]
+mod thinking_config_tests {
+    use super::*;
+
+    #[test]
+    fn level_zero_returns_none() {
+        assert!(thinking_config(0, "claude-opus-4-7", 8_192).is_none());
+    }
+
+    #[test]
+    fn opus47_level1_adaptive_low() {
+        let cfg = thinking_config(1, "claude-opus-4-7", 8_192).unwrap();
+        assert_eq!(cfg["type"], "adaptive");
+        assert_eq!(cfg["effort"], "low");
+        assert_eq!(cfg["display"], "summarized");
+    }
+
+    #[test]
+    fn opus47_level3_adaptive_medium() {
+        let cfg = thinking_config(3, "claude-opus-4-7", 8_192).unwrap();
+        assert_eq!(cfg["type"], "adaptive");
+        assert_eq!(cfg["effort"], "medium");
+        assert_eq!(cfg["display"], "summarized");
+    }
+
+    #[test]
+    fn opus46_level5_adaptive_high() {
+        let cfg = thinking_config(5, "claude-opus-4-6", 16_000).unwrap();
+        assert_eq!(cfg["type"], "adaptive");
+        assert_eq!(cfg["effort"], "high");
+        assert_eq!(cfg["display"], "summarized");
+    }
+
+    #[test]
+    fn sonnet37_level3_manual_exact_budget() {
+        let cfg = thinking_config(3, "claude-sonnet-3-7", 16_000).unwrap();
+        assert_eq!(cfg["type"], "enabled");
+        assert_eq!(cfg["budget_tokens"], 10_000_u64);
+        assert_eq!(cfg["display"], "summarized");
+    }
+
+    #[test]
+    fn sonnet37_level3_budget_clamped() {
+        let cfg = thinking_config(3, "claude-sonnet-3-7", 8_192).unwrap();
+        assert_eq!(cfg["budget_tokens"], 7_192_u64);
+    }
+
+    #[test]
+    fn tight_max_tokens_returns_none() {
+        assert!(thinking_config(5, "claude-haiku-4-5", 2_000).is_none());
+    }
+
+    #[test]
+    fn thinking_mode_opus47_is_adaptive_only() {
+        assert!(matches!(thinking_mode("claude-opus-4-7"), ThinkingMode::AdaptiveOnly));
+    }
+
+    #[test]
+    fn thinking_mode_sonnet46_is_adaptive() {
+        assert!(matches!(thinking_mode("claude-sonnet-4-6"), ThinkingMode::Adaptive));
+    }
+
+    #[test]
+    fn thinking_mode_sonnet37_is_manual() {
+        assert!(matches!(thinking_mode("claude-sonnet-3-7"), ThinkingMode::Manual));
+    }
+
+    #[test]
+    fn thinking_mode_haiku45_is_manual() {
+        assert!(matches!(thinking_mode("claude-haiku-4-5"), ThinkingMode::Manual));
     }
 }
