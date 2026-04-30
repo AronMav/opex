@@ -129,7 +129,7 @@ pub async fn compact_if_needed(
     ];
 
     let empty_tools: Vec<ToolDefinition> = vec![];
-    let facts_response = active_provider.chat(&extraction_prompt, &empty_tools).await?;
+    let facts_response = active_provider.chat(&extraction_prompt, &empty_tools, crate::agent::providers::CallOptions::default()).await?;
     let extracted_facts: Vec<String> =
         serde_json::from_str(&facts_response.content).unwrap_or_default();
 
@@ -164,7 +164,7 @@ pub async fn compact_if_needed(
         },
     ];
 
-    let summary_response = active_provider.chat(&summary_prompt, &empty_tools).await?;
+    let summary_response = active_provider.chat(&summary_prompt, &empty_tools, crate::agent::providers::CallOptions::default()).await?;
 
     // Step 3: Rebuild messages — system + summary + preserved recent
     let preserved: Vec<Message> = messages[end..].to_vec();
@@ -277,7 +277,7 @@ mod tests {
 
     #[async_trait]
     impl LlmProvider for StaticProvider {
-        async fn chat(&self, _msgs: &[Message], _tools: &[ToolDefinition]) -> anyhow::Result<LlmResponse> {
+        async fn chat(&self, _msgs: &[Message], _tools: &[ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
             Ok(LlmResponse {
                 content: self.0.clone(),
                 tool_calls: vec![],
@@ -291,8 +291,8 @@ mod tests {
                 thinking_blocks: vec![],
             })
         }
-        async fn chat_stream(&self, msgs: &[Message], tools: &[ToolDefinition], _tx: mpsc::UnboundedSender<String>) -> anyhow::Result<LlmResponse> {
-            self.chat(msgs, tools).await
+        async fn chat_stream(&self, msgs: &[Message], tools: &[ToolDefinition], _tx: mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            self.chat(msgs, tools, _opts).await
         }
         fn name(&self) -> &str { "static" }
     }

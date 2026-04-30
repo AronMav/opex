@@ -543,6 +543,7 @@ mod tests {
             &self,
             _messages: &[hydeclaw_types::Message],
             _tools: &[hydeclaw_types::ToolDefinition],
+            _opts: crate::agent::providers::CallOptions,
         ) -> anyhow::Result<hydeclaw_types::LlmResponse> {
             panic!("not called in Failed/Interrupted path")
         }

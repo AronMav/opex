@@ -416,7 +416,7 @@ impl AgentEngine {
                             ).await.ok();
                         });
                     }
-                match self.cfg().provider.chat(&messages, &[]).await {
+                match self.cfg().provider.chat(&messages, &[], crate::agent::providers::CallOptions::default()).await {
                     Ok(forced) => {
                         final_response = strip_thinking(&forced.content);
                     }

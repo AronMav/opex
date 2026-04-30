@@ -136,7 +136,7 @@ async fn extract_and_save_inner(
 
     let response = tokio::time::timeout(
         EXTRACTION_TIMEOUT,
-        provider.chat(&messages, &[]),
+        provider.chat(&messages, &[], crate::agent::providers::CallOptions::default()),
     )
     .await
     .map_err(|_| anyhow::anyhow!("extraction LLM call timed out"))??;
@@ -247,7 +247,7 @@ async fn update_rolling_summary(
     // Retry up to 2 times on failure (LLM calls can be flaky)
     let mut response = None;
     for attempt in 0..2 {
-        match tokio::time::timeout(EXTRACTION_TIMEOUT, provider.chat(&messages, &[])).await {
+        match tokio::time::timeout(EXTRACTION_TIMEOUT, provider.chat(&messages, &[], crate::agent::providers::CallOptions::default())).await {
             Ok(Ok(r)) => { response = Some(r); break; }
             Ok(Err(e)) => {
                 tracing::warn!(attempt, error = %e, "rolling summary LLM call failed, retrying");
@@ -434,7 +434,7 @@ async fn resolve_conflict(
 
     let response = match tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        provider.chat(&messages, &[]),
+        provider.chat(&messages, &[], crate::agent::providers::CallOptions::default()),
     ).await {
         Ok(Ok(r)) => r,
         _ => {

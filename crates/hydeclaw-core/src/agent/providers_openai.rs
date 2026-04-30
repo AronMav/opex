@@ -226,6 +226,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
+        _opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         let effective_model = self.model.effective();
         let mut body = serde_json::json!({
@@ -422,6 +423,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         chunk_tx: mpsc::UnboundedSender<String>,
+        _opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         let effective_model = self.model.effective();
         let mut body = serde_json::json!({

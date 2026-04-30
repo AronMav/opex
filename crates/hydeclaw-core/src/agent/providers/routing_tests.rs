@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use hydeclaw_types::{LlmResponse, Message, ToolDefinition};
 use tokio::sync::mpsc;
 
-use super::{LlmCallError, LlmProvider, RoutingProvider};
+use super::{CallOptions, LlmCallError, LlmProvider, RoutingProvider};
 
 // ── Mock providers ───────────────────────────────────────────────────────────
 
@@ -24,6 +24,7 @@ impl LlmProvider for MockFailoverProvider {
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         Err(anyhow::Error::new(LlmCallError::Server5xx {
             provider: "mock-failover".into(),
@@ -36,6 +37,7 @@ impl LlmProvider for MockFailoverProvider {
         _messages: &[Message],
         _tools: &[ToolDefinition],
         _chunk_tx: mpsc::UnboundedSender<String>,
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         Err(anyhow::Error::new(LlmCallError::Server5xx {
             provider: "mock-failover".into(),
@@ -57,6 +59,7 @@ impl LlmProvider for MockUserCancelProvider {
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         Err(anyhow::Error::new(LlmCallError::UserCancelled {
             partial_state: crate::agent::providers::error::PartialState::Text("partial-before-cancel".into()),
@@ -68,8 +71,9 @@ impl LlmProvider for MockUserCancelProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         _chunk_tx: mpsc::UnboundedSender<String>,
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
-        self.chat(messages, tools).await
+        self.chat(messages, tools, _opts).await
     }
 
     fn name(&self) -> &str {
@@ -86,6 +90,7 @@ impl LlmProvider for MockAuthErrorProvider {
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         Err(anyhow::Error::new(LlmCallError::AuthError {
             provider: "mock-auth".into(),
@@ -98,8 +103,9 @@ impl LlmProvider for MockAuthErrorProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         _chunk_tx: mpsc::UnboundedSender<String>,
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
-        self.chat(messages, tools).await
+        self.chat(messages, tools, _opts).await
     }
 
     fn name(&self) -> &str {
@@ -119,6 +125,7 @@ impl LlmProvider for MockSuccessProvider {
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         self.called.store(true, Ordering::SeqCst);
         Ok(LlmResponse {
@@ -140,8 +147,9 @@ impl LlmProvider for MockSuccessProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         _chunk_tx: mpsc::UnboundedSender<String>,
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
-        self.chat(messages, tools).await
+        self.chat(messages, tools, _opts).await
     }
 
     fn name(&self) -> &str {
@@ -166,7 +174,7 @@ async fn routing_fails_over_on_server_error() {
         ("fallback:mock-success".into(), fallback, 60),
     ]);
 
-    let resp = routing.chat(&[], &[]).await.expect("failover should succeed");
+    let resp = routing.chat(&[], &[], CallOptions::default()).await.expect("failover should succeed");
     assert_eq!(resp.content, "from-fallback");
     assert!(called.load(Ordering::SeqCst), "fallback must have been called");
 }
@@ -185,6 +193,7 @@ async fn routing_does_not_fail_over_on_inactivity_timeout() {
             &self,
             _messages: &[Message],
             _tools: &[ToolDefinition],
+            _opts: CallOptions,
         ) -> anyhow::Result<LlmResponse> {
             Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
                 provider: "mock-inactivity".into(),
@@ -197,8 +206,9 @@ async fn routing_does_not_fail_over_on_inactivity_timeout() {
             messages: &[Message],
             tools: &[ToolDefinition],
             _chunk_tx: mpsc::UnboundedSender<String>,
+            _opts: CallOptions,
         ) -> anyhow::Result<LlmResponse> {
-            self.chat(messages, tools).await
+            self.chat(messages, tools, _opts).await
         }
         fn name(&self) -> &str { "mock-inactivity" }
     }
@@ -215,7 +225,7 @@ async fn routing_does_not_fail_over_on_inactivity_timeout() {
     ]);
 
     let err = routing
-        .chat(&[], &[])
+        .chat(&[], &[], CallOptions::default())
         .await
         .expect_err("InactivityTimeout must bubble up after R1, not fail over");
     let typed = err.downcast_ref::<LlmCallError>().expect("error must be LlmCallError");
@@ -244,7 +254,7 @@ async fn routing_does_not_fail_over_on_user_cancel() {
     ]);
 
     let err = routing
-        .chat(&[], &[])
+        .chat(&[], &[], CallOptions::default())
         .await
         .expect_err("user-cancelled must bubble up, not fail over");
     let typed = err
@@ -280,7 +290,7 @@ async fn routing_does_not_fail_over_on_auth_error() {
     ]);
 
     let err = routing
-        .chat(&[], &[])
+        .chat(&[], &[], CallOptions::default())
         .await
         .expect_err("auth error must bubble up, not fail over");
     let typed = err
@@ -315,6 +325,7 @@ async fn routing_bumps_timeout_counter_on_inactivity_but_does_not_fail_over() {
             &self,
             _messages: &[Message],
             _tools: &[ToolDefinition],
+            _opts: CallOptions,
         ) -> anyhow::Result<LlmResponse> {
             Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
                 provider: "mock-inactivity-unique-t22".into(),
@@ -327,8 +338,9 @@ async fn routing_bumps_timeout_counter_on_inactivity_but_does_not_fail_over() {
             messages: &[Message],
             tools: &[ToolDefinition],
             _chunk_tx: mpsc::UnboundedSender<String>,
+            _opts: CallOptions,
         ) -> anyhow::Result<LlmResponse> {
-            self.chat(messages, tools).await
+            self.chat(messages, tools, _opts).await
         }
         fn name(&self) -> &str {
             "mock-inactivity-unique-t22"
@@ -357,7 +369,7 @@ async fn routing_bumps_timeout_counter_on_inactivity_but_does_not_fail_over() {
 
     // After R1: InactivityTimeout bubbles up, fallback is NOT called.
     let err = routing
-        .chat(&[], &[])
+        .chat(&[], &[], CallOptions::default())
         .await
         .expect_err("InactivityTimeout must bubble up after R1");
     let typed = err.downcast_ref::<LlmCallError>().expect("must be LlmCallError");
@@ -407,7 +419,7 @@ async fn routing_fails_over_on_streaming_server_error() {
 
     let (tx, _rx) = mpsc::unbounded_channel::<String>();
     let resp = routing
-        .chat_stream(&[], &[], tx)
+        .chat_stream(&[], &[], tx, CallOptions::default())
         .await
         .expect("streaming failover should succeed");
     assert_eq!(resp.content, "streamed-fallback");
@@ -430,6 +442,7 @@ impl LlmProvider for CountingFailoverProvider {
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Err(anyhow::Error::new(LlmCallError::Server5xx {
@@ -443,8 +456,9 @@ impl LlmProvider for CountingFailoverProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         _chunk_tx: mpsc::UnboundedSender<String>,
+        _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
-        self.chat(messages, tools).await
+        self.chat(messages, tools, _opts).await
     }
 
     fn name(&self) -> &str {
@@ -476,7 +490,7 @@ async fn routing_respects_max_failover_attempts_cap() {
     );
 
     let err = routing
-        .chat(&[], &[])
+        .chat(&[], &[], CallOptions::default())
         .await
         .expect_err("all routes failing → error");
     assert!(
@@ -508,7 +522,7 @@ async fn routing_default_cap_allows_full_chain_when_large() {
         ("rC:no-cap".into(), make("no-cap-2"), 60),
         ("rD:no-cap".into(), make("no-cap-3"), 60),
     ]);
-    let _ = routing.chat(&[], &[]).await;
+    let _ = routing.chat(&[], &[], CallOptions::default()).await;
     assert_eq!(
         calls.load(Ordering::SeqCst),
         4,
@@ -529,7 +543,7 @@ async fn routing_with_zero_routes_returns_error_not_panic() {
     let routing = RoutingProvider::new_for_test(vec![]);
 
     let err = routing
-        .chat(&[], &[])
+        .chat(&[], &[], CallOptions::default())
         .await
         .expect_err("zero-route chat must return an error, not panic");
     let msg = err.to_string();
@@ -546,7 +560,7 @@ async fn routing_with_zero_routes_streaming_returns_error_not_panic() {
 
     let (tx, _rx) = mpsc::unbounded_channel::<String>();
     let err = routing
-        .chat_stream(&[], &[], tx)
+        .chat_stream(&[], &[], tx, CallOptions::default())
         .await
         .expect_err("zero-route chat_stream must return an error, not panic");
     let msg = err.to_string();
@@ -563,7 +577,7 @@ async fn unconfigured_provider_returns_classified_auth_error() {
     use super::UnconfiguredProvider;
     let p = UnconfiguredProvider::new("no usable routes");
 
-    let err = p.chat(&[], &[]).await.expect_err("unconfigured must error");
+    let err = p.chat(&[], &[], CallOptions::default()).await.expect_err("unconfigured must error");
     let typed = err
         .downcast_ref::<LlmCallError>()
         .expect("must be LlmCallError");
@@ -577,7 +591,7 @@ async fn unconfigured_provider_returns_classified_auth_error() {
 
     let (tx, _rx) = mpsc::unbounded_channel::<String>();
     let err_stream = p
-        .chat_stream(&[], &[], tx)
+        .chat_stream(&[], &[], tx, CallOptions::default())
         .await
         .expect_err("unconfigured streaming must error");
     let typed_stream = err_stream

@@ -1,7 +1,7 @@
 //! Anthropic Messages API provider —
 //! extracted from providers.rs for readability.
 
-use super::{Deserialize, async_trait, Arc, SecretsManager, ModelOverride, Message, ToolDefinition, MessageRole, LlmProvider, LlmResponse, Result, mpsc};
+use super::{Deserialize, async_trait, Arc, SecretsManager, ModelOverride, Message, ToolDefinition, MessageRole, LlmProvider, LlmResponse, Result, mpsc, CallOptions};
 
 // ── Anthropic Messages API Provider ──────────────────────────────────────────
 
@@ -334,7 +334,9 @@ impl LlmProvider for AnthropicProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
+        opts: CallOptions,
     ) -> Result<LlmResponse> {
+        let _ = opts;  // forwarded to build_request_body in Task 9
         let (_, body) = self.build_request_body(messages, tools);
         let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
 
@@ -389,9 +391,10 @@ impl LlmProvider for AnthropicProvider {
         messages: &[Message],
         tools: &[ToolDefinition],
         chunk_tx: mpsc::UnboundedSender<String>,
+        opts: CallOptions,
     ) -> Result<LlmResponse> {
         if !tools.is_empty() {
-            let response = self.chat(messages, tools).await?;
+            let response = self.chat(messages, tools, opts).await?;
             if response.tool_calls.is_empty() {
                 let filtered = crate::agent::thinking::strip_thinking(&response.content);
                 if !filtered.is_empty() {

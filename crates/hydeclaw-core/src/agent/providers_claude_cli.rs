@@ -88,6 +88,7 @@ impl LlmProvider for CliLlmProvider {
         &self,
         messages: &[Message],
         _tools: &[ToolDefinition],
+        _opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         let (prompt, system) = format_messages_for_cli(messages);
 

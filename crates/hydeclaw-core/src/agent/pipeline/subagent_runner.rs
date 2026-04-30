@@ -129,7 +129,7 @@ pub async fn run_subagent_with_session(
                 tracing::warn!(iteration, "subagent deadline reached, returning partial result");
                 // Use streaming client for the forced-finish call too — no total-body timeout.
                 let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-                let forced = cfg.provider.chat_stream(&messages, &[], tx).await?;
+                let forced = cfg.provider.chat_stream(&messages, &[], tx, crate::agent::providers::CallOptions::default()).await?;
                 return Ok(extract_result_text(&forced.content, &messages));
             }
 
@@ -147,9 +147,10 @@ pub async fn run_subagent_with_session(
                 &available_tools,
                 chunk_tx,
                 executor,
+                crate::agent::providers::CallOptions::default(),
             ).await?
         } else {
-            cfg.provider.chat_stream(&messages, &available_tools, chunk_tx).await?
+            cfg.provider.chat_stream(&messages, &available_tools, chunk_tx, crate::agent::providers::CallOptions::default()).await?
         };
 
         if response.tool_calls.is_empty() {
@@ -241,7 +242,7 @@ pub async fn run_subagent_with_session(
         }
 
         if loop_broken || iteration == effective_max - 1 {
-            let forced = cfg.provider.chat(&messages, &[]).await?;
+            let forced = cfg.provider.chat(&messages, &[], crate::agent::providers::CallOptions::default()).await?;
             return Ok(extract_result_text(&forced.content, &messages));
         }
     }
