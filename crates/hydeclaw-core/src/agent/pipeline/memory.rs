@@ -4,6 +4,22 @@
 
 use crate::agent::memory_service::MemoryService;
 
+pub(crate) const MEMORY_CHUNK_MAX_CHARS: usize = 6_000;
+
+/// Truncate a memory chunk to fit context budget.
+///
+/// Excalidraw docs are replaced with a short placeholder; other content
+/// is hard-capped at `MEMORY_CHUNK_MAX_CHARS` by Unicode scalar boundary.
+pub(crate) fn truncate_chunk_content(content: &str) -> &str {
+    if content.contains("excalidraw-plugin: parsed")
+        || content.contains("== EXCALIDRAW VIEW ==")
+    {
+        return "[Excalidraw diagram — binary content, skipped]";
+    }
+    let limit = content.floor_char_boundary(MEMORY_CHUNK_MAX_CHARS.min(content.len()));
+    &content[..limit]
+}
+
 // ── MemoryContext ────────────────────────────────────────────────────────────
 
 /// Result of L0 pinned chunk loading.
@@ -335,5 +351,44 @@ pub async fn handle_memory_update(
             action, section, content
         ),
         Err(e) => format!("Error writing MEMORY.md: {}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_chunk_content;
+
+    #[test]
+    fn excalidraw_marker_replaced() {
+        let big = format!("excalidraw-plugin: parsed\n{}", "x".repeat(100_000));
+        let out = truncate_chunk_content(&big);
+        assert_eq!(out, "[Excalidraw diagram — binary content, skipped]");
+    }
+
+    #[test]
+    fn excalidraw_view_marker_replaced() {
+        let big = "== EXCALIDRAW VIEW ==\nsome data";
+        let out = truncate_chunk_content(big);
+        assert_eq!(out, "[Excalidraw diagram — binary content, skipped]");
+    }
+
+    #[test]
+    fn long_text_truncated_to_limit() {
+        let long = "a".repeat(10_000);
+        let out = truncate_chunk_content(&long);
+        assert_eq!(out.len(), super::MEMORY_CHUNK_MAX_CHARS);
+    }
+
+    #[test]
+    fn short_text_unchanged() {
+        let short = "hello world";
+        assert_eq!(truncate_chunk_content(short), short);
+    }
+
+    #[test]
+    fn exactly_at_limit_unchanged() {
+        let at_limit = "b".repeat(super::MEMORY_CHUNK_MAX_CHARS);
+        let out = truncate_chunk_content(&at_limit);
+        assert_eq!(out.len(), super::MEMORY_CHUNK_MAX_CHARS);
     }
 }
