@@ -25,10 +25,21 @@ pub mod evolution;
 /// The instructions body (after the second `---`) is injected into the system prompt
 /// when a skill is matched. `tools_required` tools are prioritized, but core tools
 /// (memory, workspace, message, shell) are always available.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::path::Path;
 use tokio::fs;
+
+// ── SkillState ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillState {
+    #[default]
+    Active,
+    Stale,
+    Archived,
+}
 
 // ── Frontmatter ───────────────────────────────────────────────────────────────
 
@@ -44,6 +55,10 @@ pub struct SkillFrontmatter {
     /// Higher priority wins when multiple skills match. Default: 0.
     #[serde(default)]
     pub priority: i32,
+    #[serde(default)]
+    pub last_used_at: Option<String>,
+    #[serde(default)]
+    pub state: SkillState,
 }
 
 // ── SkillDef ──────────────────────────────────────────────────────────────────
@@ -260,6 +275,97 @@ pub async fn list_skills(workspace_dir: &str) -> Vec<String> {
     names
 }
 
+/// Atomically updates `last_used_at` in skill frontmatter.
+/// Skips write if existing value is fresher than `min_age`.
+/// Errors are logged — never panics.
+pub async fn update_skill_last_used_if_stale(
+    path: &str,
+    now_iso: &str,
+    min_age: chrono::Duration,
+) {
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!(path, error = %e, "update_skill_last_used: read failed");
+            return;
+        }
+    };
+
+    // Check existing last_used_at
+    if let Some(skill) = SkillDef::parse(&content) {
+        if let Some(existing) = &skill.meta.last_used_at {
+            if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(existing) {
+                let age = chrono::Utc::now()
+                    .signed_duration_since(ts.with_timezone(&chrono::Utc));
+                if age < min_age {
+                    return;
+                }
+            }
+        }
+    }
+
+    // Find frontmatter boundary (second ---)
+    let fm_close = content[3..].find("\n---").map(|i| i + 4);
+    let Some(fm_end) = fm_close else {
+        tracing::debug!(path, "update_skill_last_used: no frontmatter close marker");
+        return;
+    };
+    let frontmatter = &content[..fm_end];
+    let trailing_nl = if content.ends_with('\n') { "\n" } else { "" };
+
+    let updated = if frontmatter.contains("last_used_at:") {
+        // Replace existing line — only inside frontmatter
+        let mut in_fm = true;
+        let mut close_seen = false;
+        content
+            .lines()
+            .map(|line| {
+                if !close_seen && line.trim() == "---" {
+                    // first --- opens frontmatter, second --- closes it
+                    if in_fm {
+                        // skip the opening ---
+                        in_fm = false;
+                    } else {
+                        close_seen = true;
+                    }
+                    return line.to_string();
+                }
+                if !close_seen && line.trim_start().starts_with("last_used_at:") {
+                    return format!("last_used_at: \"{}\"", now_iso);
+                }
+                line.to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + trailing_nl
+    } else {
+        // Insert before closing --- of frontmatter
+        let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+        let close = lines.iter().enumerate().skip(1).find(|(_, l)| l.trim() == "---");
+        if let Some((pos, _)) = close {
+            lines.insert(pos, format!("last_used_at: \"{}\"", now_iso));
+        } else {
+            tracing::debug!(path, "update_skill_last_used: no frontmatter close marker");
+            return;
+        }
+        lines.join("\n") + trailing_nl
+    };
+
+    // Atomic write: tmp → rename
+    let tmp_path = format!("{path}.tmp");
+    match tokio::fs::write(&tmp_path, &updated).await {
+        Ok(_) => {
+            if let Err(e) = tokio::fs::rename(&tmp_path, path).await {
+                tracing::warn!(path, error = %e, "update_skill_last_used: rename failed");
+                let _ = tokio::fs::remove_file(&tmp_path).await;
+            }
+        }
+        Err(e) => {
+            tracing::debug!(path, error = %e, "update_skill_last_used: write failed");
+        }
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -324,6 +430,8 @@ mod tests {
                 triggers: vec![],
                 tools_required: required.iter().map(|s| s.to_string()).collect(),
                 priority: 0,
+                last_used_at: None,
+                state: SkillState::Active,
             },
             instructions: String::new(),
         }
@@ -394,6 +502,67 @@ mod tests {
         let kept = filter_skills_by_available_tools(skills, &set_of(&["a"]));
         let names: Vec<&str> = kept.iter().map(|s| s.meta.name.as_str()).collect();
         assert_eq!(names, vec!["high", "mid", "low"]);
+    }
+
+    #[test]
+    fn skill_state_default_is_active() {
+        let s: SkillState = Default::default();
+        assert_eq!(s, SkillState::Active);
+    }
+
+    #[test]
+    fn frontmatter_without_state_parses_as_active() {
+        let content = "---\nname: test\n---\n\nBody.";
+        let skill = SkillDef::parse(content).unwrap();
+        assert_eq!(skill.meta.state, SkillState::Active);
+        assert!(skill.meta.last_used_at.is_none());
+    }
+
+    #[test]
+    fn frontmatter_with_state_archived_parses() {
+        let content = "---\nname: test\nstate: archived\nlast_used_at: \"2026-01-01T00:00:00Z\"\n---\n\nBody.";
+        let skill = SkillDef::parse(content).unwrap();
+        assert_eq!(skill.meta.state, SkillState::Archived);
+        assert!(skill.meta.last_used_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_skill_last_used_writes_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-skill.md");
+        std::fs::write(&path, "---\nname: test\n---\n\nBody.").unwrap();
+
+        update_skill_last_used_if_stale(
+            path.to_str().unwrap(),
+            "2026-05-01T12:00:00Z",
+            chrono::Duration::hours(1),
+        ).await;
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("last_used_at:"), "должно появиться поле");
+        assert!(content.contains("2026-05-01T12:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn update_skill_last_used_skips_if_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fresh-skill.md");
+        let recent = (chrono::Utc::now() - chrono::Duration::minutes(10))
+            .to_rfc3339();
+        std::fs::write(
+            &path,
+            format!("---\nname: test\nlast_used_at: \"{recent}\"\n---\n\nBody."),
+        ).unwrap();
+        let mtime_before = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        update_skill_last_used_if_stale(
+            path.to_str().unwrap(),
+            "2026-05-01T13:00:00Z",
+            chrono::Duration::hours(1),
+        ).await;
+
+        let mtime_after = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(mtime_before, mtime_after, "файл не должен быть перезаписан");
     }
 
     /// Audit: every `tools_required` entry across workspace/ and config/
