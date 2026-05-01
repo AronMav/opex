@@ -293,6 +293,13 @@ pub async fn search_trigram(
     .await
     .context("trigram search query failed")?;
 
+    // Reset GUC so the connection returns to the pool with a clean session state.
+    // set_limit() is session-scoped, NOT transaction-scoped — without RESET it leaks.
+    sqlx::query("RESET pg_trgm.similarity_threshold")
+        .execute(&mut *tx)
+        .await
+        .context("reset similarity_threshold")?;
+
     tx.commit().await.context("commit trigram tx")?;
 
     Ok(rows.iter().map(row_to_memory_result).collect())

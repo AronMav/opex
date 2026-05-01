@@ -1,21 +1,22 @@
 //! Integration tests for pg_trgm-based search.
-//! Requires DATABASE_URL pointing at a Postgres with pg_trgm extension.
+//! Each test gets its own fresh migrated DB via `#[sqlx::test]`.
+//! Gated to Linux x86_64 because testcontainers requires Docker.
+//!
+//! NOTE: `search_hybrid` 3-way RRF coverage (review fix C4) is intentionally
+//! NOT included here. It would require importing `hydeclaw_core::memory::{MemoryStore,
+//! EmbeddingService}`, but the `memory` module is not part of the lib facade
+//! (see `crates/hydeclaw-core/src/lib.rs` — surface is capped at ~10 modules
+//! to prevent the facade from becoming a parallel module tree). Adding it would
+//! exceed scope of this review-fix and was explicitly out-of-bounds per the
+//! "do NOT introduce new public surface" constraint. C4 is tracked as a
+//! follow-up: either expose `memory` via a leaf-only facade, or test
+//! `search_hybrid` indirectly via the chat HTTP API in a higher-level
+//! integration test.
 
-use hydeclaw_core::db::memory_queries;
+#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+
+use hydeclaw_db::memory_queries;
 use sqlx::PgPool;
-
-async fn pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for integration tests");
-    PgPool::connect(&url).await.expect("connect")
-}
-
-async fn cleanup(db: &PgPool, prefix: &str) {
-    sqlx::query("DELETE FROM memory_chunks WHERE content LIKE $1")
-        .bind(format!("{}%", prefix))
-        .execute(db)
-        .await
-        .ok();
-}
 
 async fn insert_chunk(db: &PgPool, content: &str, agent_id: &str) -> String {
     let id = uuid::Uuid::new_v4().to_string();
@@ -32,11 +33,9 @@ async fn insert_chunk(db: &PgPool, content: &str, agent_id: &str) -> String {
     id
 }
 
-#[tokio::test]
-async fn trigram_finds_russian_partial_match() {
-    let db = pool().await;
+#[sqlx::test(migrations = "../../migrations")]
+async fn trigram_finds_russian_partial_match(db: PgPool) {
     let agent = format!("test-trg-rus-{}", uuid::Uuid::new_v4());
-    cleanup(&db, "TRG_TEST_RUS_").await;
 
     insert_chunk(&db, "TRG_TEST_RUS_пользователь", &agent).await;
     insert_chunk(&db, "TRG_TEST_RUS_пользователи", &agent).await;
@@ -60,14 +59,18 @@ async fn trigram_finds_russian_partial_match() {
         "user_account must NOT match query 'пользоват', got: {:?}", contents
     );
 
-    cleanup(&db, "TRG_TEST_RUS_").await;
+    // Cleanup is automatic — sqlx::test drops the per-test DB.
+    // Explicit DELETE-by-agent_id kept as belt-and-braces for parallel safety.
+    sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
+        .bind(&agent)
+        .execute(&db)
+        .await
+        .ok();
 }
 
-#[tokio::test]
-async fn trigram_finds_cjk_substring() {
-    let db = pool().await;
+#[sqlx::test(migrations = "../../migrations")]
+async fn trigram_finds_cjk_substring(db: PgPool) {
     let agent = format!("test-trg-cjk-{}", uuid::Uuid::new_v4());
-    cleanup(&db, "TRG_TEST_CJK_").await;
 
     insert_chunk(&db, "TRG_TEST_CJK_東京タワー", &agent).await;
     insert_chunk(&db, "TRG_TEST_CJK_大阪城", &agent).await;
@@ -82,18 +85,16 @@ async fn trigram_finds_cjk_substring() {
         "expected 東京タワー match for query 東京, got: {:?}", contents
     );
 
-    cleanup(&db, "TRG_TEST_CJK_").await;
+    sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
+        .bind(&agent).execute(&db).await.ok();
 }
 
-#[tokio::test]
-async fn trigram_handles_typo() {
-    let db = pool().await;
+#[sqlx::test(migrations = "../../migrations")]
+async fn trigram_handles_typo(db: PgPool) {
     let agent = format!("test-trg-typo-{}", uuid::Uuid::new_v4());
-    cleanup(&db, "TRG_TEST_TYPO_").await;
 
     insert_chunk(&db, "TRG_TEST_TYPO_пользователь", &agent).await;
 
-    // Опечатка: "пользоветель" вместо "пользователь" (одна буква отличается).
     let results = memory_queries::search_trigram(&db, "пользоветель", 10, 0.4, &agent)
         .await
         .expect("search_trigram typo");
@@ -104,18 +105,16 @@ async fn trigram_handles_typo() {
         "typo 'пользоветель' should still match 'пользователь', got: {:?}", contents
     );
 
-    cleanup(&db, "TRG_TEST_TYPO_").await;
+    sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
+        .bind(&agent).execute(&db).await.ok();
 }
 
-#[tokio::test]
-async fn trigram_threshold_filters_garbage() {
-    let db = pool().await;
+#[sqlx::test(migrations = "../../migrations")]
+async fn trigram_threshold_filters_garbage(db: PgPool) {
     let agent = format!("test-trg-thr-{}", uuid::Uuid::new_v4());
-    cleanup(&db, "TRG_TEST_THR_").await;
 
     insert_chunk(&db, "TRG_TEST_THR_хороший контент про пингвинов", &agent).await;
 
-    // Single character query → должно вернуть пусто при threshold 0.3.
     let results = memory_queries::search_trigram(&db, "x", 10, 0.3, &agent)
         .await
         .expect("search_trigram threshold");
@@ -126,5 +125,6 @@ async fn trigram_threshold_filters_garbage() {
         results.len()
     );
 
-    cleanup(&db, "TRG_TEST_THR_").await;
+    sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
+        .bind(&agent).execute(&db).await.ok();
 }
