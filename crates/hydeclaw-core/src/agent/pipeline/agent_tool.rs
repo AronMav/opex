@@ -55,18 +55,28 @@ pub fn extract_session_id(args: &serde_json::Value) -> Option<Uuid> {
         .and_then(|s| Uuid::parse_str(s).ok())
 }
 
-/// Extract the caller's subagent recursion depth from enriched `_context`.
+/// Extracts subagent recursion depth from the enriched `_context` injection.
 ///
-/// Returns 0 (top-level) when absent or unparseable — the top-level user
-/// dispatch path does not inject `subagent_depth`, so missing == top-level.
-/// Subagent runners inject `subagent_depth = N` into the `_context` they
-/// build, so nested `agent` tool calls observe their parent's depth here.
+/// Returns:
+/// - 0 when `_context.subagent_depth` is **absent** (top-level dispatch — expected)
+/// - The clamped u8 value when present and parseable as u64 (clamped to u8::MAX = 255)
+/// - u8::MAX when present but malformed (string, float, negative, etc.) — fail-closed
+///   so a corrupted/spoofed depth blocks further spawning instead of bypassing the limit
 pub fn extract_subagent_depth(args: &serde_json::Value) -> u8 {
-    args.get("_context")
-        .and_then(|ctx| ctx.get("subagent_depth"))
-        .and_then(|v| v.as_u64())
-        .map(|n| n.min(u8::MAX as u64) as u8)
-        .unwrap_or(0)
+    let Some(ctx) = args.get("_context") else { return 0; };
+    let Some(v) = ctx.get("subagent_depth") else { return 0; };
+    match v.as_u64() {
+        Some(n) => n.min(u8::MAX as u64) as u8,
+        None => {
+            tracing::warn!(
+                value = ?v,
+                "malformed _context.subagent_depth — failing closed (returning u8::MAX). \
+                 If you see this, check who is constructing tool_args with a non-integer \
+                 subagent_depth field."
+            );
+            u8::MAX
+        }
+    }
 }
 
 /// Check whether a subagent at `current_depth` is allowed to spawn another subagent.

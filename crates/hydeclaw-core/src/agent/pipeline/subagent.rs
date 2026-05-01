@@ -644,4 +644,64 @@ mod tests {
         assert_eq!(denied.len(), SUBAGENT_DENIED_TOOLS.len(),
             "default has no extras, length must match SUBAGENT_DENIED_TOOLS");
     }
+
+    #[test]
+    fn default_delegation_blocks_recursion() {
+        let cfg = DelegationConfig::default();
+        assert_eq!(cfg.max_depth, 1, "default max_depth must be 1 (no nested subagents by default)");
+    }
+
+    #[test]
+    fn extra_blocked_tools_extend_default() {
+        let cfg = DelegationConfig {
+            max_depth: 1,
+            blocked_tools_extra: vec!["code_exec".into(), "cron".into()], // cron is already in default
+            blocked_tools_override: vec![],
+        };
+        let denied = compute_denied_tools(&cfg);
+        // All default tools must still be present
+        for default in SUBAGENT_DENIED_TOOLS {
+            assert!(denied.iter().any(|d| d == *default),
+                "default-denied {} must remain when extra is set", default);
+        }
+        // Extra entry is added
+        assert!(denied.iter().any(|d| d == "code_exec"),
+            "code_exec must be added via blocked_tools_extra");
+        // Duplicate "cron" must NOT appear twice
+        assert_eq!(denied.iter().filter(|d| *d == "cron").count(), 1,
+            "duplicate entries in blocked_tools_extra must be deduped against default list");
+    }
+
+    #[test]
+    fn override_replaces_default_deny_list_entirely() {
+        let cfg = DelegationConfig {
+            max_depth: 1,
+            blocked_tools_extra: vec!["this_should_be_ignored".into()],
+            blocked_tools_override: vec!["only_this".into()],
+        };
+        let denied = compute_denied_tools(&cfg);
+        // Only override entries
+        assert_eq!(denied, vec!["only_this".to_string()]);
+        // Default tools NOT present (override replaces)
+        for default in SUBAGENT_DENIED_TOOLS {
+            assert!(!denied.iter().any(|d| d == *default),
+                "default-denied {} must be replaced by override", default);
+        }
+        // Extra ignored when override set
+        assert!(!denied.iter().any(|d| d == "this_should_be_ignored"),
+            "blocked_tools_extra must be IGNORED when blocked_tools_override is non-empty");
+    }
+
+    #[test]
+    fn empty_override_falls_back_to_default_plus_extra() {
+        let cfg = DelegationConfig {
+            max_depth: 1,
+            blocked_tools_extra: vec!["code_exec".into()],
+            blocked_tools_override: vec![],  // empty = fall back to default + extra
+        };
+        let denied = compute_denied_tools(&cfg);
+        assert!(denied.iter().any(|d| d == "code_exec"));
+        assert!(denied.iter().any(|d| d == "workspace_delete"),
+            "empty override must NOT bypass default deny list");
+    }
 }
