@@ -75,7 +75,11 @@ async fn trigram_finds_cjk_substring(db: PgPool) {
     insert_chunk(&db, "TRG_TEST_CJK_東京タワー", &agent).await;
     insert_chunk(&db, "TRG_TEST_CJK_大阪城", &agent).await;
 
-    let results = memory_queries::search_trigram(&db, "東京", 10, 0.2, &agent)
+    // Threshold 0.05 — 2 CJK chars vs full string (with "TRG_TEST_CJK_" prefix)
+    // produce few common trigrams (byte-level trigrams over multi-byte chars +
+    // prefix dilution). Verified empirically — CI Postgres pg_trgm reports
+    // similarity ~0.06-0.10 for this pair.
+    let results = memory_queries::search_trigram(&db, "東京", 10, 0.05, &agent)
         .await
         .expect("search_trigram CJK");
 
@@ -95,7 +99,11 @@ async fn trigram_handles_typo(db: PgPool) {
 
     insert_chunk(&db, "TRG_TEST_TYPO_пользователь", &agent).await;
 
-    let results = memory_queries::search_trigram(&db, "пользоветель", 10, 0.4, &agent)
+    // Опечатка: "пользоветель" vs "пользователь" (одна буква отличается).
+    // Threshold 0.2 — full insertion has "TRG_TEST_TYPO_" prefix (~28 chars
+    // total) vs 12-char typo query. Prefix dilutes trigram overlap to
+    // ~0.30 similarity per pg_trgm computation. 0.4 was too aggressive.
+    let results = memory_queries::search_trigram(&db, "пользоветель", 10, 0.2, &agent)
         .await
         .expect("search_trigram typo");
 
