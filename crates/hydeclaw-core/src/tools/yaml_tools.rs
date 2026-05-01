@@ -544,6 +544,7 @@ impl YamlToolDef {
         http_client: &reqwest::Client,
         env_resolver: Option<&dyn EnvResolver>,
         oauth_context: Option<&OAuthContext>,
+        injected_headers: &[(String, String)],
     ) -> Result<reqwest::Response> {
         let params_map = params.as_object().cloned().unwrap_or_default();
 
@@ -727,6 +728,11 @@ impl YamlToolDef {
         for (k, v) in auth_headers {
             builder = builder.header(k, v);
         }
+        // Caller-injected headers (e.g. X-Hydeclaw-Provider for per-agent TTS routing).
+        // Applied LAST so they take precedence over anything declared in the YAML def.
+        for (k, v) in injected_headers {
+            builder = builder.header(k, v);
+        }
         for (k, v) in extra_headers {
             builder = builder.header(k, v);
         }
@@ -840,7 +846,7 @@ impl YamlToolDef {
         http_client: &reqwest::Client,
         env_resolver: Option<&dyn EnvResolver>,
     ) -> Result<String> {
-        self.execute_with_ctx(params, http_client, env_resolver, None).await
+        self.execute_with_ctx(params, http_client, env_resolver, None, &[]).await
     }
 
     /// Execute with OAuth context for provider-based auth.
@@ -851,20 +857,23 @@ impl YamlToolDef {
         env_resolver: Option<&dyn EnvResolver>,
         oauth_context: Option<&OAuthContext>,
     ) -> Result<String> {
-        self.execute_with_ctx(params, http_client, env_resolver, oauth_context).await
+        self.execute_with_ctx(params, http_client, env_resolver, oauth_context, &[]).await
     }
 
     /// Execute the tool, injecting OAuth bearer credentials when `oauth_context` is provided.
+    /// `injected_headers` are appended to the outgoing request (used by callers such as
+    /// `channel_actions::execute_yaml_channel_action` to set per-agent routing headers).
     pub async fn execute_with_ctx(
         &self,
         params: &serde_json::Value,
         http_client: &reqwest::Client,
         env_resolver: Option<&dyn EnvResolver>,
         oauth_context: Option<&OAuthContext>,
+        injected_headers: &[(String, String)],
     ) -> Result<String> {
         // Pagination: auto-fetch multiple pages if configured
         if let Some(ref pagination) = self.pagination {
-            return self.execute_paginated(params, http_client, env_resolver, pagination, oauth_context).await;
+            return self.execute_paginated(params, http_client, env_resolver, pagination, oauth_context, injected_headers).await;
         }
 
         let start = std::time::Instant::now();
@@ -878,7 +887,7 @@ impl YamlToolDef {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let resp = match self.send_request(params, http_client, env_resolver, oauth_context).await {
+            let resp = match self.send_request(params, http_client, env_resolver, oauth_context, injected_headers).await {
                 Ok(r) => r,
                 Err(e) => {
                     last_err = Some(e);
@@ -940,6 +949,7 @@ impl YamlToolDef {
         env_resolver: Option<&dyn EnvResolver>,
         pagination: &YamlPaginationConfig,
         oauth_context: Option<&OAuthContext>,
+        injected_headers: &[(String, String)],
     ) -> Result<String> {
         let mut all_results: Vec<serde_json::Value> = Vec::new();
         let max_pages = pagination.max_pages.unwrap_or(5) as usize;
@@ -971,7 +981,7 @@ impl YamlToolDef {
             }
 
             // Use a clone without pagination to avoid recursion
-            let body = self.execute_single(&page_params, http_client, env_resolver, oauth_context).await?;
+            let body = self.execute_single(&page_params, http_client, env_resolver, oauth_context, injected_headers).await?;
 
             // Extract results
             let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
@@ -1009,6 +1019,7 @@ impl YamlToolDef {
         http_client: &reqwest::Client,
         env_resolver: Option<&dyn EnvResolver>,
         oauth_context: Option<&OAuthContext>,
+        injected_headers: &[(String, String)],
     ) -> Result<String> {
         let max = self.max_attempts();
         let mut last_err = None;
@@ -1019,7 +1030,7 @@ impl YamlToolDef {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let resp = match self.send_request(params, http_client, env_resolver, oauth_context).await {
+            let resp = match self.send_request(params, http_client, env_resolver, oauth_context, injected_headers).await {
                 Ok(r) => r,
                 Err(e) => {
                     last_err = Some(e);
@@ -1050,6 +1061,7 @@ impl YamlToolDef {
         http_client: &reqwest::Client,
         env_resolver: Option<&dyn EnvResolver>,
         oauth_context: Option<&OAuthContext>,
+        injected_headers: &[(String, String)],
     ) -> Result<Vec<u8>> {
         let max = self.max_attempts();
         let mut last_err = None;
@@ -1060,7 +1072,7 @@ impl YamlToolDef {
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let resp = match self.send_request(params, http_client, env_resolver, oauth_context).await {
+            let resp = match self.send_request(params, http_client, env_resolver, oauth_context, injected_headers).await {
                 Ok(r) => r,
                 Err(e) => {
                     last_err = Some(e);

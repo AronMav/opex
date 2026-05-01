@@ -15,10 +15,23 @@ class _DegradedResponse(Exception):
 
 def require_provider(capability: str):
     """FastAPI dependency returning the active provider, or raising a structured 503.
+
+    Per-agent override: when the request carries `X-Hydeclaw-Provider: <name>`,
+    that specific provider instance is returned (its capability is trusted —
+    Core is the gatekeeper). This lets each agent route TTS to its own provider
+    (and thus its own voice) without changing the global `provider_active` map.
+
     The body contains `{error, degraded, hint}` so callers can distinguish
     'no provider configured' vs 'core unreachable' states."""
     def _dep(request: Request):
         registry = request.app.state.registry
+        override = request.headers.get("x-hydeclaw-provider")
+        if override:
+            provider = registry.get_instance(override)
+            if provider is not None:
+                return provider
+            # Override name unknown → fall back to active rather than 503,
+            # so a stale agent config doesn't break the whole capability.
         provider = registry.get_active(capability)
         if not provider:
             raise _DegradedResponse(capability, registry.is_degraded())

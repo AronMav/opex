@@ -600,6 +600,13 @@ pub struct AgentSettings {
     /// The switch is per-run only — the next run retries the primary first.
     #[serde(default)]
     pub fallback_provider: Option<String>,
+    /// Optional TTS provider name override. When set, channel actions calling YAML
+    /// tools with `channel_action: send_voice` inject `X-Hydeclaw-Provider: <name>`
+    /// so toolgate routes the synth request to this specific TTS provider instead
+    /// of the global `provider_active[tts]`. Each TTS provider's `options.voice`
+    /// determines the voice. Useful for per-agent voice personalities.
+    #[serde(default)]
+    pub tts_provider: Option<String>,
     #[serde(default = "default_temperature")]
     pub temperature: f64,
     /// Maximum output tokens for LLM responses. None = provider default.

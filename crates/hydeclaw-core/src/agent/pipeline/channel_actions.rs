@@ -124,7 +124,17 @@ pub async fn execute_yaml_channel_action(
     } else {
         &ctx.tex.ssrf_http_client
     };
-    let data_bytes = match tool.execute_binary(args, client, Some(&resolver), oauth_ctx.as_ref()).await {
+    // Per-agent TTS-provider override for send_voice (architectural decision: voice
+    // lives in the provider's options, agent picks which provider). For non-voice
+    // actions the override is harmless because toolgate falls back to provider_active.
+    let mut tool_headers: Vec<(String, String)> = Vec::new();
+    if ca.action == "send_voice"
+        && let Some(prov) = ctx.cfg.agent.tts_provider.as_deref()
+        && !prov.is_empty()
+    {
+        tool_headers.push(("X-Hydeclaw-Provider".to_string(), prov.to_string()));
+    }
+    let data_bytes = match tool.execute_binary(args, client, Some(&resolver), oauth_ctx.as_ref(), &tool_headers).await {
         Ok(b) => b,
         Err(e) => return format!("Error calling tool '{}': {}", tool.name, e),
     };
