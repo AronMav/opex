@@ -30,6 +30,11 @@ export type SseEvent =
       type: "usage";
       inputTokens: number;
       outputTokens: number;
+      // agentName: which agent emitted this usage. Used by stream-processor to
+      // route to the right agent's tokenUsage state in multi-agent sessions.
+      // Optional for forward-compat with older backends — stream-processor
+      // falls back to the session's currentAgent if absent.
+      agentName?: string;
       // Extended fields — subsets of input/output (NOT additive).
       // Only present for providers that report them.
       cacheReadTokens?: number;
@@ -116,6 +121,7 @@ export function parseSseEvent(raw: string): SseEvent | null {
         type,
         inputTokens: typeof e.inputTokens === "number" ? e.inputTokens : 0,
         outputTokens: typeof e.outputTokens === "number" ? e.outputTokens : 0,
+        agentName: typeof e.agentName === "string" ? e.agentName : undefined,
         cacheReadTokens: typeof e.cacheReadTokens === "number" ? e.cacheReadTokens : undefined,
         cacheCreationTokens: typeof e.cacheCreationTokens === "number" ? e.cacheCreationTokens : undefined,
         reasoningTokens: typeof e.reasoningTokens === "number" ? e.reasoningTokens : undefined,

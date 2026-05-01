@@ -243,20 +243,79 @@ describe("processSSEStream — case 'usage' writes AgentState fields", () => {
     expect(st?.cacheCreationTokens).toBe(9999);
   });
 
-  // ── Multi-agent isolation ────────────────────────────────────────────────
-  // Documents a latent production bug (review L3, 2026-05-01): the `usage`
-  // SSE event has no `agentName` field, so writeDraft applies it to the
-  // currentAgent regardless of which agent actually emitted the usage. In
-  // a multi-agent session, agent B finishing a stream while agent A is
-  // mid-turn will overwrite A's tokenUsage with B's values.
-  //
-  // The fix requires (a) extending sse-events.UsageEvent with agentName,
-  // (b) backend emitting the field, (c) stream-processor routing by agent.
-  // Out of scope for PR #29 (test-only); tracked as a separate todo.
+  // ── Multi-agent isolation (L3 fix verification) ──────────────────────────
+  // Backend now tags every usage SSE event with `agentName` (chat.rs current
+  // responding agent). Stream-processor routes the write to that target's
+  // AgentState directly via setState — bypassing session.writeDraft which is
+  // bound to the session's owner agent. Without this routing, usage from
+  // peer agent B would corrupt session-owner A's tokenUsage state.
 
-  it.todo(
-    "Usage events are isolated per-agent in multi-agent sessions (FIXME: prod bug L3)",
-  );
+  it("routes usage by event.agentName, not by session-bound agent", async () => {
+    // Both agents pre-exist in store (multi-agent session pattern). Stream
+    // session is owned by AGENT (currentAgent), but a usage event tagged
+    // for "Peer" must land in Peer's state, NOT in AGENT's.
+    const { emptyAgentState } = await import("@/stores/chat-types");
+    useChatStore.setState({
+      agents: {
+        [AGENT]: emptyAgentState(),
+        Peer: emptyAgentState(),
+      },
+      currentAgent: AGENT,
+      _selectCounter: {},
+      sessionParticipants: {},
+    });
+
+    mockFetch([
+      { type: "data-session-id", data: { sessionId: "sess-multi-1" } },
+      { type: "start", messageId: "m1", agentName: AGENT },
+      // First usage — owner agent (AGENT). Should land on AGENT.
+      {
+        type: "usage",
+        agentName: AGENT,
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 1111,
+      },
+      // Second usage — peer agent. Must land on Peer, NOT overwrite AGENT.
+      {
+        type: "usage",
+        agentName: "Peer",
+        inputTokens: 9999,
+        outputTokens: 8888,
+        cacheReadTokens: 7777,
+      },
+      { type: "finish" },
+    ]);
+
+    useChatStore.getState().sendMessage("hi");
+    await new Promise((r) => setTimeout(r, 200));
+
+    const state = useChatStore.getState();
+    // AGENT (session owner) preserves its own usage — NOT corrupted by Peer.
+    expect(state.agents[AGENT]?.contextTokens).toBe(100);
+    expect(state.agents[AGENT]?.contextOutputTokens).toBe(50);
+    expect(state.agents[AGENT]?.cacheReadTokens).toBe(1111);
+    // Peer received its own usage despite the stream being owned by AGENT.
+    expect(state.agents.Peer?.contextTokens).toBe(9999);
+    expect(state.agents.Peer?.contextOutputTokens).toBe(8888);
+    expect(state.agents.Peer?.cacheReadTokens).toBe(7777);
+  });
+
+  it("falls back to session-bound agent when usage event omits agentName (legacy backend)", async () => {
+    // Older backends not yet upgraded won't tag the event. Behavior must
+    // gracefully degrade to single-agent mode (write to session.agent).
+    mockFetch([
+      { type: "data-session-id", data: { sessionId: "sess-legacy-1" } },
+      { type: "start", messageId: "m1" },
+      { type: "usage", inputTokens: 42, outputTokens: 7 },
+      { type: "finish" },
+    ]);
+
+    useChatStore.getState().sendMessage("hi");
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(useChatStore.getState().agents[AGENT]?.contextTokens).toBe(42);
+  });
 
   it("overwrites earlier usage fields when a second usage event arrives", async () => {
     // Multi-turn loop: first turn reports cache-creation, second is a plain reuse.
