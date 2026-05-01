@@ -2,6 +2,7 @@
 
 import { memo } from "react";
 import { sanitizeUrl } from "@/lib/sanitize-url";
+import { AudioPlayer } from "./AudioPlayer";
 
 export const FileDataPartView = memo(function FileDataPartView({ data }: { data: { url: string; mediaType: string } }) {
   const { url, mediaType } = data;
@@ -14,7 +15,7 @@ export const FileDataPartView = memo(function FileDataPartView({ data }: { data:
     );
   }
   if (mediaType.startsWith("audio/")) {
-    return <audio controls src={safeUrl} className="w-full max-w-md" />;
+    return <AudioPlayer src={safeUrl} />;
   }
   if (mediaType.startsWith("video/")) {
     return <video controls src={safeUrl} className="max-w-md rounded-xl border border-border" />;
