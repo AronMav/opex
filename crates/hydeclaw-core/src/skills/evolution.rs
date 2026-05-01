@@ -74,9 +74,10 @@ pub async fn analyze_and_evolve(
     if let Some(rest) = line.strip_prefix("FIX ") {
         let skill_name = rest.split_whitespace().next().unwrap_or("");
         if !skill_name.is_empty() {
+            let safe_skill_name = skill_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
             tracing::info!(skill = skill_name, agent = agent_name, "skill evolution: FIX queued");
             if let Ok(content) = tokio::fs::read_to_string(
-                format!("workspace/skills/{skill_name}.md")
+                format!("{}/skills/{safe_skill_name}.md", crate::config::WORKSPACE_DIR)
             ).await {
                 let _ = crate::db::skill_versions::save_version(
                     db, skill_name, &content, "pre-fix", None,

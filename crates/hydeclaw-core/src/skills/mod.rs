@@ -237,13 +237,24 @@ pub async fn write_skill(
         .collect::<Vec<_>>()
         .join("\n");
 
+    let last_used_line = match &frontmatter.last_used_at {
+        Some(ts) => format!("last_used_at: \"{ts}\"\n"),
+        None => String::new(),
+    };
+    let state_str = match frontmatter.state {
+        SkillState::Active   => "active",
+        SkillState::Stale    => "stale",
+        SkillState::Archived => "archived",
+    };
+
     let content = format!(
-        "---\nname: {}\ndescription: {}\ntriggers:\n{}\ntools_required:\n{}\npriority: {}\n---\n\n{}",
+        "---\nname: {}\ndescription: {}\ntriggers:\n{}\ntools_required:\n{}\npriority: {}\nstate: {}\n{last_used_line}---\n\n{}",
         frontmatter.name,
         frontmatter.description,
         triggers_yaml,
         tools_yaml,
         frontmatter.priority,
+        state_str,
         instructions,
     );
 
