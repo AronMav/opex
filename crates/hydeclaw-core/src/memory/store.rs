@@ -9,6 +9,19 @@ use std::sync::{Arc, RwLock};
 use super::embedding::{fmt_vec, EmbeddingService};
 use super::{MemoryChunk, MemoryResult};
 
+// ── Hybrid search RRF tuning ────────────────────────────────────────────
+// Reciprocal Rank Fusion weights for the three search branches.
+// Updated 2026-04-30: trigram added as third branch (Sprint 1 P0.4).
+//
+// Why hardcoded? RRF tuning has no user pressure for runtime changes.
+// If future need arises, expose via MemoryStore::new + RwLock<f64>
+// (mirror the fts_language pattern).
+const RRF_K: f64 = 60.0;
+const W_SEM: f64 = 0.6;   // было 0.7 до добавления trigram
+const W_FTS: f64 = 0.25;  // было 0.3
+const W_TRGM: f64 = 0.15; // новое
+const TRGM_SIMILARITY_THRESHOLD: f32 = 0.3;  // pg_trgm default
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 pub struct MemoryStore {
@@ -128,9 +141,13 @@ impl MemoryStore {
     async fn search_hybrid(&self, query: &str, limit: usize, agent_id: &str) -> Result<Vec<MemoryResult>> {
         use std::collections::HashMap;
 
-        let (sem_result, fts_result) = tokio::join!(
+        let (sem_result, fts_result, trgm_result) = tokio::join!(
             self.search_semantic(query, limit * 2, agent_id),
             self.search_fts(query, limit * 2, agent_id),
+            crate::db::memory_queries::search_trigram(
+                &self.db, query, (limit * 2) as i64,
+                TRGM_SIMILARITY_THRESHOLD, agent_id,
+            ),
         );
 
         let sem = match sem_result {
@@ -141,33 +158,40 @@ impl MemoryStore {
             Ok(v) => v,
             Err(e) => { tracing::warn!(error = %e, "FTS search failed"); vec![] }
         };
+        let trgm = match trgm_result {
+            Ok(v) => v,
+            Err(e) => { tracing::warn!(error = %e, "trigram search failed"); vec![] }
+        };
 
-        if sem.is_empty() { return Ok(fts.into_iter().take(limit).collect()); }
-        if fts.is_empty() { return Ok(sem.into_iter().take(limit).collect()); }
+        // Single-branch shortcut (если только одна ветка дала результаты — RRF не нужен)
+        match (sem.is_empty(), fts.is_empty(), trgm.is_empty()) {
+            (true, true, true) => return Ok(vec![]),
+            (false, true, true) => return Ok(sem.into_iter().take(limit).collect()),
+            (true, false, true) => return Ok(fts.into_iter().take(limit).collect()),
+            (true, true, false) => return Ok(trgm.into_iter().take(limit).collect()),
+            _ => {} // 2+ непустые → RRF
+        }
 
-        const K: f64 = 60.0;
-
-        // Build rank maps for RRF scoring
         let sem_ranks: HashMap<String, usize> = sem.iter()
             .enumerate().map(|(i, r)| (r.id.clone(), i)).collect();
         let fts_ranks: HashMap<String, usize> = fts.iter()
             .enumerate().map(|(i, r)| (r.id.clone(), i)).collect();
+        let trgm_ranks: HashMap<String, usize> = trgm.iter()
+            .enumerate().map(|(i, r)| (r.id.clone(), i)).collect();
 
-        // Collect all unique results (semantic takes priority for the stored copy)
         let mut all: HashMap<String, MemoryResult> = HashMap::new();
         for r in sem { all.entry(r.id.clone()).or_insert(r); }
         for r in fts { all.entry(r.id.clone()).or_insert(r); }
+        for r in trgm { all.entry(r.id.clone()).or_insert(r); }
 
-        // Weighted RRF: semantic results get higher weight (0.7) than FTS (0.3)
-        // to prevent noisy short-word FTS matches from displacing semantically relevant results.
-        const W_SEM: f64 = 0.7;
-        const W_FTS: f64 = 0.3;
         let mut scored: Vec<(f64, MemoryResult)> = all.into_values().map(|r| {
             let sem_rrf = sem_ranks.get(&r.id)
-                .map_or(0.0, |&rank| 1.0 / (K + rank as f64 + 1.0));
+                .map_or(0.0, |&rank| 1.0 / (RRF_K + rank as f64 + 1.0));
             let fts_rrf = fts_ranks.get(&r.id)
-                .map_or(0.0, |&rank| 1.0 / (K + rank as f64 + 1.0));
-            (W_SEM * sem_rrf + W_FTS * fts_rrf, r)
+                .map_or(0.0, |&rank| 1.0 / (RRF_K + rank as f64 + 1.0));
+            let trgm_rrf = trgm_ranks.get(&r.id)
+                .map_or(0.0, |&rank| 1.0 / (RRF_K + rank as f64 + 1.0));
+            (W_SEM * sem_rrf + W_FTS * fts_rrf + W_TRGM * trgm_rrf, r)
         }).collect();
 
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));

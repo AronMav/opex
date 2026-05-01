@@ -152,6 +152,7 @@ pub mod gateway {
 // hydeclaw-db directly — no new entries needed here.
 pub mod db {
     pub use hydeclaw_db::approvals;
+    pub use hydeclaw_db::memory_queries;
     pub use hydeclaw_db::notifications;
     pub use hydeclaw_db::session_wal;
     pub use hydeclaw_db::sessions;

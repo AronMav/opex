@@ -17,7 +17,6 @@ pub use watcher::spawn_workspace_watcher;
 // ── Config ────────────────────────────────────────────────────────────────────
 
 use crate::config::default_true;
-use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Default, schemars::JsonSchema)]
 pub struct MemoryConfig {
@@ -52,25 +51,5 @@ fn default_compression_age_days() -> u32 {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-pub struct MemoryResult {
-    pub id: String,
-    pub content: String,
-    pub source: String,
-    pub pinned: bool,
-    pub relevance_score: f64,
-    pub similarity: f64,
-}
-
-pub struct MemoryChunk {
-    pub id: String,
-    pub content: String,
-    pub source: String,
-    pub pinned: bool,
-    pub relevance_score: f64,
-    pub created_at: DateTime<Utc>,
-    // `accessed_at` is read by `scheduler::run_memory_decay` via raw SQL
-    // (decay formula uses `now() - accessed_at`); the Rust struct copy is
-    // currently unread. Kept for future use when struct-side decay runs locally.
-    #[allow(dead_code)]
-    pub accessed_at: DateTime<Utc>,
-}
+// Types moved to hydeclaw-db so integration tests can access them.
+pub use hydeclaw_db::memory_queries::{MemoryChunk, MemoryResult};
