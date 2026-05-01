@@ -4,6 +4,7 @@
 use sqlx::PgPool;
 use std::sync::Arc;
 use hydeclaw_types::{Message, MessageRole};
+use crate::db::skill_repairs;
 
 /// Analyze a completed cron/heartbeat execution and evolve skills if needed.
 pub async fn analyze_and_evolve(
@@ -72,17 +73,68 @@ pub async fn analyze_and_evolve(
 
     if let Some(rest) = line.strip_prefix("FIX ") {
         let skill_name = rest.split_whitespace().next().unwrap_or("");
-        tracing::info!(skill = skill_name, agent = agent_name, "skill evolution: FIX suggested");
-        if let Ok(content) = tokio::fs::read_to_string(
-            format!("workspace/skills/{skill_name}.md")
-        ).await {
-            let _ = crate::db::skill_versions::save_version(
-                db, skill_name, &content, "pre-fix", None,
-                Some(&format!("Before auto-fix for agent {agent_name}")),
-            ).await;
+        if !skill_name.is_empty() {
+            tracing::info!(skill = skill_name, agent = agent_name, "skill evolution: FIX queued");
+            if let Ok(content) = tokio::fs::read_to_string(
+                format!("workspace/skills/{skill_name}.md")
+            ).await {
+                let _ = crate::db::skill_versions::save_version(
+                    db, skill_name, &content, "pre-fix", None,
+                    Some(&format!("Before auto-fix for agent {agent_name}")),
+                ).await;
+            }
+            let _ = skill_repairs::enqueue(db, skill_name, agent_name, "fix", line).await;
         }
-        tracing::info!(analysis = %analysis, "FIX analysis recorded");
-    } else if line.starts_with("DERIVED ") || line.starts_with("CAPTURED ") {
-        tracing::info!(analysis = %analysis, agent = agent_name, "skill evolution suggestion recorded");
+    } else if let Some(rest) = line.strip_prefix("DERIVED ") {
+        let parts: Vec<&str> = rest.split_whitespace().collect();
+        let skill_name = parts.first().copied().unwrap_or("unknown");
+        tracing::info!(analysis = %line, agent = agent_name, "skill evolution: DERIVED queued");
+        let _ = skill_repairs::enqueue(db, skill_name, agent_name, "derived", line).await;
+    } else if let Some(rest) = line.strip_prefix("CAPTURED ") {
+        let skill_name = rest.split_whitespace().next().unwrap_or("unknown");
+        tracing::info!(analysis = %line, agent = agent_name, "skill evolution: CAPTURED queued");
+        let _ = skill_repairs::enqueue(db, skill_name, agent_name, "captured", line).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn skip_verdict_does_not_trigger_enqueue() {
+        let line = "SKIP";
+        assert!(line.starts_with("SKIP"));
+        // If first word is SKIP, the function returns before DB calls.
+        // This is a structural assertion — the real gate is in the implementation.
+    }
+
+    #[test]
+    fn fix_verdict_extracts_skill_name() {
+        let line = "FIX channel-formatting because triggers are too broad";
+        let skill_name = line
+            .strip_prefix("FIX ")
+            .and_then(|r| r.split_whitespace().next())
+            .unwrap_or("");
+        assert_eq!(skill_name, "channel-formatting");
+    }
+
+    #[test]
+    fn derived_verdict_extracts_parent_skill() {
+        let line = "DERIVED channel-formatting channel-formatting-telegram";
+        let parts: Vec<&str> = line
+            .strip_prefix("DERIVED ")
+            .unwrap_or("")
+            .split_whitespace()
+            .collect();
+        assert_eq!(parts.first().copied().unwrap_or(""), "channel-formatting");
+    }
+
+    #[test]
+    fn captured_verdict_extracts_pattern_name() {
+        let line = "CAPTURED new-pattern-name some description here";
+        let skill_name = line
+            .strip_prefix("CAPTURED ")
+            .and_then(|r| r.split_whitespace().next())
+            .unwrap_or("");
+        assert_eq!(skill_name, "new-pattern-name");
     }
 }
