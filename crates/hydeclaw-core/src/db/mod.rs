@@ -15,6 +15,7 @@ pub mod github;
 pub mod outbound;
 pub mod pending;
 pub mod providers;
+pub mod skill_repairs;
 pub mod skill_versions;
 pub mod tool_audit;
 pub mod tool_quality;
