@@ -1064,6 +1064,21 @@ export default function ProvidersPage() {
                   />
                 </div>
 
+                {/* Timeouts (request_secs is the main TTS knob — long synth +
+                    voice-clone warmup can exceed the 120s default) */}
+                <TimeoutsSection
+                  value={(form.options as ProviderOptions | undefined)?.timeouts ?? {}}
+                  onChange={(timeouts) =>
+                    setForm((f) => ({
+                      ...f,
+                      options: {
+                        ...((f.options as ProviderOptions | undefined) ?? {}),
+                        timeouts,
+                      },
+                    }))
+                  }
+                />
+
                 {/* Enabled */}
                 <div className="flex items-center gap-2">
                   <input
