@@ -18,6 +18,7 @@ triggers:
   - style like
   - в стиле
 priority: 8
+state: active
 ---
 
 # Image Prompt Advisor

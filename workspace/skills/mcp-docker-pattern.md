@@ -9,6 +9,7 @@ triggers:
 tools_required:
   - code_exec
 priority: 10
+state: active
 ---
 
 # MCP Server Deployment

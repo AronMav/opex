@@ -21,6 +21,7 @@ tools_required:
   - email_check
   - email_send
   - email_search
+state: active
 ---
 
 ## Email Management Strategy

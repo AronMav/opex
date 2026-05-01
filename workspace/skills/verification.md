@@ -11,6 +11,7 @@ triggers:
   - верификация
   - протестируй
 priority: 9
+state: active
 ---
 
 ## Adversarial Verification Protocol

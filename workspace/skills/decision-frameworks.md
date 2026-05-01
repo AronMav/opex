@@ -17,6 +17,7 @@ triggers:
   - оценить варианты
   - решение
 priority: 6
+state: active
 ---
 
 ## Decision-Making Frameworks

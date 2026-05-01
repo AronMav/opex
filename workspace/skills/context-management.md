@@ -21,6 +21,7 @@ triggers:
   - в чате
   - помнишь когда
 priority: 3
+state: active
 ---
 
 ## Conversation Context Management

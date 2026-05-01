@@ -11,6 +11,7 @@ triggers:
   - что нового
   - дайджест
   - сводка
+state: active
 ---
 
 # Daily Briefing Skill

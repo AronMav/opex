@@ -13,6 +13,7 @@ tools_required:
   - code_exec
   - web_fetch
 priority: 5
+state: active
 ---
 
 Toolgate is a FastAPI service (port 9011), the media hub. STT, Vision, TTS, ImageGen via swappable providers + custom routers.

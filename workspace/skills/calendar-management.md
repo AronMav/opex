@@ -22,6 +22,7 @@ tools_required:
   - calendar_today
   - calendar_upcoming
   - calendar_create
+state: active
 ---
 
 ## Calendar Management Strategy

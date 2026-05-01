@@ -18,6 +18,7 @@ triggers:
   - переговоры
   - презентация
 priority: 4
+state: active
 ---
 
 ## Role-Play Simulation Strategy

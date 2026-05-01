@@ -24,6 +24,7 @@ tools_required:
   - ha_turn_on
   - ha_turn_off
   - ha_call_service
+state: active
 ---
 
 ## Smart Home Control Strategy

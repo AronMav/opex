@@ -13,6 +13,7 @@ triggers:
   - нужно ли исследовать
   - классификация задачи
 priority: 8
+state: active
 ---
 
 ## Discovery Protocol

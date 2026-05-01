@@ -14,6 +14,7 @@ triggers:
   - рефлексия
   - запиши день
 priority: 4
+state: active
 ---
 
 ## Daily Reflection Strategy

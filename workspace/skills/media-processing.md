@@ -15,6 +15,7 @@ tools_required:
   - extract_document
   - transcribe_audio
 priority: 10
+state: active
 ---
 
 When the user attaches a file to a message — process it immediately without asking permission:

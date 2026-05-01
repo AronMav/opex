@@ -10,6 +10,7 @@ triggers:
   - качество работы
   - как структурировать
 priority: 7
+state: active
 ---
 
 ## Quality Loop

@@ -11,6 +11,7 @@ triggers:
   - сформулируй задачу
   - инструкция для агента
 priority: 4
+state: active
 ---
 
 ## Effective Prompt Crafting Strategy
