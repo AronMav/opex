@@ -496,14 +496,34 @@ fn process_sse_event(
             }
         }
         Some("message_delta") => {
-            // message_delta.usage contains the cumulative output_tokens count
-            // (not incremental), so we overwrite rather than add.
-            if let Some(usage) = event.get("usage")
-                && let Some(n) = usage.get("output_tokens").and_then(|v| v.as_u64())
-            {
-                usage_buffer.output_tokens = n.min(u32::MAX as u64) as u32;
-                // Defensive: in case message_start was skipped.
-                usage_buffer.seen = true;
+            // message_delta.usage carries cumulative final values per Anthropic's spec —
+            // server-side tools (web search, etc.) inflate input/cache counts mid-stream,
+            // so we overwrite each field present rather than relying on message_start alone.
+            // Without message_start observed first, we drop the data: a bare message_delta
+            // would record TokenUsage{input:0, output:N} into usage_log, corrupting billing.
+            if let Some(usage) = event.get("usage") {
+                if !usage_buffer.seen {
+                    tracing::warn!("anthropic message_delta without preceding message_start — dropping usage");
+                    return;
+                }
+                if let Some(n) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+                    usage_buffer.output_tokens = n.min(u32::MAX as u64) as u32;
+                }
+                if let Some(n) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
+                    usage_buffer.input_tokens = n.min(u32::MAX as u64) as u32;
+                }
+                if let Some(n) = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    usage_buffer.cache_creation_input_tokens = Some(n.min(u32::MAX as u64) as u32);
+                }
+                if let Some(n) = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    usage_buffer.cache_read_input_tokens = Some(n.min(u32::MAX as u64) as u32);
+                }
             }
         }
         Some("content_block_start") => {
@@ -1013,16 +1033,77 @@ mod tests {
     }
 
     #[test]
-    fn streaming_only_message_delta_still_records() {
-        // Edge case: provider sends only message_delta (no message_start) — defensive.
+    fn streaming_only_message_delta_drops_usage() {
+        // Provider sends only message_delta (no message_start). Without input_tokens
+        // we cannot record meaningful billing data, so we drop instead of synthesizing
+        // TokenUsage{input:0, output:N} that would corrupt usage_log.
         let lines = vec![
             r#"data: {"type":"message_delta","usage":{"output_tokens":42}}"#.to_string(),
         ];
         let usage = parse_streaming_usage_for_test(&lines);
-        let u = usage.expect("usage from message_delta only");
-        assert_eq!(u.output_tokens, 42);
-        // No message_start = no input info.
-        assert_eq!(u.input_tokens, 0);
+        assert!(usage.is_none(), "bare message_delta must be dropped, not corrupt billing");
+    }
+
+    #[test]
+    fn streaming_multiple_message_delta_last_wins() {
+        // Anthropic emits cumulative usage in each message_delta. Last value must win
+        // (overwrite, not accumulate) — guards against a `=` -> `+=` regression that
+        // would double-count output tokens.
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":100,"output_tokens":1}}}"#.to_string(),
+            r#"data: {"type":"message_delta","usage":{"output_tokens":150}}"#.to_string(),
+            r#"data: {"type":"message_delta","usage":{"output_tokens":420}}"#.to_string(),
+            r#"data: {"type":"message_stop"}"#.to_string(),
+        ];
+        let u = parse_streaming_usage_for_test(&lines).expect("usage populated");
+        assert_eq!(u.output_tokens, 420, "last delta overwrites, never sums");
+        assert_eq!(u.input_tokens, 100);
+    }
+
+    #[test]
+    fn streaming_message_start_without_usage_returns_none() {
+        // Anthropic sometimes omits the usage field. Setting `seen=true` outside the
+        // `if let Some(usage)` guard would synthesize zeros — assert we don't.
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"id":"msg_x","model":"claude","content":[]}}"#.to_string(),
+            r#"data: {"type":"message_stop"}"#.to_string(),
+        ];
+        assert!(
+            parse_streaming_usage_for_test(&lines).is_none(),
+            "message_start without usage must not seed an empty TokenUsage"
+        );
+    }
+
+    #[test]
+    fn streaming_message_start_without_cache_fields() {
+        // Non-cacheable requests omit cache_*_input_tokens entirely. Ensure the
+        // resulting TokenUsage carries None (not Some(0)) for both cache fields,
+        // matching the non-streaming path's semantics.
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":250,"output_tokens":1}}}"#.to_string(),
+            r#"data: {"type":"message_delta","usage":{"output_tokens":80}}"#.to_string(),
+            r#"data: {"type":"message_stop"}"#.to_string(),
+        ];
+        let u = parse_streaming_usage_for_test(&lines).expect("usage populated");
+        assert_eq!(u.cache_read_tokens, None);
+        assert_eq!(u.cache_creation_tokens, None);
+    }
+
+    #[test]
+    fn streaming_message_delta_updates_cache_and_input_tokens() {
+        // Per Anthropic spec, message_delta.usage may carry final cumulative
+        // input_tokens and cache_* values updated after server-side tool use.
+        // The streaming path must not lock these to message_start values only.
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":100,"cache_read_input_tokens":50,"output_tokens":1}}}"#.to_string(),
+            r#"data: {"type":"message_delta","usage":{"input_tokens":10000,"cache_read_input_tokens":9500,"cache_creation_input_tokens":300,"output_tokens":600}}"#.to_string(),
+            r#"data: {"type":"message_stop"}"#.to_string(),
+        ];
+        let u = parse_streaming_usage_for_test(&lines).expect("usage populated");
+        assert_eq!(u.input_tokens, 10000, "delta input_tokens must overwrite start");
+        assert_eq!(u.output_tokens, 600);
+        assert_eq!(u.cache_read_tokens, Some(9500), "delta cache_read must overwrite start");
+        assert_eq!(u.cache_creation_tokens, Some(300));
     }
 
     #[test]
