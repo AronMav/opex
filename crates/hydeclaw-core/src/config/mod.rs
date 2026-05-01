@@ -833,6 +833,49 @@ impl Default for DelegationConfig {
     }
 }
 
+impl DelegationConfig {
+    /// Validate delegation policy. Returns a list of error messages (empty if valid).
+    /// Called from `AgentConfig::load()` after TOML parse to surface misconfiguration
+    /// at startup with full context (agent name) instead of latent runtime DoS.
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        if self.max_depth == 0 {
+            errors.push(
+                "max_depth must be >= 1 (0 disables ALL spawning, including top-level — \
+                 read the doc-comment carefully: 0 means \"current depth\", not \"disable nesting\")"
+                .to_string()
+            );
+        }
+
+        if !self.blocked_tools_override.is_empty() && !self.blocked_tools_extra.is_empty() {
+            errors.push(
+                "set either blocked_tools_extra OR blocked_tools_override, not both — \
+                 extra is silently ignored when override is non-empty"
+                .to_string()
+            );
+        }
+
+        // Tool name regex: [a-zA-Z0-9_-]+ (project convention).
+        // We warn on violations but don't reject — operator may have YAML/MCP tools not yet loaded.
+        // Validation here is best-effort syntactic — semantic existence check happens at filter time.
+        let valid_tool_name = |name: &str| -> bool {
+            !name.is_empty()
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        };
+
+        for name in self.blocked_tools_extra.iter().chain(self.blocked_tools_override.iter()) {
+            if !valid_tool_name(name) {
+                errors.push(format!(
+                    "invalid tool name {name:?} (expected [a-zA-Z0-9_-]+ — case sensitive)"
+                ));
+            }
+        }
+
+        errors
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct CompactionConfig {
     #[serde(default = "default_true")]
@@ -1023,6 +1066,18 @@ impl AgentConfig {
             .with_context(|| format!("failed to read agent config: {}", path.as_ref().display()))?;
         let config: Self = toml::from_str(&content)
             .with_context(|| "failed to parse agent config TOML")?;
+
+        // Validate delegation policy. Errors here block agent load — misconfigured
+        // delegation is a security/correctness concern, not a tunable.
+        let delegation_errors = config.agent.delegation.validate();
+        if !delegation_errors.is_empty() {
+            anyhow::bail!(
+                "agent {:?}: invalid [agent.delegation] section:\n  - {}",
+                config.agent.name,
+                delegation_errors.join("\n  - ")
+            );
+        }
+
         Ok(config)
     }
 
@@ -2161,6 +2216,60 @@ foo_bar_baz = 42
 "#;
         let result: Result<AgentToolConfig, _> = toml::from_str(toml_str);
         assert!(result.is_err(), "deny_unknown_fields must reject typo");
+    }
+
+    // ── DelegationConfig validation ──
+
+    #[test]
+    fn delegation_validate_max_depth_zero_rejected() {
+        let cfg = DelegationConfig {
+            max_depth: 0,
+            blocked_tools_extra: vec![],
+            blocked_tools_override: vec![],
+        };
+        let errors = cfg.validate();
+        assert!(!errors.is_empty(), "max_depth=0 must be rejected");
+        assert!(errors[0].contains("max_depth must be >= 1"));
+    }
+
+    #[test]
+    fn delegation_validate_extra_with_override_rejected() {
+        let cfg = DelegationConfig {
+            max_depth: 1,
+            blocked_tools_extra: vec!["foo".into()],
+            blocked_tools_override: vec!["bar".into()],
+        };
+        let errors = cfg.validate();
+        assert!(!errors.is_empty(), "extra+override combo must be rejected");
+        assert!(errors.iter().any(|e| e.contains("extra OR blocked_tools_override")));
+    }
+
+    #[test]
+    fn delegation_validate_invalid_tool_name_rejected() {
+        let cfg = DelegationConfig {
+            max_depth: 1,
+            blocked_tools_extra: vec!["valid_tool".into(), "bad name".into()],
+            blocked_tools_override: vec![],
+        };
+        let errors = cfg.validate();
+        assert!(errors.iter().any(|e| e.contains("invalid tool name")));
+        assert!(errors.iter().any(|e| e.contains("\"bad name\"")));
+    }
+
+    #[test]
+    fn delegation_validate_default_is_valid() {
+        let cfg = DelegationConfig::default();
+        assert!(cfg.validate().is_empty());
+    }
+
+    #[test]
+    fn delegation_validate_typical_config_is_valid() {
+        let cfg = DelegationConfig {
+            max_depth: 2,
+            blocked_tools_extra: vec!["code_exec".into(), "process".into()],
+            blocked_tools_override: vec![],
+        };
+        assert!(cfg.validate().is_empty());
     }
 
 }
