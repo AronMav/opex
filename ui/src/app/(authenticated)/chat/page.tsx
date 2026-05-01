@@ -196,10 +196,16 @@ export default function ChatPage() {
       return;
     }
 
-    // If already viewing a real session (live or history) — don't touch
+    // If already viewing a real session (live or history) — validate it still
+    // exists in the current sessions list. Pre-populated last session IDs may
+    // be stale (deleted or outside the top-40 window); fall through to re-select
+    // in that case so the restore effect picks a valid session.
     if (agentState?.activeSessionId && agentState?.messageSource?.mode !== "new-chat") {
-      restoredAgents.current.add(currentAgent);
-      return;
+      if (sessions.some((s) => s.id === agentState.activeSessionId)) {
+        restoredAgents.current.add(currentAgent);
+        return;
+      }
+      // Session not found — fall through to re-select below
     }
 
     // Priority 1: URL ?s= param (deep link)

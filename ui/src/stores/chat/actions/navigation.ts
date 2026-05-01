@@ -7,7 +7,7 @@ import type { ActionDeps } from "../../chat-store";
 import { emptyAgentState } from "../../chat-types";
 import type { AgentState } from "../../chat-types";
 import { qk } from "@/lib/queries";
-import { saveLastSession, clearLastSessionId } from "../../chat-persistence";
+import { saveLastSession, getLastSessionId } from "../../chat-persistence";
 import { isActivePhase } from "../../chat-types";
 import { selectIsReplayingHistory } from "../../chat-selectors";
 
@@ -80,17 +80,24 @@ export function createNavigationActions(deps: ActionDeps) {
       renderer.cleanupAgent(prev);
       update(prev, { connectionPhase: "idle" });
       ensure(name);
+      // Pre-populate with last known session so the first render shows content
+      // immediately instead of flashing a blank new-chat state while the restore
+      // effect runs. The restore effect validates this session and re-selects
+      // sessions[0] if it no longer exists.
+      const lastSessionId = getLastSessionId(name);
       update(name, {
-        activeSessionId: null,
-        messageSource: { mode: "new-chat" },
+        activeSessionId: lastSessionId ?? null,
+        messageSource: lastSessionId
+          ? { mode: "history", sessionId: lastSessionId }
+          : { mode: "new-chat" },
         streamError: null,
         connectionPhase: "idle",
         connectionError: null,
-        forceNewSession: true,
+        // false = resume existing session; true = backend creates new one on next send
+        forceNewSession: !lastSessionId,
       });
       set({ currentAgent: name });
-      clearLastSessionId(name);
-      saveLastSession(name);
+      saveLastSession(name, lastSessionId ?? undefined);
       queryClient.invalidateQueries({ queryKey: qk.sessions(name) });
     },
 
