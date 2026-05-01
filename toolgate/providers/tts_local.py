@@ -25,6 +25,16 @@ class Qwen3TTS:
         self.default_voice = opts.get("voice", "nova")
         self.normalize = opts.get("normalize", False)
         self.normalize_provider_id: str | None = opts.get("normalize_provider_id") or None
+        # Per-provider request timeout override (overrides toolgate's shared
+        # 120s client default). Voice-clone warmup + long synth can exceed
+        # that — letting operators raise it via UI options.timeouts.request_secs
+        # avoids spurious 504s without changing the global client.
+        timeouts = opts.get("timeouts") or {}
+        self.request_timeout: float | None = (
+            float(timeouts["request_secs"])
+            if isinstance(timeouts, dict) and timeouts.get("request_secs") is not None
+            else None
+        )
 
     def _resolve_llm_config(self, registry) -> NormalizeLLMConfig | None:
         """Resolve normalize-LLM config from the referenced text provider.
@@ -66,14 +76,16 @@ class Qwen3TTS:
         processed = await normalize_text(http, text, config=llm_config)
         resolved_voice = voice if voice else self.default_voice
 
-        resp = await http.post(
-            f"{self.base_url}/v1/audio/speech",
-            json={
+        kwargs: dict = {
+            "json": {
                 "model": model or self.model,
                 "input": processed,
                 "voice": resolved_voice,
                 "response_format": response_format,
             },
-        )
+        }
+        if self.request_timeout is not None:
+            kwargs["timeout"] = self.request_timeout
+        resp = await http.post(f"{self.base_url}/v1/audio/speech", **kwargs)
         resp.raise_for_status()
         return resp.content
