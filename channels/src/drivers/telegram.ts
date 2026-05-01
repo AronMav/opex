@@ -3,7 +3,7 @@
  * Port of crates/hydeclaw-channel/src/channels/telegram.rs
  */
 
-import { Bot, Context, InlineKeyboard } from "grammy";
+import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
 import type { Message } from "grammy/types";
 import type { BridgeHandle, OutboundAction, UserEntry } from "../bridge";
 import type { IncomingMessageDto, MediaAttachment } from "../types";
@@ -1001,12 +1001,12 @@ async function executeAction(
       case "send_voice": {
         // Core sends raw bytes as base64 (Pi-NAT-friendly: Telegram's bot API
         // accepts InputFile uploads, so we don't depend on a public URL).
+        // grammy's InputFile is required — passing a web `File` ends up coerced
+        // to a string and Telegram returns "wrong remote file identifier".
         const audioBase64 = action.params.audio_base64 as string | undefined;
         if (!audioBase64) break;
         const buffer = Buffer.from(audioBase64, "base64");
-        const blob = new Blob([buffer], { type: "audio/ogg" });
-        const file = new File([blob], "voice.ogg", { type: "audio/ogg" });
-        await bot.api.sendVoice(chatId, file, {
+        await bot.api.sendVoice(chatId, new InputFile(buffer, "voice.ogg"), {
           caption: action.params.caption as string | undefined,
           reply_parameters: safeReplyParams(messageId),
         });
@@ -1019,9 +1019,7 @@ async function executeAction(
         const imageBase64 = action.params.image_base64 as string | undefined;
         if (!imageBase64) break;
         const buffer = Buffer.from(imageBase64, "base64");
-        const blob = new Blob([buffer], { type: "image/png" });
-        const file = new File([blob], "photo.png", { type: "image/png" });
-        await bot.api.sendPhoto(chatId, file, {
+        await bot.api.sendPhoto(chatId, new InputFile(buffer, "photo.png"), {
           caption: action.params.caption as string | undefined,
           reply_parameters: safeReplyParams(messageId),
         });
