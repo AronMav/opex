@@ -1,4 +1,15 @@
 # Agent Configuration Scaffold (Base Agent)
+
+# ── Heartbeat (automated maintenance) ──────────────────────────────────────
+# Runs the HEARTBEAT.md procedure on a cron schedule.
+# Section is OPTIONAL. When present, the agent receives automated heartbeat
+# messages at the specified cron expression.
+#
+[agent.heartbeat]
+cron = "0 3 * * 0"                      # Sunday 3 AM UTC (weekly skill maintenance)
+timezone = "UTC"                         # Optional — if omitted, cron is UTC
+# announce_to = "telegram"              # Optional — announce results to this channel
+
 # ── Subagent delegation policy ──────────────────────────────────────────
 # Controls how this agent's `agent` tool spawns subagents.
 # Section is OPTIONAL — defaults are sane.
