@@ -42,6 +42,10 @@ pub(crate) struct AgentCreatePayload {
     pub provider_connection: Option<String>,
     /// Optional fallback provider connection name for consecutive-failure switching.
     pub fallback_provider: Option<String>,
+    /// Optional TTS provider name to override the global active TTS for this agent.
+    /// Each TTS provider has its own `options.voice` — picking the provider picks the voice.
+    #[serde(default)]
+    pub tts_provider: Option<String>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
     /// Nullable fields: absent = preserve existing, explicit null = clear, value = update.
@@ -169,6 +173,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
             model: p.model,
             provider_connection: p.provider_connection,
             fallback_provider: p.fallback_provider.filter(|s| !s.is_empty()),
+            tts_provider: p.tts_provider.filter(|s| !s.is_empty()),
             temperature: p.temperature.unwrap_or(1.0),
             max_tokens: p.max_tokens,
             access: p.access.flatten().map(|a| AgentAccessConfig {
@@ -310,6 +315,7 @@ mod tests {
             model: "claude-3".to_string(),
             provider_connection: None,
             fallback_provider: None,
+            tts_provider: None,
             temperature: None,
             max_tokens: None,
             access: None,
