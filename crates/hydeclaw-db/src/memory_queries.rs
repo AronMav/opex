@@ -246,6 +246,23 @@ pub async fn search_fts_or(
     search_fts_inner(db, query, limit, lang, agent_id, true).await
 }
 
+/// Validate a `pg_trgm` similarity threshold before it reaches Postgres.
+///
+/// pg_trgm's `set_limit()` (and `SET pg_trgm.similarity_threshold = ...`)
+/// rejects NaN, ±Inf, and values outside `[0.0, 1.0]` with a cryptic error
+/// that doesn't surface the bad input. We catch here for two reasons:
+/// 1. Clearer operator-facing error message (logs the actual bad value).
+/// 2. Avoids a no-op transaction round-trip + connection-state surprise
+///    if a future refactor exposes `threshold` to user/config input.
+pub(crate) fn validate_trgm_threshold(threshold: f32) -> Result<()> {
+    if !threshold.is_finite() || !(0.0..=1.0).contains(&threshold) {
+        anyhow::bail!(
+            "pg_trgm similarity threshold must be a finite number in [0.0, 1.0], got: {threshold}"
+        );
+    }
+    Ok(())
+}
+
 /// Trigram similarity search using pg_trgm.
 ///
 /// Uses operator `%` so the GIN index `idx_memory_chunks_content_trgm`
@@ -255,6 +272,11 @@ pub async fn search_fts_or(
 /// rollback, so a query error cannot leak the GUC onto the pooled connection.
 ///
 /// `agent_id`: filter to agent's own chunks plus shared chunks. Empty string = no filter.
+///
+/// Returns `Err` (without opening a transaction) when `threshold` is NaN,
+/// ±Inf, or outside `[0.0, 1.0]`. Today the only call site passes a hardcoded
+/// `0.3` const, but the guard exists so future config-driven thresholds
+/// fail-fast with a clear error instead of an opaque pg_trgm rejection.
 pub async fn search_trigram(
     db: &PgPool,
     query: &str,
@@ -262,6 +284,8 @@ pub async fn search_trigram(
     threshold: f32,
     agent_id: &str,
 ) -> Result<Vec<MemoryResult>> {
+    validate_trgm_threshold(threshold)?;
+
     if query.trim().is_empty() {
         return Ok(vec![]);
     }
@@ -270,8 +294,8 @@ pub async fn search_trigram(
     let mut tx = db.begin().await.context("begin trigram tx")?;
 
     // Postgres parses `SET` before parameter binding, so $1 doesn't work here.
-    // Inline the value via format!() — `threshold: f32` is validated upstream
-    // (caller passes a known config value), no injection risk.
+    // Inline the value via format!() — `threshold` is validated above (finite,
+    // in [0.0, 1.0]), so `format!("{f32}")` produces a Postgres-safe literal.
     let sql = format!("SET LOCAL pg_trgm.similarity_threshold = {threshold}");
     sqlx::query(&sql)
         .execute(&mut *tx)
@@ -583,6 +607,50 @@ mod tests {
     // These catch the class of bugs where column removal breaks INSERT/SELECT
     // (like the user_id NOT NULL bug caught in production).
 
+    // ── pg_trgm threshold validation ────────────────────────────────
+
+    #[test]
+    fn validate_trgm_threshold_accepts_in_range() {
+        assert!(super::validate_trgm_threshold(0.0).is_ok());
+        assert!(super::validate_trgm_threshold(0.3).is_ok());
+        assert!(super::validate_trgm_threshold(0.5).is_ok());
+        assert!(super::validate_trgm_threshold(1.0).is_ok());
+    }
+
+    #[test]
+    fn validate_trgm_threshold_rejects_nan() {
+        let err = super::validate_trgm_threshold(f32::NAN).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("NaN") || msg.contains("nan") || msg.contains("finite"));
+    }
+
+    #[test]
+    fn validate_trgm_threshold_rejects_infinity() {
+        assert!(super::validate_trgm_threshold(f32::INFINITY).is_err());
+        assert!(super::validate_trgm_threshold(f32::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn validate_trgm_threshold_rejects_out_of_range() {
+        // Below 0.0
+        assert!(super::validate_trgm_threshold(-0.0001).is_err());
+        assert!(super::validate_trgm_threshold(-1.0).is_err());
+        // Above 1.0
+        assert!(super::validate_trgm_threshold(1.0001).is_err());
+        assert!(super::validate_trgm_threshold(2.0).is_err());
+        // Subnormal-but-still-out-of-range edge
+        assert!(super::validate_trgm_threshold(f32::MAX).is_err());
+        assert!(super::validate_trgm_threshold(f32::MIN).is_err());
+    }
+
+    #[test]
+    fn validate_trgm_threshold_error_includes_bad_value() {
+        // Operator-facing error must surface the actual bad input so logs
+        // are diagnostic, not "set_limit failed" with no context.
+        let err = super::validate_trgm_threshold(2.5).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("2.5"), "error must include the bad value, got: {msg}");
+    }
 
     #[test]
     fn or_tsquery_joins_words_with_pipe() {
