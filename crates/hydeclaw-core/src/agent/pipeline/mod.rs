@@ -21,6 +21,7 @@ pub mod parallel;
 pub mod dispatch;
 pub mod artifact_hook;
 pub mod tool_defs;
+pub mod chunk_truncate;
 pub mod memory;
 pub mod commands;
 pub mod handlers;

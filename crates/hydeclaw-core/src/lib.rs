@@ -65,6 +65,16 @@ pub mod agent {
     // `tests/integration_path_canonicalize.rs`.
     #[path = "path_guard.rs"]
     pub mod path_guard;
+
+    // Phase 2 P0.4 follow-up: bridge for `MemoryStore::load_pinned`'s
+    // `crate::agent::pipeline::memory::truncate_chunk_content` call. The
+    // re-mounted `memory/store.rs` (see lib.rs `__memory_bridge`) refers to
+    // this path; without it the lib build fails. The bridge is `#[doc(hidden)]`
+    // and exposes nothing beyond what `store.rs` already needs.
+    #[doc(hidden)]
+    pub mod pipeline {
+        pub use crate::__memory_pipeline_bridge as memory;
+    }
 }
 
 // ── Phase 62 Plan 04: shutdown drain surface ───────────────────────────
@@ -196,3 +206,84 @@ pub mod uploads;
 // behind `#[cfg(feature = "ts-gen")]` — production builds still don't pull
 // in ts-rs.
 pub mod dto_export;
+
+// ── Phase 2 P0.4 follow-up: memory test facade ─────────────────────────
+// Tightly-scoped, `#[doc(hidden)]` re-exports so integration tests can
+// exercise `MemoryStore::search_hybrid` 3-way RRF combining (PR #22 added
+// the 8-state shortcut + RRF combiner in store.rs:141-199 with zero direct
+// coverage — `tests/test_pg_trgm_search.rs` only covers `search_trigram`
+// alone). See `tests/test_search_hybrid_rrf.rs` for the consumer.
+//
+// The publicly reachable names are exactly four:
+//   * `memory_test_facade::MemoryStore`
+//   * `memory_test_facade::EmbeddingService`
+//   * `memory_test_facade::MemoryResult`
+//   * `memory_test_facade::MemoryChunk`
+// All other supporting modules below are `#[doc(hidden)]` and exist solely
+// because Rust requires the lib crate's module tree to satisfy every
+// `crate::*` reference in the source files we re-mount. They expose NO
+// additional public API surface — they are bridges, not new types.
+//
+// DO NOT extend the publicly reachable list without an explicit follow-up
+// justification — the cap is meant to keep the lib facade from becoming a
+// parallel module tree.
+
+// `crate::memory::*` re-mount. We deliberately re-mount only `admin.rs`,
+// `embedding.rs`, and `store.rs` — NOT `mod.rs` (which would pull in the
+// `MemoryConfig` serde default chain via `crate::config`) and NOT
+// `watcher.rs` (which references `crate::agent::workspace::*` and would
+// cascade the entire agent subtree).
+//
+// The only remaining cross-module reference inside the three re-mounted
+// files is `store.rs`'s `crate::agent::pipeline::memory::truncate_chunk_content`
+// call inside `MemoryStore::load_pinned`. That path is satisfied by the
+// `__memory_pipeline_bridge` below, wired into the existing `pub mod agent`
+// block higher up. The bridge re-implements the function inline (it's six
+// lines of pure-string logic) instead of pulling in the real pipeline
+// subtree.
+//
+// Neither bridge widens the outward-facing surface — `memory_test_facade`
+// is the only name a test can `use` from outside the crate.
+#[doc(hidden)]
+#[path = "memory"]
+pub mod __memory_bridge {
+    #[path = "admin.rs"]
+    pub mod admin;
+    #[path = "embedding.rs"]
+    pub mod embedding;
+    #[path = "store.rs"]
+    pub mod store;
+
+    // Re-export the row types from `hydeclaw-db` at the same path
+    // `crate::memory::{MemoryChunk, MemoryResult}` that `store.rs` imports
+    // via `use super::{MemoryChunk, MemoryResult};`.
+    pub use hydeclaw_db::memory_queries::{MemoryChunk, MemoryResult};
+}
+
+// Bridge alias so `store.rs`'s `crate::memory::admin::validated_fts_language`
+// resolves inside the lib crate. NOT exposed for re-export from the facade.
+#[doc(hidden)]
+pub use __memory_bridge as memory;
+
+// `agent::pipeline::memory::truncate_chunk_content` bridge. Re-mounts the
+// canonical leaf module `agent/pipeline/chunk_truncate.rs` (deps: std only,
+// zero crate::* references) so production and test paths share one source
+// of truth. The full `agent/pipeline/memory.rs` would cascade `MemoryService`
+// and dozens of other modules, hence the leaf split.
+#[doc(hidden)]
+#[path = "agent/pipeline/chunk_truncate.rs"]
+pub mod __memory_pipeline_bridge;
+
+// The path `crate::agent::pipeline::memory::truncate_chunk_content` (used by
+// `store.rs::load_pinned`) is satisfied by the `pub mod pipeline` extension
+// inside the existing `pub mod agent` block higher up in this file
+// (search for "Phase 2 P0.4 follow-up: bridge").
+
+#[doc(hidden)]
+pub mod memory_test_facade {
+    //! Minimal re-exports for integration tests of `MemoryStore` 3-way RRF.
+    //! NOT for production use. `#[doc(hidden)]` keeps it out of cargo doc.
+    pub use crate::__memory_bridge::embedding::EmbeddingService;
+    pub use crate::__memory_bridge::store::MemoryStore;
+    pub use crate::__memory_bridge::{MemoryChunk, MemoryResult};
+}

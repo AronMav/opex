@@ -194,7 +194,14 @@ impl MemoryStore {
             (W_SEM * sem_rrf + W_FTS * fts_rrf + W_TRGM * trgm_rrf, r)
         }).collect();
 
-        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        // Score-descending; on ties, fall back to chunk id ascending for determinism.
+        // Without the secondary key, ordering follows HashMap::into_values iteration
+        // (random under default hasher) and integration tests flake.
+        scored.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.id.cmp(&b.1.id))
+        });
         Ok(scored.into_iter().take(limit).map(|(_, r)| r).collect())
     }
 
