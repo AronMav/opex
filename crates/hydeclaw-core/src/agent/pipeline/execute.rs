@@ -260,17 +260,13 @@ pub async fn execute<S: EventSink>(
             let provider_name = response.provider.clone()
                 .unwrap_or_else(|| engine.cfg().provider.name().to_string());
             let model = response.model.clone().unwrap_or_default();
-            let input = usage.input_tokens;
-            let output = usage.output_tokens;
-            // Extended fields — subsets of input/output (NOT additive). Persisting
+            // Clone usage by-value so the spawned task gets owned data.
+            // Extended fields are subsets of input/output (NOT additive); persisting
             // them lets dashboards split the bill by cache hits + reasoning.
-            let cache_read = usage.cache_read_tokens;
-            let cache_creation = usage.cache_creation_tokens;
-            let reasoning = usage.reasoning_tokens;
+            let usage = usage.clone();
             tokio::spawn(async move {
                 if let Err(e) = crate::db::usage::record_usage(
-                    &db, &agent, &provider_name, &model, input, output, Some(session_id),
-                    cache_read, cache_creation, reasoning,
+                    &db, &agent, &provider_name, &model, Some(session_id), &usage,
                 )
                 .await
                 {
