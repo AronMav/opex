@@ -1154,6 +1154,7 @@ version = "0.25.2"
 dependencies = [
  "anyhow",
  "chrono",
+ "hydeclaw-types",
  "serde",
  "serde_json",
  "sqlx",

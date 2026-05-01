@@ -13,21 +13,22 @@ pub const STATUS_ABORTED_FAILOVER: &str = "aborted_failover";
 
 /// Record a single LLM call's token usage.
 ///
-/// Extended fields (`cache_read_tokens`, `cache_creation_tokens`, `reasoning_tokens`)
-/// are SUBSETS of `input_tokens` (cache_*) and `output_tokens` (reasoning).
-/// Pass `None` when the provider does not return them. Never sum.
-#[allow(clippy::too_many_arguments)]
+/// Extended fields on `TokenUsage` (`cache_read_tokens`, `cache_creation_tokens`,
+/// `reasoning_tokens`) are SUBSETS of `input_tokens` (cache_*) and
+/// `output_tokens` (reasoning). They are `None` when the provider does not
+/// return them. Never sum.
+///
+/// Takes `&TokenUsage` rather than 5 expanded fields so a future `TokenUsage`
+/// extension (e.g., audio/image tokens) doesn't ripple through every call site
+/// and so the compiler catches `(cache_read, cache_creation)` field swaps that
+/// `Option<u32>` positional arguments cannot.
 pub async fn record_usage(
     db: &PgPool,
     agent_id: &str,
     provider: &str,
     model: &str,
-    input_tokens: u32,
-    output_tokens: u32,
     session_id: Option<Uuid>,
-    cache_read_tokens: Option<u32>,
-    cache_creation_tokens: Option<u32>,
-    reasoning_tokens: Option<u32>,
+    usage: &hydeclaw_types::TokenUsage,
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO usage_log (\
@@ -40,12 +41,12 @@ pub async fn record_usage(
     .bind(agent_id)
     .bind(provider)
     .bind(model)
-    .bind(input_tokens as i32)
-    .bind(output_tokens as i32)
+    .bind(usage.input_tokens as i32)
+    .bind(usage.output_tokens as i32)
     .bind(session_id)
-    .bind(cache_read_tokens.map(|v| v as i32))
-    .bind(cache_creation_tokens.map(|v| v as i32))
-    .bind(reasoning_tokens.map(|v| v as i32))
+    .bind(usage.cache_read_tokens.map(|v| v as i32))
+    .bind(usage.cache_creation_tokens.map(|v| v as i32))
+    .bind(usage.reasoning_tokens.map(|v| v as i32))
     .execute(db)
     .await?;
     Ok(())
