@@ -315,22 +315,21 @@ pub async fn update_skill_last_used_if_stale(
 
     let updated = if frontmatter.contains("last_used_at:") {
         // Replace existing line — only inside frontmatter
-        let mut in_fm = true;
-        let mut close_seen = false;
+        let mut opened = false;
+        let mut closed = false;
         content
             .lines()
             .map(|line| {
-                if !close_seen && line.trim() == "---" {
-                    // first --- opens frontmatter, second --- closes it
-                    if in_fm {
-                        // skip the opening ---
-                        in_fm = false;
-                    } else {
-                        close_seen = true;
+                if line.trim() == "---" {
+                    if !opened {
+                        opened = true;
+                    } else if !closed {
+                        closed = true;
                     }
                     return line.to_string();
                 }
-                if !close_seen && line.trim_start().starts_with("last_used_at:") {
+                // Only replace inside frontmatter (between first and second ---)
+                if opened && !closed && line.trim_start().starts_with("last_used_at:") {
                     return format!("last_used_at: \"{}\"", now_iso);
                 }
                 line.to_string()
@@ -563,6 +562,32 @@ mod tests {
 
         let mtime_after = std::fs::metadata(&path).unwrap().modified().unwrap();
         assert_eq!(mtime_before, mtime_after, "файл не должен быть перезаписан");
+    }
+
+    #[tokio::test]
+    async fn update_skill_last_used_does_not_touch_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("body-skill.md");
+        // File has last_used_at in frontmatter AND mentions it in body
+        let old_ts = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+        std::fs::write(
+            &path,
+            format!(
+                "---\nname: test\nlast_used_at: \"{old_ts}\"\n---\n\nDo not replace last_used_at: here.\n"
+            ),
+        ).unwrap();
+
+        update_skill_last_used_if_stale(
+            path.to_str().unwrap(),
+            "2026-05-01T12:00:00Z",
+            chrono::Duration::hours(1),
+        ).await;
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        // Frontmatter should be updated
+        assert!(content.contains("last_used_at: \"2026-05-01T12:00:00Z\""));
+        // Body line should be untouched
+        assert!(content.contains("Do not replace last_used_at: here."));
     }
 
     /// Audit: every `tools_required` entry across workspace/ and config/
