@@ -457,16 +457,29 @@ pub(super) fn parse_anthropic_response(api_resp: AnthropicResponse, model: &str)
     }
 }
 
+/// Bundles the per-stream thinking-block state so `process_sse_event` doesn't
+/// take five `&mut` accumulator parameters. Lives on the stack of the
+/// streaming consume loop; reset on each new HTTP response.
+#[derive(Default)]
+struct ThinkingState {
+    /// Accumulated text inside the current `<thinking>` block (between
+    /// `content_block_start` and `content_block_stop`).
+    content: String,
+    /// Accumulated cryptographic signature for the current thinking block.
+    signature: String,
+    /// True when we are between a thinking-block start and its stop.
+    in_block: bool,
+    /// Sealed `ThinkingBlock` records, one per closed thinking block.
+    blocks: Vec<hydeclaw_types::ThinkingBlock>,
+}
+
 /// Process one parsed Anthropic SSE event. Calls `emit_thinking` for thinking content
 /// (open/close tags + deltas) and `emit_text` for text_delta content. Captures usage
 /// from `message_start` (input + cache_*) and `message_delta` (cumulative output) into
 /// `usage_buffer`.
 fn process_sse_event(
     event: &serde_json::Value,
-    thinking_content: &mut String,
-    current_signature: &mut String,
-    in_thinking_block: &mut bool,
-    thinking_blocks: &mut Vec<hydeclaw_types::ThinkingBlock>,
+    thinking: &mut ThinkingState,
     usage_buffer: &mut StreamingAnthropicUsage,
     mut emit_thinking: impl FnMut(String),
     mut emit_text: impl FnMut(String),
@@ -526,26 +539,23 @@ fn process_sse_event(
                 }
             }
         }
-        Some("content_block_start") => {
+        Some("content_block_start")
             if event
                 .get("content_block")
                 .and_then(|b| b.get("type"))
                 .and_then(|t| t.as_str())
-                == Some("thinking")
-            {
-                *in_thinking_block = true;
-                emit_thinking("<thinking>".to_string());
-            }
+                == Some("thinking") =>
+        {
+            thinking.in_block = true;
+            emit_thinking("<thinking>".to_string());
         }
-        Some("content_block_stop") => {
-            if *in_thinking_block {
-                emit_thinking("</thinking>".to_string());
-                thinking_blocks.push(hydeclaw_types::ThinkingBlock {
-                    thinking: std::mem::take(thinking_content),
-                    signature: std::mem::take(current_signature),
-                });
-                *in_thinking_block = false;
-            }
+        Some("content_block_stop") if thinking.in_block => {
+            emit_thinking("</thinking>".to_string());
+            thinking.blocks.push(hydeclaw_types::ThinkingBlock {
+                thinking: std::mem::take(&mut thinking.content),
+                signature: std::mem::take(&mut thinking.signature),
+            });
+            thinking.in_block = false;
         }
         Some("content_block_delta") => {
             let delta = event.get("delta");
@@ -557,13 +567,13 @@ fn process_sse_event(
                 }
                 Some("thinking_delta") => {
                     if let Some(text) = delta.and_then(|d| d.get("thinking")).and_then(|t| t.as_str()) {
-                        thinking_content.push_str(text);
+                        thinking.content.push_str(text);
                         emit_thinking(text.to_string());
                     }
                 }
                 Some("signature_delta") => {
                     if let Some(sig) = delta.and_then(|d| d.get("signature")).and_then(|s| s.as_str()) {
-                        current_signature.push_str(sig);
+                        thinking.signature.push_str(sig);
                     }
                 }
                 _ => {}
@@ -583,10 +593,7 @@ fn process_sse_events_for_test(
     use std::cell::RefCell;
     let text_chunks: RefCell<Vec<String>> = RefCell::new(vec![]);
     let thinking_chunks: RefCell<Vec<String>> = RefCell::new(vec![]);
-    let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
-    let mut thinking_content = String::new();
-    let mut current_signature = String::new();
-    let mut in_thinking_block = false;
+    let mut thinking = ThinkingState::default();
     let mut usage_buffer = StreamingAnthropicUsage::default();
 
     for line in lines {
@@ -597,24 +604,18 @@ fn process_sse_events_for_test(
         let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else { continue };
         process_sse_event(
             &event,
-            &mut thinking_content,
-            &mut current_signature,
-            &mut in_thinking_block,
-            &mut thinking_blocks,
+            &mut thinking,
             &mut usage_buffer,
             |chunk| thinking_chunks.borrow_mut().push(chunk),
             |chunk| text_chunks.borrow_mut().push(chunk),
         );
     }
-    (text_chunks.into_inner(), thinking_chunks.into_inner(), thinking_blocks)
+    (text_chunks.into_inner(), thinking_chunks.into_inner(), thinking.blocks)
 }
 
 #[cfg(test)]
 fn parse_streaming_usage_for_test(lines: &[String]) -> Option<hydeclaw_types::TokenUsage> {
-    let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
-    let mut thinking_content = String::new();
-    let mut current_signature = String::new();
-    let mut in_thinking_block = false;
+    let mut thinking = ThinkingState::default();
     let mut usage_buffer = StreamingAnthropicUsage::default();
 
     for line in lines {
@@ -625,10 +626,7 @@ fn parse_streaming_usage_for_test(lines: &[String]) -> Option<hydeclaw_types::To
         let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else { continue };
         process_sse_event(
             &event,
-            &mut thinking_content,
-            &mut current_signature,
-            &mut in_thinking_block,
-            &mut thinking_blocks,
+            &mut thinking,
             &mut usage_buffer,
             |_| {},
             |_| {},
@@ -770,10 +768,7 @@ impl LlmProvider for AnthropicProvider {
 
         let mut full_content = String::new();
         let mut buffer = String::new();
-        let mut thinking_content = String::new();
-        let mut current_signature = String::new();
-        let mut in_thinking_block = false;
-        let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
+        let mut thinking = ThinkingState::default();
         let mut usage_buffer = StreamingAnthropicUsage::default();
 
         use tokio_stream::StreamExt;
@@ -804,22 +799,19 @@ impl LlmProvider for AnthropicProvider {
                     continue;
                 }
 
-                if let Some(data) = line.strip_prefix("data: ") {
-                    if let Ok(event) = serde_json::from_str::<serde_json::Value>(data) {
-                        process_sse_event(
-                            &event,
-                            &mut thinking_content,
-                            &mut current_signature,
-                            &mut in_thinking_block,
-                            &mut thinking_blocks,
-                            &mut usage_buffer,
-                            |_| {},
-                            |text| {
-                                full_content.push_str(&text);
-                                chunk_tx.send(text).ok();
-                            },
-                        );
-                    }
+                if let Some(data) = line.strip_prefix("data: ")
+                    && let Ok(event) = serde_json::from_str::<serde_json::Value>(data)
+                {
+                    process_sse_event(
+                        &event,
+                        &mut thinking,
+                        &mut usage_buffer,
+                        |_| {},
+                        |text| {
+                            full_content.push_str(&text);
+                            chunk_tx.send(text).ok();
+                        },
+                    );
                 }
             }
         }
@@ -868,7 +860,7 @@ impl LlmProvider for AnthropicProvider {
             fallback_notice: None,
             tools_used: vec![],
             iterations: 0,
-            thinking_blocks,
+            thinking_blocks: thinking.blocks,
         })
     }
 
