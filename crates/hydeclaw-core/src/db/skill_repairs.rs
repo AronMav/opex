@@ -71,6 +71,11 @@ pub async fn resolve(
     status: &str,
     note: Option<&str>,
 ) -> sqlx::Result<bool> {
+    if !matches!(status, "done" | "failed") {
+        return Err(sqlx::Error::Protocol(
+            format!("invalid resolve status: {status}").into(),
+        ));
+    }
     let rows = sqlx::query(
         "UPDATE pending_skill_repairs
          SET status = $1, resolved_at = now(), resolution_note = $2
