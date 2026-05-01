@@ -283,3 +283,61 @@ describe("switchAgent — clears ?s= param to prevent cross-agent resolver bounc
     expect(switchAgentBlock).toContain("router.replace");
   });
 });
+
+// ── 7. Override-state contract (static analysis of page.tsx) ─────────────────
+
+describe("overrideUrlSession override-state contract", () => {
+  async function getPageSrc() {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    return fs.readFileSync(
+      path.resolve(__dirname, "../../app/(authenticated)/chat/page.tsx"),
+      "utf8"
+    );
+  }
+
+  it("declares overrideUrlSession state", async () => {
+    const src = await getPageSrc();
+    expect(src).toContain("overrideUrlSession");
+    expect(src).toContain("setOverrideUrlSession");
+  });
+
+  it("declares effectiveUrlSessionId derived from override", async () => {
+    const src = await getPageSrc();
+    expect(src).toContain("effectiveUrlSessionId");
+    expect(src).toContain(
+      "overrideUrlSession !== undefined ? overrideUrlSession : urlSessionId"
+    );
+  });
+
+  it("switchAgent sets override to null and does NOT call router.replace", async () => {
+    const src = await getPageSrc();
+    const switchBlock = src.slice(
+      src.indexOf("const switchAgent = useCallback"),
+      src.indexOf("}, []);", src.indexOf("const switchAgent = useCallback")) + "}, []);".length
+    );
+    expect(switchBlock).toContain("setOverrideUrlSession(null)");
+    expect(switchBlock).not.toContain("router.replace");
+  });
+
+  it("cross-agent resolver uses effectiveUrlSessionId in body and deps", async () => {
+    const src = await getPageSrc();
+    const resolverBlock = src.slice(
+      src.indexOf("urlResolveFetched = useRef"),
+      src.indexOf("}, [effectiveUrlSessionId,") + "}, [effectiveUrlSessionId,".length
+    );
+    expect(resolverBlock).toContain("effectiveUrlSessionId");
+    expect(resolverBlock).toContain("[effectiveUrlSessionId,");
+  });
+
+  it("URL-sync guard uses effectiveUrlSessionId", async () => {
+    const src = await getPageSrc();
+    const syncBlock = src.slice(
+      src.indexOf("// Sync activeSessionId → URL ?s= param"),
+      src.indexOf("}, [activeSessionId, searchParams, sessions, effectiveUrlSessionId]);")
+        + "}, [activeSessionId, searchParams, sessions, effectiveUrlSessionId]);".length
+    );
+    expect(syncBlock).toContain("effectiveUrlSessionId");
+    expect(syncBlock).toContain("[activeSessionId, searchParams, sessions, effectiveUrlSessionId]");
+  });
+});
