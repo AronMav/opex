@@ -539,7 +539,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let mut thinking_filter = crate::agent::thinking::ThinkingFilter::new();
         // Indexed by tool_call index: (id, name, arguments)
         let mut tool_call_parts: Vec<(String, String, String)> = Vec::new();
-        let mut usage: Option<(u32, u32, Option<u32>, Option<u32>, Option<u32>)> = None;
+        let mut usage: Option<StreamingUsage> = None;
         let mut finish_reason: Option<String> = None;
 
         use tokio_stream::StreamExt;
@@ -585,17 +585,19 @@ impl LlmProvider for OpenAiCompatibleProvider {
                         Ok(chunk_json) => {
                             // Capture usage if present (some providers send in final chunk)
                             if let Some(ref u) = chunk_json.usage {
-                                usage = Some((
-                                    u.prompt_tokens,
-                                    u.completion_tokens,
-                                    u.prompt_tokens_details
+                                usage = Some(StreamingUsage {
+                                    input: u.prompt_tokens,
+                                    output: u.completion_tokens,
+                                    cache_read: u
+                                        .prompt_tokens_details
                                         .as_ref()
                                         .and_then(|d| d.cached_tokens),
-                                    None, // OpenAI does not report cache writes
-                                    u.completion_tokens_details
+                                    cache_creation: None, // OpenAI does not report cache writes
+                                    reasoning: u
+                                        .completion_tokens_details
                                         .as_ref()
                                         .and_then(|d| d.reasoning_tokens),
-                                ));
+                                });
                             }
                             if let Some(choice) = chunk_json.choices.first() {
                                 // Capture finish reason
@@ -739,13 +741,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         Ok(LlmResponse {
             content: full_content,
             tool_calls,
-            usage: usage.map(|(inp, out, cr, cc, rs)| hydeclaw_types::TokenUsage {
-                input_tokens: inp,
-                output_tokens: out,
-                cache_read_tokens: cr,
-                cache_creation_tokens: cc,
-                reasoning_tokens: rs,
-            }),
+            usage: usage.map(Into::into),
             model: Some(effective_model),
             provider: Some(self.provider_name.clone()),
             fallback_notice: None,
@@ -841,6 +837,36 @@ struct ChatPromptTokensDetails {
 struct ChatCompletionTokensDetails {
     #[serde(default)]
     reasoning_tokens: Option<u32>,
+}
+
+/// Internal buffer for usage data captured across streaming chunks.
+///
+/// OpenAI sends usage only in the final chunk of a streaming response (when
+/// `stream_options.include_usage = true`), but we use a buffer instead of
+/// directly building `TokenUsage` because the chunk-handler loop is in a
+/// different scope from `LlmResponse` construction.
+///
+/// Replaces a 5-tuple at multiple sites — named fields prevent positional-confusion
+/// bugs (e.g. swapping `cache_read` and `cache_creation` at construction).
+#[derive(Default)]
+struct StreamingUsage {
+    input: u32,
+    output: u32,
+    cache_read: Option<u32>,
+    cache_creation: Option<u32>,
+    reasoning: Option<u32>,
+}
+
+impl From<StreamingUsage> for hydeclaw_types::TokenUsage {
+    fn from(u: StreamingUsage) -> Self {
+        Self {
+            input_tokens: u.input,
+            output_tokens: u.output,
+            cache_read_tokens: u.cache_read,
+            cache_creation_tokens: u.cache_creation,
+            reasoning_tokens: u.reasoning,
+        }
+    }
 }
 
 // ── MiniMax XML tool call extraction ──
