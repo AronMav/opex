@@ -29,8 +29,15 @@ async def lifespan(app: FastAPI):
     # Phase 62 RES-07: cap outbound provider connections to prevent pool exhaustion
     # on Raspberry Pi. httpx queues requests past max_connections; PoolTimeout fires
     # after timeout.pool (120s here) — see Pitfall 4 in 62-RESEARCH.md.
+    #
+    # Request/connect timeouts are NOT set on the shared client — each provider
+    # passes its own `timeout=` per call (resolved from options.timeouts.request_secs
+    # via providers.base.resolve_request_timeout). This keeps toolgate from
+    # imposing a one-size-fits-all cap on long-running operations like 10-minute
+    # voice-clone synthesis. The pool timeout stays at 120s (httpx default) — that's
+    # connection-acquisition wait, not request duration.
     http_client = httpx.AsyncClient(
-        timeout=120.0,
+        timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=120.0),
         limits=httpx.Limits(
             max_connections=20,
             max_keepalive_connections=10,
