@@ -4,21 +4,11 @@
 
 use crate::agent::memory_service::MemoryService;
 
-pub(crate) const MEMORY_CHUNK_MAX_CHARS: usize = 6_000;
-
-/// Truncate a memory chunk to fit context budget.
-///
-/// Excalidraw docs are replaced with a short placeholder; other content
-/// is hard-capped at `MEMORY_CHUNK_MAX_CHARS` by Unicode scalar boundary.
-pub(crate) fn truncate_chunk_content(content: &str) -> &str {
-    if content.contains("excalidraw-plugin: parsed")
-        || content.contains("== EXCALIDRAW VIEW ==")
-    {
-        return "[Excalidraw diagram — binary content, skipped]";
-    }
-    let limit = content.floor_char_boundary(MEMORY_CHUNK_MAX_CHARS.min(content.len()));
-    &content[..limit]
-}
+// Canonical definitions live in `crate::agent::pipeline::chunk_truncate` (leaf
+// module with zero crate-internal deps). The integration-test bridge in
+// `lib.rs::__memory_pipeline_bridge` re-mounts the same leaf, so there is
+// exactly one source of truth for both paths.
+pub(crate) use crate::agent::pipeline::chunk_truncate::truncate_chunk_content;
 
 // ── MemoryContext ────────────────────────────────────────────────────────────
 
@@ -378,7 +368,7 @@ mod tests {
     fn long_text_truncated_to_limit() {
         let long = "a".repeat(10_000);
         let out = truncate_chunk_content(&long);
-        assert_eq!(out.len(), super::MEMORY_CHUNK_MAX_CHARS);
+        assert_eq!(out.len(), crate::agent::pipeline::chunk_truncate::MEMORY_CHUNK_MAX_CHARS);
     }
 
     #[test]
@@ -389,8 +379,8 @@ mod tests {
 
     #[test]
     fn exactly_at_limit_unchanged() {
-        let at_limit = "b".repeat(super::MEMORY_CHUNK_MAX_CHARS);
+        let at_limit = "b".repeat(crate::agent::pipeline::chunk_truncate::MEMORY_CHUNK_MAX_CHARS);
         let out = truncate_chunk_content(&at_limit);
-        assert_eq!(out.len(), super::MEMORY_CHUNK_MAX_CHARS);
+        assert_eq!(out.len(), crate::agent::pipeline::chunk_truncate::MEMORY_CHUNK_MAX_CHARS);
     }
 }
