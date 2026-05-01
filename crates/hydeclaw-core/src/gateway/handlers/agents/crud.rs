@@ -412,10 +412,10 @@ pub(crate) async fn api_update_agent(
         }
         // error_break_threshold is not exposed in AgentDetailDto and will be absent on
         // round-trips from the UI; restore it from the existing config to avoid data loss.
-        if let Some(Some(ref mut tl)) = payload.tool_loop {
-            if tl.error_break_threshold.is_none() {
-                tl.error_break_threshold = a.tool_loop.as_ref().and_then(|t| t.error_break_threshold);
-            }
+        if let Some(Some(ref mut tl)) = payload.tool_loop
+            && tl.error_break_threshold.is_none()
+        {
+            tl.error_break_threshold = a.tool_loop.as_ref().and_then(|t| t.error_break_threshold);
         }
     }
 
