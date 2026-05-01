@@ -100,8 +100,7 @@ Expected: `5 failed` in the new suite, all existing tests still pass.
 - [ ] **Step 1.3 — Commit the failing tests**
 
 ```bash
-cd ui && git add src/stores/__tests__/agent-switching.test.ts
-git commit -m "test(ui): add failing contract tests for overrideUrlSession fix"
+cd ui && git add src/stores/__tests__/agent-switching.test.ts && git commit -m "test(ui): add failing contract tests for overrideUrlSession fix"
 ```
 
 ---
@@ -189,9 +188,35 @@ Find the current `switchAgent` (look for `const switchAgent = useCallback`). Rep
   }, []);
 ```
 
-Note: `router` and `searchParams` are removed from the deps array. Verify `router` is still imported (it may be used elsewhere in the file — do not remove the `useRouter()` call or its import if other code in the component references it).
+- [ ] **Step 3.2 — Remove unused `router` variable**
 
-- [ ] **Step 3.2 — Verify TypeScript compiles**
+`router` was only used in the old `switchAgent`. After the replacement, search the file for any remaining `router.` usage:
+
+```bash
+grep -n "router\." ui/src/app/"(authenticated)"/chat/page.tsx
+```
+
+Expected: no output (no remaining usages). If no usages, delete the declaration near line 77:
+
+```tsx
+  const router = useRouter();   // ← delete this line
+```
+
+Also remove `useRouter` from the `next/navigation` import at the top of the file — change:
+
+```tsx
+import { useSearchParams, useRouter } from "next/navigation";
+```
+
+to:
+
+```tsx
+import { useSearchParams } from "next/navigation";
+```
+
+If `grep` shows other usages, leave both lines in place.
+
+- [ ] **Step 3.3 — Verify TypeScript compiles**
 
 ```bash
 cd ui && npx tsc --noEmit 2>&1
@@ -199,7 +224,7 @@ cd ui && npx tsc --noEmit 2>&1
 
 Expected: no output.
 
-- [ ] **Step 3.3 — Run tests**
+- [ ] **Step 3.4 — Run tests**
 
 ```bash
 cd ui && npm test -- --run agent-switching 2>&1 | grep -E "passed|failed"
@@ -366,13 +391,13 @@ Expected: no output.
 cd ui && npm test -- --run 2>&1 | tail -8
 ```
 
-Expected: all tests pass (`X passed`), including all 16 in `agent-switching.test.ts`.
+Expected: all tests pass (`X passed`), including all 21 in `agent-switching.test.ts` (16 pre-existing + 5 added in Task 1).
 
 - [ ] **Step 5.5 — Commit everything**
 
 ```bash
-cd ui && git add src/app/"(authenticated)"/chat/page.tsx
-git commit -m "fix(ui): use overrideUrlSession to block cross-agent resolver during agent switch
+cd ui && git add src/app/"(authenticated)"/chat/page.tsx && git commit -m \
+  "fix(ui): use overrideUrlSession to block cross-agent resolver during agent switch
 
 Introduces overrideUrlSession React state (null when user switches agents)
 that shadows urlSessionId via effectiveUrlSessionId. Because React batches
