@@ -962,10 +962,15 @@ pub(crate) async fn api_chat_sse(
                     cache_creation_tokens,
                     reasoning_tokens,
                 } => {
+                    // agentName: tag with the currently-responding agent so the UI
+                    // can route this usage to the correct agent's tokenUsage state.
+                    // Without it, in a multi-agent session a usage event from agent
+                    // B fired while A is mid-stream would overwrite A's state.
                     let mut payload = serde_json::json!({
                         "type": sse_types::USAGE,
                         "inputTokens": input_tokens,
                         "outputTokens": output_tokens,
+                        "agentName": current_responding_agent.clone(),
                     });
                     // Extended fields — subsets of input/output (not additive). Only emit
                     // when present so older clients see no change in payload size for

@@ -1526,6 +1526,7 @@ model = "m2.5"
                 language: "en".into(),
                 provider: "openai".into(),
                 model: "gpt-4".into(),
+                tts_provider: None,
                 temperature: 0.7,
                 max_tokens: None,
                 access: Some(AgentAccessConfig {
@@ -1587,6 +1588,7 @@ model = "m2.5"
                 language: "ru".into(),
                 provider: "minimax".into(),
                 model: "m2.5".into(),
+                tts_provider: None,
                 temperature: 1.0,
                 max_tokens: None,
                 access: None,
