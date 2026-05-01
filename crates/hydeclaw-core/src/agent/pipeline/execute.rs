@@ -274,7 +274,14 @@ pub async fn execute<S: EventSink>(
                 )
                 .await
                 {
-                    tracing::debug!(error = %e, "failed to record usage");
+                    tracing::warn!(
+                        error = %e,
+                        agent = %agent,
+                        provider = %provider_name,
+                        model = %model,
+                        session_id = ?session_id,
+                        "failed to record usage"
+                    );
                 }
             });
         }
