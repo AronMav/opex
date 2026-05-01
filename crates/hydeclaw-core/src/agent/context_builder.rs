@@ -252,11 +252,15 @@ impl ContextBuilder for DefaultContextBuilder {
                     tokio::spawn(async move {
                         let safe_name = skill_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
                         let skill_path = format!("{}/skills/{}.md", workspace, safe_name);
-                        crate::skills::update_skill_last_used_if_stale(
-                            &skill_path,
-                            &now_iso,
-                            chrono::Duration::hours(1),
-                        ).await;
+                        // Only update workspace/skills/ — config/skills/ have a different on-disk
+                        // location and should not be tracked.
+                        if tokio::fs::metadata(&skill_path).await.is_ok() {
+                            crate::skills::update_skill_last_used_if_stale(
+                                &skill_path,
+                                &now_iso,
+                                chrono::Duration::hours(1),
+                            ).await;
+                        }
                     });
                 }
             }
