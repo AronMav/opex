@@ -2,6 +2,8 @@
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class FishAudioTTS:
     name = "Fish Audio"
@@ -14,6 +16,7 @@ class FishAudioTTS:
         opts = options or {}
         self.reference_id = opts.get("reference_id")
         self.latency = opts.get("latency", "normal")
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def synthesize(self, http: httpx.AsyncClient, text: str,
                          voice: str, model: str | None = None,
@@ -38,6 +41,7 @@ class FishAudioTTS:
                 "model": engine,
             },
             json=payload,
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         return resp.content

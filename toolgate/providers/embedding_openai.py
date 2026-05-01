@@ -2,6 +2,8 @@
 import httpx
 import logging
 
+from providers.base import resolve_request_timeout
+
 log = logging.getLogger(__name__)
 
 
@@ -18,6 +20,8 @@ class OpenAIEmbedding:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "text-embedding-3-small"
+        opts = options or {}
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def embed(
         self,
@@ -34,7 +38,7 @@ class OpenAIEmbedding:
             "model": model or self.model,
             "input": texts,
         }
-        resp = await http.post(url, json=body, headers=headers, timeout=60.0)
+        resp = await http.post(url, json=body, headers=headers, timeout=self._request_timeout if self._request_timeout is not None else 60.0)
         resp.raise_for_status()
         data = resp.json()
 

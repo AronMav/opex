@@ -4,6 +4,8 @@ import base64
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class AnthropicVision:
     name = "Anthropic Claude"
@@ -13,6 +15,8 @@ class AnthropicVision:
         self.base_url = (base_url or "https://api.anthropic.com").rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "claude-sonnet-4-6"
+        opts = options or {}
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def describe(self, http: httpx.AsyncClient, image_bytes: bytes,
                        content_type: str, prompt: str,
@@ -49,6 +53,7 @@ class AnthropicVision:
                     ],
                 }],
             },
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()

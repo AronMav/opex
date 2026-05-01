@@ -4,6 +4,8 @@ import base64
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class OpenAIImageGen:
     name = "OpenAI Image Gen"
@@ -13,6 +15,8 @@ class OpenAIImageGen:
         self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "dall-e-3"
+        opts = options or {}
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def generate(self, http: httpx.AsyncClient, prompt: str,
                        size: str = "1024x1024", model: str | None = None,
@@ -32,6 +36,7 @@ class OpenAIImageGen:
             f"{self.base_url}/images/generations",
             headers={"Authorization": f"Bearer {self.api_key}"},
             json=body,
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()

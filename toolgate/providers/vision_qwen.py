@@ -4,6 +4,8 @@ import base64
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class QwenVision:
     name = "Qwen2-VL"
@@ -14,6 +16,7 @@ class QwenVision:
         self.api_key = api_key or ""
         self.model = model or "qwen-vl-max-latest"
         self.options = options or {}
+        self._request_timeout = resolve_request_timeout(self.options)
 
     async def describe(self, http: httpx.AsyncClient, image_bytes: bytes,
                        content_type: str, prompt: str,
@@ -48,6 +51,7 @@ class QwenVision:
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()

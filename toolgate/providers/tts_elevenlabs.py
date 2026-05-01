@@ -2,6 +2,8 @@
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class ElevenLabsTTS:
     name = "ElevenLabs"
@@ -16,6 +18,7 @@ class ElevenLabsTTS:
         self.stability = opts.get("stability", 0.5)
         self.similarity_boost = opts.get("similarity_boost", 0.75)
         self.style = opts.get("style", 0.0)
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def synthesize(self, http: httpx.AsyncClient, text: str,
                          voice: str, model: str | None = None,
@@ -40,6 +43,7 @@ class ElevenLabsTTS:
                     "style": self.style,
                 },
             },
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         return resp.content

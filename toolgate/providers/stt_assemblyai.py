@@ -4,6 +4,8 @@ import asyncio
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class AssemblyAISTT:
     name = "AssemblyAI"
@@ -16,6 +18,7 @@ class AssemblyAISTT:
         opts = options or {}
         self.language_detection = opts.get("language_detection", True)
         self.speaker_diarization = opts.get("speaker_diarization", False)
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def transcribe(self, http: httpx.AsyncClient, audio_bytes: bytes,
                          filename: str, language: str,
@@ -26,6 +29,7 @@ class AssemblyAISTT:
             f"{self.base_url}/v2/upload",
             headers={"Authorization": self.api_key},
             content=audio_bytes,
+            timeout=self._request_timeout,
         )
         upload_resp.raise_for_status()
         upload_url = upload_resp.json()["upload_url"]
@@ -45,6 +49,7 @@ class AssemblyAISTT:
             f"{self.base_url}/v2/transcript",
             headers={"Authorization": self.api_key, "Content-Type": "application/json"},
             json=payload,
+            timeout=self._request_timeout,
         )
         transcript_resp.raise_for_status()
         transcript_id = transcript_resp.json()["id"]
@@ -53,6 +58,7 @@ class AssemblyAISTT:
             poll_resp = await http.get(
                 f"{self.base_url}/v2/transcript/{transcript_id}",
                 headers={"Authorization": self.api_key},
+                timeout=self._request_timeout,
             )
             poll_resp.raise_for_status()
             result = poll_resp.json()

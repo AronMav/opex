@@ -4,7 +4,7 @@ import asyncio
 
 import httpx
 
-from providers.base import ImageGenProvider
+from providers.base import ImageGenProvider, resolve_request_timeout
 from helpers import validate_url_ssrf
 
 
@@ -22,6 +22,7 @@ class FalImageGen(ImageGenProvider):
         self.api_key = api_key or ""
         self.model = model or "flux/schnell"
         self.options = options or {}
+        self._request_timeout = resolve_request_timeout(self.options)
 
     async def generate(self, http: httpx.AsyncClient, prompt: str,
                        size: str = "1024x1024", model: str | None = None,
@@ -49,6 +50,7 @@ class FalImageGen(ImageGenProvider):
             f"{self.base_url}/{model_id}",
             json=payload,
             headers=headers,
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -66,20 +68,20 @@ class FalImageGen(ImageGenProvider):
 
             for _ in range(60):  # max ~60s
                 await asyncio.sleep(1)
-                status_resp = await http.get(status_url, headers=headers)
+                status_resp = await http.get(status_url, headers=headers, timeout=self._request_timeout)
                 status_resp.raise_for_status()
                 status_data = status_resp.json()
                 status = status_data.get("status")
 
                 if status == "COMPLETED":
-                    result_resp = await http.get(response_url, headers=headers)
+                    result_resp = await http.get(response_url, headers=headers, timeout=self._request_timeout)
                     result_resp.raise_for_status()
                     result_data = result_resp.json()
                     images = result_data.get("images", [])
                     if images:
                         image_url = images[0]["url"]
                         validate_url_ssrf(image_url)
-                        img_resp = await http.get(image_url)
+                        img_resp = await http.get(image_url, timeout=self._request_timeout)
                         img_resp.raise_for_status()
                         return img_resp.content
                     raise Exception("fal.ai returned no images")
@@ -92,7 +94,7 @@ class FalImageGen(ImageGenProvider):
         if "images" in data:
             image_url = data["images"][0]["url"]
             validate_url_ssrf(image_url)
-            img_resp = await http.get(image_url)
+            img_resp = await http.get(image_url, timeout=self._request_timeout)
             img_resp.raise_for_status()
             return img_resp.content
 

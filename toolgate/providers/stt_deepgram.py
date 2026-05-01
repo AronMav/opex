@@ -2,6 +2,8 @@
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class DeepgramSTT:
     name = "Deepgram"
@@ -15,6 +17,7 @@ class DeepgramSTT:
         self.detect_language = opts.get("detect_language", False)
         self.punctuate = opts.get("punctuate", True)
         self.smart_format = opts.get("smart_format", True)
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def transcribe(self, http: httpx.AsyncClient, audio_bytes: bytes,
                          filename: str, language: str,
@@ -37,6 +40,7 @@ class DeepgramSTT:
                 "Content-Type": "audio/ogg",
             },
             content=audio_bytes,
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()

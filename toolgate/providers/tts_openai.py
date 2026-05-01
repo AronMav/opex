@@ -2,6 +2,8 @@
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class OpenAITTS:
     name = "OpenAI TTS"
@@ -11,7 +13,9 @@ class OpenAITTS:
         self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "gpt-4o-mini-tts"
-        self.default_voice = (options or {}).get("voice", "alloy")
+        opts = options or {}
+        self.default_voice = opts.get("voice", "alloy")
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def synthesize(self, http: httpx.AsyncClient, text: str,
                          voice: str, model: str | None = None,
@@ -26,6 +30,7 @@ class OpenAITTS:
                 "voice": voice or self.default_voice,
                 "response_format": response_format,
             },
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         return resp.content

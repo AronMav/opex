@@ -4,6 +4,8 @@ import base64
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class GoogleSTT:
     name = "Google Gemini"
@@ -13,6 +15,8 @@ class GoogleSTT:
         self.base_url = (base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "gemini-2.0-flash"
+        opts = options or {}
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def transcribe(self, http: httpx.AsyncClient, audio_bytes: bytes,
                          filename: str, language: str,
@@ -30,6 +34,7 @@ class GoogleSTT:
                     ]
                 }],
             },
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()

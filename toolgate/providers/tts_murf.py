@@ -4,6 +4,8 @@ import base64
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class MurfTTS:
     name = "Murf AI"
@@ -17,6 +19,7 @@ class MurfTTS:
         self.default_voice_id = opts.get("voice_id", "en-US-natalie")
         self.rate = opts.get("rate", 0)
         self.pitch = opts.get("pitch", 0)
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def synthesize(self, http: httpx.AsyncClient, text: str,
                          voice: str, model: str | None = None,
@@ -46,6 +49,7 @@ class MurfTTS:
                 "Content-Type": "application/json",
             },
             json=payload,
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
 
@@ -54,7 +58,7 @@ class MurfTTS:
         if not audio_b64:
             audio_url = data.get("audioFile", "")
             if audio_url:
-                audio_resp = await http.get(audio_url)
+                audio_resp = await http.get(audio_url, timeout=self._request_timeout)
                 audio_resp.raise_for_status()
                 return audio_resp.content
             raise Exception("No audio in Murf response")
