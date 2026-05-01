@@ -333,9 +333,15 @@ impl AgentEngine {
             let model = response.model.clone().unwrap_or_default();
             let input = usage.input_tokens;
             let output = usage.output_tokens;
+            // Extended fields — captured by-value before the spawn move so the
+            // borrow on `usage` stays inside this scope.
+            let cache_read = usage.cache_read_tokens;
+            let cache_creation = usage.cache_creation_tokens;
+            let reasoning = usage.reasoning_tokens;
             tokio::spawn(async move {
                 if let Err(e) = crate::db::usage::record_usage(
                     &db, &agent, &provider, &model, input, output, session_id,
+                    cache_read, cache_creation, reasoning,
                 ).await {
                     tracing::debug!(error = %e, "failed to record usage");
                 }
