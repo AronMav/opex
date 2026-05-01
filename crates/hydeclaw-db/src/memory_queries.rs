@@ -249,8 +249,10 @@ pub async fn search_fts_or(
 /// Trigram similarity search using pg_trgm.
 ///
 /// Uses operator `%` so the GIN index `idx_memory_chunks_content_trgm`
-/// (gin_trgm_ops) is actually used. The threshold is set per-session via
-/// `set_limit($threshold)` immediately before the SELECT.
+/// (gin_trgm_ops) is actually used. The threshold is set per-transaction via
+/// `SET LOCAL pg_trgm.similarity_threshold = <value>` immediately before the
+/// SELECT. `SET LOCAL` is transaction-scoped — auto-cleaned on commit OR
+/// rollback, so a query error cannot leak the GUC onto the pooled connection.
 ///
 /// `agent_id`: filter to agent's own chunks plus shared chunks. Empty string = no filter.
 pub async fn search_trigram(
@@ -264,14 +266,17 @@ pub async fn search_trigram(
         return Ok(vec![]);
     }
 
-    // set_limit + select must run on the same connection — use a transaction.
+    // SET LOCAL + select must run on the same connection — use a transaction.
     let mut tx = db.begin().await.context("begin trigram tx")?;
 
-    sqlx::query("SELECT set_limit($1)")
-        .bind(threshold)
+    // Postgres parses `SET` before parameter binding, so $1 doesn't work here.
+    // Inline the value via format!() — `threshold: f32` is validated upstream
+    // (caller passes a known config value), no injection risk.
+    let sql = format!("SET LOCAL pg_trgm.similarity_threshold = {threshold}");
+    sqlx::query(&sql)
         .execute(&mut *tx)
         .await
-        .context("set_limit")?;
+        .context("set local similarity_threshold")?;
 
     let rows = sqlx::query(
         r"SELECT id::text,
@@ -292,13 +297,6 @@ pub async fn search_trigram(
     .fetch_all(&mut *tx)
     .await
     .context("trigram search query failed")?;
-
-    // Reset GUC so the connection returns to the pool with a clean session state.
-    // set_limit() is session-scoped, NOT transaction-scoped — without RESET it leaks.
-    sqlx::query("RESET pg_trgm.similarity_threshold")
-        .execute(&mut *tx)
-        .await
-        .context("reset similarity_threshold")?;
 
     tx.commit().await.context("commit trigram tx")?;
 

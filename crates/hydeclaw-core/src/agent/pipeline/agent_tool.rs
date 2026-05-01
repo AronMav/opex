@@ -91,7 +91,7 @@ pub fn check_depth_limit(current_depth: u8, cfg: &DelegationConfig) -> anyhow::R
              Set [agent.delegation] max_depth = {} to allow nested delegation.",
             current_depth,
             cfg.max_depth,
-            cfg.max_depth + 1
+            cfg.max_depth.saturating_add(1)
         );
     }
     Ok(())

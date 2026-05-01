@@ -343,7 +343,14 @@ impl AgentEngine {
                     &db, &agent, &provider, &model, input, output, session_id,
                     cache_read, cache_creation, reasoning,
                 ).await {
-                    tracing::debug!(error = %e, "failed to record usage");
+                    tracing::warn!(
+                        error = %e,
+                        agent = %agent,
+                        provider = %provider,
+                        model = %model,
+                        session_id = ?session_id,
+                        "failed to record usage"
+                    );
                 }
             });
         }
