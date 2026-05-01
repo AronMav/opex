@@ -83,17 +83,29 @@ pub async fn analyze_and_evolve(
                     Some(&format!("Before auto-fix for agent {agent_name}")),
                 ).await;
             }
-            let _ = skill_repairs::enqueue(db, skill_name, agent_name, "fix", line).await;
+            if let Err(e) = skill_repairs::enqueue(db, skill_name, agent_name, "fix", line).await {
+                tracing::warn!(error = %e, agent = agent_name, "skill evolution: failed to enqueue FIX repair");
+            }
         }
     } else if let Some(rest) = line.strip_prefix("DERIVED ") {
         let parts: Vec<&str> = rest.split_whitespace().collect();
-        let skill_name = parts.first().copied().unwrap_or("unknown");
-        tracing::info!(analysis = %line, agent = agent_name, "skill evolution: DERIVED queued");
-        let _ = skill_repairs::enqueue(db, skill_name, agent_name, "derived", line).await;
+        // Format: "DERIVED <parent_skill> <new_name>"
+        // Use the new skill name (index 1) as the record key; parent is in diagnosis
+        let new_skill_name = parts.get(1).copied().unwrap_or("");
+        if !new_skill_name.is_empty() {
+            tracing::info!(analysis = %line, agent = agent_name, "skill evolution: DERIVED queued");
+            if let Err(e) = skill_repairs::enqueue(db, new_skill_name, agent_name, "derived", line).await {
+                tracing::warn!(error = %e, agent = agent_name, "skill evolution: failed to enqueue DERIVED repair");
+            }
+        }
     } else if let Some(rest) = line.strip_prefix("CAPTURED ") {
-        let skill_name = rest.split_whitespace().next().unwrap_or("unknown");
-        tracing::info!(analysis = %line, agent = agent_name, "skill evolution: CAPTURED queued");
-        let _ = skill_repairs::enqueue(db, skill_name, agent_name, "captured", line).await;
+        let skill_name = rest.split_whitespace().next().unwrap_or("");
+        if !skill_name.is_empty() {
+            tracing::info!(analysis = %line, agent = agent_name, "skill evolution: CAPTURED queued");
+            if let Err(e) = skill_repairs::enqueue(db, skill_name, agent_name, "captured", line).await {
+                tracing::warn!(error = %e, agent = agent_name, "skill evolution: failed to enqueue CAPTURED repair");
+            }
+        }
     }
 }
 
