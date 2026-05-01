@@ -223,7 +223,7 @@ impl AgentEngine {
         openai_messages: &[crate::gateway::OpenAiMessage],
         chunk_tx: Option<mpsc::UnboundedSender<String>>,
     ) -> Result<hydeclaw_types::LlmResponse> {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex() };
+        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
         crate::agent::pipeline::openai_compat::handle_openai(&ctx, self, openai_messages, chunk_tx).await
     }
 }

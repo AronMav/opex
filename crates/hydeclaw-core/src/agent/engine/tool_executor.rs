@@ -40,13 +40,20 @@ impl AgentEngine {
     }
 
     /// Internal tool definitions filtered for subagent use.
+    ///
+    /// The deny list is computed from the agent's `[agent.delegation]`
+    /// config via `compute_denied_tools` (so per-agent overrides /
+    /// extensions take effect).
     pub(crate) fn internal_tool_definitions_for_subagent(
         &self,
         allowed_tools: Option<&[String]>,
     ) -> Vec<hydeclaw_types::ToolDefinition> {
+        let denied = crate::agent::pipeline::subagent::compute_denied_tools(
+            &self.cfg().agent.delegation,
+        );
         crate::agent::pipeline::tool_defs::filter_for_subagent(
             self.internal_tool_definitions(),
-            crate::agent::pipeline::subagent::SUBAGENT_DENIED_TOOLS,
+            &denied,
             allowed_tools,
         )
     }

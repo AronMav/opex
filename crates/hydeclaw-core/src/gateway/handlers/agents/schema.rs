@@ -159,7 +159,7 @@ pub(crate) struct WatchdogPayload {
 // ── Config builder ──────────────────────────────────────
 
 pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentConfig {
-    use crate::config::{AgentConfig, AgentSettings, AgentAccessConfig, HeartbeatConfig, AgentToolPolicy, CompactionConfig};
+    use crate::config::{AgentConfig, AgentSettings, AgentAccessConfig, HeartbeatConfig, AgentToolPolicy, CompactionConfig, DelegationConfig};
 
     AgentConfig {
         agent: AgentSettings {
@@ -187,6 +187,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 deny_all_others: t.deny_all_others.unwrap_or(false),
                 groups: t.groups.unwrap_or_default(),
             }),
+            delegation: DelegationConfig::default(),
             compaction: p.compaction.flatten().map(|c| CompactionConfig {
                 enabled: c.enabled.unwrap_or(true),
                 threshold: c.threshold.unwrap_or(0.8),

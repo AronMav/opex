@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::agent::session_agent_pool::{self, SessionAgentPool, SessionPoolsMap};
-use crate::config::AgentToolConfig;
+use crate::config::{AgentToolConfig, DelegationConfig};
 use crate::gateway::state::AgentMap;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -53,6 +53,48 @@ pub fn extract_session_id(args: &serde_json::Value) -> Option<Uuid> {
         .and_then(|ctx| ctx.get("session_id"))
         .and_then(|s| s.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
+}
+
+/// Extracts subagent recursion depth from the enriched `_context` injection.
+///
+/// Returns:
+/// - 0 when `_context.subagent_depth` is **absent** (top-level dispatch — expected)
+/// - The clamped u8 value when present and parseable as u64 (clamped to u8::MAX = 255)
+/// - u8::MAX when present but malformed (string, float, negative, etc.) — fail-closed
+///   so a corrupted/spoofed depth blocks further spawning instead of bypassing the limit
+pub fn extract_subagent_depth(args: &serde_json::Value) -> u8 {
+    let Some(ctx) = args.get("_context") else { return 0; };
+    let Some(v) = ctx.get("subagent_depth") else { return 0; };
+    match v.as_u64() {
+        Some(n) => n.min(u8::MAX as u64) as u8,
+        None => {
+            tracing::warn!(
+                value = ?v,
+                "malformed _context.subagent_depth — failing closed (returning u8::MAX). \
+                 If you see this, check who is constructing tool_args with a non-integer \
+                 subagent_depth field."
+            );
+            u8::MAX
+        }
+    }
+}
+
+/// Check whether a subagent at `current_depth` is allowed to spawn another subagent.
+///
+/// Returns `Ok(())` if `current_depth < cfg.max_depth`, otherwise an error with
+/// the canonical "depth limit reached" message used in tool-result feedback.
+pub fn check_depth_limit(current_depth: u8, cfg: &DelegationConfig) -> anyhow::Result<()> {
+    if current_depth >= cfg.max_depth {
+        anyhow::bail!(
+            "agent tool depth limit reached (depth={}, max={}). \
+             Subagents cannot spawn further subagents by default. \
+             Set [agent.delegation] max_depth = {} to allow nested delegation.",
+            current_depth,
+            cfg.max_depth,
+            cfg.max_depth + 1
+        );
+    }
+    Ok(())
 }
 
 /// Dispatch `agent` tool calls to the appropriate sub-handler based on `action`.
@@ -162,6 +204,33 @@ pub async fn handle_agent_ask(
         Some(m) => m,
         None => return "Error: agent_map not available (subagent context)".to_string(),
     };
+
+    // Enforce subagent recursion depth limit.
+    //
+    // The caller's `subagent_depth` rides on `_context` (injected by the
+    // pipeline that dispatched this tool call — top-level path defaults to
+    // 0; subagent_runner injects the running subagent's depth). The caller's
+    // `DelegationConfig` lives on its `AgentEngine` config and is looked up
+    // via `agent_map`. If we cannot find the caller's config (e.g. agent was
+    // just deleted) we fall through to the default (max_depth = 1).
+    let caller_depth = extract_subagent_depth(args);
+    let delegation_cfg = {
+        let map = agent_map.read().await;
+        map.get(agent_name)
+            .or_else(|| {
+                let lower = agent_name.to_lowercase();
+                map.iter()
+                    .find(|(k, _)| k.to_lowercase() == lower)
+                    .map(|(_, v)| v)
+            })
+            .map(|h| h.engine.cfg().agent.delegation.clone())
+            .unwrap_or_default()
+    };
+    if let Err(e) = check_depth_limit(caller_depth, &delegation_cfg) {
+        return format!("Error: {e}");
+    }
+    let new_depth = caller_depth.saturating_add(1);
+
     let target_engine = {
         let map = agent_map.read().await;
         let handle = map.get(target).or_else(|| {
@@ -196,6 +265,7 @@ pub async fn handle_agent_ask(
             target_engine,
             text.to_string(),
             session_id,
+            new_depth,
         ) {
             Some(la) => la,
             None => {
@@ -864,6 +934,46 @@ mod tests {
             "wait_for_idle deadline ignored — elapsed = {:?}",
             elapsed
         );
+    }
+
+    // ── check_depth_limit (T8 — TDD red) ────────────────────────────────────
+
+    use crate::config::DelegationConfig;
+
+    #[test]
+    fn depth_zero_can_spawn_subagent() {
+        let cfg = DelegationConfig::default(); // max_depth=1
+        let result = check_depth_limit(0, &cfg);
+        assert!(result.is_ok(), "depth=0 → max_depth=1: spawn should be allowed");
+    }
+
+    #[test]
+    fn depth_at_max_blocks_spawn() {
+        let cfg = DelegationConfig::default(); // max_depth=1
+        let result = check_depth_limit(1, &cfg);
+        assert!(result.is_err(), "depth=1 → max_depth=1: spawn must be blocked");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("depth limit reached"),
+            "error must mention depth limit: {}",
+            err
+        );
+        assert!(
+            err.contains("max=1"),
+            "error must show current max_depth: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn higher_max_depth_allows_nested_spawn() {
+        let cfg = DelegationConfig {
+            max_depth: 2,
+            ..Default::default()
+        };
+        assert!(check_depth_limit(0, &cfg).is_ok());
+        assert!(check_depth_limit(1, &cfg).is_ok());
+        assert!(check_depth_limit(2, &cfg).is_err());
     }
 
     /// `fresh=true` against a non-existent target must not error — it should

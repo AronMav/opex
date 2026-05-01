@@ -27,13 +27,19 @@ pub async fn run_subagent(
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     handle: Option<Arc<tokio::sync::RwLock<subagent_state::SubagentHandle>>>,
     allowed_tools: Option<Vec<String>>,
+    depth: u8,
 ) -> Result<String> {
-    run_subagent_with_session(ctx, executor, task, max_iterations, deadline, cancel, handle, allowed_tools, None).await
+    run_subagent_with_session(
+        ctx, executor, task, max_iterations, deadline, cancel, handle, allowed_tools, None, depth,
+    ).await
 }
 
 /// Like `run_subagent` but with an explicit session_id for tool context enrichment.
 /// When `session_id` is Some, it is passed to `execute_tool_calls_partitioned` so tools
 /// like `agent` can find the correct SessionAgentPool via enriched `_context`.
+///
+/// `depth` is the subagent recursion depth carried in the inner `CommandContext`.
+/// Used by max-depth enforcement (see Tasks 8/9 of the iso-subagent-isolation plan).
 #[allow(clippy::too_many_arguments)]
 pub async fn run_subagent_with_session(
     ctx: &CommandContext<'_>,
@@ -45,7 +51,13 @@ pub async fn run_subagent_with_session(
     handle: Option<Arc<tokio::sync::RwLock<subagent_state::SubagentHandle>>>,
     allowed_tools: Option<Vec<String>>,
     session_id: Option<uuid::Uuid>,
+    depth: u8,
 ) -> Result<String> {
+    // `depth` is the subagent recursion depth this run is operating at.
+    // Threaded into `subagent_context` below so any `agent` tool calls
+    // emitted from within this subagent see their parent depth via enriched
+    // `_context.subagent_depth` and `check_depth_limit` can gate further
+    // spawns via `[agent.delegation] max_depth`.
     let cfg = ctx.cfg;
     let ws_prompt =
         workspace::load_workspace_prompt(&cfg.workspace_dir, &cfg.agent.name).await?;
@@ -173,8 +185,17 @@ pub async fn run_subagent_with_session(
         });
 
         // Use an empty object (not Null) so enrich_tool_args can inject session_id into _context.
+        // Inject `subagent_depth` so nested `agent` tool calls see the parent depth
+        // and `check_depth_limit` enforces `[agent.delegation] max_depth`.
+        // Read from `ctx.subagent_depth` (single source of truth maintained by
+        // the engine wrapper); `depth` parameter is asserted to match in debug builds.
+        debug_assert_eq!(
+            ctx.subagent_depth, depth,
+            "ctx.subagent_depth ({}) must match runner depth param ({})",
+            ctx.subagent_depth, depth
+        );
         let effective_session_id = session_id.unwrap_or_else(uuid::Uuid::nil);
-        let subagent_context = serde_json::json!({});
+        let subagent_context = serde_json::json!({ "subagent_depth": ctx.subagent_depth });
         // Subagent runner does not persist tool messages to the DB
         // (subagent context is in-memory only) — pass `None`.
         let loop_broken = match executor.execute_tool_calls_partitioned(
