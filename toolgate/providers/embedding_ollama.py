@@ -2,6 +2,8 @@
 import httpx
 import logging
 
+from providers.base import resolve_request_timeout
+
 log = logging.getLogger(__name__)
 
 
@@ -18,6 +20,8 @@ class OllamaEmbedding:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "qwen3-embedding:4b"
+        opts = options or {}
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def embed(
         self,
@@ -35,7 +39,7 @@ class OllamaEmbedding:
         # Wrap single text or pass array.
         if len(texts) == 1:
             body = {"model": model or self.model, "prompt": texts[0]}
-            resp = await http.post(url, json=body, headers=headers, timeout=60.0)
+            resp = await http.post(url, json=body, headers=headers, timeout=self._request_timeout if self._request_timeout is not None else 60.0)
             resp.raise_for_status()
             data = resp.json()
             return [data["embedding"]]
@@ -44,7 +48,7 @@ class OllamaEmbedding:
             results = []
             for text in texts:
                 body = {"model": model or self.model, "prompt": text}
-                resp = await http.post(url, json=body, headers=headers, timeout=60.0)
+                resp = await http.post(url, json=body, headers=headers, timeout=self._request_timeout if self._request_timeout is not None else 60.0)
                 resp.raise_for_status()
                 data = resp.json()
                 results.append(data["embedding"])

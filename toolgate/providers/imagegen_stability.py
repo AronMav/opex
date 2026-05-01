@@ -2,7 +2,7 @@
 
 import httpx
 
-from providers.base import ImageGenProvider
+from providers.base import ImageGenProvider, resolve_request_timeout
 
 
 class StabilityImageGen(ImageGenProvider):
@@ -16,6 +16,7 @@ class StabilityImageGen(ImageGenProvider):
         opts = options or {}
         self.seed = opts.get("seed")
         self.negative_prompt = opts.get("negative_prompt")
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def generate(self, http: httpx.AsyncClient, prompt: str,
                        size: str = "1024x1024", model: str | None = None,
@@ -44,6 +45,7 @@ class StabilityImageGen(ImageGenProvider):
             },
             data=data,
             files={"none": ""},
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         return resp.content

@@ -4,6 +4,8 @@ import asyncio
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class CloudSightVision:
     name = "CloudSight"
@@ -14,6 +16,7 @@ class CloudSightVision:
         self.api_key = api_key or ""
         opts = options or {}
         self.language = opts.get("language", "en")
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def describe(self, http: httpx.AsyncClient, image_bytes: bytes,
                        content_type: str, prompt: str,
@@ -30,6 +33,7 @@ class CloudSightVision:
             headers={"Authorization": f"CloudSight {self.api_key}"},
             files=files,
             data=data,
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         result = resp.json()
@@ -43,6 +47,7 @@ class CloudSightVision:
             poll_resp = await http.get(
                 f"{self.base_url}/image_responses/{token}",
                 headers={"Authorization": f"CloudSight {self.api_key}"},
+                timeout=self._request_timeout,
             )
             poll_resp.raise_for_status()
             poll_result = poll_resp.json()

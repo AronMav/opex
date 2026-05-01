@@ -5,6 +5,27 @@ from typing import Protocol, runtime_checkable
 import httpx
 
 
+def resolve_request_timeout(options: dict | None, default: float | None = None) -> float | None:
+    """Read `options.timeouts.request_secs` (UI-configured per-provider override)
+    or return `default`. Used by every media provider to honor the timeouts the
+    operator sets in the Providers UI without each driver duplicating parsing
+    logic. Returns float seconds or None when no override exists.
+
+    Pass the result as `timeout=` to `httpx.AsyncClient` calls. When None,
+    the call inherits the shared client default (toolgate sets 120s)."""
+    if not options:
+        return default
+    timeouts = options.get("timeouts")
+    if isinstance(timeouts, dict):
+        v = timeouts.get("request_secs")
+        if v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                pass
+    return default
+
+
 @runtime_checkable
 class STTProvider(Protocol):
     name: str

@@ -4,6 +4,8 @@ import base64
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class OllamaVision:
     name = "Ollama Vision"
@@ -13,9 +15,11 @@ class OllamaVision:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "qwen3.5"
-        self.max_tokens = (options or {}).get("max_tokens", 2000)
+        opts = options or {}
+        self.max_tokens = opts.get("max_tokens", 2000)
         # Detect cloud vs local: cloud uses /api/chat, local uses /v1/chat/completions
         self.is_cloud = "ollama.com" in self.base_url
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def describe(self, http: httpx.AsyncClient, image_bytes: bytes,
                        content_type: str, prompt: str,
@@ -47,6 +51,7 @@ class OllamaVision:
                 }],
                 "stream": False,
             },
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -71,6 +76,7 @@ class OllamaVision:
                 }],
                 "max_tokens": max_tokens or self.max_tokens,
             },
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()

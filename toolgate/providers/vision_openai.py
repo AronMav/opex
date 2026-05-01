@@ -4,6 +4,8 @@ import base64
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class OpenAIVision:
     name = "OpenAI Vision"
@@ -13,6 +15,8 @@ class OpenAIVision:
         self.base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
         self.api_key = api_key or ""
         self.model = model or "gpt-4o"
+        opts = options or {}
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def describe(self, http: httpx.AsyncClient, image_bytes: bytes,
                        content_type: str, prompt: str,
@@ -34,6 +38,7 @@ class OpenAIVision:
                 }],
                 "max_tokens": max_tokens,
             },
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()

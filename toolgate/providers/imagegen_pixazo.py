@@ -4,7 +4,7 @@ import asyncio
 
 import httpx
 
-from providers.base import ImageGenProvider
+from providers.base import ImageGenProvider, resolve_request_timeout
 
 
 class PixazoImageGen(ImageGenProvider):
@@ -24,6 +24,7 @@ class PixazoImageGen(ImageGenProvider):
         self.api_key = api_key or ""
         self.model = model or "flux-schnell"
         self.options = options or {}
+        self._request_timeout = resolve_request_timeout(self.options)
 
     async def generate(self, http: httpx.AsyncClient, prompt: str,
                        size: str = "1024x1024", model: str | None = None,
@@ -70,6 +71,7 @@ class PixazoImageGen(ImageGenProvider):
             f"{self.base_url}{endpoint_path}",
             json=payload,
             headers=headers,
+            timeout=self._request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -82,19 +84,20 @@ class PixazoImageGen(ImageGenProvider):
                     f"{self.base_url}/flux-dev-polling/dev/getFluxDevStatus",
                     json={"requestId": request_id},
                     headers=headers,
+                    timeout=self._request_timeout,
                 )
                 poll_resp.raise_for_status()
                 poll_data = poll_resp.json()
                 images = poll_data.get("images", [])
                 if images:
-                    img_resp = await http.get(images[0]["url"])
+                    img_resp = await http.get(images[0]["url"], timeout=self._request_timeout)
                     img_resp.raise_for_status()
                     return img_resp.content
             raise Exception("Pixazo generation timed out after 60s")
 
         image_url = data.get("output") or data.get("image_url")
         if image_url:
-            img_resp = await http.get(image_url)
+            img_resp = await http.get(image_url, timeout=self._request_timeout)
             img_resp.raise_for_status()
             return img_resp.content
 

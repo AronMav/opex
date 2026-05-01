@@ -5,6 +5,8 @@ import base64
 
 import httpx
 
+from providers.base import resolve_request_timeout
+
 
 class ReplicateVision:
     name = "Replicate"
@@ -16,6 +18,7 @@ class ReplicateVision:
         self.model = model or "lucataco/moondream2:72ccb656353c348c1385df54b237eeb7bfa874bf11486cf0b9473e691b662d31"
         opts = options or {}
         self.temperature = opts.get("temperature", 0.7)
+        self._request_timeout = resolve_request_timeout(opts)
 
     async def describe(self, http: httpx.AsyncClient, image_bytes: bytes,
                        content_type: str, prompt: str,
@@ -43,6 +46,7 @@ class ReplicateVision:
                 "Content-Type": "application/json",
             },
             json={"version": model_version, "input": input_data},
+            timeout=self._request_timeout,
         )
         create_resp.raise_for_status()
         prediction_id = create_resp.json()["id"]
@@ -51,6 +55,7 @@ class ReplicateVision:
             poll_resp = await http.get(
                 f"{self.base_url}/predictions/{prediction_id}",
                 headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=self._request_timeout,
             )
             poll_resp.raise_for_status()
             result = poll_resp.json()
