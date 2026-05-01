@@ -49,6 +49,9 @@ export function getInitialAgent(agents: string[]): string {
 
 export function getLastSessionId(agent?: string): string | undefined {
   const data = loadLastSession();
-  if (agent && data.sessions?.[agent]) return data.sessions[agent];
+  // When an agent is specified, return only that agent's per-agent session ID.
+  // Do NOT fall back to the legacy global sessionId — it belongs to a different
+  // agent and would trigger the cross-agent URL resolver to switch back to that agent.
+  if (agent) return data.sessions?.[agent];
   return data.sessionId;
 }

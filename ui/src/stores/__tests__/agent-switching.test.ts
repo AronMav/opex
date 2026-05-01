@@ -123,6 +123,21 @@ describe("setCurrentAgent — pre-populates state from localStorage", () => {
 // ── 2. New-chat state when no prior session ──────────────────────────────────
 
 describe("setCurrentAgent — new-chat state when no prior session exists", () => {
+  it("does NOT use another agent's legacy global sessionId as pre-population", () => {
+    // Simulate legacy localStorage: global sessionId set (e.g. Arty's last session),
+    // but no per-agent entry for Agent2. Without the fix, getLastSessionId("Agent2")
+    // returned the global sessionId, causing the cross-agent resolver to switch
+    // back to the agent that owned that session.
+    const raw = { agent: "Agent1", sessions: { Agent1: "sess-agent1" }, sessionId: "sess-agent1" };
+    localStorage.setItem("hydeclaw.chat.lastSession", JSON.stringify(raw));
+
+    useChatStore.getState().setCurrentAgent("Agent2");
+
+    // Must be null — never another agent's session
+    expect(useChatStore.getState().agents["Agent2"]?.activeSessionId).toBeNull();
+    expect(useChatStore.getState().agents["Agent2"]?.messageSource).toEqual({ mode: "new-chat" });
+  });
+
   it("sets activeSessionId to null", () => {
     // No localStorage entry for Agent2
     useChatStore.getState().setCurrentAgent("Agent2");
