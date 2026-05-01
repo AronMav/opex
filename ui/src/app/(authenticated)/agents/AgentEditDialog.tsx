@@ -116,6 +116,8 @@ export interface FormState {
   accessOwnerId: string;
   // Fallback provider
   fallbackProvider: string;
+  // TTS provider (per-agent voice routing — provider's options.voice picks the voice)
+  ttsProvider: string;
 }
 
 export interface AgentEditDialogProps {
@@ -181,6 +183,7 @@ export function AgentEditDialog({
   const isValidAgentName = form.name.trim().length === 0 || /^[a-zA-Z0-9_-]+$/.test(form.name.trim());
   const { data: allProviders = [] } = useProviders();
   const llmProviders = allProviders.filter((p) => p.type === "text");
+  const ttsProviders = allProviders.filter((p) => p.type === "tts");
   const selectedProvider = llmProviders.find((p) => p.name === form.providerConnection);
   const { data: providerModels = [], isLoading: providerModelsLoading, refetch: refetchModels } = useProviderModels(selectedProvider?.id ?? null);
 
@@ -404,17 +407,32 @@ export function AgentEditDialog({
                       </SelectContent>
                     </Select>
                   </Field>
-                  <Field label={t("agents.field_top_k_tools")}>
-                    <Input type="number" step="1" min="1" max="50" value={form.maxToolsInContext} placeholder={t("agents.placeholder_all")} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxToolsInContext: e.target.value })} />
-                  </Field>
-                  <Field label={t("agents.field_voice_profile")}>
-                    <Select value={form.voice || "__default__"} onValueChange={(v) => upd({ voice: v === "__default__" ? "" : v })}>
-                      <SelectTrigger className="w-full bg-background border-border text-sm h-8"><SelectValue /></SelectTrigger>
+                  <Field label={t("agents.field_tts_provider")}>
+                    <Select value={form.ttsProvider || "__none__"} onValueChange={(v) => upd({ ttsProvider: v === "__none__" ? "" : v })}>
+                      <SelectTrigger className="w-full bg-background border-border text-sm h-8">
+                        <SelectValue placeholder={t("agents.field_tts_provider")} />
+                      </SelectTrigger>
                       <SelectContent className="border-border">
-                        <SelectItem value="__default__">{t("common.default")}</SelectItem>
-                        {voices.map((v) => (<SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>))}
+                        <SelectItem value="__none__" className="text-sm text-muted-foreground">
+                          <span className="text-muted-foreground">&mdash; {t("agents.tts_provider_global_fallback")}</span>
+                        </SelectItem>
+                        {ttsProviders.map((p) => {
+                          const voice = (p.options as { voice?: string } | null | undefined)?.voice;
+                          return (
+                            <SelectItem key={p.id} value={p.name} className="text-sm font-mono">
+                              <span className="flex items-center gap-2">
+                                <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                <span>{p.name}</span>
+                                {voice && <span className="text-muted-foreground/60 text-[10px]">voice: {voice}</span>}
+                              </span>
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
+                  </Field>
+                  <Field label={t("agents.field_top_k_tools")}>
+                    <Input type="number" step="1" min="1" max="50" value={form.maxToolsInContext} placeholder={t("agents.placeholder_all")} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxToolsInContext: e.target.value })} />
                   </Field>
                   <Field label={t("agents.field_daily_budget")}>
                     <Input type="number" step="10000" min="0" value={form.dailyBudgetTokens} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ dailyBudgetTokens: e.target.value })} />

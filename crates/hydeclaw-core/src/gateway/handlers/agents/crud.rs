@@ -397,6 +397,11 @@ pub(crate) async fn api_update_agent(
             Some("") => payload.fallback_provider = None,
             Some(_) => {}
         }
+        match payload.tts_provider.as_deref() {
+            None => payload.tts_provider = a.tts_provider.clone(),
+            Some("") => payload.tts_provider = None,
+            Some(_) => {}
+        }
         if payload.approval.is_none() {
             payload.approval = Some(a.approval.as_ref().map(|ap| ApprovalPayload {
                 enabled: Some(ap.enabled),
