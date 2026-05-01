@@ -63,7 +63,10 @@ pub(crate) async fn api_canvas_clear(
     StatusCode::NO_CONTENT
 }
 
-pub(crate) async fn api_tts_voices(State(agents): State<AgentCore>) -> impl IntoResponse {
+pub(crate) async fn api_tts_voices(
+    State(agents): State<AgentCore>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
     let toolgate_url = {
         let deps = agents.deps.read().await;
         deps.toolgate_url.clone()
@@ -73,7 +76,15 @@ pub(crate) async fn api_tts_voices(State(agents): State<AgentCore>) -> impl Into
     };
     let url = format!("{}/audio/voices", base.trim_end_matches('/'));
     let client = TOOLGATE_CLIENT.get_or_init(reqwest::Client::new);
-    match client.get(&url).timeout(std::time::Duration::from_secs(5)).send().await {
+    // Optional provider override: ?provider=<name> → X-Hydeclaw-Provider header.
+    // toolgate's require_provider("tts") honors this header and uses the named
+    // provider instead of the global active one — letting the UI fetch voice
+    // lists for any TTS provider, not only the currently active one.
+    let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
+    if let Some(prov) = params.get("provider").filter(|s| !s.is_empty()) {
+        req = req.header("X-Hydeclaw-Provider", prov);
+    }
+    match req.send().await {
         Ok(resp) if resp.status().is_success() => {
             match resp.json::<serde_json::Value>().await {
                 Ok(data) => Json(data).into_response(),
