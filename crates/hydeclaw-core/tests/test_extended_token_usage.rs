@@ -1,16 +1,14 @@
 //! Integration tests for extended token tracking in usage_log.
+//! Each test gets its own fresh migrated DB via `#[sqlx::test]`.
+//! Gated to Linux x86_64 because testcontainers requires Docker.
+
+#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use hydeclaw_db::usage;
 use sqlx::PgPool;
 
-async fn pool() -> PgPool {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    PgPool::connect(&url).await.expect("connect")
-}
-
-#[tokio::test]
-async fn record_usage_persists_extended_fields() {
-    let db = pool().await;
+#[sqlx::test(migrations = "../../migrations")]
+async fn record_usage_persists_extended_fields(db: PgPool) {
     let test_agent = format!("test-tok-{}", uuid::Uuid::new_v4());
 
     usage::record_usage(
@@ -21,9 +19,9 @@ async fn record_usage_persists_extended_fields() {
         12500,                  // input_tokens
         1800,                   // output_tokens
         None,                   // session_id
-        Some(8200),             // cache_read_tokens (NEW)
-        Some(1200),             // cache_creation_tokens (NEW)
-        Some(600),              // reasoning_tokens (NEW)
+        Some(8200),             // cache_read_tokens
+        Some(1200),             // cache_creation_tokens
+        Some(600),              // reasoning_tokens
     ).await.expect("record_usage");
 
     let row: (i32, i32, Option<i32>, Option<i32>, Option<i32>) = sqlx::query_as(
@@ -40,15 +38,10 @@ async fn record_usage_persists_extended_fields() {
     assert_eq!(row.2, Some(8200));
     assert_eq!(row.3, Some(1200));
     assert_eq!(row.4, Some(600));
-
-    sqlx::query("DELETE FROM usage_log WHERE agent_id = $1")
-        .bind(&test_agent)
-        .execute(&db).await.ok();
 }
 
-#[tokio::test]
-async fn record_usage_legacy_none_fields() {
-    let db = pool().await;
+#[sqlx::test(migrations = "../../migrations")]
+async fn record_usage_legacy_none_fields(db: PgPool) {
     let test_agent = format!("test-tok-legacy-{}", uuid::Uuid::new_v4());
 
     usage::record_usage(
@@ -67,8 +60,4 @@ async fn record_usage_legacy_none_fields() {
     assert_eq!(row.0, None);
     assert_eq!(row.1, None);
     assert_eq!(row.2, None);
-
-    sqlx::query("DELETE FROM usage_log WHERE agent_id = $1")
-        .bind(&test_agent)
-        .execute(&db).await.ok();
 }
