@@ -361,12 +361,12 @@ mod dispatch_impl;
 
 impl AgentEngine {
     pub(super) async fn handle_message_action(&self, args: &serde_json::Value) -> String {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex() };
+        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
         crate::agent::pipeline::channel_actions::handle_message_action(&ctx, args).await
     }
 
     pub async fn send_channel_message(&self, channel: &str, chat_id: i64, text: &str) -> anyhow::Result<()> {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex() };
+        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
         crate::agent::pipeline::channel_actions::send_channel_message(&ctx, channel, chat_id, text).await
     }
 
@@ -376,12 +376,12 @@ impl AgentEngine {
         args: &serde_json::Value,
         ca: &crate::tools::yaml_tools::ChannelActionConfig,
     ) -> String {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex() };
+        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
         crate::agent::pipeline::channel_actions::execute_yaml_channel_action(&ctx, tool, args, ca).await
     }
 
     pub(super) async fn handle_cron(&self, args: &serde_json::Value) -> String {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex() };
+        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
         crate::agent::pipeline::cron::handle_cron(&ctx, args).await
     }
 }
@@ -398,9 +398,14 @@ impl AgentEngine {
         handle: Option<Arc<tokio::sync::RwLock<crate::agent::subagent_state::SubagentHandle>>>,
         allowed_tools: Option<Vec<String>>,
     ) -> Result<String> {
-        self.run_subagent_with_session(task, max_iterations, deadline, cancel, handle, allowed_tools, None).await
+        self.run_subagent_with_session(task, max_iterations, deadline, cancel, handle, allowed_tools, None, 0).await
     }
 
+    /// `depth` is the subagent recursion depth this run is operating at.
+    /// Top-level entry points (gateway dispatch, cron) pass `0`. The session
+    /// agent pool's processing loop forwards the depth that was assigned to
+    /// the live agent at spawn time, so nested `agent` tool calls can be
+    /// gated by `[agent.delegation] max_depth`.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_subagent_with_session(
         &self,
@@ -411,10 +416,16 @@ impl AgentEngine {
         handle: Option<Arc<tokio::sync::RwLock<crate::agent::subagent_state::SubagentHandle>>>,
         allowed_tools: Option<Vec<String>>,
         session_id: Option<uuid::Uuid>,
+        depth: u8,
     ) -> Result<String> {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex() };
+        let ctx = crate::agent::pipeline::CommandContext {
+            cfg: self.cfg(),
+            state: self.state(),
+            tex: self.tex(),
+            subagent_depth: depth,
+        };
         crate::agent::pipeline::subagent_runner::run_subagent_with_session(
-            &ctx, self, task, max_iterations, deadline, cancel, handle, allowed_tools, session_id,
+            &ctx, self, task, max_iterations, deadline, cancel, handle, allowed_tools, session_id, depth,
         ).await
     }
 }

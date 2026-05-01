@@ -3,12 +3,16 @@
 //! Each function takes explicit `(&AgentConfig, &AgentState, &mut RequestContext)`
 //! dependencies instead of `&self` on `AgentEngine`.
 
-/// Parameter object bundling the three decomposed AgentEngine pieces.
-/// Three fields, zero methods, never grows.
+/// Parameter object bundling the three decomposed AgentEngine pieces
+/// plus the immutable subagent recursion depth for the current call.
 pub struct CommandContext<'a> {
     pub cfg: &'a super::agent_config::AgentConfig,
     pub state: &'a super::agent_state::AgentState,
     pub tex: &'a super::tool_executor::DefaultToolExecutor,
+    /// Recursion depth for subagent spawning. 0 = top-level handler,
+    /// 1 = first subagent, N = N-th nested subagent.
+    /// Read by `agent` tool dispatch to enforce `cfg.agent.delegation.max_depth`.
+    pub subagent_depth: u8,
 }
 
 pub mod context;

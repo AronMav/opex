@@ -607,6 +607,10 @@ pub struct AgentSettings {
     pub access: Option<AgentAccessConfig>,
     pub heartbeat: Option<HeartbeatConfig>,
     pub tools: Option<AgentToolPolicy>,
+    /// Subagent delegation policy (max recursion depth, deny list extensions).
+    /// Section can be omitted from TOML — defaults are sane.
+    #[serde(default)]
+    pub delegation: DelegationConfig,
     pub compaction: Option<CompactionConfig>,
     pub session: Option<SessionConfig>,
     /// Maximum number of tools to include in LLM context.
@@ -789,6 +793,42 @@ impl Default for ToolGroups {
             tool_management: true,
             skill_editing: true,
             session_tools: true,
+        }
+    }
+}
+
+/// Configuration for subagent delegation behavior.
+///
+/// Maps to `[agent.delegation]` section in agent TOML config. All fields
+/// have defaults — section can be omitted entirely (backward compat with
+/// existing TOML files).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DelegationConfig {
+    /// Maximum recursion depth for `agent` tool spawn.
+    /// 0 = top-level agent, 1 = first subagent, etc.
+    /// Default 1 means subagents CANNOT spawn further subagents.
+    /// Set to 2+ to allow nested delegation (orchestrator pattern).
+    #[serde(default = "default_max_depth")]
+    pub max_depth: u8,
+
+    /// Tools added on top of SUBAGENT_DENIED_TOOLS (extends, doesn't replace).
+    /// Common: `["code_exec"]` to forbid sandbox in subagents.
+    #[serde(default)]
+    pub blocked_tools_extra: Vec<String>,
+
+    /// If non-empty, REPLACES SUBAGENT_DENIED_TOOLS entirely. Use with care.
+    #[serde(default)]
+    pub blocked_tools_override: Vec<String>,
+}
+
+fn default_max_depth() -> u8 { 1 }
+
+impl Default for DelegationConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: default_max_depth(),
+            blocked_tools_extra: Vec::new(),
+            blocked_tools_override: Vec::new(),
         }
     }
 }
@@ -1432,6 +1472,7 @@ model = "m2.5"
                 }),
                 heartbeat: None,
                 tools: None,
+                delegation: DelegationConfig::default(),
                 compaction: Some(CompactionConfig {
                     enabled: true,
                     threshold: 0.9,
@@ -1504,6 +1545,7 @@ model = "m2.5"
                         session_tools: false,
                     },
                 }),
+                delegation: DelegationConfig::default(),
                 compaction: None,
                 session: None,
                 max_tools_in_context: None,

@@ -941,14 +941,17 @@ pub fn build_sandbox_tool_definitions() -> Vec<ToolDefinition> {
 // ── Subagent filtering ──────────────────────────────────────────────────
 
 /// Filter tool definitions for subagent use: exclude denied tools, optionally filter by whitelist.
+///
+/// `denied_tools` is owned-strings (typically the output of
+/// `subagent::compute_denied_tools(&DelegationConfig)`).
 pub fn filter_for_subagent(
     all_tools: Vec<ToolDefinition>,
-    denied_tools: &[&str],
+    denied_tools: &[String],
     allowed_tools: Option<&[String]>,
 ) -> Vec<ToolDefinition> {
     let safe: Vec<_> = all_tools
         .into_iter()
-        .filter(|t| !denied_tools.contains(&t.name.as_str()))
+        .filter(|t| !denied_tools.contains(&t.name))
         .collect();
     match allowed_tools {
         Some(whitelist) => safe
@@ -1036,8 +1039,8 @@ mod tests {
                 input_schema: serde_json::json!({}),
             },
         ];
-        let denied = &["cron"][..];
-        let filtered = filter_for_subagent(tools, denied, None);
+        let denied: Vec<String> = vec!["cron".to_string()];
+        let filtered = filter_for_subagent(tools, &denied, None);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "workspace_write");
     }

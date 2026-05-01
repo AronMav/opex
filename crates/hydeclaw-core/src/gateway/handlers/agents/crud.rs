@@ -423,6 +423,12 @@ pub(crate) async fn api_update_agent(
     let mut cfg = build_agent_config(new_name.clone(), payload);
     // Preserve base from existing config — never changed via API
     cfg.agent.base = existing_cfg.agent.base;
+    // Preserve delegation from existing config — never changed via PUT API.
+    // Same precedent as `base`/`hooks`: there is no payload field, so always
+    // re-use what's on disk. Without this, the documented migration path
+    // (TOML hand-edit `[agent.delegation] max_depth = 2`) silently resets to
+    // default on the next UI update of ANY field. See PR #24 review C5.
+    cfg.agent.delegation = existing_cfg.agent.delegation.clone();
     // Preserve fields not in payload
     if cfg.agent.hooks.is_none() {
         cfg.agent.hooks = existing_cfg.agent.hooks.clone();
