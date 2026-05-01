@@ -56,6 +56,12 @@ If anomalies were detected and resolved: briefly describe — what happened, wha
 
 System health monitoring (services, resources, containers, restarts, secrets, alerting) is handled by **Watchdog** — a built-in Core subsystem. {AGENT_NAME} does NOT perform health checks or service restarts during heartbeat.
 
+## Skill Maintenance
+
+Check `GET /api/skills/repairs?status=pending`. If the queue is non-empty,
+process all pending repairs using the skill-curator skill before other tasks.
+Report: how many repairs processed, how many succeeded, how many failed.
+
 ## Diagnostic Principles
 
 - Do not interpret — measure.
