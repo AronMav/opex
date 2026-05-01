@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -166,6 +166,8 @@ export default function ProvidersPage() {
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [ttsVoices, setTtsVoices] = useState<{ id: string; name: string; description?: string; language?: string }[]>([]);
+  const [ttsVoicesLoading, setTtsVoicesLoading] = useState(false);
   const [testResult, setTestResult] = useState<{
     cli_found?: boolean;
     cli_path?: string;
@@ -242,6 +244,33 @@ export default function ProvidersPage() {
     }
     setModelsLoading(false);
   };
+
+  // ── TTS voice list loader ──────────────────────────────────────────────────
+  // Load the voices exposed by the TTS server behind the currently-edited
+  // provider. Uses /api/tts/voices?provider=<name>; toolgate honors the
+  // X-Hydeclaw-Provider header so we get the right server's catalogue even
+  // when this provider is not the globally-active one.
+  React.useEffect(() => {
+    if (!dialog.open || dialogCategory !== "tts" || !form.name) {
+      setTtsVoices([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setTtsVoicesLoading(true);
+      try {
+        const data = await apiGet<{ voices: { id: string; name: string; description?: string; language?: string }[] }>(
+          `/api/tts/voices?provider=${encodeURIComponent(form.name)}`,
+        );
+        if (!cancelled) setTtsVoices(data.voices ?? []);
+      } catch {
+        if (!cancelled) setTtsVoices([]);
+      } finally {
+        if (!cancelled) setTtsVoicesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dialog.open, dialogCategory, form.name]);
 
   // ── Open create ────────────────────────────────────────────────────────────
 
@@ -934,6 +963,69 @@ export default function ProvidersPage() {
                     className="font-mono text-sm"
                   />
                 </div>
+
+                {/* Voice (TTS only) */}
+                {dialogCategory === "tts" && (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-muted-foreground">
+                      {t("providers.field_voice")}{" "}
+                      <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>
+                    </label>
+                    {ttsVoices.length > 0 ? (
+                      <Select
+                        value={(form.options as ProviderOptions | undefined)?.voice as string | undefined ?? "__default__"}
+                        onValueChange={(v) =>
+                          setForm((f) => ({
+                            ...f,
+                            options: {
+                              ...((f.options as ProviderOptions | undefined) ?? {}),
+                              voice: v === "__default__" ? undefined : v,
+                            },
+                          }))
+                        }
+                      >
+                        <SelectTrigger className="text-sm font-mono">
+                          <SelectValue placeholder={t("providers.field_voice_placeholder")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__default__" className="text-sm text-muted-foreground">
+                            <span className="text-muted-foreground">&mdash; {t("providers.voice_server_default")}</span>
+                          </SelectItem>
+                          {ttsVoices.map((v) => (
+                            <SelectItem key={v.id} value={v.id} className="text-sm font-mono">
+                              <span className="flex flex-col">
+                                <span>{v.name || v.id}</span>
+                                {(v.language || v.description) && (
+                                  <span className="text-muted-foreground/60 text-[10px]">
+                                    {[v.language, v.description].filter(Boolean).join(" · ")}
+                                  </span>
+                                )}
+                              </span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        placeholder={ttsVoicesLoading ? t("providers.loading_voices") : t("providers.field_voice_placeholder")}
+                        value={(form.options as ProviderOptions | undefined)?.voice as string | undefined ?? ""}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            options: {
+                              ...((f.options as ProviderOptions | undefined) ?? {}),
+                              voice: e.target.value || undefined,
+                            },
+                          }))
+                        }
+                        className="font-mono text-sm"
+                      />
+                    )}
+                    <p className="text-[11px] text-muted-foreground/60">
+                      {t("providers.field_voice_hint")}
+                    </p>
+                  </div>
+                )}
 
                 {/* API Key */}
                 <div className="space-y-1.5">
