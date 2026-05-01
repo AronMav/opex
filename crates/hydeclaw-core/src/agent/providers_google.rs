@@ -197,6 +197,10 @@ struct GeminiUsage {
     prompt_token_count: Option<u32>,
     #[serde(rename = "candidatesTokenCount")]
     candidates_token_count: Option<u32>,
+    #[serde(rename = "thoughtsTokenCount", default)]
+    thoughts_token_count: Option<u32>,
+    #[serde(rename = "cachedContentTokenCount", default)]
+    cached_content_token_count: Option<u32>,
 }
 
 #[async_trait]
@@ -311,6 +315,9 @@ impl LlmProvider for GoogleProvider {
         let usage = api_resp.usage_metadata.map(|u| hydeclaw_types::TokenUsage {
             input_tokens: u.prompt_token_count.unwrap_or(0),
             output_tokens: u.candidates_token_count.unwrap_or(0),
+            cache_read_tokens: u.cached_content_token_count,
+            cache_creation_tokens: None,
+            reasoning_tokens: u.thoughts_token_count,
         });
 
         tracing::info!(
@@ -559,5 +566,30 @@ fn strip_empty_required(value: &mut serde_json::Value) {
         for v in arr.iter_mut() {
             strip_empty_required(v);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gemini_usage_maps_thoughts_and_cached() {
+        let json = r#"{
+            "candidates": [],
+            "usageMetadata": {
+                "promptTokenCount": 1000,
+                "candidatesTokenCount": 500,
+                "thoughtsTokenCount": 200,
+                "cachedContentTokenCount": 600
+            }
+        }"#;
+        let resp: GeminiResponse = serde_json::from_str(json).expect("parse");
+        let u = resp.usage_metadata.expect("usage_metadata present");
+
+        assert_eq!(u.prompt_token_count, Some(1000));
+        assert_eq!(u.candidates_token_count, Some(500));
+        assert_eq!(u.thoughts_token_count, Some(200));
+        assert_eq!(u.cached_content_token_count, Some(600));
     }
 }

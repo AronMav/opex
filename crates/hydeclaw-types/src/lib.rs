@@ -159,10 +159,26 @@ pub struct LlmResponse {
     pub thinking_blocks: Vec<ThinkingBlock>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+
+    /// Tokens read from prompt cache (Anthropic cache_read_input_tokens,
+    /// OpenAI prompt_tokens_details.cached_tokens, Gemini cachedContentTokenCount).
+    /// SUBSET of input_tokens — do not add to total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u32>,
+
+    /// Tokens written to prompt cache (Anthropic cache_creation_input_tokens).
+    /// SUBSET of input_tokens. Cost ×1.25 of base input — show separately in UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_tokens: Option<u32>,
+
+    /// Hidden reasoning tokens (OpenAI o1/o3, DeepSeek-R1, Gemini thinking).
+    /// SUBSET of output_tokens — do not add to total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u32>,
 }
 
 // ── Callback from MCP servers ──
@@ -852,6 +868,7 @@ mod tests {
             usage: Some(TokenUsage {
                 input_tokens: 150,
                 output_tokens: 42,
+                ..Default::default()
             }),
             model: Some("minimax-m2.5".into()),
             provider: Some("minimax".into()),
@@ -999,6 +1016,7 @@ mod tests {
         let usage = TokenUsage {
             input_tokens: 500,
             output_tokens: 200,
+            ..Default::default()
         };
         let json = serde_json::to_string(&usage).unwrap();
         let back: TokenUsage = serde_json::from_str(&json).unwrap();

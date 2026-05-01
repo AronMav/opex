@@ -276,6 +276,10 @@ describe("STATE-01: history to live transition", () => {
           selectedBranches: {},
           pendingMessage: null,
           contextTokens: null,
+          contextOutputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          reasoningTokens: null,
         };
       } else {
         s.agents["TestAgent"].messageSource = { mode: "history", sessionId: "sess-history" };

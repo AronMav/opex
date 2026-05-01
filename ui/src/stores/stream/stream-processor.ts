@@ -350,10 +350,15 @@ export async function processSSEStream(
           }
 
           case "usage": {
-            // Write inputTokens to contextTokens for the ContextBar indicator.
-            // outputTokens are not stored — they don't consume context window.
+            // Write input/output + extended fields to AgentState so the ContextBar
+            // can render a breakdown tooltip. Extended fields are subsets of
+            // input/output (NOT additive) — see TokenUsage doc in hydeclaw-types.
             session.writeDraft((agentDraft: AgentState) => {
-              (agentDraft as any).contextTokens = event.inputTokens;
+              agentDraft.contextTokens = event.inputTokens;
+              agentDraft.contextOutputTokens = event.outputTokens;
+              agentDraft.cacheReadTokens = event.cacheReadTokens ?? null;
+              agentDraft.cacheCreationTokens = event.cacheCreationTokens ?? null;
+              agentDraft.reasoningTokens = event.reasoningTokens ?? null;
             });
             break;
           }

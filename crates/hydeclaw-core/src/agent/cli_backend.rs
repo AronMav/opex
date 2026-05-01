@@ -848,9 +848,12 @@ fn parse_cli_json(raw: &str) -> CliOutput {
                 (Some(inp), Some(out)) => Some(hydeclaw_types::TokenUsage {
                     input_tokens: inp,
                     output_tokens: out,
+                    cache_read_tokens: None,
+                    cache_creation_tokens: None,
+                    reasoning_tokens: None,
                 }),
                 _ => {
-                    // Try nested usage object
+                    // Try nested usage object (Anthropic CLI format includes cache fields)
                     p.usage.as_ref().and_then(|u| {
                         let inp =
                             u.get("input_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32;
@@ -860,6 +863,15 @@ fn parse_cli_json(raw: &str) -> CliOutput {
                             Some(hydeclaw_types::TokenUsage {
                                 input_tokens: inp,
                                 output_tokens: out,
+                                cache_read_tokens: u
+                                    .get("cache_read_input_tokens")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .map(|v| v as u32),
+                                cache_creation_tokens: u
+                                    .get("cache_creation_input_tokens")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .map(|v| v as u32),
+                                reasoning_tokens: None,
                             })
                         } else {
                             None
@@ -922,6 +934,15 @@ fn parse_cli_jsonl(raw: &str) -> CliOutput {
                     usage = Some(hydeclaw_types::TokenUsage {
                         input_tokens: inp,
                         output_tokens: out,
+                        cache_read_tokens: u
+                            .get("cache_read_input_tokens")
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|v| v as u32),
+                        cache_creation_tokens: u
+                            .get("cache_creation_input_tokens")
+                            .and_then(serde_json::Value::as_u64)
+                            .map(|v| v as u32),
+                        reasoning_tokens: None,
                     });
                 }
             }
@@ -1029,6 +1050,40 @@ mod tests {
         let u = out.usage.unwrap();
         assert_eq!(u.input_tokens, 100);
         assert_eq!(u.output_tokens, 50);
+    }
+
+    #[test]
+    fn claude_cli_returns_none_for_unsupported_cache_fields() {
+        // Top-level only; no nested usage object → cache fields stay None.
+        let json = r#"{"result": "...", "input_tokens": 100, "output_tokens": 50}"#;
+        let out = parse_cli_json(json);
+        let u = out.usage.expect("usage present");
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 50);
+        assert_eq!(u.cache_read_tokens, None);
+        assert_eq!(u.cache_creation_tokens, None);
+        assert_eq!(u.reasoning_tokens, None);
+    }
+
+    #[test]
+    fn claude_cli_maps_cache_fields_when_nested_usage_has_them() {
+        // Anthropic CLI JSON puts cache fields inside the nested `usage` object.
+        let json = r#"{
+            "result": "ok",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 700,
+                "cache_creation_input_tokens": 200
+            }
+        }"#;
+        let out = parse_cli_json(json);
+        let u = out.usage.expect("usage present");
+        assert_eq!(u.input_tokens, 100);
+        assert_eq!(u.output_tokens, 50);
+        assert_eq!(u.cache_read_tokens, Some(700));
+        assert_eq!(u.cache_creation_tokens, Some(200));
+        assert_eq!(u.reasoning_tokens, None);
     }
 
     #[test]

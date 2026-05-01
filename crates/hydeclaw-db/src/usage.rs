@@ -12,6 +12,11 @@ pub const STATUS_ABORTED: &str = "aborted";
 pub const STATUS_ABORTED_FAILOVER: &str = "aborted_failover";
 
 /// Record a single LLM call's token usage.
+///
+/// Extended fields (`cache_read_tokens`, `cache_creation_tokens`, `reasoning_tokens`)
+/// are SUBSETS of `input_tokens` (cache_*) and `output_tokens` (reasoning).
+/// Pass `None` when the provider does not return them. Never sum.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_usage(
     db: &PgPool,
     agent_id: &str,
@@ -20,10 +25,17 @@ pub async fn record_usage(
     input_tokens: u32,
     output_tokens: u32,
     session_id: Option<Uuid>,
+    cache_read_tokens: Option<u32>,
+    cache_creation_tokens: Option<u32>,
+    reasoning_tokens: Option<u32>,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO usage_log (agent_id, provider, model, input_tokens, output_tokens, session_id) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO usage_log (\
+            agent_id, provider, model, \
+            input_tokens, output_tokens, \
+            session_id, \
+            cache_read_tokens, cache_creation_tokens, reasoning_tokens) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(agent_id)
     .bind(provider)
@@ -31,6 +43,9 @@ pub async fn record_usage(
     .bind(input_tokens as i32)
     .bind(output_tokens as i32)
     .bind(session_id)
+    .bind(cache_read_tokens.map(|v| v as i32))
+    .bind(cache_creation_tokens.map(|v| v as i32))
+    .bind(reasoning_tokens.map(|v| v as i32))
     .execute(db)
     .await?;
     Ok(())
@@ -48,6 +63,10 @@ pub async fn record_usage(
 /// by definition don't get). `output_tokens` is the caller's estimate —
 /// typically `partial_text.len() / 4` as a rough bytes-per-token
 /// heuristic.
+///
+/// Note: aborted rows always have NULL for cache_read/cache_creation/reasoning_tokens
+/// columns — provider headers never arrived, so extended usage info is unavailable.
+/// Schema's NULL is the correct representation; do NOT add Some(0).
 pub async fn insert_aborted_row(
     db: &PgPool,
     agent_id: &str,

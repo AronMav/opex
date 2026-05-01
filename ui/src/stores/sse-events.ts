@@ -26,7 +26,16 @@ export type SseEvent =
   | { type: "finish"; agentName?: string }
   | { type: "error"; errorText: string }
   | { type: "reconnecting"; attempt: number; delay_ms: number }
-  | { type: "usage"; inputTokens: number; outputTokens: number };
+  | {
+      type: "usage";
+      inputTokens: number;
+      outputTokens: number;
+      // Extended fields — subsets of input/output (NOT additive).
+      // Only present for providers that report them.
+      cacheReadTokens?: number;
+      cacheCreationTokens?: number;
+      reasoningTokens?: number;
+    };
 
 /**
  * Parse and validate a single SSE data payload.
@@ -107,6 +116,9 @@ export function parseSseEvent(raw: string): SseEvent | null {
         type,
         inputTokens: typeof e.inputTokens === "number" ? e.inputTokens : 0,
         outputTokens: typeof e.outputTokens === "number" ? e.outputTokens : 0,
+        cacheReadTokens: typeof e.cacheReadTokens === "number" ? e.cacheReadTokens : undefined,
+        cacheCreationTokens: typeof e.cacheCreationTokens === "number" ? e.cacheCreationTokens : undefined,
+        reasoningTokens: typeof e.reasoningTokens === "number" ? e.reasoningTokens : undefined,
       };
     case "tool-approval-needed": {
       if (typeof e.approvalId !== "string" || typeof e.toolName !== "string") return null;

@@ -63,5 +63,15 @@ pub enum StreamEvent {
     Reconnecting { attempt: u32, delay_ms: u64 },
     /// Token usage from the most recent LLM response. Emitted by pipeline/execute
     /// after each LLM call so the UI can display a context window indicator.
-    Usage { input_tokens: u32, output_tokens: u32 },
+    /// Extended fields are subsets of input/output (NOT additive):
+    /// - `cache_read_tokens` ⊆ `input_tokens` (cost ×0.1 Anthropic, ×0.5 OpenAI)
+    /// - `cache_creation_tokens` ⊆ `input_tokens` (cost ×1.25, Anthropic only)
+    /// - `reasoning_tokens` ⊆ `output_tokens` (OpenAI o1/o3, Gemini thinking)
+    Usage {
+        input_tokens: u32,
+        output_tokens: u32,
+        cache_read_tokens: Option<u32>,
+        cache_creation_tokens: Option<u32>,
+        reasoning_tokens: Option<u32>,
+    },
 }

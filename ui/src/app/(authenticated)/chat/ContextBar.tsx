@@ -16,6 +16,14 @@ import {
 interface ContextBarProps {
   tokens: number | null;
   model: string | null | undefined;
+  /** Output token count from the most recent LLM response. Optional. */
+  outputTokens?: number | null;
+  /** Cache-read tokens (subset of input). Anthropic ×0.1, OpenAI ×0.5 cost. */
+  cacheReadTokens?: number | null;
+  /** Cache-creation/write tokens (subset of input). Anthropic ×1.25 cost. */
+  cacheCreationTokens?: number | null;
+  /** Hidden reasoning tokens (subset of output). OpenAI o1/o3, Gemini thinking. */
+  reasoningTokens?: number | null;
 }
 
 function formatK(n: number): string {
@@ -26,7 +34,14 @@ function formatAbsolute(n: number): string {
   return n.toLocaleString("ru-RU");
 }
 
-export function ContextBar({ tokens, model }: ContextBarProps) {
+export function ContextBar({
+  tokens,
+  model,
+  outputTokens,
+  cacheReadTokens,
+  cacheCreationTokens,
+  reasoningTokens,
+}: ContextBarProps) {
   const limit = getContextLimit(model);
 
   // Hide when either piece of data is missing.
@@ -43,7 +58,26 @@ export function ContextBar({ tokens, model }: ContextBarProps) {
         : "bg-neutral-400";
 
   const remaining = Math.max(0, limit - tokens);
-  const tooltipText = `Использовано токенов контекста: ${formatAbsolute(tokens)} из ${formatAbsolute(limit)}. Осталось: ${formatAbsolute(remaining)}`;
+
+  // Build a multi-line breakdown when extended fields are present.
+  // Note: extended fields are SUBSETS of input/output (NOT additive).
+  const lines: string[] = [];
+  lines.push(`Контекст: ${formatAbsolute(tokens)} / ${formatAbsolute(limit)} (осталось ${formatAbsolute(remaining)})`);
+  lines.push("");
+  lines.push(`Input: ${formatAbsolute(tokens)}`);
+  if (cacheCreationTokens != null && cacheCreationTokens > 0) {
+    lines.push(`  └─ cache write: ${formatAbsolute(cacheCreationTokens)} (×1.25 cost)`);
+  }
+  if (cacheReadTokens != null && cacheReadTokens > 0) {
+    lines.push(`  └─ cache read:  ${formatAbsolute(cacheReadTokens)} (×0.1 cost)`);
+  }
+  if (outputTokens != null && outputTokens > 0) {
+    lines.push(`Output: ${formatAbsolute(outputTokens)}`);
+    if (reasoningTokens != null && reasoningTokens > 0) {
+      lines.push(`  └─ reasoning:    ${formatAbsolute(reasoningTokens)}`);
+    }
+  }
+  const tooltipText = lines.join("\n");
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -69,7 +103,7 @@ export function ContextBar({ tokens, model }: ContextBarProps) {
             )}
           </div>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs max-w-xs">
+        <TooltipContent side="bottom" className="text-xs max-w-xs whitespace-pre-line font-mono">
           {tooltipText}
         </TooltipContent>
       </Tooltip>

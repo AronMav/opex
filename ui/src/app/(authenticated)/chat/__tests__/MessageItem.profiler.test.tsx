@@ -111,6 +111,10 @@ describe("MessageItem re-render count (REF-05)", () => {
         selectedBranches: {},
         pendingMessage: null,
         contextTokens: null,
+        contextOutputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        reasoningTokens: null,
       };
     });
 

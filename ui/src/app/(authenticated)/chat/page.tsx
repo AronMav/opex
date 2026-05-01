@@ -91,7 +91,11 @@ export default function ChatPage() {
   const viewingHistory = messageSource.mode === "history";
   const streamError = useChatStore((s) => s.agents[s.currentAgent]?.streamError ?? null);
   const isStreaming = isActivePhase(useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle"));
-  const contextTokens = useChatStore((s) => (s.agents[s.currentAgent] as any)?.contextTokens ?? null);
+  const contextTokens = useChatStore((s) => s.agents[s.currentAgent]?.contextTokens ?? null);
+  const contextOutputTokens = useChatStore((s) => s.agents[s.currentAgent]?.contextOutputTokens ?? null);
+  const cacheReadTokens = useChatStore((s) => s.agents[s.currentAgent]?.cacheReadTokens ?? null);
+  const cacheCreationTokens = useChatStore((s) => s.agents[s.currentAgent]?.cacheCreationTokens ?? null);
+  const reasoningTokens = useChatStore((s) => s.agents[s.currentAgent]?.reasoningTokens ?? null);
   const modelOverride = useChatStore((s) => s.agents[s.currentAgent]?.modelOverride ?? null);
   const { data: agentsData } = useAgents();
   const currentAgentModel = useMemo(() => {
@@ -714,7 +718,14 @@ export default function ChatPage() {
             <ParticipantBar sessionId={activeSessionId} currentAgent={currentAgent} />
             <ChatCanvasTabs />
           </div>
-          <ContextBar tokens={contextTokens} model={currentAgentModel} />
+          <ContextBar
+            tokens={contextTokens}
+            model={currentAgentModel}
+            outputTokens={contextOutputTokens}
+            cacheReadTokens={cacheReadTokens}
+            cacheCreationTokens={cacheCreationTokens}
+            reasoningTokens={reasoningTokens}
+          />
           {/* HISTORY / Return to live badge removed — confusing for users during agent switch */}
           {streamError && (
             <div className="ml-auto flex items-center gap-1 text-destructive/60">
