@@ -47,7 +47,7 @@ useEffect(() => {
 }, [searchParams]);
 ```
 
-`window.history.replaceState` (used in `switchAgent` for reload safety) does NOT update `useSearchParams`, so this effect does not fire prematurely during a switch.
+`window.history.replaceState` (used in `switchAgent` for reload safety) does NOT update `useSearchParams`, so this effect does not fire prematurely during a switch. The effect also runs on component mount; calling `setOverrideUrlSession(undefined)` when the value is already `undefined` is a React bail-out (no re-render).
 
 ### 2. `switchAgent` Callback
 
@@ -100,19 +100,17 @@ Deps array: replace `urlSessionId` with `effectiveUrlSessionId`.
 
 ### 5. URL-Sync Guard
 
-The URL-sync effect reads `searchParams.get("s")` directly (not via `urlSessionId`). Make it override-aware:
+The URL-sync effect reads `searchParams.get("s")` directly instead of `urlSessionId`. Replace the guard with `effectiveUrlSessionId` (already combines override + searchParams) and add it to the effect's deps:
 
 ```tsx
-const currentUrlSession = overrideUrlSession !== undefined
-  ? overrideUrlSession
-  : searchParams.get("s");
-
-if (currentUrlSession && sessions.length > 0 && !sessions.some((s) => s.id === currentUrlSession)) {
+if (effectiveUrlSessionId && sessions.length > 0 && !sessions.some((s) => s.id === effectiveUrlSessionId)) {
   return; // resolver in flight — don't overwrite
 }
 ```
 
-When `overrideUrlSession = null`: `currentUrlSession = null` → guard doesn't block → URL-sync updates to `?s=alma-session` correctly.
+Deps: `[activeSessionId, searchParams, sessions, effectiveUrlSessionId]`.
+
+When `overrideUrlSession = null`: `effectiveUrlSessionId = null` → guard doesn't block → URL-sync updates to `?s=alma-session` correctly. No extra variable, no missing dep warning.
 
 ## Scenario Validation
 
@@ -120,7 +118,7 @@ When `overrideUrlSession = null`: `currentUrlSession = null` → guard doesn't b
 |---|---|
 | First switch after page load (Arty→Alma) | `override = null` batches with agent switch → resolver sees `effectiveUrlSessionId = null` → returns early ✓ |
 | Hard reload after switch | `window.replaceState` cleared URL → no `?s=` on reload → resolver doesn't fire ✓ |
-| Subsequent switches (Alma→Hyde) | `override` already null; `replaceState` keeps URL clean ✓ |
+| Subsequent switches (Alma→Hyde) | URL-sync had already set `?s=alma-session` via `replaceState`; switchAgent calls `replaceState` again clearing it; `override` stays null → resolver blocked; URL-sync re-sets `?s=hyde-session` once Hyde's session restores ✓ |
 | Deep-link on page load (`?s=foreign`) | `override = undefined` (fresh mount) → resolver uses real `urlSessionId` → works ✓ |
 | Deep-link via Next.js navigation | `searchParams` updates → reset effect sets `override = undefined` → resolver works ✓ |
 | Deep-link via hard reload | Fresh mount → `override = undefined` → resolver works ✓ |
