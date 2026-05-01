@@ -207,12 +207,7 @@ pub async fn execute_yaml_channel_action(
             Some("Error: channel action channel closed".to_string())
         } else {
             match tokio::time::timeout(std::time::Duration::from_secs(60), reply_rx).await {
-                Ok(Ok(Ok(()))) => Some(format!(
-                    "{} delivered. The user has already received it in the channel. \
-                     Do NOT add a text message saying it was sent — that is redundant. \
-                     Reply with no text unless the user asked a follow-up question.",
-                    ca.action
-                )),
+                Ok(Ok(Ok(()))) => Some(format!("{} sent successfully", ca.action)),
                 Ok(Ok(Err(e))) => Some(format!("Error sending {}: {}", ca.action, e)),
                 Ok(Err(_)) => Some(format!("Error: {} reply channel dropped", ca.action)),
                 Err(_) => Some(format!("Error: {} send timed out", ca.action)),
