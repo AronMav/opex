@@ -243,6 +243,21 @@ describe("processSSEStream — case 'usage' writes AgentState fields", () => {
     expect(st?.cacheCreationTokens).toBe(9999);
   });
 
+  // ── Multi-agent isolation ────────────────────────────────────────────────
+  // Documents a latent production bug (review L3, 2026-05-01): the `usage`
+  // SSE event has no `agentName` field, so writeDraft applies it to the
+  // currentAgent regardless of which agent actually emitted the usage. In
+  // a multi-agent session, agent B finishing a stream while agent A is
+  // mid-turn will overwrite A's tokenUsage with B's values.
+  //
+  // The fix requires (a) extending sse-events.UsageEvent with agentName,
+  // (b) backend emitting the field, (c) stream-processor routing by agent.
+  // Out of scope for PR #29 (test-only); tracked as a separate todo.
+
+  it.todo(
+    "Usage events are isolated per-agent in multi-agent sessions (FIXME: prod bug L3)",
+  );
+
   it("overwrites earlier usage fields when a second usage event arrives", async () => {
     // Multi-turn loop: first turn reports cache-creation, second is a plain reuse.
     mockFetch([

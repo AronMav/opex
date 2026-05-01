@@ -41,6 +41,17 @@ function getBarWidthPct(): string | undefined {
   return bar?.style.width;
 }
 
+function getBarColor(): string {
+  const bar = screen.getByTestId("tooltip-trigger").querySelector<HTMLDivElement>(
+    'div[class*="rounded-full"][style*="width"]',
+  );
+  const cls = bar?.className ?? "";
+  if (cls.includes("bg-red-500")) return "red";
+  if (cls.includes("bg-yellow-500")) return "yellow";
+  if (cls.includes("bg-neutral-400")) return "neutral";
+  return "unknown";
+}
+
 describe("ContextBar — visibility", () => {
   it("returns null when tokens is null", () => {
     const { container } = render(<ContextBar tokens={null} model={MODEL} />);
@@ -168,5 +179,54 @@ describe("ContextBar — progress bar ratio", () => {
   it("hides warning label below the 95% threshold", () => {
     render(<ContextBar tokens={150_000} model={MODEL} />);
     expect(screen.queryByText(/Контекст почти заполнен/)).not.toBeInTheDocument();
+  });
+});
+
+// ── Color threshold guards ─────────────────────────────────────────────────
+// Pin barColor selection so a regression in the > 0.95 / > 0.8 thresholds
+// (or a >= vs > swap) fails loudly. Without these tests, a swap to
+// "yellow at >95%, red at >80%" would ship green.
+
+describe("ContextBar — bar color thresholds", () => {
+  it("uses neutral color below 80% (typical mid-session)", () => {
+    // 100_000 / 200_000 = 50% → well under both thresholds
+    render(<ContextBar tokens={100_000} model={MODEL} />);
+    expect(getBarColor()).toBe("neutral");
+  });
+
+  it("uses neutral color at exactly 80% (boundary — strict >)", () => {
+    // 160_000 / 200_000 = 0.80 → ratio > 0.8 is FALSE, must be neutral
+    render(<ContextBar tokens={160_000} model={MODEL} />);
+    expect(getBarColor()).toBe("neutral");
+  });
+
+  it("uses yellow color just above 80%", () => {
+    // 161_000 / 200_000 = 0.805 → first ratio > 0.8 step
+    render(<ContextBar tokens={161_000} model={MODEL} />);
+    expect(getBarColor()).toBe("yellow");
+  });
+
+  it("uses yellow color at 90% (mid-warning)", () => {
+    // 180_000 / 200_000 = 0.90
+    render(<ContextBar tokens={180_000} model={MODEL} />);
+    expect(getBarColor()).toBe("yellow");
+  });
+
+  it("uses yellow color at exactly 95% (boundary — strict >)", () => {
+    // 190_000 / 200_000 = 0.95 → ratio > 0.95 is FALSE, must stay yellow
+    render(<ContextBar tokens={190_000} model={MODEL} />);
+    expect(getBarColor()).toBe("yellow");
+  });
+
+  it("uses red color just above 95%", () => {
+    // 191_000 / 200_000 = 0.955 → first ratio > 0.95 step
+    render(<ContextBar tokens={191_000} model={MODEL} />);
+    expect(getBarColor()).toBe("red");
+  });
+
+  it("uses red color when context is over the limit (clamped)", () => {
+    // 250_000 > 200_000 — ratio clamped to 1.0, color must remain red
+    render(<ContextBar tokens={250_000} model={MODEL} />);
+    expect(getBarColor()).toBe("red");
   });
 });
