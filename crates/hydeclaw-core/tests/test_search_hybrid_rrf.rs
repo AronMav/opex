@@ -134,11 +134,16 @@ impl EmbeddingService for DisabledEmbedder {
 
 /// Insert a chunk with an embedding so all three search branches (semantic +
 /// FTS + trigram) can match it. Vector dim must match `FakeEmbedder::embed`.
+///
+/// `tsv` MUST be populated explicitly here — production code does this via
+/// `to_tsvector('russian', content)` in `memory_queries::index`, but the
+/// `memory_chunks.tsv` column is a plain `tsvector` (not GENERATED), so
+/// without setting it the FTS branch silently returns empty for every chunk.
 async fn insert_chunk_with_embedding(db: &PgPool, content: &str, agent_id: &str) -> String {
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO memory_chunks (id, content, source, pinned, scope, agent_id, embedding) \
-         VALUES ($1::uuid, $2, 'test', false, 'private', $3, $4::vector)",
+        "INSERT INTO memory_chunks (id, content, source, pinned, scope, agent_id, embedding, tsv) \
+         VALUES ($1::uuid, $2, 'test', false, 'private', $3, $4::vector, to_tsvector('russian', $2))",
     )
     .bind(&id)
     .bind(content)
@@ -164,8 +169,8 @@ async fn insert_chunk_with_vec(
         embedding[0], embedding[1], embedding[2], embedding[3]
     );
     sqlx::query(
-        "INSERT INTO memory_chunks (id, content, source, pinned, scope, agent_id, embedding) \
-         VALUES ($1::uuid, $2, 'test', false, 'private', $3, $4::vector)",
+        "INSERT INTO memory_chunks (id, content, source, pinned, scope, agent_id, embedding, tsv) \
+         VALUES ($1::uuid, $2, 'test', false, 'private', $3, $4::vector, to_tsvector('russian', $2))",
     )
     .bind(&id)
     .bind(content)
@@ -183,8 +188,8 @@ async fn insert_chunk_with_vec(
 async fn insert_chunk_no_embedding(db: &PgPool, content: &str, agent_id: &str) -> String {
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
-        "INSERT INTO memory_chunks (id, content, source, pinned, scope, agent_id) \
-         VALUES ($1::uuid, $2, 'test', false, 'private', $3)",
+        "INSERT INTO memory_chunks (id, content, source, pinned, scope, agent_id, tsv) \
+         VALUES ($1::uuid, $2, 'test', false, 'private', $3, to_tsvector('russian', $2))",
     )
     .bind(&id)
     .bind(content)
