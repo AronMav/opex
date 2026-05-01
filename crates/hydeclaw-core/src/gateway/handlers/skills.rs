@@ -183,6 +183,8 @@ pub(crate) async fn api_skill_upsert_global(
         triggers: body.triggers,
         tools_required: body.tools_required,
         priority: body.priority,
+        last_used_at: None,
+        state: crate::skills::SkillState::Active,
     };
     match crate::skills::write_skill(
         crate::config::WORKSPACE_DIR,
@@ -297,6 +299,8 @@ pub(crate) async fn api_skill_upsert(
         triggers: body.triggers,
         tools_required: body.tools_required,
         priority: body.priority,
+        last_used_at: None,
+        state: crate::skills::SkillState::Active,
     };
     match crate::skills::write_skill(
         crate::config::WORKSPACE_DIR,
