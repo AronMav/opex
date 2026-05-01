@@ -11,6 +11,8 @@ use crate::gateway::clusters::InfraServices;
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/skills", get(api_skills_list_global))
+        .route("/api/skills/repairs", get(api_skill_repairs_list))
+        .route("/api/skills/repairs/{id}", axum::routing::patch(api_skill_repair_resolve))
         .route("/api/skills/{skill}", get(api_skill_get_global).put(api_skill_upsert_global).delete(api_skill_delete_global))
         .route("/api/agents/{name}/skills", get(api_skills_list))
         .route("/api/agents/{name}/skills/{skill}", get(api_skill_get).put(api_skill_upsert).delete(api_skill_delete))
@@ -111,6 +113,21 @@ pub(crate) async fn available_tools_for_agent(
     Some(kept)
 }
 
+// ── Skill JSON serialization ─────────────────────────────────────────────────
+
+fn skill_to_json(s: &crate::skills::SkillDef) -> serde_json::Value {
+    serde_json::json!({
+        "name": s.meta.name,
+        "description": s.meta.description,
+        "triggers": s.meta.triggers,
+        "tools_required": s.meta.tools_required,
+        "priority": s.meta.priority,
+        "instructions_len": s.instructions.len(),
+        "state": s.meta.state,
+        "last_used_at": s.meta.last_used_at,
+    })
+}
+
 // ── Global skills endpoints ───────────────────────────────────────────────────
 
 #[derive(serde::Deserialize)]
@@ -133,16 +150,7 @@ pub(crate) async fn api_skills_list_global(
     {
         skills = crate::skills::filter_skills_by_available_tools(skills, &available);
     }
-    let result: Vec<serde_json::Value> = skills.iter().map(|s| {
-        serde_json::json!({
-            "name": s.meta.name,
-            "description": s.meta.description,
-            "triggers": s.meta.triggers,
-            "tools_required": s.meta.tools_required,
-            "priority": s.meta.priority,
-            "instructions_len": s.instructions.len(),
-        })
-    }).collect();
+    let result: Vec<serde_json::Value> = skills.iter().map(skill_to_json).collect();
     Json(serde_json::json!({"skills": result})).into_response()
 }
 
@@ -234,16 +242,7 @@ pub(crate) async fn api_skills_list(
     ).await {
         skills = crate::skills::filter_skills_by_available_tools(skills, &available);
     }
-    let result: Vec<serde_json::Value> = skills.iter().map(|s| {
-        serde_json::json!({
-            "name": s.meta.name,
-            "description": s.meta.description,
-            "triggers": s.meta.triggers,
-            "tools_required": s.meta.tools_required,
-            "priority": s.meta.priority,
-            "instructions_len": s.instructions.len(),
-        })
-    }).collect();
+    let result: Vec<serde_json::Value> = skills.iter().map(skill_to_json).collect();
     Json(serde_json::json!({"skills": result})).into_response()
 }
 
@@ -335,9 +334,90 @@ pub(crate) async fn api_skill_delete(
     }
 }
 
+// ── Skill repair endpoints ────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub(crate) struct RepairsQuery {
+    status: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct ResolveRepairBody {
+    status: String,
+    resolution_note: Option<String>,
+}
+
+/// GET /api/skills/repairs[?status=pending]
+pub(crate) async fn api_skill_repairs_list(
+    State(infra): State<InfraServices>,
+    axum::extract::Query(q): axum::extract::Query<RepairsQuery>,
+) -> impl IntoResponse {
+    match crate::db::skill_repairs::list(
+        &infra.db,
+        q.status.as_deref(),
+        100,
+    ).await {
+        Ok(rows) => Json(serde_json::json!({"repairs": rows})).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list skill repairs");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+             Json(serde_json::json!({"error": "db error"}))).into_response()
+        }
+    }
+}
+
+/// PATCH /api/skills/repairs/{id}
+pub(crate) async fn api_skill_repair_resolve(
+    State(infra): State<InfraServices>,
+    axum::extract::Path(id_str): axum::extract::Path<String>,
+    axum::Json(body): axum::Json<ResolveRepairBody>,
+) -> impl IntoResponse {
+    let id = match uuid::Uuid::parse_str(&id_str) {
+        Ok(u) => u,
+        Err(_) => return (StatusCode::BAD_REQUEST,
+                          Json(serde_json::json!({"error": "invalid uuid"}))).into_response(),
+    };
+    if !matches!(body.status.as_str(), "done" | "failed") {
+        return (StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "status must be 'done' or 'failed'"}))).into_response();
+    }
+    match crate::db::skill_repairs::resolve(
+        &infra.db, id, &body.status, body.resolution_note.as_deref(),
+    ).await {
+        Ok(true)  => Json(serde_json::json!({"ok": true})).into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND,
+                      Json(serde_json::json!({"error": "not found or already resolved"}))).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to resolve skill repair");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+             Json(serde_json::json!({"error": "db error"}))).into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skill_response_includes_state_and_last_used_at() {
+        use crate::skills::{SkillDef, SkillFrontmatter, SkillState};
+        let skill = SkillDef {
+            meta: SkillFrontmatter {
+                name: "test".into(),
+                description: "desc".into(),
+                triggers: vec![],
+                tools_required: vec![],
+                priority: 0,
+                last_used_at: Some("2026-04-30T12:00:00Z".into()),
+                state: SkillState::Stale,
+            },
+            instructions: "body".into(),
+        };
+        let json = skill_to_json(&skill);
+        assert_eq!(json["state"], "stale");
+        assert_eq!(json["last_used_at"], "2026-04-30T12:00:00Z");
+    }
 
     fn write_agent_toml(dir: &std::path::Path, name: &str, body: &str) {
         std::fs::create_dir_all(dir).expect("create config dir");
