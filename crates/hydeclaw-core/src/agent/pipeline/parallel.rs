@@ -275,10 +275,10 @@ pub async fn execute_tool_calls_partitioned(
             }
             // Advance chain_parent to the last parallel tool (by declaration order)
             // so the subsequent sequential tools / assistant message chain off it.
-            if let Some(&last_i) = parallel_indices.last() {
-                if let Some((last_id, _)) = out[last_i] {
-                    chain_parent = Some(last_id);
-                }
+            if let Some(&last_i) = parallel_indices.last()
+                && let Some((last_id, _)) = out[last_i]
+            {
+                chain_parent = Some(last_id);
             }
             out
         } else {
