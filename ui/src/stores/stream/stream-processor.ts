@@ -6,6 +6,7 @@ import { parseSSELines, parseSseEvent } from "./sse-parser";
 import { parseContentParts } from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
+import { useChatStore } from "@/stores/chat-store";
 import type { SessionRow } from "@/types/api";
 
 import type {
@@ -353,13 +354,35 @@ export async function processSSEStream(
             // Write input/output + extended fields to AgentState so the ContextBar
             // can render a breakdown tooltip. Extended fields are subsets of
             // input/output (NOT additive) — see TokenUsage doc in hydeclaw-types.
-            session.writeDraft((agentDraft: AgentState) => {
-              agentDraft.contextTokens = event.inputTokens;
-              agentDraft.contextOutputTokens = event.outputTokens;
-              agentDraft.cacheReadTokens = event.cacheReadTokens ?? null;
-              agentDraft.cacheCreationTokens = event.cacheCreationTokens ?? null;
-              agentDraft.reasoningTokens = event.reasoningTokens ?? null;
-            });
+            //
+            // Route by event.agentName, not by the session's bound agent. In a
+            // multi-agent flow (AgentSwitch / cron-driven peer responses), a
+            // usage event from agent B can arrive on agent A's stream — without
+            // routing it would overwrite A's tokenUsage state with B's numbers
+            // and corrupt A's ContextBar / billing breakdown.
+            //
+            // Falls back to session.writeDraft (current-agent semantics) when
+            // older backends don't tag the event — preserves single-agent behavior.
+            const targetAgent = event.agentName;
+            if (targetAgent && targetAgent !== session.agent) {
+              useChatStore.setState((draft: { agents: Record<string, AgentState> }) => {
+                const st = draft.agents[targetAgent];
+                if (!st) return;
+                st.contextTokens = event.inputTokens;
+                st.contextOutputTokens = event.outputTokens;
+                st.cacheReadTokens = event.cacheReadTokens ?? null;
+                st.cacheCreationTokens = event.cacheCreationTokens ?? null;
+                st.reasoningTokens = event.reasoningTokens ?? null;
+              });
+            } else {
+              session.writeDraft((agentDraft: AgentState) => {
+                agentDraft.contextTokens = event.inputTokens;
+                agentDraft.contextOutputTokens = event.outputTokens;
+                agentDraft.cacheReadTokens = event.cacheReadTokens ?? null;
+                agentDraft.cacheCreationTokens = event.cacheCreationTokens ?? null;
+                agentDraft.reasoningTokens = event.reasoningTokens ?? null;
+              });
+            }
             break;
           }
 
