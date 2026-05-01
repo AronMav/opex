@@ -298,6 +298,8 @@
   "agents.field_language": "Language",
   "agents.field_provider": "Provider",
   "agents.field_fallback_provider": "Fallback Provider",
+  "agents.field_tts_provider": "TTS Provider",
+  "agents.tts_provider_global_fallback": "use globally active TTS",
   "agents.field_model": "Model",
   "agents.loading_models": "Loading models...",
   "agents.field_temperature": "Temperature",

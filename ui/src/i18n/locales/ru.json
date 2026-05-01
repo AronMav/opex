@@ -298,6 +298,8 @@
   "agents.field_language": "Язык",
   "agents.field_provider": "Провайдер",
   "agents.field_fallback_provider": "Резервный провайдер",
+  "agents.field_tts_provider": "TTS-провайдер",
+  "agents.tts_provider_global_fallback": "глобальный активный TTS",
   "agents.field_model": "Модель",
   "agents.loading_models": "Загрузка моделей...",
   "agents.field_temperature": "Температура",

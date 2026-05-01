@@ -98,6 +98,7 @@ export const emptyForm: FormState = {
   accessMode: "open",
   accessOwnerId: "",
   fallbackProvider: "",
+  ttsProvider: "",
 };
 
 export function detailToForm(d: AgentDetail): FormState {
@@ -163,6 +164,7 @@ export function detailToForm(d: AgentDetail): FormState {
     accessMode: d.access?.mode ?? "open",
     accessOwnerId: d.access?.owner_id ?? "",
     fallbackProvider: d.fallback_provider ?? "",
+    ttsProvider: d.tts_provider ?? "",
   };
 }
 
@@ -255,6 +257,7 @@ export function formToPayload(f: FormState) {
     max_history_messages: f.maxHistoryMessages ? parseInt(f.maxHistoryMessages) : null,
     daily_budget_tokens: parseInt(f.dailyBudgetTokens) || 0,
     fallback_provider: f.fallbackProvider,
+    tts_provider: f.ttsProvider || null,
   };
 }
 
