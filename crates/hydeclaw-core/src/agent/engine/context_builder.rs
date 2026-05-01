@@ -281,6 +281,10 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         self.cfg().agent.max_tools_in_context
     }
 
+    fn workspace_dir(&self) -> &str {
+        &self.cfg().workspace_dir
+    }
+
     async fn load_workspace_prompt(&self) -> Result<String> {
         workspace::load_workspace_prompt(&self.cfg().workspace_dir, &self.cfg().agent.name).await
     }

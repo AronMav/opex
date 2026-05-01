@@ -99,6 +99,9 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     async fn build_memory_context(&self, budget_tokens: u32) -> (String, Vec<String>);
     async fn store_pinned_chunk_ids(&self, ids: Vec<String>);
 
+    // Workspace
+    fn workspace_dir(&self) -> &str;
+
     // Tools
     fn internal_tool_definitions(&self) -> Vec<ToolDefinition>;
     async fn load_yaml_tools_cached(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef>;
@@ -241,6 +244,21 @@ impl ContextBuilder for DefaultContextBuilder {
                     skill.meta.description,
                     skill.meta.name
                 ));
+                // Fire-and-forget: track last_used_at for workspace/skills/ only
+                {
+                    let skill_name = skill.meta.name.clone();
+                    let workspace = deps.workspace_dir().to_string();
+                    let now_iso = chrono::Utc::now().to_rfc3339();
+                    tokio::spawn(async move {
+                        let safe_name = skill_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
+                        let skill_path = format!("{}/skills/{}.md", workspace, safe_name);
+                        crate::skills::update_skill_last_used_if_stale(
+                            &skill_path,
+                            &now_iso,
+                            chrono::Duration::hours(1),
+                        ).await;
+                    });
+                }
             }
         }
 
