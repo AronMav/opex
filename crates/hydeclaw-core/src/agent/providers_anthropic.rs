@@ -359,6 +359,44 @@ pub(super) struct AnthropicUsage {
     pub(super) cache_read_input_tokens: Option<u32>,
 }
 
+/// Buffer for streaming usage data accumulated from SSE events.
+/// `message_start` populates input/cache_*. `message_delta` updates output.
+#[derive(Default)]
+struct StreamingAnthropicUsage {
+    input_tokens: u32,
+    output_tokens: u32,
+    cache_creation_input_tokens: Option<u32>,
+    cache_read_input_tokens: Option<u32>,
+    /// True if any usage event (`message_start` or `message_delta`) was observed.
+    /// If false at end of stream, usage stays None (no synthesized zeros).
+    seen: bool,
+}
+
+impl StreamingAnthropicUsage {
+    fn into_token_usage(self) -> Option<hydeclaw_types::TokenUsage> {
+        if !self.seen {
+            return None;
+        }
+        // Optional cache hit log (mirrors non-streaming path).
+        if let Some(cache_read) = self.cache_read_input_tokens
+            && cache_read > 0
+        {
+            tracing::info!(
+                cache_read,
+                cache_create = self.cache_creation_input_tokens,
+                "anthropic streaming cache hit"
+            );
+        }
+        Some(hydeclaw_types::TokenUsage {
+            input_tokens: self.input_tokens,
+            output_tokens: self.output_tokens,
+            cache_read_tokens: self.cache_read_input_tokens,
+            cache_creation_tokens: self.cache_creation_input_tokens,
+            reasoning_tokens: None,
+        })
+    }
+}
+
 pub(super) fn parse_anthropic_response(api_resp: AnthropicResponse, model: &str) -> LlmResponse {
     let mut content = String::new();
     let mut tool_calls = Vec::new();
@@ -420,17 +458,54 @@ pub(super) fn parse_anthropic_response(api_resp: AnthropicResponse, model: &str)
 }
 
 /// Process one parsed Anthropic SSE event. Calls `emit_thinking` for thinking content
-/// (open/close tags + deltas) and `emit_text` for text_delta content.
+/// (open/close tags + deltas) and `emit_text` for text_delta content. Captures usage
+/// from `message_start` (input + cache_*) and `message_delta` (cumulative output) into
+/// `usage_buffer`.
 fn process_sse_event(
     event: &serde_json::Value,
     thinking_content: &mut String,
     current_signature: &mut String,
     in_thinking_block: &mut bool,
     thinking_blocks: &mut Vec<hydeclaw_types::ThinkingBlock>,
+    usage_buffer: &mut StreamingAnthropicUsage,
     mut emit_thinking: impl FnMut(String),
     mut emit_text: impl FnMut(String),
 ) {
     match event.get("type").and_then(|t| t.as_str()) {
+        Some("message_start") => {
+            if let Some(usage) = event.get("message").and_then(|m| m.get("usage")) {
+                usage_buffer.seen = true;
+                if let Some(n) = usage.get("input_tokens").and_then(|v| v.as_u64()) {
+                    usage_buffer.input_tokens = n.min(u32::MAX as u64) as u32;
+                }
+                if let Some(n) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
+                    usage_buffer.output_tokens = n.min(u32::MAX as u64) as u32;
+                }
+                if let Some(n) = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    usage_buffer.cache_creation_input_tokens = Some(n.min(u32::MAX as u64) as u32);
+                }
+                if let Some(n) = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_u64())
+                {
+                    usage_buffer.cache_read_input_tokens = Some(n.min(u32::MAX as u64) as u32);
+                }
+            }
+        }
+        Some("message_delta") => {
+            // message_delta.usage contains the cumulative output_tokens count
+            // (not incremental), so we overwrite rather than add.
+            if let Some(usage) = event.get("usage")
+                && let Some(n) = usage.get("output_tokens").and_then(|v| v.as_u64())
+            {
+                usage_buffer.output_tokens = n.min(u32::MAX as u64) as u32;
+                // Defensive: in case message_start was skipped.
+                usage_buffer.seen = true;
+            }
+        }
         Some("content_block_start") => {
             if event
                 .get("content_block")
@@ -492,6 +567,7 @@ fn process_sse_events_for_test(
     let mut thinking_content = String::new();
     let mut current_signature = String::new();
     let mut in_thinking_block = false;
+    let mut usage_buffer = StreamingAnthropicUsage::default();
 
     for line in lines {
         let data = match line.strip_prefix("data: ") {
@@ -505,11 +581,41 @@ fn process_sse_events_for_test(
             &mut current_signature,
             &mut in_thinking_block,
             &mut thinking_blocks,
+            &mut usage_buffer,
             |chunk| thinking_chunks.borrow_mut().push(chunk),
             |chunk| text_chunks.borrow_mut().push(chunk),
         );
     }
     (text_chunks.into_inner(), thinking_chunks.into_inner(), thinking_blocks)
+}
+
+#[cfg(test)]
+fn parse_streaming_usage_for_test(lines: &[String]) -> Option<hydeclaw_types::TokenUsage> {
+    let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
+    let mut thinking_content = String::new();
+    let mut current_signature = String::new();
+    let mut in_thinking_block = false;
+    let mut usage_buffer = StreamingAnthropicUsage::default();
+
+    for line in lines {
+        let data = match line.strip_prefix("data: ") {
+            Some(d) => d,
+            None => continue,
+        };
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+        process_sse_event(
+            &event,
+            &mut thinking_content,
+            &mut current_signature,
+            &mut in_thinking_block,
+            &mut thinking_blocks,
+            &mut usage_buffer,
+            |_| {},
+            |_| {},
+        );
+    }
+
+    usage_buffer.into_token_usage()
 }
 
 #[async_trait]
@@ -648,6 +754,7 @@ impl LlmProvider for AnthropicProvider {
         let mut current_signature = String::new();
         let mut in_thinking_block = false;
         let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
+        let mut usage_buffer = StreamingAnthropicUsage::default();
 
         use tokio_stream::StreamExt;
         use crate::agent::providers::{CancelSlot, LlmCallError, cancellable_stream::stream_with_cancellation};
@@ -685,6 +792,7 @@ impl LlmProvider for AnthropicProvider {
                             &mut current_signature,
                             &mut in_thinking_block,
                             &mut thinking_blocks,
+                            &mut usage_buffer,
                             |_| {},
                             |text| {
                                 full_content.push_str(&text);
@@ -733,7 +841,7 @@ impl LlmProvider for AnthropicProvider {
         Ok(LlmResponse {
             content: full_content,
             tool_calls: vec![],
-            usage: None,
+            usage: usage_buffer.into_token_usage(),
             finish_reason: None,
             model: Some(self.model.effective()),
             provider: Some("anthropic".to_string()),
@@ -875,6 +983,46 @@ mod tests {
         assert_eq!(content[1]["type"], "tool_use");
         assert_eq!(content[1]["id"], "call_1");
         assert_eq!(content[1]["name"], "my_tool");
+    }
+
+    #[test]
+    fn streaming_message_start_populates_input_and_cache() {
+        let lines = vec![
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":1000,"cache_creation_input_tokens":200,"cache_read_input_tokens":700,"output_tokens":1}}}"#.to_string(),
+            r#"data: {"type":"message_delta","usage":{"output_tokens":500}}"#.to_string(),
+            r#"data: {"type":"message_stop"}"#.to_string(),
+        ];
+        let usage = parse_streaming_usage_for_test(&lines);
+        let u = usage.expect("usage populated");
+        assert_eq!(u.input_tokens, 1000);
+        // last message_delta wins (cumulative)
+        assert_eq!(u.output_tokens, 500);
+        assert_eq!(u.cache_creation_tokens, Some(200));
+        assert_eq!(u.cache_read_tokens, Some(700));
+        assert_eq!(u.reasoning_tokens, None);
+    }
+
+    #[test]
+    fn streaming_no_message_start_returns_none() {
+        let lines = vec![
+            r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}"#
+                .to_string(),
+        ];
+        let usage = parse_streaming_usage_for_test(&lines);
+        assert!(usage.is_none(), "no message_start = no usage");
+    }
+
+    #[test]
+    fn streaming_only_message_delta_still_records() {
+        // Edge case: provider sends only message_delta (no message_start) — defensive.
+        let lines = vec![
+            r#"data: {"type":"message_delta","usage":{"output_tokens":42}}"#.to_string(),
+        ];
+        let usage = parse_streaming_usage_for_test(&lines);
+        let u = usage.expect("usage from message_delta only");
+        assert_eq!(u.output_tokens, 42);
+        // No message_start = no input info.
+        assert_eq!(u.input_tokens, 0);
     }
 
     #[test]
