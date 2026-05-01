@@ -9,6 +9,7 @@ expression: dto
   "model": "claude-3-5-sonnet-20241022",
   "provider_connection": null,
   "fallback_provider": null,
+  "tts_provider": null,
   "temperature": 1.0,
   "max_tokens": null,
   "access": null,
