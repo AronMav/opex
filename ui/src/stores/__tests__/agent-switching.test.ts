@@ -259,3 +259,27 @@ describe("restore effect — page.tsx validates pre-populated session ID", () =>
     expect(toP1).toMatch(/fall\s+through/i);
   });
 });
+
+// ── 6. switchAgent clears ?s= on user-initiated switch (hard-reload regression) ─
+
+describe("switchAgent — clears ?s= param to prevent cross-agent resolver bounce", () => {
+  it("page.tsx switchAgent calls router.replace to clear the ?s= search param", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const src = fs.readFileSync(
+      path.resolve(__dirname, "../../app/(authenticated)/chat/page.tsx"),
+      "utf8"
+    );
+
+    // switchAgent must delete the ?s= param via router.replace so that a hard
+    // reload doesn't carry the previous agent's session ID into the cross-agent
+    // URL resolver and trigger a switch back to the old agent.
+    const switchAgentBlock = src.slice(
+      src.indexOf("const switchAgent = useCallback"),
+      src.indexOf("}, [router, searchParams]);") + "}, [router, searchParams]);".length
+    );
+
+    expect(switchAgentBlock).toContain('params.delete("s")');
+    expect(switchAgentBlock).toContain("router.replace");
+  });
+});
