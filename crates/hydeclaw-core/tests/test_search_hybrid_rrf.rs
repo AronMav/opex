@@ -443,7 +443,11 @@ async fn search_hybrid_results_are_deterministic_under_ties(db: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn search_hybrid_skipped_when_embedder_unavailable(db: PgPool) {
     let agent = format!("test-rrf-no-embed-{}", uuid::Uuid::new_v4());
-    insert_chunk_with_embedding(&db, "RRF_NOEMBED_данные системы", &agent).await;
+    // Note: tokens MUST be space-separated. The Russian FTS dictionary keeps
+    // underscore-joined runs as a single token (e.g., "RRF_NOEMBED_данные"
+    // does NOT stem to lemma "дан"), so "RRF_NOEMBED_данные системы" would
+    // never match the query "данные". Pre-existing bug in commit 8fa0482.
+    insert_chunk_with_embedding(&db, "RRF NOEMBED данные системы", &agent).await;
 
     let store = MemoryStore::new(
         db.clone(),
