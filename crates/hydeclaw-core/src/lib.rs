@@ -265,30 +265,14 @@ pub mod __memory_bridge {
 #[doc(hidden)]
 pub use __memory_bridge as memory;
 
-// `agent::pipeline::memory::truncate_chunk_content` bridge. The real
-// definition lives in `src/agent/pipeline/memory.rs`, which itself depends
-// on `MemoryService` and would cascade dozens of modules. Here we provide
-// a byte-identical leaf-only stub that satisfies `store.rs::load_pinned`
-// without pulling in the pipeline subtree.
+// `agent::pipeline::memory::truncate_chunk_content` bridge. Re-mounts the
+// canonical leaf module `agent/pipeline/chunk_truncate.rs` (deps: std only,
+// zero crate::* references) so production and test paths share one source
+// of truth. The full `agent/pipeline/memory.rs` would cascade `MemoryService`
+// and dozens of other modules, hence the leaf split.
 #[doc(hidden)]
-pub mod __memory_pipeline_bridge {
-    /// Mirror of `src/agent/pipeline/memory.rs::MEMORY_CHUNK_MAX_CHARS`.
-    pub(crate) const MEMORY_CHUNK_MAX_CHARS: usize = 6_000;
-
-    /// Mirror of `src/agent/pipeline/memory.rs::truncate_chunk_content`.
-    /// Behaviour MUST stay byte-identical to the canonical copy — this stub
-    /// only exists because the lib crate cannot reach the canonical one
-    /// without cascading the entire pipeline subtree into the facade.
-    pub(crate) fn truncate_chunk_content(content: &str) -> &str {
-        if content.contains("excalidraw-plugin: parsed")
-            || content.contains("== EXCALIDRAW VIEW ==")
-        {
-            return "[Excalidraw diagram — binary content, skipped]";
-        }
-        let limit = content.floor_char_boundary(MEMORY_CHUNK_MAX_CHARS.min(content.len()));
-        &content[..limit]
-    }
-}
+#[path = "agent/pipeline/chunk_truncate.rs"]
+pub mod __memory_pipeline_bridge;
 
 // The path `crate::agent::pipeline::memory::truncate_chunk_content` (used by
 // `store.rs::load_pinned`) is satisfied by the `pub mod pipeline` extension

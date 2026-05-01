@@ -56,6 +56,52 @@ impl EmbeddingService for FakeEmbedder {
     }
 }
 
+/// Discriminating embedder: maps anchor keywords to distinct unit vectors so the
+/// semantic branch produces a meaningful ranking. Without this, every chunk has
+/// identical cosine similarity to the query and the semantic branch contributes
+/// only positional noise to RRF — making it impossible to assert that the
+/// combiner actually fuses three independent rankings.
+struct KeywordEmbedder;
+
+#[async_trait]
+impl EmbeddingService for KeywordEmbedder {
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn embed_dim(&self) -> u32 {
+        4
+    }
+
+    fn embed_model_name(&self) -> Option<String> {
+        Some("keyword-fake".to_string())
+    }
+
+    async fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        // Each anchor word produces a distinct axis-aligned unit vector. A query
+        // containing exactly one anchor scores ≈1.0 cosine with chunks tagged by
+        // the same anchor and 0.0 with chunks tagged by a different anchor.
+        let v = if text.contains("RRF_ALPHA") {
+            vec![1.0_f32, 0.0, 0.0, 0.0]
+        } else if text.contains("RRF_BETA") {
+            vec![0.0_f32, 1.0, 0.0, 0.0]
+        } else if text.contains("RRF_GAMMA") {
+            vec![0.0_f32, 0.0, 1.0, 0.0]
+        } else {
+            vec![0.0_f32, 0.0, 0.0, 1.0]
+        };
+        Ok(v)
+    }
+
+    async fn embed_batch(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        let mut out = Vec::with_capacity(texts.len());
+        for t in texts {
+            out.push(self.embed(t).await?);
+        }
+        Ok(out)
+    }
+}
+
 /// Embedder that reports `is_available() == false`. Forces `MemoryStore::search`
 /// to take the FTS-only fallback branch — used to verify the combiner shortcut
 /// gating.
@@ -101,6 +147,33 @@ async fn insert_chunk_with_embedding(db: &PgPool, content: &str, agent_id: &str)
     .execute(db)
     .await
     .expect("insert chunk with embedding");
+    id
+}
+
+/// Insert a chunk with a custom 4-dim embedding vector. Used by tests that
+/// need the semantic branch to discriminate between chunks.
+async fn insert_chunk_with_vec(
+    db: &PgPool,
+    content: &str,
+    agent_id: &str,
+    embedding: [f32; 4],
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    let vec_str = format!(
+        "[{},{},{},{}]",
+        embedding[0], embedding[1], embedding[2], embedding[3]
+    );
+    sqlx::query(
+        "INSERT INTO memory_chunks (id, content, source, pinned, scope, agent_id, embedding) \
+         VALUES ($1::uuid, $2, 'test', false, 'private', $3, $4::vector)",
+    )
+    .bind(&id)
+    .bind(content)
+    .bind(agent_id)
+    .bind(&vec_str)
+    .execute(db)
+    .await
+    .expect("insert chunk with custom embedding");
     id
 }
 
@@ -215,6 +288,147 @@ async fn search_hybrid_returns_results_for_typo_recovery(db: PgPool) {
         contents.iter().any(|c| c.contains("пользоветель")),
         "trigram branch must surface the typo'd chunk, got: {contents:?}"
     );
+
+    sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
+        .bind(&agent)
+        .execute(&db)
+        .await
+        .ok();
+}
+
+/// RRF fusion math: a chunk that ranks in 2 of 3 layers must outrank a chunk
+/// that ranks only in 1 layer. Locks in that layer-stacking is rewarded —
+/// dropping a layer's contribution or inverting weights would let a single-layer
+/// chunk win, breaking the test.
+///
+/// Setup (chunk embeddings set explicitly via `insert_chunk_with_vec` to side-
+/// step ambiguity in `KeywordEmbedder`'s anchor mapping):
+/// - `multi`    embed=[1,0,0,0], content "контекст система winner" — SEM cos=1.0
+///              with query, FTS matches both query lexemes
+/// - `sem_only` embed=[1,0,0,0], content "qwertyuiop_xyz" — SEM cos=1.0 too,
+///              but no query lexeme overlap so FTS skips it
+/// - `fts_only` embed=[0,1,0,0], content "контекст другое" — orthogonal
+///              embedding (SEM cos=0), one query lexeme matches FTS
+///
+/// Query: "контекст система" → KeywordEmbedder default branch returns [0,0,0,1]
+/// — wait, we want query embedding aligned with `multi`/`sem_only`. We override
+/// by adding "RRF_ALPHA" to the query string so the embedder picks [1,0,0,0].
+///
+/// Expected RRF (assuming rank 0 wherever present):
+/// - multi:    W_SEM/61 + W_FTS/61 = 0.85/61 ≈ 0.01393
+/// - sem_only: W_SEM/61            = 0.6/61  ≈ 0.00984
+/// - fts_only: W_FTS/61            = 0.25/61 ≈ 0.00410
+///
+/// Even if SEM tie-break puts `multi` at rank 1 (worst case): 0.6/62 + 0.25/61
+/// = 0.01378 — still beats `sem_only` at best 0.00984. Asserting `multi` is
+/// top-1 catches (a) any single-layer skip, (b) W_SEM ↔ W_FTS inversion that
+/// would demote 2-of-3 chunks below 1-of-3 chunks.
+#[sqlx::test(migrations = "../../migrations")]
+async fn search_hybrid_rewards_multi_layer_chunks(db: PgPool) {
+    let agent = format!("test-rrf-fusion-{}", uuid::Uuid::new_v4());
+
+    // SEM-only: explicit alpha-aligned embedding, content has no Russian
+    // lexemes the query tokenizes to (so FTS branch returns zero hits) and no
+    // shared trigrams above 0.3 threshold (so TRGM branch skips it).
+    let sem_only = insert_chunk_with_vec(
+        &db,
+        "qwertyuiop_xyz_marker_unique",
+        &agent,
+        [1.0, 0.0, 0.0, 0.0],
+    )
+    .await;
+
+    // FTS-only: orthogonal embedding zeros SEM contribution, "контекст"
+    // lexeme matches plainto_tsquery.
+    let fts_only = insert_chunk_with_vec(
+        &db,
+        "контекст другое значение",
+        &agent,
+        [0.0, 1.0, 0.0, 0.0],
+    )
+    .await;
+
+    // Multi-layer: alpha-aligned embedding (SEM cos=1.0) AND both query lexemes.
+    let multi = insert_chunk_with_vec(
+        &db,
+        "контекст система winner_chunk",
+        &agent,
+        [1.0, 0.0, 0.0, 0.0],
+    )
+    .await;
+
+    let store = MemoryStore::new(
+        db.clone(),
+        Arc::new(KeywordEmbedder),
+        "russian".to_string(),
+    );
+
+    // Inject "RRF_ALPHA" into the query so KeywordEmbedder maps it to [1,0,0,0].
+    // FTS still tokenizes "контекст система" — RRF_ALPHA is just a Latin token
+    // that won't match any chunk content (none contain it).
+    let (results, mode) = store
+        .search("RRF_ALPHA контекст система", 5, &[], &agent)
+        .await
+        .expect("hybrid search");
+
+    assert_eq!(mode, "hybrid", "all branches non-empty must pick hybrid mode");
+    assert!(
+        !results.is_empty(),
+        "expected at least one result, got {}",
+        results.len()
+    );
+
+    let top_id = &results[0].id;
+    assert_eq!(
+        top_id, &multi,
+        "multi-layer chunk must rank #1 over single-layer chunks (RRF math broken?)\n\
+         Top: {top_id}\nMulti: {multi}\nSemOnly: {sem_only}\nFtsOnly: {fts_only}"
+    );
+
+    sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
+        .bind(&agent)
+        .execute(&db)
+        .await
+        .ok();
+}
+
+/// Determinism guard: HashMap::into_values() iteration order is randomized
+/// under Rust's default hasher, so without an explicit secondary sort key the
+/// final RRF ranking flakes whenever scores tie. Run search_hybrid five times
+/// and assert identical top-N across runs.
+#[sqlx::test(migrations = "../../migrations")]
+async fn search_hybrid_results_are_deterministic_under_ties(db: PgPool) {
+    let agent = format!("test-rrf-det-{}", uuid::Uuid::new_v4());
+
+    // Three chunks with identical FTS / TRGM signal and orthogonal embeddings
+    // — every chunk lands in the same per-layer rank position, so RRF scores
+    // are bit-equal and ordering depends entirely on the sort tie-break.
+    insert_chunk_with_vec(&db, "система данные", &agent, [1.0, 0.0, 0.0, 0.0]).await;
+    insert_chunk_with_vec(&db, "система данные", &agent, [0.0, 1.0, 0.0, 0.0]).await;
+    insert_chunk_with_vec(&db, "система данные", &agent, [0.0, 0.0, 1.0, 0.0]).await;
+
+    let store = MemoryStore::new(
+        db.clone(),
+        Arc::new(KeywordEmbedder),
+        "russian".to_string(),
+    );
+
+    let mut runs: Vec<Vec<String>> = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let (results, _mode) = store
+            .search("система данные", 5, &[], &agent)
+            .await
+            .expect("hybrid search");
+        runs.push(results.iter().map(|r| r.id.clone()).collect());
+    }
+
+    let first = &runs[0];
+    for (i, r) in runs.iter().enumerate() {
+        assert_eq!(
+            r, first,
+            "run {i} ordering diverged from run 0 — RRF tie-break is non-deterministic"
+        );
+    }
 
     sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
         .bind(&agent)
