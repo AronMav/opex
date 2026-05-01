@@ -15,6 +15,7 @@ triggers:
   - let's practice
   - language tutor
   - репетитор
+state: active
 ---
 
 # Language Tutor — Eva Method

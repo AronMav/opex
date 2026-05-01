@@ -19,6 +19,7 @@ triggers:
   - дашборд
 tools_required:
   - canvas
+state: active
 ---
 
 # Canvas

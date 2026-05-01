@@ -14,6 +14,7 @@ tools_required:
   - tool_test
   - workspace_write
 priority: 5
+state: active
 ---
 
 Each file in `workspace/tools/*.yaml` defines one HTTP tool. The engine loads them, converts them to JSON Schema for the LLM, and executes HTTP calls.

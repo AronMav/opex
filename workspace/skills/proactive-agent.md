@@ -11,6 +11,7 @@ triggers:
   - проверь
   - мониторинг
 priority: 3
+state: active
 ---
 
 ## Proactive Behavior Strategy

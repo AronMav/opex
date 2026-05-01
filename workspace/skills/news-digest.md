@@ -16,6 +16,7 @@ priority: 6
 tools_required:
   - search_web
   - search_web_fresh
+state: active
 ---
 
 ## News Collection Strategy

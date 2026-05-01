@@ -7,6 +7,7 @@ triggers:
   - сохрани в память
   - save to memory
   - memory write
+state: active
 ---
 
 # Memory Management

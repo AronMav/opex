@@ -20,6 +20,7 @@ triggers:
   - sketch
   - photo of
 priority: 10
+state: active
 ---
 
 ## Tool

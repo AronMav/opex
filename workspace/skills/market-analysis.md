@@ -25,6 +25,7 @@ priority: 9
 tools_required:
   - search_web
   - search_web_fresh
+state: active
 ---
 
 ## Market Analysis Strategy

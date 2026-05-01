@@ -25,6 +25,7 @@ triggers:
 priority: 5
 tools_required:
   - code_exec
+state: active
 ---
 
 ## Code Development Methodology

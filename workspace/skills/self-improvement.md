@@ -15,6 +15,7 @@ triggers:
   - запомни это
   - учти на будущее
 priority: 5
+state: active
 ---
 
 ## Self-Improvement Strategy

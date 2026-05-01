@@ -15,6 +15,7 @@ triggers:
   - проект
   - дорожная карта
 priority: 8
+state: active
 ---
 
 ## Task Planning Strategy

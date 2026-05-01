@@ -12,6 +12,7 @@ tools_required:
   - code_exec
   - web_fetch
 priority: 5
+state: active
 ---
 
 Channels is a TypeScript/Bun process, the channel adapter for HydeClaw. Bun runs TypeScript directly — no compilation needed.

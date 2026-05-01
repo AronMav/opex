@@ -14,6 +14,7 @@ triggers:
   - как форматировать
   - короткий ответ
 priority: 5
+state: active
 ---
 
 # Channel Output Formatting

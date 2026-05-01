@@ -18,6 +18,7 @@ tools_required:
   - duckduckgo_search
   - tavily_search
 priority: 10
+state: active
 ---
 
 ## Search Provider Selection

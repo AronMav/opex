@@ -23,6 +23,7 @@ triggers:
   - дай аналитику
   - разберись
 priority: 7
+state: active
 ---
 
 ## Deep Research Strategy

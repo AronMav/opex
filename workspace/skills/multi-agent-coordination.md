@@ -21,6 +21,7 @@ triggers:
 priority: 5
 tools_required:
   - agent
+state: active
 ---
 
 ## Agent Tool — Reference

@@ -15,6 +15,7 @@ triggers:
   - структура проекта
   - дизайн системы
 priority: 6
+state: active
 ---
 
 ## Architecture Design Strategy
