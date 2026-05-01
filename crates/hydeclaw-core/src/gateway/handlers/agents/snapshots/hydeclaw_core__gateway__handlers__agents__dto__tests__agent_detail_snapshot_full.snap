@@ -9,6 +9,7 @@ expression: dto
   "model": "claude-3-5-sonnet-20241022",
   "provider_connection": "main-claude",
   "fallback_provider": "openai-fallback",
+  "tts_provider": null,
   "temperature": 0.8,
   "max_tokens": 4096,
   "access": {
