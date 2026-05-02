@@ -685,6 +685,7 @@ pub async fn handle_skill_create(workspace_dir: &str, args: &serde_json::Value) 
         priority,
         last_used_at: None,
         state: crate::skills::SkillState::Active,
+        pinned: None,
     };
 
     match crate::skills::write_skill(

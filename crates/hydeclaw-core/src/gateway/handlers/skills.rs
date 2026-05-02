@@ -193,6 +193,7 @@ pub(crate) async fn api_skill_upsert_global(
         priority: body.priority,
         last_used_at: None,
         state: crate::skills::SkillState::Active,
+        pinned: None,
     };
     match crate::skills::write_skill(
         crate::config::WORKSPACE_DIR,
@@ -300,6 +301,7 @@ pub(crate) async fn api_skill_upsert(
         priority: body.priority,
         last_used_at: None,
         state: crate::skills::SkillState::Active,
+        pinned: None,
     };
     match crate::skills::write_skill(
         crate::config::WORKSPACE_DIR,
@@ -411,6 +413,7 @@ mod tests {
                 priority: 0,
                 last_used_at: Some("2026-04-30T12:00:00Z".into()),
                 state: SkillState::Stale,
+                pinned: None,
             },
             instructions: "body".into(),
         };
