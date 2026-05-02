@@ -89,6 +89,43 @@ export interface SkillEntry {
   tools_required: string[];
   priority: number;
   instructions_len: number;
+  state: "active" | "stale" | "archived";
+  last_used_at: string | null;
+}
+
+export interface SkillVersion {
+  id: string;
+  skill_name: string;
+  generation: number;
+  evolution_type: string;
+  trigger_reason: string | null;
+  content: string;
+  content_hash: string;
+  created_at: string;
+}
+
+export interface CuratorStatus {
+  enabled: boolean;
+  cron: string;
+  last_run_at: string | null;
+  last_run_id: string | null;
+  last_phase1: number;
+  last_phase2: number;
+  last_phase3: number;
+}
+
+export interface CuratorRun {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  triggered_by: string;
+  phase1_transitions: number;
+  phase2_repairs: number;
+  phase3_commands: number;
+  skipped_reason: string | null;
+  report_md: string | null;
+  error: string | null;
 }
 
 export interface YamlToolEntry {

@@ -33,6 +33,9 @@ import type {
   OAuthAccount,
   OAuthBinding,
   AgentTask,
+  CuratorStatus,
+  CuratorRun,
+  SkillVersion,
 } from "@/types/api"
 
 // ── Query Keys ──────────────────────────────────────────────────────────────
@@ -73,6 +76,8 @@ export const qk = {
   agentTasks: (name: string) => ["agents", name, "tasks"] as const,
   sessionFailures: (agent: string | null, limit: number) =>
     ["session-failures", agent, limit] as const,
+  curatorStatus: ["curator", "status"] as const,
+  curatorRuns: ["curator", "runs"] as const,
 }
 
 // ── Query Hooks ─────────────────────────────────────────────────────────────
@@ -235,6 +240,30 @@ export function useAgentTasks(agentName: string | null, isStreaming = false) {
       return isStreaming ? 3000 : 15000;
     },
     staleTime: 2500,
+  })
+}
+
+// ── Curator Hooks ────────────────────────────────────────────────────────────
+
+export function useCuratorStatus() {
+  return useQuery<CuratorStatus>({
+    queryKey: qk.curatorStatus,
+    queryFn: () => apiGet<CuratorStatus>("/api/curator/status"),
+  })
+}
+
+export function useCuratorRuns() {
+  return useQuery<{ runs: CuratorRun[] }>({
+    queryKey: qk.curatorRuns,
+    queryFn: () => apiGet<{ runs: CuratorRun[] }>("/api/curator/runs"),
+  })
+}
+
+export function useSkillVersions(skillName: string) {
+  return useQuery<{ versions: SkillVersion[] }>({
+    queryKey: [...qk.skills, skillName, "versions"],
+    queryFn: () => apiGet<{ versions: SkillVersion[] }>(`/api/skills/${encodeURIComponent(skillName)}/versions`),
+    enabled: !!skillName,
   })
 }
 
@@ -584,4 +613,3 @@ export function useNotificationWsSync() {
     prependNotification(event.data);
   });
 }
-
