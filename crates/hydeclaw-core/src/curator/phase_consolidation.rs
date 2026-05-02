@@ -68,6 +68,15 @@ async fn read_proposals_file(path: &str) -> ProposalsFile {
 
 /// Run the Analyst Hyde session. Hyde reads active skills and writes
 /// `workspace/curator_proposals.json` via workspace_write.
+/// Returns the path where the agent will write curator_proposals.json.
+fn proposals_path(workspace_dir: &str, agent_name: &str) -> std::path::PathBuf {
+    // workspace_write stores files in workspace/agents/{name}/ by default.
+    std::path::Path::new(workspace_dir)
+        .join("agents")
+        .join(agent_name)
+        .join("curator_proposals.json")
+}
+
 async fn run_analyst(
     workspace_dir: &str,
     agents: &AgentCore,
@@ -75,8 +84,7 @@ async fn run_analyst(
     active_summary: &str,
     pinned_names: &[String],
 ) -> anyhow::Result<ProposalsFile> {
-    let proposals_path = std::path::Path::new(workspace_dir)
-        .join("curator_proposals.json")
+    let proposals_path = proposals_path(workspace_dir, agent_name)
         .to_string_lossy()
         .to_string();
 
@@ -284,8 +292,8 @@ async fn run_executor(
 }
 
 /// Delete the proposals file and any leftover .tmp files after processing.
-async fn cleanup_proposals(workspace_dir: &str) {
-    let path = std::path::Path::new(workspace_dir).join("curator_proposals.json");
+async fn cleanup_proposals(workspace_dir: &str, agent_name: &str) {
+    let path = proposals_path(workspace_dir, agent_name);
     if let Err(e) = tokio::fs::remove_file(&path).await {
         tracing::debug!(error = %e, "curator p3: cleanup proposals file (may not exist)");
     }
@@ -345,7 +353,7 @@ pub async fn run(
 
     if proposals.proposals.is_empty() {
         result.log.push("Analyst: no proposals.".into());
-        cleanup_proposals(workspace_dir).await;
+        cleanup_proposals(workspace_dir, agent_name).await;
         return Ok(result);
     }
 
@@ -402,7 +410,7 @@ pub async fn run(
         }
     }
 
-    cleanup_proposals(workspace_dir).await;
+    cleanup_proposals(workspace_dir, agent_name).await;
     Ok(result)
 }
 
