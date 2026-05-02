@@ -15,7 +15,7 @@ fn is_valid_mcp_name(name: &str) -> bool {
 
 /// Manages MCP discovery and tool call routing.
 pub struct McpRegistry {
-    container_manager: Arc<ContainerManager>,
+    container_manager: Option<Arc<ContainerManager>>,
     /// Cached tool definitions from MCP servers (`mcp_name` → tools).
     tool_cache: Arc<RwLock<HashMap<String, Vec<ToolDefinition>>>>,
     /// Shared HTTP client with timeouts for MCP calls.
@@ -25,7 +25,7 @@ pub struct McpRegistry {
 }
 
 impl McpRegistry {
-    pub fn new(container_manager: Arc<ContainerManager>, cache_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(container_manager: Option<Arc<ContainerManager>>, cache_dir: impl Into<PathBuf>) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -45,7 +45,7 @@ impl McpRegistry {
     /// and to verify the retry loop without requiring a live Docker daemon.
     #[cfg(test)]
     pub(crate) fn with_http_client(
-        container_manager: Arc<ContainerManager>,
+        container_manager: Option<Arc<ContainerManager>>,
         cache_dir: impl Into<PathBuf>,
         http_client: reqwest::Client,
     ) -> Self {
@@ -149,7 +149,10 @@ impl McpRegistry {
         }
 
         // Ensure container is running
-        let base_url = self.container_manager.ensure_running(mcp_name).await?;
+        let cm = self.container_manager.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("MCP '{mcp_name}' requires Docker, which is unavailable")
+        })?;
+        let base_url = cm.ensure_running(mcp_name).await?;
 
         // MCP tools/list via JSON-RPC 2.0 (with timeout).
         // Accept header required by MCP Streamable HTTP transport (RFC-compliant servers
@@ -199,7 +202,10 @@ impl McpRegistry {
         tool_name: &str,
         arguments: &serde_json::Value,
     ) -> Result<String> {
-        let base_url = self.container_manager.ensure_running(mcp_name).await?;
+        let cm = self.container_manager.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("MCP '{mcp_name}' requires Docker, which is unavailable")
+        })?;
+        let base_url = cm.ensure_running(mcp_name).await?;
 
         // Retry delays for the startup gap: 300ms → 700ms → 1500ms
         const RETRY_DELAYS_MS: [u64; 3] = [300, 700, 1500];
@@ -275,7 +281,10 @@ impl McpRegistry {
     /// Check if an MCP server is configured in the container manager.
     #[allow(dead_code)]
     pub async fn has_mcp(&self, name: &str) -> bool {
-        self.container_manager.has_mcp(name).await
+        match self.container_manager.as_ref() {
+            Some(cm) => cm.has_mcp(name).await,
+            None => false,
+        }
     }
 
     /// Find which MCP provides a given tool name.
@@ -403,7 +412,7 @@ mod tests {
             crate::containers::ContainerManager::new("http://127.0.0.1:1", HashMap::new())
                 .expect("ContainerManager::new should succeed for test"),
         );
-        McpRegistry::new(cm, cache_dir)
+        McpRegistry::new(Some(cm), cache_dir)
     }
 
     fn make_tools() -> Vec<ToolDefinition> {
@@ -618,7 +627,7 @@ mod tests {
         // Forget the tempdir — it will be cleaned at process exit.
         let dir_path = dir.path().to_path_buf();
         std::mem::forget(dir);
-        let reg = McpRegistry::with_http_client(cm.clone(), dir_path, client);
+        let reg = McpRegistry::with_http_client(Some(cm.clone()), dir_path, client);
         (reg, cm)
     }
 
