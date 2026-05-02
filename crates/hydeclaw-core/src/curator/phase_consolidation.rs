@@ -14,10 +14,12 @@ pub struct ConsolidationResult {
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub(crate) struct CapabilityEntry {
-    pub capability: String,
-    pub from_quote: String,
-    pub covered_in: String,
-    pub covering_quote: String,
+    pub capability:       String,
+    pub from_section:     Option<String>,  // preferred: exact ## heading from archived skill
+    pub covering_section: Option<String>,  // preferred: exact ## heading from replacement
+    pub from_quote:       Option<String>,  // fallback: verbatim phrase from archived skill
+    pub covered_in:       String,
+    pub covering_quote:   Option<String>,  // fallback: verbatim phrase from replacement
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,24 +98,30 @@ async fn run_analyst(
          MANDATORY for any ARCHIVE proposal:\n\
          1. Read the FULL content of the skill to archive via workspace_read\n\
          2. Read the FULL content of the replacement skill via workspace_read\n\
-         3. For every distinct capability/section in the archived skill, include a \
-            capability_map entry with verbatim from_quote (from archived) and \
-            covering_quote (from replacement).\n\
-         4. If any capability has no verbatim covering_quote — do NOT include that \
-            ARCHIVE proposal at all.\n\n\
+         3. For every distinct section (## heading) in the archived skill, include a \
+            capability_map entry. Use the EXACT `## Heading` line as from_section \
+            (copy character-for-character including the ## prefix) and the EXACT \
+            `## Heading` line from the replacement skill that covers it as \
+            covering_section.\n\
+         4. If the skill has no ## headings, fall back to verbatim from_quote / \
+            covering_quote (10+ word phrases copied exactly from the files).\n\
+         5. If any capability has no matching section/quote in the replacement — \
+            do NOT include that ARCHIVE proposal at all.\n\n\
          JSON schema for workspace/curator_proposals.json:\n\
          {{\n\
            \"proposals\": [\n\
              {{ \"action\": \"archive\", \"skill\": \"name\", \"replacement\": \"name\",\n\
                 \"reason\": \"one sentence\",\n\
                 \"capability_map\": [\n\
-                  {{ \"capability\": \"name\", \"from_quote\": \"verbatim\",\n\
-                     \"covered_in\": \"section\", \"covering_quote\": \"verbatim\" }}\n\
+                  {{ \"capability\": \"name\", \"from_section\": \"## Exact Heading\",\n\
+                     \"covered_in\": \"section\", \"covering_section\": \"## Exact Heading\" }}\n\
                 ]\n\
              }},\n\
              {{ \"action\": \"merge\", \"sources\": [\"a\",\"b\"], \"into\": \"c\", \
                 \"reason\": \"one sentence\" }},\n\
-             {{ \"action\": \"fix\", \"skill\": \"name\", \"description\": \"what to fix\" }}\n\
+             {{ \"action\": \"fix\", \"skill\": \"name\", \"description\": \"what to fix\",\n\
+                \"current_text\": \"exact phrase from file\", \
+                \"replacement_text\": \"new text\" }}\n\
            ]\n\
          }}\n\n\
          Rules:\n\
@@ -140,6 +148,19 @@ fn normalise(s: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Collapse multiple spaces/tabs into one (whitespace-only normalisation, no case change).
+fn normalise_heading(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Check whether `section` (e.g. "## Daily Reflection Strategy") appears as a
+/// heading line in `text`. Normalises internal whitespace on both sides so that
+/// `##  Heading ` matches `## Heading`.
+fn section_anchor_found(text: &str, section: &str) -> bool {
+    let needle = normalise_heading(section.trim());
+    text.lines().any(|line| normalise_heading(line.trim()) == needle)
 }
 
 /// Check whether `quote` appears in `text`.
@@ -199,18 +220,39 @@ async fn verify_archive_proposal(
     let mut missing: Vec<String> = Vec::new();
 
     for entry in capability_map {
-        let from_ok = quote_found(&archived_content, &entry.from_quote);
-        let cover_ok = quote_found(&replacement_content, &entry.covering_quote);
+        let (from_ok, cover_ok) = if let (Some(fs), Some(cs)) =
+            (&entry.from_section, &entry.covering_section)
+        {
+            // Preferred path: section-anchor matching (exact ## heading lines)
+            (
+                section_anchor_found(&archived_content, fs),
+                section_anchor_found(&replacement_content, cs),
+            )
+        } else if let (Some(fq), Some(cq)) =
+            (&entry.from_quote, &entry.covering_quote)
+        {
+            // Fallback: verbatim quote matching (skills without ## headings)
+            (
+                quote_found(&archived_content, fq),
+                quote_found(&replacement_content, cq),
+            )
+        } else {
+            (false, false)
+        };
 
         if !from_ok {
             missing.push(format!(
-                "'{}': from_quote not found in archived skill",
-                entry.capability
+                "'{}': {} not found in archived skill",
+                entry.capability,
+                entry.from_section.as_deref()
+                    .unwrap_or(entry.from_quote.as_deref().unwrap_or("(no evidence)"))
             ));
         } else if !cover_ok {
             missing.push(format!(
-                "'{}': covering_quote not found in replacement skill",
-                entry.capability
+                "'{}': {} not found in replacement skill",
+                entry.capability,
+                entry.covering_section.as_deref()
+                    .unwrap_or(entry.covering_quote.as_deref().unwrap_or("(no evidence)"))
             ));
         }
     }
@@ -429,6 +471,71 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verifier_section_anchor_found() {
+        let text = "# Skill\n\n## Daily Reflection Strategy\n\nSome content.";
+        assert!(section_anchor_found(text, "## Daily Reflection Strategy"));
+    }
+
+    #[test]
+    fn verifier_section_anchor_not_found() {
+        let text = "# Skill\n\n## Something Else\n\nContent.";
+        assert!(!section_anchor_found(text, "## Daily Reflection Strategy"));
+    }
+
+    #[test]
+    fn verifier_section_anchor_trims_whitespace() {
+        let text = "# Skill\n\n##  Daily Reflection Strategy \n\nContent.";
+        assert!(section_anchor_found(text, "## Daily Reflection Strategy"));
+    }
+
+    #[test]
+    fn verifier_falls_back_to_quote_when_no_section() {
+        let entry = CapabilityEntry {
+            capability: "test".into(),
+            from_section: None,
+            covering_section: None,
+            from_quote: Some("hello world example text here".into()),
+            covered_in: "sec".into(),
+            covering_quote: Some("hello world example text here".into()),
+        };
+        let archived = "Some text with hello world example text here inside.";
+        let replacement = "Some hello world example text here mentioned.";
+        let (from_ok, cover_ok) = if let (Some(fs), Some(cs)) =
+            (&entry.from_section, &entry.covering_section)
+        {
+            (section_anchor_found(archived, fs), section_anchor_found(replacement, cs))
+        } else if let (Some(fq), Some(cq)) = (&entry.from_quote, &entry.covering_quote) {
+            (quote_found(archived, fq), quote_found(replacement, cq))
+        } else {
+            (false, false)
+        };
+        assert!(from_ok);
+        assert!(cover_ok);
+    }
+
+    #[test]
+    fn verifier_no_evidence_returns_false() {
+        let entry = CapabilityEntry {
+            capability: "test".into(),
+            from_section: None,
+            covering_section: None,
+            from_quote: None,
+            covered_in: "sec".into(),
+            covering_quote: None,
+        };
+        let (from_ok, _) = if let (Some(fs), Some(cs)) =
+            (&entry.from_section, &entry.covering_section)
+        {
+            (section_anchor_found("any text", fs), section_anchor_found("any text", cs))
+        } else if let (Some(fq), Some(cq)) = (&entry.from_quote, &entry.covering_quote) {
+            (quote_found("any text", fq), quote_found("any text", cq))
+        } else {
+            (false, false)
+        };
+        assert!(!from_ok);
+    }
 
     #[test]
     fn verifier_quote_found_exact() {
