@@ -59,6 +59,8 @@ pub struct SkillFrontmatter {
     pub last_used_at: Option<String>,
     #[serde(default)]
     pub state: SkillState,
+    #[serde(default)]
+    pub pinned: Option<bool>,
 }
 
 // ── SkillDef ──────────────────────────────────────────────────────────────────
@@ -441,6 +443,7 @@ mod tests {
                 priority: 0,
                 last_used_at: None,
                 state: SkillState::Active,
+                pinned: None,
             },
             instructions: String::new(),
         }

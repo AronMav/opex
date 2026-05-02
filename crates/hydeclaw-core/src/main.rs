@@ -15,6 +15,7 @@ mod secrets;
 mod mcp;
 mod shutdown;
 mod skills;
+mod curator;
 mod tasks;
 mod tools;
 mod uploads;
