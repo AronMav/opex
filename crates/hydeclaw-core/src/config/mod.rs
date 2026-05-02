@@ -950,7 +950,7 @@ pub struct CompactionConfig {
     pub enabled: bool,
     #[serde(default = "default_threshold")]
     pub threshold: f64,
-    #[serde(default)]
+    #[serde(default = "default_false")]
     pub preserve_tool_calls: bool,
     #[serde(default = "default_preserve_last_n")]
     pub preserve_last_n: u32,
@@ -977,16 +977,16 @@ pub struct CompactionConfig {
 impl Default for CompactionConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            threshold: 0.8,
-            preserve_tool_calls: false,
-            preserve_last_n: 10,
+            enabled: default_true(),
+            threshold: default_threshold(),
+            preserve_tool_calls: default_false(),
+            preserve_last_n: default_preserve_last_n(),
             max_context_tokens: None,
-            protect_first_n: 3,
-            summary_target_ratio: 0.20,
-            anti_thrash_min_savings: 0.10,
-            anti_thrash_max_skips: 2,
-            extract_to_memory: true,
+            protect_first_n: Self::default_protect_first_n(),
+            summary_target_ratio: Self::default_summary_target_ratio(),
+            anti_thrash_min_savings: Self::default_anti_thrash_min_savings(),
+            anti_thrash_max_skips: Self::default_anti_thrash_max_skips(),
+            extract_to_memory: Self::default_extract_to_memory(),
         }
     }
 }
@@ -1001,6 +1001,7 @@ impl CompactionConfig {
 
 fn default_threshold() -> f64 { 0.8 }
 fn default_preserve_last_n() -> u32 { 10 }
+fn default_false() -> bool { false }
 
 /// Session management config (per-agent).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -1941,6 +1942,21 @@ max_requests_per_minute = 200
         assert!(!cfg.preserve_tool_calls);
         assert_eq!(cfg.preserve_last_n, 10);
         assert!(cfg.max_context_tokens.is_none());
+        assert_eq!(cfg.protect_first_n, 3);
+        assert!((cfg.summary_target_ratio - 0.20).abs() < 0.001);
+        assert!((cfg.anti_thrash_min_savings - 0.10).abs() < 0.001);
+        assert_eq!(cfg.anti_thrash_max_skips, 2);
+        assert!(cfg.extract_to_memory);
+    }
+
+    #[test]
+    fn compaction_config_new_fields_have_defaults() {
+        let cfg: CompactionConfig = toml::from_str("enabled = true").unwrap();
+        assert_eq!(cfg.protect_first_n, 3);
+        assert!((cfg.summary_target_ratio - 0.20).abs() < 0.001);
+        assert!((cfg.anti_thrash_min_savings - 0.10).abs() < 0.001);
+        assert_eq!(cfg.anti_thrash_max_skips, 2);
+        assert!(cfg.extract_to_memory);
     }
 
     // ── 8. SessionConfig defaults ──
@@ -2486,13 +2502,4 @@ mod backup_config_tests {
         assert_eq!(cfg.backup.postgres_container, "my-postgres-2");
     }
 
-    #[test]
-    fn compaction_config_new_fields_have_defaults() {
-        let cfg: CompactionConfig = toml::from_str("enabled = true").unwrap();
-        assert_eq!(cfg.protect_first_n, 3);
-        assert!((cfg.summary_target_ratio - 0.20).abs() < 0.001);
-        assert!((cfg.anti_thrash_min_savings - 0.10).abs() < 0.001);
-        assert_eq!(cfg.anti_thrash_max_skips, 2);
-        assert!(cfg.extract_to_memory);
-    }
 }
