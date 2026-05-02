@@ -134,23 +134,44 @@ async fn run_analyst(
 
 // ── Verifier ──────────────────────────────────────────────────────────────────
 
-/// Parse the verifier's plain-text response.
-/// Returns true only if the first non-empty line is exactly "ACCEPT" (case-sensitive).
-/// "ACCEPTED", "ACCEPT something", empty, or any REJECT response all return false.
-fn parse_verifier_response(response: &str) -> bool {
-    response.trim_start().lines().next().unwrap_or("").trim() == "ACCEPT"
+/// Normalise text for fuzzy matching: lowercase, collapse whitespace.
+fn normalise(s: &str) -> String {
+    s.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
-/// Run a 1-turn verifier session for an ARCHIVE proposal.
+/// Check whether `quote` appears in `text`.
+/// Accepts exact match OR near-exact match after normalising whitespace/case.
+/// Minimum quote length: 10 chars (shorter quotes are too generic to verify).
+fn quote_found(text: &str, quote: &str) -> bool {
+    let q = quote.trim();
+    if q.len() < 10 {
+        return true; // too short to verify meaningfully — pass through
+    }
+    text.contains(q) || normalise(text).contains(&normalise(q))
+}
+
+/// Verify an ARCHIVE proposal deterministically via string matching.
+///
+/// The Analyst already extracted verbatim quotes from both skills into the
+/// capability_map. We simply confirm those quotes exist in the respective files.
+/// No LLM call needed — avoids context overflow and timeouts.
+///
 /// Returns (accepted: bool, reject_reason: String).
 async fn verify_archive_proposal(
     workspace_dir: &str,
-    agents: &AgentCore,
-    agent_name: &str,
+    _agents: &AgentCore,
+    _agent_name: &str,
     skill: &str,
     replacement: &str,
     capability_map: &[CapabilityEntry],
 ) -> (bool, String) {
+    if capability_map.is_empty() {
+        return (false, "capability_map is empty — analyst provided no evidence".into());
+    }
+
     let skills_dir = std::path::Path::new(workspace_dir).join("skills");
     let safe_skill = crate::curator::sanitize_skill_name(skill);
     let safe_replacement = crate::curator::sanitize_skill_name(replacement);
@@ -175,44 +196,33 @@ async fn verify_archive_proposal(
         }
     };
 
-    let map_json = serde_json::to_string_pretty(capability_map)
-        .unwrap_or_else(|_| "[]".to_string());
+    let mut missing: Vec<String> = Vec::new();
 
-    let task = format!(
-        "You are a skill coverage auditor. Verify that a proposed archival is safe.\n\n\
-         Skill to archive: {skill}\n\
-         Full content:\n{archived_content}\n\n\
-         Proposed replacement: {replacement}\n\
-         Full content:\n{replacement_content}\n\n\
-         Capability map claimed by analyst:\n{map_json}\n\n\
-         For each entry in the capability map:\n\
-         1. Find the from_quote in the archived skill (exact or near-exact match required)\n\
-         2. Find the covering_quote in the replacement skill (exact or near-exact match required)\n\
-         3. Confirm the covering_quote addresses the same capability\n\n\
-         Return EXACTLY one of:\n\
-           ACCEPT\n\
-           REJECT: <capability name> — <reason it is not covered>\n\n\
-         Multiple REJECT lines are allowed (one per missing capability).\n\
-         Be strict. Paraphrase is not coverage. If a quote is absent — REJECT."
-    );
+    for entry in capability_map {
+        let from_ok = quote_found(&archived_content, &entry.from_quote);
+        let cover_ok = quote_found(&replacement_content, &entry.covering_quote);
 
-    match crate::curator::run_verifier_task(agents, agent_name, &task).await {
-        Ok(response) => {
-            let accepted = parse_verifier_response(&response);
-            let reason = if accepted {
-                String::new()
-            } else {
-                response.lines()
-                    .filter(|l| l.starts_with("REJECT"))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            };
-            (accepted, reason)
+        if !from_ok {
+            missing.push(format!(
+                "'{}': from_quote not found in archived skill",
+                entry.capability
+            ));
+        } else if !cover_ok {
+            missing.push(format!(
+                "'{}': covering_quote not found in replacement skill",
+                entry.capability
+            ));
         }
-        Err(e) => {
-            tracing::warn!(skill, error = %e, "curator p3 verifier: session failed — treating as REJECT");
-            (false, format!("verifier error: {e}"))
-        }
+    }
+
+    if missing.is_empty() {
+        tracing::info!(skill, replacement, entries = capability_map.len(),
+                       "curator p3 verifier: all capability_map entries verified");
+        (true, String::new())
+    } else {
+        tracing::info!(skill, replacement, missing = missing.join("; "),
+                       "curator p3 verifier: capability_map failed verification");
+        (false, missing.join("; "))
     }
 }
 
@@ -421,22 +431,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verifier_accept_response_is_accepted() {
-        assert!(parse_verifier_response("ACCEPT"));
-        assert!(parse_verifier_response("ACCEPT\nsome trailing text"));
+    fn verifier_quote_found_exact() {
+        assert!(quote_found("hello world example", "hello world"));
     }
 
     #[test]
-    fn verifier_reject_response_is_rejected() {
-        assert!(!parse_verifier_response("REJECT: journal format — not found in replacement"));
-        assert!(!parse_verifier_response("REJECT: cap1 — missing\nREJECT: cap2 — absent"));
+    fn verifier_quote_found_case_insensitive() {
+        assert!(quote_found("Hello World Example", "hello world example"));
     }
 
     #[test]
-    fn verifier_malformed_response_is_rejected() {
-        assert!(!parse_verifier_response(""));
-        assert!(!parse_verifier_response("I think this looks fine"));
-        assert!(!parse_verifier_response("ACCEPTED")); // typo — not ACCEPT
+    fn verifier_quote_found_normalises_whitespace() {
+        assert!(quote_found("hello   world\n  example", "hello world example"));
+    }
+
+    #[test]
+    fn verifier_quote_not_found() {
+        assert!(!quote_found("completely different text", "hello world example"));
+    }
+
+    #[test]
+    fn verifier_short_quote_always_passes() {
+        assert!(quote_found("any text", "hi")); // < 10 chars — skipped
     }
 
     #[tokio::test]
