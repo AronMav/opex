@@ -249,7 +249,7 @@ block_tools = []
     async fn fire_webhooks_is_fire_and_forget() {
         let mut registry = HookRegistry::new();
         registry.set_webhooks(
-            reqwest::Client::new(),
+            reqwest::Client::builder().use_rustls_tls().build().unwrap(),
             vec![WebhookConfig {
                 url: "http://127.0.0.1:1/never".into(),
                 events: vec!["BeforeMessage".into()],
