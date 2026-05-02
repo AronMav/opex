@@ -552,17 +552,26 @@ async fn channel_ws_loop(
                                         });
                                     }
                                     let dto = ChannelActionDto { action: name, params, context };
-                                    {
+                                    let track_pending = {
                                         let mut pa = pending_actions.lock().await;
                                         if pa.len() >= MAX_PENDING_ACTIONS {
-                                            tracing::warn!("pending_actions cap reached, rejecting incoming action");
-                                            let _ = reply.send(Err("too many pending actions".into()));
-                                            continue;
+                                            tracing::warn!(
+                                                action_id = %action_id,
+                                                pending = pa.len(),
+                                                cap = MAX_PENDING_ACTIONS,
+                                                "pending_actions cap reached, action persisted to outbound_queue but result will not be tracked in-memory"
+                                            );
+                                            // Reply Ok immediately — action is durably queued; result tracking degrades to fire-and-forget.
+                                            let _ = reply.send(Ok(()));
+                                            false
+                                        } else {
+                                            pa.insert(action_id.clone(), reply);
+                                            true
                                         }
-                                        pa.insert(action_id.clone(), reply);
-                                    }
+                                    };
                                     let msg = ChannelOutbound::Action { action_id: action_id.clone(), action: dto };
                                     if ws_sink.send(ws_json(&msg)).await.is_err() { break; }
+                                    let _ = track_pending; // suppress unused warning
                                     // Mark sent (non-blocking)
                                     {
                                         let db = ctx.infra.db.clone();
@@ -814,15 +823,24 @@ async fn channel_ws_loop(
                 let dto = ChannelActionDto { action: name, params, context };
 
                 // Store the reply sender for when we get ActionResult back
-                {
+                let track_pending = {
                     let mut pa = pending_actions.lock().await;
                     if pa.len() >= MAX_PENDING_ACTIONS {
-                        tracing::warn!("pending_actions cap reached, rejecting incoming action");
-                        let _ = reply.send(Err("too many pending actions".into()));
-                        continue;
+                        tracing::warn!(
+                            action_id = %action_id,
+                            pending = pa.len(),
+                            cap = MAX_PENDING_ACTIONS,
+                            "pending_actions cap reached, action persisted to outbound_queue but result will not be tracked in-memory"
+                        );
+                        // Reply Ok immediately — action is durably queued; result tracking degrades to fire-and-forget.
+                        let _ = reply.send(Ok(()));
+                        false
+                    } else {
+                        pa.insert(action_id.clone(), reply);
+                        true
                     }
-                    pa.insert(action_id.clone(), reply);
-                }
+                };
+                let _ = track_pending; // suppress unused warning
 
                 let msg = ChannelOutbound::Action { action_id: action_id.clone(), action: dto };
                 let json_str = serde_json::to_string(&msg).unwrap_or_default();
