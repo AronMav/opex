@@ -248,7 +248,7 @@ export default function AccessPage() {
                 {isExpanded && (
                   <div className="border-t border-border/40 p-4 space-y-4 animate-in fade-in slide-in-from-top-1 duration-150">
                     {/* Settings row */}
-                    <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-3">
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-muted-foreground">{t("access.enable_access_control")}</span>
                         <Switch
@@ -262,7 +262,7 @@ export default function AccessPage() {
                           <div
                             role="radiogroup"
                             aria-label={t("access.mode_label")}
-                            className="flex gap-0.5 p-0.5 bg-muted/40 rounded-md border border-border"
+                            className="flex gap-0.5 p-0.5 bg-muted/40 rounded-md border border-border self-start sm:self-auto"
                           >
                             {["open", "restricted"].map((mode) => (
                               <button
@@ -283,12 +283,12 @@ export default function AccessPage() {
                           <Input
                             value={settings.owner_id}
                             placeholder="owner_id"
-                            className="bg-background font-mono text-xs h-7 w-40"
+                            className="bg-background font-mono text-xs h-7 w-full sm:w-40"
                             onChange={(e) => updAccessSettings(agent, { owner_id: e.target.value })}
                           />
                         </>
                       )}
-                      <Button size="sm" onClick={() => saveAccessSettings(agent)} disabled={isSaving} className="h-7 text-xs font-semibold ml-auto">
+                      <Button size="sm" onClick={() => saveAccessSettings(agent)} disabled={isSaving} className="h-7 text-xs font-semibold w-full sm:w-auto sm:ml-auto">
                         {isSaving ? t("common.saving") : t("common.save")}
                       </Button>
                     </div>
@@ -301,13 +301,13 @@ export default function AccessPage() {
                           <span className="text-xs font-semibold text-warning">{t("access.pending_approvals")}</span>
                         </div>
                         {agentPending.map((p) => (
-                          <div key={p.code} className="flex items-center justify-between gap-3 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2">
+                          <div key={p.code} className="flex flex-col xs:flex-row xs:items-center justify-between gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="font-semibold text-xs truncate">{p.display_name || t("access.unknown_user")}</span>
                               <Badge variant="outline" className="font-mono text-[10px] px-1 py-0 bg-background shrink-0">{p.code}</Badge>
                               <span className="font-mono text-[10px] text-muted-foreground/50 truncate hidden sm:inline">{p.channel_user_id}</span>
                             </div>
-                            <div className="flex gap-1.5 shrink-0">
+                            <div className="flex gap-1.5 shrink-0 self-end xs:self-auto">
                               <Button size="sm" onClick={() => approve(agent, p.code)} className="h-6 px-2 text-[10px] bg-success text-success-foreground hover:bg-success/90">
                                 {t("access.approve")}
                               </Button>
