@@ -249,6 +249,185 @@ pub fn remove_progress_header(messages: &mut Vec<Message>) {
     });
 }
 
+/// Phase 1 pre-pass: replace old tool result contents with 1-line summaries,
+/// deduplicate identical results. `protect_tail` is the number of messages from
+/// the end that are never pruned (matches `preserve_last_n` from config).
+pub fn prune_old_tool_results(messages: &[Message], protect_tail: usize) -> Vec<Message> {
+    if messages.is_empty() {
+        return Vec::new();
+    }
+    let mut result: Vec<Message> = messages.to_vec();
+    let prune_end = result.len().saturating_sub(protect_tail);
+
+    // Pass 1: deduplicate — keep newest full copy, replace older dups
+    use std::collections::{HashMap, HashSet};
+    let mut content_hashes: HashMap<u64, usize> = HashMap::new();
+    // Track indices that are the canonical (newest) copy of a dup group — these are
+    // exempt from Pass 2 size-based pruning so callers can see the surviving content.
+    let mut canonical_dup_indices: HashSet<usize> = HashSet::new();
+    for i in (0..result.len()).rev() {
+        if result[i].role != MessageRole::Tool { continue; }
+        let content = &result[i].content;
+        if content.len() < 200 { continue; }
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut hasher);
+        let h = hasher.finish();
+        if let Some(&newer_idx) = content_hashes.get(&h) {
+            if i < newer_idx && i < prune_end {
+                result[i].content =
+                    "[Duplicate tool output — same content as a more recent call]".into();
+                canonical_dup_indices.insert(newer_idx);
+            }
+        } else {
+            content_hashes.insert(h, i);
+        }
+    }
+
+    // Pass 2: replace large tool results outside protected tail with 1-line summary.
+    // Skip canonical dup indices — their content must survive intact so callers can
+    // verify deduplication worked correctly.
+    for i in 0..prune_end {
+        if canonical_dup_indices.contains(&i) { continue; }
+        let msg = &result[i];
+        if msg.role != MessageRole::Tool { continue; }
+        if msg.content.len() <= 200 { continue; }
+        if msg.content.starts_with('[') { continue; }
+        let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
+        let char_count = msg.content.len();
+        result[i].content = format!("[tool result {tool_call_id}] ({char_count} chars — pruned)");
+    }
+
+    result
+}
+
+/// Phase 2: find where the compressed middle begins.
+/// Starts at `protect_first_n`, then slides forward past any leading Tool messages.
+pub fn find_head_end(messages: &[Message], protect_first_n: usize) -> usize {
+    let mut idx = protect_first_n.min(messages.len());
+    while idx < messages.len() && messages[idx].role == MessageRole::Tool {
+        idx += 1;
+    }
+    idx
+}
+
+/// Phase 2: find where the protected tail begins, using a token budget.
+pub fn find_tail_start_by_tokens(messages: &[Message], head_end: usize, tail_budget: usize) -> usize {
+    let n = messages.len();
+    if n <= head_end + 1 {
+        return n;
+    }
+    let min_tail = 3.min(n.saturating_sub(head_end).saturating_sub(1));
+    let soft_ceiling = (tail_budget as f64 * 1.5) as usize;
+    let mut accumulated: usize = 0;
+    let mut cut_idx = n;
+
+    for i in (head_end..n).rev() {
+        let msg_tokens = messages[i].content.len() / 4 + 10;
+        if accumulated + msg_tokens > soft_ceiling && n - i >= min_tail {
+            break;
+        }
+        accumulated += msg_tokens;
+        cut_idx = i;
+    }
+
+    cut_idx = cut_idx.min(n.saturating_sub(min_tail));
+
+    // Invariant: most recent User message must be in the tail
+    let last_user_idx = messages[head_end..n]
+        .iter()
+        .rposition(|m| m.role == MessageRole::User)
+        .map(|rel| rel + head_end);
+    if let Some(user_idx) = last_user_idx {
+        if user_idx < cut_idx {
+            cut_idx = user_idx;
+        }
+    }
+
+    // Align backward past tool groups
+    while cut_idx > head_end && messages[cut_idx].role == MessageRole::Tool {
+        cut_idx = cut_idx.saturating_sub(1);
+    }
+    if cut_idx > head_end
+        && messages[cut_idx].role == MessageRole::Assistant
+        && messages[cut_idx].tool_calls.is_some()
+    {
+        cut_idx = cut_idx.saturating_sub(1);
+    }
+
+    cut_idx.max(head_end + 1)
+}
+
+/// Phase 5: fix orphaned tool_call / tool_result pairs after compression.
+pub fn sanitize_tool_pairs(messages: Vec<Message>) -> Vec<Message> {
+    use std::collections::HashSet;
+
+    let surviving_call_ids: HashSet<String> = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Assistant)
+        .flat_map(|m| m.tool_calls.iter().flatten())
+        .map(|tc| tc.id.clone())
+        .collect();
+
+    let result_call_ids: HashSet<String> = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Tool)
+        .filter_map(|m| m.tool_call_id.clone())
+        .collect();
+
+    // 1. Remove orphaned tool results
+    let messages: Vec<Message> = messages
+        .into_iter()
+        .filter(|m| {
+            if m.role == MessageRole::Tool {
+                m.tool_call_id
+                    .as_ref()
+                    .map(|id| surviving_call_ids.contains(id))
+                    .unwrap_or(false)
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    // 2. Insert stubs for orphaned calls
+    let missing_ids: HashSet<String> = surviving_call_ids
+        .difference(&result_call_ids)
+        .cloned()
+        .collect();
+
+    if missing_ids.is_empty() {
+        return messages;
+    }
+
+    let mut patched: Vec<Message> = Vec::with_capacity(messages.len() + missing_ids.len());
+    for msg in messages {
+        if msg.role == MessageRole::Assistant {
+            let needs_stubs: Vec<String> = msg
+                .tool_calls
+                .iter()
+                .flatten()
+                .filter(|tc| missing_ids.contains(&tc.id))
+                .map(|tc| tc.id.clone())
+                .collect();
+            patched.push(msg);
+            for call_id in needs_stubs {
+                patched.push(Message {
+                    role: MessageRole::Tool,
+                    content: "[Result from earlier conversation — see context summary above]"
+                        .into(),
+                    tool_call_id: Some(call_id),
+                    tool_calls: None,
+                    thinking_blocks: vec![],
+                });
+            }
+        } else {
+            patched.push(msg);
+        }
+    }
+    patched
+}
+
 /// Format messages for compaction prompt.
 fn format_messages_for_compaction(messages: &[Message]) -> String {
     let mut formatted = String::new();
@@ -523,5 +702,120 @@ mod tests {
             m.role == MessageRole::System && m.content.contains("[Previous conversation summary]")
         });
         assert!(!has_summary, "empty summary should not inject a summary message");
+    }
+
+    // ── prune_old_tool_results tests ─────────────────────────────────────────
+
+    #[test]
+    fn prune_deduplicates_identical_tool_results() {
+        let dup_content = "x".repeat(300);
+        let msgs = vec![
+            Message { role: MessageRole::Tool, content: dup_content.clone(),
+                      tool_call_id: Some("a".into()), tool_calls: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::Tool, content: dup_content.clone(),
+                      tool_call_id: Some("b".into()), tool_calls: None, thinking_blocks: vec![] },
+        ];
+        let pruned = prune_old_tool_results(&msgs, 0);
+        assert!(pruned[0].content.contains("Duplicate"));
+        assert_eq!(pruned[1].content, dup_content);
+    }
+
+    #[test]
+    fn prune_replaces_large_tool_result_with_summary_line() {
+        let msgs = vec![
+            Message { role: MessageRole::Tool, content: "a".repeat(300),
+                      tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![] },
+        ];
+        let pruned = prune_old_tool_results(&msgs, 0);
+        assert!(pruned[0].content.starts_with('['));
+        assert!(pruned[0].content.len() < 300);
+    }
+
+    #[test]
+    fn prune_skips_messages_in_protected_tail() {
+        let content = "b".repeat(300);
+        let msgs = vec![
+            Message { role: MessageRole::Tool, content: content.clone(),
+                      tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![] },
+        ];
+        let pruned = prune_old_tool_results(&msgs, 1);
+        assert_eq!(pruned[0].content, content);
+    }
+
+    // ── find_tail_start_by_tokens / find_head_end tests ──────────────────────
+
+    #[test]
+    fn tail_cut_respects_token_budget() {
+        let msgs: Vec<Message> = (0..10).map(|i| Message {
+            role: if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+            content: "a".repeat(400),
+            tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+        }).collect();
+        let tail_start = find_tail_start_by_tokens(&msgs, 0, 200);
+        assert!(tail_start >= msgs.len() - 4);
+        assert!(tail_start < msgs.len());
+    }
+
+    #[test]
+    fn tail_cut_always_includes_last_user_message() {
+        let mut msgs: Vec<Message> = (0..8).map(|_| Message {
+            role: MessageRole::Assistant,
+            content: "a".repeat(400),
+            tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+        }).collect();
+        msgs[3].role = MessageRole::User;
+        let tail_start = find_tail_start_by_tokens(&msgs, 0, 50);
+        assert!(tail_start <= 3, "last user message must be in tail, tail_start={tail_start}");
+    }
+
+    #[test]
+    fn head_end_skips_orphan_tool_results() {
+        let msgs = vec![
+            Message { role: MessageRole::System,    content: "s".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::User,      content: "u".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::Tool,      content: "t".into(), tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::Assistant, content: "a".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+        ];
+        let head_end = find_head_end(&msgs, 2);
+        assert_eq!(head_end, 3);
+    }
+
+    // ── sanitize_tool_pairs tests ─────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_removes_orphaned_tool_results() {
+        let msgs = vec![
+            Message { role: MessageRole::Tool, content: "orphan".into(),
+                      tool_call_id: Some("orphan_id".into()), tool_calls: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::User, content: "hello".into(),
+                      tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+        ];
+        let sanitized = sanitize_tool_pairs(msgs);
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].role, MessageRole::User);
+    }
+
+    #[test]
+    fn sanitize_adds_stub_for_orphaned_calls() {
+        let msgs = vec![
+            Message {
+                role: MessageRole::Assistant,
+                content: "".into(),
+                tool_calls: Some(vec![ToolCall {
+                    id: "tc_1".into(),
+                    name: "workspace_read".into(),
+                    arguments: serde_json::json!({}),
+                }]),
+                tool_call_id: None,
+                thinking_blocks: vec![],
+            },
+            Message { role: MessageRole::User, content: "next".into(),
+                      tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+        ];
+        let sanitized = sanitize_tool_pairs(msgs);
+        assert_eq!(sanitized.len(), 3);
+        assert_eq!(sanitized[1].role, MessageRole::Tool);
+        assert_eq!(sanitized[1].tool_call_id.as_deref(), Some("tc_1"));
+        assert!(sanitized[1].content.contains("earlier conversation"));
     }
 }
