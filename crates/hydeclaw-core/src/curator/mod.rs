@@ -105,7 +105,7 @@ pub async fn run_curator(
     }
 
     // Phase 3: Agent-driven consolidation
-    match phase_consolidation::run(workspace_dir, agents.as_ref(), &cfg.agent_name).await {
+    match phase_consolidation::run(workspace_dir, agents.as_ref(), &cfg.agent_name, db).await {
         Ok(r) => {
             phase3_count = r.commands_executed;
             if !r.log.is_empty() {

@@ -301,14 +301,109 @@ async fn cleanup_proposals(workspace_dir: &str) {
     }
 }
 
-// ── Entry point stub (filled in Task 6) ──────────────────────────────────────
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(
-    _workspace_dir: &str,
-    _agents: &AgentCore,
-    _agent_name: &str,
+    workspace_dir: &str,
+    agents: &AgentCore,
+    agent_name: &str,
+    db: &sqlx::PgPool,
 ) -> anyhow::Result<ConsolidationResult> {
-    Ok(ConsolidationResult { commands_executed: 0, log: vec!["not yet implemented".into()] })
+    let mut result = ConsolidationResult { commands_executed: 0, log: Vec::new() };
+
+    // ── Load active skills ────────────────────────────────────────────────────
+    let skills = crate::skills::load_skills(workspace_dir).await;
+    let active: Vec<_> = skills.iter()
+        .filter(|s| !matches!(s.meta.state, crate::skills::SkillState::Archived))
+        .collect();
+
+    if active.is_empty() {
+        return Ok(ConsolidationResult {
+            commands_executed: 0,
+            log: vec!["no active skills".into()],
+        });
+    }
+
+    let pinned: Vec<String> = active.iter()
+        .filter(|s| s.meta.pinned.unwrap_or(false))
+        .map(|s| s.meta.name.clone())
+        .collect();
+
+    let summary = active.iter().map(|s| {
+        format!(
+            "- name: {}\n  description: {}\n  state: {:?}\n  last_used_at: {}\n  triggers: [{}]",
+            s.meta.name,
+            s.meta.description,
+            s.meta.state,
+            s.meta.last_used_at.as_deref().unwrap_or("never"),
+            s.meta.triggers.join(", ")
+        )
+    }).collect::<Vec<_>>().join("\n");
+
+    // ── Step A: Analyst ───────────────────────────────────────────────────────
+    let proposals = run_analyst(workspace_dir, agents, agent_name, &summary, &pinned).await?;
+
+    if proposals.proposals.is_empty() {
+        result.log.push("Analyst: no proposals.".into());
+        cleanup_proposals(workspace_dir).await;
+        return Ok(result);
+    }
+
+    result.log.push(format!("Analyst: {} proposal(s).", proposals.proposals.len()));
+
+    // ── Step B: Verify ARCHIVE proposals ─────────────────────────────────────
+    let mut accepted_archives: Vec<(String, String)> = Vec::new();
+
+    for proposal in &proposals.proposals {
+        if let Proposal::Archive { skill, replacement, capability_map, .. } = proposal {
+            let (accepted, reason) = verify_archive_proposal(
+                workspace_dir, agents, agent_name,
+                skill, replacement, capability_map,
+            ).await;
+
+            if accepted {
+                accepted_archives.push((skill.clone(), replacement.clone()));
+                result.log.push(format!("ARCHIVE `{skill}` → ACCEPTED (verifier)"));
+            } else {
+                result.log.push(format!("ARCHIVE `{skill}` → REJECTED: {reason}"));
+            }
+        }
+    }
+
+    // ── Step C: Execute ───────────────────────────────────────────────────────
+
+    for (skill, _replacement) in &accepted_archives {
+        match apply_verified_archive(workspace_dir, db, skill).await {
+            Ok(()) => {
+                result.commands_executed += 1;
+                tracing::info!(skill, "curator p3: skill archived (verified)");
+            }
+            Err(e) => {
+                tracing::warn!(skill, error = %e, "curator p3: archive apply failed");
+                result.log.push(format!("⚠ archive `{skill}` failed: {e}"));
+            }
+        }
+    }
+
+    let executor_proposals: Vec<&Proposal> = proposals.proposals.iter()
+        .filter(|p| matches!(p, Proposal::Merge { .. } | Proposal::Fix { .. }))
+        .collect();
+
+    if !executor_proposals.is_empty() {
+        match run_executor(workspace_dir, agents, agent_name, &executor_proposals).await {
+            Ok(n) => {
+                result.commands_executed += n;
+                result.log.push(format!("Executor: applied {n} merge/fix action(s)."));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "curator p3: executor session failed");
+                result.log.push(format!("⚠ executor failed: {e}"));
+            }
+        }
+    }
+
+    cleanup_proposals(workspace_dir).await;
+    Ok(result)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
