@@ -442,10 +442,10 @@ done
 ok "Docker infrastructure started"
 
 # ── Phase 64 SEC-05: nginx Content-Security-Policy-Report-Only header ──────
-# v0.19.0 ships CSP in *observation* mode: browsers will POST violations to
-# /api/csp-report, core will log + count them, and we'll flip to enforce in
-# v0.19.1 once the 7-day observation window shows what CodeMirror / Mermaid /
-# KaTeX / shiki workers actually need.
+# CSP is in observation mode: browsers POST violations to /api/csp-report,
+# core logs + counts them. Enforcement has not yet been enabled — review
+# violation logs (CodeMirror / Mermaid / KaTeX workers) before switching
+# the header to Content-Security-Policy.
 #
 # Locked directive (Phase 64 CONTEXT D-CSP-01) — copy-paste-compatible:
 #   default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
@@ -454,7 +454,7 @@ ok "Docker infrastructure started"
 #
 # If you front hydeclaw-core with nginx, add this INSIDE the `location /` block:
 #
-#   # Phase 64 SEC-05: CSP observation window (v0.19.0). Flip to enforce in v0.19.1.
+#   # Phase 64 SEC-05: CSP observation mode (report-only). Switch to Content-Security-Policy when ready.
 #   add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ws: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; report-uri /api/csp-report" always;
 #
 # Use `always` so the header is emitted on 4xx/5xx responses too — browsers
@@ -481,7 +481,7 @@ configure_nginx_csp() {
 
   # Insert the add_header directive right after the first `location / {` line.
   # Locked directive string — do not drift from Phase 64 CONTEXT D-CSP-01.
-  local csp_line='        # Phase 64 SEC-05: CSP observation window (v0.19.0). Flip to enforce in v0.19.1.\n        add_header Content-Security-Policy-Report-Only "default-src '"'"'self'"'"'; script-src '"'"'self'"'"' '"'"'wasm-unsafe-eval'"'"'; connect-src '"'"'self'"'"' ws: wss:; style-src '"'"'self'"'"' '"'"'unsafe-inline'"'"'; img-src '"'"'self'"'"' data: blob:; font-src '"'"'self'"'"' data:; report-uri /api/csp-report" always;'
+  local csp_line='        # Phase 64 SEC-05: CSP observation mode (report-only). Switch to Content-Security-Policy when ready.\n        add_header Content-Security-Policy-Report-Only "default-src '"'"'self'"'"'; script-src '"'"'self'"'"' '"'"'wasm-unsafe-eval'"'"'; connect-src '"'"'self'"'"' ws: wss:; style-src '"'"'self'"'"' '"'"'unsafe-inline'"'"'; img-src '"'"'self'"'"' data: blob:; font-src '"'"'self'"'"' data:; report-uri /api/csp-report" always;'
 
   # Use sed with the FIRST `location / {` match. Falls back to a warning if the
   # site config does not contain one (operator layout is unusual).
