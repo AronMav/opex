@@ -77,52 +77,128 @@ function StateBadge({ state }: { state: SkillEntry["state"] }) {
 // ── Skill history sheet ────────────────────────────────────────────────────
 
 function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose: () => void }) {
+  const qc = useQueryClient();
   const { data, isLoading } = useSkillVersions(skillName);
   const versions = data?.versions ?? [];
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
+
+  const handleRestore = async (versionId: string) => {
+    setRestoringId(versionId);
+    try {
+      await apiPost(`/api/skills/${encodeURIComponent(skillName)}/versions/${versionId}/restore`, {});
+      qc.invalidateQueries({ queryKey: qk.skills });
+      qc.invalidateQueries({ queryKey: [...qk.skills, skillName, "versions"] });
+      toast.success(`Skill "${skillName}" restored to version`);
+      onClose();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setRestoringId(null);
+      setConfirmRestore(null);
+    }
+  };
 
   return (
-    <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
-        <SheetHeader className="mb-4">
-          <SheetTitle className="font-mono text-sm">{skillName}</SheetTitle>
-          <SheetDescription>Version history</SheetDescription>
-        </SheetHeader>
+    <>
+      <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
+        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+          <SheetHeader className="mb-4">
+            <SheetTitle className="font-mono text-sm">{skillName}</SheetTitle>
+            <SheetDescription>Version history — click a version to view content</SheetDescription>
+          </SheetHeader>
 
-        {isLoading ? (
-          <div className="space-y-3">
-            {[1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-20 rounded-lg" />
-            ))}
-          </div>
-        ) : versions.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-8 text-center">No version history yet.</p>
-        ) : (
-          <div className="space-y-3">
-            {versions.map((v) => (
-              <div key={v.id} className="rounded-lg border border-border/60 bg-card/50 p-4 space-y-2">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0">
-                    gen {v.generation}
-                  </Badge>
-                  <span className="text-xs font-medium text-foreground/80">{v.evolution_type}</span>
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {relativeTime(v.created_at)}
-                  </span>
-                </div>
-                {v.trigger_reason && (
-                  <p className="text-xs text-muted-foreground italic line-clamp-2">
-                    {v.trigger_reason}
-                  </p>
-                )}
-                <p className="text-[10px] font-mono text-muted-foreground/50 truncate">
-                  {v.content_hash}
-                </p>
-              </div>
-            ))}
-          </div>
-        )}
-      </SheetContent>
-    </Sheet>
+          {isLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-20 rounded-lg" />
+              ))}
+            </div>
+          ) : versions.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">No version history yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {versions.map((v) => {
+                const isExpanded = expandedId === v.id;
+                return (
+                  <div key={v.id} className="rounded-lg border border-border/60 bg-card/50 overflow-hidden">
+                    {/* Header row — click to expand */}
+                    <button
+                      className="w-full text-left p-3 hover:bg-muted/40 transition-colors"
+                      onClick={() => setExpandedId(isExpanded ? null : v.id)}
+                    >
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0 shrink-0">
+                          gen {v.generation}
+                        </Badge>
+                        {v.evolution_type && (
+                          <span className="text-xs font-medium text-foreground/80 truncate">
+                            {v.evolution_type}
+                          </span>
+                        )}
+                        <span className="text-xs text-muted-foreground ml-auto shrink-0">
+                          {relativeTime(v.created_at)}
+                        </span>
+                      </div>
+                      {v.trigger_reason && (
+                        <p className="text-xs text-muted-foreground mt-1 text-left">
+                          {v.trigger_reason}
+                        </p>
+                      )}
+                    </button>
+
+                    {/* Expanded content */}
+                    {isExpanded && (
+                      <div className="border-t border-border/40">
+                        <div className="flex items-center justify-between px-3 py-2 bg-muted/20">
+                          <span className="text-[10px] font-mono text-muted-foreground/60 truncate">
+                            {v.content_hash}
+                          </span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 text-xs px-2 shrink-0"
+                            disabled={restoringId === v.id}
+                            onClick={() => setConfirmRestore(v.id)}
+                          >
+                            <ArchiveRestore className="h-3 w-3 mr-1" />
+                            Restore
+                          </Button>
+                        </div>
+                        <pre className="p-3 text-[11px] font-mono text-foreground/80 overflow-x-auto max-h-80 overflow-y-auto bg-muted/10 whitespace-pre-wrap break-words">
+                          {v.content}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      <AlertDialog open={!!confirmRestore} onOpenChange={(o) => { if (!o) setConfirmRestore(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restore this version?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The current skill content will be saved as a snapshot before being replaced.
+              You can undo by restoring from history again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => confirmRestore && handleRestore(confirmRestore)}
+            >
+              Restore
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 

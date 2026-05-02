@@ -16,6 +16,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/skills/{skill}", get(api_skill_get_global).put(api_skill_upsert_global).delete(api_skill_delete_global))
         .route("/api/skills/{skill}/versions", get(api_skill_versions))
         .route("/api/skills/{skill}/versions/{vid}", get(api_skill_version_get))
+        .route("/api/skills/{skill}/versions/{vid}/restore", axum::routing::post(api_skill_version_restore))
         .route("/api/agents/{name}/skills", get(api_skills_list))
         .route("/api/agents/{name}/skills/{skill}", get(api_skill_get).put(api_skill_upsert).delete(api_skill_delete))
 }
@@ -400,6 +401,52 @@ pub(crate) async fn api_skill_version_get(
                      Json(serde_json::json!({"error": "not found"}))).into_response(),
         Err(e) => {
             tracing::error!(vid = %vid, error = %e, "failed to get skill version");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+             Json(serde_json::json!({"error": e.to_string()}))).into_response()
+        }
+    }
+}
+
+/// POST /api/skills/{skill}/versions/{vid}/restore
+/// Restores a skill to a previous version.
+/// Saves the current content as a pre-restore snapshot before overwriting.
+pub(crate) async fn api_skill_version_restore(
+    State(infra): State<InfraServices>,
+    axum::extract::Path((skill_name, vid)): axum::extract::Path<(String, uuid::Uuid)>,
+) -> impl IntoResponse {
+    let version = match crate::db::skill_versions::get_version(&infra.db, vid).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return (StatusCode::NOT_FOUND,
+                            Json(serde_json::json!({"error": "version not found"}))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR,
+                          Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    };
+
+    let safe = crate::curator::sanitize_skill_name(&skill_name);
+    let path = std::path::Path::new(crate::config::WORKSPACE_DIR)
+        .join("skills")
+        .join(format!("{safe}.md"));
+
+    // Snapshot current content before overwriting
+    if let Ok(current) = tokio::fs::read_to_string(&path).await {
+        let _ = crate::db::skill_versions::save_version(
+            &infra.db, &skill_name, &current, "restore", None,
+            Some("pre-restore snapshot"),
+        ).await;
+    }
+
+    // Restore: ensure state is active
+    let content = version.content
+        .replacen("state: archived", "state: active", 1)
+        .replacen("state: stale", "state: active", 1);
+
+    match tokio::fs::write(&path, &content).await {
+        Ok(()) => {
+            tracing::info!(skill = %skill_name, version = %vid, "skill version restored");
+            Json(serde_json::json!({"ok": true})).into_response()
+        }
+        Err(e) => {
+            tracing::error!(skill = %skill_name, error = %e, "failed to restore skill version");
             (StatusCode::INTERNAL_SERVER_ERROR,
              Json(serde_json::json!({"error": e.to_string()}))).into_response()
         }
