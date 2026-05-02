@@ -90,6 +90,51 @@ pub(crate) async fn csp_report_rate_limit_middleware(
     next.run(req).await
 }
 
+/// Dedicated per-IP rate limiter for `/webhook/*`.
+///
+/// Webhooks bypass auth (they are in `PUBLIC_PREFIX` and validate themselves
+/// via HMAC signatures), so without a dedicated limiter a noisy webhook
+/// source could exhaust the global 300 rpm `RequestRateLimiter` shared
+/// with other anonymous endpoints (`/health`, `/api/oauth/callback`,
+/// `/api/triggers/email/push`, `/api/csp-report`, `/uploads/*`,
+/// `/workspace-files/*`).
+///
+/// Additive to the global limiter — both apply. Loopback callers (internal
+/// services) bypass this limiter; the global one already exempts them.
+pub(crate) async fn webhook_rate_limit_middleware(
+    req: Request<Body>,
+    next: Next,
+    limiter: Arc<RequestRateLimiter>,
+) -> axum::response::Response {
+    let path = req.uri().path();
+    if !path.starts_with("/webhook/") {
+        return next.run(req).await;
+    }
+    let client_ip = extract_client_ip(&req);
+    if is_loopback(&client_ip) {
+        return next.run(req).await;
+    }
+    match limiter.check(&client_ip).await {
+        Ok(()) => next.run(req).await,
+        Err(retry_after) => {
+            tracing::warn!(
+                ip = %client_ip,
+                "webhook rate limit: {} req/min exceeded",
+                limiter.max_per_minute
+            );
+            let mut response = (
+                StatusCode::TOO_MANY_REQUESTS,
+                format!("Webhook rate limit exceeded. Retry after {retry_after}s."),
+            ).into_response();
+            response.headers_mut().insert(
+                "Retry-After",
+                retry_after.to_string().parse().expect("integer is valid header value"),
+            );
+            response
+        }
+    }
+}
+
 pub(crate) async fn request_rate_limit_middleware(
     req: Request<Body>,
     next: Next,
