@@ -393,9 +393,9 @@ async fn main() -> Result<()> {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        "memory bootstrap probe failed — assuming shared chunks present"
+                        "memory bootstrap probe failed — assuming no shared chunks (will attempt reindex)"
                     );
-                    true
+                    false
                 }
             };
             if !has_shared {
@@ -836,40 +836,40 @@ async fn init_container_manager() -> Option<Arc<containers::ContainerManager>> {
 async fn init_mcp_registry(container_manager: Option<Arc<containers::ContainerManager>>) -> Option<Arc<mcp::McpRegistry>> {
     let mcp_map = crate::tools::mcp_workspace::load_mcp_map(crate::config::MCP_DIR).await;
     let cache_dir = std::path::Path::new(crate::config::MCP_DIR).join(".cache");
-    let mcp_registry = container_manager.map(|cm| {
-        Arc::new(mcp::McpRegistry::new(cm, cache_dir))
-    });
 
-    if let Some(ref sr) = mcp_registry {
-        // Load on-demand tool definitions from the file cache so the LLM sees them
-        // immediately after a core restart — without starting any Docker container.
-        let enabled_mcps: std::collections::HashSet<String> = mcp_map.keys().cloned().collect();
-        match sr.load_cached_tools_from_disk(&enabled_mcps).await {
-            Ok(count) => {
-                tracing::info!(count, "loaded MCP tool cache from disk");
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to load MCP tool cache from disk");
-            }
-        }
+    // Always create the registry — URL-based MCPs (context7, deepwiki) work without Docker.
+    // Docker-based MCPs will return a clear error when called if Docker is unavailable.
+    let has_docker = container_manager.is_some();
+    let registry = Arc::new(mcp::McpRegistry::new(container_manager, cache_dir));
+    tracing::info!(has_docker, mcp_count = mcp_map.len(), "MCP registry initialized");
 
-        // Discover tools from persistent and always-on MCP servers at startup.
-        // On-demand servers are skipped here — their tools are either in the file
-        // cache (loaded above) or will be discovered on first use via ensure_running.
-        for (name, entry) in &mcp_map {
-            if entry.mode == "persistent" || entry.mode == "always-on" {
-                match sr.discover_tools(name).await {
-                    Ok(tools) => {
-                        tracing::info!(mcp = %name, mode = %entry.mode, tools = tools.len(), "discovered MCP tools");
-                    }
-                    Err(e) => {
-                        tracing::warn!(mcp = %name, mode = %entry.mode, error = %e, "failed to discover MCP tools");
-                    }
-                }
+    // Load on-demand tool definitions from the file cache so the LLM sees them
+    // immediately after a core restart — without starting any Docker container.
+    let enabled_mcps: std::collections::HashSet<String> = mcp_map.keys().cloned().collect();
+    match registry.load_cached_tools_from_disk(&enabled_mcps).await {
+        Ok(count) => tracing::info!(count, "loaded MCP tool cache from disk"),
+        Err(e) => tracing::warn!(error = %e, "failed to load MCP tool cache from disk"),
+    }
+
+    // Discover tools from persistent and always-on MCP servers at startup.
+    // On-demand servers are skipped here — their tools are either in the file
+    // cache (loaded above) or will be discovered on first use via ensure_running.
+    for (name, entry) in &mcp_map {
+        if entry.mode == "persistent" || entry.mode == "always-on" {
+            match registry.discover_tools(name).await {
+                Ok(tools) => tracing::info!(
+                    mcp = %name, mode = %entry.mode, tools = tools.len(),
+                    "discovered MCP tools"
+                ),
+                Err(e) => tracing::warn!(
+                    mcp = %name, mode = %entry.mode, error = %e,
+                    "failed to discover MCP tools"
+                ),
             }
         }
     }
-    mcp_registry
+
+    Some(registry)
 }
 
 /// Spawn various background tasks for session cleanup, watchdog, and health monitoring.
