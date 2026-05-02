@@ -546,6 +546,79 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Register a cron job that runs the skill curator on a configurable schedule.
+    ///
+    /// An idle guard prevents the curator from running when agents are actively
+    /// processing — if any session has been in `running` state within the last
+    /// `cfg.min_idle_minutes` minutes, the run is skipped.
+    pub async fn add_curator(
+        &self,
+        cron_expr: &str,
+        cfg: crate::config::CuratorConfig,
+        db: PgPool,
+        secrets: Arc<crate::secrets::SecretsManager>,
+    ) -> Result<()> {
+        let cron_expr = {
+            let raw = cron_expr.trim();
+            if raw.split_whitespace().count() == 5 { format!("0 {raw}") } else { raw.to_string() }
+        };
+        tracing::info!(cron = %cron_expr, "scheduling skill curator");
+
+        let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
+            let cfg = cfg.clone();
+            let db = db.clone();
+            let secrets = secrets.clone();
+            Box::pin(async move {
+                // ── Idle guard ────────────────────────────────────────────────
+                let idle_minutes = i64::from(cfg.min_idle_minutes);
+                let active: i64 = match sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sessions \
+                     WHERE updated_at > NOW() - ($1 || ' minutes')::INTERVAL \
+                     AND status = 'running'"
+                )
+                .bind(idle_minutes.to_string())
+                .fetch_one(&db)
+                .await
+                {
+                    Ok(n) => n,
+                    Err(e) => {
+                        tracing::error!(error = %e, "curator idle-guard query failed — skipping run");
+                        return;
+                    }
+                };
+
+                if active > 0 {
+                    tracing::info!(
+                        active_sessions = active,
+                        "curator skipped — agents active within idle window"
+                    );
+                    return;
+                }
+
+                // ── Run curator pipeline ───────────────────────────────────
+                match crate::curator::run_curator(
+                    &db,
+                    &cfg,
+                    secrets,
+                    crate::config::WORKSPACE_DIR,
+                )
+                .await
+                {
+                    Ok(summary) => tracing::info!(
+                        phase1 = summary.phase1,
+                        phase2 = summary.phase2,
+                        phase3 = summary.phase3,
+                        "skill curator run complete"
+                    ),
+                    Err(e) => tracing::error!(error = %e, "skill curator run failed"),
+                }
+            })
+        })?;
+
+        self.scheduler.add(job).await?;
+        Ok(())
+    }
+
     /// Add a dynamic job from the database.
     #[allow(clippy::too_many_arguments)]
     pub async fn add_dynamic_job(
