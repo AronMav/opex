@@ -73,7 +73,7 @@ pub async fn resolve(
 ) -> sqlx::Result<bool> {
     if !matches!(status, "done" | "failed") {
         return Err(sqlx::Error::Protocol(
-            format!("invalid resolve status: {status}").into(),
+            format!("invalid resolve status: {status}"),
         ));
     }
     let rows = sqlx::query(

@@ -303,15 +303,14 @@ pub async fn update_skill_last_used_if_stale(
     };
 
     // Check existing last_used_at
-    if let Some(skill) = SkillDef::parse(&content) {
-        if let Some(existing) = &skill.meta.last_used_at {
-            if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(existing) {
-                let age = chrono::Utc::now()
-                    .signed_duration_since(ts.with_timezone(&chrono::Utc));
-                if age < min_age {
-                    return;
-                }
-            }
+    if let Some(skill) = SkillDef::parse(&content)
+        && let Some(existing) = &skill.meta.last_used_at
+        && let Ok(ts) = chrono::DateTime::parse_from_rfc3339(existing)
+    {
+        let age = chrono::Utc::now()
+            .signed_duration_since(ts.with_timezone(&chrono::Utc));
+        if age < min_age {
+            return;
         }
     }
 
