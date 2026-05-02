@@ -1,10 +1,16 @@
 use anyhow::Result;
 use hydeclaw_types::ToolDefinition;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::containers::ContainerManager;
+
+/// Validates an MCP name: only `[a-zA-Z0-9_-]+` characters allowed.
+fn is_valid_mcp_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
 
 /// Manages MCP discovery and tool call routing.
 pub struct McpRegistry {
@@ -13,10 +19,12 @@ pub struct McpRegistry {
     tool_cache: Arc<RwLock<HashMap<String, Vec<ToolDefinition>>>>,
     /// Shared HTTP client with timeouts for MCP calls.
     http_client: reqwest::Client,
+    /// Directory for persisting per-MCP tool definition caches.
+    cache_dir: PathBuf,
 }
 
 impl McpRegistry {
-    pub fn new(container_manager: Arc<ContainerManager>) -> Self {
+    pub fn new(container_manager: Arc<ContainerManager>, cache_dir: impl Into<PathBuf>) -> Self {
         let http_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -26,7 +34,89 @@ impl McpRegistry {
             container_manager,
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
             http_client,
+            cache_dir: cache_dir.into(),
         }
+    }
+
+    // ── File-cache helpers ──────────────────────────────────────────────────────
+
+    /// Load cached tool definitions from disk into `tool_cache`.
+    ///
+    /// Only entries whose file stem is in `enabled_mcps` are loaded;
+    /// stale files for deleted/disabled MCPs are silently skipped (not deleted).
+    /// Corrupt JSON files are warned and skipped — startup is never aborted.
+    ///
+    /// Returns the number of MCP entries successfully loaded.
+    pub async fn load_cached_tools_from_disk(
+        &self,
+        enabled_mcps: &HashSet<String>,
+    ) -> Result<usize> {
+        if !self.cache_dir.exists() {
+            return Ok(0);
+        }
+
+        let mut dir = tokio::fs::read_dir(&self.cache_dir).await?;
+        let mut loaded = 0usize;
+
+        while let Some(entry) = dir.next_entry().await? {
+            let path = entry.path();
+
+            // Only process .json files
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+
+            // Skip files whose stem is not in the enabled MCPs set
+            if !enabled_mcps.contains(&stem) {
+                continue;
+            }
+
+            let contents = match tokio::fs::read(&path).await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "failed to read MCP cache file");
+                    continue;
+                }
+            };
+
+            match serde_json::from_slice::<Vec<ToolDefinition>>(&contents) {
+                Ok(tools) => {
+                    let count = tools.len();
+                    self.tool_cache.write().await.insert(stem.clone(), tools);
+                    tracing::debug!(mcp = %stem, tools = count, "loaded MCP tools from disk cache");
+                    loaded += 1;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "MCP cache file has invalid JSON, skipping"
+                    );
+                }
+            }
+        }
+
+        Ok(loaded)
+    }
+
+    /// Persist tool definitions for an MCP server to `cache_dir/{name}.json`.
+    ///
+    /// Best-effort: errors are logged but not propagated — callers must not fail on this.
+    async fn persist_cache_to_disk(&self, mcp_name: &str, tools: &[ToolDefinition]) -> Result<()> {
+        if !is_valid_mcp_name(mcp_name) {
+            anyhow::bail!("invalid MCP name for cache write: '{mcp_name}'");
+        }
+        tokio::fs::create_dir_all(&self.cache_dir).await?;
+        let path = self.cache_dir.join(format!("{mcp_name}.json"));
+        let bytes = serde_json::to_vec_pretty(tools)?;
+        tokio::fs::write(&path, bytes).await?;
+        tracing::debug!(mcp = %mcp_name, path = %path.display(), "persisted MCP tool cache to disk");
+        Ok(())
     }
 
     /// Discover tools from an MCP server via MCP tools/list.
@@ -64,11 +154,16 @@ impl McpRegistry {
         let body = parse_mcp_response(resp).await?;
         let tools = parse_mcp_tools(&body)?;
 
-        // Cache the result
+        // Cache the result in memory
         self.tool_cache
             .write()
             .await
             .insert(mcp_name.to_string(), tools.clone());
+
+        // Persist to disk (best-effort)
+        if let Err(e) = self.persist_cache_to_disk(mcp_name, &tools).await {
+            tracing::warn!(mcp = %mcp_name, error = %e, "failed to persist MCP tool cache to disk");
+        }
 
         tracing::info!(mcp = %mcp_name, tools = tools.len(), "discovered MCP tools");
         Ok(tools)
@@ -247,6 +342,118 @@ mod tests {
     // Convenience alias so tests don't need to call through the wrapper.
     fn parse(body: &serde_json::Value) -> Result<Vec<ToolDefinition>> {
         parse_mcp_tools_for_test(body)
+    }
+
+    /// Build a test registry pointing at `cache_dir`. Uses a fake Docker URL —
+    /// the ContainerManager constructor does not perform I/O until `ensure_running` is called.
+    fn registry_with_cache_dir(cache_dir: std::path::PathBuf) -> McpRegistry {
+        let cm = Arc::new(
+            crate::containers::ContainerManager::new("http://127.0.0.1:1", HashMap::new())
+                .expect("ContainerManager::new should succeed for test"),
+        );
+        McpRegistry::new(cm, cache_dir)
+    }
+
+    fn make_tools() -> Vec<ToolDefinition> {
+        vec![
+            ToolDefinition {
+                name: "search".to_string(),
+                description: "Search the web".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+            },
+            ToolDefinition {
+                name: "fetch".to_string(),
+                description: "Fetch a URL".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn cache_roundtrip_persists_and_loads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let reg = registry_with_cache_dir(dir.path().to_path_buf());
+
+        // Persist "fake-mcp" tools to disk
+        reg.persist_cache_to_disk("fake-mcp", &make_tools())
+            .await
+            .expect("persist should succeed");
+
+        // Load from disk filtering to only "fake-mcp"
+        let enabled: HashSet<String> = ["fake-mcp".to_string()].into_iter().collect();
+        let count = reg
+            .load_cached_tools_from_disk(&enabled)
+            .await
+            .expect("load should succeed");
+
+        assert_eq!(count, 1, "expected 1 MCP loaded");
+        let all = reg.all_tool_definitions().await;
+        assert_eq!(all.len(), 2, "expected 2 tool definitions");
+    }
+
+    #[tokio::test]
+    async fn load_cache_filters_stale_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Write two JSON files: one for an enabled MCP, one stale unknown
+        let tools = make_tools();
+        let bytes = serde_json::to_vec_pretty(&tools).expect("json");
+        tokio::fs::write(dir.path().join("fake-mcp.json"), &bytes)
+            .await
+            .expect("write fake-mcp.json");
+        tokio::fs::write(dir.path().join("unknown.json"), &bytes)
+            .await
+            .expect("write unknown.json");
+
+        let reg = registry_with_cache_dir(dir.path().to_path_buf());
+        let enabled: HashSet<String> = ["fake-mcp".to_string()].into_iter().collect();
+        let count = reg
+            .load_cached_tools_from_disk(&enabled)
+            .await
+            .expect("load should succeed");
+
+        assert_eq!(count, 1, "only fake-mcp should load; unknown should be filtered");
+
+        let cache = reg.tool_cache.read().await;
+        assert!(cache.contains_key("fake-mcp"), "fake-mcp should be in cache");
+        assert!(!cache.contains_key("unknown"), "unknown should NOT be in cache");
+        // File must still exist (not deleted)
+        assert!(dir.path().join("unknown.json").exists(), "stale file should not be deleted");
+    }
+
+    #[tokio::test]
+    async fn load_cache_handles_corrupt_files_gracefully() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Write an invalid JSON file
+        tokio::fs::write(dir.path().join("bad.json"), b"this is not json {{{")
+            .await
+            .expect("write bad.json");
+
+        let reg = registry_with_cache_dir(dir.path().to_path_buf());
+        let enabled: HashSet<String> = ["bad".to_string()].into_iter().collect();
+
+        // Should not panic or error — just return 0 loaded
+        let count = reg
+            .load_cached_tools_from_disk(&enabled)
+            .await
+            .expect("should return Ok even with corrupt file");
+
+        assert_eq!(count, 0, "corrupt file should be skipped");
+        let all = reg.all_tool_definitions().await;
+        assert!(all.is_empty(), "no tools should be loaded from corrupt file");
+    }
+
+    #[tokio::test]
+    async fn persist_cache_rejects_invalid_mcp_names() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let reg = registry_with_cache_dir(dir.path().to_path_buf());
+
+        // Path traversal attempt
+        let result = reg
+            .persist_cache_to_disk("../../etc/passwd", &make_tools())
+            .await;
+        assert!(result.is_err(), "path traversal in name should be rejected");
     }
 
     #[test]
