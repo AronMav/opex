@@ -119,6 +119,16 @@ pub async fn start_agent_from_config(
             if !hc.block_tools.is_empty() {
                 registry.register("block_tools".into(), crate::agent::hooks::block_tools_hook(hc.block_tools.clone()));
             }
+            if !hc.webhooks.is_empty() {
+                // Dedicated short-lived reqwest client for webhooks.
+                // 5s per-call timeout is enforced inside fire_webhooks; this
+                // outer 10s connect+pool timeout is a backstop.
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .build()
+                    .unwrap_or_default();
+                registry.set_webhooks(client, hc.webhooks.clone());
+            }
         }
         Arc::new(registry)
     };
