@@ -46,6 +46,84 @@ pub(crate) struct ProposalsFile {
     pub proposals: Vec<Proposal>,
 }
 
+// ── Analyst ───────────────────────────────────────────────────────────────────
+
+/// Read and parse the proposals file written by the Analyst session.
+/// Returns an empty ProposalsFile on any error (missing file, invalid JSON).
+async fn read_proposals_file(path: &str) -> ProposalsFile {
+    match tokio::fs::read_to_string(path).await {
+        Err(e) => {
+            tracing::warn!(path, error = %e, "curator p3: proposals file not found");
+            ProposalsFile { proposals: vec![] }
+        }
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(path, error = %e, "curator p3: proposals file invalid JSON");
+                ProposalsFile { proposals: vec![] }
+            }
+        },
+    }
+}
+
+/// Run the Analyst Hyde session. Hyde reads active skills and writes
+/// `workspace/curator_proposals.json` via workspace_write.
+async fn run_analyst(
+    workspace_dir: &str,
+    agents: &AgentCore,
+    agent_name: &str,
+    active_summary: &str,
+    pinned_names: &[String],
+) -> anyhow::Result<ProposalsFile> {
+    let proposals_path = std::path::Path::new(workspace_dir)
+        .join("curator_proposals.json")
+        .to_string_lossy()
+        .to_string();
+
+    let task = format!(
+        "[Curator: skill consolidation — analyst pass]\n\
+         Analyse the active skill collection and write your proposals to \
+         workspace/curator_proposals.json using workspace_write.\n\n\
+         NEVER touch pinned skills: [{}]\n\n\
+         MANDATORY for any ARCHIVE proposal:\n\
+         1. Read the FULL content of the skill to archive via workspace_read\n\
+         2. Read the FULL content of the replacement skill via workspace_read\n\
+         3. For every distinct capability/section in the archived skill, include a \
+            capability_map entry with verbatim from_quote (from archived) and \
+            covering_quote (from replacement).\n\
+         4. If any capability has no verbatim covering_quote — do NOT include that \
+            ARCHIVE proposal at all.\n\n\
+         JSON schema for workspace/curator_proposals.json:\n\
+         {{\n\
+           \"proposals\": [\n\
+             {{ \"action\": \"archive\", \"skill\": \"name\", \"replacement\": \"name\",\n\
+                \"reason\": \"one sentence\",\n\
+                \"capability_map\": [\n\
+                  {{ \"capability\": \"name\", \"from_quote\": \"verbatim\",\n\
+                     \"covered_in\": \"section\", \"covering_quote\": \"verbatim\" }}\n\
+                ]\n\
+             }},\n\
+             {{ \"action\": \"merge\", \"sources\": [\"a\",\"b\"], \"into\": \"c\", \
+                \"reason\": \"one sentence\" }},\n\
+             {{ \"action\": \"fix\", \"skill\": \"name\", \"description\": \"what to fix\" }}\n\
+           ]\n\
+         }}\n\n\
+         Rules:\n\
+         - Maximum 5 proposals (ARCHIVE + MERGE + FIX combined)\n\
+         - 'Never used' (last_used_at=null) is NOT a reason to archive\n\
+         - Write ONLY the JSON file. Do not reply with analysis text.\n\n\
+         Active skills (summary — read full files before deciding):\n{}",
+        pinned_names.join(", "),
+        active_summary
+    );
+
+    if let Err(e) = crate::curator::run_agent_task(agents, agent_name, &task).await {
+        tracing::warn!(error = %e, "curator p3: analyst session failed");
+    }
+
+    Ok(read_proposals_file(&proposals_path).await)
+}
+
 // ── Entry point stub (filled in Task 6) ──────────────────────────────────────
 
 pub async fn run(
@@ -61,6 +139,23 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn read_proposals_missing_file_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("curator_proposals.json");
+        let result = read_proposals_file(path.to_str().unwrap()).await;
+        assert!(result.proposals.is_empty());
+    }
+
+    #[tokio::test]
+    async fn read_proposals_invalid_json_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("curator_proposals.json");
+        tokio::fs::write(&path, b"{{not json").await.unwrap();
+        let result = read_proposals_file(path.to_str().unwrap()).await;
+        assert!(result.proposals.is_empty());
+    }
 
     #[test]
     fn proposals_valid_json_parses() {
