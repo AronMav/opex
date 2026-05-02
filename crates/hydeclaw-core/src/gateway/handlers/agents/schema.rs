@@ -83,6 +83,7 @@ pub(crate) struct AgentCreatePayload {
 pub(crate) struct HooksPayload {
     pub log_all_tool_calls: Option<bool>,
     pub block_tools: Option<Vec<String>>,
+    pub webhooks: Option<Vec<crate::config::WebhookConfig>>,
 }
 
 #[derive(Deserialize)]
@@ -242,6 +243,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
             hooks: p.hooks.flatten().map(|h| crate::config::HooksConfig {
                 log_all_tool_calls: h.log_all_tool_calls.unwrap_or(false),
                 block_tools: h.block_tools.unwrap_or_default(),
+                webhooks: h.webhooks.unwrap_or_default(),
             }),
             daily_budget_tokens: p.daily_budget_tokens.unwrap_or(0),
             max_agent_turns: p.max_agent_turns,

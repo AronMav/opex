@@ -13,6 +13,19 @@ use crate::config::AgentConfig;
 /// Must match the instruction in AGENTS.md / HEARTBEAT.md.
 const HEARTBEAT_OK: &str = "HEARTBEAT_OK";
 
+/// Normalize the JSONB `announce_to` payload into a flat list of target objects.
+///
+/// Backward-compatible: a single object is wrapped into a 1-element Vec,
+/// an array is returned as-is, anything else (null, string, number, bool)
+/// becomes an empty Vec. Per-target field validation is done at dispatch time.
+fn normalize_announce_to(val: &serde_json::Value) -> Vec<serde_json::Value> {
+    match val {
+        serde_json::Value::Array(items) => items.clone(),
+        serde_json::Value::Object(_) => vec![val.clone()],
+        _ => Vec::new(),
+    }
+}
+
 /// A scheduled job record from the database.
 #[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)] // Fields used in display formatting via engine.rs handle_cron
@@ -1645,5 +1658,62 @@ mod tests {
         let _ = |job: ScheduledJob| {
             let _: Option<serde_json::Value> = job.tool_policy;
         };
+    }
+
+    // ── normalize_announce_to ──────────────────────────────────────────
+
+    #[test]
+    fn normalize_announce_to_object_wraps_into_singleton() {
+        let v = serde_json::json!({"channel": "telegram", "chat_id": 123});
+        let out = normalize_announce_to(&v);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["channel"], "telegram");
+        assert_eq!(out[0]["chat_id"], 123);
+    }
+
+    #[test]
+    fn normalize_announce_to_array_preserves_order_and_length() {
+        let v = serde_json::json!([
+            {"channel": "telegram", "chat_id": 1},
+            {"channel": "telegram", "chat_id": 2},
+            {"channel": "discord",  "chat_id": 3}
+        ]);
+        let out = normalize_announce_to(&v);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["chat_id"], 1);
+        assert_eq!(out[1]["chat_id"], 2);
+        assert_eq!(out[2]["channel"], "discord");
+    }
+
+    #[test]
+    fn normalize_announce_to_empty_array_is_empty_vec() {
+        let v = serde_json::json!([]);
+        assert!(normalize_announce_to(&v).is_empty());
+    }
+
+    #[test]
+    fn normalize_announce_to_null_is_empty_vec() {
+        let v = serde_json::Value::Null;
+        assert!(normalize_announce_to(&v).is_empty());
+    }
+
+    #[test]
+    fn normalize_announce_to_scalar_is_empty_vec() {
+        assert!(normalize_announce_to(&serde_json::json!("nope")).is_empty());
+        assert!(normalize_announce_to(&serde_json::json!(42)).is_empty());
+        assert!(normalize_announce_to(&serde_json::json!(true)).is_empty());
+    }
+
+    #[test]
+    fn normalize_announce_to_array_with_garbage_items_passes_through() {
+        // Per-target validation belongs to the dispatch loop, not the normalizer.
+        let v = serde_json::json!([
+            {"channel": "telegram", "chat_id": 1},
+            42,
+            null
+        ]);
+        let out = normalize_announce_to(&v);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["chat_id"], 1);
     }
 }
