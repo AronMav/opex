@@ -458,7 +458,7 @@ export function AgentEditDialog({
                     </div>
                     <div className="border-t border-border/20 pt-2 mt-2">
                       <span className="text-xs font-medium text-muted-foreground mb-1.5 block">{t("agents.tool_groups")}</span>
-                      <div className="grid grid-cols-2 gap-1.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                         {([
                           ["toolGroupGit", t("agents.tool_group_git")] as const,
                           ["toolGroupManagement", t("agents.tool_group_management")] as const,
