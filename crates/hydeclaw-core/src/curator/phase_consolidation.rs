@@ -347,7 +347,7 @@ async fn apply_deterministic_fix(
 
 /// Run executor Hyde session for MERGE and FIX proposals.
 async fn run_executor(
-    workspace_dir: &str,
+    _workspace_dir: &str,
     agents: &AgentCore,
     agent_name: &str,
     proposals: &[&Proposal],
@@ -462,8 +462,14 @@ pub async fn run(
             if accepted {
                 accepted_archives.push((skill.clone(), replacement.clone()));
                 result.log.push(format!("ARCHIVE `{skill}` → ACCEPTED (verifier)"));
+                let _ = crate::db::curator_decisions::save_decision(
+                    db, skill, "archive", Some(&format!("replaced by {replacement}"))
+                ).await;
             } else {
                 result.log.push(format!("ARCHIVE `{skill}` → REJECTED: {reason}"));
+                let _ = crate::db::curator_decisions::save_decision(
+                    db, skill, "reject", Some(&reason)
+                ).await;
             }
         }
     }
@@ -483,12 +489,37 @@ pub async fn run(
         }
     }
 
-    let executor_proposals: Vec<&Proposal> = proposals.proposals.iter()
-        .filter(|p| matches!(p, Proposal::Merge { .. } | Proposal::Fix { .. }))
+    // Deterministic FIX (current_text + replacement_text provided) and Merge via agent session
+    let mut agent_proposals: Vec<&Proposal> = proposals.proposals.iter()
+        .filter(|p| matches!(p, Proposal::Merge { .. }))
         .collect();
 
-    if !executor_proposals.is_empty() {
-        match run_executor(workspace_dir, agents, agent_name, &executor_proposals).await {
+    for proposal in proposals.proposals.iter() {
+        if let Proposal::Fix { skill, description, current_text, replacement_text } = proposal {
+            if let (Some(cur), Some(rep)) = (current_text.as_deref(), replacement_text.as_deref()) {
+                match apply_deterministic_fix(workspace_dir, skill, cur, rep).await {
+                    Ok(true) => {
+                        result.commands_executed += 1;
+                        result.log.push(format!("FIX `{skill}` → applied (deterministic)"));
+                        let _ = crate::db::curator_decisions::save_decision(
+                            db, skill, "fix", Some(description)
+                        ).await;
+                    }
+                    Ok(false) => {
+                        result.log.push(format!("FIX `{skill}` → skipped (current_text not found)"));
+                    }
+                    Err(e) => {
+                        result.log.push(format!("⚠ FIX `{skill}` deterministic failed: {e}"));
+                    }
+                }
+            } else {
+                agent_proposals.push(proposal);
+            }
+        }
+    }
+
+    if !agent_proposals.is_empty() {
+        match run_executor(workspace_dir, agents, agent_name, &agent_proposals).await {
             Ok(n) => {
                 result.commands_executed += n;
                 result.log.push(format!("Executor: applied {n} merge/fix action(s)."));
