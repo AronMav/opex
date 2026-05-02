@@ -719,6 +719,22 @@ pub struct HooksConfig {
     /// Block these tools silently (no approval prompt, just deny).
     #[serde(default)]
     pub block_tools: Vec<String>,
+    /// External HTTP webhooks fired on matching HookEvents.
+    #[serde(default)]
+    pub webhooks: Vec<WebhookConfig>,
+}
+
+/// Outbound webhook subscription for hook events (TOML:
+/// `[[agent.hooks.webhooks]]`). Fire-and-forget HTTP POST per matching event.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct WebhookConfig {
+    /// Destination URL (must be an absolute http/https URL).
+    pub url: String,
+    /// HookEvent variant names to subscribe to. Valid values:
+    /// "BeforeMessage", "AfterResponse", "BeforeToolCall",
+    /// "AfterToolResult", "OnError". Unknown names are ignored at fire time.
+    #[serde(default)]
+    pub events: Vec<String>,
 }
 
 /// Per-agent tool loop configuration (TOML: `[agent.tool_loop]`).
