@@ -124,6 +124,90 @@ async fn run_analyst(
     Ok(read_proposals_file(&proposals_path).await)
 }
 
+// ── Verifier ──────────────────────────────────────────────────────────────────
+
+/// Parse the verifier's plain-text response.
+/// Returns true only if the first non-empty line is exactly "ACCEPT" (case-sensitive).
+/// "ACCEPTED", "ACCEPT something", empty, or any REJECT response all return false.
+fn parse_verifier_response(response: &str) -> bool {
+    response.trim_start().lines().next().unwrap_or("").trim() == "ACCEPT"
+}
+
+/// Run a 1-turn verifier session for an ARCHIVE proposal.
+/// Returns (accepted: bool, reject_reason: String).
+async fn verify_archive_proposal(
+    workspace_dir: &str,
+    agents: &AgentCore,
+    agent_name: &str,
+    skill: &str,
+    replacement: &str,
+    capability_map: &[CapabilityEntry],
+) -> (bool, String) {
+    let skills_dir = std::path::Path::new(workspace_dir).join("skills");
+    let safe_skill = crate::curator::sanitize_skill_name(skill);
+    let safe_replacement = crate::curator::sanitize_skill_name(replacement);
+
+    let archived_content = match tokio::fs::read_to_string(
+        skills_dir.join(format!("{safe_skill}.md"))
+    ).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(skill, error = %e, "curator p3 verifier: cannot read archived skill");
+            return (false, format!("cannot read skill file: {e}"));
+        }
+    };
+
+    let replacement_content = match tokio::fs::read_to_string(
+        skills_dir.join(format!("{safe_replacement}.md"))
+    ).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(replacement, error = %e, "curator p3 verifier: cannot read replacement skill");
+            return (false, format!("cannot read replacement file: {e}"));
+        }
+    };
+
+    let map_json = serde_json::to_string_pretty(capability_map)
+        .unwrap_or_else(|_| "[]".to_string());
+
+    let task = format!(
+        "You are a skill coverage auditor. Verify that a proposed archival is safe.\n\n\
+         Skill to archive: {skill}\n\
+         Full content:\n{archived_content}\n\n\
+         Proposed replacement: {replacement}\n\
+         Full content:\n{replacement_content}\n\n\
+         Capability map claimed by analyst:\n{map_json}\n\n\
+         For each entry in the capability map:\n\
+         1. Find the from_quote in the archived skill (exact or near-exact match required)\n\
+         2. Find the covering_quote in the replacement skill (exact or near-exact match required)\n\
+         3. Confirm the covering_quote addresses the same capability\n\n\
+         Return EXACTLY one of:\n\
+           ACCEPT\n\
+           REJECT: <capability name> — <reason it is not covered>\n\n\
+         Multiple REJECT lines are allowed (one per missing capability).\n\
+         Be strict. Paraphrase is not coverage. If a quote is absent — REJECT."
+    );
+
+    match crate::curator::run_verifier_task(agents, agent_name, &task).await {
+        Ok(response) => {
+            let accepted = parse_verifier_response(&response);
+            let reason = if accepted {
+                String::new()
+            } else {
+                response.lines()
+                    .filter(|l| l.starts_with("REJECT"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            (accepted, reason)
+        }
+        Err(e) => {
+            tracing::warn!(skill, error = %e, "curator p3 verifier: session failed — treating as REJECT");
+            (false, format!("verifier error: {e}"))
+        }
+    }
+}
+
 // ── Entry point stub (filled in Task 6) ──────────────────────────────────────
 
 pub async fn run(
@@ -139,6 +223,25 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verifier_accept_response_is_accepted() {
+        assert!(parse_verifier_response("ACCEPT"));
+        assert!(parse_verifier_response("ACCEPT\nsome trailing text"));
+    }
+
+    #[test]
+    fn verifier_reject_response_is_rejected() {
+        assert!(!parse_verifier_response("REJECT: journal format — not found in replacement"));
+        assert!(!parse_verifier_response("REJECT: cap1 — missing\nREJECT: cap2 — absent"));
+    }
+
+    #[test]
+    fn verifier_malformed_response_is_rejected() {
+        assert!(!parse_verifier_response(""));
+        assert!(!parse_verifier_response("I think this looks fine"));
+        assert!(!parse_verifier_response("ACCEPTED")); // typo — not ACCEPT
+    }
 
     #[tokio::test]
     async fn read_proposals_missing_file_returns_empty() {
