@@ -40,6 +40,8 @@ pub(crate) enum Proposal {
     Fix {
         skill: String,
         description: String,
+        current_text:     Option<String>,
+        replacement_text: Option<String>,
     },
 }
 
@@ -307,6 +309,42 @@ async fn apply_verified_archive(
     Ok(())
 }
 
+/// Apply a deterministic FIX: find `current_text` in the skill file and replace
+/// the first occurrence with `replacement_text`.
+/// Returns `true` if the replacement was applied, `false` if `current_text` was
+/// not found (skip silently — no file change).
+async fn apply_deterministic_fix(
+    workspace_dir: &str,
+    skill: &str,
+    current_text: &str,
+    replacement_text: &str,
+) -> anyhow::Result<bool> {
+    let safe = crate::curator::sanitize_skill_name(skill);
+    let path = std::path::Path::new(workspace_dir)
+        .join("skills")
+        .join(format!("{safe}.md"));
+
+    let content = tokio::fs::read_to_string(&path).await
+        .map_err(|e| anyhow::anyhow!("apply_deterministic_fix: read {skill}: {e}"))?;
+
+    if !content.contains(current_text) {
+        tracing::warn!(skill, "curator p3: current_text not found — fix skipped");
+        return Ok(false);
+    }
+
+    let updated = content.replacen(current_text, replacement_text, 1);
+    let tmp = format!("{}.tmp", path.display());
+    tokio::fs::write(&tmp, &updated).await
+        .map_err(|e| anyhow::anyhow!("apply_deterministic_fix: write tmp {skill}: {e}"))?;
+    tokio::fs::rename(&tmp, &path).await
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            anyhow::anyhow!("apply_deterministic_fix: rename {skill}: {e}")
+        })?;
+
+    Ok(true)
+}
+
 /// Run executor Hyde session for MERGE and FIX proposals.
 async fn run_executor(
     workspace_dir: &str,
@@ -323,7 +361,7 @@ async fn run_executor(
             "{}. MERGE {} into '{}': {}",
             i + 1, sources.join(" + "), into, reason
         ),
-        Proposal::Fix { skill, description } => format!(
+        Proposal::Fix { skill, description, .. } => format!(
             "{}. FIX '{}': {}", i + 1, skill, description
         ),
         _ => String::new(),
@@ -535,6 +573,53 @@ mod tests {
             (false, false)
         };
         assert!(!from_ok);
+    }
+
+    #[tokio::test]
+    async fn deterministic_fix_replaces_text() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skills");
+        tokio::fs::create_dir_all(&skill_dir).await.unwrap();
+        let skill_path = skill_dir.join("my-skill.md");
+        tokio::fs::write(
+            &skill_path,
+            "---\nname: my-skill\nstate: active\n---\n\nSearch, read, synthesize.\n",
+        ).await.unwrap();
+
+        let applied = apply_deterministic_fix(
+            tmp.path().to_str().unwrap(),
+            "my-skill",
+            "Search, read, synthesize.",
+            "Search, read, synthesize.\n\n### Validation\n\nCross-check sources.",
+        ).await.unwrap();
+
+        assert!(applied);
+        let content = tokio::fs::read_to_string(&skill_path).await.unwrap();
+        assert!(content.contains("### Validation"));
+        assert!(content.contains("Cross-check sources."));
+    }
+
+    #[tokio::test]
+    async fn deterministic_fix_skips_when_text_not_found() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skills");
+        tokio::fs::create_dir_all(&skill_dir).await.unwrap();
+        let skill_path = skill_dir.join("my-skill.md");
+        tokio::fs::write(
+            &skill_path,
+            "---\nname: my-skill\nstate: active\n---\n\nDifferent content.\n",
+        ).await.unwrap();
+
+        let applied = apply_deterministic_fix(
+            tmp.path().to_str().unwrap(),
+            "my-skill",
+            "Search, read, synthesize.",
+            "Search, read, synthesize.\n\n### Validation\n",
+        ).await.unwrap();
+
+        assert!(!applied);
+        let content = tokio::fs::read_to_string(&skill_path).await.unwrap();
+        assert!(!content.contains("### Validation"));
     }
 
     #[test]
