@@ -114,6 +114,16 @@ export interface CuratorStatus {
   last_phase3: number;
 }
 
+export interface CuratorConfig {
+  enabled: boolean;
+  cron: string;
+  min_idle_minutes: number;
+  stale_after_days: number;
+  archive_after_days: number;
+  max_repairs_per_run: number;
+  agent_name: string;
+}
+
 export interface CuratorRun {
   id: string;
   started_at: string;

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiDelete, apiPut, apiPost } from "@/lib/api";
-import { useSkills, useCuratorStatus, useSkillVersions, useCuratorDecisions, useSkillCuratorDecisions, qk } from "@/lib/queries";
+import { useSkills, useCuratorStatus, useCuratorConfig, useSkillVersions, useCuratorDecisions, useSkillCuratorDecisions, qk } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import { relativeTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/sheet";
 import {
   BookOpen, Wrench, Zap, Trash2, RefreshCw, Tag,
-  Plus, Pencil, ArrowLeft, Save, FileText, History, Archive, ArchiveRestore,
+  Plus, Pencil, ArrowLeft, Save, FileText, History, Archive, ArchiveRestore, Settings,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -26,7 +26,7 @@ import {
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import type { SkillEntry, CuratorDecision } from "@/types/api";
+import type { SkillEntry, CuratorDecision, CuratorConfig } from "@/types/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -271,14 +271,106 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
   );
 }
 
+// ── Curator settings sheet ─────────────────────────────────────────────────
+
+function CuratorSettingsSheet({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data: cfg } = useCuratorConfig();
+  const [form, setForm] = useState<Partial<CuratorConfig>>({});
+  const [saving, setSaving] = useState(false);
+
+  // Populate form from fetched config (only once)
+  const effective = { ...cfg, ...form } as CuratorConfig;
+
+  const field = (key: keyof CuratorConfig) => ({
+    value: String(effective[key] ?? ""),
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
+      setForm((f) => ({ ...f, [key]: typeof effective[key] === "number" ? Number(e.target.value) : e.target.value })),
+  });
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await apiPut("/api/curator/config", form);
+      qc.invalidateQueries({ queryKey: ["curator", "config"] });
+      qc.invalidateQueries({ queryKey: qk.curatorStatus });
+      toast.success("Curator settings saved");
+      onClose();
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <div className="grid grid-cols-[160px_1fr] items-center gap-3">
+      <label className="text-xs text-muted-foreground text-right">{label}</label>
+      {children}
+    </div>
+  );
+
+  return (
+    <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent className="w-full sm:max-w-md overflow-y-auto">
+        <SheetHeader className="mb-5">
+          <SheetTitle className="text-sm">Curator Settings</SheetTitle>
+          <SheetDescription className="text-xs">
+            Changes are written to hydeclaw.toml and take effect on the next run.
+          </SheetDescription>
+        </SheetHeader>
+
+        <div className="space-y-4">
+          <Row label="Enabled">
+            <button
+              type="button"
+              onClick={() => setForm((f) => ({ ...f, enabled: !effective.enabled }))}
+              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${effective.enabled ? "bg-primary" : "bg-muted"}`}
+            >
+              <span className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${effective.enabled ? "translate-x-4" : "translate-x-0"}`} />
+            </button>
+          </Row>
+          <Row label="Cron schedule">
+            <Input className="h-7 text-xs font-mono" {...field("cron")} placeholder="0 3 * * 0" />
+          </Row>
+          <Row label="Min idle (min)">
+            <Input className="h-7 text-xs" type="number" min={0} {...field("min_idle_minutes")} />
+          </Row>
+          <Row label="Stale after (days)">
+            <Input className="h-7 text-xs" type="number" min={1} {...field("stale_after_days")} />
+          </Row>
+          <Row label="Archive after (days)">
+            <Input className="h-7 text-xs" type="number" min={1} {...field("archive_after_days")} />
+          </Row>
+          <Row label="Max repairs / run">
+            <Input className="h-7 text-xs" type="number" min={0} {...field("max_repairs_per_run")} />
+          </Row>
+          <Row label="Agent name">
+            <Input className="h-7 text-xs font-mono" {...field("agent_name")} placeholder="Hyde" />
+          </Row>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={handleSave} disabled={saving || Object.keys(form).length === 0}>
+            <Save className="h-3.5 w-3.5" />
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 // ── Curator widget ─────────────────────────────────────────────────────────
 
 function CuratorWidget() {
   const { data: status } = useCuratorStatus();
   const qc = useQueryClient();
   const [running, setRunning] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
-  if (!status?.enabled) return null;
+  if (!status) return null;
 
   const lastRun = status.last_run_at ? relativeTime(status.last_run_at) : "never";
 
@@ -297,18 +389,34 @@ function CuratorWidget() {
   };
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3 text-sm">
-        <span className="font-medium">Curator</span>
-        <span className="text-muted-foreground text-xs">
-          Last run: {lastRun} &middot; {status.last_phase1} transitions &middot; {status.last_phase2} repairs &middot; {status.last_phase3} LLM
-        </span>
+    <>
+      <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3 text-sm">
+          <span className="font-medium">Curator</span>
+          {status.enabled ? (
+            <span className="text-muted-foreground text-xs">
+              Last run: {lastRun} &middot; {status.last_phase1} transitions &middot; {status.last_phase2} repairs &middot; {status.last_phase3} LLM
+            </span>
+          ) : (
+            <Badge className="text-[10px] px-1.5 py-0 bg-muted text-muted-foreground border-border/50">
+              disabled
+            </Badge>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setShowSettings(true)}>
+            <Settings className="h-3.5 w-3.5" />
+          </Button>
+          {status.enabled && (
+            <Button size="sm" variant="outline" onClick={runNow} disabled={running}>
+              <RefreshCw className={`h-3 w-3 ${running ? "animate-spin" : ""}`} />
+              Run now
+            </Button>
+          )}
+        </div>
       </div>
-      <Button size="sm" variant="outline" onClick={runNow} disabled={running}>
-        <RefreshCw className={`h-3 w-3 ${running ? "animate-spin" : ""}`} />
-        Run now
-      </Button>
-    </div>
+      {showSettings && <CuratorSettingsSheet onClose={() => setShowSettings(false)} />}
+    </>
   );
 }
 
