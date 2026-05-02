@@ -22,6 +22,7 @@ pub(crate) mod services;
 pub(crate) mod auth;
 pub(crate) mod backup;
 pub(crate) mod curator;
+pub(crate) mod curator_decisions;
 pub(crate) mod providers;
 pub(crate) mod oauth;
 pub(crate) mod email_triggers;
