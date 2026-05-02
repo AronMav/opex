@@ -90,6 +90,20 @@ pub async fn resolve(
     Ok(rows > 0)
 }
 
+pub async fn list_pending(db: &PgPool, limit: i64) -> sqlx::Result<Vec<SkillRepairRow>> {
+    sqlx::query_as::<_, SkillRepairRow>(
+        "SELECT * FROM pending_skill_repairs WHERE status = 'pending' ORDER BY created_at ASC LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(db)
+    .await
+}
+
+pub async fn fail(db: &PgPool, id: Uuid, note: &str) -> sqlx::Result<()> {
+    resolve(db, id, "failed", Some(note)).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
