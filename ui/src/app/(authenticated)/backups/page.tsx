@@ -292,16 +292,16 @@ export default function BackupsPage() {
 
         <BackupSettings />
 
-        {combinedError && <ErrorBanner error={combinedError} />}
+        {combinedError && <ErrorBanner error={combinedError} className="mt-6" />}
 
         {backups.length === 0 ? (
-          <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-border bg-muted/10">
+          <div className="mt-6 flex h-40 items-center justify-center rounded-xl border border-dashed border-border bg-muted/10">
             <p className="font-mono text-sm text-muted-foreground/40 uppercase tracking-wider">
               {t("backups.empty")}
             </p>
           </div>
         ) : (
-          <div className="space-y-3 pb-8">
+          <div className="mt-6 space-y-3 pb-8">
             {backups.map((b) => (
               <div
                 key={b.filename}
