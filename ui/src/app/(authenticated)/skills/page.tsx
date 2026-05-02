@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiDelete, apiPut, apiPost } from "@/lib/api";
-import { useSkills, useCuratorStatus, useSkillVersions, qk } from "@/lib/queries";
+import { useSkills, useCuratorStatus, useSkillVersions, useCuratorDecisions, useSkillCuratorDecisions, qk } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import { relativeTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,7 @@ import {
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import type { SkillEntry } from "@/types/api";
+import type { SkillEntry, CuratorDecision } from "@/types/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -74,12 +74,47 @@ function StateBadge({ state }: { state: SkillEntry["state"] }) {
   );
 }
 
+// ── Curator decision badge ─────────────────────────────────────────────────
+
+function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefined }) {
+  if (!decision || decision.action === "archive") return null;
+
+  if (decision.action === "reject") {
+    return (
+      <Badge
+        title={decision.reason ?? ""}
+        className="text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20 shrink-0 cursor-help"
+      >
+        Curator: rejected
+      </Badge>
+    );
+  }
+
+  if (decision.action === "fix") {
+    const date = decision.decided_at
+      ? new Date(decision.decided_at).toLocaleDateString()
+      : "";
+    return (
+      <Badge
+        title={decision.reason ?? ""}
+        className="text-[10px] px-1.5 py-0 bg-muted text-muted-foreground border-border/50 shrink-0 cursor-help"
+      >
+        Curator: fixed · {date}
+      </Badge>
+    );
+  }
+
+  return null;
+}
+
 // ── Skill history sheet ────────────────────────────────────────────────────
 
 function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose: () => void }) {
   const qc = useQueryClient();
   const { data, isLoading } = useSkillVersions(skillName);
   const versions = data?.versions ?? [];
+  const { data: curatorData } = useSkillCuratorDecisions(skillName);
+  const curatorHistory = curatorData?.decisions ?? [];
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
@@ -176,6 +211,40 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
               })}
             </div>
           )}
+
+          {curatorHistory.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Curator History
+              </h3>
+              <div className="space-y-1.5">
+                {curatorHistory.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex items-start gap-2 rounded-md border border-border/40 bg-card/30 px-3 py-2"
+                  >
+                    <Badge
+                      className={
+                        d.action === "reject"
+                          ? "text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20 shrink-0 mt-0.5"
+                          : "text-[10px] px-1.5 py-0 bg-muted text-muted-foreground border-border/50 shrink-0 mt-0.5"
+                      }
+                    >
+                      {d.action}
+                    </Badge>
+                    <div className="flex-1 min-w-0">
+                      {d.reason && (
+                        <p className="text-xs text-foreground/70 truncate">{d.reason}</p>
+                      )}
+                      <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                        {relativeTime(d.decided_at)}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </SheetContent>
       </Sheet>
 
@@ -250,6 +319,7 @@ export default function SkillsPage() {
   const qc = useQueryClient();
   const { data, isLoading: loading, error } = useSkills();
   const allSkills: SkillEntry[] = Array.isArray(data) ? data : [];
+  const { data: curatorDecisions } = useCuratorDecisions();
 
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
   const [deletePending, setDeletePending] = useState<string | null>(null);
@@ -553,6 +623,7 @@ export default function SkillsPage() {
                         {skill.name}
                       </span>
                       <StateBadge state={skill.state} />
+                      <CuratorDecisionBadge decision={curatorDecisions?.[skill.name]} />
                       {skill.priority > 0 && (
                         <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-mono shrink-0">
                           p:{skill.priority}
