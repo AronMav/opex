@@ -148,7 +148,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::channels::routes())        // /api/channels/*, /api/agents/*/channels/*, /api/agents/*/hooks
         .merge(handlers::config::routes())          // /api/config/*, /api/restart, /api/tts/*, /api/canvas/*
         .merge(handlers::backup::routes())          // /api/backup/*, /api/restore
-        .merge(handlers::curator::routes())         // /api/curator/*
+        .merge(handlers::curator::routes())           // /api/curator/*
+        .merge(handlers::curator_decisions::routes()) // /api/curator-decisions/*, /api/skills/*/curator-decisions
         .merge(handlers::services::routes())        // /api/services/*, /api/containers/*
         .merge(handlers::webhooks::routes())        // /api/webhooks/*, /webhook/*
         .merge(handlers::oauth::routes())           // /api/oauth/*, /api/agents/*/oauth/*
