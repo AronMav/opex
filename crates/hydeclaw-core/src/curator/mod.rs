@@ -21,6 +21,22 @@ pub(crate) fn sanitize_skill_name(name: &str) -> String {
 
 // ── Agent task runner ──────────────────────────────────────────────────────────
 
+/// Run a single-turn verification task through a named agent.
+/// Uses max_iterations=1 and an empty tool list so the agent cannot call tools —
+/// it must respond with plain text (ACCEPT or REJECT).
+pub(crate) async fn run_verifier_task(
+    agents: &AgentCore,
+    agent_name: &str,
+    task: &str,
+) -> anyhow::Result<String> {
+    let engine = agents.get_engine(agent_name).await
+        .ok_or_else(|| anyhow::anyhow!("curator: agent not found: {agent_name}"))?;
+    engine
+        .run_subagent(task, 1, None, None, None, Some(vec![]))
+        .await
+        .map_err(|e| anyhow::anyhow!("curator: verifier session failed: {e}"))
+}
+
 /// Run a task through a named agent via `run_subagent`. Returns the agent's text response.
 pub(crate) async fn run_agent_task(
     agents: &AgentCore,
@@ -167,5 +183,20 @@ mod tests {
 
         assert_eq!(result.transitions, 0);
         assert!(result.log.is_empty());
+    }
+
+    #[test]
+    fn pinned_names_not_in_summary() {
+        let summary = "- name: web-search\n- name: code-methodology\n- name: memory-management";
+        let pinned = vec!["code-methodology".to_string(), "memory-management".to_string()];
+        let task = format!(
+            "NEVER touch pinned skills: [{}]\nSkills:\n{}",
+            pinned.join(", "),
+            summary
+        );
+        assert!(task.contains("code-methodology"));
+        assert!(task.contains("memory-management"));
+        let forbidden_section = task.split("Skills:").next().unwrap();
+        assert!(forbidden_section.contains("code-methodology"));
     }
 }
