@@ -157,6 +157,11 @@ if [[ -d "$SRC/docker" ]]; then
   (cd "$DEST" && docker compose -f docker/docker-compose.yml build postgres browser-renderer 2>&1 | tail -3) || true
   [[ -f "$DEST/docker/Dockerfile.sandbox" ]] && \
     (cd "$DEST" && docker build -f docker/Dockerfile.sandbox -t hydeclaw-sandbox:latest . 2>&1 | tail -3) || true
+  # MCP bridge base image (required by on-demand MCP containers)
+  [[ -f "$DEST/docker/mcp-bridge/Dockerfile" ]] && \
+    (cd "$DEST" && docker build -f docker/mcp-bridge/Dockerfile -t hydeclaw-mcp-bridge:latest docker/mcp-bridge/ 2>&1 | tail -3) || true
+  # Re-create on-demand MCP containers (--no-recreate skips already-created ones)
+  (cd "$DEST" && docker compose -f docker/docker-compose.yml --profile on-demand create --no-recreate 2>&1 | grep -E '(Created|Error|error)') || true
   ok "Docker compose and images updated"
 fi
 
