@@ -30,6 +30,19 @@ pub async fn analyze_and_evolve(
     while end > 0 && !response.is_char_boundary(end) { end -= 1; }
     let response_preview = &response[..end];
 
+    // Load available skill names so the LLM picks from real files, not invented ones
+    let available_skills = crate::skills::load_skills(crate::config::WORKSPACE_DIR).await;
+    let available_names: Vec<String> = available_skills
+        .iter()
+        .filter(|s| !matches!(s.meta.state, crate::skills::SkillState::Archived))
+        .map(|s| s.meta.name.clone())
+        .collect();
+    let available_str = if available_names.is_empty() {
+        "none".to_string()
+    } else {
+        available_names.join(", ")
+    };
+
     let analysis_prompt = format!(
         "You are a skill evolution analyzer. A scheduled task just completed.\n\n\
          Agent: {agent_name}\n\
@@ -37,12 +50,14 @@ pub async fn analyze_and_evolve(
          Success: {success}\n\
          Skills used: {skills_str}\n\
          Response (truncated): {response_preview}\n\n\
+         Available skill names (ONLY use these exact names): {available_str}\n\n\
          Respond with EXACTLY ONE line:\n\
          - SKIP — no changes needed\n\
-         - FIX <skill_name> — skill needs repair, explain what's wrong\n\
-         - DERIVED <parent_skill> <new_name> — create specialized variant\n\
-         - CAPTURED <new_name> — new pattern detected\n\n\
-         Be conservative."
+         - FIX <skill_name> — an existing skill needs repair (skill_name MUST be from the list above)\n\
+         - DERIVED <parent_skill> <new_name> — create specialized variant of an existing skill\n\
+         - CAPTURED <new_name> — capture a genuinely new reusable pattern as a skill\n\n\
+         IMPORTANT: skill_name must be an exact name from the available list. If nothing needs \
+         changing or no existing skill is at fault, respond SKIP."
     );
 
     let msg = Message {
@@ -70,17 +85,21 @@ pub async fn analyze_and_evolve(
         let skill_name = rest.split_whitespace().next().unwrap_or("");
         if !skill_name.is_empty() {
             let safe_skill_name = skill_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
-            tracing::info!(skill = skill_name, agent = agent_name, "skill evolution: FIX queued");
-            if let Ok(content) = tokio::fs::read_to_string(
-                format!("{}/skills/{safe_skill_name}.md", crate::config::WORKSPACE_DIR)
-            ).await {
-                let _ = crate::db::skill_versions::save_version(
-                    db, skill_name, &content, "pre-fix", None,
-                    Some(&format!("Before auto-fix for agent {agent_name}")),
-                ).await;
-            }
-            if let Err(e) = skill_repairs::enqueue(db, skill_name, agent_name, "fix", line).await {
-                tracing::warn!(error = %e, agent = agent_name, "skill evolution: failed to enqueue FIX repair");
+            let skill_path = format!("{}/skills/{safe_skill_name}.md", crate::config::WORKSPACE_DIR);
+            match tokio::fs::read_to_string(&skill_path).await {
+                Ok(content) => {
+                    let _ = crate::db::skill_versions::save_version(
+                        db, skill_name, &content, "pre-fix", None,
+                        Some(&format!("Before auto-fix for agent {agent_name}")),
+                    ).await;
+                    tracing::info!(skill = skill_name, agent = agent_name, "skill evolution: FIX queued");
+                    if let Err(e) = skill_repairs::enqueue(db, skill_name, agent_name, "fix", line).await {
+                        tracing::warn!(error = %e, agent = agent_name, "skill evolution: failed to enqueue FIX repair");
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(skill = skill_name, agent = agent_name, "skill evolution: FIX skipped — skill file not found");
+                }
             }
         }
     } else if let Some(rest) = line.strip_prefix("DERIVED ") {
