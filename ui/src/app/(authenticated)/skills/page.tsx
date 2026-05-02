@@ -297,14 +297,14 @@ function CuratorWidget() {
   };
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3 text-sm">
-        <span className="font-medium">Curator</span>
-        <span className="text-muted-foreground text-xs">
+    <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
+      <div className="flex flex-col xs:flex-row xs:items-center gap-1 xs:gap-3 text-sm min-w-0">
+        <span className="font-medium shrink-0">Curator</span>
+        <span className="text-muted-foreground text-xs truncate">
           Last run: {lastRun} &middot; {status.last_phase1} transitions &middot; {status.last_phase2} repairs &middot; {status.last_phase3} LLM
         </span>
       </div>
-      <Button size="sm" variant="outline" onClick={runNow} disabled={running}>
+      <Button size="sm" variant="outline" onClick={runNow} disabled={running} className="shrink-0 self-end sm:self-auto">
         <RefreshCw className={`h-3 w-3 ${running ? "animate-spin" : ""}`} />
         Run now
       </Button>
@@ -517,11 +517,11 @@ export default function SkillsPage() {
             </div>
           </div>
 
-          <div className="mt-4 flex items-center justify-end gap-3">
-            <Button variant="ghost" onClick={() => setShowForm(false)}>
+          <div className="mt-4 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3">
+            <Button variant="ghost" onClick={() => setShowForm(false)} className="w-full sm:w-auto">
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleSave} disabled={saving}>
+            <Button onClick={handleSave} disabled={saving} className="w-full sm:w-auto">
               <Save className="h-4 w-4" />
               {saving ? t("skills.saving") : t("skills.save_skill")}
             </Button>
@@ -672,19 +672,19 @@ export default function SkillsPage() {
                 )}
 
                 {/* Footer: instructions size + actions */}
-                <div className="flex items-center justify-between pt-1 border-t border-border/30">
-                  <div className="flex items-center gap-1.5">
-                    <FileText className="h-3 w-3 text-muted-foreground/50" />
-                    <span className="text-xs text-muted-foreground/60">
+                <div className="flex flex-col xs:flex-row xs:items-center justify-between gap-2 pt-1 border-t border-border/30">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <FileText className="h-3 w-3 text-muted-foreground/50 shrink-0" />
+                    <span className="text-xs text-muted-foreground/60 truncate">
                       {t("skills.instructions_size")} {t("skills.instructions_chars", { count: skill.instructions_len.toLocaleString() })}
                     </span>
                     {skill.last_used_at && (
-                      <span className="text-xs text-muted-foreground/50">
+                      <span className="text-xs text-muted-foreground/50 shrink-0">
                         &middot; used {relativeTime(skill.last_used_at)}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 shrink-0 self-end xs:self-auto">
                     <Button
                       variant="outline"
                       size="sm"
@@ -701,7 +701,7 @@ export default function SkillsPage() {
                       className="h-7 text-xs"
                     >
                       <Pencil className="h-3 w-3" />
-                      {t("common.edit")}
+                      <span className="hidden sm:inline">{t("common.edit")}</span>
                     </Button>
                     <Button
                       variant="outline"
@@ -724,7 +724,7 @@ export default function SkillsPage() {
                       className="h-7 text-xs text-destructive hover:text-destructive"
                     >
                       <Trash2 className="h-3 w-3" />
-                      {t("common.delete")}
+                      <span className="hidden sm:inline">{t("common.delete")}</span>
                     </Button>
                   </div>
                 </div>
