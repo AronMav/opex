@@ -1,9 +1,6 @@
-//! Phase 3 — Agent-driven skill consolidation.
-//!
-//! Runs ONE Hyde agent session that analyses the active skill collection and
-//! uses workspace tools to consolidate it directly (no JSON parsing, no
-//! command enum, no fragile prompt templating).
+//! Phase 3 — Analyst / Verifier / Executor skill consolidation.
 
+use serde::Deserialize;
 use crate::gateway::clusters::AgentCore;
 
 // ── Public result type ────────────────────────────────────────────────────────
@@ -13,78 +10,104 @@ pub struct ConsolidationResult {
     pub log: Vec<String>,
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Proposal data types ───────────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub(crate) struct CapabilityEntry {
+    pub capability: String,
+    pub from_quote: String,
+    pub covered_in: String,
+    pub covering_quote: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+pub(crate) enum Proposal {
+    Archive {
+        skill: String,
+        replacement: String,
+        #[allow(dead_code)]
+        reason: String,
+        capability_map: Vec<CapabilityEntry>,
+    },
+    Merge {
+        sources: Vec<String>,
+        into: String,
+        reason: String,
+    },
+    Fix {
+        skill: String,
+        description: String,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ProposalsFile {
+    pub proposals: Vec<Proposal>,
+}
+
+// ── Entry point stub (filled in Task 6) ──────────────────────────────────────
 
 pub async fn run(
-    workspace_dir: &str,
-    agents: &AgentCore,
-    agent_name: &str,
+    _workspace_dir: &str,
+    _agents: &AgentCore,
+    _agent_name: &str,
 ) -> anyhow::Result<ConsolidationResult> {
-    let skills = crate::skills::load_skills(workspace_dir).await;
-    let active: Vec<_> = skills
-        .iter()
-        .filter(|s| !matches!(s.meta.state, crate::skills::SkillState::Archived))
-        .collect();
+    Ok(ConsolidationResult { commands_executed: 0, log: vec!["not yet implemented".into()] })
+}
 
-    if active.is_empty() {
-        return Ok(ConsolidationResult {
-            commands_executed: 0,
-            log: vec!["no active skills".into()],
-        });
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proposals_valid_json_parses() {
+        let json = r##"{
+            "proposals": [
+                {
+                    "action": "archive",
+                    "skill": "daily-reflection",
+                    "replacement": "self-improvement",
+                    "reason": "covered",
+                    "capability_map": [
+                        {
+                            "capability": "journal format",
+                            "from_quote": "Journal: YYYY-MM-DD",
+                            "covered_in": "self-improvement Section 1",
+                            "covering_quote": "Journal: YYYY-MM-DD"
+                        }
+                    ]
+                },
+                {
+                    "action": "fix",
+                    "skill": "research-strategy",
+                    "description": "add section on source validation"
+                }
+            ]
+        }"##;
+        let parsed: ProposalsFile = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.proposals.len(), 2);
+        match &parsed.proposals[0] {
+            Proposal::Archive { skill, capability_map, .. } => {
+                assert_eq!(skill, "daily-reflection");
+                assert_eq!(capability_map.len(), 1);
+            }
+            _ => panic!("expected Archive"),
+        }
     }
 
-    let pinned: Vec<String> = active
-        .iter()
-        .filter(|s| s.meta.pinned.unwrap_or(false))
-        .map(|s| s.meta.name.clone())
-        .collect();
+    #[test]
+    fn proposals_invalid_json_returns_err() {
+        let result: Result<ProposalsFile, _> = serde_json::from_str("not json {{");
+        assert!(result.is_err());
+    }
 
-    let summary = active
-        .iter()
-        .map(|s| {
-            format!(
-                "- name: {}\n  description: {}\n  state: {:?}\n  last_used_at: {}\n  triggers: [{}]",
-                s.meta.name,
-                s.meta.description,
-                s.meta.state,
-                s.meta.last_used_at.as_deref().unwrap_or("never"),
-                s.meta.triggers.join(", ")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let task = format!(
-        "[Curator: skill consolidation pass]\n\
-         You are reviewing the active skill collection. Use your workspace tools \
-         (workspace_read / workspace_write / workspace_edit) and skill-management \
-         skills to consolidate where appropriate.\n\n\
-         Rules:\n\
-         - NEVER touch pinned skills: [{}]\n\
-         - Do NOT delete skills — set state: archived in frontmatter instead\n\
-         - Allowed actions: archive (set state), merge two-or-more sources into one new skill \
-           (then archive sources), fix a skill body, rename a skill (rewrite filename + frontmatter name)\n\
-         - Maximum 5 actions per pass\n\
-         - Skip silently if nothing needs changing\n\
-         - 'Never used' (last_used_at=null) is NOT a reason to archive a skill\n\n\
-         MANDATORY PROCESS BEFORE ANY ARCHIVE OR MERGE:\n\
-         1. Use workspace_read to read the FULL content of the skill you plan to archive\n\
-         2. Use workspace_read to read the FULL content of the replacement skill\n\
-         3. List every distinct capability, use case, and instruction section in the archived skill\n\
-         4. For each item, find the exact section in the replacement that covers it\n\
-         5. Only proceed if EVERY item has a match. If even one unique capability is missing — SKIP, do not archive.\n\
-         This is not optional. Archiving based on name/description similarity alone is forbidden.\n\n\
-         Skills (summary only — read full files before deciding):\n{}\n\n\
-         When done, reply with a short bullet list of the actions you took (one line each).",
-        pinned.join(", "),
-        summary
-    );
-
-    let report = crate::curator::run_agent_task(agents, agent_name, &task).await?;
-
-    // commands_executed is always 0 — the agent's free-form report is the source of truth.
-    Ok(ConsolidationResult {
-        commands_executed: 0,
-        log: report.lines().map(str::to_string).collect(),
-    })
+    #[test]
+    fn proposals_unknown_action_returns_err() {
+        let json = r#"{"proposals": [{"action": "delete", "skill": "x"}]}"#;
+        let result: Result<ProposalsFile, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
 }
