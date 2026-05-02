@@ -356,6 +356,11 @@ pub(crate) async fn api_update_agent(
                 preserve_tool_calls: Some(c.preserve_tool_calls),
                 preserve_last_n: Some(c.preserve_last_n),
                 max_context_tokens: c.max_context_tokens,
+                protect_first_n: Some(c.protect_first_n),
+                summary_target_ratio: Some(c.summary_target_ratio),
+                anti_thrash_min_savings: Some(c.anti_thrash_min_savings),
+                anti_thrash_max_skips: Some(c.anti_thrash_max_skips),
+                extract_to_memory: Some(c.extract_to_memory),
             }));
         }
         if payload.session.is_none() {
