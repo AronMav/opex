@@ -319,4 +319,90 @@ mod tests {
     fn parse_with_whitespace() {
         assert_eq!(parse_duration(" 5m "), Duration::from_secs(300));
     }
+
+    // ── probe_port_ready tests ─────────────────────────────────────────────────
+
+    /// Bind to an ephemeral port, capture it, drop the listener — the port is now
+    /// "free but recently used", a stable test fixture for "no listener" scenarios.
+    async fn pick_unused_port() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral");
+        let port = listener.local_addr().expect("local_addr").port();
+        drop(listener);
+        port
+    }
+
+    /// Construct a ContainerManager with no MCPs (just to call probe_port_ready).
+    /// Docker URL is bogus — probe_port_ready does not touch Docker.
+    fn test_container_manager() -> ContainerManager {
+        ContainerManager::new("http://127.0.0.1:1", HashMap::new())
+            .expect("ContainerManager::new")
+    }
+
+    #[tokio::test]
+    async fn probe_port_ready_returns_ok_when_port_already_open() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let cm = test_container_manager();
+        let start = std::time::Instant::now();
+        cm.probe_port_ready(port, Duration::from_secs(2))
+            .await
+            .expect("port already listening — should return Ok");
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "expected fast return, took {:?}",
+            start.elapsed()
+        );
+        // listener stays alive until end of scope
+        drop(listener);
+    }
+
+    #[tokio::test]
+    async fn probe_port_ready_succeeds_when_listener_starts_mid_poll() {
+        let cm = test_container_manager();
+        for attempt in 0..3 {
+            let port = pick_unused_port().await;
+            // Spawn delayed listener — re-bind same port after 400ms.
+            let bind_handle = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                tokio::net::TcpListener::bind(("127.0.0.1", port)).await
+            });
+            match cm.probe_port_ready(port, Duration::from_secs(3)).await {
+                Ok(()) => {
+                    // Drop the listener task cleanly.
+                    let _ = bind_handle.await;
+                    return;
+                }
+                Err(e) if attempt < 2 => {
+                    tracing::warn!(?e, attempt, "port-reuse race on this OS, retrying");
+                    let _ = bind_handle.await;
+                    continue;
+                }
+                Err(e) => panic!("probe_port_ready failed after 3 attempts: {e}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_port_ready_returns_err_when_port_never_opens() {
+        let port = pick_unused_port().await;
+        let cm = test_container_manager();
+        let start = std::time::Instant::now();
+        let err = cm
+            .probe_port_ready(port, Duration::from_millis(400))
+            .await
+            .expect_err("port never opens — should return Err");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "expected fast timeout (~400ms), took {:?}",
+            elapsed
+        );
+        let msg = err.to_string();
+        assert!(msg.contains("not ready within"), "unexpected error: {msg}");
+        assert!(msg.contains(&port.to_string()), "error should include port: {msg}");
+    }
 }
