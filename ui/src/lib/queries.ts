@@ -34,6 +34,7 @@ import type {
   OAuthBinding,
   AgentTask,
   CuratorStatus,
+  CuratorConfig,
   CuratorRun,
   SkillVersion,
   CuratorDecision,
@@ -268,6 +269,13 @@ export function useSkillVersions(skillName: string) {
     queryKey: [...qk.skills, skillName, "versions"],
     queryFn: () => apiGet<{ versions: SkillVersion[] }>(`/api/skills/${encodeURIComponent(skillName)}/versions`),
     enabled: !!skillName,
+  })
+}
+
+export function useCuratorConfig() {
+  return useQuery({
+    queryKey: ["curator", "config"] as const,
+    queryFn: () => apiGet<CuratorConfig>("/api/curator/config"),
   })
 }
 

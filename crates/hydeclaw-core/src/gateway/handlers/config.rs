@@ -231,9 +231,8 @@ pub(crate) async fn api_get_config(
             "min_idle_minutes": config.curator.min_idle_minutes,
             "stale_after_days": config.curator.stale_after_days,
             "archive_after_days": config.curator.archive_after_days,
-            "provider_connection": config.curator.provider_connection,
-            "model": config.curator.model,
             "max_repairs_per_run": config.curator.max_repairs_per_run,
+            "agent_name": config.curator.agent_name,
         },
         "agent_tool": {
             "message_wait_for_idle_secs": config.agent_tool.message_wait_for_idle_secs,
@@ -265,9 +264,8 @@ pub(crate) struct ConfigUpdatePayload {
     curator_min_idle_minutes: Option<u32>,
     curator_stale_after_days: Option<u32>,
     curator_archive_after_days: Option<u32>,
-    curator_provider_connection: Option<String>,
-    curator_model: Option<String>,
     curator_max_repairs_per_run: Option<u32>,
+    curator_agent_name: Option<String>,
     // [agent_tool] — multi-agent timeouts (UI-configurable).
     agent_tool_message_wait_for_idle_secs: Option<u64>,
     agent_tool_message_result_secs: Option<u64>,
@@ -402,9 +400,8 @@ pub(crate) async fn api_update_config(
         || payload.curator_min_idle_minutes.is_some()
         || payload.curator_stale_after_days.is_some()
         || payload.curator_archive_after_days.is_some()
-        || payload.curator_provider_connection.is_some()
-        || payload.curator_model.is_some()
-        || payload.curator_max_repairs_per_run.is_some())
+        || payload.curator_max_repairs_per_run.is_some()
+        || payload.curator_agent_name.is_some())
         && let Err(e) = crate::config::update_curator_config(
             "config/hydeclaw.toml",
             payload.curator_enabled,
@@ -412,9 +409,8 @@ pub(crate) async fn api_update_config(
             payload.curator_min_idle_minutes,
             payload.curator_stale_after_days,
             payload.curator_archive_after_days,
-            payload.curator_provider_connection.as_deref(),
-            payload.curator_model.as_deref(),
             payload.curator_max_repairs_per_run,
+            payload.curator_agent_name.as_deref(),
         )
     {
         restore_and_fail!("failed to update curator config", e);

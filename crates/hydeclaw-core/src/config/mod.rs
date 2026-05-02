@@ -230,10 +230,6 @@ pub struct CuratorConfig {
     pub stale_after_days: u32,
     #[serde(default = "default_curator_archive_after_days")]
     pub archive_after_days: u32,
-    #[serde(default = "default_curator_provider_connection")]
-    pub provider_connection: String,
-    #[serde(default)]
-    pub model: String,
     #[serde(default = "default_curator_max_repairs_per_run")]
     pub max_repairs_per_run: u32,
     #[serde(default = "default_curator_agent_name")]
@@ -244,7 +240,6 @@ fn default_curator_cron() -> String { "0 3 * * 0".to_string() }
 fn default_curator_min_idle_minutes() -> u32 { 30 }
 fn default_curator_stale_after_days() -> u32 { 30 }
 fn default_curator_archive_after_days() -> u32 { 90 }
-fn default_curator_provider_connection() -> String { String::new() }
 fn default_curator_max_repairs_per_run() -> u32 { 10 }
 fn default_curator_agent_name() -> String { "Hyde".to_string() }
 
@@ -256,8 +251,6 @@ impl Default for CuratorConfig {
             min_idle_minutes: default_curator_min_idle_minutes(),
             stale_after_days: default_curator_stale_after_days(),
             archive_after_days: default_curator_archive_after_days(),
-            provider_connection: default_curator_provider_connection(),
-            model: String::new(),
             max_repairs_per_run: default_curator_max_repairs_per_run(),
             agent_name: default_curator_agent_name(),
         }
@@ -1410,9 +1403,8 @@ pub fn update_curator_config(
     min_idle_minutes: Option<u32>,
     stale_after_days: Option<u32>,
     archive_after_days: Option<u32>,
-    provider_connection: Option<&str>,
-    model: Option<&str>,
     max_repairs_per_run: Option<u32>,
+    agent_name: Option<&str>,
 ) -> Result<()> {
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
@@ -1428,9 +1420,8 @@ pub fn update_curator_config(
     if let Some(v) = min_idle_minutes { doc["curator"]["min_idle_minutes"] = toml_edit::value(i64::from(v)); }
     if let Some(v) = stale_after_days { doc["curator"]["stale_after_days"] = toml_edit::value(i64::from(v)); }
     if let Some(v) = archive_after_days { doc["curator"]["archive_after_days"] = toml_edit::value(i64::from(v)); }
-    if let Some(v) = provider_connection { doc["curator"]["provider_connection"] = toml_edit::value(v); }
-    if let Some(v) = model { doc["curator"]["model"] = toml_edit::value(v); }
     if let Some(v) = max_repairs_per_run { doc["curator"]["max_repairs_per_run"] = toml_edit::value(i64::from(v)); }
+    if let Some(v) = agent_name { doc["curator"]["agent_name"] = toml_edit::value(v); }
 
     std::fs::write(config_path, doc.to_string())
         .with_context(|| format!("failed to write config: {config_path}"))?;
