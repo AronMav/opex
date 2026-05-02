@@ -86,8 +86,10 @@ impl AgentEngine {
             user_message_id,
             incoming_context,
             channel,
+            compressor,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
+        let mut compressor = compressor;
 
         // Emit SessionId so the UI can track which session is active.
         let _ = s
@@ -108,6 +110,7 @@ impl AgentEngine {
             user_message_id,
             incoming_context,
             channel,
+            compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
         };
 
         // Slash-command early exit
@@ -133,6 +136,7 @@ impl AgentEngine {
                 session_id,
                 boot_for_execute.messages.len(),
                 Some(user_message_id),
+                compressor,
             );
             finalize::finalize(
                 fin_ctx,
@@ -149,7 +153,7 @@ impl AgentEngine {
 
         // Full pipeline — `cancel` token is the same one registered with the
         // StreamRegistry, so POST /api/chat/{id}/abort propagates here (C3).
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel).await?;
+        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor).await?;
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
@@ -159,6 +163,7 @@ impl AgentEngine {
             // result or intermediate assistant with tool_calls) persisted by
             // pipeline::execute. For no-tool turns this equals user_message_id.
             Some(outcome.final_parent_msg_id),
+            compressor,
         );
         let fin_outcome = finalize::execute_status_to_finalize(
             outcome.status,
@@ -220,8 +225,10 @@ impl AgentEngine {
             user_message_id,
             incoming_context,
             channel,
+            compressor,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
+        let mut compressor = compressor;
         let boot_for_execute = BootstrapOutcome {
             lifecycle_guard: None,
             command_output: None,
@@ -234,6 +241,7 @@ impl AgentEngine {
             user_message_id,
             incoming_context,
             channel,
+            compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
         };
 
         // Channel adapters render slash commands as plain TextDelta
@@ -246,6 +254,7 @@ impl AgentEngine {
                 session_id,
                 boot_for_execute.messages.len(),
                 Some(user_message_id),
+                compressor,
             );
             return finalize::finalize(
                 fin_ctx,
@@ -260,7 +269,7 @@ impl AgentEngine {
         }
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel).await?;
+        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor).await?;
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
@@ -270,6 +279,7 @@ impl AgentEngine {
             // result or intermediate assistant with tool_calls) persisted by
             // pipeline::execute. For no-tool turns this equals user_message_id.
             Some(outcome.final_parent_msg_id),
+            compressor,
         );
         let fin_outcome = finalize::execute_status_to_finalize(
             outcome.status,
@@ -317,8 +327,10 @@ impl AgentEngine {
             user_message_id,
             incoming_context,
             channel,
+            compressor,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
+        let mut compressor = compressor;
         let boot_for_execute = BootstrapOutcome {
             lifecycle_guard: None,
             command_output: None,
@@ -331,6 +343,7 @@ impl AgentEngine {
             user_message_id,
             incoming_context,
             channel,
+            compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
         };
 
         if let Some(text) = command_output.take() {
@@ -342,6 +355,7 @@ impl AgentEngine {
                 session_id,
                 boot_for_execute.messages.len(),
                 Some(user_message_id),
+                compressor,
             );
             return finalize::finalize(
                 fin_ctx,
@@ -356,7 +370,7 @@ impl AgentEngine {
         }
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel).await?;
+        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor).await?;
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
@@ -366,6 +380,7 @@ impl AgentEngine {
             // result or intermediate assistant with tool_calls) persisted by
             // pipeline::execute. For no-tool turns this equals user_message_id.
             Some(outcome.final_parent_msg_id),
+            compressor,
         );
         let fin_outcome = finalize::execute_status_to_finalize(
             outcome.status,

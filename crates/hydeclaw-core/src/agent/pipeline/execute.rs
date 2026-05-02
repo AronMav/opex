@@ -69,6 +69,7 @@ pub async fn execute<S: EventSink>(
     bootstrap_outcome: BootstrapOutcome,
     sink: &mut S,
     cancel: CancellationToken,
+    compressor: &mut crate::agent::compressor::Compressor,
 ) -> anyhow::Result<ExecuteOutcome> {
     let BootstrapOutcome {
         session_id,
@@ -82,6 +83,7 @@ pub async fn execute<S: EventSink>(
         user_message_id,
         incoming_context,
         channel,
+        compressor: _, // passed separately as &mut parameter
     } = bootstrap_outcome;
 
     // last_msg_id threads the DB parent chain through intermediate assistant
@@ -171,6 +173,29 @@ pub async fn execute<S: EventSink>(
             &mut context_chars,
         );
 
+        // Proactive compression: check token budget from last response
+        if let Some(cmp_cfg) = engine
+            .cfg()
+            .agent
+            .compaction
+            .as_ref()
+            .filter(|c| c.enabled && compressor.should_compress(c))
+        {
+            let active_provider: &dyn crate::agent::providers::LlmProvider =
+                engine.cfg().compaction_provider
+                    .as_deref()
+                    .unwrap_or_else(|| engine.cfg().provider.as_ref());
+            if let Err(e) = crate::agent::history::compress_messages(
+                &mut messages,
+                compressor,
+                cmp_cfg,
+                active_provider,
+                Some(engine.cfg().agent.language.as_str()),
+            ).await {
+                tracing::warn!(error = %e, "proactive compression failed, continuing");
+            }
+        }
+
         // 4. Call LLM with a forwarder that emits chunks directly to the sink
         //    as they arrive. No spawned task, no oneshot, no batching — the
         //    sink stays owned by `execute` and `forward_chunks_into_sink` drives
@@ -251,6 +276,9 @@ pub async fn execute<S: EventSink>(
                 cache_creation_tokens: usage.cache_creation_tokens,
                 reasoning_tokens: usage.reasoning_tokens,
             })).await;
+            // Update compressor's token count so proactive compression can fire
+            // on the next iteration when the context budget is exceeded.
+            compressor.update_token_count(usage.input_tokens);
         }
 
         // Fire-and-forget usage recording (mirrors engine_sse.rs line 405)

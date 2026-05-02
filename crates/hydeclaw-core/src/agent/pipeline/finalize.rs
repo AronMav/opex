@@ -313,6 +313,9 @@ pub struct FinalizeContext {
     /// LLM model name (e.g. `"gpt-4o-mini"`) — captured for structured
     /// failure logging.
     pub llm_model: Option<String>,
+    /// Compressor state to persist to DB so the next session turn can resume
+    /// anti-thrash counters and summary state without restarting from zero.
+    pub compressor: crate::agent::compressor::Compressor,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -446,6 +449,23 @@ pub async fn finalize<S: EventSink>(
         }
     };
 
+    // Persist compaction state so the next session turn can resume with the
+    // correct anti-thrash counters and prior summary text.
+    let state_json = ctx.compressor.to_json();
+    if let Err(e) = crate::db::compaction::set_compaction_state(
+        &ctx.db,
+        ctx.session_id,
+        state_json,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            session_id = %ctx.session_id,
+            "failed to save compaction_state"
+        );
+    }
+
     Ok(out)
 }
 
@@ -457,6 +477,7 @@ pub fn finalize_context_from_engine(
     session_id: Uuid,
     message_count: usize,
     user_message_id: Option<Uuid>,
+    compressor: crate::agent::compressor::Compressor,
 ) -> FinalizeContext {
     FinalizeContext {
         db: engine.cfg().db.clone(),
@@ -471,6 +492,7 @@ pub fn finalize_context_from_engine(
         bg_tasks: engine.state().bg_tasks.clone(),
         llm_provider: Some(engine.cfg().provider.name().to_string()),
         llm_model: Some(engine.current_model()),
+        compressor,
     }
 }
 
@@ -641,6 +663,7 @@ mod tests {
             bg_tasks: Arc::new(TaskTracker::new()),
             llm_provider: None,
             llm_model: None,
+            compressor: crate::agent::compressor::Compressor::new(128_000),
         }
     }
 

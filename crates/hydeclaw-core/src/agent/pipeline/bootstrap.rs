@@ -35,6 +35,8 @@ pub struct BootstrapOutcome {
     pub incoming_context: serde_json::Value,
     /// Channel name (e.g. "telegram", "ui"); empty string when unavailable.
     pub channel: String,
+    /// Proactive compression state loaded from DB (or fresh if no prior session state).
+    pub compressor: crate::agent::compressor::Compressor,
 }
 
 /// Input context for the bootstrap phase.
@@ -78,6 +80,11 @@ pub async fn bootstrap<S: EventSink>(
     ctx: BootstrapContext<'_>,
     sink: &mut S,
 ) -> anyhow::Result<BootstrapOutcome> {
+    // Compute context_limit once for Compressor construction (used on all paths below).
+    let context_limit = crate::agent::pipeline::llm_call::default_context_for_model(
+        &engine.cfg().agent.model,
+    ) as u32;
+
     // 1. Build context (session_id + message history + tool definitions)
     let crate::agent::context_builder::ContextSnapshot {
         session_id,
@@ -252,6 +259,15 @@ pub async fn bootstrap<S: EventSink>(
         .compact_messages(&mut messages, Some(&loop_detector))
         .await;
 
+    // Load compaction state from DB so proactive compression in execute() can
+    // resume where the previous session turn left off (anti-thrash counters, summary).
+    let compaction_state =
+        crate::db::compaction::get_compaction_state(&engine.cfg().db, session_id)
+            .await
+            .unwrap_or(None);
+    let compressor =
+        crate::agent::compressor::Compressor::load(compaction_state, context_limit);
+
     Ok(BootstrapOutcome {
         session_id,
         enriched_text,
@@ -264,6 +280,7 @@ pub async fn bootstrap<S: EventSink>(
         user_message_id,
         incoming_context: ctx.msg.context.clone(),
         channel: ctx.msg.channel.clone(),
+        compressor,
     })
 }
 
