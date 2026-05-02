@@ -17,6 +17,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/skills/{skill}/versions", get(api_skill_versions))
         .route("/api/skills/{skill}/versions/{vid}", get(api_skill_version_get))
         .route("/api/skills/{skill}/versions/{vid}/restore", axum::routing::post(api_skill_version_restore))
+        .route("/api/skills/{skill}/snapshot", axum::routing::post(api_skill_snapshot))
         .route("/api/agents/{name}/skills", get(api_skills_list))
         .route("/api/agents/{name}/skills/{skill}", get(api_skill_get).put(api_skill_upsert).delete(api_skill_delete))
 }
@@ -450,6 +451,33 @@ pub(crate) async fn api_skill_version_restore(
             (StatusCode::INTERNAL_SERVER_ERROR,
              Json(serde_json::json!({"error": e.to_string()}))).into_response()
         }
+    }
+}
+
+/// POST /api/skills/{skill}/snapshot
+/// Saves current skill content to version history (manual snapshot).
+pub(crate) async fn api_skill_snapshot(
+    State(infra): State<InfraServices>,
+    axum::extract::Path(skill_name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let safe = crate::curator::sanitize_skill_name(&skill_name);
+    let path = std::path::Path::new(crate::config::WORKSPACE_DIR)
+        .join("skills")
+        .join(format!("{safe}.md"));
+
+    let content = match tokio::fs::read_to_string(&path).await {
+        Ok(c) => c,
+        Err(_) => return (StatusCode::NOT_FOUND,
+                          Json(serde_json::json!({"error": "skill not found"}))).into_response(),
+    };
+
+    match crate::db::skill_versions::save_version(
+        &infra.db, &skill_name, &content, "snapshot", None,
+        Some("manual snapshot"),
+    ).await {
+        Ok(id) => Json(serde_json::json!({"ok": true, "version_id": id})).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
+                   Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }
 }
 
