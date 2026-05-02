@@ -128,6 +128,16 @@ export interface CuratorRun {
   error: string | null;
 }
 
+export interface CuratorDecision {
+  action: "archive" | "reject" | "fix";
+  reason: string | null;
+  decided_at: string;
+}
+
+export interface SkillCuratorDecisions {
+  decisions: Array<CuratorDecision & { id: number; skill_name: string }>;
+}
+
 export interface YamlToolEntry {
   name: string;
   description: string;

@@ -36,6 +36,8 @@ import type {
   CuratorStatus,
   CuratorRun,
   SkillVersion,
+  CuratorDecision,
+  SkillCuratorDecisions,
 } from "@/types/api"
 
 // ── Query Keys ──────────────────────────────────────────────────────────────
@@ -78,6 +80,8 @@ export const qk = {
     ["session-failures", agent, limit] as const,
   curatorStatus: ["curator", "status"] as const,
   curatorRuns: ["curator", "runs"] as const,
+  curatorDecisions: ["curator-decisions"] as const,
+  skillCuratorDecisions: (name: string) => ["skills", name, "curator-decisions"] as const,
 }
 
 // ── Query Hooks ─────────────────────────────────────────────────────────────
@@ -263,6 +267,24 @@ export function useSkillVersions(skillName: string) {
   return useQuery<{ versions: SkillVersion[] }>({
     queryKey: [...qk.skills, skillName, "versions"],
     queryFn: () => apiGet<{ versions: SkillVersion[] }>(`/api/skills/${encodeURIComponent(skillName)}/versions`),
+    enabled: !!skillName,
+  })
+}
+
+export function useCuratorDecisions() {
+  return useQuery({
+    queryKey: qk.curatorDecisions,
+    queryFn: () => apiGet<Record<string, CuratorDecision>>("/api/curator-decisions/recent"),
+    staleTime: 60_000,
+  })
+}
+
+export function useSkillCuratorDecisions(skillName: string) {
+  return useQuery({
+    queryKey: qk.skillCuratorDecisions(skillName),
+    queryFn: () => apiGet<SkillCuratorDecisions>(
+      `/api/skills/${encodeURIComponent(skillName)}/curator-decisions?limit=5`
+    ),
     enabled: !!skillName,
   })
 }
