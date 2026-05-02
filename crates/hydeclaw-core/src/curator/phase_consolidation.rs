@@ -65,7 +65,11 @@ pub async fn run(
          - Allowed actions: archive (set state), merge two-or-more sources into one new skill \
            (then archive sources), fix a skill body, rename a skill (rewrite filename + frontmatter name)\n\
          - Maximum 5 actions per pass\n\
-         - Skip silently if nothing needs changing\n\n\
+         - Skip silently if nothing needs changing\n\
+         - IMPORTANT: Only archive a skill if it is a CONFIRMED DUPLICATE of another existing skill. \
+           Do NOT archive skills just because last_used_at is 'never' or 'null' — a skill that has \
+           never been triggered may still be valuable. 'Never used' is NOT a reason to archive.\n\
+         - Only archive state=stale skills if they have no unique content not covered elsewhere.\n\n\
          Skills:\n{}\n\n\
          When done, reply with a short bullet list of the actions you took (one line each).",
         pinned.join(", "),
