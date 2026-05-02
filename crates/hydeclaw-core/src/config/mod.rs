@@ -53,6 +53,9 @@ pub struct AppConfig {
     /// Built-in backup scheduler (disabled by default).
     #[serde(default)]
     pub backup: BackupConfig,
+    /// Scheduled skill curator (disabled by default).
+    #[serde(default)]
+    pub curator: CuratorConfig,
     /// Phase 62 RES-03 cleanup scheduler tuning (session_events WAL retention).
     #[serde(default)]
     pub cleanup: CleanupConfig,
@@ -208,6 +211,51 @@ impl Default for BackupConfig {
             cron: default_backup_cron(),
             retention_days: default_backup_retention_days(),
             postgres_container: default_postgres_container(),
+        }
+    }
+}
+
+// ── CuratorConfig ─────────────────────────────────────────────────────────────
+
+/// Scheduled skill curator configuration.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct CuratorConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_curator_cron")]
+    pub cron: String,
+    #[serde(default = "default_curator_min_idle_minutes")]
+    pub min_idle_minutes: u32,
+    #[serde(default = "default_curator_stale_after_days")]
+    pub stale_after_days: u32,
+    #[serde(default = "default_curator_archive_after_days")]
+    pub archive_after_days: u32,
+    #[serde(default = "default_curator_provider_connection")]
+    pub provider_connection: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default = "default_curator_max_repairs_per_run")]
+    pub max_repairs_per_run: u32,
+}
+
+fn default_curator_cron() -> String { "0 3 * * 0".to_string() }
+fn default_curator_min_idle_minutes() -> u32 { 30 }
+fn default_curator_stale_after_days() -> u32 { 30 }
+fn default_curator_archive_after_days() -> u32 { 90 }
+fn default_curator_provider_connection() -> String { String::new() }
+fn default_curator_max_repairs_per_run() -> u32 { 10 }
+
+impl Default for CuratorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cron: default_curator_cron(),
+            min_idle_minutes: default_curator_min_idle_minutes(),
+            stale_after_days: default_curator_stale_after_days(),
+            archive_after_days: default_curator_archive_after_days(),
+            provider_connection: default_curator_provider_connection(),
+            model: String::new(),
+            max_repairs_per_run: default_curator_max_repairs_per_run(),
         }
     }
 }
@@ -1345,6 +1393,41 @@ pub fn update_backup_config(
     Ok(())
 }
 
+/// Update [curator] section in TOML config file.
+pub fn update_curator_config(
+    config_path: &str,
+    enabled: Option<bool>,
+    cron: Option<&str>,
+    min_idle_minutes: Option<u32>,
+    stale_after_days: Option<u32>,
+    archive_after_days: Option<u32>,
+    provider_connection: Option<&str>,
+    model: Option<&str>,
+    max_repairs_per_run: Option<u32>,
+) -> Result<()> {
+    let content = std::fs::read_to_string(config_path)
+        .with_context(|| format!("failed to read config: {config_path}"))?;
+    let mut doc: toml_edit::DocumentMut = content.parse()
+        .with_context(|| "failed to parse config TOML for editing")?;
+
+    if doc.get("curator").is_none() {
+        doc["curator"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    if let Some(v) = enabled { doc["curator"]["enabled"] = toml_edit::value(v); }
+    if let Some(v) = cron { doc["curator"]["cron"] = toml_edit::value(v); }
+    if let Some(v) = min_idle_minutes { doc["curator"]["min_idle_minutes"] = toml_edit::value(i64::from(v)); }
+    if let Some(v) = stale_after_days { doc["curator"]["stale_after_days"] = toml_edit::value(i64::from(v)); }
+    if let Some(v) = archive_after_days { doc["curator"]["archive_after_days"] = toml_edit::value(i64::from(v)); }
+    if let Some(v) = provider_connection { doc["curator"]["provider_connection"] = toml_edit::value(v); }
+    if let Some(v) = model { doc["curator"]["model"] = toml_edit::value(v); }
+    if let Some(v) = max_repairs_per_run { doc["curator"]["max_repairs_per_run"] = toml_edit::value(i64::from(v)); }
+
+    std::fs::write(config_path, doc.to_string())
+        .with_context(|| format!("failed to write config: {config_path}"))?;
+    Ok(())
+}
+
 /// Update [agent_tool] section in TOML config file.
 pub fn update_agent_tool_config(
     config_path: &str,
@@ -2308,6 +2391,22 @@ max_tokens = 2048
         let cfg = AgentDefaultsConfig::default();
         assert!(cfg.temperature.is_none());
         assert!(cfg.max_tokens.is_none());
+    }
+}
+
+#[cfg(test)]
+mod curator_config_tests {
+    use super::*;
+
+    #[test]
+    fn curator_config_defaults() {
+        let cfg: CuratorConfig = Default::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.cron, "0 3 * * 0");
+        assert_eq!(cfg.min_idle_minutes, 30);
+        assert_eq!(cfg.stale_after_days, 30);
+        assert_eq!(cfg.archive_after_days, 90);
+        assert_eq!(cfg.max_repairs_per_run, 10);
     }
 }
 
