@@ -48,6 +48,17 @@ pub(crate) async fn api_curator_run(
     let cfg = cfg_svc.config.curator.clone();
     let secrets = infra.secrets.clone();
 
+    // Reject if a run is already in progress (no finished_at means still running).
+    if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await {
+        if last.finished_at.is_none() {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
+            )
+                .into_response();
+        }
+    }
+
     let run_id = match crate::db::curator_runs::insert_run(&db, "manual").await {
         Ok(id) => id,
         Err(e) => {

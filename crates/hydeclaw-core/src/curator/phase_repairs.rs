@@ -58,7 +58,7 @@ async fn apply_repair(
     repair: &SkillRepairRow,
 ) -> anyhow::Result<String> {
     let skills_dir = std::path::Path::new(workspace_dir).join("skills");
-    let safe_name = repair.skill_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
+    let safe_name = crate::curator::sanitize_skill_name(&repair.skill_name);
 
     match repair.kind.as_str() {
         "fix" => {
@@ -72,11 +72,15 @@ async fn apply_repair(
             );
             let new_body = llm_call(provider, &prompt).await?;
 
-            let fm_end = existing[3..].find("\n---").map(|i| i + 7).unwrap_or(existing.len());
+            let fm_end = existing[3..].find("\n---")
+                .map(|i| (3 + i + 4 + 1).min(existing.len()))
+                .unwrap_or(existing.len());
             let new_content = format!("{}\n{}", &existing[..fm_end], new_body.trim());
 
             let _ = crate::db::skill_versions::save_version(db, &repair.skill_name, &existing, "repair", None, Some("curator:repair:fix")).await;
-            tokio::fs::write(&path, &new_content).await?;
+            let tmp_path = path.with_extension("md.tmp");
+            tokio::fs::write(&tmp_path, &new_content).await?;
+            tokio::fs::rename(&tmp_path, &path).await?;
             Ok(repair.skill_name.clone())
         }
 
@@ -85,7 +89,7 @@ async fn apply_repair(
                 .ok_or_else(|| anyhow::anyhow!("cannot extract parent from diagnosis"))?;
             let new_name = extract_new_name_from_derived(&repair.diagnosis)
                 .unwrap_or(&repair.skill_name);
-            let parent_safe = parent.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
+            let parent_safe = crate::curator::sanitize_skill_name(parent);
             let parent_path = skills_dir.join(format!("{parent_safe}.md"));
             let parent_content = tokio::fs::read_to_string(&parent_path).await
                 .map_err(|_| anyhow::anyhow!("parent skill not found: {parent}"))?;
@@ -96,7 +100,7 @@ async fn apply_repair(
             );
             let new_skill_content = llm_call(provider, &prompt).await?;
 
-            let new_safe = new_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
+            let new_safe = crate::curator::sanitize_skill_name(new_name);
             tokio::fs::write(skills_dir.join(format!("{new_safe}.md")), &new_skill_content).await?;
             let _ = crate::db::skill_versions::save_version(db, new_name, &new_skill_content, "repair", None, Some("curator:repair:derived")).await;
             Ok(new_name.to_string())

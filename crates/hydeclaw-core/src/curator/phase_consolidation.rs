@@ -230,7 +230,9 @@ async fn execute_command(
             )
             .await;
             let updated = update_state_in_frontmatter(&content, "archived");
-            tokio::fs::write(&path, &updated).await?;
+            let tmp_path = path.with_extension("md.tmp");
+            tokio::fs::write(&tmp_path, &updated).await?;
+            tokio::fs::rename(&tmp_path, &path).await?;
             Ok(format!("ARCHIVE {skill}: {reason}"))
         }
 
@@ -257,13 +259,11 @@ async fn execute_command(
             );
             let merged_content = llm_call(provider, &prompt).await?;
 
-            let safe_into =
-                into.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
-            tokio::fs::write(
-                skills_dir.join(format!("{safe_into}.md")),
-                &merged_content,
-            )
-            .await?;
+            let safe_into = crate::curator::sanitize_skill_name(into);
+            let merge_path = skills_dir.join(format!("{safe_into}.md"));
+            let merge_tmp = merge_path.with_extension("md.tmp");
+            tokio::fs::write(&merge_tmp, &merged_content).await?;
+            tokio::fs::rename(&merge_tmp, &merge_path).await?;
             let _ = crate::db::skill_versions::save_version(
                 db,
                 into,
@@ -302,10 +302,10 @@ async fn execute_command(
                     .ok_or_else(|| anyhow::anyhow!("skill not found: {skill}"))?;
             let existing = tokio::fs::read_to_string(&path).await?;
 
-            // Locate end of frontmatter (second `---`).
+            // Locate end of frontmatter (second `---`), including the trailing newline.
             let fm_end = existing[3..]
                 .find("\n---")
-                .map(|i| i + 7)
+                .map(|i| (3 + i + 4 + 1).min(existing.len()))
                 .unwrap_or(existing.len());
 
             let prompt = format!(
@@ -325,11 +325,10 @@ async fn execute_command(
                 Some("curator:fix"),
             )
             .await;
-            tokio::fs::write(
-                &path,
-                format!("{}\n{}", &existing[..fm_end], new_body.trim()),
-            )
-            .await?;
+            let new_content = format!("{}\n{}", &existing[..fm_end], new_body.trim());
+            let tmp_path = path.with_extension("md.tmp");
+            tokio::fs::write(&tmp_path, &new_content).await?;
+            tokio::fs::rename(&tmp_path, &path).await?;
             Ok(format!("FIX {skill}: {patch}"))
         }
 
@@ -342,8 +341,7 @@ async fn execute_command(
             let updated =
                 content.replacen(&format!("name: {skill}"), &format!("name: {new_name}"), 1);
 
-            let safe_new =
-                new_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
+            let safe_new = crate::curator::sanitize_skill_name(new_name);
             let _ = crate::db::skill_versions::save_version(
                 db,
                 skill,
@@ -353,7 +351,11 @@ async fn execute_command(
                 Some("curator:rename"),
             )
             .await;
-            tokio::fs::write(skills_dir.join(format!("{safe_new}.md")), &updated).await?;
+            let new_path = skills_dir.join(format!("{safe_new}.md"));
+            let tmp_path = new_path.with_extension("md.tmp");
+            tokio::fs::write(&tmp_path, &updated).await?;
+            tokio::fs::rename(&tmp_path, &new_path).await?;
+            // Only remove the old file after the new one is fully written.
             tokio::fs::remove_file(&old_path).await?;
             Ok(format!("RENAME {skill} -> {new_name}: {reason}"))
         }
