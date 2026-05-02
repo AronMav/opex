@@ -202,27 +202,6 @@ interface WatchdogStatus {
   containers?: ContainerInfo[];
 }
 
-interface ChannelInfo {
-  id: string;
-  agent_name: string;
-  channel_type: string;
-  display_name: string;
-  status: string;
-}
-
-interface AlertingSettings {
-  alert_channel_ids: string[];
-  alert_events: string[];
-}
-
-const ALL_EVENTS = ["down", "restart", "recovery", "resource"] as const;
-const EVENT_LABEL_KEYS: Record<string, string> = {
-  down: "watchdog.event_down",
-  restart: "watchdog.event_restart",
-  recovery: "watchdog.event_recovery",
-  resource: "watchdog.event_resource",
-};
-
 // ── MetricCard ──────────────────────────────────────────────────────────────
 
 function MetricCard({ label, value, subValue, dot, valueClass, icon }: {
