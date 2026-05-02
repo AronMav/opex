@@ -9,7 +9,7 @@ import { useAutoRefresh } from "@/hooks/use-auto-refresh";
 import { useTranslation } from "@/hooks/use-translation";
 import { useWsStore } from "@/stores/ws-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
-import { useUsage, useDailyUsage, useApprovals, useResolveApproval, useAudit, useSessionFailures } from "@/lib/queries";
+import { useUsage, useDailyUsage, useApprovals, useResolveApproval, useAudit, useSessionFailures, useCuratorRuns } from "@/lib/queries";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,7 @@ import {
   ShieldCheck, Check, X,
   type LucideProps,
 } from "lucide-react";
-import type { StatusInfo, StatsInfo, UsageResponse, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry } from "@/types/api";
+import type { StatusInfo, StatsInfo, UsageResponse, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry, CuratorRun } from "@/types/api";
 import type { LogEntry } from "@/types/api";
 import type { WsLog } from "@/types/ws";
 import type { TranslationKey } from "@/i18n/types";
@@ -713,6 +713,7 @@ function MonitorPageInner() {
             <TabsTrigger value="statistics" className="text-xs">{t("monitor.tab_statistics")}</TabsTrigger>
             <TabsTrigger value="approvals" className="text-xs">{t("monitor.tab_approvals")}</TabsTrigger>
             <TabsTrigger value="failures" className="text-xs">{t("monitor.tab_failures")}</TabsTrigger>
+            <TabsTrigger value="curator" className="text-xs">Curator</TabsTrigger>
           </TabsList>
         </div>
 
@@ -1818,12 +1819,124 @@ function MonitorPageInner() {
             )}
           </div>
         </TabsContent>
+
+        {/* Curator tab */}
+        <TabsContent
+          value="curator"
+          forceMount
+          className={activeTab !== "curator" ? "hidden" : "flex-1 overflow-y-auto p-4 md:p-6"}
+        >
+          <CuratorTab />
+        </TabsContent>
       </Tabs>
     </div>
   );
 }
 
 // ── Export with Suspense boundary for useSearchParams ───────────────────────
+
+// ── CuratorTab component ────────────────────────────────────────────
+
+function CuratorTab() {
+  const { data, isLoading } = useCuratorRuns();
+  const runs: CuratorRun[] = data?.runs ?? [];
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  if (isLoading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="h-12 rounded-lg border border-border bg-muted/20 animate-pulse" />
+        ))}
+      </div>
+    );
+  }
+
+  if (runs.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center">
+        <p className="text-sm text-muted-foreground">No curator runs yet.</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">Runs appear here after the curator executes.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-2 px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide border-b border-border/50">
+        <span>Time</span>
+        <span>Trigger</span>
+        <span>Status</span>
+        <span className="text-right">Phase 1</span>
+        <span className="text-right">Phase 2</span>
+        <span className="text-right">Duration</span>
+      </div>
+      {runs.map((run) => {
+        const isExpanded = expandedId === run.id;
+        const isSkipped = !!run.skipped_reason;
+        const isError = !!run.error;
+        const statusColor = isError
+          ? "text-destructive"
+          : isSkipped
+          ? "text-muted-foreground"
+          : "text-green-600 dark:text-green-400";
+        const statusLabel = isError ? "error" : isSkipped ? "skipped" : "ok";
+        const durationStr = run.duration_ms != null
+          ? run.duration_ms < 1000
+            ? `${run.duration_ms}ms`
+            : `${(run.duration_ms / 1000).toFixed(1)}s`
+          : "-";
+
+        return (
+          <div key={run.id} className="rounded-lg border border-border/50 overflow-hidden">
+            <button
+              className="w-full grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors"
+              onClick={() => setExpandedId(isExpanded ? null : run.id)}
+            >
+              <span className="text-xs text-muted-foreground font-mono truncate">
+                {relativeTime(run.started_at)}
+              </span>
+              <Badge
+                variant={run.triggered_by === "manual" ? "secondary" : "outline"}
+                className="text-[10px] px-1.5 py-0 h-5"
+              >
+                {run.triggered_by}
+              </Badge>
+              <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
+              <span className="text-xs tabular-nums text-right">{run.phase1_transitions}</span>
+              <span className="text-xs tabular-nums text-right">{run.phase2_repairs}</span>
+              <span className="text-xs tabular-nums text-right font-mono text-muted-foreground">{durationStr}</span>
+            </button>
+            {isExpanded && (
+              <div className="px-3 pb-3 pt-1 border-t border-border/30 bg-muted/10 space-y-2">
+                {run.skipped_reason && (
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium">Skipped:</span> {run.skipped_reason}
+                  </p>
+                )}
+                {run.error && (
+                  <p className="text-xs text-destructive">
+                    <span className="font-medium">Error:</span> {run.error}
+                  </p>
+                )}
+                <div className="flex gap-4 text-xs text-muted-foreground">
+                  <span>Phase 1: <span className="font-medium text-foreground">{run.phase1_transitions}</span> transitions</span>
+                  <span>Phase 2: <span className="font-medium text-foreground">{run.phase2_repairs}</span> repairs</span>
+                  <span>Phase 3: <span className="font-medium text-foreground">{run.phase3_commands}</span> LLM commands</span>
+                </div>
+                {run.report_md && (
+                  <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-background/60 p-3 rounded border border-border/50 max-h-64 overflow-y-auto">
+                    {run.report_md}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function MonitorPage() {
   return (
