@@ -9,6 +9,7 @@ pub use hydeclaw_db::usage;
 
 // ── Remaining modules (not extracted) ───────────────────────────────────
 pub mod access;
+pub mod curator_runs;
 pub mod audit_queue;
 pub mod audit;
 pub mod github;

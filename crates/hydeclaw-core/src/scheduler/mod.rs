@@ -569,6 +569,15 @@ impl Scheduler {
             let db = db.clone();
             let secrets = secrets.clone();
             Box::pin(async move {
+                // ── Record run start ──────────────────────────────────────────
+                let run_id = match crate::db::curator_runs::insert_run(&db, "cron").await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!(error = %e, "curator: failed to insert run record — skipping run");
+                        return;
+                    }
+                };
+
                 // ── Idle guard ────────────────────────────────────────────────
                 let idle_minutes = i64::from(cfg.min_idle_minutes);
                 let active: i64 = match sqlx::query_scalar(
@@ -583,6 +592,7 @@ impl Scheduler {
                     Ok(n) => n,
                     Err(e) => {
                         tracing::error!(error = %e, "curator idle-guard query failed — skipping run");
+                        crate::db::curator_runs::skip_run(&db, run_id, "idle_guard_error").await.ok();
                         return;
                     }
                 };
@@ -592,6 +602,7 @@ impl Scheduler {
                         active_sessions = active,
                         "curator skipped — agents active within idle window"
                     );
+                    crate::db::curator_runs::skip_run(&db, run_id, "agents_active").await.ok();
                     return;
                 }
 
@@ -604,13 +615,27 @@ impl Scheduler {
                 )
                 .await
                 {
-                    Ok(summary) => tracing::info!(
-                        phase1 = summary.phase1,
-                        phase2 = summary.phase2,
-                        phase3 = summary.phase3,
-                        "skill curator run complete"
-                    ),
-                    Err(e) => tracing::error!(error = %e, "skill curator run failed"),
+                    Ok(summary) => {
+                        tracing::info!(
+                            phase1 = summary.phase1,
+                            phase2 = summary.phase2,
+                            phase3 = summary.phase3,
+                            "skill curator run complete"
+                        );
+                        crate::db::curator_runs::finish_run(
+                            &db, run_id,
+                            summary.phase1, summary.phase2, summary.phase3,
+                            Some(&summary.report_md), None,
+                        ).await.ok();
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "skill curator run failed");
+                        crate::db::curator_runs::finish_run(
+                            &db, run_id,
+                            0, 0, 0,
+                            None, Some(&e.to_string()),
+                        ).await.ok();
+                    }
                 }
             })
         })?;
