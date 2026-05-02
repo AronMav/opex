@@ -427,6 +427,15 @@ if [[ -f docker/Dockerfile.sandbox ]]; then
 else
   ok "Docker images built (postgres, browser-renderer)"
 fi
+# MCP bridge base image (required by on-demand MCP containers)
+if [[ -f docker/mcp-bridge/Dockerfile ]]; then
+  info "Building MCP bridge base image..."
+  docker build -f docker/mcp-bridge/Dockerfile -t hydeclaw-mcp-bridge:latest docker/mcp-bridge/ 2>&1 | tail -3 || true
+  # Pre-create on-demand MCP containers so Core can start them without docker-compose
+  info "Creating on-demand MCP containers..."
+  docker compose -f docker/docker-compose.yml --profile on-demand create --no-recreate 2>&1 | grep -E '(Created|Error|error)' || true
+  ok "MCP containers created"
+fi
 
 info "Starting Docker infrastructure..."
 if [[ "$VERBOSE" == "1" ]]; then
