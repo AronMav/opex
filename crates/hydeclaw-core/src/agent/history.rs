@@ -573,6 +573,206 @@ that will continue this conversation.\n\nTURNS TO SUMMARIZE:\n{turns_text}\n\n{t
     }
 }
 
+/// Extract facts from a conversation slice into memory-ready strings.
+/// Called in parallel with summary generation during Phase 3.
+/// Returns empty Vec on failure (non-fatal).
+async fn extract_facts_only(
+    turns: &[Message],
+    provider: &dyn LlmProvider,
+    language: Option<&str>,
+) -> Vec<String> {
+    let lang_hint = match language {
+        Some("ru") => " Write each fact in Russian.",
+        Some("en") => " Write each fact in English.",
+        _ => "",
+    };
+    let formatted = format_messages_for_compaction(turns);
+    let extraction_prompt = vec![
+        Message {
+            role: MessageRole::System,
+            content: format!(
+                "Extract key facts from this conversation as a JSON array of strings.\n\
+MUST PRESERVE: active tasks with progress, UUIDs/URLs/file paths/IPs, decisions \
+and rationale, user preferences, error conditions and resolutions, commitments.\n\
+MAY OMIT: routine greetings, tool calls without noteworthy results, repeated info.\n\
+Each fact must be self-contained.{lang_hint}\n\
+Return ONLY the JSON array, no other text."
+            ),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+        },
+        Message {
+            role: MessageRole::User,
+            content: formatted,
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+        },
+    ];
+    let empty_tools: Vec<ToolDefinition> = vec![];
+    match provider
+        .chat(
+            &extraction_prompt,
+            &empty_tools,
+            crate::agent::providers::CallOptions::default(),
+        )
+        .await
+    {
+        Ok(resp) => serde_json::from_str::<Vec<String>>(&resp.content).unwrap_or_default(),
+        Err(e) => {
+            tracing::warn!(error = %e, "fact extraction failed, skipping");
+            vec![]
+        }
+    }
+}
+
+/// Main entry point: run all 5 phases of compression on `messages`.
+/// `language` should be the agent's language (e.g. "ru" or "en"), used for summary.
+/// Returns extracted facts (empty Vec if `cfg.extract_to_memory = false`).
+pub async fn compress_messages(
+    messages: &mut Vec<Message>,
+    compressor: &mut crate::agent::compressor::Compressor,
+    cfg: &crate::config::CompactionConfig,
+    provider: &dyn LlmProvider,
+    language: Option<&str>,
+) -> anyhow::Result<Vec<String>> {
+    let tokens_before = estimate_tokens(messages) as u32;
+
+    // Phase 1: pre-pass — prune + deduplicate tool results
+    let pruned = prune_old_tool_results(messages, cfg.preserve_last_n as usize);
+
+    // Phase 2: boundaries
+    let head_end = find_head_end(&pruned, cfg.protect_first_n);
+    let tail_budget = (compressor.context_limit as f64
+        * cfg.threshold
+        * cfg.summary_target_ratio) as usize;
+    let tail_start = find_tail_start_by_tokens(&pruned, head_end, tail_budget);
+
+    if head_end >= tail_start {
+        tracing::debug!(
+            head_end,
+            tail_start,
+            "compression skipped: nothing to summarise"
+        );
+        return Ok(vec![]);
+    }
+
+    let turns_to_summarize: Vec<Message> = pruned[head_end..tail_start].to_vec();
+    let tail: Vec<Message> = pruned[tail_start..].to_vec();
+    let head: Vec<Message> = pruned[..head_end].to_vec();
+
+    // Phase 3: LLM summary + fact extraction — parallel on read-only snapshot
+    let previous = compressor.previous_summary.as_deref();
+    let (summary, facts) = tokio::join!(
+        generate_hermes_summary(&turns_to_summarize, provider, language, previous),
+        async {
+            if cfg.extract_to_memory {
+                extract_facts_only(&turns_to_summarize, provider, language).await
+            } else {
+                vec![]
+            }
+        }
+    );
+
+    // Fallback if LLM failed
+    let summary_text = summary.unwrap_or_else(|| {
+        let n = turns_to_summarize.len();
+        tracing::warn!(n, "summary generation failed — inserting static fallback");
+        format!(
+            "{SUMMARY_PREFIX}\nSummary generation was unavailable. \
+{n} message(s) were removed to free context space. \
+Continue based on the recent messages below."
+        )
+    });
+
+    // Phase 4: assemble head + summary message + tail
+    let summary_role = if head
+        .last()
+        .map(|m| m.role == MessageRole::Assistant || m.role == MessageRole::Tool)
+        .unwrap_or(false)
+    {
+        MessageRole::User
+    } else {
+        MessageRole::Assistant
+    };
+
+    let mut assembled: Vec<Message> = Vec::with_capacity(head.len() + 1 + tail.len());
+
+    for (i, mut msg) in head.into_iter().enumerate() {
+        if i == 0
+            && msg.role == MessageRole::System
+            && !msg.content.contains(SUMMARY_NOTE_FOR_SYSTEM)
+        {
+            msg.content.push_str(&format!("\n\n{SUMMARY_NOTE_FOR_SYSTEM}"));
+        }
+        assembled.push(msg);
+    }
+
+    // Check for role collision with tail
+    let first_tail_role = tail.first().map(|m| m.role.clone());
+    let merge_into_tail = first_tail_role.as_ref() == Some(&summary_role)
+        && assembled
+            .last()
+            .map(|m| m.role.clone())
+            .as_ref()
+            == Some(&if summary_role == MessageRole::User {
+                MessageRole::Assistant
+            } else {
+                MessageRole::User
+            });
+
+    if !merge_into_tail {
+        let role = if first_tail_role.as_ref() == Some(&summary_role) {
+            if summary_role == MessageRole::User {
+                MessageRole::Assistant
+            } else {
+                MessageRole::User
+            }
+        } else {
+            summary_role
+        };
+        assembled.push(Message {
+            role,
+            content: summary_text.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+        });
+        assembled.extend(tail);
+    } else {
+        let mut tail_iter = tail.into_iter();
+        if let Some(mut first_tail) = tail_iter.next() {
+            first_tail.content = format!(
+                "{summary_text}\n\n--- END OF CONTEXT SUMMARY — respond to the message below ---\n\n{}",
+                first_tail.content
+            );
+            assembled.push(first_tail);
+        }
+        assembled.extend(tail_iter);
+    }
+
+    // Phase 5: sanitize tool pairs
+    let assembled = sanitize_tool_pairs(assembled);
+
+    // Commit
+    *messages = assembled;
+    compressor.previous_summary = Some(summary_text);
+
+    let tokens_after = estimate_tokens(messages) as u32;
+    compressor.record_compression_result(tokens_before, tokens_after, cfg);
+
+    tracing::info!(
+        tokens_before,
+        tokens_after,
+        msgs_after = messages.len(),
+        compression_count = compressor.compression_count,
+        "compress_messages complete"
+    );
+
+    Ok(facts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1080,5 +1280,52 @@ mod tests {
         let provider = FailProvider;
         let result = generate_hermes_summary(&turns, &provider, None, None).await;
         assert!(result.is_none(), "must return None when LLM fails");
+    }
+
+    #[tokio::test]
+    async fn compress_messages_reduces_token_count_and_keeps_tail() {
+        // Build 20-message alternating User/Assistant conversation
+        let mut msgs: Vec<Message> = (0..20)
+            .map(|i| make_message(
+                if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant },
+                &"word ".repeat(100), // ~125 tokens each
+            ))
+            .collect();
+        // Ensure last message is User
+        msgs[19].role = MessageRole::User;
+
+        let provider = EchoProvider("Mock summary content".into());
+
+        let cfg = crate::config::CompactionConfig {
+            enabled: true,
+            threshold: 0.75,
+            protect_first_n: 3,
+            preserve_last_n: 3,
+            summary_target_ratio: 0.20,
+            extract_to_memory: false, // skip pgvector
+            ..Default::default()
+        };
+
+        let tokens_before = estimate_tokens(&msgs) as u32;
+        let mut compressor = crate::agent::compressor::Compressor::new(200_000);
+
+        let facts = compress_messages(&mut msgs, &mut compressor, &cfg, &provider, None)
+            .await
+            .unwrap();
+
+        let tokens_after = estimate_tokens(&msgs) as u32;
+        assert!(tokens_after < tokens_before, "compression must reduce tokens");
+        assert!(msgs.len() >= 3, "must keep at least tail messages");
+        assert_eq!(
+            msgs.last().unwrap().role,
+            MessageRole::User,
+            "last message must be User"
+        );
+        assert!(
+            compressor.previous_summary.is_some(),
+            "previous_summary must be populated"
+        );
+        assert_eq!(compressor.compression_count, 1, "compression_count must be 1");
+        assert!(facts.is_empty(), "extract_to_memory=false → no facts");
     }
 }
