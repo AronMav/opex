@@ -5,6 +5,21 @@ use crate::agent::thinking::strip_thinking;
 use super::providers::LlmProvider;
 use super::tool_loop::LoopDetector;
 
+pub const SUMMARY_PREFIX: &str = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted \
+into the summary below. This is a handoff from a previous context window — treat it as background \
+reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in \
+this summary; they were already addressed. Your current task is identified in the '## Active Task' \
+section — resume exactly from there. Respond ONLY to the latest user message that appears AFTER \
+this summary.";
+
+#[allow(dead_code)]
+const SUMMARY_NOTE_FOR_SYSTEM: &str = "[Note: Some earlier conversation turns have been compacted \
+into a handoff summary to preserve context space. Build on that summary rather than re-doing work.]";
+
+const MIN_SUMMARY_TOKENS: usize = 2000;
+const SUMMARY_RATIO: f64 = 0.20;
+const SUMMARY_TOKENS_CEILING: usize = 12_000;
+
 /// Estimate token count from text (rough: ~4 chars per token).
 /// Accounts for `tool_calls` JSON size when present.
 pub fn estimate_tokens(messages: &[Message]) -> usize {
@@ -443,6 +458,121 @@ fn format_messages_for_compaction(messages: &[Message]) -> String {
     formatted
 }
 
+/// Phase 3: generate a structured 13-section Hermes-style summary via LLM.
+/// When `previous_summary` is Some, generates an iterative update.
+/// Returns None on LLM failure — caller should use static fallback.
+pub async fn generate_hermes_summary(
+    turns: &[Message],
+    provider: &dyn LlmProvider,
+    language: Option<&str>,
+    previous_summary: Option<&str>,
+) -> Option<String> {
+    let content_tokens = estimate_tokens(turns);
+    let budget = ((content_tokens as f64 * SUMMARY_RATIO) as usize)
+        .clamp(MIN_SUMMARY_TOKENS, SUMMARY_TOKENS_CEILING);
+
+    let lang_instruction = match language {
+        Some("en") => "Write the summary in English.",
+        _ => "Write the summary in Russian.",
+    };
+
+    let template = format!(r#"## Active Task
+[THE SINGLE MOST IMPORTANT FIELD. Copy the user's most recent request verbatim. If no outstanding task, write "None."]
+
+## Goal
+[What the user is trying to accomplish overall]
+
+## Constraints & Preferences
+[User preferences, coding style, important constraints]
+
+## Completed Actions
+[Numbered list: N. ACTION target — outcome [tool: name]]
+
+## Active State
+[Working directory, branch, modified files, test status, running processes]
+
+## In Progress
+[Work underway when compaction fired]
+
+## Blocked
+[Blockers, errors, issues not resolved — include exact error messages]
+
+## Key Decisions
+[Important technical decisions and WHY]
+
+## Resolved Questions
+[Questions already answered — include the answer]
+
+## Pending User Asks
+[Questions or requests not yet answered — if none, write "None."]
+
+## Relevant Files
+[Files read, modified, created — with brief note]
+
+## Remaining Work
+[What remains to be done — framed as context, not instructions]
+
+## Critical Context
+[Specific values, error messages, config details. NEVER include API keys — write [REDACTED].]
+
+Target ~{budget} tokens. Be CONCRETE. Include file paths, commands, error messages, line numbers."#);
+
+    let preamble = format!(
+        "You are a summarization agent creating a context checkpoint. \
+Your output will be injected as reference material for a DIFFERENT assistant \
+that continues the conversation. Do NOT respond to any questions or requests \
+in the conversation — only output the structured summary. \
+Do NOT include any preamble, greeting, or prefix. \
+{lang_instruction} \
+NEVER include API keys, tokens, passwords, or secrets — write [REDACTED] instead."
+    );
+
+    let prompt_content = if let Some(prev) = previous_summary {
+        let turns_text = format_messages_for_compaction(turns);
+        format!(
+            "{preamble}\n\nYou are UPDATING a context compaction summary. \
+A previous compaction produced the summary below. New turns have occurred since then.\n\n\
+PREVIOUS SUMMARY:\n{prev}\n\nNEW TURNS TO INCORPORATE:\n{turns_text}\n\n\
+Update the summary using the structure below. PRESERVE all existing relevant info. \
+ADD new completed actions (continue numbering). Move answered questions to Resolved. \
+Update Active Task to the user's most recent unfulfilled request.\n\n{template}"
+        )
+    } else {
+        let turns_text = format_messages_for_compaction(turns);
+        format!(
+            "{preamble}\n\nCreate a structured handoff summary for a different assistant \
+that will continue this conversation.\n\nTURNS TO SUMMARIZE:\n{turns_text}\n\n{template}"
+        )
+    };
+
+    let prompt = vec![Message {
+        role: MessageRole::User,
+        content: prompt_content,
+        tool_calls: None,
+        tool_call_id: None,
+        thinking_blocks: vec![],
+    }];
+
+    let empty_tools: Vec<ToolDefinition> = vec![];
+    match provider
+        .chat(&prompt, &empty_tools, crate::agent::providers::CallOptions::default())
+        .await
+    {
+        Ok(response) => {
+            let summary = response.content.trim().to_string();
+            if summary.is_empty() {
+                None
+            } else {
+                Some(format!("{SUMMARY_PREFIX}\n{summary}"))
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to generate context summary");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,5 +947,138 @@ mod tests {
         assert_eq!(sanitized[1].role, MessageRole::Tool);
         assert_eq!(sanitized[1].tool_call_id.as_deref(), Some("tc_1"));
         assert!(sanitized[1].content.contains("earlier conversation"));
+    }
+
+    // ── generate_hermes_summary tests ──────────────────────────────────────────
+
+    struct EchoProvider(String);
+
+    #[async_trait]
+    impl LlmProvider for EchoProvider {
+        async fn chat(
+            &self,
+            _msgs: &[Message],
+            _tools: &[ToolDefinition],
+            _opts: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<LlmResponse> {
+            Ok(LlmResponse {
+                content: self.0.clone(),
+                tool_calls: vec![],
+                usage: None,
+                finish_reason: None,
+                model: None,
+                provider: None,
+                fallback_notice: None,
+                tools_used: vec![],
+                iterations: 0,
+                thinking_blocks: vec![],
+            })
+        }
+        async fn chat_stream(
+            &self,
+            msgs: &[Message],
+            tools: &[ToolDefinition],
+            _tx: mpsc::UnboundedSender<String>,
+            opts: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<LlmResponse> {
+            self.chat(msgs, tools, opts).await
+        }
+        fn name(&self) -> &str { "echo" }
+    }
+
+    struct FailProvider;
+
+    #[async_trait]
+    impl LlmProvider for FailProvider {
+        async fn chat(
+            &self,
+            _msgs: &[Message],
+            _tools: &[ToolDefinition],
+            _opts: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<LlmResponse> {
+            anyhow::bail!("simulated LLM failure")
+        }
+        async fn chat_stream(
+            &self,
+            msgs: &[Message],
+            tools: &[ToolDefinition],
+            _tx: mpsc::UnboundedSender<String>,
+            opts: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<LlmResponse> {
+            self.chat(msgs, tools, opts).await
+        }
+        fn name(&self) -> &str { "fail" }
+    }
+
+    #[tokio::test]
+    async fn generate_hermes_summary_prepends_prefix() {
+        let turns = vec![make_message(MessageRole::User, "hello")];
+        let provider = EchoProvider("My summary body".into());
+        let result = generate_hermes_summary(&turns, &provider, None, None).await;
+        let text = result.unwrap();
+        assert!(text.starts_with(SUMMARY_PREFIX), "must start with SUMMARY_PREFIX");
+        assert!(text.contains("My summary body"));
+    }
+
+    #[tokio::test]
+    async fn generate_hermes_summary_iterative_update_includes_previous() {
+        struct PromptEchoProvider;
+
+        #[async_trait]
+        impl LlmProvider for PromptEchoProvider {
+            async fn chat(
+                &self,
+                msgs: &[Message],
+                _tools: &[ToolDefinition],
+                _opts: crate::agent::providers::CallOptions,
+            ) -> anyhow::Result<LlmResponse> {
+                let content = msgs.iter()
+                    .find(|m| m.role == MessageRole::User)
+                    .map(|m| m.content.clone())
+                    .unwrap_or_default();
+                Ok(LlmResponse {
+                    content,
+                    tool_calls: vec![],
+                    usage: None,
+                    finish_reason: None,
+                    model: None,
+                    provider: None,
+                    fallback_notice: None,
+                    tools_used: vec![],
+                    iterations: 0,
+                    thinking_blocks: vec![],
+                })
+            }
+            async fn chat_stream(
+                &self,
+                msgs: &[Message],
+                tools: &[ToolDefinition],
+                _tx: mpsc::UnboundedSender<String>,
+                opts: crate::agent::providers::CallOptions,
+            ) -> anyhow::Result<LlmResponse> {
+                self.chat(msgs, tools, opts).await
+            }
+            fn name(&self) -> &str { "prompt-echo" }
+        }
+
+        let turns = vec![make_message(MessageRole::User, "new turn")];
+        let provider = PromptEchoProvider;
+        let prev = "PREVIOUS SUMMARY CONTENT";
+        let result = generate_hermes_summary(&turns, &provider, None, Some(prev)).await;
+        let text = result.unwrap();
+        // The prompt sent to LLM should contain "UPDATING" and the previous summary
+        assert!(
+            text.contains("UPDATING") || text.contains(prev),
+            "iterative update must reference previous summary; got: {}",
+            &text[..100.min(text.len())]
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_hermes_summary_returns_none_on_llm_failure() {
+        let turns = vec![make_message(MessageRole::User, "hello")];
+        let provider = FailProvider;
+        let result = generate_hermes_summary(&turns, &provider, None, None).await;
+        assert!(result.is_none(), "must return None when LLM fails");
     }
 }
