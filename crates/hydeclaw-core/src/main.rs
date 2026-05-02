@@ -623,7 +623,7 @@ async fn main() -> Result<()> {
     start_configured_agents(&state, &agent_configs).await;
 
     // Load dynamic cron jobs and schedule periodic system jobs
-    schedule_periodic_jobs(&state, &agent_configs).await;
+    schedule_periodic_jobs(&state, &agent_configs).await?;
 
     // Background task: renew expiring Gmail watches every 6 hours
     {
@@ -837,8 +837,7 @@ async fn init_mcp_registry(container_manager: Option<Arc<containers::ContainerMa
     let mcp_map = crate::tools::mcp_workspace::load_mcp_map(crate::config::MCP_DIR).await;
     let cache_dir = std::path::Path::new(crate::config::MCP_DIR).join(".cache");
 
-    // Always create the registry — URL-based MCPs (context7, deepwiki) work without Docker.
-    // Docker-based MCPs will return a clear error when called if Docker is unavailable.
+    // Always create the registry — URL-based MCPs work without Docker.
     let has_docker = container_manager.is_some();
     let registry = Arc::new(mcp::McpRegistry::new(container_manager, cache_dir));
     tracing::info!(has_docker, mcp_count = mcp_map.len(), "MCP registry initialized");
@@ -852,8 +851,6 @@ async fn init_mcp_registry(container_manager: Option<Arc<containers::ContainerMa
     }
 
     // Discover tools from persistent and always-on MCP servers at startup.
-    // On-demand servers are skipped here — their tools are either in the file
-    // cache (loaded above) or will be discovered on first use via ensure_running.
     for (name, entry) in &mcp_map {
         if entry.mode == "persistent" || entry.mode == "always-on" {
             match registry.discover_tools(name).await {
@@ -988,29 +985,54 @@ async fn start_configured_agents(state: &gateway::AppState, agent_configs: &[con
 }
 
 /// Schedule periodic system maintenance jobs (decay, cleanup, backup).
-async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[config::AgentConfig]) {
+async fn schedule_periodic_jobs(
+    state: &gateway::AppState,
+    agent_configs: &[config::AgentConfig],
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
     let sched = &state.agents.scheduler;
     let db = &state.infra.db;
 
     // Load dynamic cron jobs
     let engines = state.agents.get_engines_map().await;
-    sched.load_dynamic_jobs(db, &engines).await.ok();
+    if let Err(e) = sched.load_dynamic_jobs(db, &engines).await {
+        tracing::warn!(error = %e, "failed to load dynamic cron jobs");
+    }
 
     // Daily maintenance jobs
-    sched.add_memory_decay(db.clone()).await.ok();
-    sched.add_task_cleanup(db.clone()).await.ok();
-    sched.add_audit_cleanup(db.clone(), 30).await.ok();
-    sched.add_tool_audit_cleanup(db.clone(), 90).await.ok();
-    sched.add_pending_messages_cleanup(db.clone()).await.ok();
-    sched.add_outbound_queue_cleanup(db.clone()).await.ok();
-    sched.add_usage_log_cleanup(db.clone()).await.ok();
-    sched.add_memory_decay_cleanup(db.clone()).await.ok();
-    sched.add_notifications_cleanup(db.clone()).await.ok();
+    if let Err(e) = sched.add_memory_decay(db.clone()).await {
+        tracing::warn!(error = %e, job = "memory_decay", "failed to register cron job");
+    }
+    if let Err(e) = sched.add_task_cleanup(db.clone()).await {
+        tracing::warn!(error = %e, job = "task_cleanup", "failed to register cron job");
+    }
+    if let Err(e) = sched.add_audit_cleanup(db.clone(), 30).await {
+        tracing::warn!(error = %e, job = "audit_cleanup", "failed to register cron job");
+    }
+    if let Err(e) = sched.add_tool_audit_cleanup(db.clone(), 90).await {
+        tracing::warn!(error = %e, job = "tool_audit_cleanup", "failed to register cron job");
+    }
+    if let Err(e) = sched.add_pending_messages_cleanup(db.clone()).await {
+        tracing::warn!(error = %e, job = "pending_messages_cleanup", "failed to register cron job");
+    }
+    if let Err(e) = sched.add_outbound_queue_cleanup(db.clone()).await {
+        tracing::warn!(error = %e, job = "outbound_queue_cleanup", "failed to register cron job");
+    }
+    if let Err(e) = sched.add_usage_log_cleanup(db.clone()).await {
+        tracing::warn!(error = %e, job = "usage_log_cleanup", "failed to register cron job");
+    }
+    if let Err(e) = sched.add_memory_decay_cleanup(db.clone()).await {
+        tracing::warn!(error = %e, job = "memory_decay_cleanup", "failed to register cron job");
+    }
+    if let Err(e) = sched.add_notifications_cleanup(db.clone()).await {
+        tracing::warn!(error = %e, job = "notifications_cleanup", "failed to register cron job");
+    }
 
     // Session cleanup (based on max TTL in agent configs)
     let ttl_days = agent_configs.iter().filter_map(|c| c.agent.session.as_ref()).map(|s| s.ttl_days).max().unwrap_or(30);
     let max_sessions_per_agent = state.config.config.limits.max_sessions_per_agent;
-    sched
+    if let Err(e) = sched
         .add_session_cleanup(
             db.clone(),
             ttl_days,
@@ -1018,7 +1040,9 @@ async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[conf
             state.config.config.cleanup.session_events_batch_size,
         )
         .await
-        .ok();
+    {
+        tracing::warn!(error = %e, job = "session_cleanup", "failed to register cron job");
+    }
 
     // One-shot enforcement of the per-agent session cap at startup. Protects
     // against cron/async-subagent backlogs that accumulated while the gateway
@@ -1045,14 +1069,16 @@ async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[conf
     // alongside the legacy daily add_session_cleanup (which still handles
     // cleanup_old_sessions) — the hourly job only prunes session_events,
     // with bounded LIMIT per batch to avoid long table locks.
-    sched
+    if let Err(e) = sched
         .add_session_events_cleanup_hourly(
             db.clone(),
             state.config.config.cleanup.session_events_retention_days,
             state.config.config.cleanup.session_events_batch_size,
         )
         .await
-        .ok();
+    {
+        tracing::warn!(error = %e, job = "session_events_cleanup_hourly", "failed to register cron job");
+    }
 
     // Automatic backup
     if state.config.config.backup.enabled
@@ -1077,7 +1103,8 @@ async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[conf
         }
     }
 
-    sched.start().await.ok();
+    sched.start().await.context("failed to start scheduler")?;
+    Ok(())
 }
 
 /// Advertise the service via mDNS.
