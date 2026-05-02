@@ -184,8 +184,9 @@ export default function ConfigPage() {
   const saveEditableFields = async () => {
     setSavingFields(true);
     try {
-      const payload: Record<string, unknown> = {};
-      if (editPublicUrl.trim()) payload.public_url = editPublicUrl.trim();
+      const payload: Record<string, unknown> = {
+        public_url: editPublicUrl.trim(),
+      };
       if (editMaxReqPerMin.trim()) payload.max_requests_per_minute = Number(editMaxReqPerMin);
       if (editMaxToolConcurrency.trim()) payload.max_tool_concurrency = Number(editMaxToolConcurrency);
       if (editMaxAgentTurns.trim()) payload.max_agent_turns = Number(editMaxAgentTurns);
