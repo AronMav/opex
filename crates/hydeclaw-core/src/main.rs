@@ -1065,6 +1065,18 @@ async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[conf
         tracing::error!(error = %e, "failed to schedule automatic backup");
     }
 
+    // Skill Curator
+    if state.config.config.curator.enabled {
+        if let Err(e) = sched.add_curator(
+            &state.config.config.curator.cron,
+            state.config.config.curator.clone(),
+            db.clone(),
+            state.auth.secrets.clone(),
+        ).await {
+            tracing::error!(error = %e, "failed to schedule skill curator");
+        }
+    }
+
     sched.start().await.ok();
 }
 
