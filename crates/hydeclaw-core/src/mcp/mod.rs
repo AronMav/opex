@@ -3,6 +3,7 @@ use hydeclaw_types::ToolDefinition;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::containers::ContainerManager;
@@ -170,6 +171,10 @@ impl McpRegistry {
     }
 
     /// Call an MCP server tool via MCP tools/call.
+    ///
+    /// Retries on connection/timeout errors — the MCP HTTP server inside the container
+    /// may not be ready to accept JSON-RPC requests immediately after the Docker
+    /// healthcheck passes (healthcheck hits `/health`, MCP endpoint is `/mcp`).
     pub async fn call_tool(
         &self,
         mcp_name: &str,
@@ -178,40 +183,69 @@ impl McpRegistry {
     ) -> Result<String> {
         let base_url = self.container_manager.ensure_running(mcp_name).await?;
 
-        let resp = self
-            .http_client
-            .post(format!("{base_url}/mcp"))
-            .header("Accept", "application/json, text/event-stream")
-            .json(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": arguments
-                },
-                "id": 2
-            }))
-            .send()
-            .await?;
+        // Retry delays for the startup gap: 300ms → 700ms → 1500ms
+        const RETRY_DELAYS_MS: [u64; 3] = [300, 700, 1500];
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": { "name": tool_name, "arguments": arguments },
+            "id": 2
+        });
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("MCP tools/call failed for {mcp_name}/{tool_name}: {status} {body}");
+        let mut last_err: Option<anyhow::Error> = None;
+        for (attempt, &delay_ms) in std::iter::once(&0u64)
+            .chain(RETRY_DELAYS_MS.iter())
+            .enumerate()
+        {
+            if delay_ms > 0 {
+                tracing::debug!(
+                    mcp = %mcp_name,
+                    tool = %tool_name,
+                    attempt,
+                    delay_ms,
+                    "retrying MCP call after container startup"
+                );
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+
+            let result = self
+                .http_client
+                .post(format!("{base_url}/mcp"))
+                .header("Accept", "application/json, text/event-stream")
+                .json(&payload)
+                .send()
+                .await;
+
+            match result {
+                // Retry on any transport-layer error — container may need a moment
+                // after the TCP port opens before the HTTP server handles requests.
+                Err(e) if e.is_connect() || e.is_timeout() || e.is_request() => {
+                    last_err = Some(e.into());
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let body = resp.text().await.unwrap_or_default();
+                        anyhow::bail!(
+                            "MCP tools/call failed for {mcp_name}/{tool_name}: {status} {body}"
+                        );
+                    }
+                    let body = parse_mcp_response(resp).await?;
+                    let content = body
+                        .pointer("/result/content")
+                        .and_then(|c| c.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|item| item.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    return Ok(content.to_string());
+                }
+            }
         }
 
-        let body = parse_mcp_response(resp).await?;
-
-        // Extract text content from MCP response
-        let content = body
-            .pointer("/result/content")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|item| item.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-
-        Ok(content.to_string())
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("MCP call failed: no attempts made")))
     }
 
     /// Get all discovered tool definitions (for LLM system prompt).

@@ -85,6 +85,10 @@ impl ContainerManager {
                         .start_container(&container_name, None::<StartContainerOptions<String>>)
                         .await?;
                     self.wait_healthy(&container_name, Duration::from_secs(30)).await?;
+                    // Probe the actual TCP port — wait_healthy returns immediately when
+                    // no Docker HEALTHCHECK is defined (running state is enough for Docker,
+                    // but the MCP HTTP server inside may still be initializing).
+                    self.probe_port_ready(port, Duration::from_secs(20)).await?;
                 }
             }
             Err(e) => {
@@ -194,6 +198,31 @@ impl ContainerManager {
         for name in to_stop {
             if let Err(e) = self.stop(&name).await {
                 tracing::warn!(mcp = %name, error = %e, "failed to stop idle MCP server");
+            }
+        }
+    }
+
+    /// Poll a TCP port until it accepts connections or the deadline expires.
+    ///
+    /// Used after starting Docker containers that lack a HEALTHCHECK — ensures
+    /// the MCP HTTP server inside is actually listening before the caller proceeds.
+    async fn probe_port_ready(&self, port: u16, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() > deadline {
+                anyhow::bail!("MCP server port {port} not ready within {}s", timeout.as_secs());
+            }
+            let probe = tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::net::TcpStream::connect(("127.0.0.1", port)),
+            )
+            .await;
+            match probe {
+                Ok(Ok(_)) => {
+                    tracing::debug!(port, "MCP server port ready");
+                    return Ok(());
+                }
+                _ => tokio::time::sleep(Duration::from_millis(200)).await,
             }
         }
     }
