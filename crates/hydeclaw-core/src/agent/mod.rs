@@ -37,6 +37,7 @@ pub mod workspace;
 pub mod knowledge_extractor;
 pub mod agent_config;
 pub mod pipeline;
+pub mod compressor;
 // Phase 64 SEC-02: workspace path canonicalization guard. Leaf module with
 // zero crate::* deps (only std + dunce) so the lib facade can re-export it
 // without cascading the agent subtree.
