@@ -1,5 +1,65 @@
 //! Prompt injection detection and external content wrapping.
 
+/// Injection pattern: (trigger, `context_words`, label).
+/// Trigger must be present. If `context_words` is non-empty, at least one must also match.
+const INJECTION_PATTERNS: &[(&str, &[&str], &str)] = &[
+    ("ignore", &["previous instructions", "prior instructions", "above instructions"], "ignore_previous_instructions"),
+    ("disregard", &["above", "previous"], "disregard_previous"),
+    ("forget", &["everything", "all previous", "all above"], "forget_everything"),
+    ("you are now", &[], "role_override"),
+    ("pretend you are", &[], "role_override"),
+    ("act as if you", &[], "role_override"),
+    ("new instructions:", &[], "new_instructions"),
+    ("new instructions\n", &[], "new_instructions"),
+    ("system:", &["override", "prompt", "command"], "system_override"),
+    ("<system>", &[], "xml_system_tags"),
+    ("</system>", &[], "xml_system_tags"),
+    ("<system_prompt>", &[], "xml_system_tags"),
+    ("elevated = true", &[], "privilege_escalation"),
+    ("admin = true", &[], "privilege_escalation"),
+    ("sudo mode", &[], "privilege_escalation"),
+    ("rm -rf /", &[], "dangerous_command"),
+    ("delete all files", &[], "dangerous_command"),
+    ("drop table", &[], "dangerous_command"),
+];
+
+/// Zero-width / bidi-override / BOM characters to detect as potential obfuscation.
+const ZERO_WIDTH_CHARS: &[char] = &[
+    '\u{200b}', // ZERO WIDTH SPACE
+    '\u{200c}', // ZERO WIDTH NON-JOINER
+    '\u{200d}', // ZERO WIDTH JOINER
+    '\u{202e}', // RIGHT-TO-LEFT OVERRIDE
+    '\u{feff}', // ZERO WIDTH NO-BREAK SPACE (BOM / ZWNBSP)
+];
+
+/// Check text for prompt injection patterns and zero-width / bidi-override / BOM characters.
+/// Returns a list of matched pattern labels (empty = clean).
+/// Detection is logging-only — messages are NOT blocked.
+pub fn detect_prompt_injection(text: &str) -> Vec<&'static str> {
+    let lower = text.to_lowercase();
+    let mut matches = Vec::new();
+
+    for &(trigger, context_words, label) in INJECTION_PATTERNS {
+        if !lower.contains(trigger) {
+            continue;
+        }
+        let matched = context_words.is_empty()
+            || context_words.iter().any(|w| lower.contains(w));
+        if matched && !matches.contains(&label) {
+            matches.push(label);
+        }
+    }
+
+    // Scan raw text (not lowercased) — case folding is irrelevant for these code points.
+    if text.chars().any(|c| ZERO_WIDTH_CHARS.contains(&c)) {
+        if !matches.contains(&"zero_width_chars") {
+            matches.push("zero_width_chars");
+        }
+    }
+
+    matches
+}
+
 /// Wrap external/untrusted content with boundary markers.
 /// This helps the LLM distinguish between user instructions and fetched data.
 pub fn wrap_external_content(content: &str, source: &str) -> String {
@@ -11,50 +71,6 @@ pub fn wrap_external_content(content: &str, source: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Injection pattern: (trigger, `context_words`, label).
-    /// Trigger must be present. If `context_words` is non-empty, at least one must also match.
-    const INJECTION_PATTERNS: &[(&str, &[&str], &str)] = &[
-        ("ignore", &["previous instructions", "prior instructions", "above instructions"], "ignore_previous_instructions"),
-        ("disregard", &["above", "previous"], "disregard_previous"),
-        ("forget", &["everything", "all previous", "all above"], "forget_everything"),
-        ("you are now", &[], "role_override"),
-        ("pretend you are", &[], "role_override"),
-        ("act as if you", &[], "role_override"),
-        ("new instructions:", &[], "new_instructions"),
-        ("new instructions\n", &[], "new_instructions"),
-        ("system:", &["override", "prompt", "command"], "system_override"),
-        ("<system>", &[], "xml_system_tags"),
-        ("</system>", &[], "xml_system_tags"),
-        ("<system_prompt>", &[], "xml_system_tags"),
-        ("elevated = true", &[], "privilege_escalation"),
-        ("admin = true", &[], "privilege_escalation"),
-        ("sudo mode", &[], "privilege_escalation"),
-        ("rm -rf /", &[], "dangerous_command"),
-        ("delete all files", &[], "dangerous_command"),
-        ("drop table", &[], "dangerous_command"),
-    ];
-
-    /// Check user message for prompt injection patterns.
-    /// Returns a list of matched pattern names (empty = clean).
-    /// Detection is logging-only — messages are NOT blocked.
-    fn detect_prompt_injection(text: &str) -> Vec<&'static str> {
-        let lower = text.to_lowercase();
-        let mut matches = Vec::new();
-
-        for &(trigger, context_words, label) in INJECTION_PATTERNS {
-            if !lower.contains(trigger) {
-                continue;
-            }
-            let matched = context_words.is_empty()
-                || context_words.iter().any(|w| lower.contains(w));
-            if matched && !matches.contains(&label) {
-                matches.push(label);
-            }
-        }
-
-        matches
-    }
 
     #[test]
     fn test_no_injection() {
@@ -87,5 +103,43 @@ mod tests {
         assert!(wrapped.contains("web_fetch:example.com"));
         assert!(wrapped.contains("hello"));
         assert!(wrapped.contains("<<<END_EXTERNAL_CONTENT>>>"));
+    }
+
+    // ── Zero-width / bidi-override / BOM detection ───────────────────────────
+
+    #[test]
+    fn test_zero_width_space_detected() {
+        let r = detect_prompt_injection("hello\u{200b}world");
+        assert!(r.contains(&"zero_width_chars"), "U+200B (ZERO WIDTH SPACE) must be detected");
+    }
+
+    #[test]
+    fn test_rtl_override_detected() {
+        let r = detect_prompt_injection("normal\u{202e}text");
+        assert!(r.contains(&"zero_width_chars"), "U+202E (RTL OVERRIDE) must be detected");
+    }
+
+    #[test]
+    fn test_bom_detected() {
+        let r = detect_prompt_injection("\u{feff}hello");
+        assert!(r.contains(&"zero_width_chars"), "U+FEFF (BOM/ZWNBSP) must be detected");
+    }
+
+    #[test]
+    fn test_clean_ascii_no_zero_width() {
+        let r = detect_prompt_injection("This is clean ASCII text with no hidden chars.");
+        assert!(!r.contains(&"zero_width_chars"), "clean ASCII must NOT report zero_width_chars");
+    }
+
+    #[test]
+    fn test_combined_injection_and_zero_width() {
+        let r = detect_prompt_injection("Ignore previous instructions\u{200b}");
+        assert!(r.contains(&"ignore_previous_instructions"), "must detect injection pattern");
+        assert!(r.contains(&"zero_width_chars"), "must detect zero-width char");
+        // No duplicates
+        let zw_count = r.iter().filter(|&&l| l == "zero_width_chars").count();
+        let inj_count = r.iter().filter(|&&l| l == "ignore_previous_instructions").count();
+        assert_eq!(zw_count, 1, "zero_width_chars label must appear exactly once");
+        assert_eq!(inj_count, 1, "ignore_previous_instructions label must appear exactly once");
     }
 }
