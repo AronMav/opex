@@ -14,6 +14,8 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/skills/repairs", get(api_skill_repairs_list))
         .route("/api/skills/repairs/{id}", axum::routing::patch(api_skill_repair_resolve))
         .route("/api/skills/{skill}", get(api_skill_get_global).put(api_skill_upsert_global).delete(api_skill_delete_global))
+        .route("/api/skills/{skill}/versions", get(api_skill_versions))
+        .route("/api/skills/{skill}/versions/{vid}", get(api_skill_version_get))
         .route("/api/agents/{name}/skills", get(api_skills_list))
         .route("/api/agents/{name}/skills/{skill}", get(api_skill_get).put(api_skill_upsert).delete(api_skill_delete))
 }
@@ -185,14 +187,20 @@ pub(crate) async fn api_skill_upsert_global(
     axum::extract::Path(skill_name): axum::extract::Path<String>,
     axum::extract::Json(body): axum::extract::Json<SkillUpsertBody>,
 ) -> impl IntoResponse {
+    // Preserve last_used_at from existing file when updating.
+    let existing_last_used_at = find_skill_path(crate::config::WORKSPACE_DIR, &skill_name).await
+        .and_then(|p| std::fs::read_to_string(&p).ok())
+        .and_then(|c| crate::skills::SkillDef::parse(&c))
+        .and_then(|s| s.meta.last_used_at);
+
     let frontmatter = crate::skills::SkillFrontmatter {
         name: skill_name.clone(),
         description: body.description.unwrap_or_default(),
         triggers: body.triggers,
         tools_required: body.tools_required,
         priority: body.priority,
-        last_used_at: None,
-        state: crate::skills::SkillState::Active,
+        last_used_at: existing_last_used_at,
+        state: body.state.unwrap_or(crate::skills::SkillState::Active),
         pinned: None,
     };
     match crate::skills::write_skill(
@@ -284,6 +292,7 @@ pub(crate) struct SkillUpsertBody {
     priority: i32,
     #[serde(default)]
     pub(crate) instructions: String,
+    pub(crate) state: Option<crate::skills::SkillState>,
 }
 
 /// PUT /api/agents/{name}/skills/{skill}
@@ -293,14 +302,20 @@ pub(crate) async fn api_skill_upsert(
     axum::extract::Path((agent_name, skill_name)): axum::extract::Path<(String, String)>,
     axum::extract::Json(body): axum::extract::Json<SkillUpsertBody>,
 ) -> impl IntoResponse {
+    // Preserve last_used_at from existing file when updating.
+    let existing_last_used_at = find_skill_path(crate::config::WORKSPACE_DIR, &skill_name).await
+        .and_then(|p| std::fs::read_to_string(&p).ok())
+        .and_then(|c| crate::skills::SkillDef::parse(&c))
+        .and_then(|s| s.meta.last_used_at);
+
     let frontmatter = crate::skills::SkillFrontmatter {
         name: skill_name.clone(),
         description: body.description.unwrap_or_default(),
         triggers: body.triggers,
         tools_required: body.tools_required,
         priority: body.priority,
-        last_used_at: None,
-        state: crate::skills::SkillState::Active,
+        last_used_at: existing_last_used_at,
+        state: body.state.unwrap_or(crate::skills::SkillState::Active),
         pinned: None,
     };
     match crate::skills::write_skill(
@@ -333,6 +348,40 @@ pub(crate) async fn api_skill_delete(
             Json(serde_json::json!({"ok": true})).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+// ── Skill version endpoints ───────────────────────────────────────────────────
+
+/// GET /api/skills/{skill}/versions
+pub(crate) async fn api_skill_versions(
+    State(infra): State<InfraServices>,
+    axum::extract::Path(skill_name): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    match crate::db::skill_versions::list_versions(&infra.db, &skill_name).await {
+        Ok(versions) => Json(serde_json::json!({"versions": versions})).into_response(),
+        Err(e) => {
+            tracing::error!(skill = %skill_name, error = %e, "failed to list skill versions");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+             Json(serde_json::json!({"error": e.to_string()}))).into_response()
+        }
+    }
+}
+
+/// GET /api/skills/{skill}/versions/{vid}
+pub(crate) async fn api_skill_version_get(
+    State(infra): State<InfraServices>,
+    axum::extract::Path((_skill_name, vid)): axum::extract::Path<(String, uuid::Uuid)>,
+) -> impl IntoResponse {
+    match crate::db::skill_versions::get_version(&infra.db, vid).await {
+        Ok(Some(v)) => Json(v).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND,
+                     Json(serde_json::json!({"error": "not found"}))).into_response(),
+        Err(e) => {
+            tracing::error!(vid = %vid, error = %e, "failed to get skill version");
+            (StatusCode::INTERNAL_SERVER_ERROR,
+             Json(serde_json::json!({"error": e.to_string()}))).into_response()
+        }
     }
 }
 

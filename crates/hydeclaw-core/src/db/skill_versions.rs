@@ -2,6 +2,21 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+// ── SkillVersionRow ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct SkillVersionRow {
+    pub id: Uuid,
+    pub skill_name: String,
+    pub generation: i32,
+    pub parent_id: Option<Uuid>,
+    pub evolution_type: String,
+    pub content: String,
+    pub content_hash: String,
+    pub trigger_reason: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Compute SHA256 hex digest of content.
 fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
@@ -42,4 +57,26 @@ pub async fn save_version(
     .await?;
 
     Ok(row.get("id"))
+}
+
+// ── Query helpers ─────────────────────────────────────────────────────────────
+
+/// Return all versions for a skill ordered newest-first (by generation).
+pub async fn list_versions(db: &PgPool, skill_name: &str) -> sqlx::Result<Vec<SkillVersionRow>> {
+    sqlx::query_as::<_, SkillVersionRow>(
+        "SELECT * FROM skill_versions WHERE skill_name = $1 ORDER BY generation DESC",
+    )
+    .bind(skill_name)
+    .fetch_all(db)
+    .await
+}
+
+/// Return a single version by UUID, or None if not found.
+pub async fn get_version(db: &PgPool, id: Uuid) -> sqlx::Result<Option<SkillVersionRow>> {
+    sqlx::query_as::<_, SkillVersionRow>(
+        "SELECT * FROM skill_versions WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await
 }
