@@ -19,6 +19,7 @@ tools_required:
   - tavily_search
 priority: 10
 state: active
+last_used_at: "2026-05-02T16:00:00.201292506+00:00"
 ---
 
 ## Search Provider Selection
