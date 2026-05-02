@@ -28,6 +28,8 @@ pub struct CodeSandbox {
     docker: Docker,
     image: String,
     memory_bytes: i64,
+    /// Hard CPU cap in nano-CPUs (1 CPU = 1_000_000_000). Zero means unlimited.
+    nano_cpus: i64,
     extra_binds: Vec<String>,
     timeout_secs: u64,
 }
@@ -39,6 +41,7 @@ impl CodeSandbox {
             docker,
             image: cfg.image.clone(),
             memory_bytes: i64::from(cfg.memory_mb.max(512)) * 1024 * 1024,
+            nano_cpus: (cfg.cpu_limit * 1_000_000_000.0) as i64,
             extra_binds: cfg.extra_binds.clone(),
             timeout_secs: cfg.timeout_secs,
         })
@@ -297,6 +300,7 @@ impl CodeSandbox {
                 user: Some("1000:1000".to_string()),
                 host_config: Some(HostConfig {
                     memory: Some(self.memory_bytes),
+                    nano_cpus: if self.nano_cpus > 0 { Some(self.nano_cpus) } else { None },
                     network_mode,
                     binds: Some(binds),
                     restart_policy: Some(bollard::models::RestartPolicy {

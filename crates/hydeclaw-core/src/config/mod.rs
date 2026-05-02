@@ -1038,6 +1038,9 @@ pub struct SandboxConfig {
     /// Memory limit per execution in megabytes.
     #[serde(default = "default_sandbox_memory")]
     pub memory_mb: u32,
+    /// CPU limit per execution (fractional CPUs, e.g. 1.0 = one core).
+    #[serde(default = "default_sandbox_cpu")]
+    pub cpu_limit: f64,
     /// Extra volume mounts for agent containers (e.g. "docker/toolgate:/toolgate").
     /// Relative paths are resolved against the project root (workspace parent).
     #[serde(default)]
@@ -1047,6 +1050,7 @@ pub struct SandboxConfig {
 fn default_sandbox_image() -> String { "python:3.12-slim".to_string() }
 fn default_sandbox_timeout() -> u64 { 30 }
 fn default_sandbox_memory() -> u32 { 256 }
+fn default_sandbox_cpu() -> f64 { 1.0 }
 
 impl Default for SandboxConfig {
     fn default() -> Self {
@@ -1055,6 +1059,7 @@ impl Default for SandboxConfig {
             image: default_sandbox_image(),
             timeout_secs: default_sandbox_timeout(),
             memory_mb: default_sandbox_memory(),
+            cpu_limit: default_sandbox_cpu(),
             extra_binds: vec![],
         }
     }
