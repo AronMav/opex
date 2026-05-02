@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useRef, useState, useCallback, memo, Fragment } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { apiGet, apiPost, apiPut } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { formatDuration, relativeTime } from "@/lib/format";
 import { useAutoRefresh } from "@/hooks/use-auto-refresh";
 import { useTranslation } from "@/hooks/use-translation";
@@ -24,9 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
-} from "@/components/ui/sheet";
 import {
   Activity, Clock, Brain, Bot, User, Wrench, Zap, RefreshCw, Calendar, Database,
   CheckCircle2, XCircle, HeartPulse, AlertTriangle, Stethoscope,
@@ -462,14 +459,6 @@ function MonitorPageInner() {
   const [restarting, setRestarting] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] = useState(60000);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
-  const [channels, setChannels] = useState<ChannelInfo[]>([]);
-  const [alertSettings, setAlertSettings] = useState<AlertingSettings>({
-    alert_channel_ids: [],
-    alert_events: ["down", "restart", "recovery", "resource"],
-  });
-  const [alertDirty, setAlertDirty] = useState(false);
-  const [alertSaving, setAlertSaving] = useState(false);
-  const [alertOpen, setAlertOpen] = useState(false);
 
   const restartContainer = async (dockerName: string) => {
     setRestarting(dockerName);
@@ -483,62 +472,25 @@ function MonitorPageInner() {
     setTimeout(() => { setRestarting(null); fetchWdData(); }, 5000);
   };
 
-  const saveAlertSettings = async () => {
-    setAlertSaving(true);
-    try {
-      await apiPut("/api/watchdog/settings", alertSettings);
-      setAlertDirty(false);
-    } catch (e) {
-      setWdError(`Failed to save: ${e}`);
-    }
-    setAlertSaving(false);
-  };
-
-  const toggleChannel = (id: string) => {
-    setAlertSettings((prev) => ({
-      ...prev,
-      alert_channel_ids: prev.alert_channel_ids.includes(id)
-        ? prev.alert_channel_ids.filter((c) => c !== id)
-        : [...prev.alert_channel_ids, id],
-    }));
-    setAlertDirty(true);
-  };
-
-  const toggleEvent = (event: string) => {
-    setAlertSettings((prev) => ({
-      ...prev,
-      alert_events: prev.alert_events.includes(event)
-        ? prev.alert_events.filter((e) => e !== event)
-        : [...prev.alert_events, event],
-    }));
-    setAlertDirty(true);
-  };
 
   const fetchWdData = useCallback(async (cancelled?: { current: boolean }) => {
     try {
-      const [s, st, wd, chs, als] = await Promise.all([
+      const [s, st, wd] = await Promise.all([
         apiGet<StatusInfo>("/api/status"),
         apiGet<StatsInfo>("/api/stats"),
         apiGet<WatchdogStatus>("/api/watchdog/status").catch((e) => { console.warn("[watchdog] status fetch failed:", e); return null; }),
-        apiGet<{ channels: ChannelInfo[] }>("/api/channels").catch((e) => { console.warn("[watchdog] channels fetch failed:", e); return { channels: [] }; }),
-        apiGet<AlertingSettings>("/api/watchdog/settings").catch((e) => { console.warn("[watchdog] settings fetch failed:", e); return {
-          alert_channel_ids: [] as string[],
-          alert_events: ["down", "restart", "recovery", "resource"],
-        }; }),
       ]);
       if (cancelled?.current) return;
       setWdStatus(s);
       setWdStats(st);
       if (wd && wd.checks) setWatchdog(wd);
-      setChannels(chs.channels);
-      if (!alertDirty) setAlertSettings(als);
       setLastFetch(new Date());
       setWdError("");
     } catch (e) {
       if (cancelled?.current) return;
       setWdError(`${e}`);
     }
-  }, [alertDirty]);
+  }, []);
 
   useEffect(() => {
     const cancelled = { current: false };
@@ -773,14 +725,6 @@ function MonitorPageInner() {
                       )}
                     </div>
                   )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setAlertOpen(true)}
-                  >
-                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary/60" />
-                    {t("watchdog.alerting.title")}
-                  </Button>
                 </div>
               </div>
 
@@ -804,82 +748,6 @@ function MonitorPageInner() {
                 <MetricCard label={t("dashboard.scheduled_jobs")} value={String(s?.scheduled_jobs ?? "0")} subValue={t("dashboard.scheduled_sub")} icon={Calendar} />
               </div>
 
-              <Sheet open={alertOpen} onOpenChange={setAlertOpen}>
-                <SheetContent side="right" className="w-80 sm:max-w-sm">
-                  <SheetHeader>
-                    <SheetTitle className="text-sm">{t("watchdog.alerting.title")}</SheetTitle>
-                    <SheetDescription className="text-xs">
-                      {t("watchdog.alerting.description")}
-                    </SheetDescription>
-                  </SheetHeader>
-
-                  <div className="px-4 space-y-6 flex-1 overflow-y-auto">
-                    <div className="space-y-3">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("watchdog.alerting.channels")}</p>
-                      {channels.length === 0 ? (
-                        <p className="text-xs text-muted-foreground italic">{t("watchdog.alerting.no_channels")}</p>
-                      ) : (
-                        <div className="flex flex-col gap-1.5">
-                          {channels.map((ch) => {
-                            const selected = alertSettings.alert_channel_ids.includes(ch.id);
-                            return (
-                              <Button
-                                key={ch.id}
-                                variant={selected ? "default" : "outline"}
-                                size="sm"
-                                role="checkbox"
-                                aria-checked={selected}
-                                onClick={() => toggleChannel(ch.id)}
-                                className="w-full justify-start text-xs h-auto py-2"
-                              >
-                                <span className="font-medium">{ch.agent_name}</span>
-                                <span className="opacity-70"> / {ch.channel_type}</span>
-                                {ch.display_name !== ch.channel_type && (
-                                  <span className="opacity-50"> ({ch.display_name})</span>
-                                )}
-                              </Button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-3">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("watchdog.alerting.events")}</p>
-                      <div className="flex flex-col gap-1.5">
-                        {ALL_EVENTS.map((event) => {
-                          const selected = alertSettings.alert_events.includes(event);
-                          return (
-                            <Button
-                              key={event}
-                              variant={selected ? "default" : "outline"}
-                              size="sm"
-                              role="checkbox"
-                              aria-checked={selected}
-                              onClick={() => toggleEvent(event)}
-                              className="w-full justify-start text-xs"
-                            >
-                              {EVENT_LABEL_KEYS[event] ? t(EVENT_LABEL_KEYS[event] as Parameters<typeof t>[0]) : event}
-                            </Button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </div>
-
-                  {alertDirty && (
-                    <div className="px-4 pb-4">
-                      <Button
-                        onClick={saveAlertSettings}
-                        disabled={alertSaving}
-                        className="w-full"
-                      >
-                        {alertSaving ? t("common.saving") : t("common.save")}
-                      </Button>
-                    </div>
-                  )}
-                </SheetContent>
-              </Sheet>
 
               {wdChecks.length > 0 && (
                 <div className="mt-8">
