@@ -21,11 +21,6 @@ pub async fn analyze_and_evolve(
         return;
     }
 
-    // Only evolve on failures or unusually long responses
-    if success && response.len() < 2000 {
-        return;
-    }
-
     let skills_str = if skills_used.is_empty() {
         "none".to_string()
     } else {
