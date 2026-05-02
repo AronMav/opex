@@ -107,7 +107,10 @@ impl AgentEngine {
     /// Used by cron dynamic jobs to prevent context accumulation across invocations.
     pub async fn handle_isolated(&self, msg: &IncomingMessage) -> Result<String> {
         // Hook: BeforeMessage
-        if let crate::agent::hooks::HookAction::Block(reason) = self.hooks().fire(&crate::agent::hooks::HookEvent::BeforeMessage) {
+        let hook_event = crate::agent::hooks::HookEvent::BeforeMessage;
+        let action = self.hooks().fire(&hook_event);
+        self.hooks().fire_webhooks(&hook_event);
+        if let crate::agent::hooks::HookAction::Block(reason) = action {
             anyhow::bail!("blocked by hook: {reason}");
         }
 
@@ -214,7 +217,9 @@ impl AgentEngine {
                         }
                     }
                     tracing::error!(error = %e, iteration, "isolated LLM call failed, returning fallback");
-                    self.hooks().fire(&crate::agent::hooks::HookEvent::OnError);
+                    let hook_event = crate::agent::hooks::HookEvent::OnError;
+                    self.hooks().fire(&hook_event);
+                    self.hooks().fire_webhooks(&hook_event);
                     final_response = error_classify::format_user_error(&e);
                     break;
                 }
@@ -446,7 +451,9 @@ impl AgentEngine {
         }
 
         // Hook: AfterResponse
-        self.hooks().fire(&crate::agent::hooks::HookEvent::AfterResponse);
+        let hook_event = crate::agent::hooks::HookEvent::AfterResponse;
+        self.hooks().fire(&hook_event);
+        self.hooks().fire_webhooks(&hook_event);
 
         Ok(final_response)
     }

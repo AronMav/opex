@@ -135,6 +135,8 @@ pub(crate) fn event_name(event: &HookEvent) -> &'static str {
 }
 
 /// Returns true if `event` matches the webhook's subscribed event list.
+/// Used in tests; marked cfg(test) to silence dead_code when no callers exist in prod code.
+#[cfg(test)]
 pub(crate) fn webhook_matches(wh: &crate::config::WebhookConfig, event: &HookEvent) -> bool {
     let n = event_name(event);
     wh.events.iter().any(|e| e == n)

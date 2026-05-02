@@ -30,9 +30,10 @@ impl AgentEngine {
         force_new_session: bool,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Result<Uuid> {
-        if let crate::agent::hooks::HookAction::Block(reason) =
-            self.hooks().fire(&crate::agent::hooks::HookEvent::BeforeMessage)
-        {
+        let hook_event = crate::agent::hooks::HookEvent::BeforeMessage;
+        let action = self.hooks().fire(&hook_event);
+        self.hooks().fire_webhooks(&hook_event);
+        if let crate::agent::hooks::HookAction::Block(reason) = action {
             anyhow::bail!("blocked by hook: {}", reason);
         }
         let _cancel_guard = self.state.register_request();
@@ -185,9 +186,10 @@ impl AgentEngine {
     ) -> Result<String> {
         self.cfg().approval_manager.prune_stale().await;
 
-        if let crate::agent::hooks::HookAction::Block(reason) =
-            self.hooks().fire(&crate::agent::hooks::HookEvent::BeforeMessage)
-        {
+        let hook_event = crate::agent::hooks::HookEvent::BeforeMessage;
+        let action = self.hooks().fire(&hook_event);
+        self.hooks().fire_webhooks(&hook_event);
+        if let crate::agent::hooks::HookAction::Block(reason) = action {
             anyhow::bail!("blocked by hook: {}", reason);
         }
         let _cancel_guard = self.state.register_request();

@@ -50,11 +50,13 @@ impl AgentEngine {
             let clean_params = crate::agent::pipeline::dispatch::clean_tool_params(arguments);
 
             // Hook: AfterToolResult (fire-and-forget, non-blocking)
-            self.hooks().fire(&crate::agent::hooks::HookEvent::AfterToolResult {
+            let hook_event = crate::agent::hooks::HookEvent::AfterToolResult {
                 agent: self.cfg().agent.name.clone(),
                 tool_name: name.to_string(),
                 duration_ms: duration_ms as u64,
-            });
+            };
+            self.hooks().fire(&hook_event);
+            self.hooks().fire_webhooks(&hook_event);
 
             self.cfg().audit_queue.send(crate::db::audit_queue::AuditEvent::ToolExecution {
                 agent_name: self.cfg().agent.name.clone(),
@@ -140,10 +142,13 @@ impl AgentEngine {
             }
 
             // Hook: BeforeToolCall
-            if let crate::agent::hooks::HookAction::Block(reason) = self.hooks().fire(&crate::agent::hooks::HookEvent::BeforeToolCall {
+            let hook_event = crate::agent::hooks::HookEvent::BeforeToolCall {
                 agent: self.cfg().agent.name.clone(),
                 tool_name: name.to_string(),
-            }) {
+            };
+            let action = self.hooks().fire(&hook_event);
+            self.hooks().fire_webhooks(&hook_event);
+            if let crate::agent::hooks::HookAction::Block(reason) = action {
                 return format!("Tool blocked by hook: {}", reason);
             }
 
