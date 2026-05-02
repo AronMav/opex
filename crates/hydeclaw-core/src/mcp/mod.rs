@@ -660,43 +660,36 @@ mod tests {
         let body_str = serde_json::to_string(&body).expect("json");
         tokio::spawn(async move {
             let mut drops_remaining = drop_count;
-            loop {
-                match listener.accept().await {
-                    Ok((mut stream, _)) => {
-                        if drops_remaining > 0 {
-                            // Drop the stream immediately — client gets connection reset.
-                            drops_remaining -= 1;
-                            drop(stream);
-                        } else {
-                            // Drain the request bytes then respond with HTTP 200.
-                            let mut buf = vec![0u8; 4096];
-                            // Read until we see end of HTTP headers (double CRLF).
-                            // On Windows, recv may return short; loop a few times.
-                            let mut raw = Vec::new();
-                            for _ in 0..20 {
-                                use tokio::io::AsyncReadExt;
-                                match stream.read(&mut buf).await {
-                                    Ok(0) | Err(_) => break,
-                                    Ok(n) => {
-                                        raw.extend_from_slice(&buf[..n]);
-                                        if raw.windows(4).any(|w| w == b"\r\n\r\n") {
-                                            break;
-                                        }
-                                    }
+            while let Ok((mut stream, _)) = listener.accept().await {
+                if drops_remaining > 0 {
+                    // Drop the stream immediately — client gets connection reset.
+                    drops_remaining -= 1;
+                    drop(stream);
+                } else {
+                    // Drain the request bytes then respond with HTTP 200.
+                    let mut buf = vec![0u8; 4096];
+                    // Read until we see end of HTTP headers (double CRLF).
+                    // On Windows, recv may return short; loop a few times.
+                    let mut raw = Vec::new();
+                    for _ in 0..20 {
+                        use tokio::io::AsyncReadExt;
+                        match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                raw.extend_from_slice(&buf[..n]);
+                                if raw.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
                                 }
                             }
-                            let response = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                body_str.len(),
-                                body_str
-                            );
-                            let _ = stream.write_all(response.as_bytes()).await;
-                            let _ = stream.flush().await;
-                            // Keep serving subsequent connections too.
-                            drops_remaining = 0; // already 0 — stay in serve mode
                         }
                     }
-                    Err(_) => break,
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body_str.len(),
+                        body_str
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.flush().await;
                 }
             }
         });
