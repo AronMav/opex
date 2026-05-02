@@ -3,6 +3,7 @@ use hydeclaw_types::ToolDefinition;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 use crate::containers::ContainerManager;
@@ -30,6 +31,24 @@ impl McpRegistry {
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_default();
+        Self {
+            container_manager,
+            tool_cache: Arc::new(RwLock::new(HashMap::new())),
+            http_client,
+            cache_dir: cache_dir.into(),
+        }
+    }
+
+    /// Test-only constructor that lets callers inject a pre-built `reqwest::Client`.
+    ///
+    /// Used by tests to set short connect timeouts so transport-error retries finish quickly,
+    /// and to verify the retry loop without requiring a live Docker daemon.
+    #[cfg(test)]
+    pub(crate) fn with_http_client(
+        container_manager: Arc<ContainerManager>,
+        cache_dir: impl Into<PathBuf>,
+        http_client: reqwest::Client,
+    ) -> Self {
         Self {
             container_manager,
             tool_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -170,6 +189,10 @@ impl McpRegistry {
     }
 
     /// Call an MCP server tool via MCP tools/call.
+    ///
+    /// Retries on connection/timeout errors — the MCP HTTP server inside the container
+    /// may not be ready to accept JSON-RPC requests immediately after the Docker
+    /// healthcheck passes (healthcheck hits `/health`, MCP endpoint is `/mcp`).
     pub async fn call_tool(
         &self,
         mcp_name: &str,
@@ -178,40 +201,69 @@ impl McpRegistry {
     ) -> Result<String> {
         let base_url = self.container_manager.ensure_running(mcp_name).await?;
 
-        let resp = self
-            .http_client
-            .post(format!("{base_url}/mcp"))
-            .header("Accept", "application/json, text/event-stream")
-            .json(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": arguments
-                },
-                "id": 2
-            }))
-            .send()
-            .await?;
+        // Retry delays for the startup gap: 300ms → 700ms → 1500ms
+        const RETRY_DELAYS_MS: [u64; 3] = [300, 700, 1500];
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": { "name": tool_name, "arguments": arguments },
+            "id": 2
+        });
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("MCP tools/call failed for {mcp_name}/{tool_name}: {status} {body}");
+        let mut last_err: Option<anyhow::Error> = None;
+        for (attempt, &delay_ms) in std::iter::once(&0u64)
+            .chain(RETRY_DELAYS_MS.iter())
+            .enumerate()
+        {
+            if delay_ms > 0 {
+                tracing::debug!(
+                    mcp = %mcp_name,
+                    tool = %tool_name,
+                    attempt,
+                    delay_ms,
+                    "retrying MCP call after container startup"
+                );
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+
+            let result = self
+                .http_client
+                .post(format!("{base_url}/mcp"))
+                .header("Accept", "application/json, text/event-stream")
+                .json(&payload)
+                .send()
+                .await;
+
+            match result {
+                // Retry on any transport-layer error — container may need a moment
+                // after the TCP port opens before the HTTP server handles requests.
+                Err(e) if e.is_connect() || e.is_timeout() || e.is_request() => {
+                    last_err = Some(e.into());
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let body = resp.text().await.unwrap_or_default();
+                        anyhow::bail!(
+                            "MCP tools/call failed for {mcp_name}/{tool_name}: {status} {body}"
+                        );
+                    }
+                    let body = parse_mcp_response(resp).await?;
+                    let content = body
+                        .pointer("/result/content")
+                        .and_then(|c| c.as_array())
+                        .and_then(|arr| arr.first())
+                        .and_then(|item| item.get("text"))
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("");
+                    return Ok(content.to_string());
+                }
+            }
         }
 
-        let body = parse_mcp_response(resp).await?;
-
-        // Extract text content from MCP response
-        let content = body
-            .pointer("/result/content")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|item| item.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("");
-
-        Ok(content.to_string())
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("MCP call failed: no attempts made")))
     }
 
     /// Get all discovered tool definitions (for LLM system prompt).
@@ -525,5 +577,234 @@ mod tests {
         });
         let tools = parse(&body).expect("should succeed");
         assert!(tools.is_empty());
+    }
+
+    // ── call_tool retry-loop tests ─────────────────────────────────────────────
+
+    use crate::config::McpConfig;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// Build a McpConfig with `url` set (URL-based MCP — skips Docker entirely).
+    fn url_mcp(url: &str) -> McpConfig {
+        McpConfig {
+            url: Some(url.to_string()),
+            container: None,
+            port: None,
+            mode: "on-demand".to_string(),
+            idle_timeout: Some("5m".to_string()),
+            protocol: "mcp".to_string(),
+            enabled: true,
+        }
+    }
+
+    /// Build a registry pre-registered with a URL-based MCP entry.
+    /// Uses a fast http_client with short timeouts so retry tests finish quickly.
+    async fn registry_with_url_mcp(name: &str, url: &str) -> (McpRegistry, Arc<crate::containers::ContainerManager>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cm = Arc::new(
+            crate::containers::ContainerManager::new("http://127.0.0.1:1", HashMap::new())
+                .expect("ContainerManager::new"),
+        );
+        cm.add_or_update_mcp(name.to_string(), url_mcp(url)).await;
+
+        // Fast http client: short connect/total timeouts so retry tests finish quickly.
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_millis(200))
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("client");
+
+        // Forget the tempdir — it will be cleaned at process exit.
+        let dir_path = dir.path().to_path_buf();
+        std::mem::forget(dir);
+        let reg = McpRegistry::with_http_client(cm.clone(), dir_path, client);
+        (reg, cm)
+    }
+
+    /// Standard MCP tools/call success response body.
+    fn mcp_ok_body(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": {
+                "content": [{"type": "text", "text": text}]
+            }
+        })
+    }
+
+    /// Pick a port that is NOT listening by binding then immediately dropping.
+    async fn pick_closed_port() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral");
+        let p = listener.local_addr().expect("addr").port();
+        drop(listener);
+        p
+    }
+
+    /// Spawn a TCP server on an ephemeral port that:
+    /// - Drops the first `drop_count` connections immediately after accept
+    ///   (causes `is_request()` / `is_connect()` on the client side).
+    /// - For subsequent connections, serves a valid HTTP 200 response with `body`.
+    ///
+    /// Returns the server URL (`http://127.0.0.1:<port>`).
+    async fn flaky_tcp_server(drop_count: usize, body: serde_json::Value) -> String {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind flaky server");
+        let port = listener.local_addr().expect("addr").port();
+
+        let body_str = serde_json::to_string(&body).expect("json");
+        tokio::spawn(async move {
+            let mut drops_remaining = drop_count;
+            while let Ok((mut stream, _)) = listener.accept().await {
+                if drops_remaining > 0 {
+                    // Drop the stream immediately — client gets connection reset.
+                    drops_remaining -= 1;
+                    drop(stream);
+                } else {
+                    // Drain the request bytes then respond with HTTP 200.
+                    let mut buf = vec![0u8; 4096];
+                    // Read until we see end of HTTP headers (double CRLF).
+                    // On Windows, recv may return short; loop a few times.
+                    let mut raw = Vec::new();
+                    for _ in 0..20 {
+                        use tokio::io::AsyncReadExt;
+                        match stream.read(&mut buf).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                raw.extend_from_slice(&buf[..n]);
+                                if raw.windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body_str.len(),
+                        body_str
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.flush().await;
+                }
+            }
+        });
+
+        format!("http://127.0.0.1:{port}")
+    }
+
+    #[tokio::test]
+    async fn call_tool_succeeds_on_first_attempt_when_server_returns_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(mcp_ok_body("hello")))
+            .mount(&server)
+            .await;
+        let (reg, _cm) = registry_with_url_mcp("test-mcp", &server.uri()).await;
+
+        let result = reg
+            .call_tool("test-mcp", "any", &serde_json::json!({}))
+            .await
+            .expect("call_tool should succeed on 200");
+        assert_eq!(result, "hello");
+
+        let received = server.received_requests().await.expect("requests");
+        assert_eq!(received.len(), 1, "expected exactly 1 request (no retries), got {}", received.len());
+    }
+
+    #[tokio::test]
+    async fn call_tool_retries_on_connect_error_then_succeeds() {
+        // Spawn a TCP server that drops the first 1 connection then serves HTTP 200.
+        // The client will see a connection-reset / broken-pipe error on attempt 0,
+        // then succeed on attempt 1 (after the 300ms retry delay).
+        let server_url = flaky_tcp_server(1, mcp_ok_body("recovered")).await;
+        let (reg, _cm) = registry_with_url_mcp("flaky-mcp", &server_url).await;
+
+        let result = reg
+            .call_tool("flaky-mcp", "any", &serde_json::json!({}))
+            .await;
+        let body = result.expect("should eventually succeed after retry");
+        assert_eq!(body, "recovered");
+    }
+
+    #[tokio::test]
+    async fn call_tool_returns_err_after_all_retries_exhausted() {
+        let dead_port = pick_closed_port().await;
+        let dead_url = format!("http://127.0.0.1:{dead_port}");
+        let (reg, _cm) = registry_with_url_mcp("dead-mcp", &dead_url).await;
+
+        let start = std::time::Instant::now();
+        let result = reg.call_tool("dead-mcp", "any", &serde_json::json!({})).await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_err(), "expected Err after all retries exhausted");
+        // Retry delays: 0 + 300 + 700 + 1500 = 2500ms minimum (plus connect attempts ~200ms each).
+        // Cap at 6s to catch regressions while leaving headroom for slow CI.
+        assert!(
+            elapsed < Duration::from_secs(6),
+            "test took too long: {elapsed:?} — retry loop may be unbounded"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(2400),
+            "test finished too fast — retries may not be running: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn call_tool_does_not_retry_on_http_4xx() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+            .mount(&server)
+            .await;
+        let (reg, _cm) = registry_with_url_mcp("err-mcp", &server.uri()).await;
+
+        let err = reg
+            .call_tool("err-mcp", "any", &serde_json::json!({}))
+            .await
+            .expect_err("400 should error immediately");
+        assert!(
+            err.to_string().contains("400"),
+            "error should mention 400 status: {err}"
+        );
+
+        let received = server.received_requests().await.expect("requests");
+        assert_eq!(
+            received.len(),
+            1,
+            "4xx must not trigger retries — got {} requests",
+            received.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn call_tool_does_not_retry_on_http_5xx_either() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("kaboom"))
+            .mount(&server)
+            .await;
+        let (reg, _cm) = registry_with_url_mcp("five-mcp", &server.uri()).await;
+
+        let err = reg
+            .call_tool("five-mcp", "any", &serde_json::json!({}))
+            .await
+            .expect_err("500 should error immediately (no retry on HTTP errors)");
+        assert!(err.to_string().contains("500"), "error should mention 500: {err}");
+
+        let received = server.received_requests().await.expect("requests");
+        assert_eq!(
+            received.len(),
+            1,
+            "5xx must not trigger retries (transport-only retry policy) — got {} requests",
+            received.len()
+        );
     }
 }
