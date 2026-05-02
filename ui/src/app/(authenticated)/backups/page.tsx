@@ -148,7 +148,7 @@ function BackupSettings() {
             <p className="text-xs text-muted-foreground ml-1">{t("backups.retention_hint")}</p>
           </div>
           {hasChanges && (
-            <Button size="sm" onClick={saveSettings} disabled={saving}>
+            <Button size="sm" onClick={saveSettings} disabled={saving} className="w-full sm:w-auto">
               {t("common.save")}
             </Button>
           )}
@@ -327,16 +327,17 @@ export default function BackupsPage() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 md:flex md:items-center md:justify-end gap-2 border-t border-border/50 pt-3 md:border-0 md:pt-0 shrink-0">
+                <div className="grid grid-cols-3 md:flex md:items-center md:justify-end gap-2 border-t border-border/50 pt-3 md:border-0 md:pt-0 shrink-0">
                   <Button
                     variant="ghost"
                     size="sm"
                     className="text-muted-foreground hover:text-primary hover:bg-primary/10"
                     onClick={() => handleDownload(b.filename)}
                     disabled={mutating}
+                    title={t("backups.download")}
                   >
-                    <Download className="mr-2 h-4 w-4" />
-                    {t("backups.download")}
+                    <Download className="h-4 w-4 md:mr-2" />
+                    <span className="hidden md:inline">{t("backups.download")}</span>
                   </Button>
                   <Button
                     variant="ghost"
@@ -344,9 +345,10 @@ export default function BackupsPage() {
                     className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                     onClick={() => setRestoreTarget(b.filename)}
                     disabled={mutating}
+                    title={restoring ? t("backups.restoring") : t("backups.restore")}
                   >
-                    <RotateCcw className="mr-2 h-4 w-4" />
-                    {restoring ? t("backups.restoring") : t("backups.restore")}
+                    <RotateCcw className="h-4 w-4 md:mr-2" />
+                    <span className="hidden md:inline">{restoring ? t("backups.restoring") : t("backups.restore")}</span>
                   </Button>
                   <Button
                     variant="ghost"
@@ -354,9 +356,10 @@ export default function BackupsPage() {
                     className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                     onClick={() => setDeleteTarget(b.filename)}
                     disabled={mutating}
+                    title={t("common.delete")}
                   >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    {t("common.delete")}
+                    <Trash2 className="h-4 w-4 md:mr-2" />
+                    <span className="hidden md:inline">{t("common.delete")}</span>
                   </Button>
                 </div>
               </div>
