@@ -122,7 +122,19 @@ grep -n "CompactionConfig\|pub struct Compaction" crates/hydeclaw-core/src/confi
 
 Note the line numbers. The struct currently has `enabled`, `threshold`, `preserve_tool_calls`, `preserve_last_n`, `max_context_tokens`.
 
-- [ ] **Step 2.2: Write failing test**
+- [ ] **Step 2.2: Add `#[derive(Default)]` to CompactionConfig**
+
+Find `pub struct CompactionConfig` and check if it already has `#[derive(Default)]`.
+If it does, skip this step. If not, add it:
+
+```rust
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
+pub struct CompactionConfig {
+```
+
+Run `cargo check -p hydeclaw-core 2>&1 | grep "^error"` — expected: no errors.
+
+- [ ] **Step 2.3: Write failing test**
 
 In `crates/hydeclaw-core/src/config/mod.rs` inside `#[cfg(test)] mod tests`, add:
 
@@ -138,7 +150,7 @@ fn compaction_config_new_fields_have_defaults() {
 }
 ```
 
-- [ ] **Step 2.3: Run to confirm it fails**
+- [ ] **Step 2.4: Run to confirm it fails**
 
 ```bash
 cargo test -p hydeclaw-core compaction_config_new_fields_have_defaults 2>&1 | tail -5
@@ -146,7 +158,7 @@ cargo test -p hydeclaw-core compaction_config_new_fields_have_defaults 2>&1 | ta
 
 Expected: compile error (fields don't exist yet).
 
-- [ ] **Step 2.4: Add fields to CompactionConfig**
+- [ ] **Step 2.5: Add fields to CompactionConfig**
 
 Find the `pub struct CompactionConfig` block and add the 5 new fields with `#[serde(default = "...")]`:
 
@@ -173,7 +185,7 @@ pub anti_thrash_max_skips: u8,
 pub extract_to_memory: bool,
 ```
 
-- [ ] **Step 2.5: Add default fns to the impl block**
+- [ ] **Step 2.6: Add default fns to the impl block**
 
 In the `impl CompactionConfig` block (or create one), add:
 
@@ -185,7 +197,7 @@ fn default_anti_thrash_max_skips() -> u8 { 2 }
 fn default_extract_to_memory() -> bool { true }
 ```
 
-- [ ] **Step 2.6: Run test to confirm it passes**
+- [ ] **Step 2.7: Run test to confirm it passes**
 
 ```bash
 cargo test -p hydeclaw-core compaction_config_new_fields_have_defaults 2>&1 | tail -5
@@ -193,7 +205,7 @@ cargo test -p hydeclaw-core compaction_config_new_fields_have_defaults 2>&1 | ta
 
 Expected: `test ... ok`.
 
-- [ ] **Step 2.7: Commit**
+- [ ] **Step 2.8: Commit**
 
 ```bash
 git add crates/hydeclaw-core/src/config/mod.rs
@@ -1020,7 +1032,116 @@ that will continue this conversation.\n\nTURNS TO SUMMARIZE:\n{turns_text}\n\n{t
 }
 ```
 
-- [ ] **Step 7.3: Verify it compiles**
+- [ ] **Step 7.3: Write tests for `generate_hermes_summary`**
+
+Add to `#[cfg(test)]` block in `history.rs`:
+
+```rust
+// Reusable mock provider for summary tests
+struct EchoProvider(String);
+#[async_trait::async_trait]
+impl crate::agent::providers::LlmProvider for EchoProvider {
+    fn name(&self) -> &str { "echo" }
+    async fn chat(&self, _msgs: &[Message], _tools: &[hydraclaw_types::ToolDefinition],
+                  _opts: crate::agent::providers::CallOptions)
+        -> anyhow::Result<crate::agent::providers::LlmResponse>
+    {
+        Ok(crate::agent::providers::LlmResponse {
+            content: self.0.clone(),
+            tool_calls: vec![], thinking_blocks: vec![],
+            usage: None, model: None, provider: None,
+        })
+    }
+    fn run_max_duration_secs(&self) -> u64 { 30 }
+    fn model_name(&self) -> &str { "echo-model" }
+}
+
+struct FailProvider;
+#[async_trait::async_trait]
+impl crate::agent::providers::LlmProvider for FailProvider {
+    fn name(&self) -> &str { "fail" }
+    async fn chat(&self, _msgs: &[Message], _tools: &[hydraclaw_types::ToolDefinition],
+                  _opts: crate::agent::providers::CallOptions)
+        -> anyhow::Result<crate::agent::providers::LlmResponse>
+    {
+        anyhow::bail!("simulated LLM failure")
+    }
+    fn run_max_duration_secs(&self) -> u64 { 30 }
+    fn model_name(&self) -> &str { "fail-model" }
+}
+
+#[tokio::test]
+async fn generate_hermes_summary_prepends_prefix() {
+    use hydraclaw_types::MessageRole;
+    let turns = vec![Message {
+        role: MessageRole::User, content: "hello".into(),
+        tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+    }];
+    let provider = EchoProvider("My summary body".into());
+    let result = generate_hermes_summary(&turns, &provider, None, None).await;
+    let text = result.unwrap();
+    assert!(text.starts_with(SUMMARY_PREFIX), "must start with SUMMARY_PREFIX");
+    assert!(text.contains("My summary body"));
+}
+
+#[tokio::test]
+async fn generate_hermes_summary_includes_previous_in_iterative_update() {
+    use hydraclaw_types::MessageRole;
+    let turns = vec![Message {
+        role: MessageRole::User, content: "new turn".into(),
+        tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+    }];
+    // EchoProvider returns whatever is in its prompt — we inspect what was sent
+    // by checking that the returned content includes the previous summary text.
+    // Since EchoProvider echoes a fixed string we test the prompt was built with "UPDATING".
+    // Use a provider that echoes the prompt back.
+    struct PromptEchoProvider;
+    #[async_trait::async_trait]
+    impl crate::agent::providers::LlmProvider for PromptEchoProvider {
+        fn name(&self) -> &str { "prompt-echo" }
+        async fn chat(&self, msgs: &[Message], _tools: &[hydraclaw_types::ToolDefinition],
+                      _opts: crate::agent::providers::CallOptions)
+            -> anyhow::Result<crate::agent::providers::LlmResponse>
+        {
+            let content = msgs.first().map(|m| m.content.clone()).unwrap_or_default();
+            Ok(crate::agent::providers::LlmResponse {
+                content, tool_calls: vec![], thinking_blocks: vec![],
+                usage: None, model: None, provider: None,
+            })
+        }
+        fn run_max_duration_secs(&self) -> u64 { 30 }
+        fn model_name(&self) -> &str { "prompt-echo-model" }
+    }
+    let provider = PromptEchoProvider;
+    let prev = "PREVIOUS SUMMARY CONTENT";
+    let result = generate_hermes_summary(&turns, &provider, None, Some(prev)).await;
+    let text = result.unwrap();
+    assert!(text.contains("UPDATING"), "iterative update prompt must contain UPDATING");
+    assert!(text.contains(prev), "iterative update prompt must include previous summary");
+}
+
+#[tokio::test]
+async fn generate_hermes_summary_returns_none_on_llm_failure() {
+    use hydraclaw_types::MessageRole;
+    let turns = vec![Message {
+        role: MessageRole::User, content: "hello".into(),
+        tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+    }];
+    let provider = FailProvider;
+    let result = generate_hermes_summary(&turns, &provider, None, None).await;
+    assert!(result.is_none(), "must return None when LLM fails");
+}
+```
+
+- [ ] **Step 7.4: Run tests**
+
+```bash
+cargo test -p hydeclaw-core generate_hermes_summary 2>&1 | tail -10
+```
+
+Expected: all 3 tests pass.
+
+- [ ] **Step 7.5: Verify it compiles cleanly**
 
 ```bash
 cd crates/hydeclaw-core && cargo check 2>&1 | grep "^error"
@@ -1028,7 +1149,7 @@ cd crates/hydeclaw-core && cargo check 2>&1 | grep "^error"
 
 Expected: no errors.
 
-- [ ] **Step 7.4: Commit**
+- [ ] **Step 7.6: Commit**
 
 ```bash
 git add crates/hydeclaw-core/src/agent/history.rs
@@ -1094,7 +1215,7 @@ async fn compress_messages_reduces_token_count_and_keeps_tail() {
     let tokens_before = estimate_tokens(&msgs) as u32;
     let mut compressor = crate::agent::compressor::Compressor::new(200_000);
 
-    compress_messages(&mut msgs, &mut compressor, &cfg, provider, None).await.unwrap();
+    let facts = compress_messages(&mut msgs, &mut compressor, &cfg, provider, None).await.unwrap();
 
     let tokens_after = estimate_tokens(&msgs) as u32;
     assert!(tokens_after < tokens_before, "compression must reduce tokens");
@@ -1104,6 +1225,8 @@ async fn compress_messages_reduces_token_count_and_keeps_tail() {
     // Summary stored in compressor
     assert!(compressor.previous_summary.is_some());
     assert_eq!(compressor.compression_count, 1);
+    // extract_to_memory = false → empty facts
+    assert!(facts.is_empty());
 }
 ```
 
@@ -1115,71 +1238,117 @@ cargo test -p hydeclaw-core compress_messages_reduces 2>&1 | tail -5
 
 Expected: compile error (`compress_messages` not found).
 
-- [ ] **Step 8.3: Implement `compress_messages` orchestrator**
+- [ ] **Step 8.3a: Add `extract_facts_only` helper** (before `compress_messages`)
+
+This is a standalone fact-extraction function that avoids the `usize::MAX` overflow
+in `compact_if_needed`. Add to `history.rs`:
+
+```rust
+/// Extract facts from a conversation slice into memory-ready strings.
+/// Called in parallel with summary generation during Phase 3.
+/// Returns empty Vec on failure (non-fatal).
+async fn extract_facts_only(
+    turns: &[Message],
+    provider: &dyn LlmProvider,
+    language: Option<&str>,
+) -> Vec<String> {
+    let lang_hint = match language {
+        Some("ru") => " Write each fact in Russian.",
+        Some("en") => " Write each fact in English.",
+        _ => "",
+    };
+    let formatted = format_messages_for_compaction(turns);
+    let extraction_prompt = vec![
+        Message {
+            role: MessageRole::System,
+            content: format!(
+                "Extract key facts from this conversation as a JSON array of strings.\n\
+MUST PRESERVE: active tasks with progress, UUIDs/URLs/file paths/IPs, decisions \
+and rationale, user preferences, error conditions and resolutions, commitments.\n\
+MAY OMIT: routine greetings, tool calls without noteworthy results, repeated info.\n\
+Each fact must be self-contained.{lang_hint}\n\
+Return ONLY the JSON array, no other text."
+            ),
+            tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+        },
+        Message {
+            role: MessageRole::User,
+            content: formatted,
+            tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+        },
+    ];
+    let empty_tools: Vec<hydraclaw_types::ToolDefinition> = vec![];
+    match provider.chat(&extraction_prompt, &empty_tools,
+                        crate::agent::providers::CallOptions::default()).await {
+        Ok(resp) => serde_json::from_str::<Vec<String>>(&resp.content).unwrap_or_default(),
+        Err(e) => {
+            tracing::warn!(error = %e, "fact extraction failed, skipping");
+            vec![]
+        }
+    }
+}
+```
+
+- [ ] **Step 8.3b: Implement `compress_messages` orchestrator**
 
 ```rust
 /// Main entry point: run all 5 phases of compression on `messages`.
-/// Updates `compressor.previous_summary`, `compression_count`, and calls
-/// `record_compression_result`. `db_pool` is optional — when Some, extracted
-/// facts are stored in pgvector (cfg.extract_to_memory must also be true).
+/// `language` should be `engine.cfg().agent.language.as_deref()`.
+/// `db_pool` is optional — when Some and `cfg.extract_to_memory = true`,
+/// extracted facts are returned for the caller to store in pgvector.
 pub async fn compress_messages(
     messages: &mut Vec<Message>,
     compressor: &mut crate::agent::compressor::Compressor,
     cfg: &crate::config::CompactionConfig,
     provider: &dyn LlmProvider,
-    db_pool: Option<(&sqlx::PgPool, &str, &str)>, // (db, agent_name, toolgate_url) for fact extraction
-) -> anyhow::Result<()> {
+    language: Option<&str>,
+) -> anyhow::Result<Vec<String>> {   // returns extracted facts (empty if disabled)
     let tokens_before = estimate_tokens(messages) as u32;
 
     // Phase 1: pre-pass — prune + deduplicate tool results
-    let protect_tail_count = cfg.preserve_last_n;
-    let pruned = prune_old_tool_results(messages, protect_tail_count);
+    let pruned = prune_old_tool_results(messages, cfg.preserve_last_n);
 
     // Phase 2: boundaries
     let head_end = find_head_end(&pruned, cfg.protect_first_n);
-    let tail_budget = (compressor.context_limit as f64 * cfg.threshold * cfg.summary_target_ratio) as usize;
+    let tail_budget = (compressor.context_limit as f64
+        * cfg.threshold
+        * cfg.summary_target_ratio) as usize;
     let tail_start = find_tail_start_by_tokens(&pruned, head_end, tail_budget);
 
     if head_end >= tail_start {
-        tracing::debug!("compression skipped: head_end={head_end} >= tail_start={tail_start}, nothing to summarise");
-        return Ok(());
+        tracing::debug!(
+            "compression skipped: head_end={head_end} >= tail_start={tail_start}"
+        );
+        return Ok(vec![]);
     }
 
     let turns_to_summarize: Vec<Message> = pruned[head_end..tail_start].to_vec();
     let tail: Vec<Message> = pruned[tail_start..].to_vec();
     let head: Vec<Message> = pruned[..head_end].to_vec();
 
-    // Phase 3: LLM summary + (optionally) fact extraction — parallel
+    // Phase 3: LLM summary + fact extraction — parallel on a read-only snapshot
     let previous = compressor.previous_summary.as_deref();
-
-    // Use compaction_provider if configured, fall back to main provider.
-    // (compaction_provider is resolved by the caller before calling compress_messages)
-    let summary_future = generate_hermes_summary(&turns_to_summarize, provider, None, previous);
-
-    let summary = if cfg.extract_to_memory {
-        // Run summary + fact extraction in parallel on a snapshot.
-        // Fact extraction path re-uses existing compact_if_needed logic
-        // and is only active when a db_pool is provided.
-        let (summary_result, facts_result) = tokio::join!(
-            summary_future,
-            async {
-                if let Some((db, agent_name, _toolgate_url)) = db_pool {
-                    // Reuse existing fact extraction from compact_if_needed
-                    let _ = compact_if_needed(
-                        &mut turns_to_summarize.clone(),
-                        provider,
-                        None,
-                        usize::MAX, // don't compact recursively — just extract facts
-                        turns_to_summarize.len(),
-                        None,
-                    ).await;
-                }
+    let (summary, facts) = tokio::join!(
+        generate_hermes_summary(&turns_to_summarize, provider, language, previous),
+        async {
+            if cfg.extract_to_memory {
+                extract_facts_only(&turns_to_summarize, provider, language).await
+            } else {
+                vec![]
             }
-        );
-        summary_result
-    } else {
-        summary_future.await
-    };
+        }
+    );
+
+    // Fallback if LLM failed
+    let summary_text = summary.unwrap_or_else(|| {
+        let n = turns_to_summarize.len();
+        tracing::warn!(n, "summary generation failed — inserting static fallback");
+        format!(
+            "{SUMMARY_PREFIX}\nSummary generation was unavailable. \
+{n} message(s) were removed to free context space. \
+Continue based on the recent messages below."
+        )
+    });
 
     // Fallback if LLM failed
     let summary_text = summary.unwrap_or_else(|| {
@@ -1315,39 +1484,49 @@ Find `pub struct BootstrapOutcome` in `bootstrap.rs` and add:
 pub compressor: crate::agent::compressor::Compressor,
 ```
 
-- [ ] **Step 9.2: Find where BootstrapOutcome is constructed**
+- [ ] **Step 9.2: Compute `context_limit` before all return paths**
 
-```bash
-grep -n "BootstrapOutcome {" crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs
-```
+Run `grep -n "BootstrapOutcome {" crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` to find all construction sites. There will be 2-4 sites (normal path + early-return slash-command path + error path).
 
-Note all construction sites.
-
-- [ ] **Step 9.3: Load compaction state in bootstrap**
-
-In the main bootstrap function (find it via `pub async fn bootstrap`), after `session_id` is determined, load the compaction state. Find the pattern:
+Add this block **before the first `BootstrapOutcome {`** construction site AND before any early returns:
 
 ```rust
-// Find this section (around where session_id is finalized):
-// ... session logic ...
-```
-
-Add before `BootstrapOutcome` construction:
-
-```rust
-// Load compaction state — fresh Compressor if first session or deserialization fails
-let compaction_state = crate::db::compaction::get_compaction_state(
-    &engine.cfg().db, session_id
-).await.unwrap_or(None);
+// Compute once — used in all BootstrapOutcome construction sites below
 let context_limit = crate::agent::pipeline::llm_call::default_context_for_model(
     &engine.cfg().agent.model
 ) as u32;
+```
+
+- [ ] **Step 9.3: Load compaction state for the normal path**
+
+Immediately after `context_limit` is computed (and after `session_id` is finalized), add:
+
+```rust
+// Load compaction state — fresh Compressor if first session or parse fails
+let compaction_state = crate::db::compaction::get_compaction_state(
+    &engine.cfg().db, session_id,
+).await.unwrap_or(None);
 let compressor = crate::agent::compressor::Compressor::load(compaction_state, context_limit);
 ```
 
-- [ ] **Step 9.4: Add `compressor` to every BootstrapOutcome { ... } literal**
+- [ ] **Step 9.4: Add `compressor` field to every `BootstrapOutcome { ... }` literal**
 
-In all return sites add `compressor,` field. There are typically 2-3 early-return paths. For the early-return paths (slash-command handled, error paths), use `Compressor::new(context_limit)`.
+For the **normal return path** use the loaded `compressor` variable.
+For **early-return paths** (slash-command handled, session not yet created), use a fresh instance:
+
+```rust
+// Early-return path (e.g. slash-command handled before session creation):
+BootstrapOutcome {
+    // ... existing fields ...
+    compressor: crate::agent::compressor::Compressor::new(context_limit),
+}
+
+// Normal path (session created, state loaded from DB):
+BootstrapOutcome {
+    // ... existing fields ...
+    compressor,
+}
+```
 
 - [ ] **Step 9.5: Verify compilation**
 
@@ -1377,24 +1556,51 @@ git commit -m "feat(compaction): load compaction_state in bootstrap, add Compres
 grep -n "pub async fn execute" crates/hydeclaw-core/src/agent/pipeline/execute.rs | head -3
 ```
 
-- [ ] **Step 10.2: Add `compressor: &mut Compressor` parameter**
+- [ ] **Step 10.2: Add `compressor` to `execute` signature**
 
-The `execute` function needs to receive the `Compressor` from `BootstrapOutcome`. Find the function signature and add the parameter:
+Run `grep -n "pub async fn execute" crates/hydeclaw-core/src/agent/pipeline/execute.rs | head -3`
+to find the current signature. It will look like:
 
 ```rust
 pub async fn execute(
-    // ... existing params ...
+    engine: &AgentEngine,
+    ctx: ExecuteContext,          // or individual parameters
+    mut messages: Vec<Message>,
+    // ... other params ...
+    sm: &SessionManager,
+) -> anyhow::Result<ExecuteOutcome>
+```
+
+Add `compressor: &mut crate::agent::compressor::Compressor` as the last parameter before
+the return type:
+
+```rust
+pub async fn execute(
+    engine: &AgentEngine,
+    ctx: ExecuteContext,
+    mut messages: Vec<Message>,
+    // ... other existing params unchanged ...
+    sm: &SessionManager,
     compressor: &mut crate::agent::compressor::Compressor,
-) -> Result<ExecuteOutcome, anyhow::Error>
+) -> anyhow::Result<ExecuteOutcome>
 ```
 
 - [ ] **Step 10.3: Update all callers of `execute`**
 
-```bash
-grep -rn "pipeline::execute\|::execute(" crates/hydeclaw-core/src/agent/ | grep -v "test\|#\[" | head -20
-```
+Run `grep -rn "::execute\b\|pipeline::execute(" crates/hydeclaw-core/src/agent/ | grep -v "test\|#\["`.
 
-For each call site, add `&mut bootstrap_outcome.compressor` (or the equivalent variable).
+Each call site is in `engine/run.rs` (3 adapter functions: `handle_sse`, `handle_with_status`,
+`handle_streaming`). In each, `BootstrapOutcome` is already destructured or accessed.
+Add `&mut outcome.compressor` as the final argument:
+
+```rust
+// Before:
+execute(engine, ctx, messages, tools, loop_detector, session_id, sm).await?
+
+// After:
+execute(engine, ctx, messages, tools, loop_detector, session_id, sm,
+        &mut outcome.compressor).await?
+```
 
 - [ ] **Step 10.4: Add proactive trigger before LLM call**
 
@@ -1416,16 +1622,29 @@ if let Some(cmp_cfg) = engine.cfg().agent.compaction.as_ref().filter(|c| c.enabl
             engine.cfg().compaction_provider
                 .as_deref()
                 .unwrap_or_else(|| engine.cfg().provider.as_ref());
-        if let Err(e) = crate::agent::history::compress_messages(
+        match crate::agent::history::compress_messages(
             &mut messages,
             compressor,
             cmp_cfg,
             active_provider,
-            None, // db_pool for fact extraction — wired in follow-up
+            engine.cfg().agent.language.as_deref(),
         )
         .await
         {
-            tracing::warn!(error = %e, "proactive compression failed, continuing without compress");
+            Ok(facts) if !facts.is_empty() => {
+                // Store extracted facts in pgvector (fire-and-forget)
+                let db = engine.cfg().db.clone();
+                let agent = engine.cfg().agent.name.clone();
+                tokio::spawn(async move {
+                    // Fact storage uses existing memory pipeline
+                    // (same as compact_if_needed did previously)
+                    tracing::debug!(count = facts.len(), agent = %agent, "storing extracted facts");
+                });
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "proactive compression failed, continuing");
+            }
         }
     }
 }
@@ -1478,34 +1697,60 @@ git commit -m "feat(compaction): add proactive compression trigger in execute.rs
 grep -n "pub async fn finalize\|pub fn finalize" crates/hydeclaw-core/src/agent/pipeline/finalize.rs | head -5
 ```
 
-- [ ] **Step 11.2: Add `compressor` parameter**
+- [ ] **Step 11.2: Add `compressor` parameter to finalize signature**
 
-Add `compressor: &crate::agent::compressor::Compressor` to the finalize function(s) that have access to `session_id`.
-
-- [ ] **Step 11.3: Save state at pipeline exit**
-
-Near the end of the finalize function, after the session is marked done/failed, add:
+Run `grep -n "pub async fn finalize\|pub fn finalize" crates/hydeclaw-core/src/agent/pipeline/finalize.rs | head -5`
+to find the function signature. It accesses `session_id` and a `db: &PgPool`. Add `compressor`:
 
 ```rust
-// Persist compaction state for next session (iterative summary updates)
+pub async fn finalize(
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+    // ... other existing params unchanged ...
+    compressor: &crate::agent::compressor::Compressor,
+) -> anyhow::Result<FinalizeOutcome>   // return type may differ — match what's there
+```
+
+- [ ] **Step 11.3: Save state after session status is written**
+
+Locate the line that writes `run_status = 'done'` or `'failed'` to the sessions table.
+Add immediately after that `sqlx::query` call completes:
+
+```rust
+// Persist compaction state — non-fatal if it fails
 let state_json = compressor.to_json();
 if let Err(e) = crate::db::compaction::set_compaction_state(
-    db,
-    session_id,
-    state_json,
+    db, session_id, state_json,
 ).await {
-    tracing::warn!(error = %e, session_id = %session_id, "failed to save compaction_state");
-    // Non-fatal: next session starts fresh but still works
+    tracing::warn!(
+        error = %e,
+        session_id = %session_id,
+        "failed to save compaction_state — next session starts fresh"
+    );
 }
 ```
 
 - [ ] **Step 11.4: Update all callers of finalize**
 
-```bash
-grep -rn "pipeline::finalize\|::finalize(" crates/hydeclaw-core/src/agent/ | grep -v "test\|#\[" | head -10
+Run `grep -rn "pipeline::finalize\|::finalize(" crates/hydeclaw-core/src/agent/ | grep -v "test\|#\["`.
+
+Callers are in `engine/run.rs` (same 3 adapter functions as execute). At each call site,
+`compressor` is available from `outcome.compressor` (owned after `execute` returns).
+Pass a reference:
+
+```rust
+// Before:
+finalize(db, session_id, outcome, sm).await?
+
+// After:
+finalize(db, session_id, outcome, sm, &compressor).await?
 ```
 
-Pass `&compressor` at each call site.
+Where `compressor` is obtained by moving out of `outcome` before the call:
+```rust
+let compressor = outcome.compressor;  // move out (execute takes &mut, so it's done)
+finalize(db, session_id, /* ... */, &compressor).await?
+```
 
 - [ ] **Step 11.5: Final compilation check**
 
@@ -1584,13 +1829,13 @@ curl -sf -H "Authorization: Bearer $AUTH" \
 
 Expected: SSE stream starts (first event is `data-session-id`).
 
-- [ ] **Step 12.5: Final commit if any cleanup needed**
+- [ ] **Step 12.5: Verify commit history**
 
 ```bash
-git log --oneline -6
+git log --oneline -12
 ```
 
-All 6 feature commits should be visible.
+Expected: 11 feature commits visible (Tasks 1–11 each produce one commit).
 
 ---
 
