@@ -956,6 +956,22 @@ pub struct CompactionConfig {
     pub preserve_last_n: u32,
     /// Override max context tokens (default: auto-detect from model name).
     pub max_context_tokens: Option<u32>,
+    /// Head protection: number of messages to always keep (system + first user + first assistant).
+    #[serde(default = "CompactionConfig::default_protect_first_n")]
+    pub protect_first_n: usize,
+    /// Tail token budget as a fraction of threshold_tokens.
+    /// tail_budget = (context_limit * threshold * summary_target_ratio) tokens.
+    #[serde(default = "CompactionConfig::default_summary_target_ratio")]
+    pub summary_target_ratio: f64,
+    /// Skip compression if savings < this fraction. Anti-thrashing.
+    #[serde(default = "CompactionConfig::default_anti_thrash_min_savings")]
+    pub anti_thrash_min_savings: f64,
+    /// Stop attempting compression after this many consecutive ineffective compressions.
+    #[serde(default = "CompactionConfig::default_anti_thrash_max_skips")]
+    pub anti_thrash_max_skips: u8,
+    /// Keep HydeClaw's pgvector fact extraction alongside the Hermes summary.
+    #[serde(default = "CompactionConfig::default_extract_to_memory")]
+    pub extract_to_memory: bool,
 }
 
 impl Default for CompactionConfig {
@@ -966,8 +982,21 @@ impl Default for CompactionConfig {
             preserve_tool_calls: false,
             preserve_last_n: 10,
             max_context_tokens: None,
+            protect_first_n: 3,
+            summary_target_ratio: 0.20,
+            anti_thrash_min_savings: 0.10,
+            anti_thrash_max_skips: 2,
+            extract_to_memory: true,
         }
     }
+}
+
+impl CompactionConfig {
+    fn default_protect_first_n() -> usize { 3 }
+    fn default_summary_target_ratio() -> f64 { 0.20 }
+    fn default_anti_thrash_min_savings() -> f64 { 0.10 }
+    fn default_anti_thrash_max_skips() -> u8 { 2 }
+    fn default_extract_to_memory() -> bool { true }
 }
 
 fn default_threshold() -> f64 { 0.8 }
@@ -1641,6 +1670,11 @@ model = "m2.5"
                     preserve_tool_calls: true,
                     preserve_last_n: 5,
                     max_context_tokens: Some(8000),
+                    protect_first_n: 3,
+                    summary_target_ratio: 0.20,
+                    anti_thrash_min_savings: 0.10,
+                    anti_thrash_max_skips: 2,
+                    extract_to_memory: true,
                 }),
                 session: Some(SessionConfig {
                     dm_scope: "shared".into(),
@@ -2450,5 +2484,15 @@ mod backup_config_tests {
         )
         .unwrap();
         assert_eq!(cfg.backup.postgres_container, "my-postgres-2");
+    }
+
+    #[test]
+    fn compaction_config_new_fields_have_defaults() {
+        let cfg: CompactionConfig = toml::from_str("enabled = true").unwrap();
+        assert_eq!(cfg.protect_first_n, 3);
+        assert!((cfg.summary_target_ratio - 0.20).abs() < 0.001);
+        assert!((cfg.anti_thrash_min_savings - 0.10).abs() < 0.001);
+        assert_eq!(cfg.anti_thrash_max_skips, 2);
+        assert!(cfg.extract_to_memory);
     }
 }

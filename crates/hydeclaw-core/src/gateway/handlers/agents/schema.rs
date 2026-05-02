@@ -132,6 +132,11 @@ pub(crate) struct CompactionPayload {
     pub preserve_tool_calls: Option<bool>,
     pub preserve_last_n: Option<u32>,
     pub max_context_tokens: Option<u32>,
+    pub protect_first_n: Option<usize>,
+    pub summary_target_ratio: Option<f64>,
+    pub anti_thrash_min_savings: Option<f64>,
+    pub anti_thrash_max_skips: Option<u8>,
+    pub extract_to_memory: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -200,6 +205,11 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 preserve_tool_calls: c.preserve_tool_calls.unwrap_or(false),
                 preserve_last_n: c.preserve_last_n.unwrap_or(10),
                 max_context_tokens: c.max_context_tokens,
+                protect_first_n: c.protect_first_n.unwrap_or(3),
+                summary_target_ratio: c.summary_target_ratio.unwrap_or(0.20),
+                anti_thrash_min_savings: c.anti_thrash_min_savings.unwrap_or(0.10),
+                anti_thrash_max_skips: c.anti_thrash_max_skips.unwrap_or(2),
+                extract_to_memory: c.extract_to_memory.unwrap_or(true),
             }),
             icon: p.icon,
             max_tools_in_context: p.max_tools_in_context,
