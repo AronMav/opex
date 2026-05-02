@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Settings, Gauge, Box, GitBranch, Keyboard, Loader2, RotateCcw, Save, Timer } from "lucide-react";
+import { Settings, Gauge, Box, GitBranch, Keyboard, Loader2, RotateCcw, Save, Timer, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
 interface ConfigData {
@@ -69,6 +69,15 @@ export default function ConfigPage() {
   const [editAgentToolSafety, setEditAgentToolSafety] = useState("");
   const [savingAgentTool, setSavingAgentTool] = useState(false);
   const [savingFields, setSavingFields] = useState(false);
+  // [curator]
+  const [curatorEnabled, setCuratorEnabled] = useState(false);
+  const [editCuratorCron, setEditCuratorCron] = useState("");
+  const [editCuratorMinIdle, setEditCuratorMinIdle] = useState("");
+  const [editCuratorStale, setEditCuratorStale] = useState("");
+  const [editCuratorArchive, setEditCuratorArchive] = useState("");
+  const [editCuratorMaxRepairs, setEditCuratorMaxRepairs] = useState("");
+  const [editCuratorAgent, setEditCuratorAgent] = useState("");
+  const [savingCurator, setSavingCurator] = useState(false);
   const [schema, setSchema] = useState<Record<string, unknown> | null>(null);
 
   const restartPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -91,6 +100,14 @@ export default function ConfigPage() {
         setEditAgentToolWaitForIdle(String(agentTool?.message_wait_for_idle_secs ?? ""));
         setEditAgentToolResult(String(agentTool?.message_result_secs ?? ""));
         setEditAgentToolSafety(String(agentTool?.safety_timeout_secs ?? ""));
+        const curator = d.curator as Record<string, unknown> | undefined;
+        setCuratorEnabled(Boolean(curator?.enabled ?? false));
+        setEditCuratorCron(String(curator?.cron ?? ""));
+        setEditCuratorMinIdle(String(curator?.min_idle_minutes ?? ""));
+        setEditCuratorStale(String(curator?.stale_after_days ?? ""));
+        setEditCuratorArchive(String(curator?.archive_after_days ?? ""));
+        setEditCuratorMaxRepairs(String(curator?.max_repairs_per_run ?? ""));
+        setEditCuratorAgent(String(curator?.agent_name ?? ""));
       })
       .catch((e) => setError(`${e}`));
   }, []);
@@ -158,6 +175,27 @@ export default function ConfigPage() {
       toast.error(`${e}`);
     } finally {
       setSavingFields(false);
+    }
+  };
+
+  const saveCuratorFields = async () => {
+    setSavingCurator(true);
+    try {
+      await apiPut("/api/curator/config", {
+        enabled:             curatorEnabled,
+        cron:                editCuratorCron.trim() || undefined,
+        min_idle_minutes:    editCuratorMinIdle ? Number(editCuratorMinIdle) : undefined,
+        stale_after_days:    editCuratorStale ? Number(editCuratorStale) : undefined,
+        archive_after_days:  editCuratorArchive ? Number(editCuratorArchive) : undefined,
+        max_repairs_per_run: editCuratorMaxRepairs ? Number(editCuratorMaxRepairs) : undefined,
+        agent_name:          editCuratorAgent.trim() || undefined,
+      });
+      toast.success(t("config.saved"));
+      loadConfig();
+    } catch (e) {
+      toast.error(`${e}`);
+    } finally {
+      setSavingCurator(false);
     }
   };
 
@@ -229,7 +267,7 @@ export default function ConfigPage() {
         )}
 
         {config && (() => {
-          const serviceKeys = new Set(["toolgate_url", "public_url", "tts_proxy_url", "searxng_url", "tools", "mcp", "tools_count", "mcp_count", "memory", "subagents", "database", "gateway", "discussion", "typing", "agent_tool"]);
+          const serviceKeys = new Set(["toolgate_url", "public_url", "tts_proxy_url", "searxng_url", "tools", "mcp", "tools_count", "mcp_count", "memory", "subagents", "database", "gateway", "discussion", "typing", "agent_tool", "curator", "backup"]);
           const sections: Record<string, Record<string, unknown>> = {};
           const topLevel: Record<string, unknown> = {};
           for (const [key, val] of Object.entries(config)) {
@@ -458,6 +496,43 @@ export default function ConfigPage() {
                     </Button>
                   </div>
                 </div>
+                <div className="neu-flat p-4 md:p-5">
+                  <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
+                    <Wrench className="h-4 w-4 text-primary" />
+                    <h3 className="text-sm font-semibold text-foreground">curator</h3>
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">{curatorEnabled ? "enabled" : "disabled"}</span>
+                      <Switch checked={curatorEnabled} onCheckedChange={setCuratorEnabled} />
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    {[
+                      { label: "cron", value: editCuratorCron, set: setEditCuratorCron, type: "text", placeholder: "0 3 * * 0" },
+                      { label: "min_idle_minutes", value: editCuratorMinIdle, set: setEditCuratorMinIdle, type: "number", placeholder: "30" },
+                      { label: "stale_after_days", value: editCuratorStale, set: setEditCuratorStale, type: "number", placeholder: "30" },
+                      { label: "archive_after_days", value: editCuratorArchive, set: setEditCuratorArchive, type: "number", placeholder: "90" },
+                      { label: "max_repairs_per_run", value: editCuratorMaxRepairs, set: setEditCuratorMaxRepairs, type: "number", placeholder: "10" },
+                      { label: "agent_name", value: editCuratorAgent, set: setEditCuratorAgent, type: "text", placeholder: "Hyde" },
+                    ].map(({ label, value, set, type, placeholder }) => (
+                      <div key={label} className="space-y-1">
+                        <label className="font-mono text-xs text-muted-foreground">{label}</label>
+                        <Input
+                          type={type}
+                          value={value}
+                          onChange={(e) => set(e.target.value)}
+                          placeholder={placeholder}
+                          className="font-mono text-sm h-9"
+                          min={type === "number" ? 0 : undefined}
+                        />
+                      </div>
+                    ))}
+                    <Button size="sm" onClick={saveCuratorFields} disabled={savingCurator} className="gap-1.5">
+                      {savingCurator ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      {t("common.save")}
+                    </Button>
+                  </div>
+                </div>
+
                 {Object.keys(topLevel).length > 0 && (
                   <div className="neu-flat p-4 md:p-5">
                     <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
