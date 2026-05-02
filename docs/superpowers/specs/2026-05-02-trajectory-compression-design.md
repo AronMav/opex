@@ -64,7 +64,7 @@ handle_sse()
 [agent.compaction]
 # Existing fields (unchanged defaults)
 enabled = true
-threshold = 0.75               # fraction of context window; was 0.80
+threshold = 0.80               # fraction of context window (unchanged — 0.75 recommended for new agents)
 preserve_last_n = 10           # fallback min tail messages
 
 # New fields
@@ -88,24 +88,63 @@ pub struct Compressor {
     pub ineffective_count: u8,            // anti-thrashing counter
     pub last_prompt_tokens: u32,          // from most recent LLM response
     pub compression_count: u32,           // diagnostics / logging
+    pub context_limit: u32,               // cached from model metadata at bootstrap
 }
 
 impl Compressor {
-    pub fn load(state: Option<serde_json::Value>) -> Self { ... }
+    pub fn load(state: Option<serde_json::Value>, context_limit: u32) -> Self { ... }
     pub fn to_json(&self) -> serde_json::Value { ... }
-    pub fn should_compress(&self, cfg: &CompactionConfig, context_limit: u32) -> bool { ... }
+    pub fn should_compress(&self, cfg: &CompactionConfig) -> bool { ... }
     pub fn update_token_count(&mut self, input_tokens: u32) { ... }
+    pub fn record_compression_result(&mut self, tokens_before: u32, tokens_after: u32) { ... }
 }
 ```
 
-**`should_compress` logic:**
-1. `last_prompt_tokens < threshold * context_limit` → false
-2. `ineffective_count >= anti_thrash_max_skips` → false + warn
-3. otherwise → true
+`Compressor` is a **state holder + trigger**. The 5-phase compression algorithm
+lives in `history.rs` as a standalone async function:
 
-`context_limit` is the model's context window, resolved in `execute.rs` via
-`llm_call::default_context_for_model(&cfg.agent.model)` — the same lookup
-already used by the overflow recovery path.
+```rust
+// history.rs
+pub async fn compress_messages(
+    messages: &mut Vec<Message>,
+    compressor: &mut Compressor,
+    cfg: &CompactionConfig,
+    provider: &dyn LlmProvider,          // compaction_provider if set, else main
+) -> Result<()>
+```
+
+`execute.rs` calls:
+```rust
+history::compress_messages(&mut messages, &mut compressor, cmp_cfg, provider).await?;
+```
+
+`compress_messages` updates `compressor.previous_summary`, `compressor.compression_count`,
+and calls `compressor.record_compression_result(before, after)` before returning.
+```
+
+`context_limit` is resolved once in `bootstrap.rs` via
+`llm_call::default_context_for_model(&cfg.agent.model)` and stored in
+`Compressor` — not recomputed on every `should_compress` call.
+
+**`should_compress` logic:**
+1. `last_prompt_tokens == 0` (first call, no prior response yet) → false
+2. `last_prompt_tokens < threshold * context_limit` → false
+3. `ineffective_count >= anti_thrash_max_skips` → false + `tracing::warn!`
+4. otherwise → true
+
+**`record_compression_result` logic (anti-thrashing update):**
+```
+savings_pct = (tokens_before - tokens_after) / tokens_before
+if savings_pct < anti_thrash_min_savings:
+    ineffective_count += 1
+else:
+    ineffective_count = 0
+```
+`tokens_before` = rough estimate of `messages` **before Phase 1** (pre-pass).
+`tokens_after` = rough estimate of assembled `messages` **after Phase 5**
+(sanitization). Both computed via the existing `estimate_messages_tokens_rough`
+helper. Using estimates (not actual API counts) is consistent with Hermes and
+avoids an extra API round-trip just for measurement.
 
 ---
 
@@ -218,8 +257,21 @@ exactly from there. Respond ONLY to the latest user message that appears
 AFTER this summary.
 ```
 
+**Provider:** use `compaction_provider` from `AgentConfig` if configured,
+otherwise fall back to the agent's primary provider.
+
 **Parallel:** fact extraction into pgvector (existing `history.rs` logic,
-unchanged). Both run concurrently: `tokio::join!(generate_summary(), extract_facts())`.
+unchanged). Both run concurrently on a **read-only snapshot** of
+`turns_to_summarize` taken before either task starts — neither mutates the
+slice, avoiding borrow conflicts:
+
+```rust
+let turns_snapshot: Vec<Message> = turns_to_summarize.to_vec();
+let (summary, _) = tokio::join!(
+    generate_summary(&turns_snapshot, cfg, provider),
+    extract_facts(&turns_snapshot, db, toolgate_url),
+);
+```
 
 ### Phase 4 — Assembly
 
@@ -276,8 +328,10 @@ Consider starting a new session.
 
 ```rust
 // Before each LLM call in the tool loop:
-if compressor.should_compress(&cfg.compaction, context_limit) {
-    compressor.compress(&mut messages, &cfg, provider).await;
+if let Some(cmp_cfg) = &cfg.agent.compaction {
+    if compressor.should_compress(cmp_cfg) {
+        history::compress_messages(&mut messages, &mut compressor, cmp_cfg, provider).await?;
+    }
 }
 
 // After each LLM response:
@@ -290,7 +344,9 @@ if let Some(usage) = &response.usage {
 
 ```rust
 let compaction_state = db::sessions::get_compaction_state(db, session_id).await?;
-let compressor = Compressor::load(compaction_state);
+// Deserialization failure → fresh Compressor (safe default, logs warning)
+let context_limit = llm_call::default_context_for_model(&cfg.agent.model);
+let compressor = Compressor::load(compaction_state, context_limit);
 // Pass compressor into CommandContext or directly to execute()
 ```
 
@@ -336,6 +392,16 @@ It will rarely fire with proactive compression in place.
 | `fallback_on_summary_failure_continues_pipeline` | Session continues with static marker |
 | `compressor_state_persists_across_reconnect` | State loaded from DB on next handle_sse |
 | `parallel_fact_extraction_and_summary` | Both run concurrently without blocking |
+
+---
+
+## Known Limitations
+
+- **Crash between compress and finalize:** if the pipeline panics after
+  `compress_messages` but before `finalize.rs` saves state, `previous_summary`
+  is lost. The next session starts with a fresh summary instead of iterative
+  update. Acceptable — state loss is bounded to one compaction event, and the
+  summary content is still visible in the message history.
 
 ---
 
