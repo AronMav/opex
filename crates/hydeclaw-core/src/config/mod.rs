@@ -236,6 +236,8 @@ pub struct CuratorConfig {
     pub model: String,
     #[serde(default = "default_curator_max_repairs_per_run")]
     pub max_repairs_per_run: u32,
+    #[serde(default = "default_curator_agent_name")]
+    pub agent_name: String,
 }
 
 fn default_curator_cron() -> String { "0 3 * * 0".to_string() }
@@ -244,6 +246,7 @@ fn default_curator_stale_after_days() -> u32 { 30 }
 fn default_curator_archive_after_days() -> u32 { 90 }
 fn default_curator_provider_connection() -> String { String::new() }
 fn default_curator_max_repairs_per_run() -> u32 { 10 }
+fn default_curator_agent_name() -> String { "Hyde".to_string() }
 
 impl Default for CuratorConfig {
     fn default() -> Self {
@@ -256,6 +259,7 @@ impl Default for CuratorConfig {
             provider_connection: default_curator_provider_connection(),
             model: String::new(),
             max_repairs_per_run: default_curator_max_repairs_per_run(),
+            agent_name: default_curator_agent_name(),
         }
     }
 }

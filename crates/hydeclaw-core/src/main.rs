@@ -1071,7 +1071,7 @@ async fn schedule_periodic_jobs(state: &gateway::AppState, agent_configs: &[conf
             &state.config.config.curator.cron,
             state.config.config.curator.clone(),
             db.clone(),
-            state.auth.secrets.clone(),
+            state.agents.clone(),
         ).await {
             tracing::error!(error = %e, "failed to schedule skill curator");
         }

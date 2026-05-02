@@ -1,6 +1,5 @@
-use std::sync::Arc;
-use crate::agent::providers::LlmProvider;
 use crate::db::skill_repairs::SkillRepairRow;
+use crate::gateway::clusters::AgentCore;
 
 pub struct RepairResult {
     pub applied: i32,
@@ -27,14 +26,15 @@ pub fn extract_new_name_from_derived(diagnosis: &str) -> Option<&str> {
 pub async fn run(
     workspace_dir: &str,
     db: &sqlx::PgPool,
-    provider: &Arc<dyn LlmProvider>,
+    agents: &AgentCore,
+    agent_name: &str,
     max_repairs: u32,
 ) -> anyhow::Result<RepairResult> {
     let repairs = crate::db::skill_repairs::list_pending(db, i64::from(max_repairs)).await?;
     let mut result = RepairResult { applied: 0, log: Vec::new() };
 
     for repair in repairs {
-        match apply_repair(workspace_dir, db, provider, &repair).await {
+        match apply_repair(workspace_dir, db, agents, agent_name, &repair).await {
             Ok(name) => {
                 crate::db::skill_repairs::resolve(db, repair.id, "done", None).await.ok();
                 result.applied += 1;
@@ -54,7 +54,8 @@ pub async fn run(
 async fn apply_repair(
     workspace_dir: &str,
     db: &sqlx::PgPool,
-    provider: &Arc<dyn LlmProvider>,
+    agents: &AgentCore,
+    agent_name: &str,
     repair: &SkillRepairRow,
 ) -> anyhow::Result<String> {
     let skills_dir = std::path::Path::new(workspace_dir).join("skills");
@@ -66,21 +67,20 @@ async fn apply_repair(
             let existing = tokio::fs::read_to_string(&path).await
                 .map_err(|_| anyhow::anyhow!("skill file not found: {}", repair.skill_name))?;
 
-            let prompt = format!(
-                "Apply this fix to the skill body below. Return ONLY the updated skill body (everything after the frontmatter `---`).\n\nFix: {}\n\nCurrent skill:\n{}",
-                repair.diagnosis, existing
+            // Snapshot the current version before handing off to Hyde
+            let _ = crate::db::skill_versions::save_version(
+                db, &repair.skill_name, &existing, "repair", None, Some("curator:repair:fix"),
+            ).await;
+
+            let task = format!(
+                "[Curator: skill repair — fix]\n\
+                 Fix the skill '{}'. Use workspace_edit / workspace_write to apply the change \
+                 in-place at workspace/skills/{}.md.\n\n\
+                 Fix description: {}\n\n\
+                 Current skill body for reference:\n{}",
+                repair.skill_name, safe_name, repair.diagnosis, existing
             );
-            let new_body = llm_call(provider, &prompt).await?;
-
-            let fm_end = existing[3..].find("\n---")
-                .map(|i| (3 + i + 4 + 1).min(existing.len()))
-                .unwrap_or(existing.len());
-            let new_content = format!("{}\n{}", &existing[..fm_end], new_body.trim());
-
-            let _ = crate::db::skill_versions::save_version(db, &repair.skill_name, &existing, "repair", None, Some("curator:repair:fix")).await;
-            let tmp_path = path.with_extension("md.tmp");
-            tokio::fs::write(&tmp_path, &new_content).await?;
-            tokio::fs::rename(&tmp_path, &path).await?;
+            crate::curator::run_agent_task(agents, agent_name, &task).await?;
             Ok(repair.skill_name.clone())
         }
 
@@ -90,50 +90,71 @@ async fn apply_repair(
             let new_name = extract_new_name_from_derived(&repair.diagnosis)
                 .unwrap_or(&repair.skill_name);
             let parent_safe = crate::curator::sanitize_skill_name(parent);
+            let new_safe = crate::curator::sanitize_skill_name(new_name);
             let parent_path = skills_dir.join(format!("{parent_safe}.md"));
             let parent_content = tokio::fs::read_to_string(&parent_path).await
                 .map_err(|_| anyhow::anyhow!("parent skill not found: {parent}"))?;
 
-            let prompt = format!(
-                "Create a specialized variant skill named '{}' based on this parent skill. Return a complete skill file including YAML frontmatter (---) and instructions.\n\nParent skill:\n{}\n\nRequirement: {}",
-                new_name, parent_content, repair.diagnosis
+            let task = format!(
+                "[Curator: skill repair — derived]\n\
+                 Create a new specialized skill named '{}' derived from parent '{}'. \
+                 Use workspace_write to create workspace/skills/{}.md with full YAML frontmatter \
+                 and instructions.\n\n\
+                 Requirement: {}\n\n\
+                 Parent skill body:\n{}",
+                new_name, parent, new_safe, repair.diagnosis, parent_content
             );
-            let new_skill_content = llm_call(provider, &prompt).await?;
+            crate::curator::run_agent_task(agents, agent_name, &task).await?;
 
-            let new_safe = crate::curator::sanitize_skill_name(new_name);
-            tokio::fs::write(skills_dir.join(format!("{new_safe}.md")), &new_skill_content).await?;
-            let _ = crate::db::skill_versions::save_version(db, new_name, &new_skill_content, "repair", None, Some("curator:repair:derived")).await;
+            // Try to snapshot the new file Hyde just wrote; log warning if unavailable
+            let new_path = skills_dir.join(format!("{new_safe}.md"));
+            match tokio::fs::read_to_string(&new_path).await {
+                Ok(content) => {
+                    let _ = crate::db::skill_versions::save_version(
+                        db, new_name, &content, "repair", None, Some("curator:repair:derived"),
+                    ).await;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        skill = %new_name, error = %e,
+                        "phase2: derived skill not found after agent write — skipping version snapshot"
+                    );
+                }
+            }
             Ok(new_name.to_string())
         }
 
         "captured" => {
-            let prompt = format!(
-                "Create a new skill file named '{}' that captures this pattern. Return a complete skill file including YAML frontmatter (---) and instructions.\n\nPattern: {}",
-                repair.skill_name, repair.diagnosis
+            let task = format!(
+                "[Curator: skill repair — captured]\n\
+                 Create a new skill named '{}' that captures this pattern. \
+                 Use workspace_write to create workspace/skills/{}.md with full YAML frontmatter \
+                 and instructions.\n\n\
+                 Pattern: {}",
+                repair.skill_name, safe_name, repair.diagnosis
             );
-            let new_skill_content = llm_call(provider, &prompt).await?;
+            crate::curator::run_agent_task(agents, agent_name, &task).await?;
 
-            tokio::fs::write(skills_dir.join(format!("{safe_name}.md")), &new_skill_content).await?;
-            let _ = crate::db::skill_versions::save_version(db, &repair.skill_name, &new_skill_content, "repair", None, Some("curator:repair:captured")).await;
+            // Try to snapshot the new file Hyde just wrote
+            let new_path = skills_dir.join(format!("{safe_name}.md"));
+            match tokio::fs::read_to_string(&new_path).await {
+                Ok(content) => {
+                    let _ = crate::db::skill_versions::save_version(
+                        db, &repair.skill_name, &content, "repair", None, Some("curator:repair:captured"),
+                    ).await;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        skill = %repair.skill_name, error = %e,
+                        "phase2: captured skill not found after agent write — skipping version snapshot"
+                    );
+                }
+            }
             Ok(repair.skill_name.clone())
         }
 
         other => anyhow::bail!("unknown repair kind: {other}"),
     }
-}
-
-async fn llm_call(provider: &Arc<dyn LlmProvider>, prompt: &str) -> anyhow::Result<String> {
-    use crate::agent::providers::CallOptions;
-    let msg = hydeclaw_types::Message {
-        role: hydeclaw_types::MessageRole::User,
-        content: prompt.to_string(),
-        tool_calls: None,
-        tool_call_id: None,
-        thinking_blocks: vec![],
-    };
-    let resp = provider.chat(&[msg], &[], CallOptions::default()).await
-        .map_err(|e| anyhow::anyhow!("LLM call failed: {e}"))?;
-    Ok(resp.content)
 }
 
 #[cfg(test)]

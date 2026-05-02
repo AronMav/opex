@@ -556,7 +556,7 @@ impl Scheduler {
         cron_expr: &str,
         cfg: crate::config::CuratorConfig,
         db: PgPool,
-        secrets: Arc<crate::secrets::SecretsManager>,
+        agents: crate::gateway::clusters::AgentCore,
     ) -> Result<()> {
         let cron_expr = {
             let raw = cron_expr.trim();
@@ -567,7 +567,7 @@ impl Scheduler {
         let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
             let cfg = cfg.clone();
             let db = db.clone();
-            let secrets = secrets.clone();
+            let agents = agents.clone();
             Box::pin(async move {
                 // ── Record run start ──────────────────────────────────────────
                 let run_id = match crate::db::curator_runs::insert_run(&db, "cron").await {
@@ -610,7 +610,7 @@ impl Scheduler {
                 match crate::curator::run_curator(
                     &db,
                     &cfg,
-                    secrets,
+                    std::sync::Arc::new(agents.clone()),
                     crate::config::WORKSPACE_DIR,
                 )
                 .await

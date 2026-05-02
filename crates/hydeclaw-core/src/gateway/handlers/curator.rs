@@ -43,10 +43,10 @@ pub(crate) async fn api_curator_status(
 pub(crate) async fn api_curator_run(
     State(infra): State<InfraServices>,
     State(cfg_svc): State<ConfigServices>,
+    State(agents): State<crate::gateway::clusters::AgentCore>,
 ) -> impl IntoResponse {
     let db = infra.db.clone();
     let cfg = cfg_svc.config.curator.clone();
-    let secrets = infra.secrets.clone();
 
     // Reject if a run is already in progress (no finished_at means still running).
     if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await {
@@ -71,7 +71,7 @@ pub(crate) async fn api_curator_run(
     };
 
     tokio::spawn(async move {
-        match crate::curator::run_curator(&db, &cfg, secrets, crate::config::WORKSPACE_DIR).await {
+        match crate::curator::run_curator(&db, &cfg, std::sync::Arc::new(agents), crate::config::WORKSPACE_DIR).await {
             Ok(s) => {
                 crate::db::curator_runs::finish_run(
                     &db,
