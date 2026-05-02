@@ -39,6 +39,7 @@ pub use handlers::channels::migrate_credentials_to_vault;
 pub use handlers::providers::migrate_provider_keys_to_vault;
 pub(crate) use handlers::backup::create_backup_internal;
 pub(crate) use handlers::notifications::notify;
+pub(crate) use handlers::skills::find_skill_path;
 
 // ── Phase 66 REF-06 — intentional-leak retirement ────────────────────────
 //
