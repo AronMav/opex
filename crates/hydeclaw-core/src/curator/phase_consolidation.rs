@@ -208,6 +208,99 @@ async fn verify_archive_proposal(
     }
 }
 
+// ── Executor ──────────────────────────────────────────────────────────────────
+
+/// Programmatically archive a skill: save version snapshot, update frontmatter state.
+async fn apply_verified_archive(
+    workspace_dir: &str,
+    db: &sqlx::PgPool,
+    skill: &str,
+) -> anyhow::Result<()> {
+    let safe = crate::curator::sanitize_skill_name(skill);
+    let path = std::path::Path::new(workspace_dir).join("skills").join(format!("{safe}.md"));
+
+    let content = tokio::fs::read_to_string(&path).await
+        .map_err(|e| anyhow::anyhow!("apply_verified_archive: read {skill}: {e}"))?;
+
+    let _ = crate::db::skill_versions::save_version(
+        db, skill, &content, "archive", None,
+        Some("curator:archive:verified"),
+    ).await;
+
+    // Update state in frontmatter (same pattern as phase_transitions)
+    let updated = content.replacen("state: active", "state: archived", 1);
+    let updated = if updated == content {
+        content.replacen("state: stale", "state: archived", 1)
+    } else {
+        updated
+    };
+
+    let tmp = format!("{}.tmp", path.display());
+    tokio::fs::write(&tmp, &updated).await
+        .map_err(|e| anyhow::anyhow!("apply_verified_archive: write tmp {skill}: {e}"))?;
+    tokio::fs::rename(&tmp, &path).await
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            anyhow::anyhow!("apply_verified_archive: rename {skill}: {e}")
+        })?;
+
+    Ok(())
+}
+
+/// Run executor Hyde session for MERGE and FIX proposals.
+async fn run_executor(
+    workspace_dir: &str,
+    agents: &AgentCore,
+    agent_name: &str,
+    proposals: &[&Proposal],
+) -> anyhow::Result<i32> {
+    if proposals.is_empty() {
+        return Ok(0);
+    }
+
+    let proposals_text = proposals.iter().enumerate().map(|(i, p)| match p {
+        Proposal::Merge { sources, into, reason } => format!(
+            "{}. MERGE {} into '{}': {}",
+            i + 1, sources.join(" + "), into, reason
+        ),
+        Proposal::Fix { skill, description } => format!(
+            "{}. FIX '{}': {}", i + 1, skill, description
+        ),
+        _ => String::new(),
+    }).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n");
+
+    let task = format!(
+        "[Curator: skill consolidation — executor pass]\n\
+         Apply these approved skill changes using workspace_write / workspace_edit. \
+         Workspace skills are in workspace/skills/.\n\n\
+         Changes to apply:\n{proposals_text}\n\n\
+         For MERGE: create the new merged skill file, then set state: archived in \
+         each source skill frontmatter.\n\
+         For FIX: edit the skill body in-place."
+    );
+
+    crate::curator::run_agent_task(agents, agent_name, &task).await?;
+    Ok(proposals.len() as i32)
+}
+
+/// Delete the proposals file and any leftover .tmp files after processing.
+async fn cleanup_proposals(workspace_dir: &str) {
+    let path = std::path::Path::new(workspace_dir).join("curator_proposals.json");
+    if let Err(e) = tokio::fs::remove_file(&path).await {
+        tracing::debug!(error = %e, "curator p3: cleanup proposals file (may not exist)");
+    }
+    // Clean up any stray .tmp files from interrupted archive writes
+    let skills_dir = std::path::Path::new(workspace_dir).join("skills");
+    if let Ok(mut rd) = tokio::fs::read_dir(&skills_dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("tmp") {
+                let _ = tokio::fs::remove_file(&p).await;
+            }
+        }
+    }
+}
+
 // ── Entry point stub (filled in Task 6) ──────────────────────────────────────
 
 pub async fn run(
