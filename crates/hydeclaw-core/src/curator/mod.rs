@@ -7,6 +7,18 @@ use sqlx::PgPool;
 use crate::config::CuratorConfig;
 use crate::secrets::SecretsManager;
 
+// ── Shared helpers ─────────────────────────────────────────────────────────────
+
+/// Sanitize a skill name to a safe filename stem.
+/// Strips path-unsafe characters AND prevents directory traversal via `..`.
+pub(crate) fn sanitize_skill_name(name: &str) -> String {
+    let s = name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
+    if s.contains("..") {
+        return s.replace("..", "-");
+    }
+    s
+}
+
 // ── Public types ───────────────────────────────────────────────────────────────
 
 pub struct CuratorRunSummary {
@@ -141,6 +153,25 @@ async fn build_curator_provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_skill_name_blocks_dotdot_traversal() {
+        assert_eq!(sanitize_skill_name("../config"), "--config");
+        assert_eq!(sanitize_skill_name("a/../b"), "a---b");
+        assert_eq!(sanitize_skill_name(".."), "-");
+    }
+
+    #[test]
+    fn sanitize_skill_name_strips_unsafe_chars() {
+        assert_eq!(sanitize_skill_name("my skill/name"), "my-skill-name");
+        assert_eq!(sanitize_skill_name("a:b*c?d"), "a-b-c-d");
+    }
+
+    #[test]
+    fn sanitize_skill_name_leaves_safe_names_unchanged() {
+        assert_eq!(sanitize_skill_name("channel-formatting"), "channel-formatting");
+        assert_eq!(sanitize_skill_name("skill_v2"), "skill_v2");
+    }
     use tempfile::TempDir;
 
     /// Verify run_curator completes without panicking when the workspace has no
