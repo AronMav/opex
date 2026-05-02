@@ -51,10 +51,8 @@ pub fn detect_prompt_injection(text: &str) -> Vec<&'static str> {
     }
 
     // Scan raw text (not lowercased) — case folding is irrelevant for these code points.
-    if text.chars().any(|c| ZERO_WIDTH_CHARS.contains(&c)) {
-        if !matches.contains(&"zero_width_chars") {
-            matches.push("zero_width_chars");
-        }
+    if text.chars().any(|c| ZERO_WIDTH_CHARS.contains(&c)) && !matches.contains(&"zero_width_chars") {
+        matches.push("zero_width_chars");
     }
 
     matches
