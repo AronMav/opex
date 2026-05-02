@@ -430,10 +430,10 @@ Expected: compile error (function not yet defined).
 // ── Verifier ──────────────────────────────────────────────────────────────────
 
 /// Parse the verifier's plain-text response.
-/// Returns true only if response starts with "ACCEPT" (case-sensitive).
-/// Any other response — including empty, malformed, or REJECT — returns false.
+/// Returns true only if the first non-empty line is exactly "ACCEPT" (case-sensitive).
+/// "ACCEPTED", "ACCEPT something", empty, or any REJECT response all return false.
 fn parse_verifier_response(response: &str) -> bool {
-    response.trim_start().starts_with("ACCEPT")
+    response.trim_start().lines().next().unwrap_or("").trim() == "ACCEPT"
 }
 
 /// Run a 1-turn verifier session for an ARCHIVE proposal.
@@ -510,13 +510,6 @@ async fn verify_archive_proposal(
         }
     }
 }
-```
-
-Also add `Serialize` to `CapabilityEntry` derive so it can be serialised for the verifier prompt:
-
-```rust
-#[derive(Debug, Deserialize, serde::Serialize)]
-pub(crate) struct CapabilityEntry {
 ```
 
 - [ ] **Step 4: Run tests**
@@ -796,7 +789,7 @@ Expected: all tests pass.
 
 ```bash
 git add crates/hydeclaw-core/src/curator/phase_consolidation.rs crates/hydeclaw-core/src/curator/mod.rs
-git commit -m "feat(curator/p3): wire analyst/verifier/executor into run_with_db"
+git commit -m "feat(curator/p3): wire analyst/verifier/executor into run"
 ```
 
 ---
