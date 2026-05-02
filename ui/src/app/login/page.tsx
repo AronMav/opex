@@ -64,7 +64,6 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground">{t("login.access_token")}</label>
               <Input
                 type="password"
                 placeholder={t("login.enter_token")}
