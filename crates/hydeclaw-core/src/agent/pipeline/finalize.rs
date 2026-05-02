@@ -485,7 +485,7 @@ pub(crate) fn spawn_knowledge_extraction(
     message_count: usize,
     tracker: &TaskTracker,
 ) {
-    if message_count >= 5 {
+    if message_count >= 2 {
         tracker.spawn(async move {
             crate::agent::knowledge_extractor::extract_and_save(
                 db, session_id, agent_name, provider, memory_store,

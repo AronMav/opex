@@ -31,7 +31,7 @@ pub mod clusters;
 mod handlers;
 pub use error::ApiError;
 pub use state::*;
-use middleware::{AuthRateLimiter, auth_middleware, RequestRateLimiter, request_rate_limit_middleware, csp_report_rate_limit_middleware};
+use middleware::{AuthRateLimiter, auth_middleware, RequestRateLimiter, request_rate_limit_middleware, csp_report_rate_limit_middleware, webhook_rate_limit_middleware};
 // Re-export for use by main.rs
 pub use handlers::agents::start_agent_from_config;
 pub use handlers::email_triggers::renew_expiring_gmail_watches;
@@ -62,6 +62,7 @@ static SHARED_TOKEN: OnceLock<Arc<str>> = OnceLock::new();
 static AUTH_LIMITER: OnceLock<Arc<AuthRateLimiter>> = OnceLock::new();
 static REQ_LIMITER: OnceLock<Arc<RequestRateLimiter>> = OnceLock::new();
 static CSP_LIMITER: OnceLock<Arc<handlers::csp::CspReportRateLimiter>> = OnceLock::new();
+static WEBHOOK_LIMITER: OnceLock<Arc<RequestRateLimiter>> = OnceLock::new();
 
 /// Phase 66 REF-06: dashboard size accessor helper. Returns a cheap
 /// `Arc::clone` of the auth rate limiter, or `None` before the router has
@@ -214,6 +215,18 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         csp_report_rate_limit_middleware(req, next, csp_limiter.clone())
     }));
 
+    // Dedicated per-IP limiter on /webhook/* (60 rpm). Additive to the global limiter.
+    // Prevents noisy webhook sources from exhausting the global 300 rpm budget
+    // shared with other anonymous endpoints.
+    let _ = WEBHOOK_LIMITER.set(Arc::new(RequestRateLimiter::new(60)));
+    let webhook_limiter = WEBHOOK_LIMITER.get().cloned().expect("WEBHOOK_LIMITER just set");
+    let app = {
+        let webhook_limiter = webhook_limiter.clone();
+        app.layer(axum_mw::from_fn(move |req, next| {
+            webhook_rate_limit_middleware(req, next, webhook_limiter.clone())
+        }))
+    };
+
     // Phase 62 RES-04: spawn background sweeper tasks.
     // Every 60s they evict expired entries from the rate-limiter HashMaps,
     // replacing the inline-on-write eviction that scaled with map size.
@@ -239,6 +252,17 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             loop {
                 interval.tick().await;
                 req_limiter.sweep().await;
+            }
+        });
+    }
+    {
+        let webhook_limiter = webhook_limiter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                interval.tick().await;
+                webhook_limiter.sweep().await;
             }
         });
     }
