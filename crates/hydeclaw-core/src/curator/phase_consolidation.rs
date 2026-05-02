@@ -66,11 +66,15 @@ pub async fn run(
            (then archive sources), fix a skill body, rename a skill (rewrite filename + frontmatter name)\n\
          - Maximum 5 actions per pass\n\
          - Skip silently if nothing needs changing\n\
-         - IMPORTANT: Only archive a skill if it is a CONFIRMED DUPLICATE of another existing skill. \
-           Do NOT archive skills just because last_used_at is 'never' or 'null' — a skill that has \
-           never been triggered may still be valuable. 'Never used' is NOT a reason to archive.\n\
-         - Only archive state=stale skills if they have no unique content not covered elsewhere.\n\n\
-         Skills:\n{}\n\n\
+         - 'Never used' (last_used_at=null) is NOT a reason to archive a skill\n\n\
+         MANDATORY PROCESS BEFORE ANY ARCHIVE OR MERGE:\n\
+         1. Use workspace_read to read the FULL content of the skill you plan to archive\n\
+         2. Use workspace_read to read the FULL content of the replacement skill\n\
+         3. List every distinct capability, use case, and instruction section in the archived skill\n\
+         4. For each item, find the exact section in the replacement that covers it\n\
+         5. Only proceed if EVERY item has a match. If even one unique capability is missing — SKIP, do not archive.\n\
+         This is not optional. Archiving based on name/description similarity alone is forbidden.\n\n\
+         Skills (summary only — read full files before deciding):\n{}\n\n\
          When done, reply with a short bullet list of the actions you took (one line each).",
         pinned.join(", "),
         summary
