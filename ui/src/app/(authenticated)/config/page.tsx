@@ -10,7 +10,12 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Settings, Gauge, Box, GitBranch, Keyboard, Loader2, RotateCcw, Save, Timer, Wrench } from "lucide-react";
+import { CronSchedulePicker } from "@/components/ui/cron-schedule-picker";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
+import { useAgents } from "@/lib/queries";
+import { Settings, Gauge, Box, GitBranch, Keyboard, Loader2, RotateCcw, Save, Timer, Wrench, Bell } from "lucide-react";
 import { toast } from "sonner";
 
 interface ConfigData {
@@ -51,8 +56,15 @@ function getFieldDescription(
   return typeof desc === "string" ? desc : undefined;
 }
 
+const ALL_ALERT_EVENTS = ["down", "restart", "recovery", "resource"] as const;
+const ALERT_EVENT_LABELS: Record<string, string> = {
+  down: "Service down", restart: "Restart", recovery: "Recovery", resource: "Resource alert",
+};
+
 export default function ConfigPage() {
   const { t } = useTranslation();
+  const { data: agentList } = useAgents();
+  const agents = agentList ?? [];
   const [config, setConfig] = useState<ConfigData | null>(null);
   const [error, setError] = useState("");
 
@@ -69,6 +81,12 @@ export default function ConfigPage() {
   const [editAgentToolSafety, setEditAgentToolSafety] = useState("");
   const [savingAgentTool, setSavingAgentTool] = useState(false);
   const [savingFields, setSavingFields] = useState(false);
+  // [alerting]
+  const [alertChannels, setAlertChannels] = useState<{ id: string; agent_name: string; channel_type: string; display_name: string }[]>([]);
+  const [alertSettings, setAlertSettings] = useState<{ alert_channel_ids: string[]; alert_events: string[] }>({
+    alert_channel_ids: [], alert_events: ["down", "restart", "recovery", "resource"],
+  });
+  const [alertSaving, setAlertSaving] = useState(false);
   // [curator]
   const [curatorEnabled, setCuratorEnabled] = useState(false);
   const [editCuratorCron, setEditCuratorCron] = useState("");
@@ -85,9 +103,13 @@ export default function ConfigPage() {
   const mountedRef = useRef(true);
 
   const loadConfig = useCallback(() => {
-    apiGet<ConfigData>("/api/config")
-      .then((d) => {
-        setConfig(d);
+    Promise.all([
+      apiGet<ConfigData>("/api/config"),
+      apiGet<{ channels: { id: string; agent_name: string; channel_type: string; display_name: string }[] }>("/api/channels").catch(() => ({ channels: [] })),
+      apiGet<{ alert_channel_ids: string[]; alert_events: string[] }>("/api/watchdog/settings").catch(() => ({ alert_channel_ids: [] as string[], alert_events: ["down", "restart", "recovery", "resource"] })),
+    ]).then(([d, chRes, als]) => {
+        setAlertChannels(chRes.channels);
+        setAlertSettings(als);
         setError("");
         setEditPublicUrl((d.public_url as string) || "");
         const limits = d.limits as Record<string, unknown> | undefined;
@@ -108,8 +130,8 @@ export default function ConfigPage() {
         setEditCuratorArchive(String(curator?.archive_after_days ?? ""));
         setEditCuratorMaxRepairs(String(curator?.max_repairs_per_run ?? ""));
         setEditCuratorAgent(String(curator?.agent_name ?? ""));
-      })
-      .catch((e) => setError(`${e}`));
+        setConfig(d);
+    }).catch((e) => setError(`${e}`));
   }, []);
 
   useEffect(() => { loadConfig(); }, [loadConfig]);
@@ -177,6 +199,34 @@ export default function ConfigPage() {
       setSavingFields(false);
     }
   };
+
+  const saveAlertSettings = async () => {
+    setAlertSaving(true);
+    try {
+      await apiPut("/api/watchdog/settings", alertSettings);
+      toast.success(t("config.saved"));
+    } catch (e) {
+      toast.error(`${e}`);
+    } finally {
+      setAlertSaving(false);
+    }
+  };
+
+  const toggleAlertChannel = (id: string) =>
+    setAlertSettings((prev) => ({
+      ...prev,
+      alert_channel_ids: prev.alert_channel_ids.includes(id)
+        ? prev.alert_channel_ids.filter((c) => c !== id)
+        : [...prev.alert_channel_ids, id],
+    }));
+
+  const toggleAlertEvent = (event: string) =>
+    setAlertSettings((prev) => ({
+      ...prev,
+      alert_events: prev.alert_events.includes(event)
+        ? prev.alert_events.filter((e) => e !== event)
+        : [...prev.alert_events, event],
+    }));
 
   const saveCuratorFields = async () => {
     setSavingCurator(true);
@@ -506,28 +556,92 @@ export default function ConfigPage() {
                     </div>
                   </div>
                   <div className="space-y-3">
+                    <div className="space-y-1">
+                      <label className="font-mono text-xs text-muted-foreground">cron</label>
+                      <CronSchedulePicker
+                        value={editCuratorCron}
+                        onChange={setEditCuratorCron}
+                        showTimezone={false}
+                      />
+                    </div>
                     {[
-                      { label: "cron", value: editCuratorCron, set: setEditCuratorCron, type: "text", placeholder: "0 3 * * 0" },
-                      { label: "min_idle_minutes", value: editCuratorMinIdle, set: setEditCuratorMinIdle, type: "number", placeholder: "30" },
-                      { label: "stale_after_days", value: editCuratorStale, set: setEditCuratorStale, type: "number", placeholder: "30" },
-                      { label: "archive_after_days", value: editCuratorArchive, set: setEditCuratorArchive, type: "number", placeholder: "90" },
-                      { label: "max_repairs_per_run", value: editCuratorMaxRepairs, set: setEditCuratorMaxRepairs, type: "number", placeholder: "10" },
-                      { label: "agent_name", value: editCuratorAgent, set: setEditCuratorAgent, type: "text", placeholder: "Hyde" },
-                    ].map(({ label, value, set, type, placeholder }) => (
+                      { label: "min_idle_minutes", value: editCuratorMinIdle, set: setEditCuratorMinIdle, placeholder: "30" },
+                      { label: "stale_after_days", value: editCuratorStale, set: setEditCuratorStale, placeholder: "30" },
+                      { label: "archive_after_days", value: editCuratorArchive, set: setEditCuratorArchive, placeholder: "90" },
+                      { label: "max_repairs_per_run", value: editCuratorMaxRepairs, set: setEditCuratorMaxRepairs, placeholder: "10" },
+                    ].map(({ label, value, set, placeholder }) => (
                       <div key={label} className="space-y-1">
                         <label className="font-mono text-xs text-muted-foreground">{label}</label>
-                        <Input
-                          type={type}
-                          value={value}
-                          onChange={(e) => set(e.target.value)}
-                          placeholder={placeholder}
-                          className="font-mono text-sm h-9"
-                          min={type === "number" ? 0 : undefined}
-                        />
+                        <Input type="number" value={value} onChange={(e) => set(e.target.value)}
+                          placeholder={placeholder} className="font-mono text-sm h-9" min={0} />
                       </div>
                     ))}
+                    <div className="space-y-1">
+                      <label className="font-mono text-xs text-muted-foreground">agent_name</label>
+                      <Select value={editCuratorAgent} onValueChange={setEditCuratorAgent}>
+                        <SelectTrigger className="h-9 font-mono text-sm">
+                          <SelectValue placeholder="Select agent…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {agents.map((a) => (
+                            <SelectItem key={a.name} value={a.name} className="font-mono text-sm">{a.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <Button size="sm" onClick={saveCuratorFields} disabled={savingCurator} className="gap-1.5">
                       {savingCurator ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      {t("common.save")}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="neu-flat p-4 md:p-5">
+                  <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
+                    <Bell className="h-4 w-4 text-primary" />
+                    <h3 className="text-sm font-semibold text-foreground">alerting</h3>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Channels</p>
+                      {alertChannels.length === 0 ? (
+                        <p className="text-xs text-muted-foreground italic">No channels configured</p>
+                      ) : (
+                        <div className="flex flex-col gap-1.5">
+                          {alertChannels.map((ch) => {
+                            const selected = alertSettings.alert_channel_ids.includes(ch.id);
+                            return (
+                              <Button key={ch.id} variant={selected ? "default" : "outline"} size="sm"
+                                onClick={() => toggleAlertChannel(ch.id)}
+                                className="w-full justify-start text-xs h-auto py-2">
+                                <span className="font-medium">{ch.agent_name}</span>
+                                <span className="opacity-70"> / {ch.channel_type}</span>
+                                {ch.display_name !== ch.channel_type && (
+                                  <span className="opacity-50"> ({ch.display_name})</span>
+                                )}
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Events</p>
+                      <div className="flex flex-col gap-1.5">
+                        {ALL_ALERT_EVENTS.map((event) => {
+                          const selected = alertSettings.alert_events.includes(event);
+                          return (
+                            <Button key={event} variant={selected ? "default" : "outline"} size="sm"
+                              onClick={() => toggleAlertEvent(event)}
+                              className="w-full justify-start text-xs">
+                              {ALERT_EVENT_LABELS[event] ?? event}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <Button size="sm" onClick={saveAlertSettings} disabled={alertSaving} className="gap-1.5">
+                      {alertSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
                       {t("common.save")}
                     </Button>
                   </div>
