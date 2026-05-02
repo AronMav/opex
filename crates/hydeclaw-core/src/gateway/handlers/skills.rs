@@ -187,27 +187,48 @@ pub(crate) async fn api_skill_upsert_global(
     axum::extract::Path(skill_name): axum::extract::Path<String>,
     axum::extract::Json(body): axum::extract::Json<SkillUpsertBody>,
 ) -> impl IntoResponse {
-    // Preserve last_used_at from existing file when updating.
-    let existing_last_used_at = find_skill_path(crate::config::WORKSPACE_DIR, &skill_name).await
+    // Read existing skill to use as fallback for fields not provided in the request.
+    // This ensures state-only updates (e.g. archive/unarchive) preserve all other content.
+    let existing_skill = find_skill_path(crate::config::WORKSPACE_DIR, &skill_name).await
         .and_then(|p| std::fs::read_to_string(&p).ok())
-        .and_then(|c| crate::skills::SkillDef::parse(&c))
-        .and_then(|s| s.meta.last_used_at);
+        .and_then(|c| crate::skills::SkillDef::parse(&c));
+
+    let existing_meta = existing_skill.as_ref().map(|s| &s.meta);
+
+    let instructions = if body.instructions.is_empty() {
+        existing_skill.as_ref().map(|s| s.instructions.as_str()).unwrap_or("").to_string()
+    } else {
+        body.instructions
+    };
 
     let frontmatter = crate::skills::SkillFrontmatter {
         name: skill_name.clone(),
-        description: body.description.unwrap_or_default(),
-        triggers: body.triggers,
-        tools_required: body.tools_required,
-        priority: body.priority,
-        last_used_at: existing_last_used_at,
+        description: body.description
+            .unwrap_or_else(|| existing_meta.map(|m| m.description.clone()).unwrap_or_default()),
+        triggers: if body.triggers.is_empty() {
+            existing_meta.map(|m| m.triggers.clone()).unwrap_or_default()
+        } else {
+            body.triggers
+        },
+        tools_required: if body.tools_required.is_empty() {
+            existing_meta.map(|m| m.tools_required.clone()).unwrap_or_default()
+        } else {
+            body.tools_required
+        },
+        priority: if body.priority == 0 {
+            existing_meta.map(|m| m.priority).unwrap_or(0)
+        } else {
+            body.priority
+        },
+        last_used_at: existing_meta.and_then(|m| m.last_used_at.clone()),
         state: body.state.unwrap_or(crate::skills::SkillState::Active),
-        pinned: None,
+        pinned: existing_meta.and_then(|m| m.pinned),
     };
     match crate::skills::write_skill(
         crate::config::WORKSPACE_DIR,
         &skill_name,
         &frontmatter,
-        &body.instructions,
+        &instructions,
     ).await {
         Ok(()) => {
             tracing::info!(skill = %skill_name, "skill upserted via UI (global)");
