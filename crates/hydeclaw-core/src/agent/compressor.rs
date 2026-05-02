@@ -58,6 +58,9 @@ impl Compressor {
     }
 
     pub fn should_compress(&self, cfg: &CompactionConfig) -> bool {
+        if !cfg.enabled {
+            return false;
+        }
         if self.last_prompt_tokens == 0 {
             return false;
         }
@@ -97,7 +100,7 @@ impl Compressor {
         } else {
             self.ineffective_count = 0;
         }
-        self.compression_count += 1;
+        self.compression_count = self.compression_count.saturating_add(1);
         tracing::info!(
             savings_pct = format!("{:.1}%", savings_pct * 100.0),
             compression_count = self.compression_count,
