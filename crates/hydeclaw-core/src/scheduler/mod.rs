@@ -890,17 +890,48 @@ impl Scheduler {
                             // Silent jobs rely on the agent calling send_message explicitly when needed.
                             if !silent
                                 && let Some(ref at) = announce_to
-                                    && let (Some(ch), Some(cid)) = (
-                                        at["channel"].as_str(),
-                                        at["chat_id"].as_i64(),
-                                    ) {
-                                        let text = format!("⏰ *{}*\n\n{}",
-                                            agent_name,
-                                            reply.chars().take(2000).collect::<String>());
+                            {
+                                let targets = normalize_announce_to(at);
+                                if !targets.is_empty() {
+                                    // Build the announcement text once — same body for every target.
+                                    let text = format!(
+                                        "⏰ *{}*\n\n{}",
+                                        agent_name,
+                                        reply.chars().take(2000).collect::<String>()
+                                    );
+                                    for target in &targets {
+                                        let Some(ch) = target["channel"].as_str() else {
+                                            tracing::warn!(
+                                                agent = %agent_name,
+                                                job_id = %db_id,
+                                                target = %target,
+                                                "cron announce: skipping target with missing/invalid 'channel' field"
+                                            );
+                                            continue;
+                                        };
+                                        let Some(cid) = target["chat_id"].as_i64() else {
+                                            tracing::warn!(
+                                                agent = %agent_name,
+                                                job_id = %db_id,
+                                                target = %target,
+                                                "cron announce: skipping target with missing/invalid 'chat_id' field"
+                                            );
+                                            continue;
+                                        };
                                         if let Err(e) = engine.send_channel_message(ch, cid, &text).await {
-                                            tracing::warn!(error = %e, "cron announce failed");
+                                            // Per-target failure must NOT abort delivery to remaining targets.
+                                            tracing::warn!(
+                                                agent = %agent_name,
+                                                job_id = %db_id,
+                                                channel = %ch,
+                                                chat_id = cid,
+                                                error = %e,
+                                                "cron announce failed (continuing with remaining targets)"
+                                            );
                                         }
                                     }
+                                }
+                            }
                         }
                         Err(e) => {
                             // Record error
