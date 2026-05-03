@@ -66,6 +66,15 @@ crate::register_ts_dto!(AgentDetailCompactionDto);
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
+pub struct AgentDetailSkillReviewDto {
+    pub enabled: bool,
+    pub min_tool_calls: u32,
+}
+crate::register_ts_dto!(AgentDetailSkillReviewDto);
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-gen", ts(export))]
 pub struct AgentDetailSessionDto {
     pub dm_scope: String,
     pub ttl_days: u32,
@@ -159,6 +168,7 @@ pub struct AgentDetailDto {
     pub heartbeat: Option<AgentDetailHeartbeatDto>,
     pub tools: Option<AgentDetailToolsDto>,
     pub compaction: Option<AgentDetailCompactionDto>,
+    pub skill_review: Option<AgentDetailSkillReviewDto>,
     pub session: Option<AgentDetailSessionDto>,
     pub icon: Option<String>,
     pub max_tools_in_context: Option<usize>,

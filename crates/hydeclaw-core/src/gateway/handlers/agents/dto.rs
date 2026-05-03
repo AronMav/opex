@@ -53,6 +53,10 @@ impl AgentDetailDto {
                 preserve_last_n: c.preserve_last_n,
                 max_context_tokens: c.max_context_tokens,
             }),
+            skill_review: a.skill_review.as_ref().map(|sr| AgentDetailSkillReviewDto {
+                enabled: sr.enabled,
+                min_tool_calls: sr.min_tool_calls,
+            }),
             session: a.session.as_ref().map(|s| AgentDetailSessionDto {
                 dm_scope: s.dm_scope.clone(),
                 ttl_days: s.ttl_days,

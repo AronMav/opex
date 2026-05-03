@@ -64,6 +64,8 @@ export const emptyForm: FormState = {
   compThreshold: "0.8",
   compPreserveToolCalls: false,
   compPreserveLastN: "10",
+  srEnabled: false,
+  srMinToolCalls: "3",
   maxToolsInContext: "",
   tlEnabled: false,
   tlMaxIterations: "50",
@@ -165,6 +167,8 @@ export function detailToForm(d: AgentDetail): FormState {
     accessOwnerId: d.access?.owner_id ?? "",
     fallbackProvider: d.fallback_provider ?? "",
     ttsProvider: d.tts_provider ?? "",
+    srEnabled: !!d.skill_review && d.skill_review.enabled,
+    srMinToolCalls: String(d.skill_review?.min_tool_calls ?? 3),
   };
 }
 
@@ -237,6 +241,9 @@ export function formToPayload(f: FormState) {
           require_for_categories: f.approvalCategories,
           timeout_seconds: parseInt(f.approvalTimeout) || 300,
         }
+      : null,
+    skill_review: f.srEnabled
+      ? { enabled: true, min_tool_calls: parseInt(f.srMinToolCalls) || 3 }
       : null,
     tool_loop: f.tlEnabled
       ? {
