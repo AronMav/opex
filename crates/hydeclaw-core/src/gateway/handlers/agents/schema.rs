@@ -211,6 +211,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 anti_thrash_max_skips: c.anti_thrash_max_skips.unwrap_or(2),
                 extract_to_memory: c.extract_to_memory.unwrap_or(true),
             }),
+            skill_review: None,
             icon: p.icon,
             max_tools_in_context: p.max_tools_in_context,
             routing: p.routing.flatten().unwrap_or_default().into_iter().map(|r| {
