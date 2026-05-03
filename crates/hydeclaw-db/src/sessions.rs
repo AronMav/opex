@@ -1451,7 +1451,7 @@ pub async fn mirror_to_session(
         "SELECT id FROM sessions \
          WHERE agent_id = $1 \
            AND channel   = $2 \
-           AND $3        = ANY(participants) \
+           AND user_id   = $3 \
            AND user_id  != '*' \
          ORDER BY started_at DESC \
          LIMIT 1",
