@@ -960,7 +960,6 @@ impl Scheduler {
                                             continue;
                                         };
                                         if let Err(e) = engine.send_channel_message(ch, cid, &text).await {
-                                            // Per-target failure must NOT abort delivery to remaining targets.
                                             tracing::warn!(
                                                 agent = %agent_name,
                                                 job_id = %db_id,
@@ -969,6 +968,25 @@ impl Scheduler {
                                                 error = %e,
                                                 "cron announce failed (continuing with remaining targets)"
                                             );
+                                        } else {
+                                            // Mirror delivery into the recipient's DM session.
+                                            let mirror_db  = db.clone();
+                                            let mirror_aid = agent_name.clone();
+                                            let mirror_ch  = ch.to_string();
+                                            let mirror_cid = cid.to_string();
+                                            let mirror_txt = text.clone();
+                                            tokio::spawn(async move {
+                                                if let Err(e) = crate::db::sessions::mirror_to_session(
+                                                    &mirror_db, &mirror_aid, &mirror_ch, &mirror_cid, &mirror_txt,
+                                                ).await {
+                                                    tracing::debug!(
+                                                        error = %e,
+                                                        channel = %mirror_ch,
+                                                        chat_id = %mirror_cid,
+                                                        "mirror_to_session failed (non-fatal)"
+                                                    );
+                                                }
+                                            });
                                         }
                                     }
                                 }
@@ -1198,6 +1216,24 @@ async fn run_heartbeat(
                 };
                 if let Err(e) = engine.send_channel_message(channel, chat_id, &text).await {
                     tracing::warn!(agent = %agent_name, error = %e, "heartbeat announce failed");
+                } else {
+                    let mirror_db  = engine.db_pool().clone();
+                    let mirror_aid = agent_name.to_string();
+                    let mirror_ch  = channel.to_string();
+                    let mirror_cid = chat_id.to_string();
+                    let mirror_txt = text.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = crate::db::sessions::mirror_to_session(
+                            &mirror_db, &mirror_aid, &mirror_ch, &mirror_cid, &mirror_txt,
+                        ).await {
+                            tracing::debug!(
+                                error = %e,
+                                channel = %mirror_ch,
+                                chat_id = %mirror_cid,
+                                "mirror_to_session (heartbeat) failed (non-fatal)"
+                            );
+                        }
+                    });
                 }
             }
     }
