@@ -664,6 +664,7 @@ pub struct AgentSettings {
     #[serde(default)]
     pub delegation: DelegationConfig,
     pub compaction: Option<CompactionConfig>,
+    pub skill_review: Option<SkillReviewConfig>,
     pub session: Option<SessionConfig>,
     /// Maximum number of tools to include in LLM context.
     /// When total tools exceed this limit, the most relevant ones are selected
@@ -1002,6 +1003,27 @@ impl CompactionConfig {
 fn default_threshold() -> f64 { 0.8 }
 fn default_preserve_last_n() -> u32 { 10 }
 fn default_false() -> bool { false }
+
+/// Per-agent session skill review config (TOML: `[agent.skill_review]`).
+///
+/// When enabled, after each `Done` session with ≥ `min_tool_calls` tool
+/// invocations, a background task analyzes the session for skill improvements
+/// and queues repairs via `pending_skill_repairs`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct SkillReviewConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "SkillReviewConfig::default_min_tool_calls")]
+    pub min_tool_calls: u32,
+}
+
+impl SkillReviewConfig {
+    fn default_min_tool_calls() -> u32 { 3 }
+}
+
+impl Default for SkillReviewConfig {
+    fn default() -> Self { Self { enabled: false, min_tool_calls: 3 } }
+}
 
 /// Session management config (per-agent).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -1677,6 +1699,7 @@ model = "m2.5"
                     anti_thrash_max_skips: 2,
                     extract_to_memory: true,
                 }),
+                skill_review: None,
                 session: Some(SessionConfig {
                     dm_scope: "shared".into(),
                     ttl_days: 7,
@@ -1745,6 +1768,7 @@ model = "m2.5"
                 }),
                 delegation: DelegationConfig::default(),
                 compaction: None,
+                skill_review: None,
                 session: None,
                 max_tools_in_context: None,
                 max_history_messages: None,
@@ -1959,7 +1983,61 @@ max_requests_per_minute = 200
         assert!(cfg.extract_to_memory);
     }
 
-    // ── 8. SessionConfig defaults ──
+    // ── 8. SkillReviewConfig ──
+
+    #[test]
+    fn skill_review_config_defaults() {
+        let cfg = SkillReviewConfig::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.min_tool_calls, 3);
+    }
+
+    #[test]
+    fn skill_review_config_from_toml() {
+        let toml_str = r#"
+            [agent]
+            name = "Test"
+            provider = "openai"
+            model = "gpt-4o"
+            [agent.skill_review]
+            enabled = true
+            min_tool_calls = 5
+        "#;
+        let cfg: AgentConfig = toml::from_str(toml_str).expect("parse");
+        let sr = cfg.agent.skill_review.expect("skill_review present");
+        assert!(sr.enabled);
+        assert_eq!(sr.min_tool_calls, 5);
+    }
+
+    #[test]
+    fn skill_review_absent_gives_none() {
+        let toml_str = r#"
+            [agent]
+            name = "Test"
+            provider = "openai"
+            model = "gpt-4o"
+        "#;
+        let cfg: AgentConfig = toml::from_str(toml_str).expect("parse");
+        assert!(cfg.agent.skill_review.is_none());
+    }
+
+    #[test]
+    fn skill_review_enabled_only_gives_default_min_tool_calls() {
+        let toml_str = r#"
+            [agent]
+            name = "Test"
+            provider = "openai"
+            model = "gpt-4o"
+            [agent.skill_review]
+            enabled = true
+        "#;
+        let cfg: AgentConfig = toml::from_str(toml_str).expect("parse");
+        let sr = cfg.agent.skill_review.expect("present");
+        assert!(sr.enabled);
+        assert_eq!(sr.min_tool_calls, 3);
+    }
+
+    // ── 9. SessionConfig defaults ──
 
     #[test]
     fn session_config_defaults() {
