@@ -194,14 +194,23 @@ async fn maybe_split_session(
         }
     };
 
-    // Insert seed messages into child (non-fatal if this fails)
+    // Insert seed messages into child — if this fails the child is empty and
+    // useless; fall back to parent session rather than redirecting into a void.
     if let Err(e) = crate::db::sessions::insert_seed_messages(db, child_id, &agent_id, &seed).await {
-        tracing::warn!(error = %e, child = %child_id, "insert_seed_messages failed");
+        tracing::warn!(error = %e, child = %child_id, "insert_seed_messages failed — continuing in parent session");
+        return Ok(None);
     }
 
     // Mark parent as ended
     if let Err(e) = crate::db::sessions::set_session_end_reason(db, session_id, "compression").await {
         tracing::warn!(error = %e, session = %session_id, "set_session_end_reason failed");
+    }
+
+    // Clear pending_split on parent — prevents re-entering split on future resumes of the parent.
+    state.pending_split = false;
+    let parent_cleared = serde_json::to_value(&state).unwrap_or(serde_json::Value::Null);
+    if let Err(e) = crate::db::compaction::set_compaction_state(db, session_id, parent_cleared).await {
+        tracing::warn!(error = %e, session = %session_id, "could not clear pending_split on parent");
     }
 
     // Save compaction_state with pending_split=false on child
@@ -245,7 +254,7 @@ pub async fn bootstrap<S: EventSink>(
                 .agent
                 .compaction
                 .as_ref()
-                .map_or(3, |c| c.preserve_last_n as usize);
+                .map_or(10, |c| c.preserve_last_n as usize);
             match maybe_split_session(&engine.cfg().db, resume_id, preserve_last_n).await {
                 Ok(Some(child_id)) => Some(child_id),
                 Ok(None) => Some(resume_id),
