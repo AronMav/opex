@@ -45,7 +45,8 @@ pub(crate) async fn api_curator_status(
 pub(crate) async fn api_curator_config_get(
     State(cfg_svc): State<ConfigServices>,
 ) -> impl IntoResponse {
-    let cfg = &cfg_svc.config.curator;
+    let shared = cfg_svc.shared_config.read().await;
+    let cfg = &shared.curator;
     Json(serde_json::json!({
         "enabled":             cfg.enabled,
         "cron":                cfg.cron,
