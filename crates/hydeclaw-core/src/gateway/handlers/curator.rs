@@ -9,7 +9,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::super::AppState;
-use crate::gateway::clusters::{ConfigServices, InfraServices};
+use crate::gateway::clusters::{AgentCore, ConfigServices, InfraServices};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -73,6 +73,8 @@ pub(crate) struct CuratorConfigUpdate {
 
 pub(crate) async fn api_curator_config_put(
     State(cfg_svc): State<ConfigServices>,
+    State(infra): State<InfraServices>,
+    State(agents): State<AgentCore>,
     Json(body): Json<CuratorConfigUpdate>,
 ) -> impl IntoResponse {
     if let Err(e) = crate::config::update_curator_config(
@@ -91,13 +93,28 @@ pub(crate) async fn api_curator_config_put(
         ).into_response();
     }
     // Hot-reload shared config so GET immediately reflects the new values
-    match crate::config::AppConfig::load("config/hydeclaw.toml") {
+    let new_curator_cfg = match crate::config::AppConfig::load("config/hydeclaw.toml") {
         Ok(new_config) => {
+            let curator_cfg = new_config.curator.clone();
             let mut config = cfg_svc.shared_config.write().await;
             *config = new_config;
+            Some(curator_cfg)
         }
         Err(e) => {
             tracing::warn!(error = %e, "curator config updated on disk but failed to reload into memory");
+            None
+        }
+    };
+    // Reschedule curator so new cron/enabled takes effect immediately
+    if let Some(curator_cfg) = new_curator_cfg {
+        if let Err(e) = agents.scheduler.reschedule_curator(
+            curator_cfg.clone(),
+            infra.db.clone(),
+            agents.clone(),
+        ).await {
+            tracing::warn!(error = %e, "curator reschedule failed");
+        } else {
+            tracing::info!(cron = %curator_cfg.cron, enabled = curator_cfg.enabled, "curator rescheduled via API");
         }
     }
     Json(serde_json::json!({"ok": true})).into_response()

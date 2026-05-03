@@ -346,6 +346,7 @@ mod tests {
             heartbeat: None,
             tools: None,
             compaction: None,
+            skill_review: None,
             session: None,
             max_tools_in_context: None,
             routing: None,

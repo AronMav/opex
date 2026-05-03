@@ -68,6 +68,10 @@ pub struct Scheduler {
     ui_event_tx: tokio::sync::broadcast::Sender<String>,
     /// Per-agent execution lock — if agent is already running a scheduled task, skip.
     agent_locks: AgentLocks,
+    /// UUID of the currently registered backup job (None if not scheduled).
+    backup_job: RwLock<Option<Uuid>>,
+    /// UUID of the currently registered curator job (None if not scheduled).
+    curator_job: RwLock<Option<Uuid>>,
 }
 
 impl Scheduler {
@@ -79,6 +83,8 @@ impl Scheduler {
             agent_jobs: RwLock::new(HashMap::new()),
             ui_event_tx,
             agent_locks: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            backup_job: RwLock::new(None),
+            curator_job: RwLock::new(None),
         })
     }
 
@@ -94,6 +100,8 @@ impl Scheduler {
             agent_jobs: RwLock::new(HashMap::new()),
             ui_event_tx: tx,
             agent_locks: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            backup_job: RwLock::new(None),
+            curator_job: RwLock::new(None),
         })
     }
 
@@ -555,8 +563,24 @@ impl Scheduler {
             })
         })?;
 
-        self.scheduler.add(job).await?;
+        let uuid = self.scheduler.add(job).await?;
+        *self.backup_job.write().await = Some(uuid);
         Ok(())
+    }
+
+    /// Remove the current backup job (if any) and re-register with a new cron expression.
+    pub async fn reschedule_backup(
+        &self,
+        cron_expr: &str,
+        retention_days: u32,
+        postgres_container: String,
+        secrets: Arc<crate::secrets::SecretsManager>,
+        agent_deps: Arc<tokio::sync::RwLock<crate::gateway::state::AgentDeps>>,
+    ) -> Result<()> {
+        if let Some(old_uuid) = self.backup_job.write().await.take() {
+            self.scheduler.remove(&old_uuid).await.ok();
+        }
+        self.add_backup(cron_expr, retention_days, postgres_container, secrets, agent_deps).await
     }
 
     /// Register a cron job that runs the skill curator on a configurable schedule.
@@ -653,7 +677,24 @@ impl Scheduler {
             })
         })?;
 
-        self.scheduler.add(job).await?;
+        let uuid = self.scheduler.add(job).await?;
+        *self.curator_job.write().await = Some(uuid);
+        Ok(())
+    }
+
+    /// Remove the current curator job (if any) and re-register with a new cron expression.
+    pub async fn reschedule_curator(
+        &self,
+        cfg: crate::config::CuratorConfig,
+        db: sqlx::PgPool,
+        agents: crate::gateway::clusters::AgentCore,
+    ) -> Result<()> {
+        if let Some(old_uuid) = self.curator_job.write().await.take() {
+            self.scheduler.remove(&old_uuid).await.ok();
+        }
+        if cfg.enabled {
+            self.add_curator(&cfg.cron.clone(), cfg, db, agents).await?;
+        }
         Ok(())
     }
 
