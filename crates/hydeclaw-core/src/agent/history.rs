@@ -627,6 +627,46 @@ Return ONLY the JSON array, no other text."
     }
 }
 
+/// Build the initial message list for a chain child session.
+///
+/// Returns `[system_msg (if present), summary_as_assistant, ...tail_msgs]`.
+/// The summary role is always `MessageRole::Assistant` — since the head is
+/// at most a `system` message, the first conversation message must be `assistant`
+/// to satisfy the alternating-roles invariant expected by LLM providers.
+pub fn build_compressed_seed(
+    system_msg: Option<&Message>,
+    summary: &str,
+    tail: &[Message],
+) -> Vec<Message> {
+    let mut result = Vec::new();
+
+    if let Some(sys) = system_msg {
+        result.push(sys.clone());
+    }
+
+    let summary_content = if summary.is_empty() {
+        format!(
+            "{SUMMARY_PREFIX}\nSummary generation was unavailable. \
+Context was compacted to free space. Continue based on the recent messages below."
+        )
+    } else if summary.starts_with(SUMMARY_PREFIX) {
+        summary.to_string()
+    } else {
+        format!("{SUMMARY_PREFIX}\n{summary}")
+    };
+
+    result.push(Message {
+        role: MessageRole::Assistant,
+        content: summary_content,
+        tool_calls: None,
+        tool_call_id: None,
+        thinking_blocks: vec![],
+    });
+
+    result.extend_from_slice(tail);
+    result
+}
+
 /// Main entry point: run all 5 phases of compression on `messages`.
 /// `language` should be the agent's language (e.g. "ru" or "en"), used for summary.
 /// Returns extracted facts (empty Vec if `cfg.extract_to_memory = false`).
@@ -781,6 +821,49 @@ mod tests {
     use tokio::sync::mpsc;
     use crate::agent::tool_loop::{LoopDetector, ToolLoopConfig};
     use crate::agent::providers::LlmProvider;
+
+    // ── build_compressed_seed tests ───────────────────────────────────────────
+
+    #[test]
+    fn build_compressed_seed_correct_order_and_roles() {
+        let system = Message {
+            role: MessageRole::System,
+            content: "You are a helpful assistant.".into(),
+            tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+        };
+        let tail = vec![
+            Message { role: MessageRole::User,      content: "what is 2+2".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::Assistant, content: "4".into(),            tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+        ];
+        let seed = build_compressed_seed(Some(&system), "my summary", &tail);
+        assert_eq!(seed.len(), 4, "system + summary + 2 tail");
+        assert_eq!(seed[0].role, MessageRole::System);
+        assert_eq!(seed[1].role, MessageRole::Assistant);
+        assert!(seed[1].content.contains("my summary"), "summary must be in content");
+        assert!(seed[1].content.contains(SUMMARY_PREFIX), "SUMMARY_PREFIX must be prepended");
+        assert_eq!(seed[2].role, MessageRole::User);
+        assert_eq!(seed[3].role, MessageRole::Assistant);
+    }
+
+    #[test]
+    fn build_compressed_seed_no_system_message() {
+        let tail = vec![
+            Message { role: MessageRole::User, content: "hi".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+        ];
+        let seed = build_compressed_seed(None, "summary text", &tail);
+        assert_eq!(seed.len(), 2, "summary + 1 tail (no system)");
+        assert_eq!(seed[0].role, MessageRole::Assistant);
+        assert!(seed[0].content.contains("summary text"));
+        assert_eq!(seed[1].role, MessageRole::User);
+    }
+
+    #[test]
+    fn build_compressed_seed_empty_summary_uses_fallback() {
+        let seed = build_compressed_seed(None, "", &[]);
+        assert_eq!(seed.len(), 1, "only fallback summary message");
+        assert!(seed[0].content.contains(SUMMARY_PREFIX));
+        assert!(seed[0].content.contains("unavailable"), "fallback must mention unavailability");
+    }
 
     struct StaticProvider(String);
 
