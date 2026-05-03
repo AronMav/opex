@@ -909,6 +909,11 @@ pub(crate) async fn api_session_chain(
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     match crate::db::sessions::get_session_chain(&infra.db, id).await {
+        Ok(chain) if chain.is_empty() => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "session not found" })),
+        )
+            .into_response(),
         Ok(chain) => Json(serde_json::json!({ "chain": chain })).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
