@@ -60,6 +60,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChatThread } from "./ChatThread";
 import { ContextBar } from "./ContextBar";
 import { CanvasPanel } from "./CanvasPanel";
+import { ParentBadge } from "@/components/chat/ParentBadge";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
@@ -667,15 +668,27 @@ export default function ChatPage() {
                           placeholder={t("chat.rename_session")}
                         />
                       ) : (
-                        <p
-                          className={`truncate text-sm transition-colors ${
-                            activeSessionId === s.id
-                              ? "text-foreground"
-                              : "text-muted-foreground/70 group-hover:text-muted-foreground/90"
-                          } ${!s.title && !s.user_id ? "italic text-muted-foreground/40" : ""}`}
-                        >
-                          {displayTitle}
-                        </p>
+                        <>
+                          <p
+                            className={`truncate text-sm transition-colors ${
+                              activeSessionId === s.id
+                                ? "text-foreground"
+                                : "text-muted-foreground/70 group-hover:text-muted-foreground/90"
+                            } ${!s.title && !s.user_id ? "italic text-muted-foreground/40" : ""}`}
+                          >
+                            {displayTitle}
+                          </p>
+                          {s.parent_session_id && (
+                            <ParentBadge
+                              parentTitle={
+                                sessionsData?.sessions?.find((p) => p.id === s.parent_session_id)?.title ?? null
+                              }
+                              onNavigate={() =>
+                                useChatStore.getState().selectSession(s.parent_session_id!, currentAgent)
+                              }
+                            />
+                          )}
+                        </>
                       )}
                       {activeSessionId === s.id && (
                         <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-[2px] rounded-full bg-primary" />
