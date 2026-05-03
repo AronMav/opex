@@ -1,5 +1,5 @@
 // ui/src/__tests__/compression-chains.test.tsx
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
 
@@ -52,6 +52,10 @@ function makeChain(currentId: string, parentId: string) {
 }
 
 describe("CompactChainBanner", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it("renders nothing when session has no parent (root session)", () => {
     vi.mocked(useSessionChain).mockReturnValue({
       data: { chain: [{ id: "root", parent_session_id: null, end_reason: null, title: "Root", started_at: new Date().toISOString(), agent_id: "A", depth: 0 }] },
