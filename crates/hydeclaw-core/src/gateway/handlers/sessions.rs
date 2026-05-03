@@ -99,7 +99,7 @@ pub(crate) async fn api_list_sessions(
         Some(channel) => {
             let channels: Vec<&str> = channel.split(',').collect();
             let rows = sqlx::query_as::<_, sessions::Session>(
-                "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants \
+                "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
                  FROM sessions WHERE agent_id = $1 AND channel = ANY($2) \
                  ORDER BY last_message_at DESC LIMIT $3",
             )
@@ -120,7 +120,7 @@ pub(crate) async fn api_list_sessions(
         }
         None => {
             let rows = sqlx::query_as::<_, sessions::Session>(
-                "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants \
+                "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
                  FROM sessions WHERE agent_id = $1 \
                  ORDER BY last_message_at DESC LIMIT $2",
             )
@@ -155,6 +155,8 @@ pub(crate) async fn api_list_sessions(
                         "metadata": s.metadata,
                         "run_status": s.run_status,
                         "participants": s.participants,
+                        "parent_session_id": s.parent_session_id,
+                        "end_reason": s.end_reason,
                     })
                 })
                 .collect();
