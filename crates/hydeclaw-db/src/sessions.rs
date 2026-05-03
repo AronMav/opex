@@ -1172,6 +1172,7 @@ pub async fn export_session(db: &PgPool, session_id: Uuid) -> sqlx::Result<Optio
                 "feedback": m.feedback.unwrap_or(0),
                 "edited_at": m.edited_at.map(|t| t.to_rfc3339()),
                 "status": m.status,
+                "is_mirror": m.is_mirror,
             })
         })
         .collect();
