@@ -118,6 +118,9 @@ export interface FormState {
   fallbackProvider: string;
   // TTS provider (per-agent voice routing — provider's options.voice picks the voice)
   ttsProvider: string;
+  // Skill Review
+  srEnabled: boolean;
+  srMinToolCalls: string;
 }
 
 export interface AgentEditDialogProps {
@@ -544,6 +547,14 @@ export function AgentEditDialog({
                     </div>
                     <Field label={t("agents.hooks_block_tools")}>
                       <Input value={form.hooksBlockTools} placeholder="tool1, tool2" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ hooksBlockTools: e.target.value })} />
+                    </Field>
+                  </div>
+                </SwitchSection>
+                <SwitchSection title={t("agents.section_skills")} enabled={form.srEnabled} onToggle={(v) => upd({ srEnabled: v })}>
+                  <div className="space-y-2">
+                    <Field label={t("agents.field_sr_min_tool_calls")}>
+                      <Input type="number" step="1" min="1" max="100" className="bg-background border-border font-mono text-sm h-8" value={form.srMinToolCalls} onChange={(e) => upd({ srMinToolCalls: e.target.value })} />
+                      <span className="text-[10px] text-muted-foreground">{t("agents.hint_sr_min_tool_calls")}</span>
                     </Field>
                   </div>
                 </SwitchSection>

@@ -363,6 +363,12 @@ pub(crate) async fn api_update_agent(
                 extract_to_memory: Some(c.extract_to_memory),
             }));
         }
+        if payload.skill_review.is_none() {
+            payload.skill_review = Some(a.skill_review.as_ref().map(|sr| SkillReviewPayload {
+                enabled: Some(sr.enabled),
+                min_tool_calls: Some(sr.min_tool_calls),
+            }));
+        }
         if payload.session.is_none() {
             payload.session = Some(a.session.as_ref().map(|s| SessionPayload {
                 dm_scope: Some(s.dm_scope.clone()),

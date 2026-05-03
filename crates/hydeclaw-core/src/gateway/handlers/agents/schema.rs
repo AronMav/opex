@@ -58,6 +58,8 @@ pub(crate) struct AgentCreatePayload {
     #[serde(default, deserialize_with = "nullable")]
     pub compaction: Option<Option<CompactionPayload>>,
     #[serde(default, deserialize_with = "nullable")]
+    pub skill_review: Option<Option<SkillReviewPayload>>,
+    #[serde(default, deserialize_with = "nullable")]
     pub session: Option<Option<SessionPayload>>,
     pub max_tools_in_context: Option<usize>,
     #[serde(default, deserialize_with = "nullable")]
@@ -140,6 +142,12 @@ pub(crate) struct CompactionPayload {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct SkillReviewPayload {
+    pub enabled: Option<bool>,
+    pub min_tool_calls: Option<u32>,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct SessionPayload {
     pub dm_scope: Option<String>,
     pub ttl_days: Option<u32>,
@@ -211,7 +219,10 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 anti_thrash_max_skips: c.anti_thrash_max_skips.unwrap_or(2),
                 extract_to_memory: c.extract_to_memory.unwrap_or(true),
             }),
-            skill_review: None,
+            skill_review: p.skill_review.flatten().map(|sr| crate::config::SkillReviewConfig {
+                enabled: sr.enabled.unwrap_or(false),
+                min_tool_calls: sr.min_tool_calls.unwrap_or(3),
+            }),
             icon: p.icon,
             max_tools_in_context: p.max_tools_in_context,
             routing: p.routing.flatten().unwrap_or_default().into_iter().map(|r| {
