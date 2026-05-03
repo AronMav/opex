@@ -316,6 +316,9 @@ pub struct FinalizeContext {
     /// Compressor state to persist to DB so the next session turn can resume
     /// anti-thrash counters and summary state without restarting from zero.
     pub compressor: crate::agent::compressor::Compressor,
+    /// Per-agent skill review config — when Some and enabled, `finalize` spawns
+    /// a background session analysis after `Done` outcomes with enough tool calls.
+    pub skill_review: Option<crate::config::SkillReviewConfig>,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -366,6 +369,18 @@ pub async fn finalize<S: EventSink>(
                 ctx.message_count,
                 &ctx.bg_tasks,
             );
+            if let Some(sr_cfg) = &ctx.skill_review {
+                if sr_cfg.enabled {
+                    spawn_skill_review(
+                        ctx.db.clone(),
+                        ctx.session_id,
+                        ctx.agent_name.clone(),
+                        ctx.provider.clone(),
+                        sr_cfg.min_tool_calls,
+                        &ctx.bg_tasks,
+                    );
+                }
+            }
             assistant_text.clone()
         }
         FinalizeOutcome::Failed { partial, reason } => {
@@ -493,6 +508,7 @@ pub fn finalize_context_from_engine(
         llm_provider: Some(engine.cfg().provider.name().to_string()),
         llm_model: Some(engine.current_model()),
         compressor,
+        skill_review: engine.cfg().agent.skill_review.clone(),
     }
 }
 
@@ -515,6 +531,46 @@ pub(crate) fn spawn_knowledge_extraction(
             .await;
         });
     }
+}
+
+// ── spawn_skill_review() ──────────────────────────────────────────────────────
+
+/// Count tool_end WAL events for a session (best-effort, returns 0 on error).
+async fn count_tool_calls(db: &PgPool, session_id: Uuid) -> u32 {
+    sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT COUNT(*)::BIGINT FROM session_events \
+         WHERE session_id = $1 AND event_type = 'tool_end'",
+    )
+    .bind(session_id)
+    .fetch_one(db)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|n| u32::try_from(n).ok())
+    .unwrap_or(0)
+}
+
+pub(crate) fn spawn_skill_review(
+    db: PgPool,
+    session_id: Uuid,
+    agent_name: String,
+    provider: Arc<dyn LlmProvider>,
+    min_tool_calls: u32,
+    tracker: &TaskTracker,
+) {
+    tracker.spawn(async move {
+        let tool_count = count_tool_calls(&db, session_id).await;
+        if tool_count < min_tool_calls {
+            return;
+        }
+        crate::skills::evolution::review_session_for_skills(
+            &db,
+            &provider,
+            &agent_name,
+            session_id,
+        )
+        .await;
+    });
 }
 
 // ── execute_status_to_finalize() ─────────────────────────────────────────────
@@ -664,6 +720,7 @@ mod tests {
             llm_provider: None,
             llm_model: None,
             compressor: crate::agent::compressor::Compressor::new(128_000),
+            skill_review: None,
         }
     }
 
