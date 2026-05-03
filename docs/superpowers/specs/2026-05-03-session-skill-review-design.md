@@ -58,7 +58,7 @@ pub skill_review: Option<SkillReviewConfig>,
 ```
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillReviewConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -68,6 +68,10 @@ pub struct SkillReviewConfig {
 
 impl SkillReviewConfig {
     fn default_min_tool_calls() -> u32 { 3 }
+}
+
+impl Default for SkillReviewConfig {
+    fn default() -> Self { Self { enabled: false, min_tool_calls: 3 } }
 }
 ```
 
@@ -81,9 +85,14 @@ Default: `enabled = false` (backward-compatible — agents without the section a
 (`COUNT(*) WHERE event_type = 'tool_end' AND session_id = $1`). A helper
 `count_tool_calls(db, session_id)` extracts it for reuse.
 
+**Note:** The exact field path for agent config in `FinalizeContext` must be verified
+against the struct definition before implementation — it may be `ctx.agent_cfg` or
+`ctx.cfg` rather than `ctx.engine_cfg`.
+
 ```rust
 // In finalize(), after spawn_knowledge_extraction:
-if let (Some(sr_cfg), FinalizeOutcome::Done) = (&ctx.engine_cfg.agent.skill_review, &outcome) {
+// (verify exact field name for agent config in FinalizeContext)
+if let (Some(sr_cfg), FinalizeOutcome::Done) = (&ctx.agent_cfg.agent.skill_review, &outcome) {
     if sr_cfg.enabled {
         let tool_count = count_tool_calls(&ctx.db, ctx.session_id).await.unwrap_or(0);
         if tool_count >= sr_cfg.min_tool_calls {
@@ -123,12 +132,17 @@ pub async fn review_session_for_skills(
    `user` and `assistant` roles, take last 30.
 
 2. **Build `task_summary`** — concatenate all user message contents with `"\n---\n"`,
-   truncate to 2 000 characters.
+   truncate to 2 000 characters using `floor_char_boundary(2000)` to preserve
+   valid UTF-8 (never truncate mid-codepoint). Only user messages are included —
+   assistant responses are intentionally excluded to keep the summary compact and
+   avoid exceeding the analyzer's context.
 
 3. **Load available skill names** — same as `analyze_and_evolve`: non-archived skills
    from workspace. If empty, uses `"none"`.
 
 4. **Call LLM** with the session prompt (see below). Single turn, no tools.
+   Wrap with `tokio::time::timeout(Duration::from_secs(30), ...)` — on timeout,
+   log `tracing::warn!` and return without enqueuing.
 
 5. **Parse and enqueue** — same logic as `analyze_and_evolve`:
    - `SKIP` → return
@@ -188,7 +202,7 @@ because interactive sessions have more noise than scheduled tasks.
 | Test | Verifies |
 |---|---|
 | `skill_review_skipped_below_min_tool_calls` | `tool_call_count < min` → spawn not called |
-| `task_summary_truncated_at_2000_chars` | long history is truncated, valid UTF-8 boundary |
+| `task_summary_truncated_at_2000_chars` | long history truncated via `floor_char_boundary`, no panic on multi-byte chars |
 | `skip_verdict_does_not_enqueue` | SKIP response → `pending_skill_repairs` empty |
 | `captured_verdict_enqueues_repair` | CAPTURED → one row with kind="captured" |
 | `fix_verdict_enqueues_repair` | FIX → one row with kind="fix", correct skill_name |
