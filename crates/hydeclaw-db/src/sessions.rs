@@ -42,6 +42,10 @@ pub struct Session {
     #[sqlx(default)]
     #[serde(skip)]
     pub retry_count: i32,
+    #[sqlx(default)]
+    pub parent_session_id: Option<uuid::Uuid>,
+    #[sqlx(default)]
+    pub end_reason: Option<String>,
 }
 
 /// Find or create a session for the user+agent pair.
@@ -102,6 +106,20 @@ pub async fn get_or_create_session(
     Ok(id)
 }
 
+/// Load session metadata needed for chain split operations.
+pub async fn get_session_for_chain(
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+) -> anyhow::Result<Option<(String, String, String, Option<String>)>> {
+    let row = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+        "SELECT agent_id, user_id, channel, title FROM sessions WHERE id = $1",
+    )
+    .bind(session_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row)
+}
+
 /// Create a brand-new session for the given user (no history reuse).
 /// Used by UI "New Chat" button to guarantee a fresh session.
 pub async fn create_new_session(
@@ -121,6 +139,120 @@ pub async fn create_new_session(
     .await?;
 
     Ok(row.get("id"))
+}
+
+/// Create a child session in a compression chain.
+pub async fn create_chain_session(
+    db: &sqlx::PgPool,
+    parent_id: uuid::Uuid,
+    agent_id: &str,
+    user_id: &str,
+    channel: &str,
+    title: Option<&str>,
+) -> anyhow::Result<uuid::Uuid> {
+    let id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO sessions (id, parent_session_id, agent_id, user_id, channel, title, participants)
+         VALUES ($1, $2, $3, $4, $5, $6, ARRAY[$3])",
+    )
+    .bind(id)
+    .bind(parent_id)
+    .bind(agent_id)
+    .bind(user_id)
+    .bind(channel)
+    .bind(title)
+    .execute(db)
+    .await?;
+    Ok(id)
+}
+
+/// Mark a session as ended with a specific reason (e.g. "compression").
+pub async fn set_session_end_reason(
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+    end_reason: &str,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE sessions SET end_reason = $1 WHERE id = $2")
+        .bind(end_reason)
+        .bind(session_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Insert compressed seed messages into a child session.
+/// `messages` is ordered: [system?, summary(assistant), ...tail].
+/// Each message gets a sequential `created_at` offset to preserve order.
+pub async fn insert_seed_messages(
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+    agent_id: &str,
+    messages: &[hydeclaw_types::Message],
+) -> anyhow::Result<()> {
+    use chrono::Utc;
+    for (i, msg) in messages.iter().enumerate() {
+        let role: &str = match msg.role {
+            hydeclaw_types::MessageRole::System    => "system",
+            hydeclaw_types::MessageRole::User      => "user",
+            hydeclaw_types::MessageRole::Assistant => "assistant",
+            hydeclaw_types::MessageRole::Tool      => "tool",
+        };
+        let tool_calls = msg.tool_calls.as_ref()
+            .and_then(|tc| serde_json::to_value(tc).ok());
+        sqlx::query(
+            "INSERT INTO messages (id, session_id, agent_id, role, content, tool_calls, tool_call_id, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(session_id)
+        .bind(agent_id)
+        .bind(role)
+        .bind(&msg.content)
+        .bind(tool_calls)
+        .bind(&msg.tool_call_id)
+        .bind(Utc::now() + chrono::Duration::microseconds(i as i64))
+        .execute(db)
+        .await?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, sqlx::FromRow)]
+pub struct SessionChainEntry {
+    pub id: uuid::Uuid,
+    pub parent_session_id: Option<uuid::Uuid>,
+    pub end_reason: Option<String>,
+    pub title: Option<String>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub agent_id: String,
+    pub depth: i64,
+}
+
+/// Return the full ancestor chain for `session_id`, ordered root-first.
+/// `depth=0` = the queried session. Capped at 20 levels to prevent infinite loops.
+pub async fn get_session_chain(
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+) -> anyhow::Result<Vec<SessionChainEntry>> {
+    let rows = sqlx::query_as::<_, SessionChainEntry>(
+        "WITH RECURSIVE chain AS (
+          SELECT id, parent_session_id, end_reason, title, started_at, agent_id,
+                 0::bigint AS depth
+          FROM sessions WHERE id = $1
+          UNION ALL
+          SELECT s.id, s.parent_session_id, s.end_reason, s.title, s.started_at, s.agent_id,
+                 c.depth + 1
+          FROM sessions s
+          JOIN chain c ON s.id = c.parent_session_id
+          WHERE c.depth < 19
+        )
+        SELECT id, parent_session_id, end_reason, title, started_at, agent_id, depth
+        FROM chain ORDER BY depth DESC",
+    )
+    .bind(session_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
 }
 
 /// Create a brand-new isolated session (no history reuse).
