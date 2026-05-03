@@ -1,0 +1,22 @@
+// ui/src/components/chat/ParentBadge.tsx
+import { CornerUpLeft } from "lucide-react";
+
+interface ParentBadgeProps {
+  /** Title of the parent session. Null renders as "previous session". */
+  parentTitle: string | null;
+  onNavigate: () => void;
+}
+
+export function ParentBadge({ parentTitle, onNavigate }: ParentBadgeProps) {
+  return (
+    <button
+      onClick={onNavigate}
+      className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-0.5"
+    >
+      <CornerUpLeft className="h-3 w-3 shrink-0" />
+      <span className="truncate max-w-[160px]">
+        {parentTitle ?? "previous session"}
+      </span>
+    </button>
+  );
+}
