@@ -27,7 +27,7 @@
 | `ui/src/components/chat/ParentBadge.tsx` | CREATE |
 | `ui/src/components/chat/CompactChainBanner.tsx` | CREATE |
 | `ui/src/app/(authenticated)/chat/page.tsx` | MODIFY |
-| `ui/src/__tests__/compression-chains.test.ts` | CREATE |
+| `ui/src/__tests__/compression-chains.test.tsx` | CREATE |
 
 ---
 
@@ -54,13 +54,13 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent_id
   WHERE parent_session_id IS NOT NULL;
 ```
 
-- [ ] **Step 1.2: Verify migration applies**
+- [ ] **Step 1.2: Verify migration file exists**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error" | head -5
+test -f migrations/041_sessions_compression_chains.sql && echo "OK"
 ```
 
-Expected: no errors (migration is SQL only, cargo check passes regardless).
+Expected: `OK`.
 
 - [ ] **Step 1.3: Commit**
 
@@ -294,7 +294,7 @@ pub parent_session_id: Option<uuid::Uuid>,
 pub end_reason: Option<String>,
 ```
 
-If the struct has `#[ts(...)]` or ts-rs derives, add the annotation. Check: does it have `#[derive(ts_rs::TS)]`? If yes, no extra attribute needed — `Option<Uuid>` generates `string | null` in TypeScript automatically.
+`hydeclaw-db` already depends on `hydeclaw-types` (confirmed in `Cargo.toml`). The struct uses ts-rs under the `ts-gen` feature — no extra attribute needed: `Option<Uuid>` automatically generates `string | null` in TypeScript.
 
 - [ ] **Step 3.2: Add `get_session_for_chain` helper**
 
@@ -833,6 +833,8 @@ cargo check -p hydeclaw-core 2>&1 | grep "^error"
 
 Expected: no errors. If `engine.cfg().agent.compaction` doesn't have `preserve_last_n`, use `3` as hardcoded default and add a TODO comment.
 
+Note: `crates/hydeclaw-core/src/db/mod.rs` already has `pub use hydeclaw_db::sessions;` (line 7) — all new public functions added to `hydeclaw-db/src/sessions.rs` are automatically accessible as `crate::db::sessions::*` in `hydeclaw-core`. No changes to `db/mod.rs` needed.
+
 - [ ] **Step 5.4: Run full test suite**
 
 ```bash
@@ -982,21 +984,6 @@ async fn insert_test_session(db: &sqlx::PgPool, agent_id: &str) -> Uuid {
     .await
     .expect("insert session");
     id
-}
-
-/// Insert a bare message for testing.
-async fn insert_test_message(db: &sqlx::PgPool, session_id: Uuid, role: &str, content: &str) {
-    sqlx::query(
-        "INSERT INTO messages (id, session_id, role, content)
-         VALUES ($1, $2, $3, $4)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(session_id)
-    .bind(role)
-    .bind(content)
-    .execute(db)
-    .await
-    .expect("insert message");
 }
 
 #[tokio::test]
@@ -1215,7 +1202,6 @@ git commit -m "feat(compression-chains): add SessionChainEntry types + useSessio
 ```tsx
 // ui/src/components/chat/ParentBadge.tsx
 import { CornerUpLeft } from "lucide-react";
-import type { SessionRow } from "@/types/api";
 
 interface ParentBadgeProps {
   /** Title of the parent session. Null renders as "previous session". */
@@ -1248,9 +1234,9 @@ In `chat/page.tsx`, find the block that renders a session in the list (around li
     parentTitle={
       sessionsData?.sessions?.find((p) => p.id === s.parent_session_id)?.title ?? null
     }
-    onNavigate={() => {
-      setActiveSession(s.parent_session_id!);
-    }}
+    onNavigate={() =>
+      useChatStore.getState().selectSession(s.parent_session_id!, currentAgent)
+    }
   />
 )}
 ```
@@ -1261,7 +1247,7 @@ Import `ParentBadge` at the top of `page.tsx`:
 import { ParentBadge } from "@/components/chat/ParentBadge";
 ```
 
-Note: `setActiveSession` is whatever the existing function is called in `page.tsx` that switches the active session (look for how other items in the session list navigate — it may be `selectSession(s.id)` or similar).
+`currentAgent` is already in scope at that point (line ~92 via `useChatStore`). `selectSession` is the chat-store method confirmed in `page.tsx` (search: `useChatStore.getState().selectSession`).
 
 - [ ] **Step 10.3: Verify UI builds**
 
@@ -1383,7 +1369,7 @@ In `chat/page.tsx`, find where the message list / chat body starts rendering (lo
 {activeSessionId && (
   <CompactChainBanner
     activeSessionId={activeSessionId}
-    onNavigate={(sid) => selectSession(sid)}  // use the actual navigation function
+    onNavigate={(sid) => useChatStore.getState().selectSession(sid, currentAgent)}
   />
 )}
 ```
@@ -1394,7 +1380,7 @@ Import at the top:
 import { CompactChainBanner } from "@/components/chat/CompactChainBanner";
 ```
 
-Note: replace `selectSession` with the actual function name used in the file to switch sessions (search for how clicking a session in the list navigates — likely a state setter like `setActiveSessionId` or a router push).
+`useChatStore` is already imported in `page.tsx`. `currentAgent` is available via `useChatStore` at the top of the component.
 
 - [ ] **Step 11.3: Verify UI builds**
 
@@ -1416,12 +1402,12 @@ git commit -m "feat(compression-chains): add CompactChainBanner in chat header"
 ### Task 12: Vitest tests
 
 **Files:**
-- Create: `ui/src/__tests__/compression-chains.test.ts`
+- Create: `ui/src/__tests__/compression-chains.test.tsx`
 
 - [ ] **Step 12.1: Create test file**
 
-```typescript
-// ui/src/__tests__/compression-chains.test.ts
+```tsx
+// ui/src/__tests__/compression-chains.test.tsx
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
@@ -1504,11 +1490,9 @@ describe("CompactChainBanner", () => {
 
     render(React.createElement(CompactChainBanner, { activeSessionId: "child-id", onNavigate }));
 
-    // Expand banner first (it may be collapsed)
-    const expandBtn = screen.getAllByRole("button")[0];
-    fireEvent.click(expandBtn);
-
-    // Click on Root entry (not the current session)
+    // Banner starts NOT collapsed (localStorage empty in jsdom → collapsed=false).
+    // Entries are visible immediately — do NOT click the toggle button first,
+    // that would collapse the banner and hide the entries.
     const rootBtn = screen.getByText("Root");
     fireEvent.click(rootBtn);
     expect(onNavigate).toHaveBeenCalledWith("parent-id");
@@ -1538,7 +1522,7 @@ describe("ParentBadge", () => {
 - [ ] **Step 12.2: Run tests**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw/ui && npm test -- --reporter=verbose --run src/__tests__/compression-chains.test.ts 2>&1 | tail -20
+cd d:/GIT/bogdan/hydeclaw/ui && npm test -- --reporter=verbose --run src/__tests__/compression-chains.test.tsx 2>&1 | tail -20
 ```
 
 Expected: all tests pass (or skip if JSdom environment has issues with localStorage — add `try/catch` guards in the component if needed).
@@ -1562,7 +1546,7 @@ Expected: `Finished release`.
 - [ ] **Step 12.5: Commit**
 
 ```bash
-git add ui/src/__tests__/compression-chains.test.ts
+git add ui/src/__tests__/compression-chains.test.tsx
 git commit -m "test(compression-chains): vitest coverage for CompactChainBanner + ParentBadge"
 ```
 
