@@ -105,9 +105,15 @@ describe("mirror badge", () => {
     expect(screen.getByText("↩ cron")).toBeTruthy();
   });
 
-  it("does not render badge when isMirror is false or absent", () => {
+  it("does not render badge when isMirror is false", () => {
     seedStore();
     render(<MessageItem message={makeAssistantMessage({ isMirror: false })} />);
+    expect(screen.queryByText("↩ cron")).toBeNull();
+  });
+
+  it("does not render badge when isMirror is absent", () => {
+    seedStore();
+    render(<MessageItem message={makeAssistantMessage()} />);
     expect(screen.queryByText("↩ cron")).toBeNull();
   });
 });
