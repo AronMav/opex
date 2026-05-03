@@ -85,10 +85,12 @@ impl ContainerManager {
                         .start_container(&container_name, None::<StartContainerOptions<String>>)
                         .await?;
                     self.wait_healthy(&container_name, Duration::from_secs(30)).await?;
-                    // Probe the actual TCP port — wait_healthy returns immediately when
-                    // no Docker HEALTHCHECK is defined (running state is enough for Docker,
-                    // but the MCP HTTP server inside may still be initializing).
-                    self.probe_port_ready(port, Duration::from_secs(20)).await?;
+                    // Probe TCP first, then HTTP — wait_healthy returns immediately when
+                    // no Docker HEALTHCHECK is defined. The TCP port opens before the HTTP
+                    // server (e.g. uvicorn) finishes initializing, so a TCP-only probe
+                    // can return while the MCP endpoint is still unresponsive.
+                    self.probe_port_ready(port, Duration::from_secs(30)).await?;
+                    self.probe_http_ready(port, Duration::from_secs(60)).await?;
                 }
             }
             Err(e) => {
@@ -224,6 +226,49 @@ impl ContainerManager {
                 }
                 _ => tokio::time::sleep(Duration::from_millis(200)).await,
             }
+        }
+    }
+
+    /// Poll the MCP HTTP endpoint until it returns any HTTP response or the deadline expires.
+    ///
+    /// Called after `probe_port_ready` confirms TCP. The TCP port opens before uvicorn
+    /// finishes its startup sequence, so we must wait for an actual HTTP response before
+    /// letting the caller proceed. Any HTTP status code (even 4xx/5xx) means the server
+    /// is handling requests.
+    ///
+    /// Uses a bodyless GET so the server can respond immediately without reading a request
+    /// body — avoids ClientDisconnect errors from servers that expect a body (e.g. FastAPI).
+    async fn probe_http_ready(&self, port: u16, timeout: Duration) -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let deadline = Instant::now() + timeout;
+        // Bodyless GET — any HTTP response (even 404/405) confirms the server is up.
+        let request = format!("GET / HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+        loop {
+            if Instant::now() > deadline {
+                anyhow::bail!("MCP HTTP server on port {port} not ready within {}s", timeout.as_secs());
+            }
+            let conn = tokio::time::timeout(
+                Duration::from_secs(3),
+                tokio::net::TcpStream::connect(("127.0.0.1", port)),
+            )
+            .await;
+            if let Ok(Ok(mut stream)) = conn {
+                let _ = stream.write_all(request.as_bytes()).await;
+                let mut buf = [0u8; 16];
+                if let Ok(Ok(n)) = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    stream.read(&mut buf),
+                )
+                .await
+                {
+                    // Any bytes back = HTTP server is up (even "HTTP/1.1 404" is fine)
+                    if n > 0 {
+                        tracing::debug!(port, "MCP HTTP server ready");
+                        return Ok(());
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
         }
     }
 
