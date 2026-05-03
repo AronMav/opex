@@ -84,7 +84,7 @@ pub struct CompressorState {
 
 `#[serde(default)]` ensures backward-compatibility: existing `compaction_state` JSON without this field deserializes with `pending_split=false`.
 
-In `Compressor`: add `pub pending_split: bool` field (default `false`), set to `true` in `record_compression_result()` when compression succeeds, propagate through `to_json()` / `load()`.
+In `Compressor`: add `pub pending_split: bool` field (default `false`), set to `true` in `record_compression_result()` **only when compression was effective** (savings >= `anti_thrash_min_savings`). Ineffective compressions (< threshold) do not trigger a split — the sessions would be nearly identical. Propagate through `to_json()` / `load()`.
 
 ### 2. `db/sessions.rs` — two new helpers
 
@@ -131,6 +131,8 @@ pub fn build_compressed_seed(
 
 `summary` is wrapped in `SUMMARY_PREFIX` (already defined in `history.rs`). If `summary` is empty, uses the existing static fallback text from `compress_messages`. `system_msg` is `None` when the session had no system message (rare edge case — seed starts with summary directly).
 
+The summary message role is `MessageRole::Assistant` — since the only head message is `system`, the next role must alternate to `assistant`. This is simpler than the role-detection logic in `compress_messages` (which handles arbitrary head sequences).
+
 ### 4. `pipeline/bootstrap.rs` — `maybe_split_session`
 
 **File:** `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`
@@ -153,10 +155,10 @@ async fn maybe_split_session(
 **Logic:**
 1. `if !compressor.pending_split { return Ok(None); }`
 2. Load system message: `SELECT * FROM messages WHERE session_id=$1 AND role='system' LIMIT 1`
-3. Load tail: `SELECT * FROM messages WHERE session_id=$1 ORDER BY created_at DESC LIMIT $preserve_last_n`
-4. `build_compressed_seed(system_msg, &summary, &tail)`
+3. Load tail: `SELECT * FROM messages WHERE session_id=$1 ORDER BY created_at ASC` — all non-system messages, then take last `preserve_last_n` (chronological order; DO NOT use DESC or the tail will be reversed)
+4. `let summary = compressor.previous_summary.as_deref().unwrap_or(STATIC_FALLBACK);` then `build_compressed_seed(system_msg, summary, &tail)`
 5. `create_chain_session(db, session_id, agent_id, ...)` → child_id
-6. Insert seed messages into child session (batch INSERT, same order as seed)
+6. Insert seed messages into child session with `session_id = child_id` (batch INSERT, preserving the order returned by `build_compressed_seed`)
 7. `set_session_end_reason(db, session_id, "compression")`
 8. `compressor.pending_split = false`
 9. `set_compaction_state(db, child_id, compressor.to_json())`
@@ -277,7 +279,7 @@ Small inline badge rendered under the session title in `SessionList`:
 
 **File:** `ui/src/components/chat/CompactChainBanner.tsx`
 
-Collapsible banner shown at the top of the chat area when the session is part of a chain (has parent OR has a child with `parent_session_id = this.id`).
+Collapsible banner shown at the top of the chat area when `session.parent_session_id != null` (i.e. this session was split from a parent). Root sessions (A) do not show the banner — the chain API only traverses upward via `parent_session_id`, so A has no way to know it has children without a separate query.
 
 ```
 ┌──────────────────────────────────────────┐
@@ -301,7 +303,7 @@ Collapsible banner shown at the top of the chat area when the session is part of
 ### Integration points
 
 - `SessionList` — render `<ParentBadge>` below session title when `session.parent_session_id != null`
-- Chat page / `ChatLayout` — render `<CompactChainBanner>` above message list when chain has > 1 entry
+- Chat page / `ChatLayout` — render `<CompactChainBanner>` above message list when `activeSession.parent_session_id != null` (i.e. root sessions do not show the banner)
 - Invalidate `qk.sessionChain(sessionId)` in `queryClient` after `data-session-id` SSE event (chain may have grown)
 
 ---
@@ -330,7 +332,7 @@ Collapsible banner shown at the top of the chat area when the session is part of
 **`compressor.rs` tests:**
 4. `pending_split` round-trips through `to_json()` / `load()`
 5. `pending_split=false` deserialized correctly from old JSON without the field (`serde(default)`)
-6. `record_compression_result` with effective compression → `pending_split=true`
+6. `record_compression_result` with effective compression (savings >= threshold) → `pending_split=true`; ineffective compression → `pending_split` unchanged (stays false)
 
 ### Rust integration tests (testcontainers Postgres)
 
@@ -374,6 +376,7 @@ Collapsible banner shown at the top of the chat area when the session is part of
 | `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` | MODIFY — add `parent_session_id`, `end_reason` to session list DTO |
 | `crates/hydeclaw-core/tests/test_compression_chains.rs` | CREATE — integration tests |
 | `ui/src/types/api.ts` | MODIFY — extend `SessionRow`, add `SessionChainEntry`, `SessionChainResponse` |
+| `ui/src/types/api.generated.ts` | MODIFY — add `parent_session_id`, `end_reason` if `SessionRow` is ts-rs generated |
 | `ui/src/lib/queries.ts` | MODIFY — add `qk.sessionChain`, `useSessionChain` |
 | `ui/src/components/chat/ParentBadge.tsx` | CREATE — inline badge for session list |
 | `ui/src/components/chat/CompactChainBanner.tsx` | CREATE — collapsible chain panel in chat |
