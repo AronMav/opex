@@ -198,6 +198,14 @@ async fn maybe_split_session(
     // useless; fall back to parent session rather than redirecting into a void.
     if let Err(e) = crate::db::sessions::insert_seed_messages(db, child_id, &agent_id, &seed).await {
         tracing::warn!(error = %e, child = %child_id, "insert_seed_messages failed — continuing in parent session");
+        // Clean up the empty child session to prevent orphaned sessions in the DB.
+        if let Err(del_err) = sqlx::query("DELETE FROM sessions WHERE id = $1")
+            .bind(child_id)
+            .execute(db)
+            .await
+        {
+            tracing::warn!(error = %del_err, child = %child_id, "failed to delete orphaned child session");
+        }
         return Ok(None);
     }
 
