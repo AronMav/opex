@@ -71,7 +71,7 @@ pub(crate) struct CuratorConfigUpdate {
 }
 
 pub(crate) async fn api_curator_config_put(
-    State(_cfg_svc): State<ConfigServices>,
+    State(cfg_svc): State<ConfigServices>,
     Json(body): Json<CuratorConfigUpdate>,
 ) -> impl IntoResponse {
     if let Err(e) = crate::config::update_curator_config(
@@ -88,6 +88,16 @@ pub(crate) async fn api_curator_config_put(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
         ).into_response();
+    }
+    // Hot-reload shared config so GET immediately reflects the new values
+    match crate::config::AppConfig::load("config/hydeclaw.toml") {
+        Ok(new_config) => {
+            let mut config = cfg_svc.shared_config.write().await;
+            *config = new_config;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "curator config updated on disk but failed to reload into memory");
+        }
     }
     Json(serde_json::json!({"ok": true})).into_response()
 }
