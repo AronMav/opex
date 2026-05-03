@@ -54,6 +54,7 @@ export function scheduleReconnect(
     connectionPhase: "reconnecting",
     connectionError: null,
     reconnectAttempt: attempt + 1,
+    maxReconnectAttempts: deps.maxAttempts,
   });
 
   const baseDelay = deps.baseDelayMs * Math.pow(2, attempt);

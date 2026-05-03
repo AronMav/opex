@@ -31,7 +31,7 @@ interface StoreAccess {
 
 // ── Reconnect constants (SSE-02) ─────────────────────────────────────────────
 const MAX_RECONNECT_ATTEMPTS = 6;
-const RECONNECT_DELAY_BASE_MS = 2000;
+const RECONNECT_DELAY_BASE_MS = 1000;
 
 // ── Factory ────────────────────────────────────────────────────────────────
 

@@ -11,6 +11,6 @@ COPY app.py .
 
 EXPOSE 9030
 
-HEALTHCHECK --interval=30s --timeout=5s CMD curl -f http://localhost:9030/health || exit 1
+HEALTHCHECK --interval=5s --start-period=5s --timeout=5s CMD curl -f http://localhost:9030/health || exit 1
 
 CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9030"]
