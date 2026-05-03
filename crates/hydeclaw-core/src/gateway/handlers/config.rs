@@ -454,14 +454,47 @@ pub(crate) async fn api_update_config(
     }
 
     // Reload shared config from file (hot-reload)
-    match crate::config::AppConfig::load("config/hydeclaw.toml") {
+    let new_config = match crate::config::AppConfig::load("config/hydeclaw.toml") {
         Ok(new_config) => {
             new_config.agent_tool.warn_if_invariant_violated();
             let mut config = cfg_svc.shared_config.write().await;
-            *config = new_config;
+            *config = new_config.clone();
+            Some(new_config)
         }
         Err(e) => {
             tracing::warn!(error = %e, "config file updated but failed to reload into memory");
+            None
+        }
+    };
+
+    // Reschedule backup if its config changed
+    if let Some(ref cfg) = new_config {
+        if payload.backup_enabled.is_some() || payload.backup_cron.is_some() || payload.backup_retention_days.is_some() {
+            if cfg.backup.enabled {
+                if let Err(e) = agents.scheduler.reschedule_backup(
+                    &cfg.backup.cron,
+                    cfg.backup.retention_days,
+                    cfg.backup.postgres_container.clone(),
+                    infra.secrets.clone(),
+                    agents.deps.clone(),
+                ).await {
+                    tracing::warn!(error = %e, "backup rescheduled with errors");
+                } else {
+                    tracing::info!(cron = %cfg.backup.cron, "backup rescheduled");
+                }
+            }
+        }
+        // Reschedule curator if its config changed
+        if payload.curator_enabled.is_some() || payload.curator_cron.is_some() {
+            if let Err(e) = agents.scheduler.reschedule_curator(
+                cfg.curator.clone(),
+                infra.db.clone(),
+                agents.clone(),
+            ).await {
+                tracing::warn!(error = %e, "curator rescheduled with errors");
+            } else {
+                tracing::info!(cron = %cfg.curator.cron, enabled = cfg.curator.enabled, "curator rescheduled");
+            }
         }
     }
 
