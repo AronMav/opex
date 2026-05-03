@@ -61,6 +61,7 @@ import { ChatThread } from "./ChatThread";
 import { ContextBar } from "./ContextBar";
 import { CanvasPanel } from "./CanvasPanel";
 import { ParentBadge } from "@/components/chat/ParentBadge";
+import { CompactChainBanner } from "@/components/chat/CompactChainBanner";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
@@ -805,6 +806,7 @@ export default function ChatPage() {
         <ChatCanvasContent
           key={currentAgent}
           currentAgent={currentAgent}
+          activeSessionId={activeSessionId}
           streamError={streamError}
           isReadOnly={isReadOnly}
           activeSession={activeSession}
@@ -869,6 +871,7 @@ function ChatCanvasTabs() {
 
 function ChatCanvasContent({
   currentAgent,
+  activeSessionId,
   streamError,
   isReadOnly,
   activeSession,
@@ -876,6 +879,7 @@ function ChatCanvasContent({
   onRetry,
 }: {
   currentAgent: string;
+  activeSessionId: string | null;
   streamError: string | null;
   isReadOnly: boolean;
   activeSession?: import("@/types/api").SessionRow;
@@ -889,12 +893,20 @@ function ChatCanvasContent({
   }
 
   return (
-    <ChatThread
-      streamError={streamError}
-      isReadOnly={isReadOnly}
-      activeSession={activeSession}
-      onClearError={onClearError}
-      onRetry={onRetry}
-    />
+    <div className="flex flex-1 flex-col min-h-0">
+      {activeSessionId && (
+        <CompactChainBanner
+          activeSessionId={activeSessionId}
+          onNavigate={(sid) => useChatStore.getState().selectSession(sid, currentAgent)}
+        />
+      )}
+      <ChatThread
+        streamError={streamError}
+        isReadOnly={isReadOnly}
+        activeSession={activeSession}
+        onClearError={onClearError}
+        onRetry={onRetry}
+      />
+    </div>
   );
 }
