@@ -4,7 +4,7 @@ import { toast } from "sonner"
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
 import { useWsSubscription } from "@/hooks/use-ws-subscription"
-import type { NotificationsResponse, SessionFailuresResponse } from "@/types/api"
+import type { NotificationsResponse, SessionFailuresResponse, SessionChainResponse } from "@/types/api"
 import type {
   AgentInfo,
   SecretInfo,
@@ -69,6 +69,7 @@ export const qk = {
   backups: ["backups"] as const,
   sessions: (agent: string) => ["sessions", "list", agent] as const,
   sessionMessages: (id: string) => ["sessions", id, "messages"] as const,
+  sessionChain: (id: string) => ["sessions", id, "chain"] as const,
   providers: ["providers"] as const,
   providerTypes: ["provider-types"] as const,
   providerActive: ["provider-active"] as const,
@@ -559,6 +560,15 @@ export function useSessionMessages(sessionId: string | null, engineRunning = fal
       return msgs?.some(m => m.status === "streaming") ? 3000 : false
     },
   })
+}
+
+export function useSessionChain(sessionId: string | null) {
+  return useQuery({
+    queryKey: qk.sessionChain(sessionId!),
+    queryFn: () => apiGet<SessionChainResponse>(`/api/sessions/${sessionId}/chain`),
+    enabled: !!sessionId,
+    staleTime: 30_000,
+  });
 }
 
 // ── Media Drivers ───────────────────────────────────────────────────────────

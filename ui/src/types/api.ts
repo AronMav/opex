@@ -420,3 +420,19 @@ export interface AgentToolConfig {
   message_result_secs: number;
   safety_timeout_secs: number;
 }
+
+// ── Session compression chains ────────────────────────────────────────────────
+
+export interface SessionChainEntry {
+  id: string;
+  parent_session_id: string | null;
+  end_reason: string | null;
+  title: string | null;
+  started_at: string;
+  agent_id: string;
+  depth: number;
+}
+
+export interface SessionChainResponse {
+  chain: SessionChainEntry[];
+}
