@@ -4,11 +4,11 @@
 > **Goal:** Список заимствуемых архитектурных идей и фич, сгруппированных по приоритету. Не implementation plan — это roadmap-кандидат на будущие phases.
 > **Methodology:** 4 параллельных Explore-агента проанализировали ~600KB кода + 100+ файлов (cli.py 527KB, gateway/, plugins/memory/, tools/, environments/, acp_adapter/).
 >
-> **Status (2026-05-03):** Sprint 1 + Sprint 2 полностью выполнены. Все P0
-> закрыты: P0.1 (trajectory compression) + P0.3/#24/#26 + P0.4/#22/#30 +
+> **Status (2026-05-03):** Sprint 1 + Sprint 2 + Sprint 3 полностью выполнены.
+> Все P0 закрыты: P0.1 (trajectory compression) + P0.3/#24/#26 + P0.4/#22/#30 +
 > P0.5/#23/#28/#29/#31/#33 (включая L3 agentName bug fix) + P0.2 DM pairing
-> + P0.2 Session Skill Review. P1.3, P1.5, P2.6, P1.6 — закрыты.
-> Latent bug P0.5 (agentName multi-agent) — закрыт PR #33.
+> + P0.2 Session Skill Review. P1.1 (Compression Chains) — закрыт в Sprint 3.
+> P1.3, P1.5, P2.6, P1.6 — закрыты. Latent bug P0.5 (agentName multi-agent) — закрыт PR #33.
 
 ---
 
@@ -232,13 +232,20 @@ multi-agent isolation test (нет `it.todo()`).
 
 ## 🟡 P1 — Средний приоритет (улучшения существующего)
 
-### P1.1 — Compression Chains (parent_session_id)
+### ✅ P1.1 — Compression Chains (parent_session_id) (DONE — Sprint 3, 2026-05-03)
 
 **Reference:** `D:/GIT/hermes-agent/hermes_state.py:50` — поле `parent_session_id` в `sessions`.
 
 **Идея:** После сжатия контекста создаётся новая сессия B, в `parent_session_id=A`, `end_reason='compression'` у A. Цепочка: A → B → C — позволяет восстановить полную историю при необходимости.
 
-В HydeClaw уже есть branching (`parent_message_id`, `branch_from_message_id`), но не на уровне session boundary. Добавить поле + `end_reason` enum.
+**✅ Реализовано:**
+
+- Миграции 041 (`parent_session_id`, `end_reason`) + 042 (`ON DELETE SET NULL`).
+- `CompressorState.pending_split: bool` — выставляется при эффективном сжатии.
+- `maybe_split_session()` в `bootstrap.rs` — lazy split при следующем turn: создаёт child-сессию, копирует seed (system + summary-as-assistant + tail), маркирует parent `end_reason='compression'`.
+- `GET /api/sessions/{id}/chain` — рекурсивный CTE (depth ≤ 20), возвращает цепочку root-first.
+- UI: `ParentBadge` в списке сессий + `CompactChainBanner` над чатом (collapsed/expanded, localStorage).
+- Покрытие: 5 Rust integration tests + 7 Vitest UI tests.
 
 ---
 
@@ -507,13 +514,13 @@ Bonus PRs: №25 (3 review-fix-ups), №27 (StreamingUsage struct refactor),
 2. ✅ P1.5 — Hook webhooks (WebhookConfig + fire_webhooks, 260502-uij)
 3. ✅ P2.6 — Prompt injection scanner pub + zero-width + workspace.rs (260502-u9v)
 
-**Sprint 2 (значимый user-facing impact) — PENDING:**
+**✅ Sprint 2 (значимый user-facing impact) — DONE 2026-05-03:**
 
-1. P0.1 — Trajectory compression (новый модуль + конфиг)
+1. ✅ P0.1 — Trajectory compression (Compressor + compress_messages + Hermes-style summary)
 
-**Sprint 3 (архитектурные):**
+**✅ Sprint 3 (архитектурные) — DONE 2026-05-03:**
 
-1. P1.1 — Compression chains (parent_session_id + end_reason enum)
+1. ✅ P1.1 — Compression chains (parent_session_id + bootstrap split + chain API + UI)
 
 **Backlog (по запросу):**
 
