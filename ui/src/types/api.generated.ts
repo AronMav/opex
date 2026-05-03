@@ -66,7 +66,7 @@ export type Notification = { id: string, type: string, title: string, body: stri
 
 export type NotificationsResponseDto = { items: Array<Notification>, unread_count: number, limit: number, offset: number, };
 
-export type Session = { id: string, agent_id: string, user_id: string, channel: string, started_at: string, last_message_at: string, title: string | null, metadata: Record<string, unknown> | null, run_status: string | null, participants: Array<string>, };
+export type Session = { id: string, agent_id: string, user_id: string, channel: string, started_at: string, last_message_at: string, title: string | null, metadata: Record<string, unknown> | null, run_status: string | null, participants: Array<string>, parent_session_id: string | null, end_reason: string | null, };
 
 export type ToolEntryDto = { name: string, url: string, tool_type: string, concurrency_limit: number, healthy: boolean, healthcheck?: string, depends_on: Array<string>, ui_path?: string, managed: boolean, };
 
