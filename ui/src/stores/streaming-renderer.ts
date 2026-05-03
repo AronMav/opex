@@ -30,8 +30,8 @@ interface StoreAccess {
 }
 
 // ── Reconnect constants (SSE-02) ─────────────────────────────────────────────
-const MAX_RECONNECT_ATTEMPTS = 3;
-const RECONNECT_DELAY_BASE_MS = 1000;
+const MAX_RECONNECT_ATTEMPTS = 6;
+const RECONNECT_DELAY_BASE_MS = 2000;
 
 // ── Factory ────────────────────────────────────────────────────────────────
 
@@ -187,6 +187,11 @@ export function createStreamingRenderer(store: StoreAccess) {
                 maxAttempts: MAX_RECONNECT_ATTEMPTS,
                 baseDelayMs: RECONNECT_DELAY_BASE_MS,
                 setTimer: (handle) => setReconnectTimer(agent, handle),
+                onMaxAttemptsReached: () => {
+                  session.write({ connectionPhase: "idle", messageSource: { mode: "history", sessionId: sid } });
+                  queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+                  queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sid) });
+                },
               });
             },
             getAgentState: (a) => store.get().agents[a],
@@ -206,6 +211,11 @@ export function createStreamingRenderer(store: StoreAccess) {
           maxAttempts: MAX_RECONNECT_ATTEMPTS,
           baseDelayMs: RECONNECT_DELAY_BASE_MS,
           setTimer: (handle) => setReconnectTimer(agent, handle),
+          onMaxAttemptsReached: () => {
+            session.write({ connectionPhase: "idle", messageSource: { mode: "history", sessionId } });
+            queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+            queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
+          },
         });
       });
   }
@@ -411,6 +421,11 @@ export function createStreamingRenderer(store: StoreAccess) {
                 maxAttempts: MAX_RECONNECT_ATTEMPTS,
                 baseDelayMs: RECONNECT_DELAY_BASE_MS,
                 setTimer: (handle) => setReconnectTimer(agent, handle),
+                onMaxAttemptsReached: () => {
+                  session.write({ connectionPhase: "idle", messageSource: { mode: "history", sessionId: sid } });
+                  queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+                  queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sid) });
+                },
               });
             },
             getAgentState: (a) => store.get().agents[a],
