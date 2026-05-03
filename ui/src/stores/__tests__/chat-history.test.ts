@@ -19,6 +19,7 @@ function makeRow(overrides: Partial<MessageRow> & { id: string; created_at?: str
     branch_from_message_id: null,
     abort_reason: null,
     thinking_blocks: null,
+    is_mirror: false,
     ...overrides,
   };
 }

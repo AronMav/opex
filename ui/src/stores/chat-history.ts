@@ -131,6 +131,7 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
         branchFromMessageId: m.branch_from_message_id ?? undefined,
         status: isAborted ? "aborted" : undefined,
         abortReason: isAborted ? (m.abort_reason ?? null) : undefined,
+        isMirror: m.is_mirror ?? false,
       };
     } else if (m.role === "tool" && m.tool_call_id) {
       // Tool result block — always attach to the latest assistant message

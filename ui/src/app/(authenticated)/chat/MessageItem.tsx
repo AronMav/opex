@@ -262,6 +262,9 @@ function AssistantMessage({ message }: { message: ChatMessage }) {
                 {formatMessageTime(message.createdAt, locale)}
               </span>
             )}
+            {message.isMirror && (
+              <span className="text-[10px] text-orange-500 ml-1">↩ cron</span>
+            )}
           </div>
           <MessageActions message={message} showReload />
         </div>

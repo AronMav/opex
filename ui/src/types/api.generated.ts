@@ -10,9 +10,7 @@ export type AgentDetailApprovalDto = { enabled: boolean, require_for: Array<stri
 
 export type AgentDetailCompactionDto = { enabled: boolean, threshold: number, preserve_tool_calls: boolean, preserve_last_n: number, max_context_tokens: number | null, };
 
-export type AgentDetailSkillReviewDto = { enabled: boolean, min_tool_calls: number, };
-
-export type AgentDetailDto = { name: string, language: string, provider: string, model: string, provider_connection: string | null, fallback_provider: string | null, tts_provider: string | null, temperature: number, max_tokens: number | null, access: AgentDetailAccessDto | null, heartbeat: AgentDetailHeartbeatDto | null, tools: AgentDetailToolsDto | null, compaction: AgentDetailCompactionDto | null, skill_review: AgentDetailSkillReviewDto | null, session: AgentDetailSessionDto | null, icon: string | null, max_tools_in_context: number | null, tool_loop: AgentDetailToolLoopDto | null, approval: AgentDetailApprovalDto | null, routing: Array<AgentDetailRoutingDto>, watchdog: AgentDetailWatchdogDto | null, hooks: AgentDetailHooksDto | null, max_history_messages: number | null, daily_budget_tokens: number, max_agent_turns: number | null, max_failover_attempts: number, is_running: boolean, config_dirty: boolean,
+export type AgentDetailDto = { name: string, language: string, provider: string, model: string, provider_connection: string | null, fallback_provider: string | null, tts_provider: string | null, temperature: number, max_tokens: number | null, access: AgentDetailAccessDto | null, heartbeat: AgentDetailHeartbeatDto | null, tools: AgentDetailToolsDto | null, compaction: AgentDetailCompactionDto | null, skill_review: AgentDetailSkillReviewDto | null, session: AgentDetailSessionDto | null, icon: string | null, max_tools_in_context: number | null, tool_loop: AgentDetailToolLoopDto | null, approval: AgentDetailApprovalDto | null, routing: Array<AgentDetailRoutingDto>, watchdog: AgentDetailWatchdogDto | null, hooks: AgentDetailHooksDto | null, max_history_messages: number | null, daily_budget_tokens: number, max_agent_turns: number | null, max_failover_attempts: number, is_running: boolean, config_dirty: boolean, 
 /**
  * Injected by the handler from scoped TTS_VOICE secret; absent when not set.
  */
@@ -25,6 +23,8 @@ export type AgentDetailHooksDto = { log_all_tool_calls: boolean, block_tools: Ar
 export type AgentDetailRoutingDto = { condition: string, connection: string | null, model: string | null, temperature: number | null, cooldown_secs: number, };
 
 export type AgentDetailSessionDto = { dm_scope: string, ttl_days: number, max_messages: number, prune_tool_output_after_turns: number | null, };
+
+export type AgentDetailSkillReviewDto = { enabled: boolean, min_tool_calls: number, };
 
 export type AgentDetailToolGroupsDto = { git: boolean, tool_management: boolean, skill_editing: boolean, session_tools: boolean, };
 
@@ -60,7 +60,7 @@ export type MemoryStatsDto = { total: number, total_chunks: number, pinned: numb
 
 export type MemoryTaskStatsDto = { pending: number, processing: number, done: number, failed: number, };
 
-export type MessageRow = { id: string, role: string, content: string, tool_calls: unknown, tool_call_id: string | null, created_at: string, agent_id: string | null, feedback: number | null, edited_at: string | null, status: string, thinking_blocks: unknown, parent_message_id: string | null, branch_from_message_id: string | null, abort_reason: string | null, };
+export type MessageRow = { id: string, role: string, content: string, tool_calls: unknown, tool_call_id: string | null, created_at: string, agent_id: string | null, feedback: number | null, edited_at: string | null, status: string, thinking_blocks: unknown, parent_message_id: string | null, branch_from_message_id: string | null, abort_reason: string | null, is_mirror: boolean, };
 
 export type Notification = { id: string, type: string, title: string, body: string, data: Record<string, unknown>, read: boolean, created_at: string, };
 

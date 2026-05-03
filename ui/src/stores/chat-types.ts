@@ -111,6 +111,8 @@ export interface ChatMessage {
   branchFromMessageId?: string;
   /** Reason the assistant stream ended early, if any (status === "aborted"). */
   abortReason?: string | null;
+  /** True when this message was written by a cron delivery (session mirroring). */
+  isMirror?: boolean;
 }
 
 // ── Connection phase FSM (FSM-01) ────────────────────────────────────────────
