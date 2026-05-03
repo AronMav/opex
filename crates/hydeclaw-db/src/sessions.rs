@@ -1540,7 +1540,7 @@ mod tests {
         let db = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2).connect(&url).await.expect("connect");
 
-        // Create a session with a known participant
+        // Create a session with a known user_id (lookup is by user_id, not participants)
         let session_id = uuid::Uuid::new_v4();
         let agent_id = format!("test-agent-{}", &session_id.to_string()[..8]);
         sqlx::query(
