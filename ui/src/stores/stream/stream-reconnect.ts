@@ -28,15 +28,25 @@ export function scheduleReconnect(
     baseDelayMs: number;
     /** Optional: record the scheduled timer handle so coordinator can clear it on abort. */
     setTimer?: (handle: ReturnType<typeof setTimeout> | null) => void;
+    /**
+     * Called when maxAttempts is exhausted instead of writing connectionPhase="error".
+     * Use this to fall back to history mode so the user sees the saved response
+     * rather than a frozen partial stream.
+     */
+    onMaxAttemptsReached?: () => void;
   },
 ): void {
   if (attempt >= deps.maxAttempts) {
-    session.write({
-      streamError: "Connection lost after retries",
-      connectionPhase: "error",
-      connectionError: "Connection lost after retries",
-    });
     deps.setTimer?.(null);
+    if (deps.onMaxAttemptsReached) {
+      deps.onMaxAttemptsReached();
+    } else {
+      session.write({
+        streamError: "Connection lost after retries",
+        connectionPhase: "error",
+        connectionError: "Connection lost after retries",
+      });
+    }
     return;
   }
 
