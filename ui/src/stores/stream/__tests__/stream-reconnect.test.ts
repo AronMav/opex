@@ -31,12 +31,21 @@ describe("scheduleReconnect", () => {
   it("writes reconnecting state and schedules resume on attempt < max", () => {
     const session = makeFakeSession();
     const resume = vi.fn();
-    scheduleReconnect(session, "sid", 0, { resume, maxAttempts: 3, baseDelayMs: 500 });
+    scheduleReconnect(session, "sid", 0, { resume, maxAttempts: 6, baseDelayMs: 500 });
     expect(session.write).toHaveBeenCalledWith(
-      expect.objectContaining({ connectionPhase: "reconnecting", reconnectAttempt: 1 })
+      expect.objectContaining({ connectionPhase: "reconnecting", reconnectAttempt: 1, maxReconnectAttempts: 6 })
     );
     vi.advanceTimersByTime(5000);
     expect(resume).toHaveBeenCalledWith(1);
+  });
+
+  it("syncs maxReconnectAttempts to deps.maxAttempts in store write", () => {
+    const session = makeFakeSession();
+    const resume = vi.fn();
+    scheduleReconnect(session, "sid", 2, { resume, maxAttempts: 6, baseDelayMs: 100 });
+    const writeCall = session.write.mock.calls.find((c: any[]) => c[0].connectionPhase === "reconnecting");
+    expect(writeCall).toBeDefined();
+    expect(writeCall![0].maxReconnectAttempts).toBe(6);
   });
 
   it("exponential backoff: delay >= baseDelayMs * 2^attempt * 0.8", () => {
