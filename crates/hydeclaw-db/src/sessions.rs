@@ -482,6 +482,8 @@ pub struct MessageRow {
     pub branch_from_message_id: Option<uuid::Uuid>,
     #[sqlx(default)]
     pub abort_reason: Option<String>,
+    #[sqlx(default)]
+    pub is_mirror: bool,
 }
 
 /// Insert or update a streaming assistant message (called every ~2s during LLM response).
@@ -1430,6 +1432,54 @@ pub async fn insert_assistant_partial(
     Ok(id)
 }
 
+/// Append a delivery-mirror record to the most recent DM session for the given
+/// agent + channel + participant.
+///
+/// Returns `Ok(true)` if a matching session was found and the record inserted.
+/// Returns `Ok(false)` if no matching DM session exists (group chat, no prior conversation).
+/// Never fails fatally — callers should fire-and-forget via `tokio::spawn`.
+pub async fn mirror_to_session(
+    db: &PgPool,
+    agent_id: &str,
+    channel: &str,
+    participant_id: &str,
+    text: &str,
+) -> anyhow::Result<bool> {
+    // Find the most recent DM session for this agent+channel+participant.
+    // Excludes per-chat group sessions (user_id = '*').
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "SELECT id FROM sessions \
+         WHERE agent_id = $1 \
+           AND channel   = $2 \
+           AND $3        = ANY(participants) \
+           AND user_id  != '*' \
+         ORDER BY started_at DESC \
+         LIMIT 1",
+    )
+    .bind(agent_id)
+    .bind(channel)
+    .bind(participant_id)
+    .fetch_optional(db)
+    .await?;
+
+    let session_id = match row {
+        Some((id,)) => id,
+        None => return Ok(false),
+    };
+
+    sqlx::query(
+        "INSERT INTO messages (session_id, agent_id, role, content, is_mirror) \
+         VALUES ($1, $2, 'assistant', $3, true)",
+    )
+    .bind(session_id)
+    .bind(agent_id)
+    .bind(text)
+    .execute(db)
+    .await?;
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{truncate_partial, MAX_PARTIAL_BYTES};
@@ -1482,5 +1532,44 @@ mod tests {
         assert!(out.len() <= MAX_PARTIAL_BYTES);
         // Round-tripping through str guarantees valid UTF-8 (panic otherwise).
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn mirror_to_session_inserts_when_session_exists() {
+        let url = match std::env::var("DATABASE_URL") { Ok(u) => u, Err(_) => return };
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2).connect(&url).await.expect("connect");
+
+        // Create a session with a known participant
+        let session_id = uuid::Uuid::new_v4();
+        let agent_id = format!("test-agent-{}", &session_id.to_string()[..8]);
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, participants)
+             VALUES ($1, $2, '999', 'telegram', ARRAY['999'])"
+        ).bind(session_id).bind(&agent_id).execute(&db).await.expect("insert session");
+
+        let found = super::mirror_to_session(&db, &agent_id, "telegram", "999", "hello from cron")
+            .await.expect("mirror_to_session");
+        assert!(found, "should return true when session exists");
+
+        let (role, content, is_mirror): (String, String, bool) = sqlx::query_as(
+            "SELECT role, content, is_mirror FROM messages WHERE session_id = $1 AND is_mirror = true"
+        ).bind(session_id).fetch_one(&db).await.expect("fetch mirror row");
+
+        assert_eq!(role, "assistant");
+        assert_eq!(content, "hello from cron");
+        assert!(is_mirror);
+    }
+
+    #[tokio::test]
+    async fn mirror_to_session_returns_false_when_no_session() {
+        let url = match std::env::var("DATABASE_URL") { Ok(u) => u, Err(_) => return };
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2).connect(&url).await.expect("connect");
+
+        let found = super::mirror_to_session(
+            &db, "nonexistent-agent", "telegram", "000", "nobody home"
+        ).await.expect("mirror_to_session");
+        assert!(!found, "should return false when no matching session");
     }
 }
