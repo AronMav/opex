@@ -29,6 +29,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/messages/{id}/feedback", post(api_message_feedback))
         .route("/api/sessions/{id}/fork", post(api_fork_session))
         .route("/api/sessions/{id}/active-path", get(api_active_path))
+        .route("/api/sessions/{id}/chain", get(api_session_chain))
         .route("/api/sessions/{id}/retry", post(api_retry_session))
 }
 
@@ -897,6 +898,22 @@ pub(crate) async fn api_retry_session(
     });
 
     Json(serde_json::json!({"ok": true, "retry_count": retry_count, "session_id": id})).into_response()
+}
+
+// ── GET /api/sessions/{id}/chain ─────────────────────────────────────────────
+
+pub(crate) async fn api_session_chain(
+    State(infra): State<InfraServices>,
+    Path(id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    match crate::db::sessions::get_session_chain(&infra.db, id).await {
+        Ok(chain) => Json(serde_json::json!({ "chain": chain })).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 /// GET /api/sessions/{id}/active-path -- resolve the linear message chain for display.
