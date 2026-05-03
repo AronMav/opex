@@ -1104,7 +1104,7 @@ pub struct SearchResult {
 /// Get session metadata by ID.
 pub async fn get_session(db: &PgPool, session_id: Uuid) -> Result<Option<Session>> {
     let row = sqlx::query_as::<_, Session>(
-        "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count \
+        "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
          FROM sessions WHERE id = $1",
     )
     .bind(session_id)
@@ -1134,7 +1134,7 @@ pub async fn trim_session_messages(db: &PgPool, session_id: Uuid, max_messages: 
 pub async fn export_session(db: &PgPool, session_id: Uuid) -> sqlx::Result<Option<serde_json::Value>> {
     // 1. Fetch session metadata
     let session = sqlx::query_as::<_, Session>(
-        "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count \
+        "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
          FROM sessions WHERE id = $1",
     )
     .bind(session_id)
@@ -1227,7 +1227,7 @@ pub async fn get_participants(db: &PgPool, session_id: Uuid) -> Result<Vec<Strin
 /// Get the most recent UI session for an agent (within 4-hour window).
 pub async fn get_latest_ui_session(db: &PgPool, agent_id: &str) -> Result<Option<Session>> {
     let session = sqlx::query_as::<_, Session>(
-        "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count \
+        "SELECT id, agent_id, user_id, channel, started_at, last_message_at, title, metadata, run_status, activity_at, participants, retry_count, parent_session_id, end_reason \
          FROM sessions \
          WHERE agent_id = $1 AND channel = 'ui' \
            AND last_message_at > now() - interval '4 hours' \
