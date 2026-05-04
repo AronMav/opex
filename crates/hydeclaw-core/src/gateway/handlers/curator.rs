@@ -27,7 +27,8 @@ pub(crate) async fn api_curator_status(
     State(cfg_svc): State<ConfigServices>,
 ) -> impl IntoResponse {
     let last = crate::db::curator_runs::last_run(&infra.db).await.ok().flatten();
-    let cfg = &cfg_svc.config.curator;
+    let shared = cfg_svc.shared_config.read().await;
+    let cfg = &shared.curator;
 
     Json(serde_json::json!({
         "enabled": cfg.enabled,
@@ -77,6 +78,9 @@ pub(crate) async fn api_curator_config_put(
     State(agents): State<AgentCore>,
     Json(body): Json<CuratorConfigUpdate>,
 ) -> impl IntoResponse {
+    // Suppress the file-watcher reload cycle triggered by the write below,
+    // since we hot-reload shared_config ourselves immediately after.
+    cfg_svc.config_api_write_flag.store(true, std::sync::atomic::Ordering::Release);
     if let Err(e) = crate::config::update_curator_config(
         "config/hydeclaw.toml",
         body.enabled,
@@ -128,7 +132,7 @@ pub(crate) async fn api_curator_run(
     State(agents): State<crate::gateway::clusters::AgentCore>,
 ) -> impl IntoResponse {
     let db = infra.db.clone();
-    let cfg = cfg_svc.config.curator.clone();
+    let cfg = cfg_svc.shared_config.read().await.curator.clone();
 
     if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await {
         if last.finished_at.is_none() {
