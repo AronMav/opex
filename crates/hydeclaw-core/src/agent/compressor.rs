@@ -244,4 +244,70 @@ mod tests {
         c.record_compression_result(100_000, 98_000, &cfg);
         assert!(!c.pending_split);
     }
+
+    // ── Unit 4: child state reset tests ────────────────────────────────────
+
+    /// CompressorState::default() must have zero counters and no summary.
+    #[test]
+    fn compressor_state_default_has_zero_counters() {
+        let state = CompressorState::default();
+        assert_eq!(state.ineffective_count, 0);
+        assert_eq!(state.compression_count, 0);
+        assert!(!state.pending_split);
+        assert!(state.previous_summary.is_none());
+    }
+
+    /// bootstrap.rs constructs child state with `..Default::default()` — counters reset, summary kept.
+    #[test]
+    fn child_state_resets_counters_preserves_summary() {
+        let parent_state = CompressorState {
+            previous_summary: Some("summary".to_string()),
+            ineffective_count: 3,
+            compression_count: 7,
+            pending_split: true,
+        };
+        let child_state = CompressorState {
+            previous_summary: parent_state.previous_summary.clone(),
+            ..Default::default()
+        };
+        assert_eq!(child_state.ineffective_count, 0);
+        assert_eq!(child_state.compression_count, 0);
+        assert!(!child_state.pending_split);
+        assert_eq!(child_state.previous_summary, Some("summary".to_string()));
+    }
+
+    /// Regression: parent at anti_thrash_max_skips must not infect child.
+    /// Without the fix, child would inherit a maxed ineffective_count and never compress.
+    #[test]
+    fn child_at_max_ineffective_count_parent_gets_reset() {
+        let default_cfg = cfg(0.75);
+        let parent_state = CompressorState {
+            previous_summary: Some("summary text".to_string()),
+            ineffective_count: default_cfg.anti_thrash_max_skips,
+            compression_count: 5,
+            pending_split: true,
+        };
+        let child_state = CompressorState {
+            previous_summary: parent_state.previous_summary.clone(),
+            ..Default::default()
+        };
+        assert_eq!(child_state.ineffective_count, 0, "child must not inherit parent's exhausted ineffective_count");
+        assert_eq!(child_state.compression_count, 0);
+        assert!(!child_state.pending_split);
+        // Child is below the threshold — can compress freely.
+        assert!(child_state.ineffective_count < default_cfg.anti_thrash_max_skips);
+    }
+
+    /// Child with no previous summary: counters are clear and summary stays None.
+    #[test]
+    fn child_state_no_summary_all_defaults() {
+        let child_state = CompressorState {
+            previous_summary: None,
+            ..Default::default()
+        };
+        assert!(child_state.previous_summary.is_none());
+        assert_eq!(child_state.ineffective_count, 0);
+        assert_eq!(child_state.compression_count, 0);
+        assert!(!child_state.pending_split);
+    }
 }
