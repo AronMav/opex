@@ -13,10 +13,9 @@ outcome — context that reveals whether something actually worked or failed.
 
 ## Goal
 
-1. Give agents a `skill(action="capture")` tool to create skills immediately
-   during a session, with notification and Curator traceability.
-2. Keep `skill(action="load")` as part of the same tool (replacing the current
-   separate `skill_use` handler).
+1. Add `skill_use(action="capture")` — agents create skills immediately during
+   a session, with notification and Curator traceability.
+2. Keep `skill_use(action="load")` unchanged (existing behaviour).
 3. Enrich `review_session_inner()` to include assistant responses, tool call
    names, session outcome, and allow up to 3 verdicts per session.
 
@@ -26,15 +25,19 @@ outcome — context that reveals whether something actually worked or failed.
 
 ### Tool definition
 
-New system tool `skill` with two actions, replacing the existing `skill_use`:
+Extend the existing `skill_use` system tool with a new `capture` action:
 
 | Action | Description |
 | --- | --- |
-| `load` | Load a skill's instructions into context (current `skill_use` behaviour) |
+| `load` | Load a skill's instructions into context (unchanged) |
 | `capture` | Create a new skill file immediately from session learning |
 
-The tool is a system tool (hardcoded, not YAML). It is registered alongside
-`workspace_write`, `memory_write`, etc. in the engine's tool dispatch.
+The tool remains a system tool (hardcoded, not YAML). No rename — `skill_use`
+stays as-is everywhere: allowlists, context_builder, agent prompts.
+
+**Subagent restriction:** `skill_use` is already in the subagent deny-list
+(`subagent.rs:352`). Subagents cannot call `capture` — intentional, since
+subagents should not create global workspace skills.
 
 ### `capture` parameters
 
@@ -50,11 +53,12 @@ The tool is a system tool (hardcoded, not YAML). It is registered alongside
 
 1. **Validate name** — regex `^[a-z0-9][a-z0-9-]*$`. Return error if invalid.
 2. **Check for collision** — if `workspace/skills/{name}.md` already exists,
-   return error: `"Skill '{name}' already exists. Use skill(action='load') to
-   read it, or propose a different name."`.
+   return error: `"Skill '{name}' already exists. Use skill_use(action='load')
+   to read it, or propose a different name."`.
 3. **Build frontmatter** — `SkillFrontmatter { name, description,
-   triggers: split(","), tools_required: split(","), priority: 0,
+   triggers: split(","), tools_required: split(","), priority: 5,
    state: Active, pinned: None, last_used_at: None }`.
+   Priority 5 is a reasonable default; agent can edit via PUT /api/skills later.
 4. **Write file** — `write_skill(WORKSPACE_DIR, &name, &frontmatter,
    &instructions)`.
 5. **Snapshot** — `save_version(db, &name, &content, "capture", None,
@@ -74,7 +78,7 @@ The tool is a system tool (hardcoded, not YAML). It is registered alongside
 | Invalid name format | `"Invalid skill name '{name}'. Use lowercase letters, digits, and hyphens only."` |
 | Skill already exists | `"Skill '{name}' already exists."` |
 | File write failure | `"Failed to write skill: {io_error}"` |
-| DB notification failure | Log `warn!`, continue — skill file is written |
+| DB/notify failure | Log `warn!`, continue — skill file is written |
 
 ### Agent guidance updates
 
@@ -83,7 +87,7 @@ The tool is a system tool (hardcoded, not YAML). It is registered alongside
 ```markdown
 ## Capturing New Skills In-Session
 
-Use `skill(action="capture")` when you notice a reusable pattern:
+Use `skill_use(action="capture")` when you notice a reusable pattern:
 - A workflow you will likely need again in future sessions
 - A technique that took multiple attempts to get right
 - A format, style, or sequence the user explicitly prefers
@@ -97,14 +101,14 @@ Do NOT capture:
 **`scaffold/base/SOUL.md`** — add one line to the tools section:
 
 ```
-- skill(action="capture") — create a new reusable skill from a pattern discovered this session
+- skill_use(action="capture") — create a new reusable skill from a pattern discovered this session
 ```
 
 ### New notification type
 
-Add `skill_captured` to the notification type enum/check in
+Add `"skill_captured"` to the notification type check in
 `src/gateway/handlers/notifications.rs`. The UI bell and sound already fire for
-any new notification; no frontend changes needed for basic notification.
+any new notification; no frontend changes needed.
 
 ---
 
@@ -135,18 +139,22 @@ Skills captured this session: {names or "none"}
 {assistant text 2, first 300 chars}
 ```
 
-Assistant messages are text-only: tool_call JSON blocks are stripped. Only the
-`content` field of `role == "assistant"` rows is included.
+**Assistant text**: only the `content` field of `role == "assistant"` rows.
+Tool-call JSON embedded in content is stripped (take text up to first `[{`).
 
-Tool names come from parsing `role == "tool"` rows: the `tool_call_id` links
-back to the assistant's `tool_calls` list to extract `function.name`.
+**Tool names**: extracted from `role == "tool"` rows by parsing the `content`
+field as JSON and reading `tool_use_id` / name. Alternatively, parse assistant
+rows for `tool_calls` JSON if stored there. Deduped, sorted.
 
-Skills captured in-session come from querying `curator_decisions` for
-`action = "captured"` entries created after `session.created_at`.
+**Skills captured this session**: query `curator_decisions` for
+`action = 'captured'` entries where `decided_at >= session_created_at`.
+`session_created_at` is fetched via
+`SELECT created_at FROM sessions WHERE id = $1` at the start of
+`review_session_inner()`.
 
 ### Multiple verdicts
 
-LLM prompt is updated to allow up to 3 verdict lines:
+LLM prompt updated to allow up to 3 verdict lines:
 
 ```
 Respond with 1–3 lines. Each line must be one of:
@@ -159,22 +167,21 @@ If nothing applies, respond with a single SKIP.
 ```
 
 Parser reads all non-empty lines, processes each independently, stops at 3.
-`SKIP` on any line is ignored (only blocks if it is the only line).
+A `SKIP` line is skipped; only a sole `SKIP` response means no action.
 
 ### Trigger filter update
 
-Two independent gates (both must pass):
+Two independent gates (both must pass for normal sessions):
 
 1. `tool_call_count >= min_tool_calls` (existing, configurable)
-2. `user_message_count >= 2` (new — prevents single-line sessions)
+2. `user_message_count >= 2` (new — excludes single-line sessions)
 
-Failed sessions (`Interrupted` or `Failed` outcome) pass the filter regardless
-of tool count: they are the most informative for skill improvements.
+**Exception:** Failed/Interrupted sessions bypass gate 1 — they are the most
+informative for skill improvements.
 
 ### Timeout
 
-Unchanged at 30 seconds. No retry on timeout (already the case — clarified in
-comment).
+Unchanged at 30 seconds. No retry on timeout (clarified in code comment).
 
 ---
 
@@ -185,7 +192,6 @@ comment).
 | Modify | `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` | Add `handle_skill_capture()` function |
 | Modify | `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs` | Add `capture` action to `skill_use` tool schema |
 | Modify | `crates/hydeclaw-core/src/agent/engine_dispatch.rs` | Dispatch `skill_use` capture action to new handler |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/dispatch.rs` | No change needed — `skill_use` already in allowlist |
 | Modify | `crates/hydeclaw-core/src/skills/evolution.rs` | Enrich `review_session_inner`, multi-verdict parse |
 | Modify | `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` | Pass session outcome + user_message_count to `spawn_skill_review` |
 | Modify | `config/skills/skill-curator.md` | Add capture guidance section |
@@ -198,22 +204,23 @@ comment).
 
 | Test | Assertion |
 | --- | --- |
-| `skill(capture)` valid input | File created, version saved, `curator_decisions` row inserted |
-| `skill(capture)` duplicate name | Returns error, no file written |
-| `skill(capture)` invalid name chars | Returns error immediately |
-| `skill(load)` existing skill | Returns content (same as current `skill_use`) |
-| `review_session_inner` multi-verdict | All 3 verdicts enqueued independently |
+| `skill_use(capture)` valid input | File created, version saved, `curator_decisions` row inserted |
+| `skill_use(capture)` duplicate name | Returns error, no file written |
+| `skill_use(capture)` invalid name chars | Returns error immediately |
+| `skill_use(load)` existing skill | Returns content (unchanged from current) |
+| `review_session_inner` multi-verdict | All verdicts enqueued independently |
 | `review_session_inner` SKIP only | Nothing enqueued |
 | `review_session_inner` Failed session | Passes filter regardless of tool count |
-| `review_session_inner` 1 user message | Filtered out (< 2 user messages) |
+| `review_session_inner` 1 user message | Filtered out |
 
 ---
 
 ## Out of Scope
 
-- `skill(action="improve")` — edit existing skill in-session. Can be added
-  later; `capture` + Curator FIX covers the need for now.
-- Usage telemetry counters (`use_count`, `view_count`) à la Hermes. The
-  existing `last_used_at` is sufficient for Phase 1 staleness detection.
+- `skill_use(action="improve")` — edit existing skill in-session. Captured
+  skills can be improved via Curator FIX or PUT /api/skills.
+- Usage telemetry counters (`use_count`, `view_count`) à la Hermes. Existing
+  `last_used_at` is sufficient for Phase 1 staleness detection.
 - Per-agent skill directories. All captured skills go to `workspace/skills/`.
-- UI changes for `skill_captured` notification beyond the existing bell/sound.
+- UI changes beyond the existing bell/sound for `skill_captured` notification.
+- Subagent skill capture — intentionally blocked by existing deny-list.
