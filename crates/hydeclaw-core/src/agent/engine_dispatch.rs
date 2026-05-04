@@ -204,8 +204,19 @@ impl AgentEngine {
                 "tool_disable" => Some(ph::handle_tool_disable(&self.cfg().workspace_dir, arguments).await),
                 "skill" => Some(self.dispatch_skill_tool(arguments).await),
                 "skill_use" => {
-                    let available = self.available_tool_names().await;
-                    Some(ph::handle_skill_use(&self.cfg().workspace_dir, self.cfg().agent.base, &available, arguments).await)
+                    let action = arguments.get("action").and_then(|v| v.as_str()).unwrap_or("list");
+                    if action == "capture" {
+                        Some(ph::handle_skill_capture(
+                            &self.cfg().workspace_dir,
+                            &self.cfg().agent.name,
+                            &self.cfg().db,
+                            self.state().ui_event_tx.as_ref(),
+                            arguments,
+                        ).await)
+                    } else {
+                        let available = self.available_tool_names().await;
+                        Some(ph::handle_skill_use(&self.cfg().workspace_dir, self.cfg().agent.base, &available, arguments).await)
+                    }
                 }
                 "tool_discover" => Some(ph::handle_tool_discover(&self.cfg().workspace_dir, self.ssrf_http_client(), arguments).await),
                 "secret_set" => Some(ph::handle_secret_set(self.secrets(), &self.cfg().agent.name, self.cfg().agent.base, arguments).await),
