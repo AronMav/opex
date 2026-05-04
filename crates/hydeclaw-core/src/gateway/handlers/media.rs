@@ -40,6 +40,7 @@ pub(crate) fn routes() -> Router<AppState> {
 pub(crate) async fn api_media_upload(
     State(agents): State<AgentCore>,
     State(cfg): State<ConfigServices>,
+    State(auth): State<AuthServices>,
     mut multipart: axum::extract::Multipart,
 ) -> impl IntoResponse {
     let workspace_dir = agents.deps.read().await.workspace_dir.clone();
@@ -89,7 +90,12 @@ pub(crate) async fn api_media_upload(
         let port = cfg.config.gateway.listen.rsplit(':').next().unwrap_or("18789");
         format!("http://localhost:{port}")
     };
-    let url = format!("{base}/uploads/{filename}");
+    let url = if cfg.config.uploads.require_signature {
+        let key = auth.secrets.get_upload_hmac_key();
+        crate::uploads::mint_signed_url(&base, &filename, &key, cfg.config.uploads.signed_url_ttl_secs)
+    } else {
+        format!("{base}/uploads/{filename}")
+    };
     Json(json!({"url": url, "filename": filename, "size": data.len()})).into_response()
 }
 
