@@ -663,12 +663,35 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
     // skill_use: on-demand skill loading (always available, not gated by skill_editing)
     tools.push(ToolDefinition {
         name: "skill_use".to_string(),
-        description: "Load a reusable skill (strategy/workflow). Use action='list' to see available skills with descriptions, action='load' with name to get full instructions.".to_string(),
+        description: "Load or capture a reusable skill. action='list': show catalog. action='load' + name: get full instructions. action='capture': create a new skill from a session pattern.".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
-                "action": { "type": "string", "enum": ["list", "load"], "description": "list = show catalog, load = get full skill instructions" },
-                "name": { "type": "string", "description": "Skill name (for load action)" }
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "load", "capture"],
+                    "description": "list = show catalog, load = get full skill instructions, capture = create a new skill"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Skill name (for load or capture). kebab-case, e.g. 'image-resize-workflow'"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One-sentence summary of what this skill teaches (for capture)"
+                },
+                "triggers": {
+                    "type": "string",
+                    "description": "Comma-separated phrases that should activate this skill (for capture, optional)"
+                },
+                "tools_required": {
+                    "type": "string",
+                    "description": "Comma-separated tool names this skill needs (for capture, optional)"
+                },
+                "instructions": {
+                    "type": "string",
+                    "description": "Full skill body in markdown (for capture)"
+                }
             },
             "required": ["action"]
         }),
