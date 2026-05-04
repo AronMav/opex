@@ -75,21 +75,21 @@ pub struct AppConfig {
 
 /// Signed-URL configuration for `GET /uploads/*`.
 ///
-/// Grace period: `require_signature=false` in v0.19.0 so existing clients that
-/// fetched unsigned URLs keep working. Flip to `true` in v0.19.1.
+/// Enforced since v0.26.0 (default `true`). Set to `false` in your
+/// `hydeclaw.toml` only if you need to serve unsigned legacy URLs.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct UploadsConfig {
     /// TTL for signed `/uploads` URLs (seconds). Default: 24 h (86_400 s).
     #[serde(default = "default_signed_url_ttl")]
     pub signed_url_ttl_secs: u64,
-    /// v0.19.0 grace period: accept unsigned URLs. Flip to `true` in v0.19.1
-    /// to enforce HMAC verification on every request.
+    /// Enforce HMAC verification on every `/uploads/*` request.
+    /// Default: `true` (enforced). Set `false` to accept unsigned URLs.
     #[serde(default = "default_require_signature")]
     pub require_signature: bool,
 }
 
 fn default_signed_url_ttl() -> u64 { 86_400 }
-fn default_require_signature() -> bool { false }
+fn default_require_signature() -> bool { true }
 
 impl Default for UploadsConfig {
     fn default() -> Self {
@@ -1828,7 +1828,7 @@ model = "m2.5"
     fn uploads_config_defaults() {
         let cfg = UploadsConfig::default();
         assert_eq!(cfg.signed_url_ttl_secs, 86_400);
-        assert!(!cfg.require_signature, "v0.19.0 grace period keeps this false");
+        assert!(cfg.require_signature, "v0.26.0 enforces signatures by default");
     }
 
     #[test]
@@ -1860,7 +1860,7 @@ url = "postgres://localhost/test"
 "#;
         let cfg: AppConfig = toml::from_str(toml_str).expect("parse");
         assert_eq!(cfg.uploads.signed_url_ttl_secs, 86_400);
-        assert!(!cfg.uploads.require_signature);
+        assert!(cfg.uploads.require_signature);
     }
 
     // ── 4a. AgentSettings max_agent_turns defaults to None ──

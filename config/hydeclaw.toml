@@ -15,12 +15,9 @@ max_tool_concurrency = 10
 max_restore_size_mb = 500
 
 # Phase 64 SEC-03: signed-URL HMAC verification for /uploads/*
-# Grace period in v0.19.0 keeps require_signature=false so existing
-# clients fetching unsigned /uploads URLs keep working.
-# Flip to true in v0.19.1 to enforce HMAC on every request.
 [uploads]
 signed_url_ttl_secs = 86400
-require_signature = false
+require_signature = true
 
 [typing]
 mode = "instant"
