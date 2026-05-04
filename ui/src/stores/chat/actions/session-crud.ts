@@ -44,7 +44,7 @@ export function createSessionCrudActions(deps: ActionDeps) {
       queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
     },
 
-    deleteSession: async (sessionId: string) => {
+    deleteSession: async (sessionId: string, skipInvalidation = false) => {
       const agent = get().currentAgent;
       await apiDelete(`/api/sessions/${sessionId}?agent=${encodeURIComponent(agent)}`);
       const st = get().agents[agent];
@@ -59,7 +59,9 @@ export function createSessionCrudActions(deps: ActionDeps) {
         });
         saveLastSession(agent);
       }
-      queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+      if (!skipInvalidation) {
+        queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+      }
     },
 
     deleteAllSessions: async () => {

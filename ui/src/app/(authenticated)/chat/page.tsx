@@ -360,9 +360,14 @@ export default function ChatPage() {
     }
     setDeletingSelected(true);
     try {
+      // Cancel any in-flight refetches so intermediate responses don't cache
+      // a stale  count while deletes are in progress.
+      await queryClient.cancelQueries({ queryKey: qk.sessions(currentAgent) });
       await Promise.all(
         Array.from(selectedSessions).map((id) =>
-          useChatStore.getState().deleteSession(id),
+          // skipInvalidation=true: suppress per-call cache invalidation so
+          // we issue exactly one invalidation after all deletes complete.
+          useChatStore.getState().deleteSession(id, true),
         ),
       );
       queryClient.invalidateQueries({ queryKey: qk.sessions(currentAgent) });
