@@ -167,6 +167,23 @@ pub mod db {
     pub use hydeclaw_db::session_wal;
     pub use hydeclaw_db::sessions;
     pub use hydeclaw_db::usage;
+
+    // Leaf module (deps: anyhow, chrono, sqlx — zero `crate::*`). Needed so
+    // the `channels::access` re-mount below can resolve `crate::db::access`.
+    // NOTE: `#[path]` inside an inline `pub mod db {}` is relative to `src/db/`.
+    #[path = "access.rs"]
+    pub mod access;
+}
+
+// ── Approval-gate security facade ─────────────────────────────────────
+// Exposes `AccessGuard` for `tests/integration_approval_security.rs`.
+// NOTE: `#[path]` inside an inline `pub mod channels {}` is relative to
+// `src/channels/` — not `src/`.
+pub mod channels {
+    //! Test-facing subset: only `access` is exposed to avoid cascading the
+    //! full channel-manager subtree (which has dozens of `crate::*` deps).
+    #[path = "access.rs"]
+    pub mod access;
 }
 
 // ── Phase 64 SEC-01: unified SSRF guard ────────────────────────────────
