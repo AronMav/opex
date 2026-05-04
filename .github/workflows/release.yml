@@ -46,24 +46,8 @@ jobs:
       - name: Build release
         run: ./release.sh "${{ steps.ver.outputs.version }}" --all
 
-      - name: Generate changelog
-        id: changelog
-        run: |
-          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p')
-          if [ -n "$PREV_TAG" ]; then
-            NOTES=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" --no-merges)
-          else
-            NOTES=$(git log --pretty=format:"- %s" --no-merges)
-          fi
-          {
-            echo "notes<<EOF"
-            echo "$NOTES"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: HydeClaw v${{ steps.ver.outputs.version }}
-          body: ${{ steps.changelog.outputs.notes }}
           files: release/hydeclaw-*.tar.gz

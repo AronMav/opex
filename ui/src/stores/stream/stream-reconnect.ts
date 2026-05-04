@@ -54,7 +54,8 @@ export function scheduleReconnect(
     connectionPhase: "reconnecting",
     connectionError: null,
     reconnectAttempt: attempt + 1,
-    maxReconnectAttempts: deps.maxAttempts,
+    // maxReconnectAttempts is a constant — only sync it on the first attempt
+    ...(attempt === 0 && { maxReconnectAttempts: deps.maxAttempts }),
   });
 
   const baseDelay = deps.baseDelayMs * Math.pow(2, attempt);

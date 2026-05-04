@@ -27,12 +27,14 @@ pub(crate) async fn api_curator_status(
     State(cfg_svc): State<ConfigServices>,
 ) -> impl IntoResponse {
     let last = crate::db::curator_runs::last_run(&infra.db).await.ok().flatten();
-    let shared = cfg_svc.shared_config.read().await;
-    let cfg = &shared.curator;
+    let (enabled, cron) = {
+        let s = cfg_svc.shared_config.read().await;
+        (s.curator.enabled, s.curator.cron.clone())
+    };
 
     Json(serde_json::json!({
-        "enabled": cfg.enabled,
-        "cron": cfg.cron,
+        "enabled": enabled,
+        "cron": cron,
         "last_run_at": last.as_ref().map(|r| r.started_at),
         "last_run_id": last.as_ref().map(|r| r.id),
         "last_phase1": last.as_ref().and_then(|r| r.phase1).unwrap_or(0),
