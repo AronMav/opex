@@ -239,7 +239,9 @@ export interface ChatStore {
   markSessionInactive: (agent: string, sessionId: string) => void;
   setModelOverride: (agent: string, model: string | null) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
-  deleteSession: (sessionId: string) => Promise<void>;
+  // skipInvalidation=true suppresses per-call cache invalidation for bulk-delete
+  // so the caller can issue a single invalidation after all deletes complete.
+  deleteSession: (sessionId: string, skipInvalidation?: boolean) => Promise<void>;
   deleteAllSessions: () => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
   loadEarlierMessages: (agent: string) => void;
