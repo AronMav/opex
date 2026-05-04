@@ -132,7 +132,13 @@ Axum HTTP API on port 18789. **Sub-router pattern:** 27 handler modules each exp
 
 **Service registry:** `config/services/*.yaml` — internal service definitions (browser-renderer, toolgate, STT, TTS, embedding, vision). These are infrastructure entries (URL, healthcheck, concurrency), NOT agent tools. Loaded by `service_registry.rs`.
 
-**Agent skills:** `workspace/skills/*.md` — shared skills for all agents. `config/skills/*.md` — system skills only available to base agents (provider-management, channel-management, etc.). Loaded by `skills/mod.rs`.
+**Agent skills:** `workspace/skills/*.md` — shared skills for all agents.
+`config/skills/*.md` — system skills only available to base agents
+(provider-management, channel-management, etc.). Loaded by `skills/mod.rs`.
+Skill frontmatter field `pinned: true` protects a skill from the Curator:
+Phase 1 never transitions it Active→Stale→Archived, Phase 3 Analyst never
+proposes archive/merge/fix. Toggle via `PATCH /api/skills/{name}/pin` or the
+lock icon in the Skills UI.
 
 **Agent scaffold:** `crates/hydeclaw-core/scaffold/base/` and `scaffold/regular/` — template SOUL.md, IDENTITY.md, HEARTBEAT.md created for new agents. Base agent gets full system template (capabilities, security rules, API reference). Regular agents get lighter template that delegates system tasks to base. Templates use `{AGENT_NAME}` placeholder.
 
