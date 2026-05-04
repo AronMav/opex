@@ -84,8 +84,8 @@ describe("CompactChainBanner", () => {
 
     render(React.createElement(CompactChainBanner, { activeSessionId: "child-id", onNavigate }));
 
-    // Banner starts NOT collapsed (localStorage empty in jsdom → collapsed=false).
-    // Entries are visible immediately — do NOT click the toggle button first.
+    // Banner starts collapsed by default — expand it first.
+    fireEvent.click(screen.getByText("Compression chain").closest("button")!);
     const rootBtn = screen.getByText("Root");
     fireEvent.click(rootBtn);
     expect(onNavigate).toHaveBeenCalledWith("parent-id");
@@ -150,7 +150,8 @@ describe("CompactChainBanner extended", () => {
     );
 
     expect(screen.getByText("Compression chain")).toBeTruthy();
-    // not collapsed by default in jsdom (localStorage empty)
+    // Banner starts collapsed by default — expand to see entries.
+    fireEvent.click(screen.getByText("Compression chain").closest("button")!);
     expect(screen.getByText("Root")).toBeTruthy();
   });
 

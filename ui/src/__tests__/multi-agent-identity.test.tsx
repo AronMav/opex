@@ -232,6 +232,7 @@ describe("Multi-Agent Identity (MAID)", () => {
         <MessageList
           messages={messages}
           isStreaming={false}
+          isTextStreaming={false}
           showThinking={false}
           isLoadingHistory={false}
           emptyState={<div />}
@@ -254,6 +255,7 @@ describe("Multi-Agent Identity (MAID)", () => {
         <MessageList
           messages={messages}
           isStreaming={false}
+          isTextStreaming={false}
           showThinking={false}
           isLoadingHistory={false}
           emptyState={<div />}
@@ -276,6 +278,7 @@ describe("Multi-Agent Identity (MAID)", () => {
         <MessageList
           messages={messages}
           isStreaming={false}
+          isTextStreaming={false}
           showThinking={false}
           isLoadingHistory={false}
           emptyState={<div />}
@@ -288,13 +291,14 @@ describe("Multi-Agent Identity (MAID)", () => {
     });
   });
 
-  // MAID-02: ThinkingMessage shows current agent name
+  // MAID-02: ThinkingMessage shows animation only (no agent name/avatar)
   describe("MAID-02: ThinkingMessage agent display", () => {
-    it("renders ThinkingMessage with currentAgent name", () => {
+    it("renders ThinkingMessage without agent name (animation only)", () => {
       render(
         <MessageList
           messages={[]}
           isStreaming={true}
+          isTextStreaming={true}
           showThinking={true}
           isLoadingHistory={false}
           emptyState={<div />}
@@ -303,7 +307,8 @@ describe("Multi-Agent Identity (MAID)", () => {
         />,
       );
 
-      expect(screen.getByText("TestAgent")).toBeInTheDocument();
+      // Agent name is not shown in ThinkingMessage — only the animation indicator
+      expect(screen.queryByText("TestAgent")).not.toBeInTheDocument();
     });
   });
 

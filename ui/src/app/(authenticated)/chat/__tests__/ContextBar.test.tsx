@@ -46,21 +46,26 @@ function getBarColor(): string {
     'div[class*="rounded-full"][style*="width"]',
   );
   const cls = bar?.className ?? "";
-  if (cls.includes("bg-red-500")) return "red";
-  if (cls.includes("bg-yellow-500")) return "yellow";
-  if (cls.includes("bg-neutral-400")) return "neutral";
+  // Current classes: bg-destructive (red), bg-warning (yellow), bg-muted-foreground/40 (neutral)
+  if (cls.includes("bg-destructive")) return "red";
+  if (cls.includes("bg-warning")) return "yellow";
+  if (cls.includes("bg-muted-foreground")) return "neutral";
   return "unknown";
 }
 
 describe("ContextBar — visibility", () => {
-  it("returns null when tokens is null", () => {
+  it("shows model badge but no bar when tokens is null", () => {
     const { container } = render(<ContextBar tokens={null} model={MODEL} />);
-    expect(container.firstChild).toBeNull();
+    // Model badge is always shown; token bar only when tokens != null
+    expect(container.firstChild).not.toBeNull();
+    expect(container.querySelector('[style*="width"]')).toBeNull();
   });
 
-  it("returns null when model is unknown (no context limit)", () => {
+  it("shows model badge but no bar when model has no context limit", () => {
     const { container } = render(<ContextBar tokens={1000} model="totally-unknown-model" />);
-    expect(container.firstChild).toBeNull();
+    // Model badge shows; no bar because limit is unknown
+    expect(container.firstChild).not.toBeNull();
+    expect(container.querySelector('[style*="width"]')).toBeNull();
   });
 });
 
