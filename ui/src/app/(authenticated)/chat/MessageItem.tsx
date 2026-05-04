@@ -18,7 +18,7 @@ import { BranchNavigator } from "./BranchNavigator";
 import { cn } from "@/lib/utils";
 import { AlertCircle, ChevronRight } from "lucide-react";
 // Collapsible removed — tool grouping disabled
-import { BarsLoader } from "@/components/ui/loader";
+import { CometLoader } from "@/components/ui/loader";
 import { MessageActions } from "./MessageActions";
 import { TextPart } from "./parts/TextPart";
 import { ReasoningPart } from "./parts/ReasoningPart";
@@ -54,7 +54,7 @@ export { mapToolPartState } from "@/lib/tool-state";
 // ── Empty part view (loading indicator for empty assistant messages) ─────────
 
 function EmptyPartView() {
-  return <BarsLoader size="sm" className="text-muted-foreground/40 py-1" />;
+  return <div className="py-1"><CometLoader /></div>;
 }
 
 // ── Part renderer dispatch ──────────────────────────────────────────────────

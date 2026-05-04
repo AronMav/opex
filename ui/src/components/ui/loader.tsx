@@ -318,6 +318,22 @@ export function BarsLoader({
   )
 }
 
+export function CometLoader({ className }: { className?: string }) {
+  return (
+    <div className={cn("relative overflow-hidden rounded-sm", className)} style={{ width: 48, height: 3 }}>
+      <div
+        className="absolute inset-y-0 rounded-sm"
+        style={{
+          width: 20,
+          background: "linear-gradient(90deg, transparent, var(--color-primary))",
+          animation: "comet-move 1.4s ease-in-out infinite",
+        }}
+      />
+      <span className="sr-only">Loading</span>
+    </div>
+  )
+}
+
 export function TerminalLoader({
   className,
   size = "md",

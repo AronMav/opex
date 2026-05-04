@@ -5,7 +5,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useChatStore } from "@/stores/chat-store";
 import type { ChatMessage } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
-import { BarsLoader } from "@/components/ui/loader";
+import { CometLoader } from "@/components/ui/loader";
 
 import { MessageItem } from "./MessageItem";
 import { useChatAutoscroll } from "./use-chat-autoscroll";
@@ -52,7 +52,7 @@ function MessageListSkeleton() {
 function ThinkingMessage() {
   return (
     <div className="py-4 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out">
-      <BarsLoader size="sm" className="text-muted-foreground/40" />
+      <CometLoader />
     </div>
   );
 }
@@ -282,7 +282,7 @@ export function MessageList({
                 <MessageItem message={msg} sessionChannel={sessionChannel} sessionUserId={sessionUserId} />
                 {isStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && (
                   <div className="pb-3 pl-10">
-                    <BarsLoader size="sm" className="text-muted-foreground/40" />
+                    <CometLoader />
                   </div>
                 )}
               </div>
