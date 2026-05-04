@@ -121,6 +121,8 @@ export interface FormState {
   // Skill Review
   srEnabled: boolean;
   srMinToolCalls: string;
+  // Agent turns limit per-agent override (typo kept for backward compat)
+  maxAgentTurles: string;
 }
 
 export interface AgentEditDialogProps {
@@ -587,6 +589,9 @@ export function AgentEditDialog({
                       </Field>
                       <Field label={t("agents.field_max_history")}>
                         <Input type="number" step="1" min="0" value={form.maxHistoryMessages} placeholder="Unlimited" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxHistoryMessages: e.target.value })} />
+                      </Field>
+                      <Field label="Max Agent Turns">
+                        <Input type="number" step="1" min="1" value={form.maxAgentTurles} placeholder="global default" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxAgentTurles: e.target.value })} />
                       </Field>
                     </div>
                   </div>
