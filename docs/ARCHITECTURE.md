@@ -965,7 +965,10 @@ systemd `TimeoutStopSec` should be `drain_timeout_secs + 10s buffer` (40s defaul
 
 ### Static Export with RSC Flattening
 
-Built as static export (`next build` → `out/`) for nginx. Post-build script `scripts/flatten-rsc.mjs` processes RSC chunks — required for static nginx serving without a Node.js runtime.
+Built as static export (`next build` → `out/`) for nginx. RSC chunks are
+flattened automatically by `ui/build/adapter.cjs`, registered in
+`next.config.ts` via `experimental.adapterPath` — no separate post-build
+script needed.
 
 ---
 

@@ -856,7 +856,7 @@ make deploy              # build-arm64 + scp binary + restart systemd + deploy U
 
 # Частичный deploy
 make deploy-binary       # только бинарник
-make deploy-ui           # только UI (npm build + flatten-rsc + scp)
+make deploy-ui           # только UI (npm build + RSC flattening + scp)
 
 # Toolgate (нет Docker, только .py файлы):
 scp toolgate/changed_file.py user@pi:~/hydeclaw/toolgate/
