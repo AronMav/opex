@@ -747,7 +747,7 @@ impl Scheduler {
             let agents = agents.clone();
             Box::pin(async move {
                 // ── Record run start ──────────────────────────────────────────
-                let run_id = match crate::db::curator_runs::insert_run(&db, "cron").await {
+                let run_id = match crate::db::curator_runs::insert_run(&db, "cron", false).await {
                     Ok(id) => id,
                     Err(e) => {
                         tracing::error!(error = %e, "curator: failed to insert run record — skipping run");
@@ -789,6 +789,7 @@ impl Scheduler {
                     &cfg,
                     std::sync::Arc::new(agents.clone()),
                     crate::config::WORKSPACE_DIR,
+                    false,
                 )
                 .await
                 {
@@ -802,7 +803,7 @@ impl Scheduler {
                         crate::db::curator_runs::finish_run(
                             &db, run_id,
                             summary.phase1, summary.phase2, summary.phase3,
-                            Some(&summary.report_md), None,
+                            Some(&summary.report_md), None, false,
                         ).await.ok();
                     }
                     Err(e) => {
@@ -810,7 +811,7 @@ impl Scheduler {
                         crate::db::curator_runs::finish_run(
                             &db, run_id,
                             0, 0, 0,
-                            None, Some(&e.to_string()),
+                            None, Some(&e.to_string()), false,
                         ).await.ok();
                     }
                 }

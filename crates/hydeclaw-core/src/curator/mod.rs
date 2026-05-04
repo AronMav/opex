@@ -68,6 +68,7 @@ pub async fn run_curator(
     cfg: &CuratorConfig,
     agents: Arc<AgentCore>,
     workspace_dir: &str,
+    dry_run: bool,
 ) -> anyhow::Result<CuratorRunSummary> {
     let mut report_lines: Vec<String> = Vec::new();
     let mut phase1_count = 0i32;
@@ -75,7 +76,7 @@ pub async fn run_curator(
     let mut phase3_count = 0i32;
 
     // Phase 1: State transitions (no LLM)
-    match phase_transitions::run(workspace_dir, db, cfg.stale_after_days, cfg.archive_after_days).await {
+    match phase_transitions::run(workspace_dir, db, cfg.stale_after_days, cfg.archive_after_days, dry_run).await {
         Ok(r) => {
             phase1_count = r.transitions;
             if !r.log.is_empty() {
@@ -90,7 +91,7 @@ pub async fn run_curator(
     }
 
     // Phase 2: Repair queue (agent-driven)
-    match phase_repairs::run(workspace_dir, db, agents.as_ref(), &cfg.agent_name, cfg.max_repairs_per_run).await {
+    match phase_repairs::run(workspace_dir, db, agents.as_ref(), &cfg.agent_name, cfg.max_repairs_per_run, dry_run).await {
         Ok(r) => {
             phase2_count = r.applied;
             if !r.log.is_empty() {
@@ -105,7 +106,7 @@ pub async fn run_curator(
     }
 
     // Phase 3: Agent-driven consolidation
-    match phase_consolidation::run(workspace_dir, agents.as_ref(), &cfg.agent_name, db).await {
+    match phase_consolidation::run(workspace_dir, agents.as_ref(), &cfg.agent_name, db, dry_run).await {
         Ok(r) => {
             phase3_count = r.commands_executed;
             if !r.log.is_empty() {
@@ -120,7 +121,11 @@ pub async fn run_curator(
     }
 
     if report_lines.is_empty() {
-        report_lines.push("Nothing to do.".into());
+        if dry_run {
+            report_lines.push("[DRY-RUN] Nothing to do.".into());
+        } else {
+            report_lines.push("Nothing to do.".into());
+        }
     }
 
     Ok(CuratorRunSummary {
@@ -177,6 +182,7 @@ mod tests {
             &sqlx::PgPool::connect_lazy("postgres://localhost/nonexistent").unwrap(),
             cfg.stale_after_days,
             cfg.archive_after_days,
+            false,
         )
         .await
         .expect("phase1 must not error on missing skills dir");
