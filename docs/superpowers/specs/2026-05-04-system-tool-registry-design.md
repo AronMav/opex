@@ -1,14 +1,16 @@
 # System Tool Registry — Design Spec
 
 **Date:** 2026-05-04
-**Status:** Approved
+**Status:** Approved (v2 — issues fixed after spec review)
 
 ## Problem
 
 `crates/hydeclaw-core/src/agent/engine_dispatch.rs` contains a 622-line hardcoded
 `match` with 28 named arms. Adding a new system tool requires modifying this file.
-The `skill_use` arm (42 lines) and `dispatch_memory_tool` method (~200 lines) embed
-complex logic directly in the dispatch layer, violating single responsibility.
+The `skill_use` arm (42 lines), `dispatch_memory_tool` (~200 lines),
+`dispatch_git_tool` (130 lines), `dispatch_skill_tool`, `dispatch_session_tool`,
+and `dispatch_process_tool` embed complex logic directly in the dispatch layer,
+violating single responsibility.
 
 ## Goal
 
@@ -41,7 +43,7 @@ crates/hydeclaw-core/src/agent/
 ```
 
 `engine_dispatch.rs` is reduced to building `ToolDeps`, calling
-`registry.dispatch()`, and falling through to YAML/external tools.
+`registry.dispatch()`, and falling through to MCP/YAML/external tools.
 
 ---
 
@@ -53,41 +55,49 @@ references — no cloning, no Arc overhead beyond what already exists.
 ```rust
 pub struct ToolDeps<'a> {
     // Core
-    pub workspace_dir:   &'a str,
-    pub agent_name:      &'a str,
-    pub agent_base:      bool,
-    pub db:              &'a PgPool,
+    pub workspace_dir:      &'a str,
+    pub agent_name:         &'a str,
+    pub agent_base:         bool,
+    pub db:                 &'a PgPool,
     // HTTP
-    pub http_client:     &'a reqwest::Client,
-    pub ssrf_client:     &'a reqwest::Client,
+    pub http_client:        &'a reqwest::Client,
+    pub ssrf_client:        &'a reqwest::Client,
     // Services
-    pub secrets:         &'a Arc<SecretsManager>,
-    pub sandbox:         &'a Option<Arc<CodeSandbox>>,
-    pub session_pools:   Option<&'a SessionPoolsMap>,
-    pub memory_store:    &'a Arc<dyn MemoryService>,  // = cfg().memory_store
-    pub agent_map:       &'a AgentMap,               // = cfg().agent_map
+    pub secrets:            &'a SecretsManager,          // engine.secrets().as_ref()
+    pub sandbox:            &'a Option<Arc<CodeSandbox>>,
+    pub session_pools:      Option<&'a SessionPoolsMap>, // cfg().session_pools.as_ref()
+    pub memory_store:       &'a Arc<dyn MemoryService>,  // cfg().memory_store
+    pub agent_map:          Option<&'a AgentMap>,        // cfg().agent_map.as_ref()
     // Comms
-    pub ui_event_tx:     Option<&'a broadcast::Sender<String>>,
+    pub ui_event_tx:        Option<&'a broadcast::Sender<String>>,
+    // Config values needed by specific handlers
+    pub toolgate_url:       &'a str,   // cfg().app_config.toolgate_url
+    pub gateway_listen:     &'a str,   // cfg().app_config.gateway.listen
+    pub signed_url_ttl_secs: u64,      // cfg().app_config.uploads.signed_url_ttl_secs
     // Pre-computed (avoids async call inside handlers)
-    pub available_tools: &'a HashSet<String>,
+    pub available_tools:    &'a HashSet<String>,
 }
 
 impl<'a> ToolDeps<'a> {
     pub fn from_engine(engine: &'a AgentEngine, available: &'a HashSet<String>) -> Self {
+        let cfg = engine.cfg();
         Self {
-            workspace_dir:   &engine.cfg().workspace_dir,
-            agent_name:      &engine.cfg().agent.name,
-            agent_base:      engine.cfg().agent.base,
-            db:              &engine.cfg().db,
-            http_client:     engine.http_client(),
-            ssrf_client:     engine.ssrf_http_client(),
-            secrets:         engine.secrets(),
-            sandbox:         engine.sandbox(),
-            session_pools:   engine.cfg().session_pools.as_ref(),
-            memory_store:    &engine.cfg().memory_store,
-            agent_map:       engine.agent_map(),
-            ui_event_tx:     engine.state().ui_event_tx.as_ref(),
-            available_tools: available,
+            workspace_dir:       &cfg.workspace_dir,
+            agent_name:          &cfg.agent.name,
+            agent_base:          cfg.agent.base,
+            db:                  &cfg.db,
+            http_client:         engine.http_client(),
+            ssrf_client:         engine.ssrf_http_client(),
+            secrets:             engine.secrets().as_ref(),
+            sandbox:             engine.sandbox(),
+            session_pools:       cfg.session_pools.as_ref(),
+            memory_store:        &cfg.memory_store,
+            agent_map:           cfg.agent_map.as_ref(),
+            ui_event_tx:         engine.state().ui_event_tx.as_ref(),
+            toolgate_url:        &cfg.app_config.toolgate_url,
+            gateway_listen:      &cfg.app_config.gateway.listen,
+            signed_url_ttl_secs: cfg.app_config.uploads.signed_url_ttl_secs,
+            available_tools:     available,
         }
     }
 }
@@ -129,11 +139,15 @@ impl SystemToolRegistry {
 ```
 
 `build()` registers all 28 handlers. Built once in `AgentEngine::new()`, stored as
-`Arc<SystemToolRegistry>` on the engine.
+`Arc<SystemToolRegistry>` on the engine struct.
 
 ---
 
 ## `engine_dispatch.rs` After
+
+`available_tool_names().await` is called once before `ToolDeps` construction to
+avoid async inside handlers. The fallback chain mirrors the current code exactly —
+MCP tools come after system tools and before YAML/external tools.
 
 ```rust
 pub(super) async fn execute_tool_call_inner(
@@ -141,24 +155,30 @@ pub(super) async fn execute_tool_call_inner(
     name: &str,
     args: &serde_json::Value,
 ) -> String {
+    // Pre-compute available tools once (async, needed by skill_use handler)
     let available = self.available_tool_names().await;
     let deps = ToolDeps::from_engine(self, &available);
 
+    // 1. System tools (registry)
     if let Some(result) = self.tool_registry.dispatch(name, &deps, args).await {
         return result;
     }
 
-    // YAML tools
+    // 2. MCP tools (existing path, unchanged)
+    if let Some(result) = self.dispatch_mcp_tool(name, args).await {
+        return result;
+    }
+
+    // 3. YAML tools (existing path, unchanged)
     if let Some(entry) = crate::tools::find_yaml_tool(&deps.workspace_dir, name) {
         return self.execute_yaml_tool(&entry, args).await;
     }
 
-    // External tool registry
-    if self.tool_registry_external().has(name) {
-        return self.execute_external_tool(name, args).await;
+    // 4. External tool registry (existing: self.cfg().tools.call)
+    match self.cfg().tools.call(name, args).await {
+        Ok(v) => v.to_string(),
+        Err(_) => format!("Unknown tool: {name}"),
     }
-
-    format!("Unknown tool: {name}")
 }
 ```
 
@@ -202,7 +222,6 @@ impl SystemToolHandler for SkillUseHandler {
                 deps.ui_event_tx, args,
             ).await,
             "load" => {
-                // reactivation spawn (existing logic, deps replaces self.cfg())
                 if let Some(name) = args["name"].as_str() {
                     let skills = crate::skills::load_skills(deps.workspace_dir).await;
                     if let Some(skill) = skills.iter().find(|s| s.meta.name == name) {
@@ -239,16 +258,21 @@ impl SystemToolHandler for SkillUseHandler {
 }
 ```
 
-### `MemoryToolHandler`
+### Methods migrating off `AgentEngine` into handlers
 
-`dispatch_memory_tool` moves from `AgentEngine` method to `memory.rs` handler.
-Receives `deps.memory_store` instead of `self.cfg().memory_store`. All sub-action
-routing stays identical.
+Five dispatch methods currently live on `AgentEngine` and must move:
 
-### `GitToolHandler`
+| Method | Moves to |
+| --- | --- |
+| `dispatch_memory_tool` | `MemoryToolHandler` in `memory.rs` |
+| `dispatch_git_tool` | `GitToolHandler` in `comms.rs` |
+| `dispatch_skill_tool` | `SkillHandler` in `skills.rs` |
+| `dispatch_session_tool` | `SessionHandler` in `session.rs` |
+| `dispatch_process_tool` | `ProcessHandler` in `comms.rs` |
 
-`dispatch_git_tool` (130-line helper) moves verbatim into `comms.rs`. No logic
-changes; `self.cfg().*` references replaced with `deps.*`.
+All move verbatim — no logic changes. `self.cfg().*` references replaced with
+`deps.*` equivalents. After the migration, these methods are deleted from
+`AgentEngine`.
 
 ---
 
@@ -305,14 +329,22 @@ atomically. Handlers are extracted file-by-file but the switch happens in one co
 
 **Order of work:**
 
-1. Create `tool_registry.rs` with `ToolDeps` + trait + empty registry — compiles
-2. Create `tool_handlers/` with all handler structs wrapping existing `ph::*` — no logic changes
-3. Move `dispatch_memory_tool` into `MemoryToolHandler` — single logic move
-4. Move `dispatch_git_tool` into `GitToolHandler` — single logic move
-5. Move `skill_use` inline logic into `SkillUseHandler` — single logic move
-6. Populate `SystemToolRegistry::build()` with all 28 handlers
-7. Replace `engine_dispatch.rs` match with registry dispatch
-8. Delete now-dead `dispatch_memory_tool` and `dispatch_git_tool` from `AgentEngine`
+1. Create `tool_registry.rs` — `ToolDeps`, `SystemToolHandler` trait, empty
+   `SystemToolRegistry` struct. Compiles standalone.
+2. Create `tool_handlers/` directory with all 28 handler structs, each wrapping
+   the existing `ph::*` call. No logic changes yet.
+3. Move `dispatch_memory_tool` body into `MemoryToolHandler::handle()`.
+4. Move `dispatch_git_tool` body into `GitToolHandler::handle()`.
+5. Move `dispatch_skill_tool` body into `SkillHandler::handle()`.
+6. Move `dispatch_session_tool` body into `SessionHandler::handle()`.
+7. Move `dispatch_process_tool` body into `ProcessHandler::handle()`.
+8. Move inline `skill_use` match logic into `SkillUseHandler::handle()`.
+9. Populate `SystemToolRegistry::build()` with all 28 registrations.
+10. Replace `execute_tool_call_inner` match with registry + MCP + YAML + external
+    fallback chain.
+11. Delete `dispatch_memory_tool`, `dispatch_git_tool`, `dispatch_skill_tool`,
+    `dispatch_session_tool`, `dispatch_process_tool` from `AgentEngine`.
+12. `cargo check` + `cargo test`.
 
 ---
 
@@ -320,8 +352,8 @@ atomically. Handlers are extracted file-by-file but the switch happens in one co
 
 - Each handler is testable in isolation: construct `ToolDeps` with mocked services,
   call `handler.handle(deps, args).await`, assert the returned `String`.
-- No integration test changes needed — existing `cargo test` exercises the dispatch
-  path end-to-end.
+- No integration test changes — existing `cargo test` exercises the dispatch path
+  end-to-end.
 - `skill_use` and `memory` handlers warrant dedicated unit tests for their
   sub-action routing (the most complex handlers).
 
@@ -330,8 +362,9 @@ atomically. Handlers are extracted file-by-file but the switch happens in one co
 ## What Does NOT Change
 
 - All `ph::*` function signatures — handlers wrap them, not replace them
+- MCP tool dispatch path
 - YAML tool dispatch
-- External tool registry
+- External tool registry (`self.cfg().tools`)
 - Tool policy / deny-list enforcement (applied before dispatch, unchanged)
 - Any agent TOML config
 
