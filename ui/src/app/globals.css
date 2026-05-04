@@ -178,6 +178,12 @@
 }
 
 /* --- Loader Keyframes --- */
+@keyframes comet-move {
+  0%   { transform: translateX(-100%); opacity: 0; }
+  15%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { transform: translateX(400%); opacity: 0; }
+}
 @keyframes spinner-fade {
   0% { opacity: 1; }
   100% { opacity: 0; }
