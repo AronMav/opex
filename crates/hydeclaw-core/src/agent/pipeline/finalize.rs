@@ -443,6 +443,19 @@ pub async fn finalize<S: EventSink>(
                     &ctx.bg_tasks,
                 );
             }
+            if let Some(sr_cfg) = &ctx.skill_review {
+                if sr_cfg.enabled {
+                    spawn_skill_review(
+                        ctx.db.clone(),
+                        ctx.session_id,
+                        ctx.agent_name.clone(),
+                        ctx.provider.clone(),
+                        sr_cfg.min_tool_calls,
+                        true, // force=true: Failed sessions bypass tool_count gate
+                        &ctx.bg_tasks,
+                    );
+                }
+            }
             partial.clone()
         }
         FinalizeOutcome::Interrupted { partial, reason } => {
@@ -461,6 +474,19 @@ pub async fn finalize<S: EventSink>(
                     .await;
             }
             lifecycle_guard.interrupt(reason).await;
+            if let Some(sr_cfg) = &ctx.skill_review {
+                if sr_cfg.enabled {
+                    spawn_skill_review(
+                        ctx.db.clone(),
+                        ctx.session_id,
+                        ctx.agent_name.clone(),
+                        ctx.provider.clone(),
+                        sr_cfg.min_tool_calls,
+                        true, // force=true: Interrupted sessions bypass tool_count gate
+                        &ctx.bg_tasks,
+                    );
+                }
+            }
             partial.clone()
         }
     };
