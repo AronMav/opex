@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Force rustls everywhere — defence-in-depth alongside the cargo tree assertion.
   # See Phase 65 OBS-06: the `rustls-only-assertion` job below codifies this
   # invariant permanently across both --no-default-features and --features otel.
