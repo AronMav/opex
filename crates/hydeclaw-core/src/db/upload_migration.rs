@@ -15,24 +15,13 @@ pub fn sign_uploads_in_value(val: &mut Value, re: &Regex, key: &[u8; 32]) -> usi
             if !s.contains("/uploads/") {
                 return 0;
             }
+            let original = s.clone();
             let mut count = 0usize;
-            let original = s.as_str();
-            let result = re.replace_all(original, |caps: &regex::Captures| {
-                // The lookahead (?!\?sig=) in the regex is not reliable when
-                // backtracking shortens the match (e.g. ".png" → ".pn"). We
-                // double-check by scanning forward in the original string from
-                // the start of this match to the next '?' character: if that
-                // '?' is part of '?sig=', the URL is already signed.
-                let m = caps.get(0).unwrap();
-                let match_start = m.start();
-                // The prefix "/uploads/" is 9 chars; skip past it to get filename.
-                let after_prefix = &original[match_start + 9..];
-                // Filename ends at the first '?' or end-of-string.
-                let q_offset = after_prefix.find('?').unwrap_or(after_prefix.len());
-                let after_filename = &after_prefix[q_offset..];
-                if after_filename.starts_with("?sig=") {
-                    // Already signed — return the original matched text unchanged.
-                    return m.as_str().to_owned();
+            let result = re.replace_all(&original, |caps: &regex::Captures| {
+                let end = caps.get(0).unwrap().end();
+                // Skip if already signed (match is immediately followed by ?sig=)
+                if original[end..].starts_with("?sig=") {
+                    return caps.get(0).unwrap().as_str().to_string();
                 }
                 count += 1;
                 crate::uploads::mint_signed_url(
@@ -80,7 +69,7 @@ pub async fn run_upload_signature_migration(
         return Ok(0);
     }
 
-    let re = Regex::new(r"/uploads/([a-f0-9\-]+\.[a-z0-9.]+)(?!\?sig=)")
+    let re = Regex::new(r"/uploads/([a-f0-9\-]+\.[a-z0-9.]+)")
         .expect("hardcoded regex is valid");
 
     let mut total_updated = 0usize;

@@ -11,7 +11,7 @@ fn test_key() -> [u8; 32] {
 }
 
 fn upload_re() -> Regex {
-    Regex::new(r"/uploads/([a-f0-9\-]+\.[a-z0-9.]+)(?!\?sig=)").unwrap()
+    Regex::new(r"/uploads/([a-f0-9\-]+\.[a-z0-9.]+)").unwrap()
 }
 
 // ── Test 1: unsigned URL gets replaced ────────────────────────────────────

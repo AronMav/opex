@@ -80,25 +80,25 @@ pub fn classify_str(msg: &str) -> LlmErrorClass {
     // Billing before rate limit (402 vs 429).
     // Auth before transient (401/403 vs 502).
 
-    if RE_BILLING.is_match(msg).unwrap_or(false) {
+    if RE_BILLING.is_match(msg) {
         return LlmErrorClass::Billing;
     }
-    if RE_AUTH.is_match(msg).unwrap_or(false) {
+    if RE_AUTH.is_match(msg) {
         return LlmErrorClass::AuthPermanent;
     }
-    if RE_CONTEXT_OVERFLOW.is_match(msg).unwrap_or(false) {
+    if RE_CONTEXT_OVERFLOW.is_match(msg) {
         return LlmErrorClass::ContextOverflow;
     }
-    if RE_SESSION_CORRUPTION.is_match(msg).unwrap_or(false) {
+    if RE_SESSION_CORRUPTION.is_match(msg) {
         return LlmErrorClass::SessionCorruption;
     }
-    if RE_RATE_LIMIT.is_match(msg).unwrap_or(false) {
+    if RE_RATE_LIMIT.is_match(msg) {
         return LlmErrorClass::RateLimit;
     }
-    if RE_OVERLOADED.is_match(msg).unwrap_or(false) {
+    if RE_OVERLOADED.is_match(msg) {
         return LlmErrorClass::Overloaded;
     }
-    if RE_TRANSIENT_HTTP.is_match(msg).unwrap_or(false) {
+    if RE_TRANSIENT_HTTP.is_match(msg) {
         return LlmErrorClass::TransientHttp;
     }
     LlmErrorClass::Unknown
@@ -228,8 +228,6 @@ pub fn extract_retry_after(error_msg: &str) -> Option<Duration> {
     });
     RE_RETRY_AFTER
         .captures(error_msg)
-        .ok()
-        .flatten()
         .and_then(|c| c.get(1))
         .and_then(|m| m.as_str().parse::<u64>().ok())
         .map(Duration::from_secs)

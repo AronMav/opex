@@ -206,7 +206,7 @@ pub(crate) async fn api_create_provider(
         }))).into_response();
     }
     // Validate name
-    if !NAME_RE.is_match(&body.name).unwrap_or(false) {
+    if !NAME_RE.is_match(&body.name) {
         return (StatusCode::BAD_REQUEST, Json(json!({
             "error": "name must match [a-zA-Z0-9_-]+"
         }))).into_response();
