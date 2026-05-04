@@ -150,5 +150,6 @@ tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 # Phase 61 Plan 03 — approval race test uses Uuid directly.
 uuid = { workspace = true }
