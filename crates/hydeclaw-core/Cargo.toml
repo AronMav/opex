@@ -67,7 +67,7 @@ rand = { workspace = true }
 serde_yaml = "0.9"
 
 # Error classification
-regex = "1"
+regex = { version = "0.18.0", package = "fancy-regex" }
 
 # mDNS service discovery (pure Rust — no OpenSSL, ARM64-safe)
 mdns-sd = "0.19"

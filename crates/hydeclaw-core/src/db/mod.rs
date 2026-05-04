@@ -22,6 +22,7 @@ pub mod curator_decisions;
 pub mod skill_versions;
 pub mod tool_audit;
 pub mod tool_quality;
+pub mod upload_migration;
 
 use anyhow::Result;
 use sqlx::postgres::PgPoolOptions;

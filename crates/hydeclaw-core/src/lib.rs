@@ -180,6 +180,14 @@ pub mod db {
     // NOTE: `#[path]` inside an inline `pub mod db {}` is relative to `src/db/`.
     #[path = "access.rs"]
     pub mod access;
+
+    // Phase 64 SEC-03 follow-up: upload URL signing migration. Leaf module
+    // (deps: anyhow, regex, serde_json, sqlx, uuid, tracing — only
+    // `crate::uploads::*` cross-module refs, which are already exposed in
+    // the lib facade above). Consumed by
+    // `tests/integration_upload_migration.rs`.
+    #[path = "upload_migration.rs"]
+    pub mod upload_migration;
 }
 
 // ── Approval-gate security facade ─────────────────────────────────────
