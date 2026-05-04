@@ -214,6 +214,29 @@ impl AgentEngine {
                             arguments,
                         ).await)
                     } else {
+                        if action == "load" {
+                            if let Some(name) = arguments.get("name").and_then(|v| v.as_str()) {
+                                let skills = crate::skills::load_skills(&self.cfg().workspace_dir).await;
+                                if let Some(skill) = skills.iter().find(|s| s.meta.name == name) {
+                                    if matches!(skill.meta.state, crate::skills::SkillState::Archived) {
+                                        let workspace = self.cfg().workspace_dir.clone();
+                                        let skill_name = name.to_string();
+                                        let db = self.cfg().db.clone();
+                                        let agent_name = self.cfg().agent.name.clone();
+                                        let now_iso = chrono::Utc::now().to_rfc3339();
+                                        tokio::spawn(async move {
+                                            crate::skills::reactivate_skill(
+                                                &workspace,
+                                                &skill_name,
+                                                &db,
+                                                &agent_name,
+                                                &now_iso,
+                                            ).await;
+                                        });
+                                    }
+                                }
+                            }
+                        }
                         let available = self.available_tool_names().await;
                         Some(ph::handle_skill_use(&self.cfg().workspace_dir, self.cfg().agent.base, &available, arguments).await)
                     }
