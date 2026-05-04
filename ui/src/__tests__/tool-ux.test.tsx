@@ -134,26 +134,28 @@ describe("TOOL-02: mapToolPartState returns distinct values for all states", () 
 // ── TOOL-02 tests: ToolCallPartView state-driven labels ────────────────────
 
 describe("TOOL-02: ToolCallPartView renders state-driven text labels", () => {
-  it("renders 'Calling...' label when status.type is 'calling'", () => {
-    render(
+  it("renders pulsing indicator when status.type is 'calling'", () => {
+    const { container } = render(
       <ToolCallPartView
         toolName="test_tool"
         args={{}}
         status={{ type: "calling" }}
       />,
     );
-    expect(screen.getByText("Calling...")).toBeInTheDocument();
+    // New design: animated pulsing dot instead of text label
+    expect(container.querySelector(".animate-pulse")).toBeInTheDocument();
   });
 
-  it("renders 'Running...' label when status.type is 'running'", () => {
-    render(
+  it("renders pulsing indicator when status.type is 'running'", () => {
+    const { container } = render(
       <ToolCallPartView
         toolName="test_tool"
         args={{}}
         status={{ type: "running" }}
       />,
     );
-    expect(screen.getByText("Running...")).toBeInTheDocument();
+    // New design: animated pulsing dot instead of text label
+    expect(container.querySelector(".animate-pulse")).toBeInTheDocument();
   });
 
   it("ToolCallPartView does NOT import useToolProgress", () => {
