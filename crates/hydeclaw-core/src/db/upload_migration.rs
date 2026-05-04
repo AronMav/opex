@@ -77,12 +77,14 @@ pub async fn run_upload_signature_migration(
     let mut last_id: Option<Uuid> = None;
 
     loop {
-        // Cursor-based pagination using the primary key — stable even as rows
-        // are updated (signed URLs still contain '/uploads/' so still match).
-        let rows: Vec<(Uuid, Value)> = if let Some(cursor) = last_id {
+        // messages.content is stored as TEXT (not JSONB) — fetch as String,
+        // parse manually, then write back as TEXT.
+        // Cursor-based pagination on id is stable even as rows are updated
+        // (signed URLs still contain '/uploads/' so still match the LIKE).
+        let rows: Vec<(Uuid, String)> = if let Some(cursor) = last_id {
             sqlx::query_as(
                 "SELECT id, content FROM messages \
-                 WHERE content::text LIKE '%/uploads/%' \
+                 WHERE content LIKE '%/uploads/%' \
                  AND id > $1 \
                  ORDER BY id LIMIT 500",
             )
@@ -92,7 +94,7 @@ pub async fn run_upload_signature_migration(
         } else {
             sqlx::query_as(
                 "SELECT id, content FROM messages \
-                 WHERE content::text LIKE '%/uploads/%' \
+                 WHERE content LIKE '%/uploads/%' \
                  ORDER BY id LIMIT 500",
             )
             .fetch_all(db)
@@ -105,13 +107,37 @@ pub async fn run_upload_signature_migration(
 
         last_id = rows.last().map(|(id, _)| *id);
 
-        for (id, mut content) in rows {
+        for (id, content_str) in rows {
+            let mut content: Value = match serde_json::from_str(&content_str) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        message_id = %id,
+                        error = %e,
+                        "upload migration: skipped row (invalid JSON)"
+                    );
+                    processed += 1;
+                    continue;
+                }
+            };
             let replacements = sign_uploads_in_value(&mut content, &re, upload_key);
             if replacements > 0 {
+                let updated_str = match serde_json::to_string(&content) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(
+                            message_id = %id,
+                            error = %e,
+                            "upload migration: skipped row (serialize error)"
+                        );
+                        processed += 1;
+                        continue;
+                    }
+                };
                 if let Err(e) = sqlx::query(
                     "UPDATE messages SET content = $1 WHERE id = $2",
                 )
-                .bind(&content)
+                .bind(&updated_str)
                 .bind(id)
                 .execute(db)
                 .await
@@ -121,6 +147,7 @@ pub async fn run_upload_signature_migration(
                         error = %e,
                         "upload migration: skipped row"
                     );
+                    processed += 1;
                     continue;
                 }
                 total_updated += 1;
