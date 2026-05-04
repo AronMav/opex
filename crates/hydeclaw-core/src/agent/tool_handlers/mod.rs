@@ -5,3 +5,6 @@ pub mod secrets_tool;
 pub mod tools_mgmt;
 pub mod agent_tool;
 pub mod memory;
+pub mod skills;
+pub mod session;
+pub mod comms;
