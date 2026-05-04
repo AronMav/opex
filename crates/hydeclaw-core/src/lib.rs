@@ -167,6 +167,13 @@ pub mod db {
     pub use hydeclaw_db::session_wal;
     pub use hydeclaw_db::sessions;
     pub use hydeclaw_db::usage;
+
+    // `curator_runs` is a leaf module (zero `crate::*` refs — only
+    // sqlx, chrono, uuid, serde). Safe to re-export for
+    // `integration_curator_config.rs` DB-layer tests.
+    // Path is relative to `src/db/` inside this inline module block.
+    #[path = "curator_runs.rs"]
+    pub mod curator_runs;
 }
 
 // ── Phase 64 SEC-01: unified SSRF guard ────────────────────────────────
