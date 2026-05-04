@@ -165,9 +165,13 @@ pub struct ScheduledJob {
     pub tool_policy: Option<serde_json::Value>,
 }
 
-/// Per-agent execution lock — prevents concurrent heartbeat + cron for the same agent.
-/// Shared across all scheduled jobs via Arc.
-type AgentLocks = Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>;
+/// How long a queued job will wait to acquire the per-agent lock before being dropped.
+const AGENT_LOCK_TIMEOUT_SECS: u64 = 30 * 60; // 30 minutes
+
+/// Per-agent execution lock.  Each agent gets its own `Mutex<()>`; waiting jobs
+/// queue in FIFO order rather than being dropped silently.
+type AgentLock = Arc<tokio::sync::Mutex<()>>;
+type AgentLocks = Arc<tokio::sync::Mutex<HashMap<String, AgentLock>>>;
 
 /// Manages cron-based tasks (heartbeat, memory decay, dynamic user-created jobs).
 pub struct Scheduler {
@@ -194,7 +198,7 @@ impl Scheduler {
             dynamic_jobs: RwLock::new(HashMap::new()),
             agent_jobs: RwLock::new(HashMap::new()),
             ui_event_tx,
-            agent_locks: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            agent_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             backup_job: RwLock::new(None),
             curator_job: RwLock::new(None),
         })
@@ -211,10 +215,19 @@ impl Scheduler {
             dynamic_jobs: RwLock::new(HashMap::new()),
             agent_jobs: RwLock::new(HashMap::new()),
             ui_event_tx: tx,
-            agent_locks: Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new())),
+            agent_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             backup_job: RwLock::new(None),
             curator_job: RwLock::new(None),
         })
+    }
+
+    /// Return (or lazily create) the per-agent execution lock.
+    /// Holds the outer map lock only for the lookup/insert, then releases it.
+    async fn agent_lock_for(locks: &AgentLocks, agent_name: &str) -> AgentLock {
+        let mut map = locks.lock().await;
+        map.entry(agent_name.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     /// Add heartbeat job for an agent. Returns the scheduler job UUID.
@@ -275,21 +288,36 @@ impl Scheduler {
             let ui_tx = ui_tx.clone();
             let locks = locks.clone();
             Box::pin(async move {
-                // Per-agent lock: skip if already running a scheduled task
-                {
-                    let mut active = locks.lock().await;
-                    if active.contains(&agent_name) {
-                        tracing::debug!(agent = %agent_name, "heartbeat skipped — agent busy with another scheduled task");
-                        return;
+                // Per-agent lock: queue if already running, drop only after 30 min wait.
+                let agent_lock = Self::agent_lock_for(&locks, &agent_name).await;
+                let _guard = if let Ok(g) = agent_lock.try_lock() {
+                    g
+                } else {
+                    tracing::warn!(agent = %agent_name, "heartbeat queued — waiting for running task to finish");
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(AGENT_LOCK_TIMEOUT_SECS),
+                        agent_lock.lock(),
+                    ).await {
+                        Ok(g) => {
+                            tracing::info!(agent = %agent_name, "heartbeat proceeding after wait");
+                            g
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                agent = %agent_name,
+                                timeout_secs = AGENT_LOCK_TIMEOUT_SECS,
+                                "heartbeat dropped — agent still busy after timeout"
+                            );
+                            return;
+                        }
                     }
-                    active.insert(agent_name.clone());
-                }
+                };
                 tracing::info!(agent = %agent_name, "heartbeat triggered");
                 let result = run_heartbeat(
                     &engine, &workspace_dir, &agent_name,
                     announce_to.as_deref(), owner_id.as_deref(),
                 ).await;
-                locks.lock().await.remove(&agent_name);
+                // _guard dropped here, releasing the per-agent lock.
                 match result {
                     Ok(()) => {
                         tracing::info!(agent = %agent_name, "heartbeat completed");
@@ -962,15 +990,31 @@ impl Scheduler {
                     let delay_ms = rand::rng().random_range(0u64..jitter_ms_max);
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 }
-                // Per-agent lock: skip if already running a scheduled task
-                {
-                    let mut active = locks.lock().await;
-                    if active.contains(&agent_name) {
-                        tracing::debug!(agent = %agent_name, job_id = %db_id, "cron skipped — agent busy with another scheduled task");
-                        return;
+                // Per-agent lock: queue if already running, drop only after 30 min wait.
+                let agent_lock = Self::agent_lock_for(&locks, &agent_name).await;
+                let _guard = if let Ok(g) = agent_lock.try_lock() {
+                    g
+                } else {
+                    tracing::warn!(agent = %agent_name, job_id = %db_id, "cron job queued — waiting for running task to finish");
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(AGENT_LOCK_TIMEOUT_SECS),
+                        agent_lock.lock(),
+                    ).await {
+                        Ok(g) => {
+                            tracing::info!(agent = %agent_name, job_id = %db_id, "cron job proceeding after wait");
+                            g
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                agent = %agent_name,
+                                job_id = %db_id,
+                                timeout_secs = AGENT_LOCK_TIMEOUT_SECS,
+                                "cron job dropped — agent still busy after timeout"
+                            );
+                            return;
+                        }
                     }
-                    active.insert(agent_name.clone());
-                }
+                };
                 tracing::info!(agent = %agent_name, job_id = %db_id, "dynamic job triggered");
                 // Use the channel's formatting prompt cached on the engine (from last adapter connection).
                 // This ensures cron output follows the same formatting rules as live chat.
@@ -1173,8 +1217,7 @@ impl Scheduler {
                         .unwrap_or_else(|| "unknown panic".to_string());
                     tracing::error!(agent = %agent_name, job_id = %db_id, error = %panic_msg, "dynamic job panicked");
                 }
-                // Always release the per-agent lock, even after panic
-                locks.lock().await.remove(&agent_name);
+                // _guard dropped here, releasing the per-agent lock (even after panic).
             })
         })?;
 
