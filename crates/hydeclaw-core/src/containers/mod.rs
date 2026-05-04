@@ -261,11 +261,11 @@ impl ContainerManager {
                 )
                 .await
                 {
-                    // Any bytes back = HTTP server is up (even "HTTP/1.1 404" is fine)
-                    if n > 0 {
-                        tracing::debug!(port, "MCP HTTP server ready");
-                        return Ok(());
-                    }
+                    // Any read result (bytes or clean EOF) = HTTP server is up.
+                    // n == 0 means the server accepted the connection and closed it
+                    // immediately (e.g. HTTP/1.0 connection-close with no body).
+                    tracing::debug!(port, n, "MCP HTTP server ready");
+                    return Ok(());
                 }
             }
             tokio::time::sleep(Duration::from_millis(300)).await;

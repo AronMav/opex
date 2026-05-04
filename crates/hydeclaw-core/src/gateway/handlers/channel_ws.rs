@@ -375,7 +375,7 @@ async fn channel_ws_loop(
                                 // Security: only the owner can resolve approvals. Re-fetch the live
                                 // guard so an agent config change is reflected immediately.
                                 let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
-                                let is_owner = live_guard.as_ref().is_none_or(|g| g.is_owner(&user_id));
+                                let is_owner = live_guard.as_ref().map_or(false, |g| g.is_owner(&user_id));
                                 if !is_owner {
                                     tracing::warn!(user_id = %user_id, "non-owner attempted to resolve approval via callback");
                                     let reply = ChannelOutbound::Error {

@@ -123,10 +123,7 @@ pub async fn start_agent_from_config(
                 // Dedicated short-lived reqwest client for webhooks.
                 // 5s per-call timeout is enforced inside fire_webhooks; this
                 // outer 10s connect+pool timeout is a backstop.
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(10))
-                    .build()
-                    .unwrap_or_default();
+                let client = crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(10));
                 registry.set_webhooks(client, hc.webhooks.clone());
             }
         }
