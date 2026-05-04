@@ -102,6 +102,9 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     // Workspace
     fn workspace_dir(&self) -> &str;
 
+    // Database
+    fn db(&self) -> sqlx::PgPool;
+
     // Tools
     fn internal_tool_definitions(&self) -> Vec<ToolDefinition>;
     async fn load_yaml_tools_cached(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef>;
@@ -244,24 +247,40 @@ impl ContextBuilder for DefaultContextBuilder {
                     skill.meta.description,
                     skill.meta.name
                 ));
-                // Fire-and-forget: track last_used_at for workspace/skills/ only
+                // Fire-and-forget: reactivate archived skills or track last_used_at
                 {
                     let skill_name = skill.meta.name.clone();
+                    let skill_state = skill.meta.state.clone();
                     let workspace = deps.workspace_dir().to_string();
                     let now_iso = chrono::Utc::now().to_rfc3339();
-                    tokio::spawn(async move {
-                        let safe_name = skill_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
-                        let skill_path = format!("{}/skills/{}.md", workspace, safe_name);
-                        // Only update workspace/skills/ — config/skills/ have a different on-disk
-                        // location and should not be tracked.
-                        if tokio::fs::metadata(&skill_path).await.is_ok() {
-                            crate::skills::update_skill_last_used_if_stale(
-                                &skill_path,
+
+                    if matches!(skill_state, crate::skills::SkillState::Archived) {
+                        let db = deps.db();
+                        let agent_name = deps.agent_name().to_string();
+                        tokio::spawn(async move {
+                            crate::skills::reactivate_skill(
+                                &workspace,
+                                &skill_name,
+                                &db,
+                                &agent_name,
                                 &now_iso,
-                                chrono::Duration::hours(1),
                             ).await;
-                        }
-                    });
+                        });
+                    } else {
+                        tokio::spawn(async move {
+                            let safe_name = skill_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
+                            let skill_path = format!("{}/skills/{}.md", workspace, safe_name);
+                            // Only update workspace/skills/ — config/skills/ have a different on-disk
+                            // location and should not be tracked.
+                            if tokio::fs::metadata(&skill_path).await.is_ok() {
+                                crate::skills::update_skill_last_used_if_stale(
+                                    &skill_path,
+                                    &now_iso,
+                                    chrono::Duration::hours(1),
+                                ).await;
+                            }
+                        });
+                    }
                 }
             }
         }
