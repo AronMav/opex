@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiDelete, apiPut, apiPost } from "@/lib/api";
+import { apiGet, apiDelete, apiPut, apiPost, apiPatch } from "@/lib/api";
 import { useSkills, useCuratorStatus, useSkillVersions, useCuratorDecisions, useSkillCuratorDecisions, qk } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import { relativeTime } from "@/lib/format";
@@ -19,6 +19,7 @@ import {
 import {
   BookOpen, Wrench, Zap, Trash2, RefreshCw, Tag,
   Plus, Pencil, ArrowLeft, Save, FileText, History, Archive, ArchiveRestore,
+  Lock, LockOpen,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -105,6 +106,16 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
   }
 
   return null;
+}
+
+// ── Pin badge ──────────────────────────────────────────────────────────────
+
+function PinBadge() {
+  return (
+    <Badge className="text-[10px] px-1.5 py-0 bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20 shrink-0">
+      pinned
+    </Badge>
+  );
 }
 
 // ── Skill history sheet ────────────────────────────────────────────────────
@@ -325,6 +336,7 @@ export default function SkillsPage() {
   const [deletePending, setDeletePending] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [archivePending, setArchivePending] = useState<string | null>(null);
+  const [pinPending, setPinPending] = useState<string | null>(null);
   const [historySkill, setHistorySkill] = useState<string | null>(null);
 
   const [showForm, setShowForm] = useState(false);
@@ -363,6 +375,23 @@ export default function SkillsPage() {
       toast.error(String(e));
     } finally {
       setArchivePending(null);
+    }
+  };
+
+  const handleTogglePin = async (skill: SkillEntry) => {
+    const newPinned = !skill.pinned;
+    setPinPending(skill.name);
+    try {
+      await apiPatch(`/api/skills/${encodeURIComponent(skill.name)}/pin`, { pinned: newPinned });
+      qc.invalidateQueries({ queryKey: qk.skills });
+      toast.success(newPinned
+        ? `Skill "${skill.name}" protected from Curator`
+        : `Curator protection removed from "${skill.name}"`
+      );
+    } catch (e) {
+      toast.error(String(e));
+    } finally {
+      setPinPending(null);
     }
   };
 
@@ -624,6 +653,7 @@ export default function SkillsPage() {
                       </span>
                       <StateBadge state={skill.state} />
                       <CuratorDecisionBadge decision={curatorDecisions?.[skill.name]} />
+                      {skill.pinned && <PinBadge />}
                       {skill.priority > 0 && (
                         <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-mono shrink-0">
                           p:{skill.priority}
@@ -693,6 +723,19 @@ export default function SkillsPage() {
                       title="Version history"
                     >
                       <History className="h-3 w-3" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={pinPending === skill.name}
+                      onClick={() => handleTogglePin(skill)}
+                      className="h-7 text-xs"
+                      title={skill.pinned ? "Remove Curator protection" : "Protect from Curator"}
+                    >
+                      {skill.pinned
+                        ? <Lock className="h-3 w-3 text-blue-500" />
+                        : <LockOpen className="h-3 w-3" />
+                      }
                     </Button>
                     <Button
                       variant="outline"

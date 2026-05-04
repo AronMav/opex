@@ -91,6 +91,7 @@ export interface SkillEntry {
   instructions_len: number;
   state: "active" | "stale" | "archived";
   last_used_at: string | null;
+  pinned?: boolean;
 }
 
 export interface SkillVersion {
