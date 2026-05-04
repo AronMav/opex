@@ -66,8 +66,10 @@ impl<'a> ToolDeps<'a> {
             memory_store:        &cfg.memory_store,
             agent_map:           cfg.agent_map.as_ref(),
             ui_event_tx:         engine.state().ui_event_tx.as_ref(),
-            toolgate_url:        cfg.app_config.toolgate_url.clone()
-                                    .unwrap_or_else(|| "http://localhost:9011".to_string()),
+            toolgate_url:        cfg.app_config.toolgate_url.clone().unwrap_or_else(|| {
+                tracing::warn!("toolgate_url not configured; defaulting to http://localhost:9011");
+                "http://localhost:9011".to_string()
+            }),
             gateway_listen:      &cfg.app_config.gateway.listen,
             signed_url_ttl_secs: cfg.app_config.uploads.signed_url_ttl_secs,
             agent_tool_timeouts: crate::agent::pipeline::agent_tool::AgentToolTimeouts::from(
@@ -78,6 +80,34 @@ impl<'a> ToolDeps<'a> {
             state:               engine.state(),
             tex:                 engine.tex(),
             available_tools:     available,
+        }
+    }
+
+    /// Returns a reborrow of this `ToolDeps` with the same lifetime.
+    /// Used by `SystemToolRegistry::dispatch()` to forward deps to handlers.
+    pub fn reborrow(&self) -> ToolDeps<'a> {
+        ToolDeps {
+            workspace_dir:       self.workspace_dir,
+            agent_name:          self.agent_name,
+            agent_base:          self.agent_base,
+            db:                  self.db,
+            http_client:         self.http_client,
+            ssrf_client:         self.ssrf_client,
+            secrets:             self.secrets,
+            sandbox:             self.sandbox,
+            session_pools:       self.session_pools,
+            memory_store:        self.memory_store,
+            agent_map:           self.agent_map,
+            ui_event_tx:         self.ui_event_tx,
+            toolgate_url:        self.toolgate_url.clone(),
+            gateway_listen:      self.gateway_listen,
+            signed_url_ttl_secs: self.signed_url_ttl_secs,
+            agent_tool_timeouts: self.agent_tool_timeouts,
+            oauth:               self.oauth,
+            cfg:                 self.cfg,
+            state:               self.state,
+            tex:                 self.tex,
+            available_tools:     self.available_tools,
         }
     }
 }
@@ -109,28 +139,6 @@ impl SystemToolRegistry {
         args: &Value,
     ) -> Option<String> {
         let handler = self.handlers.get(name)?;
-        Some(handler.handle(ToolDeps {
-            workspace_dir:       deps.workspace_dir,
-            agent_name:          deps.agent_name,
-            agent_base:          deps.agent_base,
-            db:                  deps.db,
-            http_client:         deps.http_client,
-            ssrf_client:         deps.ssrf_client,
-            secrets:             deps.secrets,
-            sandbox:             deps.sandbox,
-            session_pools:       deps.session_pools,
-            memory_store:        deps.memory_store,
-            agent_map:           deps.agent_map,
-            ui_event_tx:         deps.ui_event_tx,
-            toolgate_url:        deps.toolgate_url.clone(),
-            gateway_listen:      deps.gateway_listen,
-            signed_url_ttl_secs: deps.signed_url_ttl_secs,
-            agent_tool_timeouts: deps.agent_tool_timeouts,
-            oauth:               deps.oauth,
-            cfg:                 deps.cfg,
-            state:               deps.state,
-            tex:                 deps.tex,
-            available_tools:     deps.available_tools,
-        }, args).await)
+        Some(handler.handle(deps.reborrow(), args).await)
     }
 }
