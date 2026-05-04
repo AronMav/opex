@@ -78,6 +78,9 @@ Add `dry_run BOOLEAN NOT NULL DEFAULT false` to `curator_runs` table.
 Migration: `ALTER TABLE curator_runs ADD COLUMN dry_run BOOLEAN NOT NULL DEFAULT false;`
 
 The `finish_run()` helper that writes the final row needs to accept and persist this field.
+`dry_run: bool` is captured in the `tokio::spawn` closure from the HTTP endpoint handler
+(same scope where `run_id` is created) and passed into `run_curator()` and then
+forwarded to `finish_run()`.
 
 ### New HTTP endpoint
 
@@ -118,7 +121,8 @@ distinguishes preview from real runs.
 /// Restore an archived skill to active state and update last_used_at.
 /// No-op if the skill is not archived. Fire-and-forget safe (all errors → warn).
 pub async fn reactivate_skill(
-    path: &str,
+    workspace_dir: &str,
+    name: &str,
     db: &sqlx::PgPool,
     agent_name: &str,
     now_iso: &str,
@@ -126,12 +130,14 @@ pub async fn reactivate_skill(
 ```
 
 **Algorithm:**
-1. Read file, parse frontmatter via `SkillDef::parse()`
+1. Read `{workspace_dir}/skills/{name}.md`, parse via `SkillDef::parse()`
 2. If `state != Archived` → return immediately (noop)
-3. Build new `SkillFrontmatter` with `state: Active`, `last_used_at: Some(now_iso)`
-4. Call `write_skill()` (atomic tmp → rename)
+3. Build new `SkillFrontmatter` copying all fields from `skill_def.meta`, overriding
+   only `state: Active` and `last_used_at: Some(now_iso.to_string())`
+4. Call `write_skill(workspace_dir, name, &frontmatter, &skill_def.instructions)`
+   — instructions are preserved from the parsed file, not overwritten
 5. Insert `curator_decisions` row: `action="reactivated"`, `reason="re-used by {agent_name}"`
-6. Log `info!(skill, agent, "skill reactivated from archived")`
+6. Log `info!(skill = %name, agent = %agent_name, "skill reactivated from archived")`
 7. All errors → `tracing::warn!`, never propagate
 
 ### Trigger point 1 — `context_builder.rs`
@@ -166,14 +172,18 @@ Explicit `skill_use(action="load", name="archived-skill")` silently returns
   - Add note to returned text: `*(This skill was archived and has been reactivated.)*`
 - If not found in either lookup: existing "Skill not found" response unchanged.
 
-**No db parameter for `handle_skill_use`:** `handle_skill_use` currently does not
-take a `db: &PgPool`. The reactivation DB write (curator_decisions) can be decoupled:
-spawn fire-and-forget with a cloned PgPool passed from the dispatch site in
-`engine_dispatch.rs` (which already has access to `self.cfg().db`).
+**Dispatch-level interception for `"load"` action:** Following the same pattern used
+for `action="capture"` (Task 3 of the prior feature), intercept `action="load"` in
+`engine_dispatch.rs` before calling `handle_skill_use`. When `action="load"`:
 
-To avoid signature churn on `handle_skill_use`, add a new function:
-`handle_skill_use_load(workspace_dir, is_base, available_tools, args, db, agent_name)`
-called only for the `"load"` action, alongside the existing path for `"list"`.
+1. Call the existing `handle_skill_use` path first to get the result.
+2. If the result is `"Skill '...' not found"`, do a second lookup via
+   `load_skills_all_states()` in-place at the dispatch site.
+3. If found and archived: spawn `reactivate_skill(workspace_dir, name, &self.cfg().db, &agent_name, &now_iso)` fire-and-forget, return skill instructions with reactivation note.
+
+`handle_skill_use` signature is unchanged. All reactivation logic lives in
+`engine_dispatch.rs` where `self.cfg().db` and `self.cfg().agent.name` are already
+available.
 
 ### `load_skills_all_states()`
 
@@ -196,8 +206,7 @@ glob + parse logic from `load_skills()`, just removes the archived filter.
 | New migration | `migrations/` | `ALTER TABLE curator_runs ADD COLUMN dry_run BOOLEAN NOT NULL DEFAULT false` |
 | Modify | `crates/hydeclaw-core/src/skills/mod.rs` | Add `reactivate_skill()` + `load_skills_all_states()` |
 | Modify | `crates/hydeclaw-core/src/agent/context_builder.rs` | Trigger match includes archived; spawn reactivation |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` | `handle_skill_use` load path checks archived |
-| Modify | `crates/hydeclaw-core/src/agent/engine_dispatch.rs` | Pass `db` + `agent_name` for reactivation load path |
+| Modify | `crates/hydeclaw-core/src/agent/engine_dispatch.rs` | Intercept `action="load"` for archived reactivation (dispatch-level, no handler sig change) |
 
 ---
 
