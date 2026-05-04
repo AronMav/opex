@@ -813,7 +813,7 @@ async fn check_security_audit(_infra: &InfraServices) -> CheckResult {
                 if content.len() > 100_000 { continue; }
                 let text = String::from_utf8_lossy(&content);
                 for (re, pattern_name) in compiled {
-                    if re.is_match(&text).unwrap_or(false) {
+                    if re.is_match(&text) {
                         findings.push(serde_json::json!({
                             "file": path.display().to_string(),
                             "pattern": pattern_name,

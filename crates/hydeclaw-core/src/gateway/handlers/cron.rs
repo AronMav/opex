@@ -125,7 +125,7 @@ pub(crate) async fn api_create_cron(
                 if let Some(arr) = obj.get(*key).and_then(|v| v.as_array()) {
                     for item in arr {
                         if let Some(name) = item.as_str()
-                            && !valid_name.is_match(name).unwrap_or(false) {
+                            && !valid_name.is_match(name) {
                                 return (
                                     StatusCode::BAD_REQUEST,
                                     Json(serde_json::json!({"error": format!("invalid tool name: {}", name)})),
@@ -286,7 +286,7 @@ pub(crate) async fn api_update_cron(
                 if let Some(arr) = obj.get(*key).and_then(|v| v.as_array()) {
                     for item in arr {
                         if let Some(name) = item.as_str()
-                            && !valid_name.is_match(name).unwrap_or(false) {
+                            && !valid_name.is_match(name) {
                                 return (
                                     StatusCode::BAD_REQUEST,
                                     Json(serde_json::json!({"error": format!("invalid tool name: {}", name)})),
