@@ -13,17 +13,129 @@ use crate::config::AgentConfig;
 /// Must match the instruction in AGENTS.md / HEARTBEAT.md.
 const HEARTBEAT_OK: &str = "HEARTBEAT_OK";
 
+/// Parse a string-form delivery target into a normalized JSON object.
+///
+/// Accepted forms:
+/// - `"local"` → `{"type": "local"}` — save reply to `workspace/agents/{agent}/cron_output/`
+/// - `"origin"` → `{"type": "origin"}` — reply to the channel that owns the cron job
+///   (currently logged as unsupported by cron dispatch)
+/// - `"{channel}:{chat_id}"` → `{"channel": ..., "chat_id": ...}` — chat_id parsed as i64
+/// - `"{channel}:{chat_id}:{thread_id}"` → same as above (thread dropped, future work)
+///
+/// Returns `None` on empty input, missing colon, non-numeric chat_id, or unknown
+/// keyword. Per-target validation at dispatch time still applies.
+fn parse_target_string(s: &str) -> Option<serde_json::Value> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    match s {
+        "local" => return Some(serde_json::json!({"type": "local"})),
+        "origin" => return Some(serde_json::json!({"type": "origin"})),
+        _ => {}
+    }
+    let mut parts = s.splitn(3, ':');
+    let channel = parts.next()?.trim();
+    let chat_part = parts.next()?.trim();
+    if channel.is_empty() || chat_part.is_empty() {
+        return None;
+    }
+    let chat_id: i64 = chat_part.parse().ok()?;
+    // Third component (thread id) intentionally ignored — see doc comment.
+    Some(serde_json::json!({
+        "channel": channel,
+        "chat_id": chat_id,
+    }))
+}
+
 /// Normalize the JSONB `announce_to` payload into a flat list of target objects.
 ///
-/// Backward-compatible: a single object is wrapped into a 1-element Vec,
-/// an array is returned as-is, anything else (null, string, number, bool)
-/// becomes an empty Vec. Per-target field validation is done at dispatch time.
+/// Backward-compatible:
+/// - Object → 1-element Vec
+/// - Array → items processed individually (Object passes through, String parsed
+///   via `parse_target_string`, anything that fails to parse is dropped)
+/// - Bare String → parsed via `parse_target_string` (1-element Vec on success)
+/// - Anything else (null, number, bool) → empty Vec
+///
+/// Per-target dispatch-time validation (`channel`/`chat_id` for channel targets,
+/// `type` for local/origin) still applies.
 fn normalize_announce_to(val: &serde_json::Value) -> Vec<serde_json::Value> {
     match val {
-        serde_json::Value::Array(items) => items.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                serde_json::Value::Object(_) => Some(item.clone()),
+                serde_json::Value::String(s) => parse_target_string(s),
+                _ => None,
+            })
+            .collect(),
         serde_json::Value::Object(_) => vec![val.clone()],
+        serde_json::Value::String(s) => match parse_target_string(s) {
+            Some(v) => vec![v],
+            None => Vec::new(),
+        },
         _ => Vec::new(),
     }
+}
+
+/// Maximum characters to send into a chat message before truncation kicks in.
+const CHANNEL_MAX_CHARS: usize = 4000;
+
+/// Truncate a cron reply for channel delivery and signal whether the full
+/// text needs to be saved to workspace.
+///
+/// Returns `(text_for_channel, needs_save)`:
+/// - If `reply.chars().count() <= CHANNEL_MAX_CHARS` → original text, false.
+/// - Otherwise → first 4000 chars + `…\n\n[полный вывод сохранён в workspace]`,
+///   and the caller MUST persist the full reply to disk.
+fn truncate_reply_for_channel(reply: &str) -> (String, bool) {
+    if reply.chars().count() <= CHANNEL_MAX_CHARS {
+        return (reply.to_string(), false);
+    }
+    let mut truncated: String = reply.chars().take(CHANNEL_MAX_CHARS).collect();
+    truncated.push_str("…\n\n[полный вывод сохранён в workspace]");
+    (truncated, true)
+}
+
+/// Persist a cron reply to `{workspace_dir}/agents/{agent_name}/cron_output/`.
+///
+/// File name: `{YYYYMMDDTHHMMSS}_{job_id_short}.txt`, where `job_id_short`
+/// is the first 8 hex characters of the UUID (no hyphens stripped — the UUID's
+/// own first 8 chars). Returns the workspace-relative path
+/// `agents/{agent}/cron_output/{filename}` on success, or `None` on I/O error.
+async fn save_to_local(
+    workspace_dir: &str,
+    agent_name: &str,
+    job_id: Uuid,
+    content: &str,
+) -> Option<String> {
+    let dir_rel = format!("agents/{agent_name}/cron_output");
+    let dir_abs = std::path::Path::new(workspace_dir).join(&dir_rel);
+    if let Err(e) = tokio::fs::create_dir_all(&dir_abs).await {
+        tracing::warn!(
+            agent = %agent_name,
+            job_id = %job_id,
+            dir = %dir_abs.display(),
+            error = %e,
+            "save_to_local: failed to create dir"
+        );
+        return None;
+    }
+    let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
+    let job_short: String = job_id.to_string().chars().take(8).collect();
+    let filename = format!("{timestamp}_{job_short}.txt");
+    let path_abs = dir_abs.join(&filename);
+    if let Err(e) = tokio::fs::write(&path_abs, content).await {
+        tracing::warn!(
+            agent = %agent_name,
+            job_id = %job_id,
+            path = %path_abs.display(),
+            error = %e,
+            "save_to_local: failed to write file"
+        );
+        return None;
+    }
+    Some(format!("{dir_rel}/{filename}"))
 }
 
 /// A scheduled job record from the database.
@@ -927,20 +1039,62 @@ impl Scheduler {
                             // Notify UI about new session
                             broadcast_session_event(&ui_tx, &agent_name, "cron");
 
-                            // Announce result to channel unless job is silent.
+                            // Announce result to channel(s) and/or local disk, unless job is silent.
                             // Silent jobs rely on the agent calling send_message explicitly when needed.
                             if !silent
                                 && let Some(ref at) = announce_to
                             {
                                 let targets = normalize_announce_to(at);
                                 if !targets.is_empty() {
-                                    // Build the announcement text once — same body for every target.
-                                    let text = format!(
-                                        "⏰ *{}*\n\n{}",
-                                        agent_name,
-                                        reply.chars().take(2000).collect::<String>()
-                                    );
+                                    let has_local = targets
+                                        .iter()
+                                        .any(|t| t["type"].as_str() == Some("local"));
+                                    let (channel_text, needs_save) = truncate_reply_for_channel(&reply);
+                                    let saved_path: Option<String> = if needs_save || has_local {
+                                        save_to_local(
+                                            &engine.cfg().workspace_dir,
+                                            &agent_name,
+                                            db_id,
+                                            &reply,
+                                        )
+                                        .await
+                                    } else {
+                                        None
+                                    };
+
+                                    let announce_text = if needs_save && saved_path.is_some() {
+                                        format!(
+                                            "⏰ *{}*\n\n{}\n\n📄 `{}`",
+                                            agent_name,
+                                            channel_text,
+                                            saved_path.as_deref().unwrap_or("")
+                                        )
+                                    } else {
+                                        format!("⏰ *{}*\n\n{}", agent_name, channel_text)
+                                    };
+
                                     for target in &targets {
+                                        // local target — file was already written above; just log.
+                                        if target["type"].as_str() == Some("local") {
+                                            tracing::info!(
+                                                agent = %agent_name,
+                                                job_id = %db_id,
+                                                saved_path = ?saved_path,
+                                                "cron announce: local delivery"
+                                            );
+                                            continue;
+                                        }
+                                        // origin target — not yet supported for scheduled jobs (no
+                                        // originating channel/chat captured at job-creation time).
+                                        if target["type"].as_str() == Some("origin") {
+                                            tracing::warn!(
+                                                agent = %agent_name,
+                                                job_id = %db_id,
+                                                "cron announce: 'origin' target not supported for scheduled jobs; skipping"
+                                            );
+                                            continue;
+                                        }
+                                        // Channel target — existing path with new (possibly truncated) text.
                                         let Some(ch) = target["channel"].as_str() else {
                                             tracing::warn!(
                                                 agent = %agent_name,
@@ -959,7 +1113,7 @@ impl Scheduler {
                                             );
                                             continue;
                                         };
-                                        if let Err(e) = engine.send_channel_message(ch, cid, &text).await {
+                                        if let Err(e) = engine.send_channel_message(ch, cid, &announce_text).await {
                                             tracing::warn!(
                                                 agent = %agent_name,
                                                 job_id = %db_id,
@@ -974,7 +1128,7 @@ impl Scheduler {
                                             let mirror_aid = agent_name.clone();
                                             let mirror_ch  = ch.to_string();
                                             let mirror_cid = cid.to_string();
-                                            let mirror_txt = text.clone();
+                                            let mirror_txt = announce_text.clone();
                                             tokio::spawn(async move {
                                                 if let Err(e) = crate::db::sessions::mirror_to_session(
                                                     &mirror_db, &mirror_aid, &mirror_ch, &mirror_cid, &mirror_txt,
@@ -1813,15 +1967,106 @@ mod tests {
     }
 
     #[test]
-    fn normalize_announce_to_array_with_garbage_items_passes_through() {
-        // Per-target validation belongs to the dispatch loop, not the normalizer.
+    fn normalize_announce_to_array_with_garbage_items_filtered() {
+        // Non-object, non-parseable-string items are dropped at normalize time.
         let v = serde_json::json!([
             {"channel": "telegram", "chat_id": 1},
             42,
             null
         ]);
         let out = normalize_announce_to(&v);
-        assert_eq!(out.len(), 3);
+        assert_eq!(out.len(), 1);
         assert_eq!(out[0]["chat_id"], 1);
+    }
+
+    // ── parse_target_string + new normalize_announce_to + truncate_reply_for_channel ──
+
+    #[test]
+    fn parse_target_string_local() {
+        assert_eq!(
+            parse_target_string("local"),
+            Some(serde_json::json!({"type": "local"}))
+        );
+    }
+
+    #[test]
+    fn parse_target_string_origin() {
+        assert_eq!(
+            parse_target_string("origin"),
+            Some(serde_json::json!({"type": "origin"}))
+        );
+    }
+
+    #[test]
+    fn parse_target_string_channel_only() {
+        let result = parse_target_string("telegram:99").unwrap();
+        assert_eq!(result["channel"], "telegram");
+        assert_eq!(result["chat_id"], serde_json::json!(99i64));
+        assert!(result.get("thread").is_none());
+    }
+
+    #[test]
+    fn parse_target_string_channel_with_thread() {
+        let result = parse_target_string("telegram:99:42").unwrap();
+        assert_eq!(result["channel"], "telegram");
+        assert_eq!(result["chat_id"], serde_json::json!(99i64));
+        assert!(result.get("thread").is_none());
+    }
+
+    #[test]
+    fn parse_target_string_invalid() {
+        assert_eq!(parse_target_string(""), None);
+        assert_eq!(parse_target_string("telegram:"), None);
+        assert_eq!(parse_target_string("telegram:notanumber"), None);
+        assert_eq!(parse_target_string(":"), None);
+        assert_eq!(parse_target_string("garbage"), None);
+    }
+
+    #[test]
+    fn normalize_announce_to_bare_string_parsed() {
+        let v = serde_json::json!("telegram:99");
+        let out = normalize_announce_to(&v);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["channel"], "telegram");
+        assert_eq!(out[0]["chat_id"], serde_json::json!(99i64));
+    }
+
+    #[test]
+    fn normalize_announce_to_string_in_array() {
+        let v = serde_json::json!([
+            "telegram:99",
+            {"channel": "telegram", "chat_id": 100},
+            "local",
+            "garbage"
+        ]);
+        let out = normalize_announce_to(&v);
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0]["channel"], "telegram");
+        assert_eq!(out[0]["chat_id"], serde_json::json!(99i64));
+        assert_eq!(out[1]["channel"], "telegram");
+        assert_eq!(out[1]["chat_id"], 100);
+        assert_eq!(out[2]["type"], "local");
+    }
+
+    #[test]
+    fn truncate_reply_short() {
+        let reply = "a".repeat(100);
+        let (text, needs_save) = truncate_reply_for_channel(&reply);
+        assert_eq!(text, reply);
+        assert!(!needs_save);
+    }
+
+    #[test]
+    fn truncate_reply_long() {
+        let reply = "a".repeat(4500);
+        let (text, needs_save) = truncate_reply_for_channel(&reply);
+        assert!(needs_save);
+        // The full suffix starts with '…' and ends with the workspace notice.
+        let suffix = "…\n\n[полный вывод сохранён в workspace]";
+        assert!(text.ends_with(suffix));
+        // The part before the suffix is exactly 4000 'a' chars (CHANNEL_MAX_CHARS).
+        let content_part = &text[..text.len() - suffix.len()];
+        assert_eq!(content_part.chars().count(), 4000);
+        assert!(content_part.chars().all(|c| c == 'a'));
     }
 }
