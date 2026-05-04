@@ -101,6 +101,7 @@ export const emptyForm: FormState = {
   accessOwnerId: "",
   fallbackProvider: "",
   ttsProvider: "",
+  maxAgentTurles: "",
 };
 
 export function detailToForm(d: AgentDetail): FormState {
@@ -169,6 +170,7 @@ export function detailToForm(d: AgentDetail): FormState {
     ttsProvider: d.tts_provider ?? "",
     srEnabled: !!d.skill_review && d.skill_review.enabled,
     srMinToolCalls: String(d.skill_review?.min_tool_calls ?? 3),
+    maxAgentTurles: d.max_agent_turns != null ? String(d.max_agent_turns) : '',
   };
 }
 
@@ -265,6 +267,7 @@ export function formToPayload(f: FormState) {
     daily_budget_tokens: parseInt(f.dailyBudgetTokens) || 0,
     fallback_provider: f.fallbackProvider,
     tts_provider: f.ttsProvider || null,
+    max_agent_turns: f.maxAgentTurles ? parseInt(f.maxAgentTurles) : undefined,
   };
 }
 
