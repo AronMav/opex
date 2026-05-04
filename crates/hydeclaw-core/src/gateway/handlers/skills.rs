@@ -18,6 +18,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/skills/{skill}/versions/{vid}", get(api_skill_version_get))
         .route("/api/skills/{skill}/versions/{vid}/restore", axum::routing::post(api_skill_version_restore))
         .route("/api/skills/{skill}/snapshot", axum::routing::post(api_skill_snapshot))
+        .route("/api/skills/{skill}/pin", axum::routing::patch(api_skill_pin_global))
         .route("/api/agents/{name}/skills", get(api_skills_list))
         .route("/api/agents/{name}/skills/{skill}", get(api_skill_get).put(api_skill_upsert).delete(api_skill_delete))
 }
@@ -129,6 +130,7 @@ fn skill_to_json(s: &crate::skills::SkillDef) -> serde_json::Value {
         "instructions_len": s.instructions.len(),
         "state": s.meta.state,
         "last_used_at": s.meta.last_used_at,
+        "pinned": s.meta.pinned.unwrap_or(false),
     })
 }
 
@@ -318,6 +320,11 @@ pub(crate) struct SkillUpsertBody {
     pub(crate) state: Option<crate::skills::SkillState>,
 }
 
+#[derive(serde::Deserialize)]
+pub(crate) struct SkillPinBody {
+    pinned: bool,
+}
+
 /// PUT /api/agents/{name}/skills/{skill}
 /// Creates or updates a skill file.
 pub(crate) async fn api_skill_upsert(
@@ -478,6 +485,54 @@ pub(crate) async fn api_skill_snapshot(
         Ok(id) => Json(serde_json::json!({"ok": true, "version_id": id})).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR,
                    Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+/// PATCH /api/skills/{skill}/pin — set or clear the pinned flag.
+///
+/// Pinned skills are skipped by the Curator (Phase 1 transitions and
+/// Phase 3 consolidation). Uses the same file-write path as upsert so
+/// all other frontmatter fields are preserved.
+pub(crate) async fn api_skill_pin_global(
+    State(_state): State<InfraServices>,
+    axum::extract::Path(skill_name): axum::extract::Path<String>,
+    axum::extract::Json(body): axum::extract::Json<SkillPinBody>,
+) -> impl IntoResponse {
+    let Some(path) = find_skill_path(crate::config::WORKSPACE_DIR, &skill_name).await else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "skill not found"}))).into_response();
+    };
+
+    let content = match tokio::fs::read_to_string(&path).await {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    };
+
+    let Some(skill_def) = crate::skills::SkillDef::parse(&content) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "failed to parse skill"}))).into_response();
+    };
+
+    let frontmatter = crate::skills::SkillFrontmatter {
+        name:           skill_def.meta.name.clone(),
+        description:    skill_def.meta.description.clone(),
+        triggers:       skill_def.meta.triggers.clone(),
+        tools_required: skill_def.meta.tools_required.clone(),
+        priority:       skill_def.meta.priority,
+        last_used_at:   skill_def.meta.last_used_at.clone(),
+        state:          skill_def.meta.state.clone(),
+        pinned:         Some(body.pinned),
+    };
+
+    match crate::skills::write_skill(
+        crate::config::WORKSPACE_DIR,
+        &skill_name,
+        &frontmatter,
+        &skill_def.instructions,
+    ).await {
+        Ok(()) => {
+            tracing::info!(skill = %skill_name, pinned = body.pinned, "skill pin toggled");
+            Json(serde_json::json!({"name": skill_name, "pinned": body.pinned})).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }
 }
 
