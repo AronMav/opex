@@ -548,7 +548,7 @@ pub async fn handle_tool_verify(workspace_dir: &str, args: &serde_json::Value) -
     };
 
     let status_re = Regex::new(r"(?m)^status:\s*verified\s*$").unwrap();
-    if status_re.is_match(&content) {
+    if status_re.is_match(&content).unwrap_or(false) {
         return format!("Tool '{}' is already verified.", tool_name);
     }
 

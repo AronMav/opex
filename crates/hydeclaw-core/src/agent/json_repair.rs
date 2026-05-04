@@ -26,7 +26,7 @@ fn strip_markdown_fences(s: &str) -> String {
     static FENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?s)```(?:json)?\s*(\{.*\})\s*```").unwrap()
     });
-    if let Some(caps) = FENCE_RE.captures(s) {
+    if let Some(caps) = FENCE_RE.captures(s).ok().flatten() {
         return caps[1].to_string();
     }
     s.to_string()
