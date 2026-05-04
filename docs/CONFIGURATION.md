@@ -1,95 +1,90 @@
-# HydeClaw Configuration Guide
+# HydeClaw Configuration Reference
 
-This guide covers every configuration file, environment variable, workspace convention, and deployment target for HydeClaw.
-
----
-
-## Table of Contents
-
-1. [Environment Variables (.env)](#environment-variables-env)
-2. [Main Config (config/hydeclaw.toml)](#main-config-confighydeclawttoml)
-3. [Agent Config (config/agents/{Name}.toml)](#agent-config-configagentsnametoml)
-4. [Docker Deployment](#docker-deployment)
-5. [Workspace Structure](#workspace-structure)
-6. [Database Migrations](#database-migrations)
-7. [Managed Processes](#managed-processes)
-8. [Watchdog (config/watchdog.toml)](#watchdog-configwatchdogtoml)
-9. [Makefile Targets](#makefile-targets)
+Полный справочник по всем файлам конфигурации, переменным окружения и форматам данных HydeClaw.
 
 ---
 
-## Environment Variables (.env)
+## Содержание
 
-The `.env` file is read by the systemd service unit at startup. **Only three variables belong here.** Every other secret (API keys, bot tokens, provider credentials) is stored in the encrypted secrets vault and managed through the UI or API.
-
-Copy `.env.example` to `.env` and fill in all three values before starting the service.
-
-| Variable | Required | Description |
-|---|---|---|
-| `HYDECLAW_AUTH_TOKEN` | Yes | Bearer token for all API requests. Used by the UI, Makefile targets, and channel adapters. |
-| `HYDECLAW_MASTER_KEY` | Yes | 32-byte key for ChaCha20-Poly1305 encryption of the secrets vault. Never changes after first run. |
-| `DATABASE_URL` | Yes | PostgreSQL connection string. Must match `[database].url` in `hydeclaw.toml`. |
-
-### Generating Each Value
-
-**HYDECLAW_AUTH_TOKEN** — any long random string. Generate with:
-```bash
-openssl rand -hex 32
-```
-
-**HYDECLAW_MASTER_KEY** — must be exactly 32 bytes, base64-encoded:
-```bash
-openssl rand -base64 32
-```
-Write this value down. If it is lost, all vault secrets become unrecoverable and must be re-entered.
-
-**DATABASE_URL** — standard libpq connection string:
-```
-postgresql://hydeclaw:yourpassword@localhost:5432/hydeclaw
-```
-For Docker deployments where PostgreSQL runs in a container, use the container's service name as the host (e.g. `postgres`).
-
-### Policy: Secrets Vault vs .env
-
-`.env` holds only what the process needs before it can connect to the database. Everything else goes through `POST /api/secrets`:
-
-```bash
-curl -X POST http://localhost:18789/api/secrets \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "BRAVE_SEARCH_API_KEY", "value": "BSA1...", "scope": ""}'
-```
-
-Per-agent secrets use `"scope": "AgentName"`. The lookup order is: agent-scoped → global → environment variable fallback.
+1. [Обзор файлов конфигурации](#1-обзор-файлов-конфигурации)
+2. [.env — переменные окружения](#2-env--переменные-окружения)
+3. [config/hydeclaw.toml — главный конфиг](#3-confighydeclawttoml--главный-конфиг)
+4. [config/agents/{Name}.toml — конфиг агента](#4-configagentsnametoml--конфиг-агента)
+5. [workspace/tools/*.yaml — YAML-инструменты](#5-workspacetoolsyaml--yaml-инструменты)
+6. [workspace/mcp/*.yaml — MCP-серверы](#6-workspacemcpyaml--mcp-серверы)
+7. [Хранилище секретов (Secrets Vault)](#7-хранилище-секретов-secrets-vault)
+8. [Toolgate — конфиг провайдеров](#8-toolgate--конфиг-провайдеров)
+9. [Развёртывание на Pi (ARM64)](#9-развёртывание-на-pi-arm64)
 
 ---
 
-## Main Config (config/hydeclaw.toml)
+## 1. Обзор файлов конфигурации
 
-The primary runtime configuration file. Core reads it at startup; most values require a restart to take effect.
+| Файл | Назначение | Горячая перезагрузка |
+|------|-----------|---------------------|
+| `.env` | 3 системных ключа (токен, мастер-ключ, БД) | Нет (только при старте) |
+| `config/hydeclaw.toml` | Всё остальное: сервер, лимиты, процессы, Docker | Да (через `notify`-крейт) |
+| `config/agents/{Name}.toml` | Конфигурация отдельного агента | Да |
+| `workspace/tools/*.yaml` | Declarative HTTP-инструменты | Да (перезагружаются при каждом запросе) |
+| `workspace/mcp/*.yaml` | MCP-сервера (workspace-level) | Нет |
+| `config/services/*.yaml` | Service registry (URL, healthcheck, concurrency) | Нет |
+
+**Расположение конфигов на Pi:**
+- Binary: `~/hydeclaw/hydeclaw-core-aarch64`
+- Config: `~/hydeclaw/config/`
+- Workspace: `~/hydeclaw/workspace/`
+
+---
+
+## 2. .env — переменные окружения
+
+Файл `.env` загружается автоматически при старте бинарника. Порядок поиска:
+
+1. Директория бинарного файла (`$(dirname binary)/.env`) — приоритет
+2. Текущая рабочая директория (`.env`)
+3. Если файл не найден — используются переменные окружения (systemd `EnvironmentFile=`)
+
+**При первом запуске** `.env` создаётся автоматически с генерацией `HYDECLAW_AUTH_TOKEN` и `HYDECLAW_MASTER_KEY` через `rand`. `DATABASE_URL` нужно добавить вручную.
+
+**Только 3 ключа принадлежат `.env`:**
+
+| Переменная | Обязательна | Описание |
+|-----------|-------------|----------|
+| `HYDECLAW_AUTH_TOKEN` | Да | Bearer-токен для всех API-запросов. Используется UI, channel-адаптерами, Makefile. Автогенерируется как 32-байтный hex. |
+| `HYDECLAW_MASTER_KEY` | Да | 64-символьный hex (32 байта) для ChaCha20-Poly1305 шифрования secrets vault. **Никогда не меняется после первого запуска.** |
+| `DATABASE_URL` | Да | PostgreSQL connection string. Пример: `postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw`. |
+
+> **Все остальные секреты** (API-ключи, токены ботов, пароли провайдеров) хранятся в зашифрованном vault через UI или API. Никогда не добавляйте дополнительные переменные в `.env`.
+
+---
+
+## 3. config/hydeclaw.toml — главный конфиг
+
+Загружается при старте через `AppConfig::load()`. Путь передаётся как первый аргумент CLI или берётся из дефолта `config/hydeclaw.toml`.
 
 ### [gateway]
 
-Controls the HTTP server and authentication.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `listen` | string | `"0.0.0.0:18789"` | Bind address and port for the HTTP server. |
-| `auth_token_env` | string | `"HYDECLAW_AUTH_TOKEN"` | Name of the environment variable that holds the bearer token. Change this only if you rename the `.env` key. |
-| `public_url` | string | — | External URL where this instance is reachable. Used to construct webhook callbacks and Telegram webhook URLs. Example: `"http://your-server:18789"`. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `listen` | String | `"0.0.0.0:18789"` | Адрес и порт HTTP-сервера |
+| `auth_token_env` | Option\<String\> | — | Имя env-переменной с auth-токеном (обычно `"HYDECLAW_AUTH_TOKEN"`) |
+| `public_url` | Option\<String\> | `http://localhost:{port}` | Публичный URL для внешних ссылок (медиа, uploads) |
+| `cors_origins` | Vec\<String\> | `[]` | Разрешённые CORS origins. Если пусто — auto-derived из listen-адреса |
+| `cors_docker_subnets` | Vec\<String\> | `[]` | Дополнительные подсети для авто-вывода CORS (для Docker bridge сетей) |
 
 ```toml
 [gateway]
 listen = "0.0.0.0:18789"
 auth_token_env = "HYDECLAW_AUTH_TOKEN"
-public_url = "http://your-server:18789"
+public_url = "http://192.168.1.82:18789"
+# cors_origins = ["http://localhost:3000"]
 ```
 
 ### [database]
 
-| Field | Type | Description |
-|---|---|---|
-| `url` | string | PostgreSQL connection URL. Should match `DATABASE_URL` in `.env`. sqlx uses this for the connection pool. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `url` | String | — | PostgreSQL connection string. Переопределяется env `DATABASE_URL` |
 
 ```toml
 [database]
@@ -98,50 +93,51 @@ url = "postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw"
 
 ### [limits]
 
-Rate limiting and concurrency controls applied globally across all agents.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `max_requests_per_minute` | integer | `100` | Maximum number of incoming requests per minute across the entire gateway. Requests over this limit receive HTTP 429. |
-| `max_tool_concurrency` | integer | `10` | Maximum number of tool calls executing simultaneously across all agent sessions. Enforced by a tokio `Semaphore`. Prevents runaway tool loops from starving other sessions. |
-| `request_timeout_secs` | integer | `180` | Maximum duration for a single API request in seconds. Requests exceeding this limit are terminated. |
-| `max_agent_turns` | integer | `5` | Maximum agent-to-agent turns in a single request. Prevents infinite delegation loops between agents. |
-| `max_handoff_context_chars` | integer | `2000` | Maximum context size (in characters) for inter-agent messages (legacy field name, still used in config API). Longer contexts are truncated. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `max_requests_per_minute` | u32 | `300` | Rate limit (rpm). Аутентифицированные запросы освобождены. Loopback освобождён. |
+| `max_tool_concurrency` | u32 | `10` | Максимум параллельных tool-вызовов (семафор в engine) |
+| `request_timeout_secs` | u64 | `180` | Timeout одного запроса (LLM-loop + tools), секунды. `0` = без лимита |
+| `max_agent_turns` | usize | `5` | Максимум agent-to-agent turns в одном цикле (API-only, не используется внутри loop) |
+| `max_inter_agent_context_chars` | usize | `2000` | Максимум символов для inter-agent контекста (API-only) |
+| `max_restore_size_mb` | u64 | `500` | Лимит тела `POST /api/restore` в МБ. Превышение → 413 |
+| `max_sessions_per_agent` | u32 | `500` | Максимум сессий на агента. `0` = без лимита |
 
 ```toml
 [limits]
 max_requests_per_minute = 100
 max_tool_concurrency = 10
 request_timeout_secs = 180
-max_agent_turns = 5
-max_inter_agent_context_chars = 2000  # limit context transfer size between agents
+max_restore_size_mb = 500
+max_sessions_per_agent = 500
 ```
 
-### [typing]
+### [uploads]
 
-Controls the "typing..." indicator sent to channel users while the agent is thinking.
+Конфиг подписанных URL для `GET /uploads/*` (фаза 64 SEC-03).
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `mode` | string | `"instant"` | `"instant"` — typing indicator sent immediately when a message arrives. `"none"` — disabled. `"typing"` — classic typing animation where supported. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `signed_url_ttl_secs` | u64 | `86400` (24ч) | TTL подписанных URL в секундах |
+| `require_signature` | bool | `false` | Требовать HMAC-верификацию на каждый запрос (flip в `true` в v0.19.1) |
 
 ```toml
-[typing]
-mode = "instant"
+[uploads]
+signed_url_ttl_secs = 86400
+require_signature = false
 ```
 
 ### [subagents]
 
-Configuration for the live agent pool system. Controls whether the `agent` tool can spawn live agents to delegate sub-tasks.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `true` | Master switch. When false, `agent` tool calls are rejected. |
-| `default_mode` | string | `"in-process"` | Where live agents run by default. `"in-process"` runs them as tokio tasks inside Core. `"docker"` runs them in a sandbox container. |
-| `max_concurrent_in_process` | integer | `5` | Maximum simultaneously running in-process sub-agents. |
-| `max_concurrent_docker` | integer | `3` | Maximum simultaneously running Docker sandbox sub-agents. |
-| `docker_timeout` | string | `"5m"` | Maximum lifetime for a Docker sub-agent. Human-readable duration: `"5m"`, `"30s"`, `"2h"`. |
-| `in_process_timeout` | string | `"2m"` | Maximum lifetime for an in-process sub-agent. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `true` | Разрешить запуск субагентов |
+| `default_mode` | String | `"in-process"` | Режим по умолчанию: `"in-process"` или `"docker"` |
+| `max_concurrent_in_process` | u32 | `5` | Максимум одновременных in-process субагентов |
+| `max_concurrent_docker` | u32 | `3` | Максимум одновременных Docker субагентов |
+| `docker_timeout` | String | `"5m"` | Timeout для Docker-субагентов |
+| `in_process_timeout` | String | `"2m"` | Timeout для in-process субагентов |
+| `core_image` | Option\<String\> | — | Docker-образ Core для Docker-субагентов |
 
 ```toml
 [subagents]
@@ -153,15 +149,26 @@ docker_timeout = "5m"
 in_process_timeout = "2m"
 ```
 
+### [discussion]
+
+Конфигурация multi-agent discussion-режима. Все поля имеют дефолты.
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `max_rounds` | u32 | `2` | Максимум раундов обсуждения (1–3; >3 ведёт к sycophancy) |
+| `agent_timeout_secs` | u64 | `120` | Timeout на ответ одного агента |
+| `anonymize_after_round1` | bool | `true` | Анонимизировать ответы начиная со 2-го раунда |
+| `devils_advocate` | bool | `true` | Последний агент играет роль devil's advocate |
+| `synthesize` | bool | `true` | Финальный synthesizer-проход после всех раундов |
+| `max_response_len` | usize | `1500` | Максимум символов ответа агента (перед обрезкой в следующем раунде) |
+
 ### [docker]
 
-Controls how Core interacts with Docker for managing infrastructure services (via bollard over TCP at `tcp://127.0.0.1:2375`).
-
-| Field | Type | Description |
-|---|---|---|
-| `compose_file` | string | Path to the Docker Compose file relative to the working directory. Default: `"docker/docker-compose.yml"`. |
-| `rebuild_allowed` | array of strings | List of Compose service names that the API allows Core to rebuild (e.g. `["browser-renderer", "searxng"]`). Services not in this list can be restarted but not rebuilt via the API. |
-| `rebuild_timeout_secs` | integer | Maximum seconds to wait for a `docker compose build` operation before aborting. Default: `300`. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `compose_file` | String | `"docker/docker-compose.yml"` | Путь к docker-compose.yml |
+| `rebuild_allowed` | Vec\<String\> | `[]` | Whitelist сервисов, разрешённых для rebuild/restart через API |
+| `rebuild_timeout_secs` | u64 | `300` | Timeout команды rebuild в секундах |
 
 ```toml
 [docker]
@@ -170,20 +177,165 @@ rebuild_allowed = ["browser-renderer", "searxng"]
 rebuild_timeout_secs = 300
 ```
 
-### [[managed_process]] — channels
+### [sandbox]
 
-The channel adapter is a TypeScript/Bun process that runs as a native OS process managed by Core (not in Docker). Core spawns it at startup, monitors its health URL, and restarts it if it fails.
+Конфигурация sandbox для инструмента `code_exec`. Требует Docker.
 
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Internal name. Must be `"channels"`. Used in API endpoints like `POST /api/services/channels/restart`. |
-| `command` | array of strings | Command line to launch the process. Default: `["bun", "run", "src/index.ts"]`. |
-| `working_dir` | string | Directory where the command runs. Relative to the Core working directory. Default: `"channels"`. |
-| `env_passthrough` | array of strings | Environment variable names to forward from Core's environment into the child process. |
-| `env_extra` | map | Additional environment variables set for the child process only. `${VAR}` syntax expands values from Core's environment. |
-| `health_url` | string | URL Core polls to determine if the process is healthy. HTTP 200 = healthy. |
-| `port` | integer | Port the process listens on. Informational — used in health checks and log messages. |
-| `memory_max` | string | Soft memory limit for cgroup-based limiting if supported. Example: `"256M"`. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `false` | Включить инструмент `code_exec` |
+| `image` | String | `"python:3.12-slim"` | Docker-образ для выполнения кода |
+| `timeout_secs` | u64 | `30` | Timeout выполнения (контейнер убивается) |
+| `memory_mb` | u32 | `256` | Лимит памяти на выполнение (МБ) |
+| `cpu_limit` | f64 | `1.0` | Лимит CPU (дробные CPU, 1.0 = одно ядро) |
+| `extra_binds` | Vec\<String\> | `[]` | Дополнительные volume mounts (e.g. `"docker/toolgate:/toolgate"`) |
+
+```toml
+[sandbox]
+enabled = true
+image = "hydeclaw-sandbox:latest"
+extra_binds = []
+```
+
+### [memory]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `true` | Включить embedding-память |
+| `embed_dim` | Option\<u32\> | — | Размерность векторов (авто-определяется при старте) |
+| `embed_dimensions` | Option\<u32\> | — | Запрашиваемые dimensions для API (для моделей с гибким output, e.g. Qwen3-Embedding) |
+| `fts_language` | Option\<String\> | — | PostgreSQL FTS-словарь (e.g. `"russian"`, `"english"`). Авто-определяется из языка base-агента |
+| `pinned_budget_tokens` | u32 | `2000` | Максимум токенов для pinned chunks в L0 контексте |
+| `compression_age_days` | u32 | `30` | Возраст (дней), после которого non-pinned chunks доступны для сжатия |
+
+```toml
+[memory]
+# embed_dim = 2560  # авто-определяется при старте
+# fts_language = "russian"
+pinned_budget_tokens = 2000
+compression_age_days = 30
+```
+
+> **Важно:** `embed_url` и `embed_model` не хранятся в toml — они управляются через реестр провайдеров (таблица `providers` в БД).
+
+### [memory_worker]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `true` | Включить memory worker |
+| `poll_interval_secs` | u64 | `5` | Интервал опроса очереди (catch-up safety net) в секундах |
+| `notify_mode` | String | `"listen"` | Режим пробуждения: `"listen"` (первичный — PostgreSQL LISTEN/NOTIFY) или `"poll"` (только опрос, debug/back-compat) |
+
+```toml
+[memory_worker]
+enabled = true
+poll_interval_secs = 5
+notify_mode = "listen"
+```
+
+> Memory worker — отдельный бинарник (`hydeclaw-memory-worker`). Режим `listen` использует `PgListener` на канале `memory_tasks_new` (migration 023), опрос остаётся как safety net.
+
+### [backup]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `false` | Включить автоматические бэкапы |
+| `cron` | String | `"0 0 5 * * *"` | Cron-расписание (6 полей: sec min hour dom mon dow). Дефолт: ежедневно в 05:00 UTC |
+| `retention_days` | u32 | `7` | Хранить бэкапы N дней |
+| `postgres_container` | String | `"docker-postgres-1"` | Имя PostgreSQL Docker-контейнера для `pg_dump`/`pg_restore` |
+
+```toml
+[backup]
+enabled = true
+cron = "0 3 * * *"
+retention_days = 7
+```
+
+### [curator]
+
+Планировщик ревизии навыков (skills). Запускает автоматический анализ и ремонт устаревших skills.
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `false` | Включить curator |
+| `cron` | String | `"0 3 * * 0"` | Cron-расписание (каждое воскресенье в 03:00) |
+| `min_idle_minutes` | u32 | `30` | Минимальное время простоя агента перед запуском |
+| `stale_after_days` | u32 | `30` | Навыки старше N дней считаются устаревшими |
+| `archive_after_days` | u32 | `90` | Навыки старше N дней архивируются |
+| `max_repairs_per_run` | u32 | `10` | Максимум ремонтов за один запуск |
+| `agent_name` | String | `"Hyde"` | Имя агента, выполняющего ревизию |
+
+### [cleanup]
+
+Настройки очистки WAL-журнала (`session_events`).
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `session_events_retention_days` | u32 | `7` | Хранить WAL-записи N дней. `0` = отключить очистку |
+| `session_events_batch_size` | i64 | `5000` | Строк удаляется за одну batch-итерацию (минимизирует удержание блокировок) |
+
+### [shutdown]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `drain_timeout_secs` | u64 | `30` | Максимум секунд ожидания завершения in-flight агентов при SIGTERM. systemd `TimeoutStopSec` должен быть `drain_timeout_secs + 10` |
+
+### [tailscale]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `false` | Включить Tailscale serve интеграцию |
+| `funnel` | bool | `false` | `true` = `tailscale funnel` (публичный интернет), `false` = `tailscale serve` (только Tailnet) |
+
+### [otel]
+
+OpenTelemetry (требует feature flag `otel` при компиляции).
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `false` | Включить экспорт трейсов. Также нужна env `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `service_name` | String | `"hydeclaw-core"` | Имя сервиса, передаваемое в коллектор |
+
+### [agent]
+
+Глобальные дефолты параметров LLM. Переопределяются настройками конкретного агента.
+
+> Этот раздел пока резервирован — конкретные поля `AgentSectionConfig` не имеют публичных полей (задел для будущего).
+
+### [agent_tool]
+
+Таймауты для инструмента `agent` (run/message/collect/status/kill). **Hot-reloadable** через config watcher и `PUT /api/config`.
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `message_wait_for_idle_secs` | u64 | `60` | Ожидание освобождения агента перед отправкой сообщения |
+| `message_result_secs` | u64 | `300` | Ожидание `last_result` от агента (sync `run`, sync `message`, `collect`) |
+| `safety_timeout_secs` | u64 | `600` | Внешний defense-in-depth timeout. Должен быть строго больше `message_wait_for_idle + message_result` |
+
+```toml
+[agent_tool]
+message_wait_for_idle_secs = 60
+message_result_secs = 300
+safety_timeout_secs = 600
+```
+
+> Инвариант: `safety_timeout_secs > message_wait_for_idle_secs + message_result_secs`. При нарушении — только предупреждение, не ошибка.
+
+### [[managed_process]]
+
+Массив секций. Каждая описывает нативный дочерний процесс (не Docker), управляемый Core.
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|------------|----------|
+| `name` | String | Да | Имя сервиса (`"channels"`, `"toolgate"`) |
+| `command` | Vec\<String\> | Да | Команда + аргументы |
+| `working_dir` | String | Да | Рабочая директория (относительно cwd Core) |
+| `env_passthrough` | Vec\<String\> | Нет | Имена env-переменных, проксируемых из окружения Core |
+| `env_extra` | HashMap\<String, String\> | Нет | Дополнительные env-переменные (поддерживает `${VAR}` подстановку) |
+| `health_url` | Option\<String\> | Нет | URL health-check (зарезервировано для будущего) |
+| `port` | Option\<u16\> | Нет | TCP-порт сервиса (для ожидания освобождения при рестарте) |
+| `memory_max` | Option\<String\> | Нет | Лимит памяти (зарезервировано; лимиты управляются через systemd unit Core) |
+| `cpu_quota` | Option\<String\> | Нет | Лимит CPU (зарезервировано) |
 
 ```toml
 [[managed_process]]
@@ -194,773 +346,554 @@ env_passthrough = ["HYDECLAW_AUTH_TOKEN"]
 env_extra = { HYDECLAW_CORE_WS = "ws://localhost:18789", HEALTH_PORT = "3100" }
 health_url = "http://localhost:3100/health"
 port = 3100
-memory_max = "256M"
-```
 
-### [[managed_process]] — toolgate
-
-Toolgate is a Python/FastAPI media hub providing STT, Vision, TTS, and image generation via swappable provider drivers.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Internal name. Must be `"toolgate"`. |
-| `command` | array of strings | uvicorn invocation. The virtual environment path must be absolute or relative to `working_dir`. |
-| `working_dir` | string | Directory containing `app.py`. Default: `"toolgate"`. |
-| `env_passthrough` | array of strings | External API credentials to pass from Core's environment (e.g. `WHISPER_URL`, `VISION_URL`, `TTS_BACKEND_URL`). These are typically set as global secrets and exported before launch. |
-| `env_extra` | map | Runtime config for toolgate itself. `AUTH_TOKEN` gates toolgate's own API. `INTERNAL_NETWORK` CIDR for trusted callers. `CONFIG_PATH` points to the provider registry JSON. |
-| `health_url` | string | Toolgate health endpoint. Returns `{"status":"ok",...}` when all configured providers are reachable. |
-| `port` | integer | `9011`. |
-| `memory_max` | string | `"256M"`. |
-
-```toml
 [[managed_process]]
 name = "toolgate"
-command = [".venv/bin/python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9011", "--workers", "1", "--loop", "asyncio"]
+command = [".venv/bin/python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9011", "--workers", "1", "--loop", "asyncio", "--limit-concurrency", "50"]
 working_dir = "toolgate"
-env_passthrough = ["WHISPER_URL", "VISION_URL", "VISION_MODEL", "OLLAMA_API_KEY", "TTS_BACKEND_URL", "MINIMAX_API_KEY"]
-env_extra = { AUTH_TOKEN = "${HYDECLAW_AUTH_TOKEN}", INTERNAL_NETWORK = "127.0.0.0/8", CONFIG_PATH = "providers.json" }
+env_passthrough = ["HYDECLAW_AUTH_TOKEN"]
+env_extra = { AUTH_TOKEN = "${HYDECLAW_AUTH_TOKEN}", INTERNAL_NETWORK = "127.0.0.0/8", CORE_API_URL = "http://localhost:18789" }
 health_url = "http://localhost:9011/health"
 port = 9011
-memory_max = "256M"
 ```
 
-### [sandbox]
+### [mcp]
 
-Code execution sandbox for regular (non-base (sandboxed)) agents. Runs arbitrary code inside an isolated Docker container.
+MCP-серверы в форме `[mcp.NAME]`. Альтернативный способ (workspace-level через `workspace/mcp/*.yaml`).
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `true` | When false, `code_exec` tool calls from non-base (sandboxed) agents are rejected. |
-| `image` | string | `"hydeclaw-sandbox:latest"` | Docker image to use for the sandbox container. Build it from `docker/Dockerfile.sandbox`. |
-| `extra_binds` | array of strings | `[]` | Additional volume mounts in `host:container` format. Use to give sandbox access to specific directories on the host. |
-| `timeout_secs` | integer | `30` | Execution timeout in seconds before the sandbox container is killed. |
-| `memory_mb` | integer | `256` | Memory limit per sandbox execution in megabytes. |
-
-```toml
-[sandbox]
-enabled = true
-image = "hydeclaw-sandbox:latest"
-extra_binds = []
-timeout_secs = 30
-memory_mb = 256
-```
-
-Privileged agents (those with `base = true` in their agent config) bypass the sandbox and run `code_exec` directly on the host. Use this only for trusted system management agents.
-
-### [memory]
-
-Vector embedding settings for long-term memory.
-
-| Field | Type | Description |
-|---|---|---|
-| `embed_dim` | integer | Embedding dimension. **Auto-detected at startup** by querying the configured embedding endpoint. Only set this manually to override auto-detection. Example: `2560` for `qwen3-embedding:4b`. |
-
-```toml
-[memory]
-# embed_dim = 2560  # auto-detected at startup
-```
-
-The embedding endpoint is configured via the toolgate provider registry (`providers.json`). Memory uses cosine similarity search with MMR reranking.
-
-### [memory_worker]
-
-The memory worker is a separate binary (`hydeclaw-memory-worker`) that runs as its own systemd service. It handles background embedding, extraction queue processing, and GraphRAG entity extraction without blocking the main Core process.
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `true` | Whether Core expects the memory worker to be running. When true, the worker's status appears in `/api/doctor`. |
-| `poll_interval_secs` | integer | `5` | How often (in seconds) the worker polls the extraction queue for new items to process. |
-
-```toml
-[memory_worker]
-enabled = true
-poll_interval_secs = 5
-```
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `url` | Option\<String\> | — | Прямой URL (без Docker) |
+| `container` | Option\<String\> | — | Имя Docker-контейнера (если `url` не задан) |
+| `port` | Option\<u16\> | — | Docker-порт (если `url` не задан) |
+| `mode` | String | `"on-demand"` | Режим запуска |
+| `idle_timeout` | Option\<String\> | — | Timeout простоя для on-demand контейнеров |
+| `protocol` | String | `"mcp"` | Протокол |
+| `enabled` | bool | `true` | Включить сервер |
 
 ---
 
-## Agent Config (config/agents/{Name}.toml)
+## 4. config/agents/{Name}.toml — конфиг агента
 
-Each file in `config/agents/` defines one agent. The filename (without `.toml`) is the agent's name. Names are case-sensitive. Create as many agents as needed — each gets its own conversation history, memory, tool permissions, and channel connections.
+Файлы агентов хранятся в `config/agents/`. Имя файла — это **точное имя агента** (регистрозависимо). Загружаются при старте, поддерживают hot-reload.
 
-### [agent]
+> Поля `base` и флаги системного агента **никогда** не изменяются через PUT API — они всегда берутся с диска.
 
-Core identity and LLM settings.
+### [agent] — основные поля
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | Yes | Agent name. Must match the filename. Used as the agent identifier in the API, database, and secret scoping. |
-| `language` | string | No | Primary language for the agent's responses. Example: `"ru"`, `"en"`. Passed as context to skills and channel adapters. |
-| `provider` | string | Yes | LLM provider type. `"openai"`, `"anthropic"`, `"minimax"`, or any OpenAI-compatible provider name configured in `providers`. |
-| `model` | string | Yes | Model identifier for the chosen provider. Example: `"gpt-4o-mini"`, `"minimax-m2.7"`, `"claude-sonnet-4-5"`. |
-| `temperature` | float | No | Sampling temperature (0.0–2.0). Lower = more deterministic. Default varies by provider. |
-| `routing` | array of strings | No | List of Telegram user IDs or patterns that are routed to this agent. Empty array means the agent accepts traffic from its own registered channels. |
-| `base` | bool | No | System agent flag. When `true`: cannot be renamed or deleted via API, SOUL.md and IDENTITY.md are read-only, `code_exec` runs directly on the host (no Docker sandbox), can write to service source directories and use tools marked `required_base = true`. Default: `false`. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `name` | String | — | **Обязательно.** Имя агента (совпадает с именем файла) |
+| `language` | String | `"ru"` | Язык агента (влияет на FTS-словарь памяти) |
+| `provider` | String | — | **Обязательно.** LLM-провайдер (`"openai"`, `"anthropic"`, `"google"`, `"http"`) |
+| `model` | String | — | **Обязательно.** Имя модели |
+| `provider_connection` | Option\<String\> | — | Имя именованного провайдера из таблицы `providers` (переопределяет `provider`/`model`) |
+| `fallback_provider` | Option\<String\> | — | Fallback провайдер при N подряд ошибках LLM |
+| `tts_provider` | Option\<String\> | — | Имя TTS-провайдера для голосовых ответов через channel actions |
+| `temperature` | f64 | `1.0` | Температура генерации |
+| `max_tokens` | Option\<u32\> | — | Максимум output tokens (дефолт провайдера если не задано) |
+| `base` | bool | `false` | Системный агент: нельзя переименовать/удалить через API, SOUL.md и IDENTITY.md только для чтения |
+| `max_history_messages` | Option\<usize\> | `50` | Максимум сообщений истории в LLM-контексте |
+| `max_tools_in_context` | Option\<usize\> | — | Лимит инструментов в контексте (relevance-based отбор при превышении) |
+| `daily_budget_tokens` | u64 | `0` | Лимит токенов (input+output) в день. `0` = без лимита |
+| `max_agent_turns` | Option\<usize\> | — | Переопределение глобального `limits.max_agent_turns` для этого агента |
+| `max_failover_attempts` | u32 | `3` | Максимум попыток failover при multi-provider routing |
+| `icon` | Option\<String\> | — | Путь к иконке агента (`"uploads/agent-icon.png"`) |
+
+### [agent.access]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `mode` | String | `"open"` | `"open"` — доступен всем, `"restricted"` — только owner + approved users |
+| `owner_id` | Option\<String\> | — | User ID владельца бота (автоматически разрешён в restricted-режиме) |
+
+```toml
+[agent.access]
+mode = "restricted"
+owner_id = "123456789"
+```
+
+### [agent.heartbeat]
+
+| Поле | Тип | Обязательно | Описание |
+|------|-----|------------|----------|
+| `cron` | String | Да | Cron-расписание запуска heartbeat |
+| `timezone` | Option\<String\> | Нет | Часовой пояс для cron (e.g. `"Europe/Moscow"`) |
+| `announce_to` | Option\<String\> | Нет | Канал для анонса результатов (`"telegram"`) |
+
+```toml
+[agent.heartbeat]
+cron = "0 9 * * *"
+timezone = "Europe/Moscow"
+announce_to = "telegram"
+```
+
+### [agent.tools]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `allow` | Vec\<String\> | `[]` | Белый список инструментов |
+| `deny` | Vec\<String\> | `[]` | Чёрный список инструментов (проверяется первым, применяется ко ВСЕМ инструментам включая системные) |
+| `allow_all` | bool | `false` | Разрешить все инструменты |
+| `deny_all_others` | bool | `false` | Запрещать все инструменты кроме перечисленных в `allow` |
+| `groups.git` | bool | `true` | Группа git-инструментов (`git_status`, `git_diff`, `git_commit`, `git_push`, `git_pull`, `git_ssh_key`) |
+| `groups.tool_management` | bool | `true` | Группа управления инструментами (`tool_create`, `tool_list`, `tool_test`, ...) |
+| `groups.skill_editing` | bool | `true` | Группа редактирования навыков (`skill_create`, `skill_update`, `skill_list`) |
+| `groups.session_tools` | bool | `true` | Группа сессионных инструментов (`sessions_list`, `sessions_history`, ...) |
+
+```toml
+[agent.tools]
+deny = ["code_exec", "workspace_delete"]
+```
+
+### [agent.delegation]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `max_depth` | u8 | `1` | Максимальная глубина рекурсивного порождения субагентов. `1` = субагенты НЕ могут порождать дальнейших. Минимум `1`. |
+| `blocked_tools_extra` | Vec\<String\> | `[]` | Добавить в deny-list субагентов (расширяет `SUBAGENT_DENIED_TOOLS`) |
+| `blocked_tools_override` | Vec\<String\> | `[]` | Если непусто — ЗАМЕНЯЕТ весь `SUBAGENT_DENIED_TOOLS` |
+
+> Нельзя задавать `blocked_tools_extra` и `blocked_tools_override` одновременно.
+
+```toml
+[agent.delegation]
+max_depth = 2
+blocked_tools_extra = ["code_exec"]
+```
+
+### [agent.compaction]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `true` | Включить автосжатие контекста |
+| `threshold` | f64 | `0.8` | Доля заполнения контекста, при которой срабатывает сжатие |
+| `preserve_tool_calls` | bool | `false` | Сохранять tool calls в сжатом контексте |
+| `preserve_last_n` | u32 | `10` | Количество последних сообщений, которые никогда не сжимаются |
+| `max_context_tokens` | Option\<u32\> | — | Переопределение максимума контекстных токенов (авто-определяется из имени модели) |
+| `protect_first_n` | usize | `3` | Head protection: первые N сообщений (system + first user + first assistant) всегда сохраняются |
+| `summary_target_ratio` | f64 | `0.20` | Доля бюджета токенов для tail (tail_budget = context_limit * threshold * ratio) |
+| `anti_thrash_min_savings` | f64 | `0.10` | Минимальное сокращение (доля) для применения сжатия. Защита от thrashing. |
+| `anti_thrash_max_skips` | u8 | `2` | Максимум неэффективных сжатий подряд до пропуска |
+| `extract_to_memory` | bool | `true` | Извлекать факты в pgvector рядом с summary |
+
+### [agent.skill_review]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `false` | Включить фоновый анализ навыков после сессий |
+| `min_tool_calls` | u32 | `3` | Минимум tool-вызовов в сессии для запуска анализа |
+
+### [agent.session]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `dm_scope` | String | `"per-channel-peer"` | Область DM-сессий: `"shared"`, `"per-channel-peer"`, `"per-peer"`, `"per-chat"` |
+| `ttl_days` | u32 | `30` | Удалять сессии старше N дней. `0` = никогда |
+| `max_messages` | u32 | `0` | Максимум сообщений в сессии. `0` = без лимита |
+| `prune_tool_output_after_turns` | Option\<usize\> | — | Проактивно заменять tool-результаты старше N turns на `"[output omitted, N chars]"` перед первым LLM-вызовом |
+
+### [agent.approval]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `enabled` | bool | `false` | Включить систему подтверждений |
+| `require_for` | Vec\<String\> | `[]` | Конкретные инструменты, требующие подтверждения |
+| `require_for_categories` | Vec\<String\> | `[]` | Категории инструментов: `"system"`, `"destructive"`, `"external"` |
+| `timeout_seconds` | u64 | `300` | Timeout авто-отклонения (5 минут) |
+
+### [agent.tool_loop]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `max_iterations` | usize | `50` | Максимум итераций tool loop до принудительного финального ответа |
+| `compact_on_overflow` | bool | `true` | Попытка mid-loop сжатия при переполнении контекста |
+| `detect_loops` | bool | `true` | Включить детектор зацикливания |
+| `warn_threshold` | usize | `5` | Одинаковых последовательных вызовов до предупреждения |
+| `break_threshold` | usize | `10` | Одинаковых последовательных вызовов до остановки |
+| `max_consecutive_failures` | usize | `3` | Подряд ошибок LLM до переключения на fallback провайдер |
+| `max_auto_continues` | u8 | `5` | Максимум авто-продолжений при незавершённом ответе LLM |
+| `max_loop_nudges` | usize | `3` | Максимум nudge-сообщений о зацикливании до force-stop |
+| `ngram_cycle_length` | usize | `6` | Максимальная длина цикла в n-gram детекции (3..=N) |
+| `error_break_threshold` | Option\<usize\> | `3` | Подряд ошибок одного инструмента до прерывания |
+
+### [agent.watchdog]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `inactivity_secs` | u64 | `600` | Секунд бездействия сессии до принудительного завершения watchdog-ом |
+
+### [agent.hooks]
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `log_all_tool_calls` | bool | `false` | Логировать каждый tool call и результат через tracing |
+| `block_tools` | Vec\<String\> | `[]` | Тихо блокировать инструменты (без диалога подтверждения) |
+| `webhooks` | Vec\<WebhookConfig\> | `[]` | Исходящие HTTP-webhook подписки |
+
+### [[agent.hooks.webhooks]]
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `url` | String | Абсолютный HTTP/HTTPS URL (обязательно) |
+| `events` | Vec\<String\> | События для подписки: `"BeforeMessage"`, `"AfterResponse"`, `"BeforeToolCall"`, `"AfterToolResult"`, `"OnError"` |
+
+```toml
+[agent.hooks]
+log_all_tool_calls = true
+
+[[agent.hooks.webhooks]]
+url = "https://example.com/hook"
+events = ["BeforeToolCall", "AfterToolResult"]
+```
+
+### [[agent.routing]]
+
+Multi-provider routing (переопределяет `provider`/`model`). Правила оцениваются по порядку, первое совпадение побеждает.
+
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `condition` | String | `"default"` | Условие: `"default"` / `"always"`, `"short"` (<300 chars), `"long"` (>2000 chars), `"with_tools"`, `"financial"`, `"analytical"`, `"code"`, `"fallback"` |
+| `connection` | Option\<String\> | — | Имя провайдера из таблицы `providers` |
+| `model` | Option\<String\> | — | Переопределение модели |
+| `temperature` | Option\<f64\> | — | Переопределение температуры |
+| `cooldown_secs` | u64 | `60` | Cooldown после failover-ошибки. Минимум `1`. |
+
+```toml
+[[agent.routing]]
+condition = "code"
+connection = "deepseek-coder"
+model = "deepseek-coder-v2"
+
+[[agent.routing]]
+condition = "default"
+connection = "claude-sonnet"
+```
+
+### Пример полного конфига агента
 
 ```toml
 [agent]
 name = "Hyde"
 language = "ru"
-provider = "minimax"
-model = "minimax-m2.7"
-temperature = 0.5
-routing = []
+provider = "anthropic"
+model = "claude-sonnet-4-5"
+temperature = 1.0
 base = true
-```
+max_history_messages = 100
+daily_budget_tokens = 0
 
-### [agent.access]
-
-Access control for incoming messages.
-
-| Field | Type | Description |
-|---|---|---|
-| `mode` | string | `"restricted"` — only `owner_id` can send messages. `"open"` — anyone who can reach a channel can send messages. |
-| `owner_id` | string | Telegram user ID of the owner. Required when `mode = "restricted"`. The channels adapter checks this before forwarding messages to Core. Example: `"123456789"`. |
-
-```toml
 [agent.access]
 mode = "restricted"
-owner_id = "YOUR_TELEGRAM_USER_ID"
-```
+owner_id = "123456789"
 
-Find your Telegram user ID by messaging `@userinfobot` on Telegram.
-
-### [agent.heartbeat]
-
-Configures the agent's periodic self-triggered task, based on cron scheduling.
-
-| Field | Type | Description |
-|---|---|---|
-| `cron` | string | Standard 5-field cron expression. Example: `"*/15 * * * *"` (every 15 minutes), `"0 10 * * *"` (daily at 10:00). |
-| `timezone` | string | IANA timezone name. Example: `"UTC"`, `"Europe/Moscow"`, `"America/New_York"`. |
-
-When the cron fires, Core sends a `HEARTBEAT` message to the agent. The agent's `HEARTBEAT.md` skill file describes what to do (backups, memory deduplication, reports, etc.).
-
-```toml
-[agent.heartbeat]
-cron = "*/15 * * * *"
-timezone = "UTC"
-```
-
-### [agent.tools]
-
-Fine-grained control over which tools the agent can use.
-
-| Field | Type | Description |
-|---|---|---|
-| `allow` | array of strings | Explicit allow list. Tool names listed here are permitted regardless of `allow_all`. |
-| `deny` | array of strings | Explicit deny list. These tools are always blocked, even if `allow_all = true`. |
-| `allow_all` | bool | When `true`, all loaded tools are available except those in `deny`. Default: `false`. |
-| `deny_all_others` | bool | When `true` combined with specific `allow` entries, only the allowed tools are available and everything else is blocked. Useful for sandboxed agents. |
-
-```toml
 [agent.tools]
-allow = []
-deny = ["workspace_write"]
-allow_all = true
-deny_all_others = false
-```
+deny = []
 
-#### [agent.tools.groups]
+[agent.delegation]
+max_depth = 2
+blocked_tools_extra = []
 
-Tool groups are named sets of built-in system tools. Setting a group to `true` grants access to all tools in that group.
-
-| Group | Tools included |
-|---|---|
-| `git` | `git_status`, `git_diff`, `git_log`, `git_commit`, `git_push` |
-| `tool_management` | `tool_discover`, `tool_test`, `tool_enable`, `tool_disable` |
-| `skill_editing` | `workspace_edit` for skill files |
-| `session_tools` | `session_list`, `session_get`, `session_delete` |
-
-```toml
-[agent.tools.groups]
-git = true
-tool_management = true
-skill_editing = true
-session_tools = true
-```
-
-### [agent.compaction]
-
-Context window management. When the conversation grows long, Core compacts older messages into a summary to stay within the LLM's context limit.
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | bool | Enable automatic compaction. Default: `true`. |
-| `threshold` | float | Fraction of the model's context window (0.0–1.0) at which compaction triggers. `0.8` = compact when 80% full. |
-| `preserve_tool_calls` | bool | When `true`, tool call/result pairs are never removed during compaction — only pure conversation messages are summarized. |
-| `preserve_last_n` | integer | Always keep the last N messages verbatim, regardless of compaction. |
-
-```toml
 [agent.compaction]
 enabled = true
 threshold = 0.8
-preserve_tool_calls = true
 preserve_last_n = 10
-```
+extract_to_memory = true
 
-### [agent.session]
-
-Session lifecycle settings.
-
-| Field | Type | Description |
-|---|---|---|
-| `dm_scope` | string | How DM sessions are scoped. `"shared"` — all DM conversations with this agent share one session per user. `"per_channel"` — separate session per channel. |
-| `ttl_days` | integer | Sessions older than this many days (since last message) are automatically archived. `0` = never expire. |
-| `max_messages` | integer | Maximum messages to keep per session before the oldest are dropped. `0` = unlimited. |
-
-```toml
 [agent.session]
-dm_scope = "shared"
+dm_scope = "per-channel-peer"
 ttl_days = 30
-max_messages = 0
-```
 
-### [agent.tool_loop]
-
-Guards against runaway tool-use loops where the agent calls tools repeatedly without producing a final answer.
-
-| Field | Type | Description |
-|---|---|---|
-| `max_iterations` | integer | Hard limit on tool call iterations per request. When reached, the loop is broken and the agent is asked to summarize. |
-| `compact_on_overflow` | bool | When `max_iterations` is reached, trigger context compaction before asking for a summary. |
-| `detect_loops` | bool | Enable loop detection heuristics (same tool with same arguments called repeatedly). |
-| `warn_threshold` | integer | After this many identical consecutive tool calls, add a warning to the system prompt. |
-| `break_threshold` | integer | After this many identical consecutive tool calls, forcibly break the loop. |
-
-```toml
 [agent.tool_loop]
 max_iterations = 50
-compact_on_overflow = true
 detect_loops = true
-warn_threshold = 5
-break_threshold = 10
-```
 
-### [agent.channel.telegram]
-
-Enable Telegram channel participation for this agent. The bot token must be stored as a scoped secret with `name = "BOT_TOKEN"` and `scope = "AgentName"`.
-
-| Field | Type | Description |
-|---|---|---|
-| `enabled` | bool | When `true`, Core registers this agent for the Telegram channel adapter at startup. |
-
-```toml
-[agent.channel.telegram]
-enabled = true
-```
-
-After setting this, register the channel via the API to store the bot token:
-
-```bash
-curl -X POST http://localhost:18789/api/agents/MyAgent/channels \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"channel_type": "telegram", "display_name": "My Bot",
-       "config": {"bot_token": "1234567890:ABC..."}}'
-```
-
-The token is stored in the vault automatically. The `channels` managed process picks it up via the Core WebSocket and starts the Telegram polling loop.
-
----
-
-## Docker Deployment
-
-HydeClaw uses Docker Compose for infrastructure services. The `docker/docker-compose.yml` file defines all services. Core itself and the managed processes (channels, toolgate) run as native processes outside Docker.
-
-### Infrastructure Services (always running)
-
-| Service | Image | Port | Description |
-|---|---|---|---|
-| `postgres` | `hydeclaw-pg:17-age-pgvector` | `127.0.0.1:5432` | PostgreSQL 17 with pgvector extension. Stores sessions, messages, memory chunks, secrets, providers. Data in the `pgdata` named volume. |
-| `searxng` | `searxng/searxng:latest` | `127.0.0.1:8080` | Private meta search engine. Used by the `search_web` YAML tool. Config in `docker/config/searxng/`. |
-| `browser-renderer` | `browser-renderer:latest` (local build) | `127.0.0.1:9020` | Headless Chrome service for URL screenshot rendering. Used by the `screenshot_web` tool. |
-
-### MCP Containers (on-demand)
-
-MCP containers use the `profiles: ["on-demand"]` Compose profile. Core starts and stops them dynamically via bollard when agents call the corresponding MCP tool. They are not running by default.
-
-| Service | Port | Description |
-|---|---|---|
-| `mcp-summarize` | `9002` | Text summarization via LLM. Requires `MINIMAX_API_KEY`. |
-| `mcp-stock-analysis` | `9003` | Financial data analysis. |
-| `mcp-weather` | `9004` | Weather data from Open-Meteo. |
-| `mcp-obsidian` | `9005` | Obsidian vault access (mounts `../workspace`). |
-| `mcp-github` | `9006` | GitHub API operations. Requires `GITHUB_TOKEN`. |
-| `mcp-postgres` | `9007` | Direct SQL access to the HydeClaw database. |
-| `mcp-browser-cdp` | `9030` | Browser automation via Chrome DevTools Protocol. |
-| `mcp-fetch` | `9040` | HTTP fetch and content extraction. |
-| `mcp-memory` | `9041` | Memory operations MCP bridge. |
-| `mcp-sequential-thinking` | `9042` | Chain-of-thought reasoning tool. |
-| `mcp-youtube-transcript` | `9043` | YouTube video transcript extraction. |
-| `mcp-time` | `9044` | Timezone and time conversion. |
-| `mcp-filesystem` | `9045` | Filesystem access (mounts `~/hydeclaw/workspace`). |
-| `mcp-git` | `9046` | Git repository operations. |
-| `mcp-notion` | `9048` | Notion API integration. |
-| `mcp-todoist` | `9049` | Todoist task management. |
-
-### docker/.env Variables
-
-Create `docker/.env` (or set in the environment before running `docker compose up`):
-
-| Variable | Required by | Description |
-|---|---|---|
-| `POSTGRES_USER` | `postgres`, `mcp-postgres` | PostgreSQL superuser name. Example: `hydeclaw`. |
-| `POSTGRES_PASSWORD` | `postgres`, `mcp-postgres` | PostgreSQL superuser password. |
-| `MINIMAX_API_KEY` | `mcp-summarize` | MiniMax API key for LLM-based summarization. |
-| `GITHUB_TOKEN` | `mcp-github` | GitHub personal access token. |
-
-### Starting Services
-
-```bash
-# Start infrastructure (postgres, searxng, browser-renderer)
-cd docker && docker compose up -d
-
-# Build and start all on-demand MCP images
-cd docker && docker compose --profile on-demand build
-
-# Start a specific service
-docker compose up -d searxng
-
-# View logs
-docker compose logs -f postgres
+[agent.watchdog]
+inactivity_secs = 600
 ```
 
 ---
 
-## Workspace Structure
+## 5. workspace/tools/*.yaml — YAML-инструменты
 
-The `workspace/` directory is the runtime-editable part of HydeClaw. Changes here take effect without restarting Core (tools are hot-reloaded; skills and MCP configs are read on demand).
+Декларативные HTTP-инструменты. Каждый файл — один инструмент. Загружаются при старте, доступны через `find_yaml_tool(workspace_dir, name)`.
 
-```
-workspace/
-├── tools/          # YAML HTTP tool definitions (hot-reloaded)
-│   ├── _templates/ # Shared auth/header templates (extends:)
-│   └── *.yaml
-├── skills/         # Markdown behavioral guides (loaded per request)
-│   └── *.md
-├── agents/         # Per-agent workspace files
-│   └── {Name}/
-│       ├── SOUL.md       # Core behavior and security rules
-│       ├── IDENTITY.md   # Personality and communication style
-│       └── HEARTBEAT.md  # Heartbeat task instructions
-└── mcp/            # MCP server registrations
-    └── *.yaml
-```
+Имя файла: `{tool_name}.yaml`. Имена инструментов: только `[a-zA-Z0-9_-]`.
 
-### workspace/tools/ — YAML Tool Format
+### Поля YamlToolDef
 
-Each `.yaml` file in `workspace/tools/` defines one HTTP tool available to agents.
+| Поле | Тип | Обязательно | Описание |
+|------|-----|------------|----------|
+| `name` | String | Да | Имя инструмента (уникально, `[a-zA-Z0-9_-]`) |
+| `description` | String | Да | Описание для LLM (JSON Schema description) |
+| `endpoint` | String | Да | URL вызываемого HTTP-эндпоинта. Поддерживает path params: `{param}` |
+| `method` | String | Да | HTTP-метод: `GET`, `POST`, `PUT`, `DELETE`, `PATCH` |
+| `status` | String | `"verified"` | Статус: `"verified"`, `"draft"`, `"disabled"` |
+| `extends` | Option\<String\> | Нет | Наследует поля из другого инструмента (e.g. `extends: github` для общих заголовков) |
+| `headers` | Map\<String, String\> | Нет | Дополнительные HTTP-заголовки |
+| `parameters` | Map\<String, YamlParam\> | Нет | Параметры инструмента (JSON Schema для LLM) |
+| `auth` | Option\<YamlAuth\> | Нет | Конфигурация аутентификации |
+| `body_template` | Option\<String\> | Нет | Mustache-шаблон тела запроса (`{{param}}` подстановка). Переменные окружения: `${ENV_VAR}` |
+| `response_transform` | Option\<String\> | Нет | JSONPath-выражение для извлечения поля из ответа. `"$"` = весь ответ |
+| `response_pipeline` | Vec | Нет | Пайплайн обработки ответа: `jsonpath`, `pick_fields`, `sort_by`, `limit` |
+| `channel_action` | Option | Нет | Побочный эффект после вызова (отправить голос/файл через канал) |
+| `timeout` | u64 | `60` | Timeout вызова в секундах |
+| `content_type` | String | `"application/json"` | Content-Type тела запроса |
+| `required_base` | bool | `false` | Только для `base = true` агентов |
+| `parallel` | bool | `false` | Безопасен для параллельного выполнения с другими parallel-safe инструментами |
+| `required_secrets` | Vec\<String\> | `[]` | Секреты, необходимые внутренним роутерам toolgate |
+| `rate_limit.max_calls_per_minute` | Option\<u32\> | Нет | Лимит вызовов в минуту (зарезервировано) |
+| `retry.max_attempts` | u32 | `1` | Максимум попыток при transient-ошибках |
+| `retry.backoff_base_ms` | u64 | `1000` | База backoff в миллисекундах |
+| `retry.retry_on` | Vec\<u16\> | `[429, 500, 502, 503, 504]` | HTTP-коды для повтора |
+| `cache.ttl` | u64 | — | TTL кэша в секундах (forward-compat, не используется в runtime) |
+| `response_schema` | Option\<JSON\> | Нет | Схема ответа для LLM (добавляется к description) |
+| `graphql.query` | String | — | GraphQL-запрос (переопределяет `body_template`) |
+| `graphql.variables` | Map | Нет | Переменные GraphQL с `{{param}}` подстановкой |
+| `tags` | Vec\<String\> | `[]` | Теги (для документации/фильтрации) |
+| `created_by` | String | `""` | Автор инструмента |
 
-**Required fields:**
+### Поля YamlParam (параметры инструмента)
 
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | Unique tool name in `snake_case`. Must be unique across all tool files. |
-| `description` | string | English description for the LLM: when and why to call this tool. |
-| `endpoint` | string | HTTP endpoint URL. Use `{param}` for path parameters (e.g. `https://api.example.com/v1/{id}`). |
-| `method` | string | HTTP method: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `type` | String | `"string"` | Тип: `"string"`, `"integer"`, `"number"`, `"boolean"`, `"array"`, `"object"` |
+| `required` | bool | `false` | Обязательный параметр |
+| `location` | String | `"body"` | Размещение: `"body"`, `"query"`, `"path"`, `"header"` |
+| `description` | String | `""` | Описание для LLM |
+| `default` | Option\<JSON\> | — | Значение по умолчанию |
+| `default_from_env` | Option\<String\> | — | Имя env/secret для дефолта (если LLM не предоставил значение) |
+| `enum` | Vec\<String\> | `[]` | Допустимые значения |
+| `minimum` | Option\<f64\> | — | Минимальное значение (для числовых) |
+| `maximum` | Option\<f64\> | — | Максимальное значение (для числовых) |
+| `examples` | Vec\<String\> | `[]` | Примеры (добавляются к description) |
 
-**Parameters** — each parameter is a key under `parameters:`:
+### Конфигурация аутентификации (YamlAuth)
 
-| Field | Default | Description |
-|---|---|---|
-| `type` | `"string"` | JSON Schema type: `string`, `integer`, `number`, `boolean`. |
-| `required` | `false` | Whether the LLM must provide this parameter. |
-| `location` | `"body"` | Where the parameter goes: `path`, `query`, `body`, `header`. |
-| `description` | `""` | Description shown to the LLM. |
-| `default` | null | Value used when the LLM does not provide one. |
-| `default_from_env` | null | Secret/env var name to use as fallback before `default`. |
-| `enum` | `[]` | Restrict to allowed values. |
-| `minimum` / `maximum` | null | Numeric range constraints. |
-| `examples` | `[]` | Example values appended to `description`. |
+| `type` | Поля | Описание |
+|--------|------|----------|
+| `bearer_env` | `key: ENV_VAR` | Bearer-токен из env/vault |
+| `basic_env` | `username_key`, `password_key` | HTTP Basic из двух env/vault переменных |
+| `api_key_header` | `key: ENV_VAR`, `header_name: "X-API-Key"` | API-ключ в заголовке |
+| `api_key_query` | `key: ENV_VAR`, `param_name: "api_key"` | API-ключ как query-параметр |
+| `custom` | `headers: { "Header": "${ENV_VAR}" }` | Произвольные заголовки с env-подстановкой |
+| `oauth_refresh` | `key`, `token_url`, `token_body`, `token_field` | OAuth2 refresh token flow |
+| `oauth_provider` | — | Использует OAuth2 access token из OAuthManager |
+| `none` | — | Без аутентификации |
 
-**Authentication** — the `auth:` block. The field is `type:` (not `auth_type:`):
+### channel_action
 
-| type | Extra fields | Description |
-|---|---|---|
-| `bearer_env` | `key` | `Authorization: Bearer $KEY`. `key` is the vault secret name. |
-| `basic_env` | `username_key`, `password_key` | HTTP Basic auth from two vault secrets. |
-| `api_key_header` | `header_name`, `key` | Custom header with value from vault secret. |
-| `api_key_query` | `param_name`, `key` | Key appended as a query parameter. |
-| `custom` | `headers` (map) | Static headers; use `${ENV_VAR}` to expand vault secrets in values. |
-| `oauth_refresh` | `key`, `token_url`, `token_body`, `token_field` | OAuth2 client credentials / refresh flow. |
-| `oauth_provider` | `key` | Use OAuth token from a connected integration. `key` is the provider name (e.g. `github`, `google`). |
-| `none` | — | No authentication. |
+| Поле | Значения | Описание |
+|------|----------|----------|
+| `action` | `"send_voice"`, `"send_file"`, `"send_photo"` | Тип канального действия |
+| `data_field` | `"_binary"` или JSONPath | Источник данных: `"_binary"` = бинарный ответ, JSONPath = поле JSON |
 
-**Additional fields:**
+### Примеры инструментов
 
-| Field | Default | Description |
-|---|---|---|
-| `status` | `"verified"` | `"verified"` (active), `"draft"` (loaded but not shown to LLM), `"disabled"` (not loaded). |
-| `body_template` | null | Handlebars-style template for POST body. `{{param}}` substitution, `{{#if param}}...{{/if}}` conditionals. |
-| `content_type` | `"application/json"` | Content-Type for POST requests. Also supports `multipart/form-data`, `application/x-www-form-urlencoded`. |
-| `response_transform` | null | JSONPath string to extract from the response: `"$.results"`, `"$.data[*]"`, `"$.items[0:5]"`. |
-| `response_pipeline` | null | Array of post-processing steps: `jsonpath`, `pick_fields`, `sort_by`, `limit`. |
-| `channel_action` | null | After HTTP call, send binary data to the channel. Fields: `action` (`send_voice`, `send_photo`, `send_file`, `send_message`), `data_field` (`"_binary"` or JSONPath). |
-| `headers` | `{}` | Static HTTP headers sent with every request. |
-| `timeout` | `60` | Request timeout in seconds. |
-| `retry` | null | `{max_attempts, backoff_base_ms, retry_on: [429, 500, 502, 503, 504]}`. |
-| `rate_limit` | null | `{max_calls_per_minute}`. |
-| `cache` | null | `{ttl, key_params}` — cache responses by parameter values. |
-| `pagination` | null | `{type: offset/cursor/page, param, limit_param, limit, max_pages, results_path, next_path}`. |
-| `graphql` | null | `{query, variables}` — GraphQL query with `{{param}}` templating. |
-| `required_base` | `false` | When `true`, only base agents can call this tool. |
-| `parallel` | `false` | Hint to the LLM that this tool can be called in parallel with others. |
-| `extends` | null | Name of a template in `workspace/tools/_templates/` to inherit auth, headers, and base parameters from. |
-| `tags` | `[]` | Labels for grouping and filtering tools in the UI. |
-
-**Tool lifecycle:**
-1. Create `workspace/tools/my_tool.yaml` with `status: draft`
-2. Test from chat: `/tool_test my_tool {"param": "value"}`
-3. Set `status: verified` — tool is now visible to the LLM
-4. Set `status: disabled` — tool is excluded from loading
-
-### workspace/skills/ — Skill Format
-
-Skills are Markdown files with YAML frontmatter. They are injected into the agent's system prompt when triggered.
-
-**Frontmatter fields:**
-
-| Field | Required | Description |
-|---|---|---|
-| `name` | Yes | Unique skill identifier (`snake_case`). |
-| `description` | Yes | When this skill is relevant (used for matching). |
-| `triggers` | No | List of keywords/phrases that trigger automatic injection. |
-| `tools_required` | No | Tool names this skill depends on. Listed for documentation; does not enforce availability. |
-| `priority` | No | Integer. Higher priority skills are injected first when multiple match. |
-
-```markdown
----
-name: web_search_strategy
-description: Web search strategy — when to use each search provider
-triggers:
-  - search
-  - look it up
-tools_required:
-  - search_web
-  - search_web_fresh
-priority: 10
----
-
-## Strategy content here...
-```
-
-### workspace/agents/{Name}/ — Agent Workspace Files
-
-Per-agent workspace files are loaded into the agent's context automatically.
-
-| File | Purpose |
-|---|---|
-| `SOUL.md` | Core behavioral rules, security policies, decision principles. Always injected into the system prompt. |
-| `IDENTITY.md` | Personality, communication style, character definition. |
-| `HEARTBEAT.md` | Instructions for what to do when the heartbeat cron fires. |
-
-Additional Markdown files can be added and referenced by the agent via `workspace_read("agents/Name/filename.md")`.
-
-### workspace/mcp/ — MCP Registration Format
-
-Each `.yaml` file registers one MCP server. Core uses this to route `mcp_*` tool calls to the correct container.
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | MCP server identifier (matches Compose service name without `mcp-` prefix). |
-| `container` | string | Docker container name (must match `container_name` in docker-compose.yml). |
-| `port` | integer | Port the MCP HTTP server listens on inside the container. |
-| `mode` | string | `"on-demand"` — container is started when first called and stopped after idle timeout. `"always"` — container stays running. |
-| `idle_timeout` | string | How long after last call before the container is stopped. Example: `"5m"`. Only applies to `on-demand` mode. |
-| `protocol` | string | `"http"` (HTTP/SSE-based MCP). |
-| `enabled` | bool | When `false`, this MCP server is not available to agents. |
-
+**Внешний API с auth:**
 ```yaml
-name: mcp-github
-container: mcp-github
-port: 9006
-mode: on-demand
-idle_timeout: 5m
-protocol: http
-enabled: true
+name: tavily_search
+description: "AI-optimized web search via Tavily."
+endpoint: "https://api.tavily.com/search"
+method: POST
+auth:
+  type: bearer_env
+  key: TAVILY_API_KEY
+body_template: '{"query":"{{query}}","search_depth":"{{search_depth}}","include_answer":true,"max_results":5}'
+parameters:
+  query:
+    type: string
+    required: true
+    description: "Search query"
+  search_depth:
+    type: string
+    default: "basic"
+    description: "'basic' or 'advanced'"
+response_transform: "$.results"
+status: draft
+```
+
+**Path-параметры + Bearer auth:**
+```yaml
+name: ha_call_service
+endpoint: "http://homeassistant.local:8123/api/services/{domain}/{service}"
+method: POST
+parameters:
+  domain:
+    type: string
+    required: true
+    location: path
+  service:
+    type: string
+    required: true
+    location: path
+auth:
+  type: bearer_env
+  key: HA_TOKEN
+```
+
+**Channel action (голосовой ответ):**
+```yaml
+name: synthesize_speech
+endpoint: "http://localhost:9011/v1/audio/speech"
+method: POST
+parameters:
+  text:
+    type: string
+    required: true
+    location: body
+body_template: '{"input": "{{text}}", "response_format": "opus"}'
+channel_action:
+  action: send_voice
+  data_field: "_binary"
 ```
 
 ---
 
-## Database Migrations
+## 6. workspace/mcp/*.yaml — MCP-серверы
 
-HydeClaw uses sequential numbered SQL migrations in the `migrations/` directory. Migrations run automatically at Core startup via sqlx. There is no manual migration step.
+Каждый файл описывает один MCP-сервер. Имя файла = имя сервера.
 
-**Current state: 54 migrations.**
-
-### Key Tables by Function
-
-**Conversations:**
-
-| Table | Description |
-|---|---|
-| `sessions` | Conversation sessions per agent/user/channel. Tracks `last_message_at` for TTL. |
-| `messages` | Individual messages within sessions. Stores role, content, token counts, tool call metadata. |
-| `pending_messages` | Outbound message queue for async delivery. |
-
-**Memory:**
-
-| Table | Description |
-|---|---|
-| `memory_chunks` | Long-term memory entries with pgvector embeddings and FTS indexes. Two-tier: raw (time-decayed) and pinned (permanent). |
-| `memory_tasks` | Background job queue for the memory worker (reindex tasks). |
-
-**Agents and Scheduling:**
-
-| Table | Description |
-|---|---|
-| `scheduled_jobs` | Agent-created cron jobs (via the `cron` tool). Per-agent, with timezone support. |
-| `cron_runs` | History of cron job executions. |
-| `agent_goals` | Persistent goals with progress tracking and optional check schedule. |
-| `agent_channels` | Registered channel connections per agent (type, config, status). |
-
-**Secrets and Auth:**
-
-| Table | Description |
-|---|---|
-| `secrets` | Encrypted key-value vault. PK is `(name, scope)`. ChaCha20-Poly1305 encryption using `HYDECLAW_MASTER_KEY`. |
-| `providers` | Unified provider connections (LLM and media) with model, base URL, capabilities, and secret reference. |
-| `oauth_connections` / `oauth_accounts` | OAuth2 integration tokens (GitHub, Google, etc.). |
-
-**Tools and Audit:**
-
-| Table | Description |
-|---|---|
-| `pending_approvals` | Tool calls awaiting owner confirmation. Used with the approval allowlist feature. |
-| `tool_audit_log` | Record of every tool call: agent, tool name, args, result summary, duration. |
-| `audit_events` | Broader audit trail for API actions (agent create/update/delete, secret writes). |
-| `usage_log` | LLM token usage per session/agent. |
-
-**Infrastructure:**
-
-| Table | Description |
-|---|---|
-| `webhooks` | Registered inbound webhooks with per-webhook secret and agent routing. |
-| `github_repos` | GitHub repository subscriptions for event-driven triggers. |
-| `stream_jobs` | Long-running streaming task state. |
+| Поле | Тип | Дефолт | Описание |
+|------|-----|--------|----------|
+| `name` | String | — | Имя сервера (из имени файла) |
+| `url` | Option\<String\> | — | Прямой URL (без Docker) |
+| `container` | Option\<String\> | — | Docker-контейнер |
+| `port` | Option\<u16\> | — | Docker-порт |
+| `mode` | String | `"on-demand"` | Режим запуска |
+| `idle_timeout` | Option\<String\> | — | Timeout простоя |
+| `protocol` | String | `"mcp"` | Протокол |
+| `enabled` | bool | `true` | Включить |
 
 ---
 
-## Managed Processes
+## 7. Хранилище секретов (Secrets Vault)
 
-Core manages two native processes: `channels` (TypeScript/Bun) and `toolgate` (Python/FastAPI). They are **not** Docker containers — they run as child processes of Core on the host system.
+Секреты шифруются ChaCha20-Poly1305 (мастер-ключ из `HYDECLAW_MASTER_KEY`) и хранятся в таблице `secrets`.
 
-### Channels
+### Структура записи
 
-**What it does:** Connects to messaging platforms (Telegram, Discord, Matrix, IRC, Slack, WhatsApp). Maintains persistent connections, receives messages, forwards them to Core via an internal WebSocket, and delivers agent responses back.
+- `name` — имя секрета (e.g. `TAVILY_API_KEY`)
+- `scope` — область видимости: `""` = глобальный, `"AgentName"` = per-agent
 
-**Directory:** `channels/`
+### Порядок разрешения (resolution order)
 
-**Runtime dependencies:**
-- Bun 1.x installed on the host
-- `bun install` run once to install npm dependencies
+Для каждого секрета с именем `NAME` и агентом `SCOPE`:
 
-**Deploy workflow:**
-1. Edit drivers in `channels/src/drivers/` on the development machine
-2. Use `make deploy-binary` if deploying a full update, or `rsync` just the changed `.ts` files
-3. Restart via API: `POST /api/services/channels/restart`
-4. Verify: `curl http://localhost:3100/health`
+1. `(NAME, SCOPE)` — per-agent секрет (vault)
+2. `(NAME, "")` — глобальный секрет (vault)
+3. `std::env::var(NAME)` — env-переменная (устаревший fallback, с предупреждением)
 
-Since Bun runs TypeScript directly (no compilation step), individual `.ts` files can be edited on the server and a restart is sufficient to pick up changes.
+Метод `get_scoped(name, scope)` реализует эту цепочку. Метод `get(name)` — только шаги 2–3.
 
-**Registering a Telegram channel:**
-```bash
-# Store the bot token as a scoped secret
-curl -X POST http://localhost:18789/api/secrets \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{"name": "BOT_TOKEN", "scope": "MyAgent", "value": "1234:abc..."}'
+### Работа с секретами
 
-# Register the channel
-curl -X POST http://localhost:18789/api/agents/MyAgent/channels \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"channel_type": "telegram", "display_name": "My Bot", "config": {}}'
-```
+- **Через UI:** Settings → Secrets
+- **Через API:** `GET /api/secrets`, `POST /api/secrets`, `DELETE /api/secrets/{name}`
+- **Scoped секреты:** `POST /api/secrets` с полем `scope: "AgentName"`
+- **Channel credentials** (bot_token и т.д.) хранятся под ключом `CHANNEL_CREDENTIALS`, scope = UUID канала. В JSONB-колонке `config` таблицы `agent_channels` credentials **отсутствуют** — они redacted при записи и re-injected из vault при `GET ?reveal=true`.
 
-### Toolgate
+### Бэкап секретов
 
-**What it does:** Media hub for STT (speech-to-text), Vision (image description), TTS (text-to-speech), and image generation. Provides a provider registry — each capability has a swappable backend selected through the admin UI.
-
-**Directory:** `toolgate/`
-
-**Runtime dependencies:**
-- Python 3.11+ and `uv` on the host
-- Virtual environment at `toolgate/.venv/`
-
-**Initial setup:**
-```bash
-cd toolgate
-uv venv .venv
-uv pip install -r requirements.txt
-```
-
-**Deploy workflow:**
-1. Edit or add router files in `toolgate/routers/` on the server
-2. Validate Python syntax: `python3 -m py_compile toolgate/routers/new_router.py && echo OK`
-3. Register in `toolgate/app.py`: add import and `app.include_router(name.router)`
-4. Restart via API: `POST /api/services/toolgate/restart`
-5. Verify: `curl http://localhost:9011/health`
-
-**Toolgate endpoints:**
-
-| Endpoint | Description |
-|---|---|
-| `POST /v1/audio/transcriptions` | Speech-to-text (OpenAI-compatible format) |
-| `POST /describe-url` | Vision: describe an image from a URL |
-| `POST /transcribe-url` | STT from a media URL |
-| `POST /v1/audio/speech` | Text-to-speech (OpenAI-compatible format) |
-| `GET /health` | Health check with provider status |
-| `GET /docs` | Interactive API documentation (Swagger UI) |
-
-Provider configuration is stored in `toolgate/providers.json` and managed through the admin UI at `http://localhost:18789`.
+Бэкап через `GET /api/backup` включает расшифрованные секреты — это сделано намеренно (portability при смене мастер-ключа). Защита: требует auth token + заголовок `X-Confirm-Restore` при восстановлении.
 
 ---
 
-## Watchdog (config/watchdog.toml)
+## 8. Toolgate — конфиг провайдеров
 
-The watchdog is a built-in Core subsystem (not a separate binary) that monitors all services and restarts them if they become unhealthy. It runs as a background task inside Core.
+Toolgate (`toolgate/`) не имеет статического конфиг-файла. Конфигурация провайдеров загружается динамически из Core API:
 
-### [watchdog]
+- **Эндпоинт:** `GET /api/media-config` (аутентифицированный)
+- **Retry:** 5 попыток с backoff 2s, 4s, 6s, 8s, 10s
+- **Деградированный режим:** если Core недоступен после 5 попыток, toolgate стартует без провайдеров (503 на capability-эндпоинтах до восстановления связи)
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `enabled` | bool | `true` | Master switch. When `false`, no health checks or automatic restarts occur. |
-| `interval_secs` | integer | `60` | How often (in seconds) to run health checks. |
-| `max_restart_attempts` | integer | `3` | Maximum restart attempts per service within `flap_window_secs`. After this limit, the service is marked as failed and no more restarts are attempted until the window resets. |
-| `cooldown_secs` | integer | `300` | Minimum seconds to wait between restart attempts for the same service. |
-| `grace_period_secs` | integer | `60` | Seconds to wait after a restart before checking health again. Prevents false failures during startup. |
-| `flap_window_secs` | integer | `600` | Window (in seconds) over which restart attempts are counted for flap detection. |
-| `flap_threshold` | integer | `3` | If a service restarts more than this many times within `flap_window_secs`, it is considered flapping and watchdog stops restarting it. |
+### Переменные окружения toolgate
 
-```toml
-[watchdog]
-enabled = true
-interval_secs = 60
-max_restart_attempts = 3
-cooldown_secs = 300
-grace_period_secs = 60
-flap_window_secs = 600
-flap_threshold = 3
-```
+| Переменная | Дефолт | Описание |
+|-----------|--------|----------|
+| `CORE_API_URL` | `http://127.0.0.1:18789` | URL Core API для загрузки конфига провайдеров |
+| `HYDECLAW_AUTH_TOKEN` / `AUTH_TOKEN` | — | Bearer-токен для аутентификации в Core |
+| `INTERNAL_NETWORK` | `127.0.0.0/8` | CIDR внутренней сети (для SSRF-защиты) |
 
-### [[checks]]
+### Структура провайдера (ProviderConfig)
 
-Each `[[checks]]` entry defines one service to monitor. A check uses either a URL (HTTP GET) or a shell command, but not both.
+| Поле | Описание |
+|------|----------|
+| `type` | Тип capability: `"stt"`, `"tts"`, `"vision"`, `"imagegen"`, `"embedding"` |
+| `driver` | Драйвер провайдера (e.g. `"openai"`, `"ollama"`, `"qwen3-tts"`) |
+| `base_url` | Base URL сервиса |
+| `model` | Имя модели (опционально) |
+| `api_key` | API-ключ (опционально) |
+| `enabled` | Включён ли провайдер |
+| `options` | Дополнительные опции (e.g. `{"voice": "nova"}` для TTS) |
 
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | Yes | Unique name for this check. Appears in watchdog logs and `/api/doctor`. |
-| `url` | string | No | HTTP URL to GET. HTTP 200 = healthy. Use this for services with a `/health` endpoint. |
-| `check_cmd` | string | No | Shell command to run. Exit code 0 = healthy, non-zero = unhealthy. Use when a URL check is not available. |
-| `restart_cmd` | string | Yes | Shell command to run when the check fails. Core executes this via `sh -c`. |
-
-```toml
-[[checks]]
-name = "core"
-url = "http://localhost:18789/health"
-restart_cmd = "systemctl --user restart hydeclaw-core"
-
-[[checks]]
-name = "postgres"
-check_cmd = "docker exec docker-postgres-1 pg_isready -U hydeclaw"
-restart_cmd = "docker restart docker-postgres-1"
-
-[[checks]]
-name = "channels"
-url = "http://localhost:3100/health"
-restart_cmd = "curl -sf -X POST http://localhost:18789/api/services/channels/restart"
-
-[[checks]]
-name = "toolgate"
-url = "http://localhost:9011/health"
-restart_cmd = "curl -sf -X POST http://localhost:18789/api/services/toolgate/restart"
-
-[[checks]]
-name = "memory-worker"
-check_cmd = "systemctl --user is-active hydeclaw-memory-worker"
-restart_cmd = "systemctl --user restart hydeclaw-memory-worker"
-
-[[checks]]
-```
-
-### [resources]
-
-Resource threshold monitoring. Watchdog logs warnings and critical alerts when disk or RAM thresholds are crossed. It does not take automatic action — alerts are logged and sent to agents if configured.
-
-| Field | Type | Description |
-|---|---|---|
-| `disk_warning_gb` | integer | Log a warning when free disk space drops below this many gigabytes. |
-| `disk_critical_gb` | integer | Log a critical alert when free disk space drops below this many gigabytes. |
-| `ram_warning_percent` | integer | Log a warning when RAM usage exceeds this percentage. |
-| `ram_critical_percent` | integer | Log a critical alert when RAM usage exceeds this percentage. |
-| `check_interval_secs` | integer | How often to check resource usage. Independent of `interval_secs`. |
-
-```toml
-[resources]
-disk_warning_gb = 5
-disk_critical_gb = 1
-ram_warning_percent = 85
-ram_critical_percent = 95
-check_interval_secs = 300
-```
+Активные провайдеры по capability управляются через UI (Settings → Active Providers) и хранятся в таблице `provider_active`.
 
 ---
 
-## Makefile Targets
+## 9. Развёртывание на Pi (ARM64)
 
-The Makefile simplifies common development and deployment tasks. Set `PI_HOST` to your server's SSH address before running deploy targets.
+### Пути на Pi
 
-```bash
-# Override the deploy target
-PI_HOST=user@your-server make deploy-binary
-```
+| Ресурс | Путь |
+|--------|------|
+| Core binary | `~/hydeclaw/hydeclaw-core-aarch64` |
+| Watchdog binary | `~/hydeclaw/hydeclaw-watchdog-aarch64` |
+| Memory worker binary | `~/hydeclaw/hydeclaw-memory-worker-aarch64` |
+| Config | `~/hydeclaw/config/` |
+| Workspace | `~/hydeclaw/workspace/` |
+| UI static | `~/hydeclaw/ui/out/` |
+| Migrations | `~/hydeclaw/migrations/` |
+| Docker configs | `~/hydeclaw/docker/` |
+| Toolgate source | `~/hydeclaw/toolgate/` |
+| `.env` | `~/hydeclaw/.env` (рядом с бинарником) |
 
-| Target | Description |
-|---|---|
-| `check` | Run `cargo check --all-targets`. Fast syntax/type check without producing a binary. |
-| `test` | Run `cargo test`. Executes all Rust unit and integration tests. |
-| `lint` | Run `cargo clippy --all-targets -- -D warnings`. All warnings are errors. |
-| `build` | Build a native release binary for the current platform: `cargo build --release`. |
-| `build-arm64` | Cross-compile for ARM64 (Raspberry Pi): `cargo zigbuild --release --target aarch64-unknown-linux-gnu`. Requires `cargo-zigbuild` and the `zig` toolchain. |
-| `ui` | Build the Next.js web UI: `cd ui && npm run build`. Outputs to `ui/out/`. |
-| `deploy-binary` | Build ARM64 binary, upload to `$PI_HOST`, stop the service, replace the binary, restart the service. |
-| `deploy-ui` | Build UI and upload the `out/` directory to `$PI_DIR/ui/` on the server via tar over SSH. |
-| `deploy-migrations` | Upload the `migrations/` directory to the server via scp. |
-| `deploy-docker` | Sync `docker/` to the server via rsync (excluding build artifacts), then run `docker compose up -d --build`. |
-| `deploy` | Run all deploy targets in sequence: binary, UI, migrations, docker. Then run `make doctor`. |
-| `doctor` | SSH to the server and call `GET /api/doctor`, formatted as JSON. Shows the health of all services. |
-| `logs` | Stream Core's systemd journal from the server: `journalctl --user -u hydeclaw-core -f`. |
-| `restart` | SSH to the server and restart the Core systemd service. |
-| `status` | SSH to the server and show the Core systemd service status. |
-| `clean` | Remove Rust build artifacts (`cargo clean`) and the UI build output (`ui/out/`, `ui/.next/`). |
-
-### Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `PI_HOST` | `user@your-server` | SSH target for deploy commands. Override on the command line or set in your shell. |
-| `PI_DIR` | `~/hydeclaw` | Directory on the server where HydeClaw is installed. |
-| `TARGET` | `aarch64-unknown-linux-gnu` | Rust cross-compilation target triple. |
-| `AUTH` | Read from `.auth-token` file | Auth token for `make doctor`. Create `.auth-token` with your `HYDECLAW_AUTH_TOKEN` value. |
-
-### First-Time Setup on a New Server
+### Deploy workflow
 
 ```bash
-# 1. Create the directory structure
-ssh user@your-server "mkdir -p ~/hydeclaw/{config/agents,workspace/{tools,skills,agents,mcp},docker,migrations}"
+# Полный deploy
+make deploy              # build-arm64 + scp binary + restart systemd + deploy UI + migrations
 
-# 2. Deploy everything
-PI_HOST=user@your-server make deploy
+# Частичный deploy
+make deploy-binary       # только бинарник
+make deploy-ui           # только UI (npm build + flatten-rsc + scp)
 
-# 3. Set up the systemd service
-scp docker/hydeclaw-core.service user@your-server:~/.config/systemd/user/
-ssh user@your-server "systemctl --user daemon-reload && systemctl --user enable hydeclaw-core && systemctl --user start hydeclaw-core"
+# Toolgate (нет Docker, только .py файлы):
+scp toolgate/changed_file.py user@pi:~/hydeclaw/toolgate/
+curl -X POST http://pi:18789/api/services/toolgate/restart -H "Authorization: Bearer $TOKEN"
 
-# 4. Start Docker infrastructure
-ssh user@your-server "cd ~/hydeclaw/docker && docker compose up -d"
-
-# 5. Check health
-PI_HOST=user@your-server make doctor
+# Проверка здоровья
+make doctor              # GET /api/doctor
+make logs                # journalctl --user -u hydeclaw-core -f
 ```
+
+### Переменная PI_HOST
+
+```bash
+export PI_HOST=aronmav@192.168.1.82
+make deploy
+```
+
+### Компиляция для ARM64
+
+```bash
+make build-arm64         # cargo zigbuild --target aarch64-unknown-linux-gnu
+```
+
+> **Важно:** Все crates используют `rustls-tls` feature flags. OpenSSL отсутствует полностью — это позволяет кросс-компиляцию через `zigbuild` без нативного toolchain.
+
+### systemd unit (пример)
+
+```ini
+[Service]
+ExecStart=/home/user/hydeclaw/hydeclaw-core-aarch64 config/hydeclaw.toml
+WorkingDirectory=/home/user/hydeclaw
+EnvironmentFile=/home/user/hydeclaw/.env
+TimeoutStopSec=40
+```
+
+`TimeoutStopSec` должен быть `shutdown.drain_timeout_secs + 10` (дефолт: 30 + 10 = 40).
+
+---
+
+*Документ сгенерирован на основе исходного кода: `crates/hydeclaw-core/src/config/mod.rs`, `crates/hydeclaw-core/src/memory/mod.rs`, `crates/hydeclaw-core/src/secrets.rs`, `crates/hydeclaw-core/src/tools/yaml_tools.rs`, `crates/hydeclaw-memory-worker/src/config.rs`, `config/hydeclaw.toml`, `toolgate/config.py`.*

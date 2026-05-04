@@ -4,14 +4,14 @@
 
 **Authentication:** All routes require `Authorization: Bearer <HYDECLAW_AUTH_TOKEN>` unless explicitly marked **Public**. The token is configured via `gateway.auth_token_env` in `hydeclaw.toml`.
 
-**Rate limiting:** 10 failed auth attempts within 5 minutes triggers a 5-minute lockout (per IP). Loopback (127.0.0.1) and private LAN IPs are exempt from auth lockout. General request rate limiting is configurable via `limits.max_requests_per_minute`.
+**Rate limiting:** 500 failed auth attempts per IP triggers a 30-second lockout. General request rate limiting is configurable via `limits.max_requests_per_minute`. Loopback and authenticated requests are exempt.
 
 ---
 
 ## Table of Contents
 
 1. [Authentication](#1-authentication)
-2. [Monitoring](#2-monitoring)
+2. [Monitoring & Health](#2-monitoring--health)
 3. [Agents](#3-agents)
 4. [Chat — OpenAI-Compatible](#4-chat--openai-compatible)
 5. [Chat SSE (Native Streaming)](#5-chat-sse-native-streaming)
@@ -31,20 +31,21 @@
 19. [Services](#19-services)
 20. [Watchdog](#20-watchdog)
 21. [Providers](#21-providers)
-22. [TTS](#22-tts)
+22. [TTS and Canvas](#22-tts-and-canvas)
 23. [Media Upload](#23-media-upload)
 24. [Workspace](#24-workspace)
-25. [Canvas](#25-canvas)
+25. [Workspace Files (Signed URLs)](#25-workspace-files-signed-urls)
 26. [OAuth](#26-oauth)
 27. [Access / Pairing](#27-access--pairing)
 28. [WebSocket (UI Events)](#28-websocket-ui-events)
 29. [Email Triggers (Gmail)](#29-email-triggers-gmail)
 30. [GitHub Integration](#30-github-integration)
-31. [Audit Log](#31-audit-log)
-32. [Setup](#32-setup)
-33. [Network](#33-network)
-34. [Notifications](#34-notifications)
-35. [Config Schema](#35-config-schema)
+31. [Setup](#31-setup)
+32. [Network](#32-network)
+33. [Notifications](#33-notifications)
+34. [Curator](#34-curator)
+35. [Session Failures](#35-session-failures)
+36. [CSP Reports](#36-csp-reports)
 
 ---
 
@@ -52,44 +53,37 @@
 
 ### WS Ticket
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/auth/ws-ticket` | Issue a one-time WebSocket ticket |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/auth/ws-ticket` | Required | Issue a one-time WebSocket ticket |
 
-The WebSocket endpoint (`/ws`) requires authentication. Because exposing the static Bearer token in a WebSocket URL is unsafe, use this endpoint to obtain a short-lived ticket and pass it as a query parameter: `/ws?ticket=<uuid>`.
+The WebSocket endpoint (`/ws`) requires authentication. Use this endpoint to obtain a short-lived ticket and pass it as `?ticket=<uuid>`.
 
 **Response:**
 ```json
 { "ticket": "uuid-v4-string" }
 ```
 
-- Tickets are valid for **30 seconds** and consumed on first use.
-- Requires standard Bearer auth (the ticket itself is for WS upgrade only).
+Tickets are valid for **30 seconds** and consumed on first use.
 
 ---
 
-## 2. Monitoring
+## 2. Monitoring & Health
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/health` | Public | Liveness check |
-| `GET` | `/api/setup/status` | Required | Whether initial setup is needed |
+| `GET` | `/health` | Public | Liveness check — returns `200 OK`, no body |
 | `GET` | `/api/status` | Required | Full gateway status |
 | `GET` | `/api/stats` | Required | Message/session statistics |
 | `GET` | `/api/usage` | Required | Token usage summary |
 | `GET` | `/api/usage/daily` | Required | Daily token usage breakdown |
 | `GET` | `/api/usage/sessions` | Required | Per-session token usage |
-| `GET` | `/api/doctor` | Required | Health check for all subsystems |
+| `GET` | `/api/doctor` | Required | Deep health check of all subsystems |
+| `GET` | `/api/health/dashboard` | Required | Runtime metrics dashboard |
 | `GET` | `/api/audit` | Required | Audit event log |
 | `GET` | `/api/audit/tools` | Required | Tool invocation audit log |
 
-### GET /health
-
-Returns `200 OK` with no body. Public — use for load balancer / uptime checks.
-
 ### GET /api/status
-
-Returns gateway status including running agents, memory chunk count, uptime, and registered tools.
 
 **Response:**
 ```json
@@ -130,8 +124,6 @@ Returns gateway status including running agents, memory chunk count, uptime, and
 
 ### GET /api/usage
 
-Query parameters:
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `days` | integer | 30 | Lookback window |
@@ -146,30 +138,42 @@ Returns health status of all subsystems with latency measurements.
 {
   "ok": true,
   "checks": {
-    "database": { "ok": true, "latency_ms": 2 },
-    "toolgate": { "ok": true, "latency_ms": 15, "providers": [...] },
-    "browser_renderer": { "ok": false, "latency_ms": 5001 },
-    "searxng": { "ok": true, "latency_ms": 8 },
-    "secrets": {
-      "ok": true,
-      "count": 7,
-      "missing_critical": []
-    },
-    "channels": { "ok": true, "latency_ms": 3 },
-    "agents": { "main": { "ok": true } },
-    "polling": {
-      "messages_in": 1234,
-      "messages_out": 1230,
-      "last_inbound_at": "2026-03-27T10:00:00Z",
-      "last_outbound_at": "2026-03-27T10:00:01Z"
-    }
+    "database": { "status": "ok", "latency_ms": 2, "message": "..." },
+    "toolgate":  { "status": "ok", "latency_ms": 15, "message": "..." },
+    "secrets":   { "status": "ok", "message": "..." },
+    "channels":  { "status": "ok", "latency_ms": 3, "message": "..." }
   }
 }
 ```
 
-### GET /api/audit
+Each check has `status` (`"ok"`, `"warn"`, or `"error"`), `message`, optional `latency_ms`, `fix_hint`, and `details`.
 
-Query parameters:
+### GET /api/health/dashboard
+
+Returns runtime counters and pool sizes. Unknown fields are opaque — clients must not assume the field set is stable.
+
+**Response:**
+```json
+{
+  "version": "0.x.x",
+  "sse_events_dropped_total": { "<agent>": { "<event_type>": 0 } },
+  "csp_violations": {},
+  "csp_violations_overflow": 0,
+  "active_agents": 2,
+  "sse_streams": 1,
+  "approval_waiters": 0,
+  "auth_rate_limiter_size": 0,
+  "request_rate_limiter_size": 0,
+  "stream_registry_size": 1,
+  "db_pool_total": 5,
+  "db_pool_idle": 4,
+  "memory_worker_heartbeat_age_secs": 120,
+  "session_events_table_size_bytes": 204800,
+  "uptime_secs": 3600
+}
+```
+
+### GET /api/audit
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -179,8 +183,6 @@ Query parameters:
 | `offset` | integer | 0 | Pagination offset |
 
 ### GET /api/audit/tools
-
-Query parameters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -195,18 +197,16 @@ Query parameters:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/agents` | List all agents |
+| `GET` | `/api/agents` | List all agents (base-first, then alphabetical) |
 | `POST` | `/api/agents` | Create a new agent |
 | `GET` | `/api/agents/{name}` | Get agent details |
 | `PUT` | `/api/agents/{name}` | Update agent config |
 | `DELETE` | `/api/agents/{name}` | Delete agent |
-| `POST` | `/api/agents/{name}/model-override` | Temporarily override LLM model |
-| `GET` | `/api/providers/{id}/models` | List available models for a provider |
+| `POST` | `/api/agents/{name}/model-override` | Temporarily override LLM model in-memory |
+| `GET` | `/api/agents/{name}/tasks` | List tasks for an agent |
 | `GET` | `/api/agents/{name}/hooks` | Get agent hook configuration |
 
 ### GET /api/agents
-
-Returns all agents (from disk config + running state). Base agents are listed first, then alphabetical.
 
 **Response:**
 ```json
@@ -224,16 +224,11 @@ Returns all agents (from disk config + running state). Base agents are listed fi
       "has_heartbeat": false,
       "heartbeat_cron": null,
       "heartbeat_timezone": null,
-      "tool_policy": {
-        "allow": [],
-        "deny": [],
-        "allow_all": true
-      },
+      "tool_policy": { "allow": [], "deny": [], "allow_all": true },
       "routing_count": 0,
       "is_running": true,
       "config_dirty": false,
-      "base": true,
-      "base": false
+      "base": true
     }
   ]
 }
@@ -241,7 +236,7 @@ Returns all agents (from disk config + running state). Base agents are listed fi
 
 ### POST /api/agents
 
-Create a new agent. The agent config is written to `config/agents/{name}.toml` and the agent is started immediately.
+Create a new agent. Config is written to `config/agents/{name}.toml` and the agent starts immediately. The first agent created automatically gets `base = true` with restricted access defaults.
 
 **Request body:**
 
@@ -255,24 +250,25 @@ Create a new agent. The agent config is written to `config/agents/{name}.toml` a
 | `temperature` | float | No | Sampling temperature |
 | `max_tokens` | integer | No | Max response tokens |
 | `icon` | string | No | Emoji or icon string |
-| `voice` | string | No | TTS voice name (stored as scoped secret) |
-| `access` | object\|null | No | Access control config (null to clear) |
-| `heartbeat` | object\|null | No | Heartbeat cron config (null to clear) |
-| `tools` | object\|null | No | Tool policy (null to clear) |
-| `compaction` | object\|null | No | Context compaction config (null to clear) |
-| `session` | object\|null | No | Session management config (null to clear) |
-| `routing` | array\|null | No | LLM routing rules (null to clear) |
-| `approval` | object\|null | No | Human approval config (null to clear) |
-| `tool_loop` | object\|null | No | Tool loop config (null to clear) |
+| `voice` | string | No | TTS voice name (stored as scoped secret `TTS_VOICE`) |
+| `access` | object\|null | No | Access control config |
+| `heartbeat` | object\|null | No | Heartbeat cron config |
+| `tools` | object\|null | No | Tool policy |
+| `compaction` | object\|null | No | Context compaction config |
+| `session` | object\|null | No | Session management config |
+| `routing` | array\|null | No | LLM routing rules |
+| `approval` | object\|null | No | Human approval config |
+| `tool_loop` | object\|null | No | Tool loop config |
 | `max_tools_in_context` | integer | No | Max tool definitions injected into context |
 | `max_history_messages` | integer | No | Max messages loaded from session history |
-| `daily_budget_tokens` | integer | No | Daily token budget cap |
+| `max_agent_turns` | integer | No | Max turns before automatic stop |
+| `daily_budget_tokens` | integer | No | Daily token budget cap (0 = no limit) |
 
 **`access` object:**
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `mode` | string | `allowlist` or `open` |
+| `mode` | string | `"allowlist"`, `"open"`, or `"restricted"` |
 | `owner_id` | string | Channel user ID with admin rights |
 
 **`heartbeat` object:**
@@ -280,7 +276,7 @@ Create a new agent. The agent config is written to `config/agents/{name}.toml` a
 | Field | Type | Description |
 |-------|------|-------------|
 | `cron` | string | Cron expression |
-| `timezone` | string | IANA timezone (e.g. `UTC`) |
+| `timezone` | string | IANA timezone (default `"UTC"`) |
 | `announce_to` | string | Channel name to post heartbeat messages to |
 
 **`tools` object:**
@@ -289,8 +285,8 @@ Create a new agent. The agent config is written to `config/agents/{name}.toml` a
 |-------|------|-------------|
 | `allow` | array | Explicitly allowed tool names |
 | `deny` | array | Explicitly denied tool names |
-| `allow_all` | bool | If true, all tools are allowed by default |
-| `deny_all_others` | bool | If true, only `allow` list is permitted |
+| `allow_all` | bool | If true, all tools allowed by default |
+| `deny_all_others` | bool | If true, only `allow` list permitted |
 | `groups.git` | bool | Enable git tool group |
 | `groups.tool_management` | bool | Enable tool management tools |
 | `groups.skill_editing` | bool | Enable skill editing tools |
@@ -301,7 +297,7 @@ Create a new agent. The agent config is written to `config/agents/{name}.toml` a
 | Field | Type | Description |
 |-------|------|-------------|
 | `enabled` | bool | Enable automatic context compaction |
-| `threshold` | integer | Token threshold that triggers compaction |
+| `threshold` | float | Token fraction threshold that triggers compaction |
 | `preserve_tool_calls` | bool | Keep tool call/result pairs in summary |
 | `preserve_last_n` | integer | Always preserve the last N messages |
 | `max_context_tokens` | integer | Hard limit before emergency compaction |
@@ -315,28 +311,68 @@ Create a new agent. The agent config is written to `config/agents/{name}.toml` a
 | `require_for_categories` | array | Tool categories requiring approval |
 | `timeout_seconds` | integer | Seconds to wait before auto-deny |
 
-**Response:** Full agent detail object (same as `GET /api/agents/{name}`).
+**`tool_loop` object:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `max_iterations` | integer | Max total tool calls per session turn |
+| `compact_on_overflow` | bool | Trigger compaction when iterations exceeded |
+| `detect_loops` | bool | Enable n-gram loop detection |
+| `warn_threshold` | integer | Iteration count for loop warning |
+| `break_threshold` | integer | Iteration count to force-break loop |
+| `max_consecutive_failures` | integer | Consecutive tool failures before breaking |
+| `max_auto_continues` | integer | Max automatic continue prompts |
+| `max_loop_nudges` | integer | Max loop-nudge messages injected |
+| `ngram_cycle_length` | integer | N-gram window for cycle detection |
+
+**`session` object:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `dm_scope` | string | DM session scope identifier |
+| `ttl_days` | integer | Days before idle sessions expire |
+| `max_messages` | integer | Max messages before auto-compaction |
+| `prune_tool_output_after_turns` | integer | Remove tool output from context after N turns |
+
+**`skill_review` object:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `enabled` | bool | Enable skill review after sessions |
+| `min_tool_calls` | integer | Minimum tool calls to trigger review |
+
+**`hooks` object:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `log_all_tool_calls` | bool | Log every tool call to audit |
+| `block_tools` | array | Tool names to block (alternative to deny list) |
+
+**Response:** `{ "ok": true, "name": "agent-name" }`
 
 ### GET /api/agents/{name}
 
-Returns detailed agent configuration. The `config_dirty` flag is `true` when the running config diverges from the on-disk config (e.g. after a file change that has not been reloaded).
+Returns full `AgentDetailDto`. The `config_dirty` flag is `true` when the running config diverges from the on-disk config.
 
 ### PUT /api/agents/{name}
 
-Update agent configuration. Accepts the same fields as `POST /api/agents`. For nullable fields (`access`, `heartbeat`, `tools`, `compaction`, `session`, `routing`, `approval`, `tool_loop`):
-- **Field absent**: existing value is preserved.
+Update agent config. Accepts the same fields as `POST /api/agents`. Field merge semantics:
+- **Field absent in payload**: existing value is preserved.
 - **Explicit `null`**: value is cleared.
 - **Value provided**: value is updated.
 
-When the agent name changes (via `PUT` with a different `name`), scoped secrets are automatically migrated.
+`base` and `base` flags are **never** changed via PUT — preserved from disk.
+Renaming an agent (via `name` field in payload) updates 21 DB tables in a transaction, renames the workspace directory, and migrates scoped secrets. Base agents cannot be renamed.
+
+**Response:** `{ "ok": true, "name": "new-name" }`
 
 ### DELETE /api/agents/{name}
 
-Stops and removes an agent. The config file is deleted. Returns `{ "ok": true }`.
+Stops and removes the agent. Config file is deleted. Returns `{ "ok": true }`.
 
 ### POST /api/agents/{name}/model-override
 
-Temporarily override the LLM model for a running agent (in-memory, survives until restart).
+Temporarily override LLM model for a running agent (in-memory, lost on restart).
 
 **Request body:**
 ```json
@@ -351,7 +387,7 @@ Temporarily override the LLM model for a running agent (in-memory, survives unti
 |--------|------|------|-------------|
 | `POST` | `/v1/chat/completions` | Required | OpenAI-compatible chat completions |
 | `GET` | `/v1/models` | Required | List available models |
-| `POST` | `/v1/embeddings` | Required | Proxy embeddings request |
+| `POST` | `/v1/embeddings` | Required | Proxy embeddings request to Toolgate |
 
 ### POST /v1/chat/completions
 
@@ -362,34 +398,14 @@ OpenAI-format chat completions. Supports streaming (`"stream": true`) and non-st
 | Field | Type | Description |
 |-------|------|-------------|
 | `messages` | array | OpenAI-format message array |
-| `model` | string | Model name (informational; agent selects actual model) |
-| `temperature` | float | Sampling temperature (passed to agent) |
+| `model` | string | Model name (informational) |
+| `temperature` | float | Sampling temperature |
 | `stream` | bool | Enable SSE streaming (default: false) |
-| `agent` | string | HydeClaw extension: target agent name (defaults to first available) |
+| `agent` | string | HydeClaw extension: target agent name |
 
-**Non-streaming response:**
-```json
-{
-  "id": "chatcmpl-uuid",
-  "object": "chat.completion",
-  "created": 1711530000,
-  "model": "MiniMax-M2.5",
-  "choices": [
-    {
-      "index": 0,
-      "message": { "role": "assistant", "content": "Hello!" },
-      "finish_reason": "stop"
-    }
-  ],
-  "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 },
-  "tools_used": ["memory_search"],
-  "iterations": 2
-}
-```
+### POST /api/mcp/callback
 
-### GET /v1/models
-
-Returns all available models from all configured LLM providers.
+Internal OAuth callback for MCP server authentication. Not intended for direct use.
 
 ---
 
@@ -403,7 +419,7 @@ Returns all available models from all configured LLM providers.
 
 ### POST /api/chat
 
-Primary chat endpoint. Returns a Server-Sent Events stream compatible with the **Vercel AI SDK v3** (`useChat` hook).
+Primary chat endpoint. Returns Server-Sent Events compatible with the **Vercel AI SDK v3** (`useChat` hook).
 
 **Request body:**
 
@@ -414,7 +430,11 @@ Primary chat endpoint. Returns a Server-Sent Events stream compatible with the *
 | `session_id` | string (UUID) | No | Continue an existing session |
 | `channel` | string | No | Source channel identifier (default: `"ui"`) |
 | `user_id` | string | No | User identifier for access control |
-| `attachments` | array | No | File attachments (see below) |
+| `attachments` | array | No | File attachments |
+| `leaf_message_id` | UUID | No | Resume from a specific branch leaf |
+| `user_message_id` | UUID | No | Explicit message ID for idempotency |
+| `tool_policy_override` | object | No | Per-request tool policy override |
+| `formatting_prompt` | string | No | Additional formatting instruction |
 
 **Attachment object:**
 
@@ -426,30 +446,34 @@ Primary chat endpoint. Returns a Server-Sent Events stream compatible with the *
 
 **SSE event types:**
 
-| Event type | Description | Example data |
-|------------|-------------|--------------|
+| Event type | Description | Key payload fields |
+|------------|-------------|-------------------|
 | `data-session-id` | First event; contains the session ID | `{ "sessionId": "uuid" }` |
 | `start` | Stream begins | `{ "session_id": "uuid", "stream_id": "uuid" }` |
 | `text-start` | Text block starting | `{ "id": "block-uuid" }` |
-| `text-delta` | Incremental text chunk | `{ "value": "Hello" }` |
+| `text-delta` | Incremental text chunk | `{ "delta": "text" }` |
 | `text-end` | Text block complete | `{}` |
 | `tool-input-start` | Tool call starting | `{ "toolCallId": "id", "toolName": "search" }` |
-| `tool-input-delta` | Tool arguments streaming | `{ "argsTextDelta": "{\"q\":" }` |
-| `tool-input-available` | Full tool call ready | `{ "toolCallId": "id", "toolName": "search", "args": {...} }` |
-| `tool-output-available` | Tool result ready | `{ "toolCallId": "id", "result": "..." }` |
-| `rich-card` | Structured display card | `{ "card_type": "...", "data": {...} }` |
-| `file` | File produced by tool (audio, image) | `{ "url": "...", "mediaType": "audio/ogg" }` |
-| `sync` | Message sync (content + tool state) | `{ "content": "...", "toolCalls": [...], "status": "...", "error": null }` |
+| `tool-input-delta` | Tool arguments streaming | `{ "toolCallId": "id", "inputTextDelta": "{\"q\":" }` |
+| `tool-input-available` | Full tool call ready | `{ "toolCallId": "id", "toolName": "search", "input": {...} }` |
+| `tool-output-available` | Tool result ready | `{ "toolCallId": "id", "output": "..." }` |
+| `rich-card` | Structured display card | `{ "cardType": "...", "data": {...} }` |
+| `file` | File produced by tool | `{ "url": "...", "mediaType": "audio/ogg" }` |
+| `sync` | Message sync | `{ "content": "...", "toolCalls": [...], "status": "...", "error": null }` |
+| `tool-approval-needed` | Tool awaiting human approval | `{ "approvalId": "uuid", "toolName": "...", "args": {...} }` |
+| `tool-approval-resolved` | Approval decision made | `{ "approvalId": "uuid", "decision": "approve" }` |
+| `reconnecting` | Stream reconnect in progress | `{}` |
+| `usage` | Token usage update | `{ "input_tokens": 100, "output_tokens": 50 }` |
 | `finish` | Stream complete | `{ "usage": {...}, "tools_used": [...] }` |
-| `error` | Error during processing | `{ "message": "error text" }` |
+| `error` | Error during processing | `{ "errorText": "error text" }` |
 
 ### GET /api/chat/{id}/stream
 
-Resume a previously started stream by its `stream_id`. Useful for reconnecting after a dropped connection. Returns the same SSE format.
+Resume a previously started stream by its `stream_id`. Returns same SSE format.
 
 ### POST /api/chat/{id}/abort
 
-Abort an in-progress stream. The agent stops processing and the stream is closed.
+Abort an in-progress stream. Agent stops processing.
 
 **Response:** `{ "ok": true }` or `{ "ok": false, "error": "stream not found" }`
 
@@ -459,28 +483,33 @@ Abort an in-progress stream. The agent stops processing and the stream is closed
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/sessions` | List sessions |
-| `DELETE` | `/api/sessions` | Delete all sessions for an agent or channel |
-| `GET` | `/api/sessions/latest` | Get latest session for an agent |
+| `GET` | `/api/sessions` | List sessions (requires `?agent=`) |
+| `DELETE` | `/api/sessions` | Delete all sessions (requires `?agent=` or `?channel=`) |
+| `GET` | `/api/sessions/latest` | Get latest session for an agent (requires `?agent=`) |
 | `GET` | `/api/sessions/search` | Full-text search across messages |
+| `GET` | `/api/sessions/stuck` | Find stuck/stale sessions for retry |
+| `GET` | `/api/sessions/failures` | Paginated session failure log |
+| `GET` | `/api/sessions/{id}` | Get session metadata |
 | `PATCH` | `/api/sessions/{id}` | Update session title or UI state |
-| `DELETE` | `/api/sessions/{id}` | Delete a session and all its messages |
+| `DELETE` | `/api/sessions/{id}` | Delete session and all messages (requires `?agent=`) |
 | `POST` | `/api/sessions/{id}/compact` | Manually compact session history |
 | `GET` | `/api/sessions/{id}/export` | Export session as JSON or Markdown |
 | `POST` | `/api/sessions/{id}/invite` | Invite an agent into a multi-agent session |
-| `POST` | `/api/sessions/{id}/documents` | Upload a document for session-scoped RAG |
+| `POST` | `/api/sessions/{id}/fork` | Create a branched message from an existing message |
+| `GET` | `/api/sessions/{id}/active-path` | Get the active message branch path |
+| `GET` | `/api/sessions/{id}/chain` | Get the full session chain (parent + child sessions) |
+| `POST` | `/api/sessions/{id}/retry` | Replay last user message through engine |
 | `GET` | `/api/sessions/{id}/messages` | List messages in a session |
-| `DELETE` | `/api/messages/{id}` | Delete a single message |
-| `PATCH` | `/api/messages/{id}` | Edit a user message |
-| `POST` | `/api/messages/{id}/feedback` | Set message feedback (like/dislike) |
+| `GET` | `/api/sessions/{id}/failures` | Get failure records for one session |
+| `DELETE` | `/api/messages/{id}` | Delete a single message (requires `?agent=`) |
+| `PATCH` | `/api/messages/{id}` | Edit a user message (requires `?agent=`) |
+| `POST` | `/api/messages/{id}/feedback` | Set message feedback |
 
 ### GET /api/sessions
 
-Query parameters:
-
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `agent` | string | Yes | Filter by agent name |
+| `agent` | string | Yes | Filter by agent name (ownership, not participation) |
 | `channel` | string | No | Filter by channel (comma-separated) |
 | `limit` | integer | No | Max results (default 20, max 100) |
 
@@ -497,21 +526,67 @@ Query parameters:
       "last_message_at": "2026-03-27T10:05:00Z",
       "title": "Discussion about X",
       "metadata": {},
-      "run_status": "idle"
+      "run_status": "idle",
+      "participants": [],
+      "parent_session_id": null,
+      "end_reason": null
     }
-  ]
+  ],
+  "total": 42
 }
 ```
 
-### GET /api/sessions/search
+### DELETE /api/sessions
 
-Query parameters:
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `agent` | string | Conditional | Delete all sessions for this agent |
+| `channel` | string | Conditional | Delete all sessions for this channel (comma-separated) |
+
+One of `agent` or `channel` is required.
+
+**Response:** `{ "ok": true, "deleted": 5 }`
+
+### GET /api/sessions/search
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `q` | string | Required | Search query |
-| `agent` | string | `main` | Filter by agent |
+| `agent` | string | `"main"` | Filter by agent |
 | `limit` | integer | 50 | Max results (max 200) |
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "content": "...",
+      "session_id": "uuid",
+      "user_id": "...",
+      "channel": "ui",
+      "role": "user",
+      "created_at": "...",
+      "rank": 0.95
+    }
+  ],
+  "count": 3
+}
+```
+
+### GET /api/sessions/stuck
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `stale_secs` | integer | 90 | Seconds without activity to consider stuck |
+| `max_retries` | integer | 3 | Max retry count threshold |
+
+**Response:** `{ "sessions": [{"id": "uuid", "agent_id": "main"}] }`
+
+### GET /api/sessions/{id}
+
+Returns lightweight session metadata for deep-link resolution. Does not require `agent` parameter.
+
+**Response:** `{ "id": "uuid", "agent_id": "main", "channel": "ui", "run_status": "idle" }`
 
 ### PATCH /api/sessions/{id}
 
@@ -527,60 +602,57 @@ Query parameters:
 
 ### POST /api/sessions/{id}/compact
 
-Triggers context compaction on a session. The agent summarizes the conversation into facts and replaces older messages with the summary.
-
 **Response:**
 ```json
-{
-  "ok": true,
-  "facts_extracted": 12,
-  "new_message_count": 5
-}
+{ "ok": true, "facts_extracted": 12, "new_message_count": 5 }
 ```
 
 ### GET /api/sessions/{id}/export
-
-Query parameters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `agent` | string | — | Ownership check |
 | `format` | string | `json` | `json` or `markdown` |
 
-Markdown export returns a `Content-Disposition: attachment` response.
+Markdown export returns `Content-Disposition: attachment; filename="session-{id}.md"`.
 
 ### POST /api/sessions/{id}/invite
-
-Invite an agent into a multi-agent session. The invited agent is added to the session's `participants` list.
 
 **Request body:**
 ```json
 { "agent_name": "Agent2" }
 ```
 
-**Response:**
+**Response:** `{ "participants": ["main", "Agent2"] }`
+
+### POST /api/sessions/{id}/fork
+
+Creates a branched user message. Enables conversation tree navigation.
+
+**Request body:**
 ```json
-{ "ok": true, "participants": ["Agent1", "Agent2"] }
+{
+  "branch_from_message_id": "uuid",
+  "content": "New user message text"
+}
 ```
-
-Returns `404` if the agent does not exist or the session is not found.
-
-### POST /api/sessions/{id}/documents
-
-Multipart file upload. Chunks the document and embeds it for retrieval-augmented generation scoped to this session. Requires embeddings to be configured.
 
 **Response:**
 ```json
 {
-  "filename": "report.txt",
-  "chunks": 8,
-  "total_chars": 4200
+  "message_id": "uuid",
+  "parent_message_id": "uuid",
+  "branch_from_message_id": "uuid"
 }
 ```
 
-### GET /api/sessions/{id}/messages
+### POST /api/sessions/{id}/retry
 
-Query parameters:
+Replays the last user message through the engine in a background task. Useful for recovering stuck sessions.
+
+**Response:** `{ "ok": true, "retry_count": 1 }` or `409` if session not in running state.
+
+### GET /api/sessions/{id}/messages
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -598,7 +670,7 @@ Values: `1` = like, `-1` = dislike, `0` = clear.
 
 ### PATCH /api/messages/{id}
 
-Edit a user message (role must be `user`).
+Edit a user message (role must be `user`). Requires `?agent=` query param.
 
 **Request body:**
 ```json
@@ -611,17 +683,15 @@ Edit a user message (role must be `user`).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/memory` | List memory chunks |
+| `GET` | `/api/memory` | List / search memory chunks |
 | `POST` | `/api/memory` | Create a memory chunk manually |
 | `GET` | `/api/memory/stats` | Memory statistics |
-| `GET` | `/api/memory/graph` | Entity relationship graph |
 | `GET` | `/api/memory/export` | Export all memory as JSON |
 | `GET` | `/api/memory/fts-language` | Get FTS language setting |
 | `PUT` | `/api/memory/fts-language` | Set FTS language |
 | `DELETE` | `/api/memory/{id}` | Delete a memory chunk |
 | `PATCH` | `/api/memory/{id}` | Update a memory chunk |
 | `GET` | `/api/memory/tasks` | List memory indexing tasks |
-| `GET` | `/api/memory/extraction-queue` | View extraction queue status |
 | `GET` | `/api/memory/documents` | List source documents |
 | `GET` | `/api/memory/documents/{id}` | Get document details |
 | `PATCH` | `/api/memory/documents/{id}` | Update document metadata |
@@ -629,26 +699,23 @@ Edit a user message (role must be `user`).
 
 ### GET /api/memory
 
-Query parameters:
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `agent` | string | — | Filter by agent |
-| `query` | string | — | Semantic search query |
-| `limit` | integer | 50 | Max results |
-| `pinned` | bool | — | Filter pinned/unpinned chunks |
+| `query` | string | — | Semantic/FTS search query |
+| `limit` | integer | 20 | Max results (max 100) |
+| `offset` | integer | 0 | Pagination offset |
 
-**Memory chunk object:**
+When `query` is provided, performs hybrid semantic + FTS search. Without `query`, returns paginated list.
+
+**Memory chunk object (search result):**
 ```json
 {
   "id": "uuid",
-  "agent_id": "main",
   "content": "User prefers concise answers",
-  "pinned": false,
-  "created_at": "2026-03-27T10:00:00Z",
-  "expires_at": null,
-  "source": "conversation",
-  "document_id": null
+  "source": "shared",
+  "relevance_score": 0.87,
+  "similarity": 0.91,
+  "pinned": false
 }
 ```
 
@@ -663,14 +730,6 @@ Query parameters:
 }
 ```
 
-### GET /api/memory/stats
-
-Returns counts, storage usage, and indexing state.
-
-### GET /api/memory/graph
-
-Returns entity-relationship graph extracted from memory for visualization.
-
 ### PUT /api/memory/fts-language
 
 **Request body:**
@@ -684,10 +743,7 @@ Valid values: `simple`, `english`, `russian`, and other PostgreSQL text search c
 
 **Request body** (all fields optional):
 ```json
-{
-  "content": "Updated fact text",
-  "pinned": true
-}
+{ "content": "Updated fact text", "pinned": true }
 ```
 
 ---
@@ -696,8 +752,8 @@ Valid values: `simple`, `english`, `russian`, and other PostgreSQL text search c
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/tool-definitions` | List all tool definitions visible to agents |
-| `GET` | `/api/tools` | List registered tool services |
+| `GET` | `/api/tool-definitions` | List all tool names visible to agents (system + YAML + MCP) |
+| `GET` | `/api/tools` | List registered HTTP tool services |
 | `POST` | `/api/tools` | Register a new tool service |
 | `PUT` | `/api/tools/{name}` | Update a tool service |
 | `DELETE` | `/api/tools/{name}` | Delete a tool service |
@@ -707,47 +763,22 @@ Valid values: `simple`, `english`, `russian`, and other PostgreSQL text search c
 | `DELETE` | `/api/mcp/{name}` | Delete an MCP server |
 | `POST` | `/api/mcp/{name}/reload` | Reload an MCP server |
 | `POST` | `/api/mcp/{name}/toggle` | Enable or disable an MCP server |
-| `POST` | `/api/mcp/callback` | Internal: MCP OAuth callback |
 
 ### GET /api/tool-definitions
 
-Returns the full list of tool definitions that agents can see (built-in + YAML + MCP).
+Returns a sorted list of all tool names available in the system (built-in + YAML + MCP).
 
-### Tool Service object
-
-A "tool service" is an HTTP-based tool endpoint registered in the tool registry.
-
-```json
-{
-  "name": "weather",
-  "url": "http://localhost:9011/weather",
-  "description": "Get current weather",
-  "enabled": true
-}
-```
-
-### MCP Server object
-
-```json
-{
-  "name": "filesystem",
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
-  "env": {},
-  "enabled": true,
-  "status": "running"
-}
-```
+**Response:** `{ "tools": ["memory_search", "workspace_write", "web_search", ...] }`
 
 ---
 
 ## 9. YAML Tools
 
-YAML tools are HTTP-based tool definitions stored as `.yaml` files in `workspace/tools/`. They are shared across all agents.
+YAML tools are HTTP-based tool definitions stored as `.yaml` files in `workspace/tools/`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/yaml-tools` | List all global YAML tools |
+| `GET` | `/api/yaml-tools` | List all YAML tools (all statuses) |
 | `POST` | `/api/yaml-tools` | Create a new YAML tool |
 | `GET` | `/api/yaml-tools/{tool}` | Get YAML tool definition |
 | `PUT` | `/api/yaml-tools/{tool}` | Update a YAML tool |
@@ -756,7 +787,7 @@ YAML tools are HTTP-based tool definitions stored as `.yaml` files in `workspace
 | `POST` | `/api/yaml-tools/{tool}/disable` | Move tool to disabled status |
 | `POST` | `/api/yaml-tools/{tool}/enable` | Re-enable a disabled tool |
 
-Per-agent compatibility aliases (same behavior):
+Per-agent compatibility aliases:
 
 | Method | Path |
 |--------|------|
@@ -768,12 +799,18 @@ Per-agent compatibility aliases (same behavior):
 
 **Request body:**
 ```json
-{
-  "content": "name: get_weather\ndescription: ...\nmethod: GET\nendpoint: ...\n..."
-}
+{ "content": "name: get_weather\ndescription: ...\nmethod: GET\nendpoint: ...\n..." }
 ```
 
-The `content` field is a YAML string. The tool is created with status `verified`.
+The `content` field is a YAML string. Tool is created with status `verified`.
+
+**Tool statuses:**
+
+| Status | Location | Description |
+|--------|----------|-------------|
+| `verified` | `workspace/tools/*.yaml` | Active, available to agents |
+| `draft` | `workspace/tools/draft/*.yaml` | Work-in-progress, not yet active |
+| `disabled` | `workspace/tools/disabled/*.yaml` | Archived, not available |
 
 **YAML tool format:**
 ```yaml
@@ -796,31 +833,30 @@ response_transform: "$.current"
 
 | type | Description |
 |------|-------------|
-| `bearer_env` | Read API key from environment variable named by `key` |
+| `bearer_env` | Read API key from env var named by `key` |
 | `none` | No authentication |
-
-**Tool statuses:**
-
-| Status | Location | Description |
-|--------|----------|-------------|
-| `verified` | `workspace/tools/*.yaml` | Active, available to agents |
-| `draft` | `workspace/tools/draft/*.yaml` | Work-in-progress, not yet active |
-| `disabled` | `workspace/tools/disabled/*.yaml` | Archived, not available |
 
 ---
 
 ## 10. Skills
 
-Skills are Markdown files stored in `workspace/skills/`. They are shared prompt fragments injected into agent context.
+Skills are Markdown files stored in `workspace/skills/`. Shared prompt fragments injected into agent context.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/skills` | List all global skills |
+| `GET` | `/api/skills` | List all skills |
+| `GET` | `/api/skills/repairs` | List skill repair proposals |
+| `PATCH` | `/api/skills/repairs/{id}` | Resolve a skill repair proposal |
 | `GET` | `/api/skills/{skill}` | Get skill content |
 | `PUT` | `/api/skills/{skill}` | Create or update a skill |
 | `DELETE` | `/api/skills/{skill}` | Delete a skill |
+| `GET` | `/api/skills/{skill}/versions` | List skill version history |
+| `GET` | `/api/skills/{skill}/versions/{vid}` | Get a specific version |
+| `POST` | `/api/skills/{skill}/versions/{vid}/restore` | Restore skill to a previous version |
+| `POST` | `/api/skills/{skill}/snapshot` | Create a manual snapshot |
+| `GET` | `/api/skills/{skill}/curator-decisions` | Get curator decisions for a skill |
 
-Per-agent compatibility aliases:
+Per-agent aliases:
 
 | Method | Path |
 |--------|------|
@@ -833,22 +869,20 @@ Per-agent compatibility aliases:
 
 **Request body:**
 ```json
-{
-  "content": "# Web Search Strategy\n\nUse SearXNG for general queries..."
-}
+{ "content": "# Web Search Strategy\n\nUse SearXNG for general queries..." }
 ```
 
 ---
 
 ## 11. Channels
 
-Channels connect agents to messaging platforms (Telegram, Discord, etc.). Each channel is registered per-agent and managed via an external channel adapter that connects over WebSocket.
+Channels connect agents to messaging platforms (Telegram, Discord, etc.).
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/channels` | List all channels across all agents |
 | `GET` | `/api/channels/active` | List currently connected channel adapters |
-| `POST` | `/api/channels/notify` | Send a direct notification via a channel |
+| `POST` | `/api/channels/notify` | Send a notification via a channel |
 | `GET` | `/api/agents/{name}/channels` | List channels for an agent |
 | `POST` | `/api/agents/{name}/channels` | Create a channel for an agent |
 | `PUT` | `/api/agents/{name}/channels/{id}` | Update a channel |
@@ -856,6 +890,7 @@ Channels connect agents to messaging platforms (Telegram, Discord, etc.). Each c
 | `POST` | `/api/agents/{name}/channels/{id}/restart` | Restart a channel adapter |
 | `POST` | `/api/agents/{name}/channels/{id}/ack` | Acknowledge a channel error |
 | `GET` | `/api/agents/{name}/channels/{id}/status` | Get channel status |
+| `GET` | `/api/agents/{name}/hooks` | Get agent hook configuration |
 | `GET` | `/ws/channel/{agent_name}` | WebSocket endpoint for channel adapters |
 
 ### Channel object
@@ -881,29 +916,17 @@ Channels connect agents to messaging platforms (Telegram, Discord, etc.). Each c
 {
   "channel_type": "telegram",
   "display_name": "My Bot",
-  "config": {
-    "bot_token": "5092435297:AAH..."
-  }
+  "config": { "bot_token": "5092435297:AAH..." }
 }
 ```
 
-Credential fields (`bot_token`, `access_token`, `password`, `app_token`, `verify_token`) are automatically extracted from `config` and stored in the secrets vault. The returned `config` object has these fields redacted.
+Credential fields (`bot_token`, `access_token`, `password`, `app_token`, `verify_token`) are extracted from `config` and stored in the secrets vault. The returned `config` has these fields redacted.
 
-**Response:**
-```json
-{ "ok": true, "id": "uuid", "status": "stopped" }
-```
-
-### Channel Credential Flow
-
-1. `POST /api/agents/{name}/channels` with credentials in `config` JSON.
-2. Core extracts credential fields, stores them as a scoped secret keyed by channel UUID.
-3. When the channel adapter connects via `/ws/channel/{agent_name}`, Core retrieves credentials from vault and passes them to the adapter.
-4. Channel credentials are never returned in plain text after creation.
+**Response:** `{ "ok": true, "id": "uuid", "status": "stopped" }`
 
 ### POST /api/channels/notify
 
-Send a notification message through a specific channel without going through the agent's LLM.
+Send a notification through a channel without going through the agent LLM.
 
 **Request body:**
 ```json
@@ -914,19 +937,15 @@ Send a notification message through a specific channel without going through the
 }
 ```
 
-### Channel Adapter WebSocket: /ws/channel/{agent_name}
+### /ws/channel/{agent_name}
 
-External channel adapters connect here. Authentication options:
-- **Bearer token** via `Authorization` header.
-- **WS ticket** via `?ticket=<uuid>` query parameter (obtain from `POST /api/auth/ws-ticket`).
-
-The adapter sends `ChannelInbound` JSON messages and receives `ChannelOutbound` JSON messages.
+Channel adapters connect via WebSocket. Authentication:
+- `Authorization: Bearer <token>` header
+- `?ticket=<uuid>` query parameter (from `POST /api/auth/ws-ticket`)
 
 ---
 
 ## 12. Cron Jobs
-
-Cron jobs run agent tasks on a schedule.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -938,33 +957,6 @@ Cron jobs run agent tasks on a schedule.
 | `GET` | `/api/cron/{id}/runs` | Get run history for a job |
 | `GET` | `/api/cron/runs` | Get run history for all jobs |
 
-### GET /api/cron
-
-**Response:**
-```json
-{
-  "jobs": [
-    {
-      "id": "uuid",
-      "agent": "main",
-      "name": "morning-briefing",
-      "cron": "0 9 * * *",
-      "timezone": "UTC",
-      "task": "Prepare daily briefing",
-      "enabled": true,
-      "silent": false,
-      "announce_to": "telegram",
-      "jitter_secs": 0,
-      "run_once": false,
-      "run_at": null,
-      "created_at": "2026-01-01T00:00:00Z",
-      "last_run": "2026-03-27T06:00:00Z",
-      "next_run": "2026-03-28T06:00:00Z"
-    }
-  ]
-}
-```
-
 ### POST /api/cron
 
 **Request body:**
@@ -974,17 +966,36 @@ Cron jobs run agent tasks on a schedule.
 | `name` | string | Yes | Unique job name |
 | `agent` | string | Yes | Target agent name |
 | `task` | string | Yes | Task message sent to the agent |
-| `cron` | string | Conditional | Cron expression (required unless `run_once`) |
+| `cron` | string | Conditional | Cron expression (required unless `run_once = true`) |
 | `timezone` | string | No | IANA timezone (default: `UTC`) |
 | `announce_to` | string/object | No | Channel to send output to |
 | `silent` | bool | No | If true, discard agent output (default: false) |
 | `jitter_secs` | integer | No | Random delay added to execution time |
 | `run_once` | bool | No | One-shot job (requires `run_at`) |
 | `run_at` | datetime | Conditional | ISO 8601 datetime for one-shot jobs |
+| `tool_policy` | object | No | Tool policy override for this job |
 
-### PUT /api/cron/{id}
-
-Accepts the same fields as `POST /api/cron`. All fields are optional (patch semantics).
+**Job object:**
+```json
+{
+  "id": "uuid",
+  "name": "morning-briefing",
+  "agent": "main",
+  "cron": "0 9 * * *",
+  "timezone": "UTC",
+  "task": "Prepare daily briefing",
+  "enabled": true,
+  "silent": false,
+  "announce_to": "telegram",
+  "jitter_secs": 0,
+  "run_once": false,
+  "run_at": null,
+  "created_at": "2026-01-01T00:00:00Z",
+  "last_run": "2026-03-27T06:00:00Z",
+  "next_run": "2026-03-28T06:00:00Z",
+  "tool_policy": null
+}
+```
 
 ---
 
@@ -1003,11 +1014,9 @@ Tasks are multi-step execution pipelines tracked in the database.
 
 ### GET /api/tasks
 
-Query parameters:
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `agent` | string | `main` | Filter by agent |
+| `agent` | string | `"main"` | Filter by agent |
 | `limit` | integer | 50 | Max results (max 200) |
 
 ### POST /api/tasks
@@ -1020,49 +1029,13 @@ Query parameters:
 | `input` | string | Yes | Task description/prompt |
 | `source` | string | No | Source identifier (default: `"api"`) |
 
-**Response:**
-```json
-{ "ok": true, "task_id": "uuid" }
-```
-
-### GET /api/tasks/{id}/steps
-
-Returns ordered list of execution steps with their outputs and status.
-
-### GET /api/tasks/audit
-
-Returns tool execution audit log entries.
-
-Query parameters:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `agent` | string | — | Filter by agent name |
-| `status` | string | — | Filter by status |
-| `limit` | integer | 50 | Max results (max 200) |
-
-**Response:**
-```json
-[
-  {
-    "id": "uuid",
-    "agent_id": "agent-name",
-    "session_id": "uuid",
-    "tool_name": "workspace_write",
-    "parameters": { "...": "..." },
-    "status": "ok",
-    "duration_ms": 42,
-    "error": null,
-    "created_at": "2025-01-01T00:00:00Z"
-  }
-]
-```
+**Response:** `{ "ok": true, "task_id": "uuid" }`
 
 ---
 
 ## 14. Approvals
 
-Human-in-the-loop approval for sensitive tool calls.
+Human-in-the-loop approval for sensitive tool calls. Approval endpoints are registered under `/api/agents` router.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -1092,8 +1065,6 @@ Values: `"approve"` or `"deny"`.
 
 ## 15. Webhooks
 
-Webhooks let external systems trigger agent processing via HTTP POST.
-
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/webhooks` | List all webhooks |
@@ -1101,32 +1072,7 @@ Webhooks let external systems trigger agent processing via HTTP POST.
 | `PUT` | `/api/webhooks/{id}` | Update a webhook |
 | `DELETE` | `/api/webhooks/{id}` | Delete a webhook |
 | `POST` | `/api/webhooks/{id}/regenerate-secret` | Regenerate webhook secret |
-| `POST` | `/webhook/{name}` | Trigger endpoint (Public, verified by secret) |
-
-### GET /api/webhooks
-
-**Response:**
-```json
-{
-  "webhooks": [
-    {
-      "id": "uuid",
-      "name": "github-push",
-      "agent_id": "main",
-      "secret": "****...abcd",
-      "prompt_prefix": "New GitHub event:",
-      "enabled": true,
-      "created_at": "2026-01-01T00:00:00Z",
-      "last_triggered_at": "2026-03-27T10:00:00Z",
-      "trigger_count": 42,
-      "webhook_type": "github",
-      "event_filter": ["push", "pull_request"]
-    }
-  ]
-}
-```
-
-Note: The `secret` field is masked (last 4 characters visible). The full secret is returned only at creation time.
+| `POST` | `/webhook/{name}` | Trigger endpoint (auth by webhook secret) |
 
 ### POST /api/webhooks
 
@@ -1136,32 +1082,27 @@ Note: The `secret` field is masked (last 4 characters visible). The full secret 
 |-------|------|----------|-------------|
 | `name` | string | Yes | Unique webhook name (used in trigger URL) |
 | `agent` | string | Yes | Target agent name |
-| `prompt_prefix` | string | No | Text prepended to the payload before sending to agent |
+| `prompt_prefix` | string | No | Text prepended to payload before sending to agent |
 | `enabled` | bool | No | Default: `true` |
 | `webhook_type` | string | No | `generic` (default) or `github` |
-| `event_filter` | array | No | For GitHub webhooks: list of event types to process (e.g. `["push", "pull_request"]`) |
+| `event_filter` | array | No | GitHub webhooks: list of event types (e.g. `["push", "pull_request"]`) |
 
-**Response:** `201 Created` with webhook object including the **full secret** (only visible at creation).
+**Response:** `201 Created` with full webhook object including the **full secret** (only visible at creation).
 
 ### POST /api/webhooks/{id}/regenerate-secret
 
-Generates a new random secret for the webhook. The old secret is immediately invalidated.
-
-**Response:**
-```json
-{ "ok": true, "secret": "new-64-char-hex-string" }
-```
+**Response:** `{ "ok": true, "secret": "new-64-char-hex-string" }`
 
 ### POST /webhook/{name}
 
-Trigger endpoint called by external systems. Not behind the standard auth middleware — instead authenticated by the webhook secret.
+Trigger endpoint called by external systems. **Not** behind standard auth middleware — authenticated by webhook secret.
 
-**Webhook types:**
+**Auth methods:**
 
-| Type | Auth method | Payload handling |
-|------|-------------|-----------------|
-| `generic` | `Authorization: Bearer <secret>` | JSON body pretty-printed and sent to agent |
-| `github` | `X-Hub-Signature-256: sha256=<hmac>` | GitHub event parsed and summarized before sending to agent |
+| Type | Auth method |
+|------|-------------|
+| `generic` | `Authorization: Bearer <secret>` |
+| `github` | `X-Hub-Signature-256: sha256=<hmac>` |
 
 **Query parameters:**
 
@@ -1171,21 +1112,12 @@ Trigger endpoint called by external systems. Not behind the standard auth middle
 
 **Rate limiting:** 5 auth failures within 5 minutes locks the webhook for 10 minutes.
 
-**Response (synchronous):**
-```json
-{ "ok": true, "response": "Agent response text" }
-```
-
-**Response (async):**
-```json
-{ "ok": true, "queued": true }
-```
+**Response (sync):** `{ "ok": true, "response": "Agent response text" }`  
+**Response (async):** `{ "ok": true, "queued": true }`
 
 ---
 
 ## 16. Secrets
-
-The secrets vault stores credentials and API keys. Secrets have a name and an optional scope. Scoped secrets take priority over global ones during lookup.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -1194,26 +1126,20 @@ The secrets vault stores credentials and API keys. Secrets have a name and an op
 | `GET` | `/api/secrets/{name}` | Get a secret |
 | `DELETE` | `/api/secrets/{name}` | Delete a secret |
 
-### GET /api/secrets
-
-Returns metadata for all secrets. Values are never returned in the list view.
-
 ### POST /api/secrets
 
 **Request body:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Secret name (A-Z, a-z, 0-9, `_`, max 128 chars) |
+| `name` | string | Yes | Secret name |
 | `value` | string | Conditional | Secret value (required unless updating description only) |
 | `description` | string | No | Human-readable description |
-| `scope` | string | No | Agent name for per-agent secrets; omit or empty for global |
+| `scope` | string | No | Agent name for per-agent secrets; empty for global |
 
-**Scoped secret lookup order:** `(name, scope)` → `(name, "")` (global) → environment variable fallback.
+**Resolution order:** `(name, scope)` → `(name, "")` global → environment variable.
 
 ### GET /api/secrets/{name}
-
-Query parameters:
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -1230,19 +1156,16 @@ Query parameters:
 | `PUT` | `/api/config` | Update gateway configuration |
 | `GET` | `/api/config/export` | Export full config as JSON |
 | `POST` | `/api/config/import` | Import config from JSON |
+| `GET` | `/api/config/schema` | Get JSON schema for gateway config |
 | `POST` | `/api/restart` | Restart the gateway process |
 
-### GET /api/config
+### GET /api/config/schema
 
-Returns the current gateway configuration (from `config/hydeclaw.toml`). Sensitive fields are masked.
-
-### PUT /api/config
-
-Update gateway config. Changes are written to disk and applied live where possible. Some settings require a restart.
+Returns JSON Schema for `config/hydeclaw.toml`. Useful for UI config editors and client-side validation.
 
 ### POST /api/restart
 
-Signals the process to exit (systemd or the watchdog will restart it). Returns immediately.
+Signals the process to exit (systemd or watchdog will restart it).
 
 **Response:** `{ "ok": true, "message": "restarting..." }`
 
@@ -1260,7 +1183,7 @@ Signals the process to exit (systemd or the watchdog will restart it). Returns i
 
 ### POST /api/backup
 
-Creates a full backup of the database (agents, sessions, messages, memory, cron jobs, secrets, webhooks, channels, LLM providers) and writes it to the `backups/` directory.
+Creates a full backup to the `backups/` directory.
 
 **Response:**
 ```json
@@ -1271,84 +1194,56 @@ Creates a full backup of the database (agents, sessions, messages, memory, cron 
 }
 ```
 
-### Backup file format
-
-The backup is a JSON file with top-level keys:
-
-```json
-{
-  "version": "1",
-  "created_at": "2026-03-27T10:00:00Z",
-  "agents": [...],
-  "sessions": [...],
-  "messages": [...],
-  "memory_chunks": [...],
-  "scheduled_jobs": [...],
-  "secrets": [...],
-  "webhooks": [...],
-  "agent_channels": [...],
-  "providers": [...]
-}
-```
-
 ### POST /api/restore
+
+Body size limit: configured by `limits.max_restore_size_mb` (default 500 MB). Uses chunked streaming validation — axum's default 2 MB limit is disabled for this endpoint.
 
 **Request body:**
 ```json
 { "filename": "hydeclaw-backup-2026-03-27T10-00-00Z.json" }
 ```
 
-Restores data from the named backup file. Existing data in the target tables is replaced.
-
 ---
 
 ## 19. Services
 
-Manage Docker services and native child processes controlled by HydeClaw.
-
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/services` | List all managed services |
+| `GET` | `/api/services` | List all managed services (Docker + native processes) |
 | `POST` | `/api/services/{name}/{action}` | Perform an action on a service |
-| `POST` | `/api/containers/{name}/restart` | Restart a Docker container |
-
-### GET /api/services
-
-Returns all Docker containers visible on the host plus natively managed processes (toolgate, channel adapter).
+| `POST` | `/api/containers/{name}/restart` | Restart a Docker container (whitelist-restricted) |
 
 ### POST /api/services/{name}/{action}
 
-**Actions:**
+**Actions for Docker services:** `restart`, `rebuild`, `start`, `stop`, `status`, `logs`
 
-| Action | Description |
-|--------|-------------|
-| `restart` | Stop and restart the service |
-| `rebuild` | Rebuild Docker image and restart |
-| `start` | Start a stopped service |
-| `stop` | Stop a running service |
-| `status` | Get service status |
-| `logs` | Retrieve recent logs |
+**Actions for native managed processes** (channels, toolgate): `restart`, `start`, `stop`, `status`, `logs`
 
-For **natively managed processes** (non-Docker), only `restart`, `start`, `stop`, and `status` are supported.
+`rebuild` is Docker-only. For native processes, `restart` and `rebuild` both call `pm.restart()`.
+
+**Response:**
+```json
+{ "ok": true, "action": "restart", "service": "toolgate", "managed": true }
+```
+
+### POST /api/containers/{name}/restart
+
+Whitelist-only — only non-sensitive containers (browser-renderer, searxng, mcp-*). PostgreSQL container is excluded.
 
 ---
 
 ## 20. Watchdog
 
-The watchdog is a separate binary (`hydeclaw-watchdog`) that monitors services and can restart them automatically. Status is communicated via a JSON file at `/tmp/hydeclaw-watchdog.json`.
-
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/watchdog/status` | Current watchdog status |
+| `GET` | `/api/watchdog/status` | Current watchdog status (reads `/tmp/hydeclaw-watchdog.json`) |
 | `GET` | `/api/watchdog/config` | Read watchdog TOML config |
 | `PUT` | `/api/watchdog/config` | Update watchdog TOML config |
-| `GET` | `/api/watchdog/settings` | Read alerting settings |
+| `GET` | `/api/watchdog/settings` | Read DB-backed alerting settings |
 | `PUT` | `/api/watchdog/settings` | Update alerting settings |
-| `POST` | `/api/watchdog/restart/{name}` | Execute the restart command for a check |
+| `POST` | `/api/watchdog/restart/{name}` | Execute restart command for a check |
 
-### GET /api/watchdog/status
-
-Returns the content of `/tmp/hydeclaw-watchdog.json`. Returns `{ "error": "watchdog not running" }` if the watchdog process is not active.
+These endpoints are registered in `monitoring.rs`, not a separate watchdog handler.
 
 ### PUT /api/watchdog/config
 
@@ -1361,8 +1256,6 @@ Config is validated as valid TOML before saving.
 
 ### PUT /api/watchdog/settings
 
-Updatable keys:
-
 | Key | Type | Description |
 |-----|------|-------------|
 | `alert_channel_ids` | array | Channel UUIDs to send alerts to |
@@ -1372,41 +1265,24 @@ Updatable keys:
 
 ## 21. Providers
 
-All providers (LLM and media) share the unified `/api/providers` endpoint. LLM and media providers are distinguished by their `kind` field (`"llm"` or `"media"`).
-
-### LLM Providers
-
-Named LLM provider connections allow configuring multiple providers with their API keys.
+All providers (LLM and media) share the `/api/providers` endpoint. Distinguished by `kind` field (`"text"`, `"stt"`, `"tts"`, `"vision"`, `"imagegen"`, `"embedding"`).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/provider-types` | List supported provider types |
-| `GET` | `/api/providers` | List configured providers (filter by `kind` query param) |
+| `GET` | `/api/provider-types` | List supported LLM provider types |
+| `GET` | `/api/media-drivers` | List available media driver types |
+| `GET` | `/api/media-config` | Export toolgate-compatible media config |
+| `GET` | `/api/providers` | List configured providers (filter by `?kind=`) |
 | `POST` | `/api/providers` | Create a provider |
 | `GET` | `/api/providers/{id}` | Get a provider |
 | `PUT` | `/api/providers/{id}` | Update a provider |
+| `PATCH` | `/api/providers/{id}` | Patch CLI options for a provider |
 | `DELETE` | `/api/providers/{id}` | Delete a provider |
 | `GET` | `/api/providers/{id}/models` | List models from this provider |
 | `GET` | `/api/providers/{id}/resolve` | Resolve connection details |
-
-### GET /api/provider-types
-
-**Response:**
-```json
-{
-  "provider_types": [
-    {
-      "id": "openai",
-      "name": "OpenAI",
-      "default_base_url": "https://api.openai.com/v1",
-      "chat_path": "/chat/completions",
-      "default_secret_name": "OPENAI_API_KEY",
-      "requires_api_key": true,
-      "supports_model_listing": true
-    }
-  ]
-}
-```
+| `POST` | `/api/providers/{id}/test-cli` | Test CLI-based provider |
+| `GET` | `/api/provider-active` | Get currently active provider per capability |
+| `PUT` | `/api/provider-active` | Set active provider for a capability |
 
 ### POST /api/providers (LLM)
 
@@ -1414,75 +1290,24 @@ Named LLM provider connections allow configuring multiple providers with their A
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Human-readable connection name |
-| `kind` | string | Yes | `"llm"` for LLM providers |
+| `name` | string | Yes | Human-readable connection name (alphanumeric, `-`, `_`) |
+| `kind` | string | Yes | `"text"` for LLM providers |
 | `provider_type` | string | Yes | Provider type ID (e.g. `openai`, `anthropic`, `minimax`) |
 | `base_url` | string | No | Override base URL |
 | `api_key` | string | No | API key (stored in vault, masked in responses) |
 | `default_model` | string | No | Default model for this connection |
 | `notes` | string | No | Internal notes |
 
-**Response:** Provider object with `has_api_key: true/false` and masked `api_key`.
+### Valid `kind` values
 
-### LLM Provider object
-
-```json
-{
-  "id": "uuid",
-  "name": "MiniMax Production",
-  "kind": "llm",
-  "provider_type": "minimax",
-  "base_url": "https://api.minimax.io/v1",
-  "api_key": "****...xyz9",
-  "has_api_key": true,
-  "default_model": "MiniMax-M2.5",
-  "notes": "",
-  "created_at": "2026-01-01T00:00:00Z",
-  "updated_at": "2026-03-27T10:00:00Z"
-}
-```
-
-### Media Providers
-
-Media providers handle STT (speech-to-text), TTS (text-to-speech), vision, image generation, and embedding capabilities. They use the same `/api/providers` endpoint as LLM providers, with `kind` set to `"media"`.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/providers` | List providers (use `?kind=media` to filter) |
-| `POST` | `/api/providers` | Create a media provider |
-| `GET` | `/api/providers/{id}` | Get a media provider |
-| `PUT` | `/api/providers/{id}` | Update a media provider |
-| `DELETE` | `/api/providers/{id}` | Delete a media provider |
-| `GET` | `/api/provider-active` | Get currently active provider per capability |
-| `PUT` | `/api/provider-active` | Set the active provider for a capability |
-| `GET` | `/api/media-drivers` | List available driver types |
-| `GET` | `/api/media-config` | Export toolgate-compatible media config |
-
-### Capabilities
-
-| Capability | Description |
-|------------|-------------|
-| `stt` | Speech-to-text transcription |
-| `tts` | Text-to-speech synthesis |
+| Kind | Description |
+|------|-------------|
+| `text` | LLM text generation provider |
+| `stt` | Speech-to-text |
+| `tts` | Text-to-speech |
 | `vision` | Image description / visual understanding |
 | `imagegen` | Image generation |
-| `embedding` | Text embeddings for semantic search |
-
-### Media Provider object
-
-```json
-{
-  "id": "whisper-local",
-  "kind": "media",
-  "type": "stt",
-  "driver": "openai",
-  "base_url": "http://localhost:8300/v1",
-  "model": "Systran/faster-whisper-large-v3",
-  "api_key": null,
-  "has_api_key": false,
-  "notes": "Local faster-whisper"
-}
-```
+| `embedding` | Text embeddings |
 
 ### PUT /api/provider-active
 
@@ -1491,7 +1316,8 @@ Media providers handle STT (speech-to-text), TTS (text-to-speech), vision, image
 {
   "stt": "whisper-local",
   "tts": "qwen3-tts-voice",
-  "vision": "qwen35-local"
+  "vision": "qwen35-local",
+  "embedding": "local-embed"
 }
 ```
 
@@ -1499,12 +1325,14 @@ Omit a capability to leave its active provider unchanged.
 
 ---
 
-## 22. TTS
+## 22. TTS and Canvas
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/tts/voices` | List available TTS voices |
 | `POST` | `/api/tts/synthesize` | Synthesize speech |
+| `GET` | `/api/canvas/{agent}` | Get current canvas state |
+| `DELETE` | `/api/canvas/{agent}` | Clear canvas state |
 
 ### POST /api/tts/synthesize
 
@@ -1517,6 +1345,22 @@ Omit a capability to leave its active provider unchanged.
 
 **Response:** Audio binary with appropriate `Content-Type` header (`audio/mpeg`, `audio/ogg`, etc.), or JSON error.
 
+### GET /api/canvas/{agent}
+
+**Response:**
+```json
+{
+  "visible": true,
+  "agent": "main",
+  "action": "present",
+  "content_type": "markdown",
+  "content": "# Current canvas content\n...",
+  "title": null
+}
+```
+
+When canvas is empty: `{ "visible": false }`.
+
 ---
 
 ## 23. Media Upload
@@ -1524,26 +1368,42 @@ Omit a capability to leave its active provider unchanged.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/api/media/upload` | Required | Upload a file (max 20 MB) |
-| `GET` | `/uploads/{filename}` | Public | Serve an uploaded file |
+| `POST` | `/api/media/transcribe` | Required | Transcribe audio via STT (max 20 MB) |
+| `POST` | `/api/vision/analyze` | Required | Analyze an image via vision provider |
+| `GET` | `/uploads/{filename}` | Public / Signed | Serve an uploaded file |
 
 ### POST /api/media/upload
 
-Multipart form upload. The file is saved to `workspace/uploads/{uuid}.{ext}`.
+Multipart form upload. Saves to `workspace/uploads/{uuid}.{ext}`.
 
-**Allowed extensions:** `jpg`, `jpeg`, `png`, `gif`, `webp`, `bmp`, `ico`, `mp4`, `webm`, `mov`, `avi`, `ogg`, `oga`, `mp3`, `wav`, `flac`, `aac`, `m4a`, `pdf`, `docx`, `xlsx`, `pptx`, `txt`, `md`, `csv`, `log`, `json`, `toml`, `yaml`, `yml`, `zip`, `tar`, `gz`, `bin`. Other extensions are saved with the `.bin` extension.
+**Allowed extensions:** `jpg`, `jpeg`, `png`, `gif`, `webp`, `bmp`, `ico`, `mp4`, `webm`, `mov`, `avi`, `ogg`, `oga`, `mp3`, `wav`, `flac`, `aac`, `m4a`, `pdf`, `docx`, `xlsx`, `pptx`, `txt`, `md`, `csv`, `log`, `json`, `toml`, `yaml`, `yml`, `zip`, `tar`, `gz`, `bin`. Other extensions saved as `.bin`.
 
 **Response:**
 ```json
-{
-  "url": "http://host:18789/uploads/uuid.jpg",
-  "filename": "uuid.jpg",
-  "size": 204800
-}
+{ "url": "http://host:18789/uploads/uuid.jpg", "filename": "uuid.jpg", "size": 204800 }
 ```
+
+### POST /api/media/transcribe
+
+Multipart audio upload. Proxies to Toolgate `/transcribe`.
+
+| Query param | Default | Description |
+|-------------|---------|-------------|
+| `lang` | `"ru"` | Language hint for transcription |
+
+**Supported audio extensions:** `webm`, `mp4`, `ogg`, `oga`, `mp3`, `wav`, `m4a`, `aac`, `flac`.
+
+**Response:** `{ "text": "<transcript>" }` or `503` if STT not configured.
 
 ### GET /uploads/{filename}
 
-Public — no auth required. Serves the file with appropriate `Content-Type`. Returns `400 Bad Request` if the filename contains path traversal sequences (`..`, `/`, `\`).
+Serves uploaded files. Security: HMAC-signed URL enforcement is configurable via `uploads.require_signature`.
+
+- `require_signature = true`: `403` when `?sig=&exp=` missing.
+- `require_signature = false` (default): unsigned OK; if signature present it is still validated.
+- Expired signature: `410 Gone`.
+- Invalid signature: `403 Forbidden`.
+- Path traversal (`..`, `/`, `\`): `400 Bad Request`.
 
 ---
 
@@ -1553,16 +1413,16 @@ Browse, read, write, and delete files within the `workspace/` directory.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/workspace` | List workspace root |
-| `GET` | `/api/workspace/{path}` | List directory or read file |
-| `PUT` | `/api/workspace/{path}` | Write a file |
-| `DELETE` | `/api/workspace/{path}` | Delete a file |
+| `GET` | `/api/workspace` | Browse workspace root |
+| `GET` | `/api/workspace/{*path}` | List directory or read file |
+| `PUT` | `/api/workspace/{*path}` | Write a file |
+| `DELETE` | `/api/workspace/{*path}` | Delete a file |
 
-All paths are strictly sandboxed within the `workspace/` directory. Path traversal (e.g. `../`) is rejected with `403 Forbidden`.
+All paths are strictly sandboxed within `workspace/`. Symlink-following path traversal is rejected with `403 Forbidden`.
 
-### GET /api/workspace/{path}
+### GET /api/workspace/{*path}
 
-For **directories**: returns a JSON listing.
+For **directories**: returns JSON listing.
 ```json
 {
   "entries": [
@@ -1572,43 +1432,33 @@ For **directories**: returns a JSON listing.
 }
 ```
 
-For **files**: returns the raw file content with appropriate `Content-Type`.
+For **files**: returns raw file content with appropriate `Content-Type`.
 
-### PUT /api/workspace/{path}
+### PUT /api/workspace/{*path}
 
-**Request body:** Raw file content (any content type). Parent directories are created automatically.
+**Request body:** Raw file content (any content type). Parent directories created automatically.
 
 ---
 
-## 25. Canvas
+## 25. Workspace Files (Signed URLs)
 
-The canvas stores ephemeral shared state (e.g. a document being collaboratively edited) per agent.
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/workspace-files/{*path}` | HMAC signature | Serve workspace artifacts via signed URL |
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/canvas/{agent}` | Get current canvas state |
-| `DELETE` | `/api/canvas/{agent}` | Clear canvas state |
+HMAC-signed access to workspace files created by tools (`workspace_write`, `workspace_edit`, `code_exec`). No Bearer token required — security is via `?sig=<hmac>&exp=<unix_ts>`.
 
-### GET /api/canvas/{agent}
+Signature payload: `HMAC-SHA256("{path}:{exp}", upload_key)`.
 
-**Response:**
-```json
-{
-  "agent": "main",
-  "content": "# Current canvas content\n...",
-  "updated_at": "2026-03-27T10:00:00Z"
-}
-```
+Returns `403 Forbidden` for invalid/expired signatures, `403` for path escaping workspace.
 
 ---
 
 ## 26. OAuth
 
-OAuth 2.0 integration for connecting agent tools to external services (Google, GitHub, etc.).
-
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/oauth/callback` | Public | OAuth callback (called by provider) |
+| `GET` | `/api/oauth/callback` | Public | OAuth callback (called by OAuth provider) |
 | `GET` | `/api/oauth/providers` | Required | List supported OAuth providers |
 | `GET` | `/api/oauth/accounts` | Required | List configured OAuth accounts |
 | `POST` | `/api/oauth/accounts` | Required | Create an OAuth account |
@@ -1616,8 +1466,8 @@ OAuth 2.0 integration for connecting agent tools to external services (Google, G
 | `POST` | `/api/oauth/accounts/{id}/connect` | Required | Initiate OAuth authorization flow |
 | `POST` | `/api/oauth/accounts/{id}/revoke` | Required | Revoke OAuth tokens |
 | `GET` | `/api/agents/{name}/oauth/bindings` | Required | List agent OAuth bindings |
-| `POST` | `/api/agents/{name}/oauth/bindings` | Required | Bind an OAuth account to an agent |
-| `DELETE` | `/api/agents/{name}/oauth/bindings/{provider}` | Required | Remove an OAuth binding |
+| `POST` | `/api/agents/{name}/oauth/bindings` | Required | Bind OAuth account to agent |
+| `DELETE` | `/api/agents/{name}/oauth/bindings/{provider}` | Required | Remove OAuth binding |
 
 ### POST /api/oauth/accounts
 
@@ -1633,25 +1483,19 @@ OAuth 2.0 integration for connecting agent tools to external services (Google, G
 
 ### POST /api/oauth/accounts/{id}/connect
 
-Generates an authorization URL. Redirect the user to this URL to complete OAuth.
+Generates authorization URL. Redirect user to this URL to complete OAuth.
 
-**Response:**
-```json
-{ "auth_url": "https://accounts.google.com/o/oauth2/auth?..." }
-```
+**Response:** `{ "auth_url": "https://accounts.google.com/o/oauth2/auth?..." }`
 
 ### POST /api/agents/{name}/oauth/bindings
 
-**Request body:**
-```json
-{ "account_id": "uuid" }
-```
+**Request body:** `{ "account_id": "uuid" }`
 
 ---
 
 ## 27. Access / Pairing
 
-Agents with `access.mode: allowlist` require users to be approved before they can chat. The pairing flow works via a 6-character code sent by the user in the channel.
+Agents with `access.mode: allowlist` require users to be approved before chatting. The pairing flow uses a 6-character code.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -1659,14 +1503,14 @@ Agents with `access.mode: allowlist` require users to be approved before they ca
 | `POST` | `/api/access/{agent}/approve/{code}` | Approve a pairing request |
 | `POST` | `/api/access/{agent}/reject/{code}` | Reject a pairing request |
 | `GET` | `/api/access/{agent}/users` | List approved users |
-| `DELETE` | `/api/access/{agent}/users/{user_id}` | Remove a user from the allowlist |
+| `DELETE` | `/api/access/{agent}/users/{user_id}` | Remove user from allowlist |
 
 ### Pairing flow
 
-1. User sends `/start` or their pairing code to the bot.
-2. Core creates a pending pairing entry with a 6-character code.
-3. Admin calls `POST /api/access/{agent}/approve/{code}` (or rejects).
-4. On approval, the user is added to `allowed_users` and can chat freely.
+1. User sends `/start` or pairing code to the bot.
+2. Core creates a pending entry with a 6-character code.
+3. Admin calls `POST /api/access/{agent}/approve/{code}`.
+4. User is added to `allowed_users`.
 
 ### GET /api/access/{agent}/pending
 
@@ -1707,15 +1551,15 @@ Agents with `access.mode: allowlist` require users to be approved before they ca
 |------|------|-------------|
 | `GET /ws` | Ticket or Bearer | UI real-time event stream |
 
-The WebSocket connection at `/ws` delivers real-time events to the UI. Authentication is via:
+Authentication:
 - `?ticket=<uuid>` query parameter (from `POST /api/auth/ws-ticket`)
-- `Authorization: Bearer <token>` header on the upgrade request
+- `Authorization: Bearer <token>` header on upgrade request
 
 ### UI event types
 
 | Event | Description |
 |-------|-------------|
-| `agent_processing` | Agent started/stopped processing a request |
+| `agent_processing` | Agent started/stopped processing |
 | `session_updated` | Session metadata or messages changed |
 | `cron_completed` | A scheduled cron job finished |
 | `task_updated` | Task status changed |
@@ -1723,13 +1567,12 @@ The WebSocket connection at `/ws` delivers real-time events to the UI. Authentic
 | `approval_resolved` | Approval was resolved |
 | `channel_status` | Channel adapter connected/disconnected |
 | `memory_updated` | Memory chunk created or updated |
-| `log` | Real-time log line (debug/info/warn/error) |
+| `agent_joined` | Agent invited into a multi-agent session |
+| `log` | Real-time log line |
 
 ---
 
 ## 29. Email Triggers (Gmail)
-
-Gmail Pub/Sub push triggers notify the agent when new emails arrive in a connected Gmail account.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
@@ -1749,11 +1592,11 @@ Gmail Pub/Sub push triggers notify the agent when new emails arrive in a connect
 | `label_filter` | array | No | Gmail label IDs to filter (e.g. `["INBOX"]`) |
 | `prompt_prefix` | string | No | Text prepended to email content |
 
-The Gmail watch subscription is automatically registered with Google Pub/Sub.
+Gmail watch subscription is automatically registered with Google Pub/Sub.
 
 ### POST /api/triggers/email/push
 
-Called by Google Pub/Sub when new mail arrives. Public endpoint — Google does not include auth tokens. Validates the Pub/Sub message signature internally.
+Called by Google Pub/Sub when new mail arrives. No Bearer token required.
 
 ---
 
@@ -1765,37 +1608,249 @@ Called by Google Pub/Sub when new mail arrives. Public endpoint — Google does 
 | `POST` | `/api/agents/{name}/github/repos` | Add a GitHub repo to the allowlist |
 | `DELETE` | `/api/agents/{name}/github/repos/{id}` | Remove a repo from the allowlist |
 
-The GitHub repo allowlist controls which repositories an agent's GitHub tools can access. Used in combination with GitHub webhook integrations.
-
 ### POST /api/agents/{name}/github/repos
 
 **Request body:**
 ```json
+{ "owner": "octocat", "repo": "hello-world" }
+```
+
+---
+
+## 31. Setup
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/setup/status` | Public | Whether initial setup has been completed |
+| `GET` | `/api/setup/requirements` | Public | Prerequisites checklist (Docker, DB, disk space) |
+| `POST` | `/api/setup/complete` | Required | Mark setup as complete (guarded — `403` after completion) |
+
+### GET /api/setup/status
+
+**Response:**
+```json
+{ "needs_setup": true }
+```
+
+`needs_setup` is derived from the `system_flags` table (not agent count).
+
+### GET /api/setup/requirements
+
+Returns a checklist for the setup wizard. Public endpoint — no token needed.
+
+**Response:**
+```json
 {
-  "owner": "octocat",
-  "repo": "hello-world"
+  "requirements": [
+    { "name": "database", "ok": true, "message": "PostgreSQL 17 reachable" },
+    { "name": "master_key", "ok": true, "message": "HYDECLAW_MASTER_KEY set" },
+    { "name": "provider", "ok": false, "message": "No LLM provider configured" },
+    { "name": "agent", "ok": false, "message": "No agents created" }
+  ]
+}
+```
+
+### POST /api/setup/complete
+
+Marks the instance as fully configured. Protected by `setup_guard_middleware` — returns `403` if already completed.
+
+**Request body:**
+```json
+{ "provider": "openai", "model": "gpt-4o-mini", "agent_name": "assistant" }
+```
+
+**Response:** `{ "ok": true }`
+
+---
+
+## 32. Network
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/network/addresses` | List detected network addresses (LAN, WAN, Tailscale) |
+
+### GET /api/network/addresses
+
+Returns WAN IP (with CGNAT detection), Tailscale status, LAN interfaces, and mDNS hostname. WAN IP cached for 5 minutes.
+
+**Response:**
+```json
+{
+  "wan_ip": "1.2.3.4",
+  "wan_cgnat": false,
+  "tailscale": { "status": "...", "ip": "100.x.x.x" },
+  "interfaces": [
+    { "name": "eth0", "ip": "192.168.1.85", "family": "ipv4" }
+  ],
+  "mdns_hostname": "hydeclaw.local",
+  "port": 18789
 }
 ```
 
 ---
 
-## 31. Audit Log
+## 33. Notifications
 
-See [Monitoring](#2-monitoring) for audit endpoints. Event types include:
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/notifications` | List notifications |
+| `PATCH` | `/api/notifications/{id}` | Mark a notification as read |
+| `POST` | `/api/notifications/read-all` | Mark all notifications as read |
+| `DELETE` | `/api/notifications/clear` | Delete all read notifications |
 
-| Event type | Description |
-|------------|-------------|
-| `secret_created` | Secret was created or updated |
-| `agent_started` | Agent engine started |
-| `agent_stopped` | Agent engine stopped |
-| `access_approved` | User pairing approved |
-| `access_rejected` | User pairing rejected |
-| `webhook_triggered` | Webhook received a payload |
-| `tool_called` | Agent invoked a tool |
-| `approval_resolved` | Human approval decision made |
-| `config_updated` | Gateway config changed |
-| `backup_created` | Backup snapshot taken |
-| `restore_completed` | Backup restored |
+### GET /api/notifications
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | integer | 50 | Max results (max 200) |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "type": "agent_error",
+      "title": "Agent failed",
+      "body": "Provider returned 401",
+      "read": false,
+      "created_at": "2026-04-06T12:00:00Z",
+      "data": {}
+    }
+  ],
+  "unread_count": 3,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Note: Backend serializes `notification_type` as `"type"` in JSON.
+
+### PATCH /api/notifications/{id}
+
+**Request body:** `{ "read": true }`  
+**Response:** `{ "ok": true }`
+
+### POST /api/notifications/read-all
+
+**Response:** `{ "ok": true, "updated": 5 }`
+
+### DELETE /api/notifications/clear
+
+Deletes read notifications only. Unread preserved.
+
+**Response:** `{ "ok": true, "deleted": 12 }`
+
+---
+
+## 34. Curator
+
+The curator is an automated skill maintenance system that reviews, repairs, and archives skills.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/curator/status` | Current curator status and last run info |
+| `GET` | `/api/curator/config` | Get curator configuration |
+| `PUT` | `/api/curator/config` | Update curator configuration |
+| `POST` | `/api/curator/run` | Trigger a curator run manually |
+| `GET` | `/api/curator/runs` | List curator run history |
+| `GET` | `/api/curator/runs/{id}` | Get details of a curator run |
+| `GET` | `/api/curator-decisions/recent` | Most recent curator decision per skill |
+| `GET` | `/api/skills/{skill}/curator-decisions` | Curator decisions for a specific skill |
+
+### GET /api/curator/status
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "cron": "0 3 * * *",
+  "last_run_at": "2026-05-01T03:00:00Z",
+  "last_run_id": "uuid",
+  "last_phase1": 12,
+  "last_phase2": 3,
+  "last_phase3": 1
+}
+```
+
+### GET /api/curator/config
+
+**Response:**
+```json
+{
+  "enabled": true,
+  "cron": "0 3 * * *",
+  "min_idle_minutes": 30,
+  "stale_after_days": 90,
+  "archive_after_days": 180,
+  "max_repairs_per_run": 5,
+  "agent_name": "main"
+}
+```
+
+### GET /api/curator-decisions/recent
+
+Returns most recent decision per skill as a flat map.
+
+**Response:**
+```json
+{
+  "web-search": {
+    "action": "keep",
+    "reason": "...",
+    "decided_at": "2026-05-01T03:00:00Z"
+  }
+}
+```
+
+---
+
+## 35. Session Failures
+
+Read-only API for the structured session failure log.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/sessions/failures` | Paginated failure list |
+| `GET` | `/api/sessions/{session_id}/failures` | Failure records for one session |
+
+### GET /api/sessions/failures
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `agent` | string | — | Filter by agent name |
+| `limit` | integer | 50 | Max results |
+| `offset` | integer | 0 | Pagination offset |
+
+**Response:**
+```json
+{
+  "failures": [
+    {
+      "id": "uuid",
+      "session_id": "uuid",
+      "agent_id": "main",
+      "failed_at": "2026-04-01T12:00:00Z",
+      "failure_kind": "provider_error",
+      "error_message": "Provider returned 500",
+      "retry_count": 2,
+      "resolved": false
+    }
+  ],
+  "total": 5
+}
+```
+
+---
+
+## 36. CSP Reports
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/csp-report` | Public | Receive Content Security Policy violation reports |
+
+Browser CSP report endpoint. Rate-limited separately from standard API endpoints. Body capped at 64 KB. Reports are aggregated into metrics counters visible in `/api/health/dashboard`.
 
 ---
 
@@ -1813,195 +1868,39 @@ All error responses use a consistent JSON format:
 |--------|---------|
 | `400` | Bad request — missing or invalid parameters |
 | `401` | Unauthorized — missing or invalid Bearer token |
-| `403` | Forbidden — path traversal or ownership mismatch |
-| `404` | Not found — resource does not exist |
-| `409` | Conflict — resource already exists |
-| `413` | Payload too large — file upload exceeds 20 MB |
-| `429` | Too many requests — rate limit exceeded |
+| `403` | Forbidden — path traversal, ownership mismatch, or feature guard |
+| `404` | Not found |
+| `409` | Conflict — resource already exists or concurrent state issue |
+| `410` | Gone — signed URL expired |
+| `413` | Payload too large — file exceeds 20 MB |
+| `429` | Too many requests — rate limit exceeded or lockout active |
 | `500` | Internal server error |
-| `503` | Service unavailable — dependency (embeddings, etc.) not configured |
+| `503` | Service unavailable — dependency not configured (embeddings, STT, etc.) |
 
 ---
 
 ## Notes
 
+### Auth Lockout
+
+500 failed auth attempts (per IP) triggers a 30-second lockout for requests without a valid `Authorization` header. Loopback addresses are exempt. Authenticated requests are exempt from rate limiting.
+
 ### LLM Retry Policy
 
-Failed LLM calls are retried up to 3 times with exponential backoff: 1s → 3s → 9s. Retries are triggered on HTTP status codes `429`, `500`, `502`, and `503`.
-
-### Tool Concurrency
-
-Tool call concurrency is controlled by an in-memory `tokio::Semaphore`. There is no database-level queue.
+Failed LLM calls are retried up to 3 times with exponential backoff. Retries triggered on HTTP `429`, `500`, `502`, `503`.
 
 ### Secrets Resolution Order
 
 For any secret name and agent scope: `(name, scope)` → `(name, "")` global → environment variable.
 
+### SSE Backpressure
+
+Chat SSE endpoint uses bounded channels (256/512 events) with backpressure. Overflow events are dropped and counted in `/api/health/dashboard` under `sse_events_dropped_total`.
+
 ### CORS
 
-CORS origins are configured via `gateway.cors_origins`. If empty, the gateway allows the UI port (`:5173`) and API port on the same host.
+CORS origins configured via `gateway.cors_origins`. If empty, allows the UI port (`:5173`) and API port on the same host.
 
----
+### Session Branching
 
-## 32. Setup
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/setup/status` | Check whether initial setup has been completed |
-| `GET` | `/api/setup/requirements` | List prerequisites and their current status |
-| `POST` | `/api/setup/complete` | Mark setup as complete after configuration |
-
-### GET /api/setup/status
-
-Returns whether the instance has completed first-run setup.
-
-**Response:**
-```json
-{
-  "setup_complete": false,
-  "missing_steps": ["provider", "agent"]
-}
-```
-
-### GET /api/setup/requirements
-
-Returns a checklist of prerequisites (database, Docker, secrets, providers) with pass/fail status for each.
-
-**Response:**
-```json
-{
-  "requirements": [
-    { "name": "database", "ok": true, "message": "PostgreSQL 17 reachable" },
-    { "name": "master_key", "ok": true, "message": "HYDECLAW_MASTER_KEY set" },
-    { "name": "provider", "ok": false, "message": "No LLM provider configured" },
-    { "name": "agent", "ok": false, "message": "No agents created" }
-  ]
-}
-```
-
-### POST /api/setup/complete
-
-Marks the instance as fully configured. Subsequent calls to `GET /api/setup/status` will return `"setup_complete": true`. Idempotent.
-
-**Request body:**
-```json
-{ "provider": "openai", "model": "gpt-4o-mini", "agent_name": "assistant" }
-```
-
-**Response:** `{ "ok": true }`
-
----
-
-## 33. Network
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/network/addresses` | List detected LAN addresses for this host |
-
-### GET /api/network/addresses
-
-Returns all non-loopback IP addresses detected on the host, useful for displaying access URLs in the UI or during setup.
-
-**Response:**
-```json
-{
-  "addresses": [
-    { "ip": "192.168.1.85", "interface": "eth0", "family": "ipv4" },
-    { "ip": "fe80::1", "interface": "eth0", "family": "ipv6" }
-  ],
-  "port": 18789
-}
-```
-
----
-
-## 34. Notifications
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/notifications` | List notifications for the current user |
-| `PATCH` | `/api/notifications/{id}` | Update a notification (e.g. mark as read) |
-| `POST` | `/api/notifications/read-all` | Mark all notifications as read |
-| `DELETE` | `/api/notifications/clear` | Delete all read notifications |
-
-### GET /api/notifications
-
-Query parameters:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `unread` | boolean | — | Filter to unread only |
-| `limit` | integer | 50 | Max results (max 200) |
-| `offset` | integer | 0 | Pagination offset |
-
-**Response:**
-```json
-{
-  "notifications": [
-    {
-      "id": "uuid",
-      "type": "agent_error",
-      "title": "Agent failed",
-      "body": "Provider returned 401 for agent 'analyst'",
-      "read": false,
-      "created_at": "2026-04-06T12:00:00Z"
-    }
-  ],
-  "unread_count": 3
-}
-```
-
-### PATCH /api/notifications/{id}
-
-**Request body:**
-```json
-{ "read": true }
-```
-
-**Response:** `{ "ok": true }`
-
-### POST /api/notifications/read-all
-
-Marks all unread notifications as read. Returns the number of notifications updated.
-
-**Response:** `{ "ok": true, "updated": 5 }`
-
-### DELETE /api/notifications/clear
-
-Deletes all notifications that have been read. Unread notifications are preserved.
-
-**Response:** `{ "ok": true, "deleted": 12 }`
-
----
-
-## 35. Config Schema
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/config/schema` | Get the JSON schema for gateway configuration |
-
-### GET /api/config/schema
-
-Returns the JSON schema describing all valid fields for `config/hydeclaw.toml`. Useful for UI-driven config editors and client-side validation.
-
-**Response:**
-```json
-{
-  "type": "object",
-  "properties": {
-    "gateway": {
-      "type": "object",
-      "properties": {
-        "listen": { "type": "string", "default": "0.0.0.0:18789" },
-        "cors_origins": { "type": "array", "items": { "type": "string" } }
-      }
-    },
-    "limits": {
-      "type": "object",
-      "properties": {
-        "max_requests_per_minute": { "type": "integer", "default": 100 }
-      }
-    }
-  }
-}
-```
+`parent_message_id` and `branch_from_message_id` on messages enable conversation tree navigation. `POST /api/sessions/{id}/fork` creates a new branch; `GET /api/sessions/{id}/active-path` returns the current active path through the tree.

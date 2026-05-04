@@ -2,349 +2,599 @@
 
 ## Overview
 
-HydeClaw is a self-hosted AI gateway and multi-agent platform written in Rust. The primary deployment target is a Raspberry Pi 4 (ARM64). The stack consists of three Rust binaries (`hydeclaw-core`, `hydeclaw-watchdog`, `hydeclaw-memory-worker`) running as independent systemd services, with two managed child processes (`channels` in Bun/TypeScript, `toolgate` in Python/FastAPI) spawned by core.
+HydeClaw is a self-hosted AI gateway and multi-agent platform written in Rust. Primary deployment target is Raspberry Pi 4 (ARM64). The stack consists of three Rust binaries (`hydeclaw-core`, `hydeclaw-watchdog`, `hydeclaw-memory-worker`) running as independent systemd services, with two managed child processes (`channels` in Bun/TypeScript, `toolgate` in Python/FastAPI) spawned by Core at startup.
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                          hydeclaw-core (systemd)                         │
-│                                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐   │
-│  │  AgentEngine │  │  AgentEngine │  │  Scheduler   │  │  Gateway   │   │
-│  │  "Agent1"    │  │  "Agent2"    │  │  (cron jobs) │  │  (axum)    │   │
-│  └──────┬───────┘  └──────┬───────┘  └──────────────┘  └─────┬──────┘   │
-│         │                 │                                    │          │
-│  ┌──────▼─────────────────▼────────────────────────────────────▼──────┐   │
-│  │             ChannelActionRouter  /  ProcessingTracker              │   │
-│  └───────────────────────────────────────────────────────────────────┘   │
-│                                                                          │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  ┌─────────────┐   │
-│  │ SecretsVault│  │ MemoryStore  │  │ McpRegistry │  │ToolRegistry │   │
-│  │ ChaCha20    │  │ pgvector+FTS │  │ (bollard)   │  │ RwLock<Map> │   │
-│  └─────────────┘  └──────────────┘  └─────────────┘  └─────────────┘   │
-└───────────────────────────┬──────────────────────────────────────────────┘
-                            │  manages child processes
-                  ┌─────────┴─────────┐
-                  │                   │
-         ┌────────▼───────┐   ┌───────▼──────┐
-         │  channels      │   │  toolgate    │
-         │  (Bun/TS)      │   │  (Python)    │
-         │  WebSocket ↔   │   │  port 9011   │
-         │  hydeclaw-core │   └──────────────┘
-         └────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        hydeclaw-core (systemd)                          │
+│                                                                         │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────────┐  │
+│  │AgentEngine │  │AgentEngine │  │ Scheduler  │  │   Gateway/Axum   │  │
+│  │ "Agent1"   │  │ "Agent2"   │  │ (cron jobs)│  │  :18789          │  │
+│  └──────┬─────┘  └──────┬─────┘  └────────────┘  └────────┬─────────┘  │
+│         │               │                                  │            │
+│  ┌──────▼───────────────▼──────────────────────────────────▼─────────┐  │
+│  │   ChannelActionRouter  /  SessionAgentPool  /  StreamRegistry     │  │
+│  └────────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │
+│  │ SecretsVault │  │ MemoryStore  │  │ McpRegistry  │  │ToolRegistry│  │
+│  │ ChaCha20     │  │ pgvec+FTS    │  │  (bollard)   │  │RwLock<Map> │  │
+│  │             │  │ +trigram     │  │              │  │            │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └────────────┘  │
+└──────────────────────────────┬──────────────────────────────────────────┘
+                               │  manages child processes
+                     ┌─────────┴──────────┐
+                     │                    │
+            ┌────────▼───────┐   ┌────────▼──────┐
+            │  channels      │   │  toolgate      │
+            │  (Bun/TS)      │   │  (Python 3)    │
+            │  Telegram,     │   │  STT, TTS,     │
+            │  Discord, etc. │   │  Vision, Embed │
+            │  WS ↔ core     │   │  port 9011     │
+            └────────────────┘   └────────────────┘
 
-┌──────────────────┐  ┌──────────────────┐
-│ hydeclaw-watchdog│  │ hydeclaw-memory- │
-│ (systemd)        │  │ worker (systemd) │
-│ health monitor   │  │ background index │
-└────────┬─────────┘  └────────┬─────────┘
-         │                     │
-         └──────────┬──────────┘
-                    │
-     ┌──────────────▼──────────────────┐
-     │      PostgreSQL 17 + pgvector    │
-     │  sessions, messages,             │
-     │  memory_chunks, secrets,         │
-     │  tasks, agent_channels           │
-     └─────────────────────────────────┘
+┌────────────────────┐  ┌──────────────────────┐
+│ hydeclaw-watchdog  │  │ hydeclaw-memory-      │
+│ (systemd)          │  │ worker (systemd)      │
+│ health monitor     │  │ LISTEN/NOTIFY + poll  │
+│ alert routing      │  │ embedding reindex     │
+└─────────┬──────────┘  └────────────┬──────────┘
+          │                          │
+          └──────────────┬───────────┘
+                         │
+          ┌──────────────▼──────────────────┐
+          │   PostgreSQL 17 + pgvector       │
+          │   + pg_trgm                      │
+          │   sessions, messages,            │
+          │   memory_chunks, secrets,        │
+          │   memory_tasks, agent_channels   │
+          └─────────────────────────────────┘
 ```
 
 **Key binaries:**
 
 | Binary | Role |
 |--------|------|
-| `hydeclaw-core` | Main process: HTTP gateway, agent engines, scheduler, secrets, MCP |
-| `hydeclaw-memory-worker` | Separate binary: background indexing task queue (poll-based) |
-| `hydeclaw-watchdog` | Optional: external health monitor for the core process |
+| `hydeclaw-core` | Main process: HTTP gateway, agent engines, scheduler, secrets, MCP, channels WS |
+| `hydeclaw-memory-worker` | Background indexing via PostgreSQL LISTEN/NOTIFY + poll safety net |
+| `hydeclaw-watchdog` | External health monitor — agent inactivity and managed process health alerts |
 
-**Stack:** axum, tokio (4 worker threads), sqlx (async PostgreSQL), bollard (Docker), reqwest (rustls, no OpenSSL). Binary size ~14 MB, idle RAM ~2.2 MB.
+**Stack:** axum 0.8, tokio (4 worker threads), sqlx 0.8 (async PostgreSQL), bollard 0.18 (Docker), reqwest 0.12 (rustls-tls only, no OpenSSL). Binary size ~14 MB, idle RAM ~2.2 MB.
+
+---
+
+## Binaries & Processes
+
+### hydeclaw-core
+
+Entry point: `crates/hydeclaw-core/src/main.rs`.
+
+Startup sequence:
+1. Load `.env` from binary dir (auto-generate if missing with `HYDECLAW_AUTH_TOKEN`, `HYDECLAW_MASTER_KEY`, `DATABASE_URL`)
+2. Load `config/hydeclaw.toml`
+3. Run sqlx migrations (`migrations/*.sql`) automatically
+4. Recover stale `session_events` WAL entries from previous crash
+5. Bootstrap `SecretsManager` (decrypt `secrets` table into in-memory cache)
+6. Detect `embed_dim` from Toolgate (auto-probe at startup)
+7. Load agents from `config/agents/{Name}.toml`, build `Arc<AgentEngine>` per agent
+8. If `memory_chunks` has zero `scope='shared'` rows → enqueue one-shot reindex task
+9. Start `Scheduler` (tokio-cron-scheduler): heartbeats, dynamic cron, memory decay, backup, curator
+10. Start `ProcessManager`: spawn `channels` (Bun) and `toolgate` (Python) as managed child processes
+11. Start `ChannelActionRouter`, `SessionAgentPool` map, `StreamRegistry`
+12. Bind Axum router on `0.0.0.0:18789`
+
+### hydeclaw-memory-worker
+
+Entry point: `crates/hydeclaw-memory-worker/src/main.rs`.
+
+- Runs as `tokio::main(flavor = "current_thread")` (single-threaded async)
+- DB pool: 3 connections
+- Wake strategy: PostgreSQL `LISTEN memory_tasks_new` (primary, sub-100ms pickup) + poll every `poll_interval_secs` (safety net for dropped notifications)
+- On startup: recovers stuck `'processing'` tasks from previous crash
+- Sends `sd_notify(READY=1)` on Linux for systemd watchdog integration
+- Task type: `reindex` — reads workspace files, calls `POST /v1/embeddings` on Toolgate, inserts/updates `memory_chunks`
+
+### hydeclaw-watchdog
+
+Entry point: `crates/hydeclaw-watchdog/src/main.rs`.
+
+- Monitors agent inactivity and managed process health
+- Alert configuration stored in `watchdog_settings` DB table (not `hydeclaw.toml`)
+- Sends alerts via `POST /api/channels/notify` (body: `{"channel_id": "uuid", "text": "..."}`)
+- API: `GET/PUT /api/watchdog/settings`, `GET /api/watchdog/status`, `GET/PUT /api/watchdog/config`
+
+### channels (Bun/TypeScript)
+
+Entry point: `channels/src/index.ts`.
+
+- Runs as a managed child process spawned by Core's `ProcessManager`
+- Polls `GET /api/channels?reveal=true` every 10 seconds for active channel configs
+- Supports 7 platforms via driver factories: **Telegram** (grammy), **Discord** (discord.js), **Matrix** (matrix-bot-sdk), **IRC** (irc-framework), **Slack** (@slack/bolt), **WhatsApp**, **Email**
+- Communicates with Core via WebSocket loopback at `/ws/channel/{agent_name}`
+- Health server on `HEALTH_PORT` (default 3000)
+
+### toolgate (Python/FastAPI)
+
+Entry point: `toolgate/app.py`.
+
+- Runs as a managed child process (`--workers 1 --loop asyncio`)
+- Media hub for STT, Vision, TTS, ImageGen, Embeddings
+- Loads provider configuration from Core API at startup via `registry.aload()`
+- Key endpoints:
+  - `POST /describe-url` — vision (image description)
+  - `POST /transcribe-url` — STT (audio transcription)
+  - `POST /v1/audio/speech` — TTS
+  - `POST /v1/embeddings` — text embeddings (proxied to configured embedding backend)
+  - `GET /health` — healthcheck (public, no auth)
+  - `POST /reload` — reload provider registry
+- httpx connection pool: max 20 connections, max 10 keepalive, pool timeout 120s
+- Auth: Bearer token (`AUTH_TOKEN` env var), with internal network bypass (`INTERNAL_NETWORK` CIDR)
 
 ---
 
 ## Agent Engine
 
-### Entry Points
+### Architecture After Decomposition (Phase 66)
 
-Every agent has one `AgentEngine` instance, owned by an `Arc<AgentEngine>`. There are two ways to invoke it:
+`AgentEngine` is the central object per agent. It is constructed once at startup, stored in `Arc<AgentEngine>`, and shared across concurrent requests. After Phase 66 decomposition, the monolithic `engine.rs` is split into submodules under `crates/hydeclaw-core/src/agent/engine/`:
 
-1. **HTTP SSE** (`POST /api/chat`): called from the UI or API. The engine streams `StreamEvent` variants over Server-Sent Events using the Vercel AI SDK UI Message Stream Protocol v1. The gateway handler calls `engine.handle_with_status()` and pipes `mpsc::Receiver<StreamEvent>` to the SSE response.
+| File | Role |
+|------|------|
+| `mod.rs` | `AgentEngine` struct, `Arc<AgentConfig>`, state fields |
+| `run.rs` | Three thin entry-point adapters: `handle_sse`, `handle_with_status`, `handle_isolated` |
+| `context_builder.rs` | `impl ContextBuilderDeps for AgentEngine`: `build_context`, `compact_session`, channel info cache |
+| `tool_executor.rs` | `impl ToolExecutor for AgentEngine`: routes single tool call to pipeline |
+| `yaml_tool_runner.rs` | YAML tool HTTP execution logic |
+| `approval_flow.rs` | Approval gate: `check_needs_approval`, `wait_for_approval` |
+| `loop_detector_integration.rs` | `LoopDetector` warm-up from WAL on session entry |
+| `stream.rs` | `ProcessingGuard`, `ProcessingPhase` enum |
 
-2. **Internal `handle_isolated()`**: called by the Scheduler for cron jobs and heartbeats. Creates a fresh, throw-away session in the DB so cron runs never accumulate context from previous invocations. Also used by `agent` tool for inter-agent communication.
+`AgentConfig` (`crates/hydeclaw-core/src/agent/agent_config.rs`) is an immutable snapshot holding all engine dependencies, grouped into five concern areas:
+- **Identity**: `agent: AgentSettings`, `workspace_dir`, `default_timezone`, `app_config`
+- **LLM**: `provider: Arc<dyn LlmProvider>`, `compaction_provider`
+- **Data**: `db: PgPool`, `memory_store`, `embedder`
+- **Tools**: `tools: ToolRegistry`, `approval_manager`
+- **Infra**: `scheduler`, `agent_map`, `session_pools`, `audit_queue`, `metrics: Arc<MetricsRegistry>`
 
-### LLM Loop Flow
+### Three Entry Points
 
-The core loop runs inside `handle_isolated()` (for internal calls) or the SSE path (for user-facing calls). The steps are identical:
+All three entry points (`run.rs`) construct an `EventSink` and delegate to `pipeline::{bootstrap, execute, finalize}`:
 
+1. **`handle_sse(msg, event_tx, resume_session_id, force_new_session, cancel)`** — web SSE via `SseSink` wrapping an `EngineEventSender` (bounded `mpsc::Sender<StreamEvent>`, capacity 256). Fires `HookEvent::BeforeMessage` before any processing; publishes `sse_event_tx` so `ApprovalManager` can broadcast tool-approval notifications while the stream is live.
+
+2. **`handle_with_status(msg, text_tx, status_tx)`** — channel adapters (Telegram/Discord) via `ChannelStatusSink`; drives typing indicator via `UnboundedSender` channels.
+
+3. **`handle_isolated(msg)`** — called by Scheduler for cron jobs, heartbeats, and inter-agent `agent` tool calls. Creates a throw-away session (or reuses an existing subagent session). No SSE transport.
+
+### Pipeline: bootstrap → execute → finalize
+
+The unified pipeline lives in `crates/hydeclaw-core/src/agent/pipeline/`.
+
+**`sink.rs`** defines the transport abstraction:
+```rust
+enum PipelineEvent {
+    Stream(StreamEvent),    // web SSE events
+    Phase(ProcessingPhase), // channel typing indicator phases
+}
+trait EventSink: Send {
+    async fn emit(&mut self, ev: PipelineEvent) -> Result<(), SinkError>;
+}
 ```
-1. build_context()
-   ├── load system prompt from workspace/AGENTS.md + USER.md
-   ├── inject runtime context: agent name, model, channel, datetime, channel list
-   ├── load session history from DB (last N messages)
-   ├── prune_old_tool_outputs(): replace tool results in old turns with "[omitted]"
-   └── assemble available_tools: system + YAML (cached 30s) + MCP
+Production sinks: `SseSink` (SSE), `ChannelStatusSink` (channel), `ChunkSink` (plain text).
 
-2. enrich_message_text()
-   ├── PII redaction (credit cards, phone numbers, etc.)
-   ├── URL auto-fetch (up to 2 URLs, 10s timeout, 512 KB limit)
-   ├── attachment enrichment (description strings from media metadata)
-   └── audio auto-transcription via Toolgate STT
+**`bootstrap.rs`** — session entry:
+1. Resolve or create session (check `resume_session_id`, handle `force_new_session`)
+2. Check `pending_split` compaction state → `maybe_split_session()` creates child session B, marks parent A with `end_reason='compression'`
+3. Persist user message to DB, write WAL `running` event (with single retry)
+4. Build `ProcessingGuard` (marks session in-flight), `SessionLifecycleGuard`
+5. Load `Compressor` state from `sessions.compaction_state` JSONB
+6. Detect and handle slash-commands → `command_output` early exit
+7. Load session history (`max_history_messages`, default 50), assemble `tools` list
+8. Warm up `LoopDetector` from WAL replay
+9. Return `BootstrapOutcome { session_id, messages, tools, loop_detector, compressor, ... }`
 
-3. LLM call  →  provider.chat() or provider.chat_stream()
-   ├── ThinkingFilter: strips <think>/<thinking>/<thought>/<antthinking> blocks in-stream
-   └── retry on TransientHttp / Overloaded (3 attempts, exponential backoff)
-
-4. Response branch:
-   ├── tool_calls.is_empty() == true  →  final response, break
-   │   └── auto-continue check: if looks_incomplete(), inject nudge and continue
-   └── tool_calls present  →  execute_tool_calls_partitioned() → append results → goto 3
-
-5. Post-loop:
-   ├── save final assistant message to DB
-   ├── session graph extraction (background tokio::spawn, ≥5 messages)
-   └── emit SSE Finish event
+**`execute.rs`** — main LLM + tools loop:
+```
+for iteration in 0..loop_config.effective_max_iterations():
+    1. Check CancellationToken → Interrupted("cancel_token") on signal
+    2. Optionally run mid-loop compaction (Compressor.should_compress())
+    3. LLM call: engine.call_provider() → stream text deltas into sink
+    4. ThinkingFilter: strip <think>/<thinking>/<thought>/<antthinking> in-stream
+    5. Collect tool_calls from response
+    6. If tool_calls.is_empty() → check looks_incomplete() → nudge or break
+    7. If tool_calls present:
+       a. Hook: BeforeToolCall (sync policy, fire_webhooks async)
+       b. execute_tool_calls_partitioned(parallel_batch + sequential)
+       c. Persist tool results via detached tokio::spawn (survives SSE disconnect)
+       d. LoopDetector.check_limits() + record_execution()
+    8. If LoopDetector fires → inject nudge or force break
+    → return ExecuteOutcome { status, final_text, thinking_json, messages_len_at_end, final_parent_msg_id }
 ```
 
-The loop runs up to `max_iterations` times (default: 50). If the loop detector fires or the iteration limit is hit, a forced final LLM call is made with no tools available so the model produces a conclusion.
+**`finalize.rs`** — single exit point:
+1. Persist final assistant message to DB (or partial on interruption)
+2. Transition `SessionLifecycleGuard`: WAL `done|failed|interrupted`
+3. Record `session_failures` row on `Failed` status
+4. Emit `notify_agent_error` / `notify_iteration_limit` UI notifications
+5. Enqueue knowledge extraction (background `tokio::spawn`, ≥5 messages)
+6. Save updated `compressor` state to `sessions.compaction_state`
+7. Emit `StreamEvent::Finish` to sink
 
 ### Tool Execution Partitioning
 
-Tool calls returned by the LLM in a single turn are partitioned into two groups before execution:
+Tool calls from a single LLM turn are split into two groups before execution (`pipeline/parallel.rs`):
 
 **Parallel-safe** (read-only or independently stateful):
-
 ```
 web_fetch, memory_search, memory_get, workspace_read, workspace_list,
 tool_list, skill_list, sessions_list, sessions_history, session_search,
 session_context, session_export, canvas, rich_card, agent
 ```
+YAML tools with `parallel: true` and no `channel_action` are also parallel-eligible.
 
-YAML tools with `parallel: true` and no `channel_action` are also eligible for the parallel batch.
+**Sequential** — everything else: write operations, tools requiring approval, channel actions.
 
-**Sequential** (write operations, tools requiring approval, channel actions):
+Parallel batch runs via `futures_util::future::join_all()`. Both batches subject to a 120-second per-tool timeout. A `safety_timeout_secs` (default 600s) wraps the entire `agent` tool call as a defense-in-depth backstop.
 
-Everything else executes serially, in order, one at a time.
+**Context enrichment:** before dispatch, the engine injects a `_context` field into each tool call's arguments containing `session_id`, channel identifier, and the original `IncomingMessage.context`. Prevents LLM from forging channel routing data. `_context` is stripped before audit logging (`clean_tool_params`).
 
-The parallel batch runs via `futures_util::future::join_all()`. Both parallel and sequential calls are subject to a 120-second per-tool timeout.
+### Session Compression Chains
 
-**Context enrichment:** before dispatch, each tool call receives a `_context` field injected by the engine (not the LLM) containing the session ID, channel identifier, and the original `IncomingMessage.context` blob. This prevents the LLM from forging channel context (e.g., spoofing a `chat_id` for Telegram actions).
+When the context window approaches capacity:
 
-### SSE Streaming Event Flow
+1. `Compressor.should_compress()` checks: `last_prompt_tokens >= context_limit × threshold`
+2. Anti-thrash guard: if `ineffective_count >= anti_thrash_max_skips` → skip (prevents thrashing when model responses are already short)
+3. `compact_session()` calls a summarization LLM pass, producing `previous_summary`
+4. `record_compression_result()`: if savings ≥ `anti_thrash_min_savings` → reset `ineffective_count`, set `pending_split = true`
+5. At next session entry, `bootstrap.maybe_split_session()` detects `pending_split = true`:
+   - Creates child session B (`sessions.parent_session_id` → A's UUID)
+   - Seeds B with: system message + compressed summary + last N messages
+   - Sets `sessions.end_reason = 'compression'` on parent A
+   - Continues in child session B
+6. `CompressorState` is serialized to `sessions.compaction_state` (JSONB). Child state resets `ineffective_count` and `compression_count` but preserves `previous_summary`.
 
+### Hook System (`crates/hydeclaw-core/src/agent/hooks.rs`)
+
+`HookRegistry` intercepts engine events for policy enforcement:
+
+```rust
+enum HookEvent {
+    BeforeMessage,
+    AfterResponse,
+    BeforeToolCall { agent: String, tool_name: String },
+    AfterToolResult { agent: String, tool_name: String, duration_ms: u64 },
+    OnError,
+}
+enum HookAction { Continue, Block(String) }
 ```
-Engine                    Gateway SSE handler           UI (chat-store.ts)
-  │                             │                             │
-  │── StreamEvent::SessionId ──>│── data: {type:"data-       │
-  │                             │   session-id",...}  ──────>│
-  │── StreamEvent::MessageStart─>│── data: {type:"start"}───>│
-  │── StreamEvent::TextDelta ──>│── data: {type:"text-delta"}│ (streaming text)
-  │   (loop, chunk by chunk)    │                             │
-  │── StreamEvent::ToolCallStart>│── data: {type:"tool-      │
-  │                             │   input-start",...}  ─────>│ (spinner)
-  │── StreamEvent::ToolResult  ─>│── data: {type:"tool-      │
-  │                             │   output-available",...}──>│
-  │── StreamEvent::RichCard    ─>│── data: {type:"rich-card"} │ (inline table/metric)
-  │── StreamEvent::File        ─>│── data: {type:"file",...} ─>│ (inline media)
-  │── StreamEvent::Finish      ─>│── data: {type:"finish"}   │
-  │                             │   close SSE stream         │
-```
 
-The UI `chat-store.ts` parses each `data:` line with `parseSseEvent()` and applies mutations to the per-agent `UIMessage[]` state using Immer, accumulating deltas into `TextPart`, `ToolPart`, `RichCardPart`, and `FilePart` message parts.
+Built-in hooks: `logging_hook()` (trace all calls), `block_tools_hook(blocked: Vec<String>)` (silent deny).
 
-### Thinking Filter
+Outbound webhooks (`WebhookConfig { url, events }`): fire-and-forget HTTP POST dispatched via `tokio::spawn` with 5-second timeout. Errors are logged at `warn` and dropped — they never affect `HookAction`. Configured under `[agent.hooks]` in agent TOML.
 
-Two modes depending on context:
+### Session Agent Pool (`session_agent_pool.rs`)
 
-- **Batch (post-LLM):** `strip_thinking(text)` — scans for `<think>`, `<thinking>`, `<thought>`, `<antthinking>` open tags (ASCII case-insensitive) and removes everything up to the matching close tag. Multiple blocks in one response are all removed. Unclosed blocks strip the remainder.
+Each active session maintains its own `SessionAgentPool` in `AppState.session_pools: SessionPoolsMap` (`Arc<RwLock<HashMap<Uuid, SessionAgentPool>>>`).
 
-- **Streaming:** `ThinkingFilter` struct maintains stateful `in_thinking` flag. Buffers up to 20 bytes at the end of each chunk to handle partial open/close tags split across chunk boundaries.
+`LiveAgent` fields:
+- `message_tx: mpsc::Sender<AgentMessage>` — send new messages
+- `status: Arc<AtomicU8>` — `STATUS_IDLE(0)` / `STATUS_PROCESSING(1)`
+- `last_result: Arc<RwLock<Option<String>>>` — last completed response
+- `result_notify: Arc<Notify>` — signaled on each IDLE transition (zero-latency vs polling)
+- `task_handle: JoinHandle<()>` — background tokio task running `run_subagent()`
+- `cancel: Arc<AtomicBool>` — cancellation flag; set on `Drop`
 
-**Override:** if the incoming message context contains `directives.think: true` (set by `/think` command), thinking blocks are preserved at levels 0–2. Level 3+ always preserves them regardless of directive.
-
-### Error Classification and Retry
-
-Errors from LLM provider calls are classified via regex patterns (compiled once with `LazyLock`) into 7 classes:
-
-| Class | Trigger patterns | Recovery |
-|-------|-----------------|----------|
-| `Billing` | `402`, "payment required", "insufficient credit/quota/balance" | No retry, user error message |
-| `AuthPermanent` | `401`/`403` + api key, "unauthorized", "api key invalid/revoked" | No retry, user error message |
-| `ContextOverflow` | "context length", "token limit", "input too long", 上下文 | Compact context, retry |
-| `SessionCorruption` | "tool_use_block", "roles must alternate", "orphan tool", "incorrect role" | Reset messages to system+user, retry once |
-| `RateLimit` | `429`, "too many requests", "tokens per minute", "resource exhausted" | 60s cooldown |
-| `Overloaded` | "overloaded", "high demand", "overloaded_error" | 30s cooldown |
-| `TransientHttp` | `500`/`502`/`503`/`504`/`521`–`524`/`529`, "bad gateway", "gateway timeout" | 15s cooldown, up to 3 retries |
-| `Unknown` | anything else | 15s cooldown |
-
-Only `TransientHttp` and `Overloaded` are retried at the engine level (`is_retryable()`). All other classes surface a localized user-facing message.
-
-### Agent Tool (Evolution from Handoff)
-
-HydeClaw has transitioned from a linear `handoff` loop (where control was passed from agent to agent) to a **polling-based live agent pool** model. This provides better scalability and allows a single parent agent to drive multiple sub-tasks in parallel.
-
-- **Legacy Handoff (Removed):** Used to pass control via synthetic user messages. Difficult to parallelize and prone to infinite loops.
-- **Modern Agent Tool:** Spawns subagents as background tasks in a session-scoped pool. The parent agent uses `agent(action="ask", target=…, text=…)` — a single canonical "talk to a peer" verb that auto-spawns on pool-miss, continues the dialog on pool-hit, and blocks until a result is available. `status` and `kill` round out the API for inspection and explicit teardown. See [`workspace/skills/multi-agent-coordination.md`](../workspace/skills/multi-agent-coordination.md) for patterns.
-- **Session Pooling:** Each session maintains its own `SessionAgentPool`, ensuring that agents are isolated and their lifecycle is tied to the current chat session.
-
-The `handoff` name is preserved in some legacy configuration fields (e.g., `max_handoff_context_chars`) for backward compatibility with existing `hydeclaw.toml` files, but functionally it now refers to the context transfer between the initiator and the subagent.
-
-### Inter-Agent Communication
-
-`agent(action="ask")` routes through the `AgentMap` (a `Arc<RwLock<HashMap<String, Arc<AgentEngine>>>>` shared across all agents):
-
-1. Looks up the target agent by name.
-2. Looks up the target in the per-session `SessionAgentPool`. On miss, spawns a `LiveAgent` (background tokio task running `engine.run_subagent()`); on hit, sends `text` as the next user message in the existing dialog.
-3. Blocks until the peer's loop finishes, returning its `last_result` to the caller.
-4. Leaves the peer alive in the pool for follow-ups; explicit `kill` (or `fresh=true` on the next `ask`) frees the slot.
-
-The `agent` tool is stripped from the available tool list when the incoming message is itself an inter-agent call, preventing broadcast loops.
+`agent` tool actions:
+- `run` / `ask` — spawn on pool-miss, continue dialog on pool-hit, block until `last_result`
+- `status` — read `status + last_result` without blocking
+- `kill` — remove from pool (Drop signals cancellation)
+- `collect` — wait for idle and return last_result
 
 ### LLM Providers
 
-28 provider types are defined in `PROVIDER_TYPES` (`providers.rs`):
+28 provider types defined in `PROVIDER_TYPES` (`providers.rs`). All implement `LlmProvider` trait (`chat()` + `chat_stream()`). API keys resolved from `SecretsManager` on each call (hot-reloadable without restart).
 
-| Provider key | Implementation | Auth env var |
-|---|---|---|
-| `openai` | OpenAI-compatible HTTP | `OPENAI_API_KEY` |
-| `anthropic` | Anthropic Messages API (native) | `ANTHROPIC_API_KEY` |
-| `google` / `gemini` | Google Generative AI REST | `GOOGLE_API_KEY` |
-| `minimax` | OpenAI-compatible | `MINIMAX_API_KEY` |
-| `deepseek` | OpenAI-compatible | `DEEPSEEK_API_KEY` |
-| `groq` | OpenAI-compatible | `GROQ_API_KEY` |
-| `together` | OpenAI-compatible | `TOGETHER_API_KEY` |
-| `openrouter` | OpenAI-compatible | `OPENROUTER_API_KEY` |
-| `mistral` | OpenAI-compatible | `MISTRAL_API_KEY` |
-| `xai` | OpenAI-compatible | `XAI_API_KEY` |
-| `perplexity` | OpenAI-compatible | `PERPLEXITY_API_KEY` |
-| `ollama` | OpenAI-compatible, local | — |
-| `claude-cli` | Subprocess (Claude CLI inside Docker sandbox) | — |
-| `gemini-cli` | Subprocess (Gemini CLI inside Docker sandbox) | — |
-| `openai_compat` | Generic OpenAI-compatible endpoint | `API_KEY` |
-| `huggingface` | OpenAI-compatible | `HF_API_KEY` |
-| `moonshot` | OpenAI-compatible (Kimi) | `MOONSHOT_API_KEY` |
-| `nvidia` | OpenAI-compatible (NIM) | `NVIDIA_API_KEY` |
-| `venice` | OpenAI-compatible | `VENICE_API_KEY` |
-| `cloudflare` | OpenAI-compatible (AI Gateway) | `CF_AI_API_KEY` |
-| `litellm` | OpenAI-compatible, local proxy | — |
-| `volcengine` | OpenAI-compatible (Doubao) | `VOLCENGINE_API_KEY` |
-| `qwen` | OpenAI-compatible (Alibaba DashScope) | `DASHSCOPE_API_KEY` |
-| `glm` | OpenAI-compatible (Zhipu AI) | `GLM_API_KEY` |
-| `sglang` | OpenAI-compatible, local | — |
-| `vllm` | OpenAI-compatible, local | — |
-| `qianfan` | OpenAI-compatible (Baidu) | `QIANFAN_API_KEY` |
-| `xiaomi` | OpenAI-compatible (MiLM) | `XIAOMI_API_KEY` |
+Provider routing: per-agent `[[agent.routing]]` rules evaluated in order. Conditions: `"default"`, `"short"` (<300 chars), `"long"` (>2000 chars), `"with_tools"`, `"financial"`, `"analytical"`, `"code"`, `"fallback"`. Each rule references a named DB provider connection. Fallback provider: `agent.fallback_provider` — switches after `max_consecutive_failures` (default 3) errors from primary; per-run only.
 
-All providers implement `LlmProvider` trait (`chat()` + `chat_stream()`). API keys are resolved from `SecretsManager` on each call, making them hot-reloadable without restart.
+### Error Classification
+
+Errors from LLM providers are classified via `LazyLock`-compiled regex patterns into 8 classes:
+
+| Class | Trigger patterns | Recovery |
+|-------|-----------------|----------|
+| `Billing` | `402`, "payment required", "insufficient credit" | No retry |
+| `AuthPermanent` | `401`/`403` + api key, "unauthorized", "api key invalid" | No retry |
+| `ContextOverflow` | "context length", "token limit", "input too long" | Compact context, retry |
+| `SessionCorruption` | "tool_use_block", "roles must alternate", "orphan tool" | Reset messages, retry once |
+| `RateLimit` | `429`, "too many requests", "tokens per minute" | 60s cooldown |
+| `Overloaded` | "overloaded", "high demand", "overloaded_error" | 30s cooldown |
+| `TransientHttp` | `500`/`502`/`503`/`504`/`521`–`524`/`529`, "bad gateway" | 15s, up to 3 retries |
+| `Unknown` | anything else | 15s cooldown |
+
+---
+
+## Session Lifecycle
+
+```
+POST /api/chat (new)
+       │
+       ▼
+bootstrap(): resolve/create session
+       │ WAL: "running"
+       ▼
+execute(): LLM + tools loop
+       │   ── tool_calls ──► execute_tool_calls_partitioned()
+       │                         ├── WAL: tool_start / tool_end per call
+       │                         └── tool results persisted via detached spawn
+       ▼
+finalize(): persist assistant message
+       │ WAL: "done" | "failed" | "interrupted"
+       │ session_failures row on Failed
+       ▼
+background: knowledge extraction (≥5 messages)
+            compressor state saved to sessions.compaction_state
+```
+
+**Session WAL** (`session_events` table, migration m013): logs lifecycle transitions — `running`, `tool_start`, `tool_end`, `done`, `failed`, `interrupted`. Retention: 7 days by default (`cleanup.session_events_retention_days`), cleaned in batches of 5000 rows hourly.
+
+**Message branching** (migration m012): `parent_message_id` links each message to its predecessor; `branch_from_message_id` marks fork points. Both nullable (NULL = trunk). Enables conversation tree navigation.
+
+**Mirror messages** (migration m043): `messages.is_mirror = true` marks messages written by cron delivery. Mirror records do NOT update `sessions.last_message_at` (trigger guards this), keeping DM sessions from floating to the top of the list.
+
+**Compression chains** (migration m041): `sessions.parent_session_id` (UUID, FK to sessions) and `sessions.end_reason` ('compression' or NULL). Index on `parent_session_id WHERE NOT NULL`.
+
+---
+
+## Gateway
+
+### Sub-Router Pattern
+
+`crates/hydeclaw-core/src/gateway/mod.rs` composes the router via `.merge()` of 35 handler modules. Each handler module exports `pub(crate) fn routes() -> Router<AppState>`.
+
+**Current handler modules** (`src/gateway/handlers/`):
+
+| Module | Routes |
+|--------|--------|
+| `chat.rs` | `/health`, `POST /api/chat`, `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`, `/api/mcp/callback` |
+| `auth.rs` | `POST /api/auth/ws-ticket` |
+| `channel_ws.rs` | `GET /ws`, `GET /ws/channel/{agent_name}` |
+| `agents.rs` | `/api/agents/*`, `/api/approvals/*` |
+| `sessions.rs` | `/api/sessions/*`, `/api/messages/*` |
+| `session_failures.rs` | `/api/sessions/failures`, `/api/sessions/{id}/failures` |
+| `monitoring.rs` | `/api/setup/*`, `/api/status`, `/api/stats`, `/api/usage/*`, `/api/doctor`, `/api/health/dashboard`, `/api/audit/*`, `/api/watchdog/*` |
+| `providers.rs` | `/api/providers/*`, `/api/provider-types`, `/api/media-drivers`, `/api/media-config`, `/api/provider-active` |
+| `network.rs` | `GET /api/network/addresses` |
+| `secrets.rs` | `/api/secrets/*` |
+| `memory.rs` | `/api/memory/*` |
+| `cron.rs` | `/api/cron/*` |
+| `tools.rs` | `/api/tool-definitions`, `/api/tools/*`, `/api/mcp/*` |
+| `yaml_tools.rs` | `/api/yaml-tools/*`, `/api/agents/*/yaml-tools/*` |
+| `skills.rs` | `/api/skills/*`, `/api/agents/*/skills/*` |
+| `channels.rs` | `/api/channels/*`, `/api/agents/*/channels/*`, `/api/agents/*/hooks` |
+| `config.rs` | `/api/config/*`, `/api/restart`, `/api/tts/*`, `/api/canvas/*` |
+| `backup.rs` | `/api/backup/*`, `/api/restore` |
+| `curator.rs` | `/api/curator/*` |
+| `curator_decisions.rs` | `/api/curator-decisions/*`, `/api/skills/*/curator-decisions` |
+| `services.rs` | `/api/services/*`, `/api/containers/*` |
+| `webhooks.rs` | `/api/webhooks/*`, `/webhook/*` |
+| `oauth.rs` | `/api/oauth/*`, `/api/agents/*/oauth/*` |
+| `email_triggers.rs` | `/api/triggers/email/*` |
+| `github_repos.rs` | `/api/agents/*/github/repos/*` |
+| `access.rs` | `/api/access/*` |
+| `tasks.rs` | `/api/tasks/*` |
+| `notifications.rs` | `/api/notifications/*` |
+| `csp.rs` | `POST /api/csp-report` |
+| `media.rs` | `/uploads/*`, `/api/media/*` |
+| `workspace_files.rs` | `/workspace-files/{*path}?sig=&exp=` |
+| `workspace.rs` | `/api/workspace/*` |
+
+### Middleware Stack (outer to inner)
+
+1. **Static files** — `ServeDir` for UI `out/` directory
+2. **Request rate limit** — per-IP sliding window, default 300 rpm (`limits.max_requests_per_minute`)
+3. **CSP report rate limit** — separate limit for `/api/csp-report`
+4. **Webhook rate limit** — separate limit for `/webhook/*`
+5. **Auth middleware** — Bearer token check; authenticated requests exempt from request rate limit. Auth lockout: 500 failed attempts → 30s block for requests without Authorization. Loopback exempt.
+6. **W3C Trace Context** (`trace_context` module) — parses `traceparent` header, injects into tracing span
+7. **CORS** — derives allowed origins from listen address; configurable via `cors_origins`
+
+### SSE Event Types (Vercel AI SDK v3 compatible)
+
+```
+data-session-id      → {sessionId}
+start                → {messageId?}
+text-start           → {id?}
+text-delta           → {delta}
+text-end             → —
+tool-input-start     → {toolCallId, toolName}
+tool-input-delta     → {toolCallId, inputTextDelta}
+tool-input-available → {toolCallId, input}
+tool-output-available→ {toolCallId, output}
+file                 → {url, mediaType?}
+rich-card            → {cardType, data}
+sync                 → {content, toolCalls, status, error?}
+tool-approval-needed → {approvalId, toolName, args}
+tool-approval-resolved → {approvalId, approved}
+reconnecting         → —
+usage                → {inputTokens, outputTokens, ...}
+finish               → {finishReason, continuation}
+error                → {errorText}
+```
+
+### `/api/health/dashboard`
+
+Returns process-wide resilience metrics (Phase 62 + Phase 65):
+- `sse_events_dropped_total` — per-agent, per-event-type backpressure drop counters
+- `csp_violations` — per-directive CSP report counts
+- `active_agents`, `sse_streams`, `approval_waiters`
+- `auth_rate_limiter_size`, `request_rate_limiter_size`, `stream_registry_size`
+- `db_pool_total`, `db_pool_idle`
+- `memory_worker_heartbeat_age_secs` — seconds since memory worker last processed a task (-1 = unknown)
+- `session_events_table_size_bytes`
+- `uptime_secs`
 
 ---
 
 ## Memory System
 
-Memory is stored entirely in PostgreSQL. There is no separate vector database process.
+All memory storage is in PostgreSQL. No separate vector DB process.
 
-### Hybrid Search
+### Hybrid Search: 3-Way RRF
 
-Every search query runs semantic and FTS in parallel (`tokio::join!`) and merges via Reciprocal Rank Fusion:
+`MemoryStore.search()` (`crates/hydeclaw-core/src/memory/store.rs`) runs three branches in parallel via `tokio::join!` and merges with weighted Reciprocal Rank Fusion:
 
 ```
 query
-  │
-  ├─── embed(query) ──────> pgvector HNSW index  ──> semantic_results (N×2 candidates)
-  │                          (cosine distance)
-  └─── tsvector tsquery ──> PostgreSQL FTS         ──> fts_results     (N×2 candidates)
-                             (language-aware stemming)
-                                         │
-                                         ▼
-                               RRF merge:
-                               score(doc) = 1/(60 + rank_sem + 1)
-                                          + 1/(60 + rank_fts + 1)
-                                         │
-                                         ▼
-                               dedup_by_parent(): keep best chunk per document
-                                         │
-                                         ▼
-                               MMR reranking (semantic path only)
+  ├─── embed(query) ──────► pgvector HNSW (cosine) ──► semantic_results (N×2 candidates)
+  │                                                     (with MMR reranking, λ=0.75)
+  ├─── tsvector tsquery ──► PostgreSQL FTS             ──► fts_results     (N×2 candidates)
+  │                          (language-aware stemming, runtime-switchable)
+  └─── pg_trgm similarity ► GIN trigram index          ──► trgm_results    (N×2 candidates)
+                             (threshold 0.3)
+                                       │
+                                       ▼
+              Weighted RRF: score(doc) = W_SEM × 1/(60 + rank_sem + 1)
+                                       + W_FTS × 1/(60 + rank_fts + 1)
+                                       + W_TRGM × 1/(60 + rank_trgm + 1)
+              Weights: W_SEM=0.6, W_FTS=0.25, W_TRGM=0.15
 ```
 
-**RRF formula:** `score = 1/(K + rank_sem + 1) + 1/(K + rank_fts + 1)` where `K = 60`.
+**Single-branch shortcut:** if only one branch returns results, returns those directly (no RRF computation needed).
 
-If the embedding endpoint is unavailable at query time, the search degrades gracefully to FTS-only (mode returned as `"fts"`). The search mode string is included in tool output.
+**Degradation:** if embedding endpoint is unavailable → FTS-only (mode returned as `"fts"`). If FTS AND-mode returns nothing → retries with OR-mode (`"fts_or"` for multi-word queries). Mode string included in tool output.
 
-### MMR Reranking
+**MMR reranking** on semantic candidates (applied before RRF):
+- Fetch `limit × 6` semantic candidates
+- λ=0.75: balance relevance vs diversity
+- `score = λ × (similarity × relevance_score) - (1-λ) × max_sim_to_selected`
+- Inter-result similarity approximated as `min(candidate_sim, selected_sim)` (no cross-embeddings)
 
-Applied to semantic candidates before RRF merge. Parameters: `lambda = 0.75`, `candidateMultiplier = 6` (fetches 6× the requested limit as candidates).
+**FTS language** — runtime-switchable via API (default: "russian"). Stored in `RwLock<String>` in `MemoryStore`. Validated before SQL interpolation (regconfig cannot be parameterized).
 
-```
-selected = []
-for i in 0..limit:
-    best = argmax over candidates:
-        score = λ × (similarity × relevance_score)
-              - (1 - λ) × max(similarity_to_any_selected)
-    selected.append(best)
-    candidates.remove(best)
-```
-
-The inter-result similarity is approximated as `min(candidate_sim, selected_sim)` since cross-embeddings are not computed.
+**pg_trgm** (migration m035): `CREATE EXTENSION pg_trgm` + GIN index on `memory_chunks.content`. Threshold 0.3 (pg_trgm default). Added as third search branch in Sprint 1 P0.4.
 
 ### Two-Tier Memory
 
-| Tier | `pinned` field | Behavior |
-|------|---------------|----------|
-| Raw | `false` | Subject to temporal decay (daily cron at 03:00 UTC): `relevance_score` multiplied by `exp(-0.693 / 30 * days_since_accessed)` (exponential decay with 30-day half-life). A second cleanup job at 08:00 UTC deletes chunks where `relevance_score < 0.1` AND `accessed_at` is older than 180 days. |
-| Pinned | `true` | Never decayed, never deleted by the decay job. Permanent facts explicitly stored by the agent. |
+| Tier | `pinned` | Behavior |
+|------|---------|----------|
+| Raw | `false` | Temporal decay: daily cron 03:00 UTC — `relevance_score *= exp(-0.693/30 * days_since_accessed)` (30-day half-life). Cleanup cron 08:00 UTC: delete where `relevance_score < 0.1` AND `accessed_at > 180 days` |
+| Pinned | `true` | Never decayed, never deleted by decay job. Permanent facts. |
 
-Both tiers are searched together. The `pinned` flag is surfaced in search results so the LLM can distinguish permanent knowledge from time-sensitive context.
+Both tiers searched together. `pinned` flag surfaced in search results.
 
-### Memory Worker
+### Memory Watcher (`memory/watcher.rs`)
 
-`hydeclaw-memory-worker` is a separate binary that handles asynchronous memory indexing tasks enqueued by the core. It uses a poll-based task queue in PostgreSQL:
+File watcher (notify crate) monitors workspace file `Create`/`Modify` events. On change: re-indexes the file as `scope='shared'` via memory worker task queue. Watcher is delta-only (no initial scan). First-run bootstrap handled by Core startup (enqueue one-shot reindex if zero shared chunks).
 
-```
-claim_next() → UPDATE tasks SET status='processing' WHERE status='pending' ... RETURNING *
-    │
-    ▼
-handlers::dispatch(task) → embed text → insert memory_chunks with pgvector embedding
-    │
-    ▼
-mark_done() or mark_failed()
-```
+### Memory Worker LISTEN/NOTIFY
 
-The worker runs as a single-threaded tokio runtime (`current_thread`) with a DB pool of 3 connections. It sends sd-notify `READY=1` on Linux for systemd integration. Stuck `processing` tasks from a previous crash are recovered at startup.
+Migration m023 adds a PostgreSQL trigger that calls `pg_notify('memory_tasks_new', '')` on every `INSERT` into `memory_tasks`. Memory worker holds a persistent `PgListener` on `memory_tasks_new` — wakes immediately on new tasks. Poll safety net fires every `poll_interval_secs` (default 60s) to reclaim tasks missed by a dropped LISTEN connection.
 
 ---
 
-## Secrets Vault
+## Tool System
 
-Secrets are encrypted at rest in the `secrets` PostgreSQL table using **ChaCha20-Poly1305** (authenticated encryption).
-
-```
-┌───────────────────────────────────────────────────┐
-│                    secrets table                  │
-│  PK: (name, scope)                               │
-│  encrypted_value: bytea  (ciphertext + auth tag) │
-│  nonce: bytea            (12 bytes, random)       │
-└───────────────────────────────────────────────────┘
-         │ decrypt at startup with HYDECLAW_MASTER_KEY (32-byte hex)
-         ▼
-┌─────────────────────────────────────────────────────┐
-│       SecretsManager in-memory cache                │
-│       RwLock<HashMap<(name, scope), String>>        │
-└─────────────────────────────────────────────────────┘
-```
-
-Each secret uses a **unique 12-byte random nonce** generated at write time, so two writes of the same value produce different ciphertexts. The master key is never stored in the DB.
-
-### Scoping Resolution
-
-`get_scoped(name, scope)` applies a three-level fallback:
+### Tool Types
 
 ```
-1. (name, scope)   — agent-specific secret (scope = agent name, e.g. "main")
-2. (name, "")      — global secret (scope = empty string)
-3. env::var(name)  — environment variable fallback (for migration convenience)
+tool_call(name, args)
+       │
+       ├── System tools ──── hardcoded in engine/engine_dispatch.rs
+       │   workspace_write, workspace_edit, workspace_read, workspace_list,
+       │   workspace_delete, workspace_rename, memory_write, memory_search,
+       │   memory_get, memory_delete, web_fetch, code_exec, process_start,
+       │   agent, canvas, rich_card, git_*, skill_*, tool_*, cron_*, etc.
+       │
+       ├── YAML tools ────── loaded from workspace/tools/*.yaml
+       │   HTTP API calls with optional response transforms and channel actions
+       │
+       └── MCP tools ─────── Docker containers via bollard (McpRegistry)
+           name prefixed with "mcp:" or resolved via McpRegistry
 ```
 
-This allows, for example, `BOT_TOKEN` to be stored globally while `BOT_TOKEN` with `scope="analyst"` overrides it for that specific agent. Agent renaming automatically migrates scoped secrets via `rename_scope(old, new)`.
+### Tool Policy
 
-Channel adapter credentials (bot tokens) are extracted from agent config on first startup and stored as scoped secrets keyed by channel UUID, then removed from the config file.
+Evaluation order (deny wins):
+
+```
+1. agent.tools.deny[] → "tool is denied" (checked FIRST, before everything)
+2. HookRegistry.fire(BeforeToolCall) → Block(reason) or Continue
+3. agent.hooks.block_tools[] → silent deny
+4. System tool → execute in engine (Rust)
+5. YAML tool → yaml_tool_runner
+6. MCP tool → McpRegistry
+7. ToolRegistry fallback
+```
+
+Draft YAML tools (`status: draft`) excluded from tool list unless `include_draft = true`. Disabled tools (`status: disabled`) never loaded.
+
+**Tool groups** — `[agent.tools.groups]` in agent TOML toggle entire groups (git, tool_management, etc.) to save LLM context tokens.
+
+**`max_tools_in_context`** — when total tools exceed this limit, keyword matching against user message selects the most relevant subset.
+
+### YAML Tool Execution (`yaml_tool_runner.rs`)
+
+Each `workspace/tools/*.yaml` defines one tool. 30-second in-memory cache to avoid per-batch disk reads.
+
+```
+1. Resolve parameters (LLM-provided → default_from_env → default literal)
+2. Build HTTP request (path/query/header/body params with template substitution)
+3. Auth:
+   bearer_env | basic_env | api_key_header | api_key_query |
+   custom (${VAR} substitution) | oauth_refresh | oauth_provider | none
+4. Execute via reqwest (standard client — admin-configured, not SSRF-checked)
+5. response_transform: optional JSONPath extraction ("$.path.to.field")
+6. If channel_action → route binary result to ChannelActionRouter instead of LLM
+7. Return text result to LLM context
+```
+
+Auth keys resolved via `SecretsEnvResolver`: agent-scoped → global → env var fallback.
+
+`required_base: true` — tool only available to agents with `base = true`.
+
+### SSRF Guard (`crates/hydeclaw-core/src/net/ssrf.rs`)
+
+Phase 64 unified guard for user-supplied URLs (`web_fetch`, `fetch_url_content`):
+
+**Layer 1 — sync pre-check** (`validate_url_scheme()`):
+- Only `http://` and `https://` schemes allowed
+- Internal service blocklist by `host:port` (toolgate:9011, postgres, Docker socket, SearXNG, browser-renderer, core itself)
+- Numeric private IPs in URL blocked immediately
+
+**Layer 2 — DNS-time filtering** (`SsrfSafeResolver`):
+- Custom `reqwest::dns::Resolve` implementation
+- After DNS resolution: filters out all private/internal IPs
+  - IPv4: RFC 1918 (10/8, 172.16/12, 192.168/16), loopback (127/8), link-local (169.254/16), CGNAT (100.64/10), multicast (224/4), broadcast, unspecified
+  - IPv6: loopback (::1), unspecified (::), ULA (fc00::/7), link-local (fe80::/10), Teredo (2001::/32), 6to4 (2002::/16), multicast (ff00::/8), IPv4-mapped (::ffff:x.x.x.x)
+- If ALL resolved addresses are private → `PermissionDenied` (connection never attempted)
+- Closes DNS-rebinding TOCTOU gap
+
+YAML tools and Toolgate calls bypass SSRF checks (admin-configured endpoints).
+
+**`ssrf_http_client()`** — canonical safe client: 30s default timeout, 10s connect timeout, redirect policy NONE, `SsrfSafeResolver`.
+
+### MCP (Model Context Protocol)
+
+MCP servers run as Docker containers managed via bollard. `McpRegistry` wraps `ContainerManager`:
+
+```
+LLM requests tool "mcp_name__tool_name"
+       │
+       ▼
+McpRegistry.call_tool("mcp_name", "tool_name", args)
+       │
+       ├── ContainerManager.ensure_running("mcp_name")
+       │   ├── check if container already running
+       │   ├── if not: docker pull + docker run (bollard async API)
+       │   └── return base_url (e.g. "http://container-ip:8080")
+       │
+       └── POST {base_url}/mcp
+           {"jsonrpc":"2.0","method":"tools/call","params":{"name":"tool_name","arguments":args},"id":2}
+           └── parse JSON-RPC 2.0 response → tool result string
+```
+
+Tool definitions discovered via `tools/list`, cached in `RwLock<HashMap<String, Vec<ToolDefinition>>>`. Cache invalidated on container restart. MCP configs also loadable from `workspace/mcp/*.yaml`.
 
 ---
 
@@ -352,243 +602,311 @@ Channel adapter credentials (bot tokens) are extracted from agent config on firs
 
 ### WebSocket Loopback Architecture
 
-Channel adapters (Telegram, Discord, etc.) connect to Core via a WebSocket handshake at `GET /ws/channel/{agent_name}`. This creates a bidirectional loopback within the same process:
+Channel adapters connect to Core via `GET /ws/channel/{agent_name}`. All communication is serialized JSON over the internal WebSocket:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         hydeclaw-core                                   │
-│                                                                         │
-│   channel adapter task (tokio)          AgentEngine                    │
-│   ┌─────────────────────────────────┐   ┌────────────────────────────┐  │
-│   │  grammy / discord.js / etc.     │   │                            │  │
-│   │  listens on external API        │   │  tool handlers             │  │
-│   │          │                      │   │       │                    │  │
-│   │          ▼                      │   │       ▼                    │  │
-│   │  ChannelInbound (JSON)  ────────┼──>│  IncomingMessage           │  │
-│   │                                 │   │  (via WS loopback)         │  │
-│   │  ChannelOutbound / Action <─────┼───│  ChannelAction             │  │
-│   │  (react, send_voice, etc.)      │   │  (via ChannelActionRouter) │  │
-│   └─────────────────────────────────┘   └────────────────────────────┘  │
-│                  ▲                                                       │
-│                  │ WS frames (JSON)                                      │
-│         /ws/channel/{agent_name}                                        │
-└─────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                       hydeclaw-core                             │
+│                                                                 │
+│   channels process (Bun)              AgentEngine              │
+│   ┌───────────────────────────┐       ┌─────────────────────┐  │
+│   │  grammy / discord.js etc. │       │  tool handlers       │  │
+│   │  listens on external API  │       │                     │  │
+│   │          │                │       │  ChannelActionRouter │  │
+│   │          ▼                │       │         │           │  │
+│   │  ChannelInbound (JSON) ───┼──────►│  IncomingMessage    │  │
+│   │                           │       │  (via WS loopback)  │  │
+│   │  ChannelOutbound ◄────────┼───────│  ChannelAction      │  │
+│   │  (send_voice, react, etc.)│       │  (mpsc ch. cap 64)  │  │
+│   └───────────────────────────┘       └─────────────────────┘  │
+│            ▲                                                    │
+│            │ WS frames (JSON)                                   │
+│   /ws/channel/{agent_name}                                     │
+└─────────────────────────────────────────────────────────────────┘
 ```
-
-The adapter and engine never share memory directly — all communication is serialized JSON over the internal WebSocket, making channel adapters fully replaceable and independently restartable.
 
 ### Inbound Message Flow
 
 ```
-1. Adapter receives external message (e.g. Telegram update via grammy long-poll)
-2. Adapter serializes to ChannelInbound JSON: {text, attachments, context, sender_id, ...}
-3. Adapter sends JSON frame over /ws/channel/{agent_name}
+1. Adapter receives external message (e.g. Telegram update via grammy)
+2. Serialize to ChannelInbound JSON: {text, attachments, context, sender_id, ...}
+3. Send JSON frame over /ws/channel/{agent_name}
 4. Gateway WS handler deserializes to IncomingMessage
-   └── context: opaque serde_json::Value (Immutable Core principle — engine never inspects it)
+   └── context: opaque serde_json::Value (engine never inspects it — Immutable Core principle)
 5. AccessGuard.is_allowed(sender_id) check
 6. engine.handle_with_status() called in spawned task
 7. Response text sent back as ChannelOutbound frame
-8. Adapter formats and delivers response to the user
+8. Adapter formats and delivers to user
 ```
 
-### Outbound Action Flow
+### Outbound Channel Actions
 
-When the engine executes a tool that produces a channel action (e.g., `send_voice`, `react`, `pin`):
-
+When an engine tool produces a channel action (`channel_action:` in YAML tool config):
 ```
-1. YAML tool executes HTTP call → receives binary payload (audio bytes, etc.)
-2. channel_action config in YAML tool triggers ChannelActionRouter.send()
-3. ChannelActionRouter looks up adapter by channel type ("telegram", "discord", etc.)
-4. Sends ChannelAction {name, params, context} via bounded mpsc channel (capacity 64)
+1. YAML tool executes HTTP call → receives binary payload (audio, image, etc.)
+2. channel_action config triggers ChannelActionRouter.send()
+3. ChannelActionRouter looks up adapter by "{channel_type}:{uuid}"
+4. Sends ChannelAction {name, params, context} via bounded mpsc (capacity 64)
 5. Adapter's action receiver loop picks it up
-6. Adapter performs the platform-specific action (uploads file, sets reaction, etc.)
+6. Adapter performs platform-specific action (upload file, set reaction, etc.)
 7. Result sent back via oneshot::Sender<Result<(), String>>
 ```
 
-### ChannelActionRouter
+`ChannelActionRouter` maintains `RwLock<HashMap<String, mpsc::Sender<ChannelAction>>>` keyed by `"{channel_type}:{uuid}"`. UUID is generated fresh on each WebSocket connection to prevent stale senders.
 
-Maintains a `RwLock<HashMap<String, mpsc::Sender<ChannelAction>>>` keyed by `"{channel_type}:{uuid}"`. The UUID is generated fresh on each WebSocket connection, preventing stale senders from a previous connection from being used after reconnection.
+### DM Pairing and Mirroring
 
-When an engine action specifies a `target_channel`, the router finds the first registered sender with a matching prefix. If no target is specified, the first available channel is used.
+Channels support DM pairing: `POST /api/channels/notify` can deliver messages to specific channels by UUID. This is used by:
+- Watchdog alerts
+- Cron job delivery targets
+- Scheduler `announce_to` field
+
+Session mirroring (`sessions.mirror_to_session()`, migration m043): cron delivery writes `is_mirror = true` messages to the target session as passive context, without affecting `last_message_at`.
 
 ### Access Guard
 
 `AccessGuard` enforces per-agent access control:
-
-- `restricted: false` — all users allowed (default for personal agents).
-- `restricted: true` — only the `owner_id` and users in the `access_list` DB table can interact.
-- `owner_id` check is a fast string comparison (no DB query).
-- Non-owner access is checked via `access::is_user_allowed(&db, agent_id, channel_user_id)`.
-- Pairing codes: the owner can generate time-limited codes to grant access to other users.
-
----
-
-## Tool System
-
-### Three Tool Types
-
-```
-IncomingMessage.tool_calls[]
-         │
-         ▼
-execute_tool_call(name, args)
-         │
-         ├── System tools ──────────────── handled in engine (Rust code)
-         │   (workspace_*, memory_*, agent, etc.)
-         │
-         ├── YAML tools ─────────────────── loaded from workspace/tools/*.yaml
-         │   (web APIs, external HTTP services)
-         │
-         └── MCP tools ──────────────────── Docker containers via bollard
-             (name prefixed with mcp: or resolved via McpRegistry)
-```
-
-### Tool Policy
-
-The deny list is checked first, before any execution:
-
-```
-agent config: tools.deny = ["tool_name", ...]
-                              │
-                              ▼ (checked first, before any other routing)
-                         return "tool is denied"
-```
-
-Draft YAML tools (status: `draft`) are excluded from the tool list shown to the LLM unless `include_draft = true` is set in config. Disabled tools (`status: disabled`) are never loaded.
-
-### YAML Tool Execution
-
-Each YAML file in `workspace/tools/` defines one tool. The engine loads them with a 30-second in-memory cache to avoid per-batch disk reads during parallel execution.
-
-Execution flow:
-
-```
-1. Resolve parameters:
-   ├── LLM-provided values (from tool call arguments)
-   ├── default_from_env: resolve via SecretsEnvResolver (agent-scoped → global → env fallback)
-   └── default: literal fallback value
-
-2. Build HTTP request:
-   ├── path parameters: {param} substitution in URL template
-   ├── query parameters: appended to URL
-   ├── header parameters: added to request headers
-   └── body parameters: JSON body (or form-encoded)
-
-3. Auth:
-   ├── bearer_env:      Authorization: Bearer {resolve_env(key)}
-   ├── basic_env:       Authorization: Basic base64({username}:{password})
-   ├── api_key_header:  {header_name}: {resolve_env(key)}
-   ├── api_key_query:   ?{param_name}={resolve_env(key)}
-   ├── custom:          arbitrary headers with ${VAR} substitution
-   ├── oauth_refresh:   POST to token_url with refresh token → cache access token
-   ├── oauth_provider:  OAuth 2.0 via OAuthManager (PKCE flow)
-   └── none:            no auth
-
-4. Execute HTTP call (standard reqwest client — NOT SSRF-safe, tools are admin-configured)
-
-5. response_transform: optional JSONPath extraction ("$.ok", "$.web.results")
-
-6. If channel_action configured: route binary result to ChannelActionRouter
-   instead of returning text to LLM (used for TTS audio, images, etc.)
-
-7. Return text result to LLM context
-```
-
-### SSRF Protection
-
-User-supplied URLs (in `web_fetch`, `fetch_url_content`) use a dedicated `ssrf_http_client` built with `SsrfSafeResolver`:
-
-**Layer 1 — Sync pre-check** (`validate_url_scheme()`):
-- Only `http://` and `https://` schemes allowed.
-- Internal service blocklist checked by `host:port` (toolgate, PostgreSQL, Docker socket, SearXNG, browser-renderer, core itself).
-- Numeric private IPs in URL blocked immediately (no DNS needed).
-
-**Layer 2 — DNS-time filtering** (`SsrfSafeResolver`):
-- Custom `reqwest::dns::Resolve` implementation.
-- After DNS resolution, filters out all private/internal IPs:
-  - IPv4: loopback (127/8), RFC 1918, link-local (169.254/16), CGNAT (100.64/10), broadcast.
-  - IPv6: loopback (::1), unique-local (fc00::/7), link-local (fe80::/10).
-- If all resolved addresses are private, returns `PermissionDenied` — connection never attempted.
-- Eliminates the DNS rebinding TOCTOU gap between validation and connection.
-
-YAML tools and Toolgate calls bypass SSRF checks entirely (admin-configured endpoints).
-
-### MCP (Model Context Protocol)
-
-MCP servers run as Docker containers managed via `bollard`. The `McpRegistry` wraps a `ContainerManager`:
-
-```
-LLM requests mcp tool "mcp_name__tool_name"
-         │
-         ▼
-McpRegistry.call_tool("mcp_name", "tool_name", args)
-         │
-         ├── ContainerManager.ensure_running("mcp_name")
-         │   ├── check if container already running
-         │   ├── if not: docker pull + docker run (via bollard async API)
-         │   └── return base_url (e.g. "http://container-ip:8080")
-         │
-         └── POST {base_url}/mcp
-             Content-Type: application/json
-             Accept: application/json, text/event-stream
-             {
-               "jsonrpc": "2.0",
-               "method": "tools/call",
-               "params": {"name": "tool_name", "arguments": args},
-               "id": 2
-             }
-             │
-             └── parse JSON-RPC 2.0 response → tool result string
-```
-
-Tool definitions are discovered via `tools/list` and cached in `tool_cache: RwLock<HashMap<String, Vec<ToolDefinition>>>`. The cache is invalidated when a container is restarted.
+- `mode: "open"` — all users allowed (default)
+- `mode: "restricted"` — only `owner_id` and users in `access` DB table
+- Pairing codes: owner generates time-limited codes for granting access
 
 ---
 
 ## Scheduler
 
-### Heartbeat Mechanism
+### `Scheduler` struct (`crates/hydeclaw-core/src/scheduler/mod.rs`)
 
-Each agent can configure a heartbeat — a cron-scheduled synthetic message sent to itself:
+```rust
+struct Scheduler {
+    scheduler: JobScheduler,         // tokio-cron-scheduler
+    dynamic_jobs: RwLock<HashMap<Uuid, Uuid>>,   // DB job id → scheduler UUID
+    agent_jobs: RwLock<HashMap<String, Vec<Uuid>>>, // agent name → heartbeat UUIDs
+    ui_event_tx: broadcast::Sender<String>,
+    agent_locks: AgentLocks,         // Arc<Mutex<HashSet<String>>> — per-agent exec lock
+    backup_job: RwLock<Option<Uuid>>,
+    curator_job: RwLock<Option<Uuid>>,
+}
+```
+
+### Heartbeat
 
 ```toml
 [agent.heartbeat]
-cron = "*/30 10-19 * * *"    # Every 30 min, 10:00–19:00 local time
+cron = "*/30 10-19 * * *"
 timezone = "UTC"
-announce_to = "telegram"      # Channel to deliver non-OK responses
+announce_to = "telegram"
 ```
 
-Execution flow:
+Execution: per-agent lock check → construct synthetic `IncomingMessage {channel: "heartbeat"}` → `engine.handle_isolated()` → if response ≠ `"HEARTBEAT_OK"` → deliver to `announce_to`.
 
-```
-1. tokio-cron-scheduler fires at UTC-converted time
-2. Per-agent lock check: if agent already running a scheduled task, skip this tick
-3. Acquire agent lock (HashSet<String>)
-4. Construct synthetic IncomingMessage {text: heartbeat_task_message, channel: "heartbeat"}
-5. engine.handle_isolated() → LLM processes the heartbeat task
-6. Check response:
-   ├── contains "HEARTBEAT_OK" → log info, silent (no delivery)
-   └── any other response → deliver to announce_to channel via ChannelActionRouter
-7. Release agent lock
-```
-
-**Cron normalization:** standard 5-field cron is converted to 6-field (prepend `"0 "` for seconds). Local timezone hours are converted to UTC by computing effective UTC offsets for each hour in the cron expression.
+**Cron normalization:** 5-field cron prepended with `"0 "` (seconds). Local timezone hours converted to UTC.
 
 ### Dynamic Cron Jobs
 
-Agents can create, modify, and delete their own scheduled jobs via the `cron_add` / `cron_delete` tools. Jobs are stored in the `scheduled_jobs` PostgreSQL table and hot-loaded into the running scheduler without restart.
+Stored in `scheduled_jobs` table. Hot-loaded into running scheduler without restart.
 
-Supported options per job: `cron_expr`, `timezone`, `task_message`, `silent`, `announce_to`, `jitter_secs` (randomize execution time within a window), `run_once` (auto-delete after first execution), `run_at` (one-shot future time).
+`ScheduledJob` fields:
+```
+id, agent_id, name, cron_expr, timezone, task_message, enabled,
+created_at, last_run_at, silent, announce_to (JSONB), jitter_secs,
+run_once, run_at, tool_policy (JSONB override)
+```
+
+### DeliveryTarget (`announce_to`)
+
+`normalize_announce_to(val)` normalizes `announce_to` JSONB into flat `Vec<Value>` of delivery targets:
+
+| Input form | Resolved as |
+|-----------|-------------|
+| `"local"` | `{"type": "local"}` → save to `workspace/agents/{agent}/cron_output/` |
+| `"origin"` | `{"type": "origin"}` → reply to originating channel (logged as unsupported) |
+| `"telegram:12345"` | `{"channel": "telegram", "chat_id": 12345}` |
+| `"telegram:12345:67890"` | same (thread_id dropped, future work) |
+| Object | pass through |
+| Array | each item processed individually |
+
+**`save_to_local()`** persists cron reply to `workspace/agents/{agent}/cron_output/{YYYYMMDDTHHMMSS}_{job_short}.txt`. Long replies (>4000 chars) truncated for channel delivery with workspace save notification.
+
+### Built-in Scheduler Jobs
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| Memory decay | 03:00 UTC daily | `relevance_score *= exp(-decay)` on raw chunks |
+| Memory cleanup | 08:00 UTC daily | Delete chunks with `relevance_score < 0.1` AND >180 days old |
+| Session cleanup | hourly | Prune `session_events` WAL rows older than `retention_days` |
+| Session age prune | 05:00 UTC daily | Delete oldest sessions exceeding `max_sessions_per_agent` |
+| Backup | configurable (default 05:00 UTC) | `pg_dump` via Docker container |
+| Curator | configurable (default Sunday 03:00) | Skill review and repair pipeline |
 
 ### Per-Agent Execution Lock
 
-A single `AgentLocks: Arc<Mutex<HashSet<String>>>` is shared across all scheduled jobs for all agents. Before executing any heartbeat or dynamic cron task, the agent name is inserted into the set. On completion (or error), it is removed. If the agent name is already present, the tick is skipped. This prevents concurrent scheduled executions from the same agent accumulating and starving the tokio runtime.
+`AgentLocks: Arc<Mutex<HashSet<String>>>` shared across all scheduled jobs. Before executing any heartbeat or cron task: insert agent name into set; remove on completion. If name already present: skip tick. Prevents concurrent scheduled executions from same agent.
+
+---
+
+## Database Schema
+
+PostgreSQL 17 + pgvector. Migrations in `migrations/*.sql` (sqlx). Auto-run on startup. No ORM — raw sqlx queries in `crates/hydeclaw-core/src/db/`.
+
+**Current migration state:** m001 through m043 (43 migrations).
+
+### Key Tables
+
+| Table | Description | Notable columns |
+|-------|-------------|-----------------|
+| `sessions` | Chat sessions | `id`, `agent_id`, `status` (running/done/failed/interrupted), `parent_session_id` (compression chain), `end_reason` ('compression' or NULL), `compaction_state` (JSONB with `CompressorState`) |
+| `messages` | Individual messages | `id`, `session_id`, `role`, `content`, `parent_message_id`, `branch_from_message_id`, `is_mirror` (bool) |
+| `session_events` | WAL journal | `session_id`, `event_type` (running/tool_start/tool_end/done/failed), `created_at` |
+| `session_failures` | Terminal failure log | `session_id`, `failure_kind`, `error_message`, `last_tool_name`, `llm_provider`, `llm_model`, `iteration_count` |
+| `memory_chunks` | Vector memory | `id`, `agent_id`, `scope` (agent name/'shared'), `content`, `embedding` (halfvec), `fts_vector` (tsvector), `relevance_score`, `pinned`, `accessed_at` |
+| `memory_tasks` | Worker task queue | `id`, `task_type`, `status` (pending/processing/done/failed), `payload` (JSONB) |
+| `secrets` | Encrypted secrets | `name`, `scope`, `encrypted_value` (bytea), `nonce` (bytea 12 bytes) |
+| `providers` | LLM provider configs | `name`, `provider_type`, `base_url`, `default_model`, `api_key_env` |
+| `provider_active` | Active provider per capability | `capability` (stt/tts/vision/imagegen/embedding), `provider_id` |
+| `scheduled_jobs` | Dynamic cron jobs | `id`, `agent_id`, `cron_expr`, `timezone`, `task_message`, `announce_to` (JSONB), `jitter_secs`, `run_once`, `run_at`, `tool_policy` (JSONB) |
+| `agent_channels` | Channel configs | `id`, `agent_id`, `channel_type`, `config` (JSONB — credentials redacted, stored in vault) |
+| `usage_log` | Token usage per session turn | `session_id`, `agent_id`, `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_creation_tokens`, `reasoning_tokens` (all nullable) |
+| `approvals` | Pending tool approvals | `id`, `session_id`, `tool_name`, `args`, `status`, `expires_at` |
+| `webhooks` | Outbound webhooks | `id`, `agent_id`, `url`, `events` |
+| `notifications` | UI notifications | `id`, `type`, `title`, `body`, `data` (JSONB), `read_at` |
+| `system_flags` | Feature flags | `key`, `value` (e.g. `setup_complete`) |
+| `curator_runs` | Skill curator history | `id`, `trigger`, `status`, `phase1/2/3`, `report_md` |
+| `curator_decisions` | Per-skill curator decisions | `skill_id`, `decision`, `reason`, `created_at` |
+| `access` | Per-agent user access list | `agent_id`, `channel_user_id` |
+| `pairing_codes` | Temporary access codes | `code`, `agent_id`, `expires_at` |
+
+### Token Columns (migration m036)
+
+Extended token tracking added to `usage_log`:
+- `cache_read_tokens` — tokens read from prompt cache (Anthropic `cache_read_input_tokens`, OpenAI `cached_tokens`, Gemini `cachedContentTokenCount`). Subset of `input_tokens`. Never sum to base.
+- `cache_creation_tokens` — tokens written to prompt cache (Anthropic only). Cost ×1.25 base input.
+- `reasoning_tokens` — hidden reasoning tokens (o1/o3, DeepSeek-R1, Gemini thinking). Subset of `output_tokens`.
+
+---
+
+## Secrets Vault
+
+ChaCha20-Poly1305 encryption (pure Rust, no OpenSSL).
+
+```
+secrets table
+  PK: (name, scope)
+  encrypted_value: bytea  (ciphertext + 16-byte auth tag)
+  nonce: bytea            (12 bytes, random per write)
+```
+
+Each write generates a unique 12-byte random nonce. Master key (`HYDECLAW_MASTER_KEY`, 32-byte hex) never stored in DB. In-memory cache: `RwLock<HashMap<(name, scope), String>>`.
+
+**Scoped resolution** (`get_scoped(name, scope)`):
+```
+1. (name, scope)  — agent-specific (scope = agent name)
+2. (name, "")     — global secret (scope = empty string)
+3. env::var(name) — environment variable fallback
+```
+
+Channel credentials (`bot_token`, `access_token`, etc.) extracted from `agent_channels.config` on create/update and stored in vault under key `CHANNEL_CREDENTIALS`, scope = channel UUID. `config` column in DB never contains credential values.
+
+Agent rename migrates scoped secrets via `rename_scope(old, new)`.
+
+---
+
+## Security
+
+### Upload URL Signing (Phase 64 SEC-03)
+
+`GET /uploads/*` and `/workspace-files/*` URLs are HMAC-signed:
+- `UploadsConfig { signed_url_ttl_secs: 86400, require_signature: bool }`
+- `require_signature = false` by default (v0.19.0 grace period)
+- `mint_workspace_file_url()` generates signed URL with expiry
+- Workspace write tool emits `__file__:` markers with signed URLs
+
+### Approval Workflow
+
+```
+tool call → needs_approval(approval_config, tool_name) → true
+       │
+       ▼
+create_approval(db, session_id, tool_name, args) → approval_id (UUID)
+       │
+       ▼
+emit StreamEvent::ApprovalNeeded {approval_id, tool_name, args}
+       │
+       ▼
+wait approval_waiter.wait(timeout) → oneshot::Receiver
+       │                              (tokio::sync::oneshot, registered in ApprovalManager)
+       ▼
+POST /api/approvals/{id}/approve (or /reject) wakes waiter
+       │
+       ▼
+continue with result or return rejection error
+```
+
+Approval timeout: `approval.timeout_seconds` (default 300 = 5 min).
+
+### DelegationConfig
+
+Per-agent subagent delegation policy:
+```toml
+[agent.delegation]
+max_depth = 1                    # subagents CANNOT recursively spawn further subagents
+blocked_tools_extra = [...]      # extends built-in deny-list
+blocked_tools_override = [...]   # if non-empty, replaces built-in deny-list entirely
+```
+
+`SUBAGENT_DENIED_TOOLS` built-in list always denied for subagents unless `blocked_tools_override` is set.
+
+### Rate Limiting
+
+- **Auth lockout**: 500 failed auth attempts → 30s block for requests without Authorization header. Loopback exempt. (`AuthRateLimiter(500, 30)`)
+- **Request rate limit**: 300 rpm default, per-IP sliding window. Authenticated requests exempt. Configurable via `limits.max_requests_per_minute`.
+- **CSP report rate limit**: separate limit for `/api/csp-report`
+- **Webhook rate limit**: separate limit for `/webhook/*`
+
+All rate limiter instances stored in `OnceLock<Arc<T>>` module-level statics (Phase 66 REF-06, replacing intentional-leak pattern).
+
+### Tool Name Validation
+
+API handlers enforce `[a-zA-Z0-9_-]` on tool and MCP entry names — prevents path traversal in `workspace/tools/` lookup.
+
+---
+
+## Observability
+
+### Structured Logging
+
+`tracing` crate with `tracing-subscriber` JSON output. Broadcast to connected WebSocket clients (`/ws`) via `BroadcastLogLayer` for the UI logs page.
+
+Example:
+```rust
+tracing::info!(agent = %name, session = %session_id, tool = %tool_name, "hook: tool call");
+```
+
+### OpenTelemetry (optional)
+
+Requires `otel` feature flag. Config:
+```toml
+[otel]
+enabled = true
+service_name = "hydeclaw-core"    # default
+```
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` env var for collector address. `tracing-opentelemetry` bridges tracing spans to OTLP.
+
+### W3C Trace Context (Phase 65 OBS-04)
+
+`trace_context` middleware (`hydeclaw_gateway_util::trace_context`) parses `traceparent` header from inbound requests and injects it into the tracing span context, enabling distributed trace propagation across services.
+
+### Metrics Registry (Phase 65 OBS-02)
+
+`Arc<MetricsRegistry>` in `AgentConfig.metrics`:
+- `record_tool_latency(tool_name, agent_name, status, elapsed)` — tool call latency histogram
+- `record_llm_call(agent_name, duration, input_tokens, output_tokens)` — LLM call duration
+- `sse_events_dropped_total` — per-agent, per-event-type SSE backpressure drops (surfaced at `/api/health/dashboard`)
 
 ---
 
 ## Process Manager
 
-`ProcessManager` manages long-lived child processes (channel adapters, toolgate, browser-renderer) spawned by Core at startup.
+`ProcessManager` (`crates/hydeclaw-core/src/process_manager/`) manages long-lived child processes.
 
 ### Spawn
 
@@ -596,31 +914,28 @@ A single `AgentLocks: Arc<Mutex<HashSet<String>>>` is shared across all schedule
 tokio::process::Command::new(exe)
     .args(args)
     .current_dir(working_dir)
-    .envs(env)               // selected passthrough + injected vars
-    .process_group(0)        // own process group → SIGKILL kills grandchildren too
+    .envs(env)              // minimal: only env_passthrough keys + env_extra literals
+    .process_group(0)       // own process group → SIGKILL kills grandchildren
     .spawn()
 ```
 
-Process groups ensure that multi-process children (e.g., uvicorn with worker subprocesses) are fully terminated when Core kills the parent.
-
-Environment is minimal by design: only explicitly listed `env_passthrough` keys are forwarded, plus any `env_extra` literals (with `${VAR}` substitution support). DB credentials are never forwarded to channel adapters.
+Environment is minimal: only explicitly listed `env_passthrough` keys forwarded, plus `env_extra` literals (with `${VAR}` substitution). DB credentials never forwarded to channel adapters.
 
 ### Monitor Loop
 
-A background `tokio::spawn` polls each child's `try_wait()` every 5 seconds. If a child has exited unexpectedly, it is respawned with exponential backoff (restart count tracked per process). The `POST /api/services/{name}/restart` endpoint kills and respawns a named process on demand.
+Background `tokio::spawn` polls each child's `try_wait()` every 5 seconds. On unexpected exit: respawn with exponential backoff. `POST /api/services/{name}/restart` kills and respawns on demand.
+
+**Container restart whitelist** — only non-sensitive containers restartable via API: browser-renderer, searxng, mcp-*. PostgreSQL is excluded.
 
 ### Graceful Shutdown
 
-On `SIGTERM` / `Ctrl-C`:
+On `SIGTERM`/`SIGINT`:
+1. `tokio::signal::unix::signal(SIGTERM)` fires
+2. Drain in-flight agents (`handle.shutdown()` on each, up to `drain_timeout_secs` default 30s)
+3. `ProcessManager.stop_all()`: SIGTERM to process groups, wait 5s, SIGKILL
+4. DB pool closes
 
-```
-1. tokio::signal::unix::signal(SIGTERM) fires
-2. ProcessManager.kill(name) for each managed process:
-   a. child.kill() (SIGKILL to the process group)
-   b. tokio::time::timeout(3s, child.wait())
-3. DB pool closes
-4. Core exits
-```
+systemd `TimeoutStopSec` should be `drain_timeout_secs + 10s buffer` (40s default).
 
 ---
 
@@ -631,138 +946,47 @@ On `SIGTERM` / `Ctrl-C`:
 | Layer | Technology |
 |-------|-----------|
 | Framework | Next.js 16 (App Router) + React 19 |
-| State management | Zustand + Immer |
-| UI components | shadcn/ui (Radix primitives + Tailwind) |
+| State management | Zustand 5 + Immer |
+| UI components | shadcn/ui (Radix + Tailwind 4) |
 | Data fetching | TanStack Query v5 (with persist client) |
-| Rich text editor | TipTap v3 (workspace markdown editor) |
+| Rich text | TipTap v3 (workspace markdown editor) |
 | Code editor | CodeMirror 6 |
 | Graph visualization | Sigma.js (react-sigma) + Dagre layout |
-| Chat rendering | Custom multi-agent renderer (no assistant-ui) |
 | Internationalization | Custom i18n (en/ru) |
 
-### Chat Store
+### Chat Store Decomposition (Phase 54)
 
-`chat-store.ts` (Zustand + Immer) is the central state machine for the chat UI. It maintains per-agent state:
-
-```typescript
-interface AgentState {
-  sessions: SessionRow[];          // paginated list
-  messages: UIMessage[];           // current session, Immer-mutable
-  currentSessionId: string | null;
-  isStreaming: boolean;
-  streamController: AbortController | null;
-}
-```
-
-**SSE parsing:** `sendMessage()` opens a `fetch()` to `POST /api/chat` with `Accept: text/event-stream`. Each line is parsed by `parseSSELines()` + `parseSseEvent()` into a discriminated `SseEvent` union. Events are applied to `messages[]` via Immer mutations:
-
-- `text-delta` → appends to the last `TextPart` in the current assistant message.
-- `tool-input-start` → adds a `ToolPart` with `state: "input-streaming"`.
-- `tool-input-available` → transitions to `state: "input-available"`, sets `input`.
-- `tool-output-available` → transitions to `state: "output-available"`, sets `output`.
-- `rich-card` → appends a `RichCardPart` with structured data for table/metric rendering.
-- `file` → appends a `FilePart` with URL + media type for inline image/audio display.
-- `finish` → sets `isStreaming: false`, releases the AbortController.
-
-### WebSocket Event Bus
-
-`ws-store.ts` (Zustand) manages a single persistent WebSocket connection to `GET /ws`. The `WsManager` class handles:
-
-- Reconnection with exponential backoff.
-- One-time ticket auth (`POST /api/auth/ws-ticket` → token valid for one WS connection).
-- Broadcast of typed events to subscribers via a simple listener map.
-
-WebSocket events from Core include: `agent_processing` (start/end — drives global loading indicators), `session_updated` (cache invalidation), `approval_requested` (tool approval modal), `log_entry` (live log feed).
-
-Subscribers register via `useWsSubscription(eventType, handler)` hook and are automatically cleaned up on component unmount.
+`chat-store.ts` (451 lines) is the central SSE state machine. Supporting modules:
+- `chat-types.ts` — `ChatMessage`, `MessagePart`, `AgentState`, `ConnectionPhase`, `MessageSource`
+- `chat-history.ts` — `convertHistory`, `resolveActivePath`, `findSiblings`, `getCachedRawMessages`
+- `chat-reconciliation.ts` — `contentHash`, `reconcileLiveWithHistory`
+- `chat-persistence.ts` — `saveLastSession`, `getLastSessionId`, `getInitialAgent` (localStorage)
+- `streaming-renderer.ts` — factory via `createStreamingRenderer()`: SSE parsing, rAF throttling (50ms), reconnection, per-agent Map cleanup. Non-serializable state (AbortController, setTimeout) in private closures, not Immer
 
 ### Static Export with RSC Flattening
 
-The UI is built as a static export (`next build` → `out/`) for deployment as a Docker nginx container. Because Next.js App Router emits React Server Component payloads (`.rsc` files) alongside HTML, a post-build script `scripts/flatten-rsc.mjs` processes the output:
-
-- Replaces RSC `<script>` injection with direct HTML so the static files are self-contained.
-- Ensures the nginx container can serve the app from any path without a Node.js runtime.
-
-The `out/` directory and an `nginx.conf` are the only artifacts deployed to the Pi — no source code, no Node.js, no build tools on the target host.
+Built as static export (`next build` → `out/`) for nginx. Post-build script `scripts/flatten-rsc.mjs` processes RSC chunks — required for static nginx serving without a Node.js runtime.
 
 ---
 
-## Setup Wizard
+## Configuration
 
-The Setup Wizard guides first-time users through instance configuration. It runs when `GET /api/setup/status` reports `setup_complete: false` (no providers configured, no agents created).
+**Three required `.env` keys (only these):**
+- `HYDECLAW_AUTH_TOKEN` — HTTP API bearer token
+- `HYDECLAW_MASTER_KEY` — vault encryption key (32-byte hex)
+- `DATABASE_URL` — PostgreSQL connection string
 
-```
-Browser opens http://host:18789
-         │
-         ▼
-GET /api/setup/status  →  { setup_complete: false }
-         │
-         ▼
-UI redirects to /setup
-         │
-         ├── Step 1: Prerequisites check (GET /api/setup/requirements)
-         │   ├── database connectivity
-         │   ├── master key present
-         │   └── Docker availability
-         │
-         ├── Step 2: Provider configuration
-         │   └── user enters API key + selects model
-         │
-         ├── Step 3: Create initial agent
-         │   └── name, provider, model, basic settings
-         │
-         └── Step 4: POST /api/setup/complete
-             └── marks instance as configured
-```
+All other configuration goes in `config/hydeclaw.toml` or the secrets vault.
 
-After setup completes, the wizard is bypassed on all subsequent visits. The setup state is persisted in the database, not in a file.
+**Key config files:**
+- `config/hydeclaw.toml` — `AppConfig`: gateway, database, limits, subagents, memory, docker, otel, managed_process, agent defaults, backup, curator, cleanup, shutdown, uploads, agent_tool timeouts
+- `config/agents/{Name}.toml` — per-agent `AgentConfig` (case-sensitive filename = agent name)
+- `workspace/tools/*.yaml` — YAML tool definitions
+- `workspace/skills/*.md` — shared agent skills
+- `config/skills/*.md` — system skills (base agents only)
+- `workspace/mcp/*.yaml` — MCP server definitions
+- `config/services/*.yaml` — service registry (browser-renderer, toolgate, STT, TTS, etc.)
 
----
+**Hot reload:** config file watcher (notify crate) reloads `hydeclaw.toml` and agent configs without restart. Agent rename is transactional (updates 19+ DB tables).
 
-## Network Discovery
-
-Core detects all non-loopback network interfaces at startup and exposes them via `GET /api/network/addresses`. This allows the UI to display clickable access URLs (e.g., `http://192.168.1.85:18789`) during setup and on the settings page.
-
-Detection uses platform-native APIs (`getifaddrs` on Linux, equivalent on other platforms). Both IPv4 and IPv6 addresses are returned, tagged with interface name and address family. The result is cached and refreshed on each API call (interfaces can change due to DHCP or VPN).
-
----
-
-## Notifications System
-
-In-app notifications provide a persistent feed of system events that require user attention. Notifications are stored in PostgreSQL and delivered to the UI via the existing WebSocket event bus.
-
-```
-Event source (engine, watchdog, scheduler)
-         │
-         ▼
-  notification_create(type, title, body)
-         │
-         ├── INSERT into notifications table
-         └── broadcast via WS: { event: "notification", ... }
-                   │
-                   ▼
-         UI NotificationBell component
-         (badge count, dropdown list, mark-read actions)
-```
-
-**Notification types:** `agent_error` (LLM or tool failure), `watchdog_alert` (health check failure), `setup_required` (missing configuration), `update_available` (new version detected), `approval_needed` (pending tool approval).
-
-Lifecycle: notifications are created as unread, can be individually marked read via `PATCH /api/notifications/{id}`, bulk-marked via `POST /api/notifications/read-all`, and cleared (read only) via `DELETE /api/notifications/clear`.
-
----
-
-## Base Agent Scaffold
-
-When a new base agent is created (via API or setup wizard), the scaffold system bootstraps it with a default directory structure under `workspace/`:
-
-```
-workspace/
-  └── agents/{agent-name}/
-      ├── SOUL.md          # personality and behavioral directives
-      ├── IDENTITY.md      # name, role, capabilities summary
-      └── skills/          # agent-specific skill files (initially empty)
-```
-
-The scaffold templates are embedded in the binary (not read from disk at runtime). `SOUL.md` and `IDENTITY.md` are created with sensible defaults that can be customized later. For base agents, these files are read-only via the workspace write protection in `workspace.rs:is_read_only()` -- only manual edits on disk or admin API calls can modify them.
-
-Non-base agents do not receive a scaffold; their workspace directories are created on first write.
+For complete configuration reference see `docs/CONFIGURATION.md`.
