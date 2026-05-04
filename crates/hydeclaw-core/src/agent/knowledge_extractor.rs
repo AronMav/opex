@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn parse_clean_json() {
-        let input = r#"{"user_facts":["User works in IT"],"outcomes":["Decided to use GraphQL"],"tool_insights":["API responded in 2s"]}"#;
+        let input = r#"{"user_facts":["User works in IT"],"outcomes":["Decided to use GraphQL"],"feedback":["API responded in 2s"]}"#;
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["User works in IT"]);
         assert_eq!(result.outcomes, vec!["Decided to use GraphQL"]);
@@ -304,21 +304,21 @@ mod tests {
 
     #[test]
     fn parse_with_markdown_fences() {
-        let input = "Here is the result:\n```json\n{\"user_facts\":[\"Fact one\"],\"outcomes\":[],\"tool_insights\":[]}\n```";
+        let input = "Here is the result:\n```json\n{\"user_facts\":[\"Fact one\"],\"outcomes\":[],\"feedback\":[]}\n```";
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["Fact one"]);
     }
 
     #[test]
     fn parse_with_think_blocks() {
-        let input = "<think>Let me analyze this...</think>\n{\"user_facts\":[\"Important fact\"],\"outcomes\":[],\"tool_insights\":[]}";
+        let input = "<think>Let me analyze this...</think>\n{\"user_facts\":[\"Important fact\"],\"outcomes\":[],\"feedback\":[]}";
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["Important fact"]);
     }
 
     #[test]
     fn parse_with_surrounding_text() {
-        let input = "Based on my analysis, here are the extracted facts:\n\n{\"user_facts\":[\"A\"],\"outcomes\":[\"B\"],\"tool_insights\":[\"C\"]}\n\nI hope this helps!";
+        let input = "Based on my analysis, here are the extracted facts:\n\n{\"user_facts\":[\"A\"],\"outcomes\":[\"B\"],\"feedback\":[\"C\"]}\n\nI hope this helps!";
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["A"]);
         assert_eq!(result.outcomes, vec!["B"]);
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn parse_empty_arrays() {
-        let input = r#"{"user_facts":[],"outcomes":[],"tool_insights":[]}"#;
+        let input = r#"{"user_facts":[],"outcomes":[],"feedback":[]}"#;
         let result = parse_extraction(input).unwrap();
         assert!(result.user_facts.is_empty());
         assert!(result.outcomes.is_empty());
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn parse_nested_think_blocks() {
-        let input = "<think>first</think>Some text<think>second</think>{\"user_facts\":[\"X\"],\"outcomes\":[],\"tool_insights\":[]}";
+        let input = "<think>first</think>Some text<think>second</think>{\"user_facts\":[\"X\"],\"outcomes\":[],\"feedback\":[]}";
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts, vec!["X"]);
     }
@@ -362,14 +362,14 @@ mod tests {
 
     #[test]
     fn parse_multiple_items_per_category() {
-        let input = r#"{"user_facts":["F1","F2","F3"],"outcomes":["O1","O2"],"tool_insights":["T1"]}"#;
+        let input = r#"{"user_facts":["F1","F2","F3"],"outcomes":["O1","O2"],"feedback":["T1"]}"#;
         let result = parse_extraction(input).unwrap();
         assert_eq!(result.user_facts.len(), 3);
         assert_eq!(result.outcomes.len(), 2);
     }
 
     #[test]
-    fn extracted_knowledge_schema_has_no_tool_insights() {
+    fn extracted_knowledge_schema_has_no_feedback() {
         let json = r#"{"user_facts":["x"],"outcomes":[],"feedback":[]}"#;
         let parsed: ExtractedKnowledge = serde_json::from_str(json).unwrap();
         let _ = parsed;
@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn parse_without_feedback_defaults_empty() {
-        let input = r#"{"user_facts":["F1"],"outcomes":[],"tool_insights":[]}"#;
+        let input = r#"{"user_facts":["F1"],"outcomes":[],"feedback":[]}"#;
         let result = parse_extraction(input).unwrap();
         assert!(result.feedback.is_empty());
     }
