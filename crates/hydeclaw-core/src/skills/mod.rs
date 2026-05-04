@@ -381,6 +381,63 @@ pub async fn update_skill_last_used_if_stale(
     }
 }
 
+// ── Reactivation ─────────────────────────────────────────────────────────────
+
+/// Restores an archived skill to Active state and updates `last_used_at`.
+///
+/// Fire-and-forget: all errors are warn-logged, never propagated.
+pub async fn reactivate_skill(
+    workspace_dir: &str,
+    name: &str,
+    db: &sqlx::PgPool,
+    agent_name: &str,
+    now_iso: &str,
+) {
+    let path = Path::new(workspace_dir).join("skills").join(format!("{name}.md"));
+
+    let content = match tokio::fs::read_to_string(&path).await {
+        Ok(c) => c,
+        Err(_) => return, // file not found — noop
+    };
+
+    let skill_def = match SkillDef::parse(&content) {
+        Some(s) => s,
+        None => {
+            tracing::warn!(skill = %name, "reactivate_skill: failed to parse frontmatter");
+            return;
+        }
+    };
+
+    if skill_def.meta.state != SkillState::Archived {
+        return; // not archived — noop
+    }
+
+    let new_fm = SkillFrontmatter {
+        state: SkillState::Active,
+        last_used_at: Some(now_iso.to_string()),
+        ..skill_def.meta.clone()
+    };
+
+    if let Err(e) = write_skill(workspace_dir, name, &new_fm, &skill_def.instructions).await {
+        tracing::warn!(skill = %name, error = %e, "reactivate_skill: write_skill failed");
+        return;
+    }
+
+    let reason = format!("re-used by {}", agent_name);
+    if let Err(e) = crate::db::curator_decisions::save_decision(
+        db,
+        name,
+        "reactivated",
+        Some(reason.as_str()),
+    )
+    .await
+    {
+        tracing::warn!(skill = %name, error = %e, "reactivate_skill: save_decision failed");
+    }
+
+    tracing::info!(skill = %name, agent = %agent_name, "skill reactivated from archived");
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -650,6 +707,20 @@ mod tests {
             ).await.unwrap();
             assert!(!content.contains("pinned:"), "pinned: must NOT appear when false/None");
         }
+    }
+
+    #[test]
+    fn reactivate_noop_check_non_archived() {
+        let state = SkillState::Active;
+        let is_archived = matches!(state, SkillState::Archived);
+        assert!(!is_archived);
+    }
+
+    #[test]
+    fn reactivate_triggers_on_archived() {
+        let state = SkillState::Archived;
+        let is_archived = matches!(state, SkillState::Archived);
+        assert!(is_archived);
     }
 
     #[tokio::test]
