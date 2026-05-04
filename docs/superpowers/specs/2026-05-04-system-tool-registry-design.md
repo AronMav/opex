@@ -63,7 +63,7 @@ pub struct ToolDeps<'a> {
     pub http_client:        &'a reqwest::Client,
     pub ssrf_client:        &'a reqwest::Client,
     // Services
-    pub secrets:            &'a SecretsManager,          // engine.secrets().as_ref()
+    pub secrets:            &'a Arc<SecretsManager>,      // engine.secrets(); .as_ref() where &SecretsManager needed
     pub sandbox:            &'a Option<Arc<CodeSandbox>>,
     pub session_pools:      Option<&'a SessionPoolsMap>, // cfg().session_pools.as_ref()
     pub memory_store:       &'a Arc<dyn MemoryService>,  // cfg().memory_store
@@ -71,7 +71,7 @@ pub struct ToolDeps<'a> {
     // Comms
     pub ui_event_tx:        Option<&'a broadcast::Sender<String>>,
     // Config values needed by specific handlers
-    pub toolgate_url:       &'a str,   // cfg().app_config.toolgate_url
+    pub toolgate_url:       String,    // cfg().app_config.toolgate_url (Option<String>, unwrapped)
     pub gateway_listen:     &'a str,   // cfg().app_config.gateway.listen
     pub signed_url_ttl_secs: u64,      // cfg().app_config.uploads.signed_url_ttl_secs
     // Pre-computed (avoids async call inside handlers)
@@ -146,8 +146,8 @@ impl SystemToolRegistry {
 ## `engine_dispatch.rs` After
 
 `available_tool_names().await` is called once before `ToolDeps` construction to
-avoid async inside handlers. The fallback chain mirrors the current code exactly —
-MCP tools come after system tools and before YAML/external tools.
+avoid async inside handlers. The fallback chain mirrors the current code exactly:
+system → YAML → MCP → external tool registry.
 
 ```rust
 pub(super) async fn execute_tool_call_inner(
@@ -164,20 +164,32 @@ pub(super) async fn execute_tool_call_inner(
         return result;
     }
 
-    // 2. MCP tools (existing path, unchanged)
-    if let Some(result) = self.dispatch_mcp_tool(name, args).await {
-        return result;
-    }
-
-    // 3. YAML tools (existing path, unchanged)
+    // 2. YAML tools (existing path, unchanged)
     if let Some(entry) = crate::tools::find_yaml_tool(&deps.workspace_dir, name) {
         return self.execute_yaml_tool(&entry, args).await;
     }
 
+    // 3. MCP tools (existing path, unchanged)
+    if let Some(mcp) = self.mcp()
+        && let Some(mcp_name) = mcp.find_mcp_for_tool(name).await
+    {
+        return match mcp.call_tool(&mcp_name, name, args).await {
+            Ok(r) => r,
+            Err(e) => Self::format_tool_error(name, &e.to_string()),
+        };
+    }
+
     // 4. External tool registry (existing: self.cfg().tools.call)
     match self.cfg().tools.call(name, args).await {
-        Ok(v) => v.to_string(),
-        Err(_) => format!("Unknown tool: {name}"),
+        Ok(v) => serde_json::to_string(&v).unwrap_or_default(),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("tool not found") {
+                format!("Error: tool '{}' does not exist.", name)
+            } else {
+                Self::format_tool_error(name, &msg)
+            }
+        }
     }
 }
 ```
