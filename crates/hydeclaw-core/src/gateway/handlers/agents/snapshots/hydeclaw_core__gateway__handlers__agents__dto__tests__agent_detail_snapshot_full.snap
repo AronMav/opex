@@ -45,6 +45,7 @@ expression: dto
     "preserve_last_n": 5,
     "max_context_tokens": 200000
   },
+  "skill_review": null,
   "session": {
     "dm_scope": "per-peer",
     "ttl_days": 14,
