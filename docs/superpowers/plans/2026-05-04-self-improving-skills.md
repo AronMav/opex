@@ -45,42 +45,32 @@ The function needs: `workspace_dir`, `agent_name`, `db: &sqlx::PgPool`, `ui_even
 Add at the bottom of `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` inside the existing `#[cfg(test)]` block (search for `mod tests {`):
 
 ```rust
-#[tokio::test]
-async fn capture_rejects_invalid_name_uppercase() {
-    let args = serde_json::json!({
-        "action": "capture",
-        "name": "MySkill",
-        "description": "desc",
-        "instructions": "body"
-    });
-    // Call directly with dummy paths — file check will fail first if name passes
-    let dir = tempfile::tempdir().unwrap();
-    // We test name validation only — pass dummy db/tx placeholders via None
-    // Name has uppercase → must fail before any I/O
-    let name = args["name"].as_str().unwrap();
+#[test]
+fn capture_rejects_invalid_name_uppercase() {
+    let name = "MySkill";
     let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !name.starts_with('-');
     assert!(!valid, "uppercase name must fail validation");
 }
 
-#[tokio::test]
-async fn capture_rejects_name_starting_with_dash() {
+#[test]
+fn capture_rejects_name_starting_with_dash() {
     let name = "-bad-name";
     let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !name.starts_with('-');
     assert!(!valid);
 }
 
-#[tokio::test]
-async fn capture_accepts_valid_name() {
+#[test]
+fn capture_accepts_valid_name() {
     let name = "my-skill-123";
     let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !name.starts_with('-');
     assert!(valid);
 }
 
-#[tokio::test]
-async fn capture_parses_triggers_and_tools() {
+#[test]
+fn capture_parses_triggers_and_tools() {
     let triggers: Vec<String> = "search, find online, поиск"
         .split(',')
         .map(|s| s.trim().to_string())
@@ -96,7 +86,7 @@ async fn capture_parses_triggers_and_tools() {
 }
 ```
 
-- [ ] **Step 2: Run tests to confirm they pass (pure logic)**
+- [ ] **Step 2: Run tests to confirm they pass**
 
 ```bash
 cd crates/hydeclaw-core
@@ -406,31 +396,30 @@ No tests needed — these are documentation-only changes.
 
 Append to the end of `config/skills/skill-curator.md`:
 
-```markdown
----
+Append to the end of `config/skills/skill-curator.md` (raw text, no fenced block wrapper needed — it's already a markdown file):
 
-## Capturing New Skills In-Session
+    ---
 
-Use `skill_use(action="capture")` when you notice a reusable pattern:
-- A workflow you will likely need again in future sessions
-- A technique that took multiple attempts to get right
-- A format, style, or sequence the user explicitly prefers
+    ## Capturing New Skills In-Session
 
-**Do NOT capture:**
-- One-off tasks specific to this session only
-- Trivial operations already covered by an existing skill
-- Patterns that duplicate an existing skill (use FIX instead)
+    Use `skill_use(action="capture")` when you notice a reusable pattern:
+    - A workflow you will likely need again in future sessions
+    - A technique that took multiple attempts to get right
+    - A format, style, or sequence the user explicitly prefers
 
-**Example:**
-```
-skill_use(action="capture",
-  name="image-resize-for-telegram",
-  description="Resize images to ≤10MB before sending via Telegram",
-  triggers="resize image, compress image, telegram image",
-  tools_required="code_exec",
-  instructions="## Steps\n1. Read image size\n2. ...")
-```
-```
+    **Do NOT capture:**
+    - One-off tasks specific to this session only
+    - Trivial operations already covered by an existing skill
+    - Patterns that duplicate an existing skill (use FIX instead)
+
+    **Example:**
+
+        skill_use(action="capture",
+          name="image-resize-for-telegram",
+          description="Resize images to ≤10MB before sending via Telegram",
+          triggers="resize image, compress image, telegram image",
+          tools_required="code_exec",
+          instructions="## Steps\n1. Read image size\n2. ...")
 
 - [ ] **Step 2: Add capture line to SOUL.md scaffold**
 
@@ -802,7 +791,7 @@ cd crates/hydeclaw-core
 cargo check 2>&1 | grep "^error" | head -10
 ```
 
-Expected: no errors. The `crate::db::sessions::load_messages` path might need adjustment — check the actual module path used in the existing code.
+Expected: no errors. The path `crate::db::sessions::load_messages` is confirmed — it matches the existing call at `evolution.rs:159`.
 
 - [ ] **Step 5: Run tests**
 
