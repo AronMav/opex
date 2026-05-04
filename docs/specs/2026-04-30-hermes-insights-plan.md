@@ -4,11 +4,11 @@
 > **Goal:** Список заимствуемых архитектурных идей и фич, сгруппированных по приоритету. Не implementation plan — это roadmap-кандидат на будущие phases.
 > **Methodology:** 4 параллельных Explore-агента проанализировали ~600KB кода + 100+ файлов (cli.py 527KB, gateway/, plugins/memory/, tools/, environments/, acp_adapter/).
 >
-> **Status (2026-05-03):** Sprint 1 + Sprint 2 + Sprint 3 полностью выполнены.
-> Все P0 закрыты: P0.1 (trajectory compression) + P0.3/#24/#26 + P0.4/#22/#30 +
-> P0.5/#23/#28/#29/#31/#33 (включая L3 agentName bug fix) + P0.2 DM pairing
-> + P0.2 Session Skill Review. P1.1 (Compression Chains) — закрыт в Sprint 3.
-> P1.3, P1.5, P2.6, P1.6 — закрыты. Latent bug P0.5 (agentName multi-agent) — закрыт PR #33.
+> **Status (2026-05-04):** Sprints 1–4 полностью выполнены.
+> Все P0 закрыты. P1.1, P1.2, P1.3, P1.5, P1.6, P2.6, P2.10 — закрыты.
+> Sprint 4: Skill Self-Improvement (in-session capture + rich review),
+> Curator Dry-Run + Reactivation. P2.10 (Model Config UI) был реализован ранее.
+> **Открытые:** P1.4, P1.7, P2.1–P2.5, P2.7–P2.9.
 
 ---
 
@@ -513,25 +513,26 @@ enum DeliveryTarget {
 
 ## 📊 Сравнительная матрица: HydeClaw vs Hermes
 
-| Фича | HydeClaw 2026-05-02 | Hermes |
+| Фича | HydeClaw 2026-05-04 | Hermes |
 |---|---|---|
-| Trajectory compression (protect+summarize) | ❌ примитивная | ✅ продвинутая |
+| Trajectory compression (protect+summarize) | ✅ Compressor + 5-phase (Sprint 2) | ✅ продвинутая |
 | DM pairing security | ✅ pairing_codes + /api/access | ✅ TOTP-style codes |
-| Session mirroring cross-platform | ✅ is_mirror + mirror_to_session (260504) | ✅ |
+| Session mirroring cross-platform | ✅ is_mirror + mirror_to_session | ✅ |
 | WhatsApp/Signal adapters | ❌ | ✅ |
 | MCP serve (как сервер) | ❌ только client | ✅ обе роли |
 | ACP (IDE protocol) | ❌ | ✅ |
-| Hook system | ✅ WebhookConfig + fire_webhooks (260502-uij) | ✅ |
+| Hook system | ✅ WebhookConfig + fire_webhooks | ✅ |
 | Reasoning tokens tracking | ✅ Sprint 1 (#23+#28) | ✅ |
-| Skill self-improvement (patch tool) | ✅ curator_decisions + last_used_at | ✅ |
-| Curator (skill archival) | ✅ curator_decisions.rs | ✅ |
+| Skill self-improvement (in-session capture + review) | ✅ Sprint 4 | ✅ |
+| Curator dry-run + reactivation | ✅ Sprint 4 | — |
 | Multi-backend terminal (SSH/Modal) | ❌ только Docker | ✅ 6 backends |
 | Trigram FTS для CJK/RU | ✅ Sprint 1 (#22+#30) | ✅ |
-| Cron multi-target delivery | ✅ normalize_announce_to + multi-target loop (260502-uio) | ✅ |
-| Prompt injection scanner | ✅ pub fn + zero-width + workspace.rs (260502-u9v) | ✅ |
+| Cron multi-target delivery | ✅ parse_target_string + truncation | ✅ |
+| Prompt injection scanner | ✅ content_security.rs + workspace.rs | ✅ |
 | Subagent blocked tools | ✅ Sprint 1 (#24+#26) | ✅ |
 | Voice memo cache pipeline | ⚠️ per-request (нет audio_cache) | ✅ unified cache |
-| Compression chains (parent_session_id) | ❌ только message-level branching | ✅ session-level |
+| Compression chains (parent_session_id) | ✅ Sprint 3 | ✅ session-level |
+| Model config from UI | ✅ AgentEditDialog (General tab) | ✅ |
 | Atropos RL pipeline | ❌ | ✅ |
 | Memory provider trait/plugins | ❌ монолит | ✅ |
 
@@ -567,9 +568,18 @@ Bonus PRs: №25 (3 review-fix-ups), №27 (StreamingUsage struct refactor),
 
 1. ✅ P1.1 — Compression chains (parent_session_id + bootstrap split + chain API + UI)
 
+**✅ Sprint 4 (skill loop + curator) — DONE 2026-05-04:**
+
+1. ✅ Skill in-session capture (`skill_use action=capture`)
+2. ✅ Rich post-session review (assistant text, tool names, multi-verdict)
+3. ✅ Curator Dry-Run (`POST /api/curator/preview`, `dry_run` flag в всех фазах)
+4. ✅ Skill Reactivation (archived → active при trigger match и `action=load`)
+5. ✅ P2.10 — Model Config UI (уже был в AgentEditDialog; подтверждено)
+6. ✅ Max Agent Turns в UI (числовой инпут в Session-табе)
+7. ✅ UI BUG-01 — стale session counter после bulk delete
+
 **Backlog (по запросу):**
 
-- P1.2 — Session mirroring
 - P1.4 — MCP serve mode
 - P1.7 — Voice memo cache pipeline
 - P2.* — только при появлении конкретных use cases
@@ -605,4 +615,7 @@ Bonus PRs: №25 (3 review-fix-ups), №27 (StreamingUsage struct refactor),
 - **2026-04-30** — Документ создан после анализа Hermes Agent (4 параллельных Explore-агента).
 - Заменяет: `2026-03-30-openclaw-insights-plan.md` (удалён, его hardening-часть выполнена и осталась как `2026-03-30-openclaw-insights-hardening.md`).
 - **2026-05-02** — Статусы обновлены по факту кода: P0.2 и P1.6 закрыты вне Sprint 1; P1.3, P1.5, P2.6 помечены как частично реализованные.
-- **2026-05-04** — P1.2 (Cross-Platform Session Mirroring) и P1.3 (Cron Multi-Target Delivery Routing) переведены в ✅ DONE: `is_mirror` + `mirror_to_session` + cron/heartbeat зеркалирование + `parse_target_string` + `truncate_reply_for_channel` + `save_to_local` + extended dispatch loop. Добавлены P2.8 (Teams), P2.9 (Audio Routing), P2.10 (Model Config UI).
+- **2026-05-04 (утро)** — P1.2 и P1.3 переведены в ✅; добавлены P2.8, P2.9, P2.10.
+- **2026-05-04 (вечер)** — Sprint 4 закрыт: skill capture, rich review,
+  Curator Dry-Run + Reactivation, P2.10/max_agent_turns UI, BUG-01 fix.
+  Матрица и backlog обновлены.
