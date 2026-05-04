@@ -42,6 +42,8 @@ pub mod compressor;
 // zero crate::* deps (only std + dunce) so the lib facade can re-export it
 // without cascading the agent subtree.
 pub mod path_guard;
+pub mod tool_registry;
+pub mod tool_handlers;
 
 /// Delete upload files older than `max_age` from workspace/uploads/.
 pub async fn cleanup_stale_uploads(workspace_dir: &str, max_age: std::time::Duration) -> usize {
