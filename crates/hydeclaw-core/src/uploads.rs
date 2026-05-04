@@ -74,6 +74,9 @@ pub fn derive_upload_key(master_key: &[u8; 32]) -> [u8; 32] {
     okm
 }
 
+/// TTL for upload URLs re-signed during the historical migration — 50 years.
+pub const HISTORICAL_URL_TTL_SECS: u64 = 1_576_800_000;
+
 /// Per-namespace HMAC payload: `"{ns}:{path}:{exp}"`. The namespace prefix
 /// prevents a sig minted for one namespace from verifying on another.
 fn ns_payload(ns: &'static str, path: &str, exp: u64) -> Vec<u8> {
@@ -374,5 +377,11 @@ mod tests {
         assert_eq!(guess_mime_from_extension("a.MD"), "text/markdown");
         assert_eq!(guess_mime_from_extension("noext"), "application/octet-stream");
         assert_eq!(guess_mime_from_extension("a.unknownext"), "application/octet-stream");
+    }
+
+    #[test]
+    fn historical_url_ttl_secs_is_50_years() {
+        // 50 * 365 * 24 * 3600
+        assert_eq!(HISTORICAL_URL_TTL_SECS, 1_576_800_000u64);
     }
 }
