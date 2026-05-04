@@ -406,6 +406,7 @@ pub async fn run(
     agents: &AgentCore,
     agent_name: &str,
     db: &sqlx::PgPool,
+    dry_run: bool,
 ) -> anyhow::Result<ConsolidationResult> {
     let mut result = ConsolidationResult { commands_executed: 0, log: Vec::new() };
 
@@ -475,6 +476,28 @@ pub async fn run(
     }
 
     // ── Step C: Execute ───────────────────────────────────────────────────────
+
+    if dry_run {
+        for (skill, _replacement) in &accepted_archives {
+            result.log.push(format!("[DRY-RUN] would execute: archive `{skill}`"));
+            result.commands_executed += 1;
+        }
+        for proposal in proposals.proposals.iter() {
+            match proposal {
+                Proposal::Fix { skill, description, .. } => {
+                    result.log.push(format!("[DRY-RUN] would execute: fix `{skill}` — {description}"));
+                    result.commands_executed += 1;
+                }
+                Proposal::Merge { sources, into, .. } => {
+                    result.log.push(format!("[DRY-RUN] would execute: merge {} → `{into}`", sources.join(" + ")));
+                    result.commands_executed += 1;
+                }
+                Proposal::Archive { .. } => {} // already logged above
+            }
+        }
+        cleanup_proposals(workspace_dir, agent_name).await;
+        return Ok(result);
+    }
 
     for (skill, _replacement) in &accepted_archives {
         match apply_verified_archive(workspace_dir, db, skill).await {

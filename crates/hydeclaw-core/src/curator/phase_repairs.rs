@@ -29,7 +29,21 @@ pub async fn run(
     agents: &AgentCore,
     agent_name: &str,
     max_repairs: u32,
+    dry_run: bool,
 ) -> anyhow::Result<RepairResult> {
+    if dry_run {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pending_skill_repairs WHERE status = 'pending'",
+        )
+        .fetch_one(db)
+        .await
+        .unwrap_or(0);
+        return Ok(RepairResult {
+            applied: 0,
+            log: vec![format!("[DRY-RUN] {} pending repairs (not executed)", count)],
+        });
+    }
+
     let repairs = crate::db::skill_repairs::list_pending(db, i64::from(max_repairs)).await?;
     let mut result = RepairResult { applied: 0, log: Vec::new() };
 
