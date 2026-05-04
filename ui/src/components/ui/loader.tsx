@@ -318,17 +318,30 @@ export function BarsLoader({
   )
 }
 
+const HOLO_BARS: { height: number; color: string; delay: string }[] = [
+  { height: 10, color: "#00c8ff", delay: "0s" },
+  { height: 18, color: "#a855f7", delay: "0.18s" },
+  { height: 13, color: "#ec4899", delay: "0.36s" },
+];
+
 export function CometLoader({ className }: { className?: string }) {
   return (
-    <div className={cn("relative overflow-hidden rounded-sm", className)} style={{ width: 48, height: 3 }}>
-      <div
-        className="absolute inset-y-0 rounded-sm"
-        style={{
-          width: 20,
-          background: "linear-gradient(90deg, transparent, var(--color-primary))",
-          animation: "comet-move 1.4s ease-in-out infinite",
-        }}
-      />
+    <div className={cn("flex items-end gap-[3px]", className)} style={{ height: 20 }}>
+      {HOLO_BARS.map((bar, i) => (
+        <div
+          key={i}
+          style={{
+            width: 4,
+            height: bar.height,
+            borderRadius: 2,
+            background: bar.color,
+            boxShadow: `0 0 6px ${bar.color}`,
+            animation: `holo-wave 1.2s ease-in-out infinite`,
+            animationDelay: bar.delay,
+            transformOrigin: "bottom",
+          }}
+        />
+      ))}
       <span className="sr-only">Loading</span>
     </div>
   )
