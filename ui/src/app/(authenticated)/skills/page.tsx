@@ -563,10 +563,10 @@ export default function SkillsPage() {
   // ── List view ──────────────────────────────────────────────────────────────
 
   const STATE_FILTERS: { value: StateFilter; label: string }[] = [
-    { value: "all", label: "All" },
-    { value: "active", label: "Active" },
-    { value: "stale", label: "Stale" },
-    { value: "archived", label: "Archived" },
+    { value: "all", label: t("skills.filter_all") },
+    { value: "active", label: t("skills.filter_active") },
+    { value: "stale", label: t("skills.filter_stale") },
+    { value: "archived", label: t("skills.filter_archived") },
   ];
 
   return (
