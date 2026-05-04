@@ -27,6 +27,7 @@ pub(crate) struct MediaQuery {
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/uploads/{filename}", get(api_media_serve))
+        .route("/api/vision/analyze", post(api_vision_analyze))
         .merge(
             Router::new()
                 .route("/api/media/upload", post(api_media_upload))
@@ -303,6 +304,136 @@ pub(crate) async fn api_media_transcribe(
             let _ = tokio::fs::remove_file(&path).await;
             (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("transcription failed: {e}")}))).into_response()
         }
+    }
+}
+
+// ── Vision analyze ────────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+pub(crate) struct VisionAnalyzeRequest {
+    image_url: String,
+    question: Option<String>,
+    language: Option<String>,
+}
+
+/// POST /api/vision/analyze — analyze an image from a URL or internal /uploads/ path.
+///
+/// Handles two cases:
+/// * Internal path (`/uploads/...`): downloads from localhost, forwards bytes to
+///   toolgate `/describe` (multipart, no SSRF check needed).
+/// * External URL (`https://...`): forwards to toolgate `/describe-url` (SSRF
+///   validated there).
+///
+/// This endpoint exists because the `analyze_image` YAML tool passes relative
+/// `/uploads/` paths that toolgate's SSRF guard blocks (no scheme). Core acts
+/// as a proxy that knows how to download its own uploads.
+///
+/// Auth: loopback-exempt (see `LOOPBACK_EXACT` in middleware.rs).
+pub(crate) async fn api_vision_analyze(
+    State(cfg): State<ConfigServices>,
+    Json(body): Json<VisionAnalyzeRequest>,
+) -> impl IntoResponse {
+    let toolgate_url = match cfg.config.toolgate_url.as_deref() {
+        Some(u) if !u.is_empty() => u.trim_end_matches('/').to_string(),
+        _ => return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Vision not configured"}))).into_response(),
+    };
+
+    let image_url = body.image_url.trim().to_string();
+    let language = body.language.as_deref().unwrap_or("ru").to_string();
+    let question = body.question.clone().unwrap_or_default();
+
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
+
+    // Internal path: starts with / or contains /uploads/ — download via localhost
+    if image_url.starts_with('/') || image_url.contains("/uploads/") {
+        let path = if let Some(idx) = image_url.find("/uploads/") {
+            &image_url[idx..]
+        } else {
+            &image_url
+        };
+        let port = cfg.config.gateway.listen.rsplit(':').next().unwrap_or("18789");
+        let local_url = format!("http://localhost:{port}{path}");
+
+        let image_bytes = match http.get(&local_url).send().await {
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("read image: {e}")}))).into_response(),
+            },
+            Ok(resp) => return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("download image: {}", resp.status())}))).into_response(),
+            Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("download image: {e}")}))).into_response(),
+        };
+
+        if image_bytes.len() < 10 {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "image too small"}))).into_response();
+        }
+
+        let base_filename = path.split('/').next_back().unwrap_or("image.jpg")
+            .split('?').next().unwrap_or("image.jpg");
+        let ext = base_filename.rsplit('.').next().unwrap_or("jpg").to_lowercase();
+        let mime = match ext.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "bmp" => "image/bmp",
+            _ => "image/jpeg",
+        };
+
+        let tg_url = format!("{toolgate_url}/describe");
+        let part = reqwest::multipart::Part::bytes(image_bytes.to_vec())
+            .file_name(base_filename.to_string())
+            .mime_str(mime)
+            .unwrap_or_else(|_| reqwest::multipart::Part::bytes(image_bytes.to_vec()));
+        let mut form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("language", language);
+        if !question.is_empty() {
+            form = form.text("prompt", question);
+        }
+
+        return match http.post(&tg_url).multipart(form).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.json::<serde_json::Value>().await {
+                    Ok(v) => Json(json!({"description": v["description"].as_str().unwrap_or("")})).into_response(),
+                    Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("parse error: {e}")}))).into_response(),
+                }
+            }
+            Ok(resp) if resp.status().as_u16() == 503 => {
+                (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Vision provider not configured"}))).into_response()
+            }
+            Ok(resp) => {
+                let body = resp.text().await.unwrap_or_default();
+                (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {body}")}))).into_response()
+            }
+            Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {e}")}))).into_response(),
+        };
+    }
+
+    // External URL: forward to toolgate /describe-url (SSRF validated there)
+    let tg_url = format!("{toolgate_url}/describe-url");
+    let mut payload = serde_json::json!({"image_url": image_url, "language": language});
+    if !question.is_empty() {
+        payload["question"] = serde_json::Value::String(question);
+    }
+
+    match http.post(&tg_url).json(&payload).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            match resp.json::<serde_json::Value>().await {
+                Ok(v) => Json(json!({"description": v["description"].as_str().unwrap_or("")})).into_response(),
+                Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("parse error: {e}")}))).into_response(),
+            }
+        }
+        Ok(resp) if resp.status().as_u16() == 503 => {
+            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "Vision provider not configured"}))).into_response()
+        }
+        Ok(resp) => {
+            let body = resp.text().await.unwrap_or_default();
+            (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {body}")}))).into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {e}")}))).into_response(),
     }
 }
 

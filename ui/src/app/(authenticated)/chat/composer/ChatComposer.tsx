@@ -196,13 +196,19 @@ export function ChatComposer() {
       });
       if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
       const result = await resp.json();
+      // Use relative path (/uploads/uuid.ext) so the browser can load it without
+      // TLS issues from public_url (e.g. https://192.168.1.85 has no valid cert).
+      const uploadPath = (() => {
+        try { return new URL(result.url as string).pathname; }
+        catch { return result.url as string; }
+      })();
       setAttachments((prev) => [
         ...prev,
         {
           id: uuid(),
           name: file.name,
           file,
-          content: [{ type: "file", data: result.url as string, mimeType: file.type, filename: file.name }],
+          content: [{ type: "file", data: uploadPath, mimeType: file.type, filename: file.name }],
         },
       ]);
     } catch (err) {
