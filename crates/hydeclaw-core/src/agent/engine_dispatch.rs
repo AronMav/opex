@@ -233,6 +233,11 @@ impl AgentEngine {
                                                 &now_iso,
                                             ).await;
                                         });
+
+                                        // Spec: response for archived skill load must include reactivation note
+                                        let available = self.available_tool_names().await;
+                                        let result = ph::handle_skill_use(&self.cfg().workspace_dir, self.cfg().agent.base, &available, arguments).await;
+                                        return format!("{}\n\n*(This skill was archived and has been reactivated.)*", result);
                                     }
                                 }
                             }
