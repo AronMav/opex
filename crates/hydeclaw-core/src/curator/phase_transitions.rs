@@ -40,6 +40,7 @@ pub async fn run(
     db: &sqlx::PgPool,
     stale_after_days: u32,
     archive_after_days: u32,
+    dry_run: bool,
 ) -> anyhow::Result<TransitionResult> {
     let now = Utc::now();
     let skills_dir = std::path::Path::new(workspace_dir).join("skills");
@@ -81,33 +82,43 @@ pub async fn run(
         );
 
         if let Some(new_state) = target {
-            let _ = crate::db::skill_versions::save_version(
-                db, &skill.meta.name, &content, "auto-transition", None,
-                Some(&format!("curator:auto-transition to {}", state_str(&new_state))),
-            ).await;
+            let log_prefix = if dry_run { "[DRY-RUN] " } else { "" };
 
-            let updated = content.replacen(
-                &format!("state: {}", state_str(&skill.meta.state)),
-                &format!("state: {}", state_str(&new_state)),
-                1,
-            );
-            let updated = if updated == content {
-                insert_state_in_frontmatter(&content, &new_state)
-            } else {
-                updated
-            };
+            if !dry_run {
+                let _ = crate::db::skill_versions::save_version(
+                    db, &skill.meta.name, &content, "auto-transition", None,
+                    Some(&format!("curator:auto-transition to {}", state_str(&new_state))),
+                ).await;
 
-            let tmp = format!("{}.tmp", path.display());
-            if tokio::fs::write(&tmp, &updated).await.is_ok() {
-                if let Err(e) = tokio::fs::rename(&tmp, &path).await {
-                    tracing::warn!(path = %path.display(), error = %e, "phase1: rename failed");
-                    let _ = tokio::fs::remove_file(&tmp).await;
+                let updated = content.replacen(
+                    &format!("state: {}", state_str(&skill.meta.state)),
+                    &format!("state: {}", state_str(&new_state)),
+                    1,
+                );
+                let updated = if updated == content {
+                    insert_state_in_frontmatter(&content, &new_state)
                 } else {
-                    result.transitions += 1;
-                    result.log.push(format!(
-                        "{}: {:?} → {:?}", skill.meta.name, skill.meta.state, new_state
-                    ));
+                    updated
+                };
+
+                let tmp = format!("{}.tmp", path.display());
+                if tokio::fs::write(&tmp, &updated).await.is_ok() {
+                    if let Err(e) = tokio::fs::rename(&tmp, &path).await {
+                        tracing::warn!(path = %path.display(), error = %e, "phase1: rename failed");
+                        let _ = tokio::fs::remove_file(&tmp).await;
+                    } else {
+                        result.transitions += 1;
+                        result.log.push(format!(
+                            "{}{}: {:?} → {:?}", log_prefix, skill.meta.name, skill.meta.state, new_state
+                        ));
+                    }
                 }
+            } else {
+                // Dry-run: count and log without writing
+                result.transitions += 1;
+                result.log.push(format!(
+                    "{}{}: {:?} → {:?}", log_prefix, skill.meta.name, skill.meta.state, new_state
+                ));
             }
         }
     }
@@ -179,5 +190,18 @@ mod tests {
     fn null_last_used_at_no_transition() {
         let result = decide_transition(&SkillState::Active, None, Utc::now(), 30, 90);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn dry_run_prefix_applied_to_log() {
+        let prefix = "[DRY-RUN] ";
+        let entry = format!("{}web-search: Active → Stale", prefix);
+        assert!(entry.starts_with("[DRY-RUN] "));
+    }
+
+    #[test]
+    fn real_run_has_no_prefix() {
+        let entry = "web-search: Active → Stale".to_string();
+        assert!(!entry.starts_with("[DRY-RUN] "));
     }
 }

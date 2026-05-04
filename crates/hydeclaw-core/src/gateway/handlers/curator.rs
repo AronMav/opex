@@ -145,7 +145,7 @@ pub(crate) async fn api_curator_run(
         }
     }
 
-    let run_id = match crate::db::curator_runs::insert_run(&db, "manual").await {
+    let run_id = match crate::db::curator_runs::insert_run(&db, "manual", false).await {
         Ok(id) => id,
         Err(e) => return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -154,12 +154,12 @@ pub(crate) async fn api_curator_run(
     };
 
     tokio::spawn(async move {
-        match crate::curator::run_curator(&db, &cfg, std::sync::Arc::new(agents), crate::config::WORKSPACE_DIR).await {
+        match crate::curator::run_curator(&db, &cfg, std::sync::Arc::new(agents), crate::config::WORKSPACE_DIR, false).await {
             Ok(s) => {
-                crate::db::curator_runs::finish_run(&db, run_id, s.phase1, s.phase2, s.phase3, Some(&s.report_md), None).await.ok();
+                crate::db::curator_runs::finish_run(&db, run_id, s.phase1, s.phase2, s.phase3, Some(&s.report_md), None, false).await.ok();
             }
             Err(e) => {
-                crate::db::curator_runs::finish_run(&db, run_id, 0, 0, 0, None, Some(&e.to_string())).await.ok();
+                crate::db::curator_runs::finish_run(&db, run_id, 0, 0, 0, None, Some(&e.to_string()), false).await.ok();
             }
         }
     });
