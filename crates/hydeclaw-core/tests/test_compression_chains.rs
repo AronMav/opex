@@ -32,7 +32,9 @@ async fn insert_test_session(db: &sqlx::PgPool, agent_id: &str) -> Uuid {
 async fn no_split_when_pending_split_false() {
     let db = match test_db().await { Some(d) => d, None => return };
 
-    let session_id = insert_test_session(&db, "TestAgent").await;
+    // Use a unique agent_id so parallel tests don't affect this COUNT.
+    let agent_id = format!("test-no-split-{}", Uuid::new_v4());
+    let session_id = insert_test_session(&db, &agent_id).await;
     let state = serde_json::json!({
         "previous_summary": "some summary",
         "ineffective_count": 0,
@@ -47,15 +49,21 @@ async fn no_split_when_pending_split_false() {
         .await
         .unwrap();
 
-    let count_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
-        .fetch_one(&db).await.unwrap();
+    let count_before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sessions WHERE agent_id = $1"
+    )
+    .bind(&agent_id)
+    .fetch_one(&db).await.unwrap();
 
     let row = hydeclaw_db::sessions::get_session_for_chain(&db, session_id)
         .await.unwrap();
     assert!(row.is_some());
 
-    let count_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")
-        .fetch_one(&db).await.unwrap();
+    let count_after: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sessions WHERE agent_id = $1"
+    )
+    .bind(&agent_id)
+    .fetch_one(&db).await.unwrap();
     assert_eq!(count_before, count_after, "no new session created");
 }
 
