@@ -786,7 +786,9 @@ pub async fn handle_skill_capture(
     };
 
     // Check for collision before writing.
-    let skill_path = format!("{}/skills/{}.md", workspace_dir, name);
+    let skill_path = std::path::Path::new(workspace_dir)
+        .join("skills")
+        .join(format!("{}.md", name));
     if tokio::fs::metadata(&skill_path).await.is_ok() {
         return format!(
             "Skill '{}' already exists. Use skill_use(action='load', name='{}') to read it, \
@@ -852,16 +854,14 @@ pub async fn handle_skill_capture(
     }
 
     // Audit row in curator_decisions for Phase 3 visibility.
-    if let Err(e) = sqlx::query(
-        "INSERT INTO curator_decisions (skill_name, action, reason) VALUES ($1, $2, $3)",
-    )
-    .bind(name)
-    .bind("captured")
-    .bind(format!("in-session capture by {}", agent_name))
-    .execute(db)
-    .await
-    {
-        tracing::warn!(skill = %name, agent = %agent_name, error = %e, "skill capture: curator_decisions insert failed");
+    if let Err(e) = crate::db::curator_decisions::save_decision(
+        db,
+        name,
+        "captured",
+        Some(&format!("in-session capture by {}", agent_name)),
+    ).await {
+        tracing::warn!(skill = %name, agent = %agent_name, error = %e,
+            "skill capture: curator_decisions insert failed");
     }
 
     // UI notification (best-effort).
