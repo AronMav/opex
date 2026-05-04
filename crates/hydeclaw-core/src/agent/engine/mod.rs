@@ -70,6 +70,8 @@ pub struct AgentEngine {
     /// Immutable agent configuration snapshot — sole source for agent settings,
     /// DB pool, provider, tools, memory, etc.
     pub cfg: Option<Arc<crate::agent::agent_config::AgentConfig>>,
+    /// System tool registry — replaces the 28-arm match in execute_tool_call_inner.
+    pub(crate) tool_registry: std::sync::Arc<crate::agent::tool_registry::SystemToolRegistry>,
 }
 
 /// Snapshot of what's currently displayed on the canvas.

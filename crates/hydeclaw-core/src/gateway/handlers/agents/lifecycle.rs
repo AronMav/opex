@@ -173,6 +173,7 @@ pub async fn start_agent_from_config(
         tool_executor: std::sync::OnceLock::new(),
         state: agent_state,
         cfg: Some(agent_config),
+        tool_registry: std::sync::Arc::new(crate::agent::tool_registry::SystemToolRegistry::build()),
     });
     engine.set_context_builder(&engine);
     engine.state().set_self_ref(&engine);
