@@ -377,6 +377,7 @@ pub async fn finalize<S: EventSink>(
                         ctx.agent_name.clone(),
                         ctx.provider.clone(),
                         sr_cfg.min_tool_calls,
+                        false,
                         &ctx.bg_tasks,
                     );
                 }
@@ -556,11 +557,12 @@ pub(crate) fn spawn_skill_review(
     agent_name: String,
     provider: Arc<dyn LlmProvider>,
     min_tool_calls: u32,
+    force: bool,
     tracker: &TaskTracker,
 ) {
     tracker.spawn(async move {
         let tool_count = count_tool_calls(&db, session_id).await;
-        if tool_count < min_tool_calls {
+        if tool_count < min_tool_calls && !force {
             return;
         }
         crate::skills::evolution::review_session_for_skills(
@@ -568,6 +570,7 @@ pub(crate) fn spawn_skill_review(
             &provider,
             &agent_name,
             session_id,
+            force,
         )
         .await;
     });
