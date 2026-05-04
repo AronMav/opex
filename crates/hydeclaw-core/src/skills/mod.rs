@@ -243,6 +243,10 @@ pub async fn write_skill(
         Some(ts) => format!("last_used_at: \"{ts}\"\n"),
         None => String::new(),
     };
+    let pinned_line = match frontmatter.pinned {
+        Some(true) => "pinned: true\n",
+        _ => "",
+    };
     let state_str = match frontmatter.state {
         SkillState::Active   => "active",
         SkillState::Stale    => "stale",
@@ -250,7 +254,7 @@ pub async fn write_skill(
     };
 
     let content = format!(
-        "---\nname: {}\ndescription: {}\ntriggers:\n{}\ntools_required:\n{}\npriority: {}\nstate: {}\n{last_used_line}---\n\n{}",
+        "---\nname: {}\ndescription: {}\ntriggers:\n{}\ntools_required:\n{}\npriority: {}\nstate: {}\n{last_used_line}{pinned_line}---\n\n{}",
         frontmatter.name,
         frontmatter.description,
         triggers_yaml,
@@ -606,6 +610,48 @@ mod tests {
     /// Audit: every `tools_required` entry across workspace/ and config/
     /// skills must reference a known tool (core system, YAML, or mcp__-prefixed).
     /// Catches typos that would silently hide a skill from listings.
+    #[tokio::test]
+    async fn write_skill_serializes_pinned_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let fm = SkillFrontmatter {
+            name: "test-skill".into(),
+            description: "desc".into(),
+            triggers: vec![],
+            tools_required: vec![],
+            priority: 0,
+            last_used_at: None,
+            state: SkillState::Active,
+            pinned: Some(true),
+        };
+        write_skill(dir.path().to_str().unwrap(), "test-skill", &fm, "body").await.unwrap();
+        let content = tokio::fs::read_to_string(
+            dir.path().join("skills/test-skill.md")
+        ).await.unwrap();
+        assert!(content.contains("pinned: true"), "pinned: true must appear in file");
+    }
+
+    #[tokio::test]
+    async fn write_skill_omits_pinned_when_false_or_none() {
+        let dir = tempfile::tempdir().unwrap();
+        for pinned in [Some(false), None] {
+            let fm = SkillFrontmatter {
+                name: "test-skill".into(),
+                description: "desc".into(),
+                triggers: vec![],
+                tools_required: vec![],
+                priority: 0,
+                last_used_at: None,
+                state: SkillState::Active,
+                pinned,
+            };
+            write_skill(dir.path().to_str().unwrap(), "test-skill", &fm, "body").await.unwrap();
+            let content = tokio::fs::read_to_string(
+                dir.path().join("skills/test-skill.md")
+            ).await.unwrap();
+            assert!(!content.contains("pinned:"), "pinned: must NOT appear when false/None");
+        }
+    }
+
     #[tokio::test]
     async fn audit_all_skills_required_tools_exist() {
         // Resolve workspace/ relative to the Cargo workspace root (two levels up from
