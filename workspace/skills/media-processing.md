@@ -20,7 +20,8 @@ state: active
 
 When the user attaches a file to a message — process it immediately without asking permission:
 
-- **Image** `[User attached an image: URL]` → call `analyze_image` with the URL, describe what is in the image and respond to the user's message
+- **Image** `[User attached an image: URL]` + `<vision>description</vision>` → the image was already auto-described; use the description to respond. Do NOT call `analyze_image` again.
+- **Image** `[User attached an image: URL]` (no `<vision>` block follows) → auto-describe was not available; call `analyze_image` with the URL to get a description, then respond.
 - **Document (PDF, DOCX, TXT, etc.)** `[User attached a document: URL]` → call `extract_document` with the URL, use the content to respond
 - **Voice / audio** `[User sent a voice message: URL]` → call `transcribe_audio` with the URL, respond to the transcription content
 - **Video** `[User sent a video: URL]` → describe what is available, call `analyze_image` with the preview URL if present

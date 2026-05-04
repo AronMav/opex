@@ -1,19 +1,25 @@
 name: analyze_image
-description: "Analyze an image from a URL. Accepts image_url and an optional question. Returns a text description. Use when receiving a photo from the user or when an image at a URL needs analysis."
-endpoint: "http://localhost:9011/describe-url"
+description: "Analyze an image from a URL or /uploads/ path. Accepts image_url and an optional question. Returns a text description. Works with both external URLs (https://...) and internal /uploads/ paths."
+endpoint: "http://localhost:18789/api/vision/analyze"
 method: POST
 parameters:
   image_url:
     type: string
     required: true
     location: body
-    description: "Image URL to analyze"
+    description: "Image URL to analyze (external https:// or internal /uploads/ path)"
   question:
     type: string
     required: false
     location: body
     description: "Question about the image (optional)"
     default: "Describe what is in the image"
+  language:
+    type: string
+    required: false
+    location: body
+    description: "Response language (default: ru)"
+    default: "ru"
 response_transform: "$.description"
 
 status: verified

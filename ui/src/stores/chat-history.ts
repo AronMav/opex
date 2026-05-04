@@ -4,6 +4,50 @@ import { parseContentParts } from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
 
+// ── User message part parser ─────────────────────────────────────────────────
+
+const USER_IMAGE_RE = /\[User attached an image: ([^\]]+)\]/g;
+const IMAGE_VISION_RE = /<vision>[\s\S]*?<\/vision>/g;
+
+function guessImageMime(url: string): string {
+  const ext = url.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "png") return "image/png";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  if (ext === "bmp") return "image/bmp";
+  return "image/jpeg";
+}
+
+/**
+ * Convert stored user message content to MessageParts.
+ * Extracts [User attached an image: URL] hints into FileParts so images
+ * render as <img> when history loads — same behaviour as live streaming.
+ * Strips [Image (vision): ...] hints — LLM context, not for display.
+ */
+function parseUserMessageParts(content: string): MessagePart[] {
+  const parts: MessagePart[] = [];
+  const imageUrls: string[] = [];
+  let text = content;
+
+  USER_IMAGE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = USER_IMAGE_RE.exec(content)) !== null) {
+    imageUrls.push(m[1]);
+    text = text.replace(m[0], "");
+  }
+
+  text = text.replace(IMAGE_VISION_RE, "");
+
+  const trimmed = text.trim();
+  if (trimmed) parts.push({ type: "text", text: trimmed });
+  for (const url of imageUrls) {
+    parts.push({ type: "file", url, mediaType: guessImageMime(url) });
+  }
+
+  if (parts.length === 0) parts.push({ type: "text", text: content });
+  return parts;
+}
+
 // ── Tool ordering helper ─────────────────────────────────────────────────────
 
 /**
@@ -93,7 +137,7 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
       messages.push({
         id: m.id,
         role: "user",
-        parts: [{ type: "text", text: m.content || "" }],
+        parts: parseUserMessageParts(m.content || ""),
         createdAt: m.created_at,
         agentId: m.agent_id ?? undefined,
         parentMessageId: m.parent_message_id ?? undefined,

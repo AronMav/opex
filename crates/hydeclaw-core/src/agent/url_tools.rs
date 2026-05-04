@@ -1,8 +1,29 @@
 //! URL extraction and content helpers — standalone functions used by the engine.
 //!
-//! Safety note: `auto_transcribe_audio` uses `http_client` (no SSRF filtering) because
-//! attachment URLs are always from Core's `/uploads/` endpoint (localhost). The caller
-//! must ensure attachments originate from trusted internal sources.
+//! Safety note: `auto_transcribe_audio` and `auto_describe_images` use `http_client`
+//! (no SSRF filtering) because attachment downloads always go to Core's own
+//! `/uploads/` endpoint via localhost. The caller must ensure attachments originate
+//! from trusted internal sources.
+
+/// Convert a public attachment URL to a localhost URL for internal Core downloads.
+///
+/// When `public_url` is configured (e.g. `https://192.168.1.85`), `att.url` contains
+/// that host+scheme. Connecting to it from inside Core fails (TLS cert, CGNAT, etc.).
+/// We always download from `http://localhost:{port}` instead, using just the path component.
+pub(crate) fn uploads_local_url(att_url: &str, gateway_listen: &str) -> String {
+    let port = gateway_listen
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(18789);
+    // Extract path from URL (e.g. "/uploads/uuid.jpg") or fall back to full URL
+    let path = if let Some(idx) = att_url.find("/uploads/") {
+        &att_url[idx..]
+    } else {
+        att_url
+    };
+    format!("http://localhost:{port}{path}")
+}
 
 /// Append media attachment hints to the enriched text for LLM.
 pub(crate) fn enrich_with_attachments(text: &mut String, attachments: &[hydeclaw_types::MediaAttachment]) {
@@ -35,20 +56,22 @@ pub(crate) async fn auto_transcribe_audio(
     toolgate_url: &str,
     language: &str,
     http_client: &reqwest::Client,
+    gateway_listen: &str,
 ) {
     use hydeclaw_types::MediaType;
     for att in attachments {
         if att.media_type != MediaType::Audio {
             continue;
         }
-        // Step 1: Download audio bytes from Core uploads (localhost)
-        let audio_bytes = match http_client.get(&att.url).send().await {
+        // Step 1: Download audio bytes via localhost (avoids TLS issues with public_url)
+        let local_url = uploads_local_url(&att.url, gateway_listen);
+        let audio_bytes = match http_client.get(&local_url).send().await {
             Ok(resp) if resp.status().is_success() => match resp.bytes().await {
                 Ok(b) => b,
                 Err(e) => { tracing::warn!(error = %e, "failed to read audio bytes"); continue; }
             },
-            Ok(resp) => { tracing::warn!(url = %att.url, status = %resp.status(), "failed to download audio"); continue; }
-            Err(e) => { tracing::warn!(error = %e, "failed to download audio from Core"); continue; }
+            Ok(resp) => { tracing::warn!(url = %local_url, status = %resp.status(), "failed to download audio"); continue; }
+            Err(e) => { tracing::warn!(error = %e, url = %local_url, "failed to download audio from Core"); continue; }
         };
 
         // Step 2: Upload bytes to toolgate /transcribe (file upload, no SSRF check)
@@ -80,6 +103,76 @@ pub(crate) async fn auto_transcribe_audio(
             }
             Err(e) => {
                 tracing::warn!(error = %e, "auto-transcribe request failed");
+            }
+        }
+    }
+}
+
+/// Auto-describe image attachments via toolgate vision before sending to LLM.
+/// Downloads image bytes from Core (localhost) then POSTs to toolgate /describe.
+/// Replaces the `[User attached an image: ...]` hint with the vision description.
+/// Silently skips if vision provider is inactive (503) or toolgate unreachable.
+pub(crate) async fn auto_describe_images(
+    text: &mut String,
+    attachments: &[hydeclaw_types::MediaAttachment],
+    toolgate_url: &str,
+    language: &str,
+    http_client: &reqwest::Client,
+    gateway_listen: &str,
+) {
+    use hydeclaw_types::MediaType;
+    for att in attachments {
+        if att.media_type != MediaType::Image {
+            continue;
+        }
+        // Step 1: Download image bytes via localhost (avoids TLS issues with public_url)
+        let local_url = uploads_local_url(&att.url, gateway_listen);
+        let image_bytes = match http_client.get(&local_url).send().await {
+            Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => { tracing::warn!(error = %e, "failed to read image bytes"); continue; }
+            },
+            Ok(resp) => { tracing::warn!(url = %local_url, status = %resp.status(), "failed to download image"); continue; }
+            Err(e) => { tracing::warn!(error = %e, url = %local_url, "failed to download image from Core"); continue; }
+        };
+
+        // Step 2: POST bytes to toolgate /describe (multipart file upload, no SSRF check)
+        let url = format!("{}/describe", toolgate_url.trim_end_matches('/'));
+        let filename = att.url.split('/').next_back().unwrap_or("image.jpg").to_string();
+        let mime = att.mime_type.as_deref().unwrap_or("image/jpeg").to_string();
+        let part = reqwest::multipart::Part::bytes(image_bytes.to_vec())
+            .file_name(filename)
+            .mime_str(&mime)
+            .unwrap_or_else(|_| reqwest::multipart::Part::bytes(image_bytes.to_vec()));
+        let form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("language", language.to_string());
+
+        match http_client.post(&url).multipart(form).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(data) = resp.json::<serde_json::Value>().await
+                    && let Some(description) = data["description"].as_str()
+                    && !description.is_empty()
+                {
+                    let url_hint = format!("[User attached an image: {}]", att.url);
+                    // Keep the original URL hint so the UI can reconstruct the image FilePart
+                    // from history; append the vision description for the LLM context only.
+                    // Use <vision>...</vision> tags — not markdown, won't confuse rendering.
+                    let replacement = format!("[User attached an image: {}]\n<vision>{description}</vision>", att.url);
+                    *text = text.replace(&url_hint, &replacement);
+                    tracing::info!(len = description.len(), "auto-described image via vision");
+                }
+            }
+            Ok(resp) if resp.status().as_u16() == 503 => {
+                tracing::debug!(url = %att.url, "vision provider not active, keeping image hint");
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                tracing::warn!(%status, body = %body, "vision describe failed");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "vision describe request failed");
             }
         }
     }

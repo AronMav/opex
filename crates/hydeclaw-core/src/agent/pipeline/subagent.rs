@@ -197,7 +197,12 @@ pub async fn enrich_message_text(
 
     // Auto-transcribe voice messages via toolgate STT
     crate::agent::url_tools::auto_transcribe_audio(
-        &mut enriched, attachments, toolgate_url, agent_language, http_client,
+        &mut enriched, attachments, toolgate_url, agent_language, http_client, gateway_listen,
+    ).await;
+
+    // Auto-describe images via toolgate vision
+    crate::agent::url_tools::auto_describe_images(
+        &mut enriched, attachments, toolgate_url, agent_language, http_client, gateway_listen,
     ).await;
 
     enriched

@@ -395,6 +395,9 @@ pub(crate) struct ChatSseRequest {
     /// already persisted the branch user message.
     #[serde(default)]
     user_message_id: Option<uuid::Uuid>,
+    /// File attachments uploaded via /api/media/upload (images, audio, documents).
+    #[serde(default)]
+    attachments: Vec<hydeclaw_types::MediaAttachment>,
 }
 
 #[allow(unused_assignments)]
@@ -506,7 +509,7 @@ pub(crate) async fn api_chat_sse(
     let msg = hydeclaw_types::IncomingMessage {
         user_id: crate::agent::channel_kind::channel::UI.to_string(),
         text: Some(cleaned_text),
-        attachments: vec![],
+        attachments: req.attachments,
         agent_id: engine.name().to_string(),
         channel: crate::agent::channel_kind::channel::UI.to_string(),
         context: serde_json::json!({}),
