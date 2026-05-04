@@ -300,6 +300,24 @@ async fn main() -> Result<()> {
         tracing::error!(error = %e, "OAuth vault migration failed — old tokens may not be available");
     }
 
+    // One-time migration: sign historical /uploads/* URLs in messages (v0.26.0).
+    {
+        let upload_key = secrets_manager.get_upload_hmac_key();
+        match db::upload_migration::run_upload_signature_migration(
+            &db_pool,
+            &upload_key,
+        )
+        .await
+        {
+            Ok(n) if n > 0 => tracing::info!(rows = n, "upload signature migration complete"),
+            Ok(_) => {}
+            Err(e) => tracing::error!(
+                err = %e,
+                "upload signature migration failed — continuing"
+            ),
+        }
+    }
+
     // No hardcoded secrets — user creates all secrets via UI.
     // Channel-specific secrets (bot tokens) are auto-seeded when agents are created.
     // HYDECLAW_AUTH_TOKEN and HYDECLAW_MASTER_KEY stay in .env only (bootstrap).
