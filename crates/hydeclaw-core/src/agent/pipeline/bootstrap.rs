@@ -225,9 +225,7 @@ async fn maybe_split_session(
     // but reset counters — child is a fresh continuation that should compress freely.
     let child_state = crate::agent::compressor::CompressorState {
         previous_summary: state.previous_summary.clone(),
-        ineffective_count: 0,
-        compression_count: 0,
-        pending_split: false,
+        ..Default::default()
     };
     let new_state_json = serde_json::to_value(&child_state).unwrap_or(serde_json::Value::Null);
     if let Err(e) = crate::db::compaction::set_compaction_state(db, child_id, new_state_json).await {

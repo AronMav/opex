@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 // ── Persisted state ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CompressorState {
     pub previous_summary: Option<String>,
     pub ineffective_count: u8,
