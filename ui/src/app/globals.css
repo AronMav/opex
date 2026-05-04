@@ -332,29 +332,6 @@
   user-select: none;
 }
 
-/* Streaming message: blinking cursor on last text element */
-.streaming-message .prose > *:last-child::after,
-.streaming-message .prose > p:last-of-type::after {
-  content: "";
-  display: inline-block;
-  width: 2px;
-  height: 1em;
-  margin-left: 2px;
-  vertical-align: text-bottom;
-  background: var(--primary);
-  border-radius: 1px;
-  animation: cursor-blink 1s steps(2) infinite;
-}
-
-/* Prevent double cursor on nested last elements */
-.streaming-message .prose > *:last-child *:last-child::after {
-  content: none;
-}
-
-@keyframes cursor-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
 
 /* Accessibility: respect user's reduced motion preference */
 @media (prefers-reduced-motion: reduce) {

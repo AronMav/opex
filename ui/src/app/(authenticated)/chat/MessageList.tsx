@@ -294,9 +294,13 @@ export function MessageList({
               {showSeparator && <AgentTransitionDivider agentName={msg.agentId!} />}
               <div className={cn(
                 isNew && "animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out",
-                isStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && "streaming-message",
               )}>
                 <MessageItem message={msg} sessionChannel={sessionChannel} sessionUserId={sessionUserId} />
+                {isStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && (
+                  <div className="pb-3 pl-10">
+                    <span className="streaming-cursor"><span /></span>
+                  </div>
+                )}
               </div>
             </div>
           );

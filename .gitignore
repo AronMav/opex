@@ -24,6 +24,7 @@ CLAUDE.md
 /backups/
 /release/
 /docs/superpowers/
+/.superpowers/
 /docs/specs/
 /docs/plans/
 .worktrees/

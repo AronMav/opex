@@ -141,6 +141,26 @@ pub(crate) async fn api_list_sessions(
 
     match query {
         Ok(rows) => {
+            // Batch-fetch last input_tokens per session from usage_log (single query, not N+1).
+            let session_ids: Vec<uuid::Uuid> = rows.iter().map(|s| s.id).collect();
+            let token_map: HashMap<uuid::Uuid, i64> = if session_ids.is_empty() {
+                HashMap::new()
+            } else {
+                sqlx::query_as::<_, (uuid::Uuid, i32)>(
+                    "SELECT DISTINCT ON (session_id) session_id, input_tokens \
+                     FROM usage_log \
+                     WHERE session_id = ANY($1) AND status IS DISTINCT FROM 'aborted' AND input_tokens > 0 \
+                     ORDER BY session_id, created_at DESC",
+                )
+                .bind(&session_ids)
+                .fetch_all(&infra.db)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id, t)| (id, t as i64))
+                .collect()
+            };
+
             let sessions: Vec<Value> = rows
                 .iter()
                 .map(|s| {
@@ -157,6 +177,7 @@ pub(crate) async fn api_list_sessions(
                         "participants": s.participants,
                         "parent_session_id": s.parent_session_id,
                         "end_reason": s.end_reason,
+                        "last_input_tokens": token_map.get(&s.id),
                     })
                 })
                 .collect();
@@ -249,13 +270,27 @@ pub(crate) async fn api_get_session(
     .await;
 
     match row {
-        Ok(Some(r)) => Json(json!({
-            "id": r.id,
-            "agent_id": r.agent_id,
-            "channel": r.channel,
-            "run_status": r.run_status,
-        }))
-        .into_response(),
+        Ok(Some(r)) => {
+            let last_input_tokens: Option<i64> = sqlx::query_scalar::<_, i32>(
+                "SELECT input_tokens FROM usage_log \
+                 WHERE session_id = $1 AND status IS DISTINCT FROM 'aborted' AND input_tokens > 0 \
+                 ORDER BY created_at DESC LIMIT 1",
+            )
+            .bind(r.id)
+            .fetch_optional(&infra.db)
+            .await
+            .unwrap_or(None)
+            .map(|v| v as i64);
+
+            Json(json!({
+                "id": r.id,
+                "agent_id": r.agent_id,
+                "channel": r.channel,
+                "run_status": r.run_status,
+                "last_input_tokens": last_input_tokens.unwrap_or(0),
+            }))
+            .into_response()
+        }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
