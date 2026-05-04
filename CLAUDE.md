@@ -230,7 +230,7 @@ All other configuration (service URLs, API keys, tokens) must go into the secret
 
 Next.js 16 App Router, React 19, Tailwind 4, shadcn/ui, Zustand state, CodeMirror editor.
 
-Post-build script `scripts/flatten-rsc.mjs` flattens RSC chunks — required for static nginx serving. Run as part of `npm run build`.
+RSC chunks are flattened automatically during `next build` via `ui/build/adapter.cjs` (registered in `next.config.ts` as `experimental.adapterPath`). No separate post-build script needed.
 
 **Key stores:** `chat-store.ts` (451 lines — core state machine + actions), `auth-store.ts` (health check + agent list), `canvas-store.ts` (workspace canvas state).
 
@@ -402,7 +402,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - `Cargo.lock` - Locked dependency versions
 - `docker/docker-compose.yml` - Infrastructure (Postgres, searxng, browser-renderer, MCP servers)
 - `docker/Dockerfile.*` - Custom images for Postgres (age, pgvector), sandbox (code execution)
-- `ui/package.json` with Next.js build + RSC flattening via `scripts/flatten-rsc.mjs`
+- `ui/package.json` with Next.js build; RSC flattening via `ui/build/adapter.cjs` (`experimental.adapterPath` hook)
 - `tailwind.config.ts`, `tsconfig.json`, `next.config.js`
 - Post-build: RSC chunks flattened for static nginx serving
 - `toolgate/config.py` - Provider registry load from Core API at startup

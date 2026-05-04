@@ -100,7 +100,7 @@ make build-arm64
 ```bash
 make ui
 # эквивалент: cd ui && npm run build
-# пост-сборка: scripts/flatten-rsc.mjs (RSC chunks → статика для nginx)
+# RSC flattening: ui/build/adapter.cjs (via experimental.adapterPath, встроен в next build)
 # выходная директория: ui/out/
 ```
 
