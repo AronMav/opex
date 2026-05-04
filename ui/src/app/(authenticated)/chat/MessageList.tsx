@@ -51,7 +51,7 @@ function MessageListSkeleton() {
 
 function ThinkingMessage() {
   return (
-    <div className="pt-1 pb-2 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out">
+    <div className="pt-1 pb-2 pl-12 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out">
       <CometLoader />
     </div>
   );
@@ -281,7 +281,7 @@ export function MessageList({
               )}>
                 <MessageItem message={msg} sessionChannel={sessionChannel} sessionUserId={sessionUserId} />
                 {isStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && (
-                  <div className="pb-1 pl-10">
+                  <div className="pb-1 pl-12">
                     <CometLoader />
                   </div>
                 )}
