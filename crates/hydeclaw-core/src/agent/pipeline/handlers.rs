@@ -749,6 +749,139 @@ pub async fn handle_skill_use(
     }
 }
 
+/// skill_use(action="capture") — create a new skill from a session pattern.
+///
+/// Writes the file immediately to workspace/skills/, saves a version snapshot,
+/// records in curator_decisions, and fires a UI notification.
+pub async fn handle_skill_capture(
+    workspace_dir: &str,
+    agent_name: &str,
+    db: &sqlx::PgPool,
+    ui_event_tx: Option<&tokio::sync::broadcast::Sender<String>>,
+    args: &serde_json::Value,
+) -> String {
+    let name = match args.get("name").and_then(|v| v.as_str()) {
+        Some(n) if !n.is_empty() => n,
+        _ => return "Error: 'name' is required.".to_string(),
+    };
+
+    // Validate: lowercase letters, digits, hyphens; cannot start with hyphen.
+    let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-');
+    if !valid {
+        return format!(
+            "Invalid skill name '{}'. Use lowercase letters, digits, and hyphens only.",
+            name
+        );
+    }
+
+    let description = match args.get("description").and_then(|v| v.as_str()) {
+        Some(d) if !d.is_empty() => d.to_string(),
+        _ => return "Error: 'description' is required.".to_string(),
+    };
+
+    let instructions = match args.get("instructions").and_then(|v| v.as_str()) {
+        Some(i) if !i.is_empty() => i.to_string(),
+        _ => return "Error: 'instructions' is required.".to_string(),
+    };
+
+    // Check for collision before writing.
+    let skill_path = format!("{}/skills/{}.md", workspace_dir, name);
+    if tokio::fs::metadata(&skill_path).await.is_ok() {
+        return format!(
+            "Skill '{}' already exists. Use skill_use(action='load', name='{}') to read it, \
+             or choose a different name.",
+            name, name
+        );
+    }
+
+    let triggers: Vec<String> = args
+        .get("triggers")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let tools_required: Vec<String> = args
+        .get("tools_required")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let frontmatter = crate::skills::SkillFrontmatter {
+        name: name.to_string(),
+        description,
+        triggers,
+        tools_required,
+        priority: 5,
+        state: crate::skills::SkillState::Active,
+        pinned: None,
+        last_used_at: None,
+    };
+
+    if let Err(e) = crate::skills::write_skill(workspace_dir, name, &frontmatter, &instructions).await {
+        return format!("Failed to write skill: {}", e);
+    }
+
+    // Read back to snapshot the exact bytes written.
+    let content = match tokio::fs::read_to_string(&skill_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(skill = %name, agent = %agent_name, error = %e, "skill capture: read-back failed");
+            String::new()
+        }
+    };
+
+    // Version snapshot.
+    if !content.is_empty() {
+        if let Err(e) = crate::db::skill_versions::save_version(
+            db,
+            name,
+            &content,
+            "capture",
+            None,
+            Some(&format!("captured in-session by {}", agent_name)),
+        ).await {
+            tracing::warn!(skill = %name, agent = %agent_name, error = %e, "skill capture: version save failed");
+        }
+    }
+
+    // Audit row in curator_decisions for Phase 3 visibility.
+    if let Err(e) = sqlx::query(
+        "INSERT INTO curator_decisions (skill_name, action, reason) VALUES ($1, $2, $3)",
+    )
+    .bind(name)
+    .bind("captured")
+    .bind(format!("in-session capture by {}", agent_name))
+    .execute(db)
+    .await
+    {
+        tracing::warn!(skill = %name, agent = %agent_name, error = %e, "skill capture: curator_decisions insert failed");
+    }
+
+    // UI notification (best-effort).
+    if let Some(tx) = ui_event_tx {
+        if let Err(e) = crate::gateway::notify(
+            db,
+            tx,
+            "skill_captured",
+            "New skill captured",
+            &format!("Agent {} captured skill: {}", agent_name, name),
+            serde_json::json!({"skill": name, "agent": agent_name}),
+        ).await {
+            tracing::warn!(skill = %name, agent = %agent_name, error = %e, "skill capture: notify failed");
+        }
+    }
+
+    tracing::info!(skill = %name, agent = %agent_name, "skill captured in-session");
+    format!("Skill '{}' captured and active.", name)
+}
+
 /// Skill meta-tool: list available skills, filtered by tools the agent may call.
 pub async fn handle_skill_list(
     workspace_dir: &str,
@@ -1027,5 +1160,45 @@ mod tests {
 
         assert!(result.contains("no_requirements"), "should keep no-requirements skill: {result}");
         assert!(!result.contains("needs_code_exec"), "should hide code_exec skill when empty available set: {result}");
+    }
+
+    #[test]
+    fn capture_rejects_invalid_name_uppercase() {
+        let name = "MySkill";
+        let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && !name.starts_with('-');
+        assert!(!valid, "uppercase name must fail validation");
+    }
+
+    #[test]
+    fn capture_rejects_name_starting_with_dash() {
+        let name = "-bad-name";
+        let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && !name.starts_with('-');
+        assert!(!valid);
+    }
+
+    #[test]
+    fn capture_accepts_valid_name() {
+        let name = "my-skill-123";
+        let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && !name.starts_with('-');
+        assert!(valid);
+    }
+
+    #[test]
+    fn capture_parses_triggers_and_tools() {
+        let triggers: Vec<String> = "search, find online, поиск"
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(triggers, vec!["search", "find online", "поиск"]);
+
+        let tools: Vec<String> = " , web_search, ".split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(tools, vec!["web_search"]);
     }
 }
