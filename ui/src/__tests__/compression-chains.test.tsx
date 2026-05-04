@@ -110,3 +110,90 @@ describe("ParentBadge", () => {
     expect(onNavigate).toHaveBeenCalledOnce();
   });
 });
+
+// ── Additional CompactChainBanner tests ───────────────────────────────────────
+
+describe("CompactChainBanner extended", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("CompactChainBanner_not_rendered_when_isMirror_true — no banner for root (no parent_session_id)", () => {
+    vi.mocked(useSessionChain).mockReturnValue({
+      data: {
+        chain: [
+          {
+            id: "mirror-id",
+            parent_session_id: null,
+            end_reason: null,
+            title: "Mirror Session",
+            started_at: new Date().toISOString(),
+            agent_id: "A",
+            depth: 0,
+          },
+        ],
+      },
+    } as any);
+
+    const { container } = render(
+      React.createElement(CompactChainBanner, { activeSessionId: "mirror-id", onNavigate: vi.fn() })
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("CompactChainBanner_shows_link_to_parent — banner renders with parent reference", () => {
+    const chain = makeChain("current-id", "parent-id");
+    vi.mocked(useSessionChain).mockReturnValue({ data: chain } as any);
+
+    render(
+      React.createElement(CompactChainBanner, { activeSessionId: "current-id", onNavigate: vi.fn() })
+    );
+
+    expect(screen.getByText("Compression chain")).toBeTruthy();
+    // not collapsed by default in jsdom (localStorage empty)
+    expect(screen.getByText("Root")).toBeTruthy();
+  });
+
+  it("chain_length_displayed — banner shows correct session count", () => {
+    // Build a 3-session chain: grandparent → parent → current
+    const threeChain = {
+      chain: [
+        {
+          id: "gp-id",
+          parent_session_id: null,
+          end_reason: "compression",
+          title: "Grandparent",
+          started_at: new Date().toISOString(),
+          agent_id: "A",
+          depth: 2,
+        },
+        {
+          id: "p-id",
+          parent_session_id: "gp-id",
+          end_reason: "compression",
+          title: "Parent",
+          started_at: new Date().toISOString(),
+          agent_id: "A",
+          depth: 1,
+        },
+        {
+          id: "c-id",
+          parent_session_id: "p-id",
+          end_reason: null,
+          title: "Current",
+          started_at: new Date().toISOString(),
+          agent_id: "A",
+          depth: 0,
+        },
+      ],
+    };
+    vi.mocked(useSessionChain).mockReturnValue({ data: threeChain } as any);
+
+    render(
+      React.createElement(CompactChainBanner, { activeSessionId: "c-id", onNavigate: vi.fn() })
+    );
+
+    // Banner should display "(3 sessions)"
+    expect(screen.getByText("(3 sessions)")).toBeTruthy();
+  });
+});
