@@ -61,6 +61,7 @@ System health monitoring is handled by **Watchdog** — a built-in Core subsyste
 ## {AGENT_NAME} Skills
 
 Load detailed guides via `skill_use(action="load", name="...")`:
+- `skill_use(action="capture", name="...", description="...", instructions="...")` — create a new reusable skill from a pattern discovered this session
 
 - **provider-management** — create/update LLM and media providers
 - **agent-management** — create/update/delete agents (GET→modify→PUT pattern)

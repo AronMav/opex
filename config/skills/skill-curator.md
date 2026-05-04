@@ -54,3 +54,26 @@ For each skill with `last_used_at` present:
 **Never delete skills — only archive. Archived skills are recoverable by moving back.**
 
 **Pinned skills** (`priority >= 10`) are exempt from all lifecycle transitions.
+
+---
+
+## Capturing New Skills In-Session
+
+Use `skill_use(action="capture")` when you notice a reusable pattern:
+- A workflow you will likely need again in future sessions
+- A technique that took multiple attempts to get right
+- A format, style, or sequence the user explicitly prefers
+
+**Do NOT capture:**
+- One-off tasks specific to this session only
+- Trivial operations already covered by an existing skill
+- Patterns that duplicate an existing skill (use FIX instead)
+
+**Example:**
+
+    skill_use(action="capture",
+      name="image-resize-for-telegram",
+      description="Resize images to ≤10MB before sending via Telegram",
+      triggers="resize image, compress image, telegram image",
+      tools_required="code_exec",
+      instructions="## Steps\n1. Read image size\n2. ...")
