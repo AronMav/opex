@@ -272,35 +272,6 @@
   }
 }
 
-/* Streaming cursor */
-@keyframes stream-dot {
-  0%, 80%, 100% { transform: scaleY(0.4); opacity: 0.3; }
-  40%           { transform: scaleY(1);   opacity: 1;   }
-}
-.streaming-cursor {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  height: 1em;
-  vertical-align: middle;
-}
-.streaming-cursor::before,
-.streaming-cursor::after {
-  content: '';
-}
-.streaming-cursor span,
-.streaming-cursor::before,
-.streaming-cursor::after {
-  display: inline-block;
-  width: 3px;
-  height: 0.75em;
-  border-radius: 2px;
-  background-color: var(--primary);
-  animation: stream-dot 1.2s ease-in-out infinite;
-}
-.streaming-cursor::before { animation-delay: 0s;    }
-.streaming-cursor span    { animation-delay: 0.2s;  }
-.streaming-cursor::after  { animation-delay: 0.4s;  }
 
 /* Message grouping: hide avatar and header for consecutive messages from same role */
 [data-role="user"] + [data-role="user"] .message-avatar,
