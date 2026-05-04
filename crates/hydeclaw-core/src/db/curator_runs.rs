@@ -20,6 +20,7 @@ pub struct CuratorRun {
     pub error: Option<String>,
     pub started_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+    pub dry_run: bool,
 }
 
 // ── Read helpers ───────────────────────────────────────────────────────────────
@@ -29,7 +30,7 @@ pub struct CuratorRun {
 pub async fn last_run(db: &PgPool) -> Result<Option<CuratorRun>> {
     let row = sqlx::query_as::<_, CuratorRun>(
         "SELECT id, trigger, status, skip_reason, phase1, phase2, phase3, \
-               report_md, error, started_at, finished_at \
+               report_md, error, started_at, finished_at, dry_run \
          FROM curator_runs \
          ORDER BY started_at DESC \
          LIMIT 1",
@@ -43,7 +44,7 @@ pub async fn last_run(db: &PgPool) -> Result<Option<CuratorRun>> {
 pub async fn list_runs(db: &PgPool, limit: i64) -> Result<Vec<CuratorRun>> {
     let rows = sqlx::query_as::<_, CuratorRun>(
         "SELECT id, trigger, status, skip_reason, phase1, phase2, phase3, \
-               report_md, error, started_at, finished_at \
+               report_md, error, started_at, finished_at, dry_run \
          FROM curator_runs \
          ORDER BY started_at DESC \
          LIMIT $1",
@@ -58,7 +59,7 @@ pub async fn list_runs(db: &PgPool, limit: i64) -> Result<Vec<CuratorRun>> {
 pub async fn get_run(db: &PgPool, id: Uuid) -> Result<Option<CuratorRun>> {
     let row = sqlx::query_as::<_, CuratorRun>(
         "SELECT id, trigger, status, skip_reason, phase1, phase2, phase3, \
-               report_md, error, started_at, finished_at \
+               report_md, error, started_at, finished_at, dry_run \
          FROM curator_runs \
          WHERE id = $1",
     )
@@ -71,12 +72,13 @@ pub async fn get_run(db: &PgPool, id: Uuid) -> Result<Option<CuratorRun>> {
 // ── Write helpers ──────────────────────────────────────────────────────────────
 
 /// Insert a new curator run record with status `running`. Returns the new run id.
-pub async fn insert_run(db: &PgPool, trigger: &str) -> Result<Uuid> {
+pub async fn insert_run(db: &PgPool, trigger: &str, dry_run: bool) -> Result<Uuid> {
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO curator_runs (trigger, status, started_at) \
-         VALUES ($1, 'running', now()) RETURNING id",
+        "INSERT INTO curator_runs (trigger, status, started_at, dry_run) \
+         VALUES ($1, 'running', now(), $2) RETURNING id",
     )
     .bind(trigger)
+    .bind(dry_run)
     .fetch_one(db)
     .await?;
     Ok(id)
@@ -108,12 +110,13 @@ pub async fn finish_run(
     phase3: i32,
     report_md: Option<&str>,
     error: Option<&str>,
+    dry_run: bool,
 ) -> Result<()> {
     let status = if error.is_some() { "error" } else { "done" };
     sqlx::query(
         "UPDATE curator_runs \
          SET status = $2, phase1 = $3, phase2 = $4, phase3 = $5, \
-             report_md = $6, error = $7, finished_at = now() \
+             report_md = $6, error = $7, finished_at = now(), dry_run = $8 \
          WHERE id = $1",
     )
     .bind(run_id)
@@ -123,6 +126,7 @@ pub async fn finish_run(
     .bind(phase3)
     .bind(report_md)
     .bind(error)
+    .bind(dry_run)
     .execute(db)
     .await?;
     Ok(())
