@@ -16,6 +16,7 @@ expression: dto
   "heartbeat": null,
   "tools": null,
   "compaction": null,
+  "skill_review": null,
   "session": null,
   "icon": null,
   "max_tools_in_context": null,

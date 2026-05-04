@@ -221,9 +221,15 @@ async fn maybe_split_session(
         tracing::warn!(error = %e, session = %session_id, "could not clear pending_split on parent");
     }
 
-    // Save compaction_state with pending_split=false on child
-    state.pending_split = false;
-    let new_state_json = serde_json::to_value(&state).unwrap_or(serde_json::Value::Null);
+    // Save compaction_state on child: inherit only previous_summary (the compression seed),
+    // but reset counters — child is a fresh continuation that should compress freely.
+    let child_state = crate::agent::compressor::CompressorState {
+        previous_summary: state.previous_summary.clone(),
+        ineffective_count: 0,
+        compression_count: 0,
+        pending_split: false,
+    };
+    let new_state_json = serde_json::to_value(&child_state).unwrap_or(serde_json::Value::Null);
     if let Err(e) = crate::db::compaction::set_compaction_state(db, child_id, new_state_json).await {
         tracing::warn!(error = %e, child = %child_id, "set_compaction_state on child failed");
     }
