@@ -91,7 +91,7 @@ pub struct ToolDeps<'a> {
     pub db:                  &'a PgPool,
     pub http_client:         &'a reqwest::Client,
     pub ssrf_client:         &'a reqwest::Client,
-    pub secrets:             &'a SecretsManager,
+    pub secrets:             &'a Arc<SecretsManager>,  // &Arc — needed by tool_test, secret_set
     pub sandbox:             &'a Option<Arc<CodeSandbox>>,
     pub session_pools:       Option<&'a SessionPoolsMap>,
     pub memory_store:        &'a Arc<dyn MemoryService>,
@@ -124,7 +124,7 @@ impl<'a> ToolDeps<'a> {
             db:                  &cfg.db,
             http_client:         engine.http_client(),
             ssrf_client:         engine.ssrf_http_client(),
-            secrets:             engine.secrets().as_ref(),
+            secrets:             engine.secrets(),
             sandbox:             engine.sandbox(),
             session_pools:       cfg.session_pools.as_ref(),
             memory_store:        &cfg.memory_store,
@@ -284,7 +284,7 @@ impl SystemToolHandler for WorkspaceWriteHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
         ph::handle_workspace_write(
             deps.workspace_dir, deps.agent_name, deps.agent_base,
-            deps.secrets, deps.signed_url_ttl_secs, args,
+            deps.secrets.as_ref(), deps.signed_url_ttl_secs, args,
         ).await
     }
 }
@@ -308,7 +308,7 @@ impl SystemToolHandler for WorkspaceEditHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
         ph::handle_workspace_edit(
             deps.workspace_dir, deps.agent_name, deps.agent_base,
-            deps.secrets, deps.signed_url_ttl_secs, args,
+            deps.secrets.as_ref(), deps.signed_url_ttl_secs, args,
         ).await
     }
 }
@@ -420,11 +420,10 @@ agent_tool_timeouts: crate::agent::pipeline::agent_tool::AgentToolTimeouts::from
     &cfg.app_config.agent_tool,
 ),
 ```
-In `dispatch()` re-borrow, clone it:
+In `dispatch()` re-borrow, copy it (`AgentToolTimeouts` derives `Copy`):
 ```rust
-agent_tool_timeouts: deps.agent_tool_timeouts.clone(),
+agent_tool_timeouts: deps.agent_tool_timeouts,
 ```
-(`AgentToolTimeouts` should derive `Clone` — if not, add `#[derive(Clone)]` or use Copy.)
 
 **agents_list** (lines 252–257): `sessions::handle_agents_list(agent_map, session_pools, agent_name, args)`
 
@@ -442,7 +441,7 @@ agent_tool_timeouts: crate::agent::pipeline::agent_tool::AgentToolTimeouts::from
 ```
 In `dispatch()`, add to the re-borrow block:
 ```rust
-agent_tool_timeouts: deps.agent_tool_timeouts.clone(),
+agent_tool_timeouts: deps.agent_tool_timeouts,
 ```
 
 - [ ] **Step 2: Create `web.rs`**
@@ -491,7 +490,7 @@ impl SystemToolHandler for CodeExecHandler {
         ps::handle_code_exec(
             args, deps.agent_name, deps.agent_base,
             deps.sandbox, deps.workspace_dir,
-            deps.secrets, deps.signed_url_ttl_secs,
+            deps.secrets.as_ref(), deps.signed_url_ttl_secs,
         ).await
     }
 }
@@ -520,6 +519,7 @@ pub struct SecretSetHandler;
 #[async_trait]
 impl SystemToolHandler for SecretSetHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
+        // handle_secret_set takes &Arc<SecretsManager> — pass deps.secrets directly
         ph::handle_secret_set(deps.secrets, deps.agent_name, deps.agent_base, args).await
     }
 }
@@ -567,8 +567,7 @@ impl SystemToolHandler for ToolListHandler {
 #[async_trait]
 impl SystemToolHandler for ToolTestHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
-        // Read ph::handle_tool_test signature to confirm secrets param type.
-        // Pass deps.secrets (&SecretsManager) or deps.cfg.secrets (Arc) as needed.
+        // handle_tool_test takes &Arc<SecretsManager> — pass deps.secrets directly
         ph::handle_tool_test(
             deps.workspace_dir, deps.http_client, deps.ssrf_client,
             deps.secrets, deps.agent_name,
@@ -666,7 +665,7 @@ mod tests {
 cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 15
 ```
 
-Common issue: `ph::handle_tool_test` may take `&Arc<SecretsManager>` — read its signature and adjust. If `AgentToolTimeouts` does not impl `Clone`, change to `Copy` or wrap in `Arc`.
+Common issue: verify `ph::handle_tool_test` param order matches the implementation above. `AgentToolTimeouts` is `Copy` — no clone needed.
 
 - [ ] **Step 8: Commit**
 
