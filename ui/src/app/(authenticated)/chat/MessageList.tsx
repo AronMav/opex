@@ -136,6 +136,7 @@ function VirtuosoFooter({ turnLimitMessage }: { turnLimitMessage: string | null 
 export function MessageList({
   messages,
   isStreaming,
+  isTextStreaming,
   showThinking,
   isLoadingHistory,
   emptyState,
@@ -146,6 +147,8 @@ export function MessageList({
 }: {
   messages: ChatMessage[];
   isStreaming: boolean;
+  /** True only during active text emission (phase === "streaming"), not during reconnect. */
+  isTextStreaming: boolean;
   showThinking: boolean;
   isLoadingHistory: boolean;
   emptyState: ReactNode;
@@ -280,7 +283,7 @@ export function MessageList({
                 isNew && "animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out",
               )}>
                 <MessageItem message={msg} sessionChannel={sessionChannel} sessionUserId={sessionUserId} />
-                {isStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && (
+                {isTextStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && (
                   <div className="pb-1 pl-12">
                     <CometLoader />
                   </div>

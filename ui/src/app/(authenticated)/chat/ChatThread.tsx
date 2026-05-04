@@ -186,6 +186,9 @@ export function ChatThread({
   const hasMessages = msgCount > 0;
 
   const isStreaming = isActivePhase(connectionPhase);
+  // Only true during active text emission — excludes "reconnecting" so the
+  // streaming cursor doesn't linger after session completion while SSE reconnects.
+  const isTextStreaming = connectionPhase === "streaming";
 
   // ── Pending message queue drain ────────────────────────────────────────────
   // When connectionPhase transitions to 'idle' (clean success), drain the
@@ -283,6 +286,7 @@ export function ChatThread({
       <MessageList
         messages={allMessages}
         isStreaming={isStreaming}
+        isTextStreaming={isTextStreaming}
         showThinking={showThinking}
         isLoadingHistory={historyLoading && !liveHasContent}
         emptyState={<EmptyState />}
