@@ -97,7 +97,13 @@ export default function ChatPage() {
   const viewingHistory = messageSource.mode === "history";
   const streamError = useChatStore((s) => s.agents[s.currentAgent]?.streamError ?? null);
   const isStreaming = isActivePhase(useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle"));
-  const contextTokens = useChatStore((s) => s.agents[s.currentAgent]?.contextTokens ?? null);
+  const contextTokensLive = useChatStore((s) => s.agents[s.currentAgent]?.contextTokens ?? null);
+  // For inactive sessions fall back to last_input_tokens stored in the session list.
+  const activeSessionLastTokens = useMemo(() => {
+    if (contextTokensLive != null) return contextTokensLive;
+    return sessions.find((s) => s.id === activeSessionId)?.last_input_tokens ?? null;
+  }, [contextTokensLive, sessions, activeSessionId]);
+  const contextTokens = activeSessionLastTokens;
   const contextOutputTokens = useChatStore((s) => s.agents[s.currentAgent]?.contextOutputTokens ?? null);
   const cacheReadTokens = useChatStore((s) => s.agents[s.currentAgent]?.cacheReadTokens ?? null);
   const cacheCreationTokens = useChatStore((s) => s.agents[s.currentAgent]?.cacheCreationTokens ?? null);

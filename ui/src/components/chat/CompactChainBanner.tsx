@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { ChevronDown, ChevronUp, Shrink } from "lucide-react";
 import { useSessionChain } from "@/lib/queries";
+import { useTranslation } from "@/hooks/use-translation";
 import type { SessionChainEntry } from "@/types/api";
 
 interface CompactChainBannerProps {
@@ -12,22 +13,19 @@ interface CompactChainBannerProps {
   onNavigate: (sessionId: string) => void;
 }
 
-const STORAGE_KEY = "hydeclaw:chain-banner-collapsed";
-
 export function CompactChainBanner({ activeSessionId, onNavigate }: CompactChainBannerProps) {
+  const { t } = useTranslation();
   const { data } = useSessionChain(activeSessionId);
-  const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(STORAGE_KEY) === "1"; } catch { return false; }
-  });
+  const [collapsed, setCollapsed] = useState(true);
 
+  // Always close when navigating to a different session.
   useEffect(() => {
-    try { localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0"); } catch {}
-  }, [collapsed]);
+    setCollapsed(true);
+  }, [activeSessionId]);
 
   const chain = data?.chain ?? [];
 
   // Only show when session has a parent (i.e. is part of a chain)
-  // Root sessions (no parent_session_id) do not show the banner.
   const currentEntry = chain.find((e) => e.id === activeSessionId);
   if (!currentEntry?.parent_session_id) return null;
   if (chain.length < 2) return null;
@@ -39,8 +37,8 @@ export function CompactChainBanner({ activeSessionId, onNavigate }: CompactChain
         onClick={() => setCollapsed((c) => !c)}
       >
         <Shrink className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-        <span className="font-medium text-foreground">Compression chain</span>
-        <span className="text-muted-foreground ml-1">({chain.length} sessions)</span>
+        <span className="font-medium text-foreground">{t("chat.chain_title")}</span>
+        <span className="text-muted-foreground ml-1">{t("chat.chain_sessions", { count: chain.length })}</span>
         <span className="ml-auto text-muted-foreground">
           {collapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
         </span>

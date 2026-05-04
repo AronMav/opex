@@ -47,7 +47,9 @@ export type { AgentDetailDto as AgentDetail } from "./api.generated";
 // SessionRow is now generated from Rust DTO via ts-rs codegen.
 // Source: crates/hydeclaw-core/src/db/sessions.rs
 // Regenerate: make gen-types
-export type { Session as SessionRow } from "./api.generated";
+import type { Session as _Session } from "./api.generated";
+// last_input_tokens is appended server-side from usage_log (not in the ts-rs DTO).
+export type SessionRow = _Session & { last_input_tokens?: number | null };
 
 // MessageRow is now generated from Rust DTO via ts-rs codegen.
 // Note: feedback is number | null (DB-accurate); the old type had number (incorrect).

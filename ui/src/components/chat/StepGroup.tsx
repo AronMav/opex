@@ -17,40 +17,27 @@ export function StepGroup({
 }) {
   const { t } = useTranslation();
 
-  const firstName = stepGroup.toolParts[0]?.toolName;
-  let label: string;
-  if (!firstName) {
-    label = t("chat.step_processing");
-  } else if (firstName === "searxng_search" || firstName.includes("search")) {
-    const firstInput = stepGroup.toolParts[0]?.input;
-    const query =
-      firstInput && typeof firstInput === "object" && "query" in firstInput
-        ? String((firstInput as Record<string, unknown>).query)
-        : undefined;
-    label = query
-      ? t("chat.step_searched_query", { query })
-      : t("chat.step_searched");
-  } else if (firstName === "code_exec") {
-    label = t("chat.step_executed_code");
-  } else {
-    label = t("chat.step_used_tool", { tool: firstName });
-  }
+  const allDone = stepGroup.toolParts.every(
+    (tp) => tp.state === "output-available" || tp.state === "output-error" || tp.state === "output-denied",
+  );
+  const defaultOpen = isLastGroup || !allDone;
 
   return (
     <details
-      className="rounded-lg border border-border/50 bg-muted/10 group"
-      open={isLastGroup && !stepGroup.isStreaming ? true : undefined}
+      className="group"
+      open={defaultOpen ? true : undefined}
     >
-      <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="size-4 shrink-0 transition-transform group-open:rotate-90" />
-        <span className="text-sm text-muted-foreground truncate">
-          {label}
+      <summary className="flex items-center gap-1.5 py-1 cursor-pointer list-none [&::-webkit-details-marker]:hidden w-fit">
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-transform group-open:rotate-90" />
+        <span className="text-[11px] text-muted-foreground/50 select-none">
+          {allDone ? t("chat.step_done") : t("chat.step_processing")}
         </span>
-        {stepGroup.isStreaming && (
-          <span className="size-2 rounded-full bg-primary animate-pulse" />
+        {!allDone && (
+          <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
         )}
       </summary>
-      <div className="p-4 space-y-1">
+
+      <div className="mt-1.5 space-y-1">
         {stepGroup.toolParts.map((tp) => (
           <ToolCallPartView
             key={tp.toolCallId}
