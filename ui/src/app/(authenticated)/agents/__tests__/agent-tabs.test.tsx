@@ -296,6 +296,7 @@ describe("AgentEditDialog — Session tab", () => {
             accessEnabled: true,
             hbEnabled: true,
             hooksLogAll: true,
+            srEnabled: true,
           },
           upd
         )}
@@ -340,6 +341,7 @@ describe("AgentEditDialog — Session tab", () => {
             sessionEnabled: true,
             hbEnabled: true,
             hooksLogAll: true,
+            srEnabled: true,
           },
           upd
         )}
@@ -370,6 +372,7 @@ describe("AgentEditDialog — Schedule tab", () => {
             sessionEnabled: true,
             accessEnabled: true,
             hooksLogAll: true,
+            srEnabled: true,
           },
           upd
         )}

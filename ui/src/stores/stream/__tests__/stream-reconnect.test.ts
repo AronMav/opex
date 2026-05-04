@@ -39,10 +39,11 @@ describe("scheduleReconnect", () => {
     expect(resume).toHaveBeenCalledWith(1);
   });
 
-  it("syncs maxReconnectAttempts to deps.maxAttempts in store write", () => {
+  it("syncs maxReconnectAttempts to deps.maxAttempts on first attempt (attempt=0)", () => {
     const session = makeFakeSession();
     const resume = vi.fn();
-    scheduleReconnect(session, "sid", 2, { resume, maxAttempts: 6, baseDelayMs: 100 });
+    // maxReconnectAttempts is only written on attempt=0 (constant — no need to re-sync)
+    scheduleReconnect(session, "sid", 0, { resume, maxAttempts: 6, baseDelayMs: 100 });
     const writeCall = session.write.mock.calls.find((c: any[]) => c[0].connectionPhase === "reconnecting");
     expect(writeCall).toBeDefined();
     expect(writeCall![0].maxReconnectAttempts).toBe(6);

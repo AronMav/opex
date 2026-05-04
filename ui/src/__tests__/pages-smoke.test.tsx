@@ -285,6 +285,10 @@ vi.mock("@/lib/queries", () => ({
   useOAuthAccounts: () => ({ ...emptyQuery, data: [] }),
   useOAuthBindings: () => ({ ...emptyQuery, data: [] }),
   useAgentTasks: () => ({ ...emptyQuery, data: [] }),
+  useCuratorStatus: () => ({ ...emptyQuery, data: null }),
+  useCuratorRuns: () => ({ ...emptyQuery, data: [] }),
+  useCuratorConfig: () => ({ ...emptyQuery, data: null }),
+  useCuratorDecisions: () => ({ ...emptyQuery, data: [] }),
   // Mutation hooks
   useUpsertSecret: () => ({ ...emptyMutation }),
   useDeleteSecret: () => ({ ...emptyMutation }),
