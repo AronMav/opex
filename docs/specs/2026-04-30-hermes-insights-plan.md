@@ -249,17 +249,23 @@ multi-agent isolation test (нет `it.todo()`).
 
 ---
 
-### P1.2 — Cross-Platform Session Mirroring
+### ✅ P1.2 — Cross-Platform Session Mirroring (DONE)
 
 **Reference:** `D:/GIT/hermes-agent/gateway/mirror.py`
 
 **Идея:** Когда сообщение отправляется в одну платформу из CLI/cron, дублируется в transcript целевой сессии как `mirror=true` запись. Агент **видит контекст** другой платформы при ответе. Cross-platform conversation continuity.
 
-**Перенос:** В `messages` таблицу — новое поле `is_mirror BOOLEAN DEFAULT false`. В `agent/pipeline/bootstrap.rs` — игнорировать mirror-сообщения для агентского контекста, но показывать в UI.
+**✅ Реализовано:**
+
+- Миграция `is_mirror BOOLEAN DEFAULT false` в `messages` (с индексом для фильтрации в bootstrap).
+- `mirror_to_session()` в `crates/hydeclaw-core/src/db/sessions.rs` — upsert DM-сессии получателя + insert mirror-message.
+- Cron- и heartbeat-доставка зеркалятся в DM-сессию получателя (см. `scheduler/mod.rs::run_heartbeat` и dynamic job dispatch).
+- `isMirror` в UI `ChatMessage` + cron-badge (помечает зеркальные сообщения от системы).
+- Backend integration tests: mirroring, curator, chain CTE, webhook auth (см. недавние коммиты).
 
 ---
 
-### ⚠️ P1.3 — Cron Multi-Target Delivery Routing (PARTIAL)
+### ✅ P1.3 — Cron Multi-Target Delivery Routing (DONE)
 
 **Reference:** `D:/GIT/hermes-agent/cron/scheduler.py:74-100`, `D:/GIT/hermes-agent/gateway/delivery.py`
 
@@ -275,12 +281,21 @@ enum DeliveryTarget {
 }
 ```
 
-**⚠️ Частично реализовано:**
+**✅ Реализовано (2026-05-04):**
 
-- В `scheduled_jobs` есть поле `announce_to JSONB`
-  (`{ channel, chat_id, channel_id? }`) — базовый один target.
-- `DeliveryTarget` enum и парсинг `telegram:id:thread` строк — не реализованы.
-- Не хватает: multi-target список, `origin`/`local` варианты, truncation guard.
+- `parse_target_string(&str)` в `scheduler/mod.rs` — `local` / `origin` /
+  `{channel}:{chat_id}[:{thread_id}]` (thread пока игнорируется).
+- `normalize_announce_to` принимает голую строку и строки внутри массива.
+- `truncate_reply_for_channel(reply)` — guard на 4000 chars + suffix
+  `…\n\n[полный вывод сохранён в workspace]`, возвращает `(text, needs_save)`.
+- `save_to_local(workspace_dir, agent, job_id, content)` — пишет в
+  `workspace/agents/{agent}/cron_output/{YYYYMMDDTHHMMSS}_{job_short}.txt`,
+  возвращает workspace-relative path.
+- Dynamic-cron dispatch (`add_dynamic_job`): `local` → пишет файл и
+  логирует; `origin` → warn + skip (TODO: backlog); channel-target →
+  truncated text + `📄 path` footer когда был save.
+- 9 unit-тестов (parse_target_string × 5, normalize × 2, truncate × 2)
+  + обновлён `normalize_announce_to_array_with_garbage_items_filtered`.
 
 ---
 
@@ -466,13 +481,43 @@ enum DeliveryTarget {
 
 ---
 
+### P2.8 — Microsoft Teams Adapter
+
+**Reference:** `D:/GIT/hermes-agent/plugins/platforms/teams/` (новый plugin в v0.11.0)
+
+**Идея:** Teams adapter как plugin, аналогично Slack в HydeClaw. Необходим для enterprise-окружений.
+
+**В HydeClaw:** новый TypeScript driver в `channels/src/drivers/teams.ts`, аналогично существующим. Требует регистрации Azure AD приложения + Bot Framework.
+
+---
+
+### P2.9 — Centralized Audio Routing
+
+**Reference:** `D:/GIT/hermes-agent/gateway/platforms/base.py:641-670` (`cache_audio_from_bytes()`)
+
+**Идея:** Унифицированный пайплайн для голосовых сообщений: audio из любой платформы (OGG/Opus/MP3/WAV/M4A/FLAC) → `workspace/audio_cache/` с TTL 24h → STT-тул читает оттуда. Если STT падает, файл остаётся доступным.
+
+**В HydeClaw:** сейчас каждый channel adapter передаёт audio inline в message. Добавить `AudioCacheManager` в toolgate с TTL-очисткой, индексировать через `attachment_id` в messages.
+
+---
+
+### P2.10 — Model Config from UI Dashboard
+
+**Reference:** `D:/GIT/hermes-agent` `feat(dashboard): configure main + auxiliary models from Models page` (v0.11.0)
+
+**Идея:** Смена основной и вспомогательной модели прямо из UI без редактирования TOML.
+
+**В HydeClaw:** модель конфигурируется только через `config/agents/{Name}.toml`. Добавить endpoint `PATCH /api/agents/{name}/model` + UI-панель в настройках агента. `set_model_override()` на AgentEngine уже существует — нужен только API + UI.
+
+---
+
 ## 📊 Сравнительная матрица: HydeClaw vs Hermes
 
 | Фича | HydeClaw 2026-05-02 | Hermes |
 |---|---|---|
 | Trajectory compression (protect+summarize) | ❌ примитивная | ✅ продвинутая |
 | DM pairing security | ✅ pairing_codes + /api/access | ✅ TOTP-style codes |
-| Session mirroring cross-platform | ❌ | ✅ |
+| Session mirroring cross-platform | ✅ is_mirror + mirror_to_session (260504) | ✅ |
 | WhatsApp/Signal adapters | ❌ | ✅ |
 | MCP serve (как сервер) | ❌ только client | ✅ обе роли |
 | ACP (IDE protocol) | ❌ | ✅ |
@@ -560,3 +605,4 @@ Bonus PRs: №25 (3 review-fix-ups), №27 (StreamingUsage struct refactor),
 - **2026-04-30** — Документ создан после анализа Hermes Agent (4 параллельных Explore-агента).
 - Заменяет: `2026-03-30-openclaw-insights-plan.md` (удалён, его hardening-часть выполнена и осталась как `2026-03-30-openclaw-insights-hardening.md`).
 - **2026-05-02** — Статусы обновлены по факту кода: P0.2 и P1.6 закрыты вне Sprint 1; P1.3, P1.5, P2.6 помечены как частично реализованные.
+- **2026-05-04** — P1.2 (Cross-Platform Session Mirroring) и P1.3 (Cron Multi-Target Delivery Routing) переведены в ✅ DONE: `is_mirror` + `mirror_to_session` + cron/heartbeat зеркалирование + `parse_target_string` + `truncate_reply_for_channel` + `save_to_local` + extended dispatch loop. Добавлены P2.8 (Teams), P2.9 (Audio Routing), P2.10 (Model Config UI).
