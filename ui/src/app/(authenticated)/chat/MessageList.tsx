@@ -6,12 +6,10 @@ import { useChatStore } from "@/stores/chat-store";
 import type { ChatMessage } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
 import { BarsLoader } from "@/components/ui/loader";
-import { RoleAvatar } from "./avatar/RoleAvatar";
 
 import { MessageItem } from "./MessageItem";
 import { useChatAutoscroll } from "./use-chat-autoscroll";
 import { AgentTransitionDivider } from "@/components/chat/AgentTransitionDivider";
-import { useAuthStore } from "@/stores/auth-store";
 import { useSessions } from "@/lib/queries";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -52,23 +50,9 @@ function MessageListSkeleton() {
 // ── Thinking indicator ──────────────────────────────────────────────────────
 
 function ThinkingMessage() {
-  const currentAgent = useChatStore((s) => s.currentAgent);
-  const agentIcons = useAuthStore((s) => s.agentIcons);
-  const agentIconUrl = currentAgent && agentIcons[currentAgent] ? `/uploads/${agentIcons[currentAgent]}` : null;
-
   return (
-    <div className="flex gap-3 py-5 md:py-6 border-t border-border/30 dark:border-border/20 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out">
-      <span className="message-avatar">
-        <RoleAvatar role="assistant" iconUrl={agentIconUrl} agentName={currentAgent} />
-      </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="message-header min-h-[18px] flex items-center">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
-            {currentAgent}
-          </span>
-        </div>
-        <BarsLoader size="sm" className="text-muted-foreground/40 pt-0.5" />
-      </div>
+    <div className="py-4 animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out">
+      <BarsLoader size="sm" className="text-muted-foreground/40" />
     </div>
   );
 }
@@ -298,7 +282,7 @@ export function MessageList({
                 <MessageItem message={msg} sessionChannel={sessionChannel} sessionUserId={sessionUserId} />
                 {isStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && (
                   <div className="pb-3 pl-10">
-                    <span className="streaming-cursor"><span /></span>
+                    <BarsLoader size="sm" className="text-muted-foreground/40" />
                   </div>
                 )}
               </div>
