@@ -154,3 +154,49 @@ async fn insert_seed_messages_preserves_order() {
     let roles: Vec<&str> = rows.iter().map(|(r,)| r.as_str()).collect();
     assert_eq!(roles, vec!["system", "assistant", "user"]);
 }
+
+// ── Unit 4: child session compaction_state reset ────────────────────────────
+
+/// After `create_chain_session`, the child's `compaction_state` column in DB
+/// must be NULL.  The actual state reset (inheriting previous_summary, zeroing
+/// counters) happens in bootstrap.rs when the child is first loaded — so the
+/// row itself starts clean.
+#[tokio::test]
+async fn child_session_has_null_compaction_state_initially() {
+    let db = match test_db().await { Some(d) => d, None => return };
+
+    let parent_id = insert_test_session(&db, "TestAgent").await;
+
+    // Give parent a non-trivial compaction_state so we can confirm the child
+    // doesn't accidentally copy it.
+    let parent_state = serde_json::json!({
+        "previous_summary": "summary text",
+        "ineffective_count": 3,
+        "compression_count": 5,
+        "pending_split": true
+    });
+    sqlx::query("UPDATE sessions SET compaction_state = $1 WHERE id = $2")
+        .bind(&parent_state)
+        .bind(parent_id)
+        .execute(&db)
+        .await
+        .unwrap();
+
+    let child_id = hydeclaw_db::sessions::create_chain_session(
+        &db, parent_id, "TestAgent", "user1", "ui", Some("Child Session"),
+    ).await.unwrap();
+
+    let (compaction_state,): (Option<serde_json::Value>,) = sqlx::query_as(
+        "SELECT compaction_state FROM sessions WHERE id = $1"
+    )
+    .bind(child_id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    assert!(
+        compaction_state.is_none(),
+        "child compaction_state should be NULL immediately after create_chain_session; \
+         the reset (with inherited previous_summary) happens in bootstrap.rs"
+    );
+}
