@@ -16,6 +16,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/curator/status", get(api_curator_status))
         .route("/api/curator/config", get(api_curator_config_get).put(api_curator_config_put))
         .route("/api/curator/run", axum::routing::post(api_curator_run))
+        .route("/api/curator/preview", axum::routing::post(api_curator_preview))
         .route("/api/curator/runs", get(api_curator_runs))
         .route("/api/curator/runs/{id}", get(api_curator_run_get))
 }
@@ -165,6 +166,47 @@ pub(crate) async fn api_curator_run(
     });
 
     Json(serde_json::json!({"run_id": run_id})).into_response()
+}
+
+// ── POST /api/curator/preview ────────────────────────────────────────────────
+
+pub(crate) async fn api_curator_preview(
+    State(infra): State<InfraServices>,
+    State(cfg_svc): State<ConfigServices>,
+    State(agents): State<crate::gateway::clusters::AgentCore>,
+) -> impl IntoResponse {
+    let db = infra.db.clone();
+    let cfg = cfg_svc.shared_config.read().await.curator.clone();
+
+    if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await {
+        if last.finished_at.is_none() {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
+            ).into_response();
+        }
+    }
+
+    let run_id = match crate::db::curator_runs::insert_run(&db, "preview", true).await {
+        Ok(id) => id,
+        Err(e) => return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ).into_response(),
+    };
+
+    tokio::spawn(async move {
+        match crate::curator::run_curator(&db, &cfg, std::sync::Arc::new(agents), crate::config::WORKSPACE_DIR, true).await {
+            Ok(s) => {
+                crate::db::curator_runs::finish_run(&db, run_id, s.phase1, s.phase2, s.phase3, Some(&s.report_md), None, true).await.ok();
+            }
+            Err(e) => {
+                crate::db::curator_runs::finish_run(&db, run_id, 0, 0, 0, None, Some(&e.to_string()), true).await.ok();
+            }
+        }
+    });
+
+    (StatusCode::ACCEPTED, Json(serde_json::json!({"run_id": run_id}))).into_response()
 }
 
 // ── GET /api/curator/runs ─────────────────────────────────────────────────────
