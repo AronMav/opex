@@ -761,6 +761,7 @@ mod tests {
             llm_model: None,
             compressor: crate::agent::compressor::Compressor::new(128_000),
             skill_review: None,
+            assistant_message_id: uuid::Uuid::nil(),
         }
     }
 
