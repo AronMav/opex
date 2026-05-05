@@ -447,6 +447,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some("tc1".to_string()),
             thinking_blocks: vec![],
+            db_id: None,
         }
     }
 
@@ -457,6 +458,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         }
     }
 
