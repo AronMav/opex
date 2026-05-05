@@ -68,6 +68,18 @@ pub enum ExecuteStatus {
 /// Implements the safe subset of the `handle_sse` tool loop (see module doc).
 /// Callers that need the full feature set (fallback provider, auto-continue,
 /// session corruption recovery) should use `handle_sse` directly until Phase 66.
+#[tracing::instrument(
+    name = "pipeline.execute",
+    skip_all,
+    fields(
+        session_id = %bootstrap_outcome.session_id,
+        agent = %engine.cfg().agent.name,
+        // Iteration count and final assistant id are recorded as the loop
+        // progresses via `tracing::Span::current().record(...)`.
+        iterations = tracing::field::Empty,
+        assistant_message_id = tracing::field::Empty,
+    )
+)]
 pub async fn execute<S: EventSink>(
     engine: &AgentEngine,
     bootstrap_outcome: BootstrapOutcome,
@@ -397,6 +409,11 @@ pub async fn execute<S: EventSink>(
             } else {
                 serde_json::to_value(&final_thinking_blocks).ok()
             };
+            // Record final span fields so the OTel trace shows iteration
+            // count and the assistant message id without parsing logs.
+            tracing::Span::current().record("iterations", iteration + 1);
+            tracing::Span::current()
+                .record("assistant_message_id", tracing::field::display(assistant_msg_id));
             return Ok(ExecuteOutcome {
                 status: ExecuteStatus::Done,
                 final_text,

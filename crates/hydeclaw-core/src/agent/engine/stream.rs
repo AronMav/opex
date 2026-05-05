@@ -105,6 +105,29 @@ impl AgentEngine {
 
     /// Handle a message in a fully isolated session (no history from previous runs).
     /// Used by cron dynamic jobs to prevent context accumulation across invocations.
+    ///
+    /// ARCHITECTURE NOTE — why this duplicates `pipeline::execute`:
+    /// Both implement an LLM+tools loop, but the contracts differ:
+    ///   * `pipeline::execute` is a streaming pipeline driven by `EventSink`
+    ///     — emits MessageStart, StepStart (with per-iteration UUID),
+    ///     TextDelta, ToolCallStart, …, Finish for an SSE consumer.
+    ///   * `handle_isolated` is a synchronous RPC — returns the final
+    ///     response string. No SSE consumer, no per-iteration UUID
+    ///     surfaced to anyone.
+    /// This file additionally owns features that the unified pipeline
+    /// doesn't yet implement:
+    ///   * fallback provider switch on consecutive failures
+    ///   * auto-continue when the LLM describes remaining work
+    ///   * session corruption recovery (reset + retry)
+    ///   * tool_policy_override application
+    /// Phase 4 wire-up (step_id) is consistent across both paths so
+    /// `messages.step_id` is uniform regardless of which path produced
+    /// the row. A future refactor (~1 day) could extract shared helpers
+    /// (`compact_and_call_llm`, `apply_loop_break`, `persist_intermediate`)
+    /// into a `pipeline::tool_loop_helpers` module and have both paths
+    /// build their loops on top — that's tracked in the architecture
+    /// backlog (docs/architecture/2026-05-05-id-based-dedup.md
+    /// "Negative / open" section).
     pub async fn handle_isolated(&self, msg: &IncomingMessage) -> Result<String> {
         // Hook: BeforeMessage
         let hook_event = crate::agent::hooks::HookEvent::BeforeMessage;
