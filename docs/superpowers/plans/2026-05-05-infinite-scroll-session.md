@@ -4,9 +4,9 @@
 
 **Goal:** Replace session chain splits with in-session compression tracking, add backward-paginated messages API, and add infinite-scroll UI so users see one continuous session regardless of how many compressions occurred.
 
-**Architecture:** DB migration adds `compressed BOOLEAN` to messages. `compress_messages()` gains `db` + `session_id` + parallel `message_db_ids` params — it marks the compressed range in DB and inserts a `session_events` compression WAL record. `bootstrap.rs`'s chain-split function is deleted. The messages API gains `before_id` backward pagination and filters out compressed rows, returning `compression_events` for divider placement. The UI adds `IntersectionObserver`-triggered backward loading and renders a `CompressionDivider` at each boundary.
+**Architecture:** DB migration adds `compressed BOOLEAN` to messages. `compress_messages()` gains `db` + `session_id` + parallel `message_db_ids` params — it marks the compressed range in DB and inserts a `session_events` compression WAL record. `bootstrap.rs`'s chain-split function is deleted. The messages API gains `before_id` backward pagination and filters out compressed rows, returning `compression_events` for divider placement. The UI uses Virtuoso's `startReached` callback (MessageList already has `onLoadEarlier`/`isLoadingHistory` props) and renders a `CompressionDivider` at each boundary.
 
-**Tech Stack:** Rust/sqlx/axum (backend), React/Zustand/Immer (frontend), IntersectionObserver API (scroll detection)
+**Tech Stack:** Rust/sqlx/axum (backend), React/Zustand/Immer/react-virtuoso (frontend)
 
 ---
 
@@ -18,7 +18,8 @@
 | Modify | `crates/hydeclaw-core/src/agent/compressor.rs` | Remove `pending_split` field |
 | Modify | `crates/hydeclaw-db/src/sessions.rs` | Add `mark_messages_compressed()`, `insert_compression_event()`, `get_messages_page()` |
 | Modify | `crates/hydeclaw-core/src/agent/history.rs` | Add params to `compress_messages()`: `message_db_ids`, `db`, `session_id` |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | Delete `maybe_split_session()`; add `message_db_ids` to `BootstrapOutcome` |
+| Modify | `crates/hydeclaw-core/src/agent/engine/context_builder.rs` | Add `message_db_ids` to `ContextSnapshot`; build from `MessageRow.id` |
+| Modify | `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | Delete `maybe_split_session()`; add `message_db_ids` to `BootstrapOutcome` (from ContextSnapshot) |
 | Modify | `crates/hydeclaw-core/src/agent/pipeline/execute.rs` | Thread `message_db_ids` through loop; pass new params to `compress_messages()` |
 | Modify | `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` | `before_id` param; new response shape; `segment_count` in session DTO |
 | Create | `ui/src/components/chat/CompressionDivider.tsx` | Thin divider component |
@@ -384,43 +385,47 @@ git commit -m "feat(db): add mark_messages_compressed, insert_compression_event,
 ## Task 4 — Thread message_db_ids through pipeline
 
 **Files:**
+- Modify: `crates/hydeclaw-core/src/agent/engine/context_builder.rs`
 - Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`
 - Modify: `crates/hydeclaw-core/src/agent/pipeline/execute.rs`
 
 ### Context
 
-`compress_messages()` (updated in Task 5) needs the DB IDs of messages in parallel with the `messages` vec. We add `message_db_ids: Vec<Option<uuid::Uuid>>` to `BootstrapOutcome` (alongside `messages`), build it from `MessageRow.id` when loading session history, and thread it through `execute.rs`.
+`compress_messages()` (updated in Task 5) needs DB IDs of messages parallel to the `messages` vec. The DB loading happens in `context_builder.rs` — `build_context()` returns a `ContextSnapshot { session_id, messages, tools }`. We extend `ContextSnapshot` with `message_db_ids`, build it where `MessageRow`s are converted to `Message`s, then flow it through `BootstrapOutcome` → `execute.rs`.
 
-`BootstrapOutcome` struct (bootstrap.rs lines 18-40):
+`BootstrapOutcome` struct (bootstrap.rs lines 18-40) — relevant fields:
 ```rust
-pub struct BootstrapOutcome {
-    pub session_id: Uuid,
-    pub enriched_text: String,
-    pub messages: Vec<Message>,
-    pub tools: Vec<hydeclaw_types::ToolDefinition>,
-    pub loop_detector: LoopDetector,
-    pub processing_guard: ProcessingGuard,
-    pub lifecycle_guard: Option<SessionLifecycleGuard>,
-    pub command_output: Option<String>,
-    pub user_message_id: Uuid,
-    pub incoming_context: serde_json::Value,
-    pub channel: String,
-    pub compressor: crate::agent::compressor::Compressor,
-}
+pub messages: Vec<Message>,      // comes from ContextSnapshot
+pub compressor: Compressor,
+// we add: pub message_db_ids: Vec<Option<uuid::Uuid>>,
 ```
 
-- [ ] **Step 1: Write compile-time test for field existence**
+In `execute.rs`, `BootstrapOutcome` is destructured at lines 74-87:
+```rust
+let BootstrapOutcome {
+    session_id,
+    mut messages,   // ← line 76
+    tools,
+    mut loop_detector,
+    // ...
+    compressor: _,  // passed separately
+} = bootstrap_outcome;
+```
 
-In `bootstrap.rs` test section add:
+`messages.push()` occurs at lines 380, 501, 524 — each needs a paired `message_db_ids.push(None)`.
+
+- [ ] **Step 1: Write compile-time test for ContextSnapshot field**
+
+In `context_builder.rs` test section add:
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn bootstrap_outcome_has_message_db_ids() {
-        fn _check(_o: &BootstrapOutcome) -> &Vec<Option<uuid::Uuid>> {
-            &_o.message_db_ids
+    fn context_snapshot_has_message_db_ids() {
+        fn _check(s: &ContextSnapshot) -> &Vec<Option<uuid::Uuid>> {
+            &s.message_db_ids
         }
     }
 }
@@ -429,72 +434,121 @@ mod tests {
 - [ ] **Step 2: Run to verify failure**
 
 ```powershell
-cargo test -p hydeclaw-core bootstrap_outcome_has_message_db_ids 2>&1 | Select-String "error\[" | Select-Object -First 3
+cargo check --package hydeclaw-core 2>&1 | Select-String "error\[E" | Select-Object -First 3
 ```
 
-Expected: compile error — field not found.
+Expected: compile error — field `message_db_ids` not found on `ContextSnapshot`.
 
-- [ ] **Step 3: Add message_db_ids to BootstrapOutcome**
+- [ ] **Step 3: Find ContextSnapshot struct and add field**
 
-In `bootstrap.rs`, add to the struct after `pub compressor`:
+Search for it:
+
+```powershell
+Select-String -Path "crates\**\*.rs" -Pattern "pub struct ContextSnapshot" -Recurse | Select-Object Path, LineNumber
+```
+
+In the found file, add to the struct:
 
 ```rust
-/// DB primary keys parallel to `messages` — None for synthetic messages
-/// (summary, appended user turn). Used by compress_messages() for in-DB marking.
+/// DB primary keys parallel to `messages`. None for synthetic messages.
 pub message_db_ids: Vec<Option<uuid::Uuid>>,
 ```
 
-- [ ] **Step 4: Build message_db_ids when loading session messages**
+- [ ] **Step 4: Build message_db_ids where MessageRows are loaded**
 
-In `bootstrap.rs`, find where `sessions::load_messages()` is called and the resulting `Vec<MessageRow>` is converted to `Vec<Message>`. Immediately after that conversion, add:
+In `context_builder.rs`, find where `sessions::load_messages()` (or `session_load_messages()`) is called and the resulting `Vec<MessageRow>` is converted to `Vec<Message>`.
 
-```rust
-// Build parallel ID vec — same length and order as `messages`
-let message_db_ids: Vec<Option<uuid::Uuid>> =
-    message_rows.iter().map(|r| Some(r.id)).collect();
+```powershell
+Select-String -Path "crates\hydeclaw-core\src\agent\engine\context_builder.rs" `
+    -Pattern "load_messages|MessageRow|into_iter.*map" | Select-Object LineNumber, Line
 ```
 
-Then include `message_db_ids` in the `BootstrapOutcome { ... }` construction.
+Immediately after building `messages: Vec<Message>` from rows, add:
 
-**Note:** The variable holding the `Vec<MessageRow>` before conversion may be named `rows`, `message_rows`, or similar. Search for the `load_messages` call and adapt accordingly.
+```rust
+let message_db_ids: Vec<Option<uuid::Uuid>> =
+    rows.iter().map(|r| Some(r.id)).collect();
+```
 
-- [ ] **Step 5: Thread message_db_ids through execute.rs**
+Where `rows` is the `Vec<MessageRow>` before conversion. Include `message_db_ids` in the `ContextSnapshot { ... }` construction.
 
-In `execute.rs`, find where `BootstrapOutcome` fields are destructured (e.g. `let BootstrapOutcome { messages, compressor, ... } = outcome`). Extract `message_db_ids`:
+- [ ] **Step 5: Add message_db_ids to BootstrapOutcome**
+
+In `bootstrap.rs`, add to `BootstrapOutcome` struct after `pub compressor`:
+
+```rust
+/// DB primary keys parallel to `messages`. Passed to compress_messages().
+pub message_db_ids: Vec<Option<uuid::Uuid>>,
+```
+
+In `bootstrap()`, where `ContextSnapshot` is destructured (line ~290):
+
+```rust
+let crate::agent::context_builder::ContextSnapshot {
+    session_id,
+    mut messages,
+    tools,
+    message_db_ids,   // ← add this
+} = engine.build_context(...).await?;
+```
+
+Include `message_db_ids` in the `BootstrapOutcome { ... }` construction.
+
+Fix any other `ContextSnapshot { }` construction sites that are now missing the field (cargo check will flag them).
+
+- [ ] **Step 6: Thread message_db_ids through execute.rs**
+
+In `execute.rs` destructuring (lines 74-87), add `mut message_db_ids`:
 
 ```rust
 let BootstrapOutcome {
-    messages,
-    compressor,
-    message_db_ids,
-    // ... other fields
-} = outcome;
-let mut message_db_ids = message_db_ids;
+    session_id,
+    mut messages,
+    mut message_db_ids,   // ← add
+    tools,
+    mut loop_detector,
+    // ...
+} = bootstrap_outcome;
 ```
 
-Everywhere a new `Message` is pushed to `messages`, also push `None` to `message_db_ids`:
+At each `messages.push(...)` (lines 380, 501, 524), add a paired push:
 
 ```rust
-// Pattern: whenever you see  messages.push(some_msg)
-// Add below: message_db_ids.push(None);
+// line 380 — assistant message with tool calls
+messages.push(Message { role: MessageRole::Assistant, ... });
+message_db_ids.push(None);
+
+// line 501 — tool result
+messages.push(Message { role: MessageRole::Tool, ... });
+message_db_ids.push(None);
+
+// line 524 — loop nudge
+messages.push(Message { role: MessageRole::System, ... });
+message_db_ids.push(None);
 ```
 
-Search for all `messages.push(` in execute.rs and add the corresponding `message_db_ids.push(None)`.
+Also push `None` for the user message added in bootstrap.rs itself (line ~447):
 
-- [ ] **Step 6: Compile check**
+```rust
+messages.push(Message { role: MessageRole::User, content: enriched_text.clone(), ... });
+message_db_ids.push(None);
+```
+
+- [ ] **Step 7: Compile check**
 
 ```powershell
 cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 10
 ```
 
-Expected: no errors. Fix any struct construction mismatches (missing field in `BootstrapOutcome { }` literals).
+Expected: no errors. Fix any struct construction mismatches flagged by the compiler.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs \
+git add crates/hydeclaw-core/src/agent/engine/context_builder.rs \
+        crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs \
         crates/hydeclaw-core/src/agent/pipeline/execute.rs
-git commit -m "feat(pipeline): thread message_db_ids through bootstrap and execute for compression DB tracking"
+git commit -m "feat(pipeline): thread message_db_ids through context_builder, bootstrap, execute"
 ```
 
 ---
@@ -655,19 +709,9 @@ crate::agent::history::compress_messages(
 ).await
 ```
 
-- For any other call site (e.g. inside history.rs itself), pass an empty `&mut vec![]` for `message_db_ids` if DB tracking is not applicable there.
+**Note:** `compact_if_needed` in history.rs is a completely separate function — it does NOT call `compress_messages`. The only call site for `compress_messages` is in `execute.rs`. No other files need the signature update.
 
-- [ ] **Step 7: Check if compact_if_needed calls compress_messages**
-
-```powershell
-Select-String -Path "crates\hydeclaw-core\src\agent\history.rs" -Pattern "compress_messages" | Select-Object LineNumber, Line
-```
-
-If `compact_if_needed` internally calls `compress_messages`, update that call to pass:
-- `&mut ids` where `ids` is built as `messages.iter().map(|_| None).collect()` (no real IDs — slash command compaction rewrites messages entirely, so DB marking is irrelevant)
-- `db` and a dummy `session_id` (or refactor `compact_if_needed` to also accept them)
-
-- [ ] **Step 8: Full compile check**
+- [ ] **Step 7: Full compile check**
 
 ```powershell
 cargo check --all-targets 2>&1 | Select-String "^error" | Select-Object -First 15
@@ -675,7 +719,7 @@ cargo check --all-targets 2>&1 | Select-String "^error" | Select-Object -First 1
 
 Expected: no errors.
 
-- [ ] **Step 9: Run compression tests**
+- [ ] **Step 8: Run compression tests**
 
 ```powershell
 cargo test -p hydeclaw-core compress -- --nocapture 2>&1 | tail -10
@@ -683,7 +727,7 @@ cargo test -p hydeclaw-core compress -- --nocapture 2>&1 | tail -10
 
 Expected: all pass.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add crates/hydeclaw-core/src/agent/history.rs \
@@ -1192,102 +1236,108 @@ git commit -m "feat(ui): add CompressionDivider component for compression bounda
 
 ---
 
-## Task 11 — IntersectionObserver + overflow-anchor in MessageList
+## Task 11 — Wire backward loading in MessageList + ChatThread
 
 **Files:**
 - Modify: `ui/src/app/(authenticated)/chat/MessageList.tsx`
+- Modify: `ui/src/app/(authenticated)/chat/ChatThread.tsx`
 
 ### Context
 
-`MessageList.tsx` is the scrollable container that renders chat messages. We add:
-1. `overflow-anchor: auto` CSS on the scroll container — prevents scroll jump when prepending (natively supported in all modern browsers)
-2. `IntersectionObserver` on the first message element — calls `loadPreviousMessages()` when visible
-3. Loading spinner at top when `isLoadingHistory`
+`MessageList.tsx` uses `<Virtuoso>` (react-virtuoso) — NOT a plain scrollable div.
+`IntersectionObserver` and `overflow-anchor` CSS do not apply here; Virtuoso manages
+scroll position internally when prepending items.
 
-- [ ] **Step 1: Add overflow-anchor to scroll container**
+`MessageList` already has `onLoadEarlier` and `isLoadingHistory` props (existing
+interface). `ChatThread.tsx` already passes `onLoadEarlier={() => loadEarlierMessages(currentAgent)}` — currently wired to a render-limit action, not an API fetch.
 
-Find the outermost scrollable `div` in `MessageList.tsx` (likely has `overflow-y-auto` class). Add inline style:
+Two changes needed:
+1. **MessageList.tsx** — add Virtuoso `startReached` callback to call `onLoadEarlier`
+   automatically when the user scrolls to the top, and show a spinner in the Virtuoso
+   header when `isLoadingHistory`.
+2. **ChatThread.tsx** — when `hasMoreHistory` is true, pass `loadPreviousMessages`
+   as `onLoadEarlier`; pass store's `isLoadingHistory` to the component.
+
+- [ ] **Step 1: Add startReached to Virtuoso in MessageList.tsx**
+
+Find the `<Virtuoso>` element in `MessageList.tsx` (lines ~238-295). Add the
+`startReached` prop:
 
 ```tsx
-<div
-  className="... overflow-y-auto ..."
-  style={{ overflowAnchor: "auto" }}
->
+<Virtuoso
+  // ... existing props unchanged ...
+  startReached={() => {
+    if (onLoadEarlier) onLoadEarlier();
+  }}
+/>
 ```
 
-- [ ] **Step 2: Add IntersectionObserver hook**
+Virtuoso calls `startReached` once when the user scrolls to the first item.
+The guard against `isLoadingHistory` lives in the action itself (Task 9 already
+sets `isLoadingHistory = true` before fetching, preventing double-calls).
 
-Import and add to `MessageList`:
+- [ ] **Step 2: Update Virtuoso Header to show spinner**
+
+The Virtuoso `components.Header` is already defined (shows "show earlier" button
+when `hiddenCount > 0`). Update it to also show a spinner when `isLoadingHistory`:
 
 ```tsx
-import { useEffect, useRef } from "react";
-import { useChatStore } from "@/stores/chat-store"; // adjust import path
-
-// Inside component:
-const firstMsgRef = useRef<HTMLDivElement>(null);
-const { loadPreviousMessages, hasMoreHistory, isLoadingHistory, currentAgent } =
-  useChatStore((s) => ({
-    loadPreviousMessages: s.loadPreviousMessages,
-    hasMoreHistory: s.agents[s.currentAgent]?.hasMoreHistory ?? false,
-    isLoadingHistory: s.agents[s.currentAgent]?.isLoadingHistory ?? false,
-    currentAgent: s.currentAgent,
-  }));
-
-// Track first message ID to re-observe after prepend
-const firstMessageId = messages[0]?.id;
-
-useEffect(() => {
-  const el = firstMsgRef.current;
-  if (!el || !hasMoreHistory) return;
-
-  const observer = new IntersectionObserver(
-    ([entry]) => {
-      if (entry.isIntersecting && !isLoadingHistory) {
-        loadPreviousMessages(currentAgent);
-      }
-    },
-    { threshold: 0.1 },
+// In the Header component (inside MessageList):
+if (isLoadingHistory) {
+  return (
+    <div className="flex justify-center py-3">
+      <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+    </div>
   );
-  observer.observe(el);
-  return () => observer.disconnect();
-}, [firstMessageId, hasMoreHistory, isLoadingHistory, loadPreviousMessages, currentAgent]);
+}
+// existing hiddenCount button below...
 ```
 
-- [ ] **Step 3: Attach ref to first message element**
+- [ ] **Step 3: Update ChatThread.tsx to wire loadPreviousMessages**
 
-In the message list render, attach `firstMsgRef` to the first message:
+In `ChatThread.tsx`, extract `hasMoreHistory`, `isLoadingHistory` (scroll-load),
+and `loadPreviousMessages` from the store alongside the existing state reads:
 
 ```tsx
-{messages.map((msg, idx) => (
-  <div key={msg.id} ref={idx === 0 ? firstMsgRef : undefined}>
-    <MessageItem message={msg} />
-  </div>
-))}
+const hasMoreHistory = useStore((s) => s.agents[currentAgent]?.hasMoreHistory ?? false);
+const isScrollLoadingHistory = useStore(
+  (s) => s.agents[currentAgent]?.isLoadingHistory ?? false,
+);
+const loadPreviousMessages = useStore((s) => s.loadPreviousMessages);
 ```
 
-- [ ] **Step 4: Add loading spinner at top**
-
-Above the message list, add:
+Update the `<MessageList>` call to pass the new scroll-load `isLoadingHistory` and
+`onLoadEarlier` that prefers API fetch when there are more pages:
 
 ```tsx
-{isLoadingHistory && (
-  <div className="flex justify-center py-3">
-    <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
-  </div>
-)}
+<MessageList
+  // ... existing props ...
+  isLoadingHistory={isScrollLoadingHistory || (historyLoading && !liveHasContent)}
+  onLoadEarlier={
+    hasMoreHistory
+      ? () => loadPreviousMessages(currentAgent)
+      : hiddenCount > 0
+        ? () => loadEarlierMessages(currentAgent)
+        : undefined
+  }
+/>
 ```
 
-- [ ] **Step 5: TypeScript compile + vitest check**
+This preserves the existing render-limit "show earlier" fallback while preferring
+API pagination when there are unloaded pages.
+
+- [ ] **Step 4: TypeScript compile + vitest check**
 
 ```powershell
 cd ui && npx tsc --noEmit && npm test -- --run 2>&1 | Select-String "error|FAIL" | Select-Object -First 10
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add ui/src/app/(authenticated)/chat/MessageList.tsx
-git commit -m "feat(ui): IntersectionObserver for backward history loading; overflow-anchor prevents scroll jump"
+git add ui/src/app/(authenticated)/chat/MessageList.tsx \
+        ui/src/app/(authenticated)/chat/ChatThread.tsx
+git commit -m "feat(ui): wire Virtuoso startReached for backward history loading; wire loadPreviousMessages in ChatThread"
 ```
 
 ---
