@@ -93,6 +93,32 @@ export function createStreamingRenderer(store: StoreAccess) {
     }, 500);
   }
 
+  /**
+   * Returns true when RQ cache says the session is no longer running. The
+   * backend can close SSE without sending a `finish` event on some exit paths
+   * (subagent timeout, dropped tool result, finalize bypass) and still mark
+   * the session row as `done` in DB. The frontend would otherwise loop trying
+   * to resume — checking the cached status short-circuits that loop.
+   */
+  function isSessionFinishedInCache(agent: string, sessionId: string): boolean {
+    const cached = queryClient.getQueryData<{ sessions: { id: string; run_status?: string }[] }>(qk.sessions(agent));
+    const status = cached?.sessions?.find((s) => s.id === sessionId)?.run_status;
+    return !!status && status !== "running";
+  }
+
+  /** Switch to history mode for a session that the backend has finalized. */
+  function settleAsFinished(session: StreamSession, agent: string, sessionId: string) {
+    session.write({
+      connectionPhase: "idle",
+      messageSource: { mode: "history", sessionId },
+      isLlmReconnecting: false,
+      reconnectAttempt: 0,
+      streamError: null,
+    });
+    queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+    queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
+  }
+
   // ── Stream lifecycle ────────────────────────────────────────────────────
 
   /**
@@ -182,22 +208,16 @@ export function createStreamingRenderer(store: StoreAccess) {
           callbacks: {
             onSessionId: (sid) => { _onSessionId?.(agent, sid); },
             onReconnectNeeded: (sid, attempt) => {
+              if (isSessionFinishedInCache(agent, sid)) {
+                settleAsFinished(session, agent, sid);
+                return;
+              }
               scheduleReconnect(session, sid, attempt, {
                 resume: (nextAttempt) => resumeStream(agent, sid, nextAttempt),
                 maxAttempts: MAX_RECONNECT_ATTEMPTS,
                 baseDelayMs: RECONNECT_DELAY_BASE_MS,
                 setTimer: (handle) => setReconnectTimer(agent, handle),
-                onMaxAttemptsReached: () => {
-                  session.write({
-                    connectionPhase: "idle",
-                    messageSource: { mode: "history", sessionId: sid },
-                    isLlmReconnecting: false,
-                    reconnectAttempt: 0,
-                    streamError: null,
-                  });
-                  queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
-                  queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sid) });
-                },
+                onMaxAttemptsReached: () => settleAsFinished(session, agent, sid),
               });
             },
             getAgentState: (a) => store.get().agents[a],
@@ -429,22 +449,16 @@ export function createStreamingRenderer(store: StoreAccess) {
           callbacks: {
             onSessionId: (sid) => { _onSessionId?.(agent, sid); },
             onReconnectNeeded: (sid, attempt) => {
+              if (isSessionFinishedInCache(agent, sid)) {
+                settleAsFinished(session, agent, sid);
+                return;
+              }
               scheduleReconnect(session, sid, attempt, {
                 resume: (nextAttempt) => resumeStream(agent, sid, nextAttempt),
                 maxAttempts: MAX_RECONNECT_ATTEMPTS,
                 baseDelayMs: RECONNECT_DELAY_BASE_MS,
                 setTimer: (handle) => setReconnectTimer(agent, handle),
-                onMaxAttemptsReached: () => {
-                  session.write({
-                    connectionPhase: "idle",
-                    messageSource: { mode: "history", sessionId: sid },
-                    isLlmReconnecting: false,
-                    reconnectAttempt: 0,
-                    streamError: null,
-                  });
-                  queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
-                  queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sid) });
-                },
+                onMaxAttemptsReached: () => settleAsFinished(session, agent, sid),
               });
             },
             getAgentState: (a) => store.get().agents[a],
