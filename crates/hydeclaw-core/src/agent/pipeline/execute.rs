@@ -191,6 +191,8 @@ pub async fn execute<S: EventSink>(
                 cmp_cfg,
                 active_provider,
                 Some(engine.cfg().agent.language.as_str()),
+                &engine.cfg().db,
+                session_id,
             ).await {
                 tracing::warn!(error = %e, "proactive compression failed, continuing");
             }

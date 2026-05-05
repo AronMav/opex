@@ -680,12 +680,18 @@ Context was compacted to free space. Continue based on the recent messages below
 /// Main entry point: run all 5 phases of compression on `messages`.
 /// `language` should be the agent's language (e.g. "ru" or "en"), used for summary.
 /// Returns extracted facts (empty Vec if `cfg.extract_to_memory = false`).
+///
+/// `db` + `session_id` are used to persist the compression boundary to the DB
+/// (mark messages compressed, insert session_events WAL record). Failures are
+/// non-fatal: logged as warnings, compression continues in memory regardless.
 pub async fn compress_messages(
     messages: &mut Vec<Message>,
     compressor: &mut crate::agent::compressor::Compressor,
     cfg: &crate::config::CompactionConfig,
     provider: &dyn LlmProvider,
     language: Option<&str>,
+    db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
 ) -> anyhow::Result<Vec<String>> {
     let tokens_before = estimate_tokens(messages) as u32;
 
@@ -707,6 +713,15 @@ pub async fn compress_messages(
         );
         return Ok(vec![]);
     }
+
+    // Collect DB IDs from the middle range before they're dropped.
+    let compressed_ids: Vec<uuid::Uuid> = pruned[head_end..tail_start]
+        .iter()
+        .filter_map(|m| m.db_id)
+        .collect();
+    let first_compressed_id = pruned[head_end..tail_start].first().and_then(|m| m.db_id);
+    let first_live_id = pruned.get(tail_start).and_then(|m| m.db_id);
+    let segment_index = compressor.compression_count;
 
     let turns_to_summarize: Vec<Message> = pruned[head_end..tail_start].to_vec();
     let tail: Vec<Message> = pruned[tail_start..].to_vec();
@@ -808,10 +823,29 @@ Continue based on the recent messages below."
 
     // Commit
     *messages = assembled;
-    compressor.previous_summary = Some(summary_text);
+    compressor.previous_summary = Some(summary_text.clone());
 
     let tokens_after = estimate_tokens(messages) as u32;
     compressor.record_compression_result(tokens_before, tokens_after, cfg);
+
+    // Persist compression boundary to DB (best-effort, non-fatal).
+    if !compressed_ids.is_empty() {
+        if let Err(e) = crate::db::sessions::mark_messages_compressed(db, &compressed_ids).await {
+            tracing::warn!(error = %e, count = compressed_ids.len(), "failed to mark messages as compressed");
+        }
+        if let Err(e) = crate::db::sessions::insert_compression_event(
+            db,
+            session_id,
+            segment_index,
+            &summary_text,
+            first_compressed_id,
+            first_live_id,
+            tokens_before as i64,
+            tokens_after as i64,
+        ).await {
+            tracing::warn!(error = %e, "failed to insert compression WAL event");
+        }
+    }
 
     tracing::info!(
         tokens_before,
@@ -1412,7 +1446,16 @@ mod tests {
         let tokens_before = estimate_tokens(&msgs) as u32;
         let mut compressor = crate::agent::compressor::Compressor::new(200_000);
 
-        let facts = compress_messages(&mut msgs, &mut compressor, &cfg, &provider, None)
+        // Test messages have db_id: None so no DB calls will be made.
+        // connect_lazy creates a pool without connecting — safe for this unit test.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://localhost/test_unused")
+            .unwrap();
+        let facts = compress_messages(
+            &mut msgs, &mut compressor, &cfg, &provider, None,
+            &pool, uuid::Uuid::nil(),
+        )
             .await
             .unwrap();
 
