@@ -172,6 +172,13 @@ pub trait LlmProvider: Send + Sync {
     fn supports_prefill(&self) -> bool {
         false
     }
+
+    /// Returns the Ollama API base URL (e.g. `http://localhost:11434`) when this
+    /// is an Ollama provider, or `None` for all other providers.  Used by
+    /// `resolve_context_limit` to query `/api/show` for the real `num_ctx`.
+    fn ollama_base_url(&self) -> Option<String> {
+        None
+    }
 }
 
 // ── Skill trigger detection ───────────────────────────────────────────────────
