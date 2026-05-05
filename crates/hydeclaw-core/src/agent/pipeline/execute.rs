@@ -47,6 +47,10 @@ pub struct ExecuteOutcome {
     /// intermediate chain (last tool result or last intermediate assistant)
     /// so finalize can link the final reply correctly.
     pub final_parent_msg_id: Uuid,
+    /// UUID pre-generated for the final assistant DB row.
+    /// Matches the `messageId` sent in the `MessageStart` SSE event
+    /// so the frontend's live buffer ID equals the DB row ID.
+    pub assistant_message_id: Uuid,
 }
 
 #[derive(Debug)]
@@ -101,13 +105,18 @@ pub async fn execute<S: EventSink>(
             thinking_json: None,
             messages_len_at_end: messages.len(),
             final_parent_msg_id: last_msg_id,
+            assistant_message_id: uuid::Uuid::nil(),
         });
     }
 
     // Signal the start of a message to the sink.
-    let msg_id = format!("msg_{}", Uuid::new_v4());
+    // Pre-generate the UUID here so the same ID is used both in the
+    // `MessageStart` SSE event (sent to the frontend) and in the final
+    // DB row persisted by `finalize`. This keeps the live buffer ID in
+    // sync with the DB row ID, preventing duplicate messages in the UI.
+    let assistant_msg_id = Uuid::new_v4();
     match sink
-        .emit(PipelineEvent::Stream(StreamEvent::MessageStart { message_id: msg_id }))
+        .emit(PipelineEvent::Stream(StreamEvent::MessageStart { message_id: assistant_msg_id.to_string() }))
         .await
     {
         Ok(()) => {}
@@ -118,6 +127,7 @@ pub async fn execute<S: EventSink>(
                 thinking_json: None,
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
+                assistant_message_id: assistant_msg_id,
             });
         }
         Err(e) => return Err(e.into()),
@@ -141,6 +151,7 @@ pub async fn execute<S: EventSink>(
                 thinking_json: None,
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
+                assistant_message_id: assistant_msg_id,
             });
         }
 
@@ -160,6 +171,7 @@ pub async fn execute<S: EventSink>(
                     thinking_json: None,
                     messages_len_at_end: messages.len(),
                     final_parent_msg_id: last_msg_id,
+                    assistant_message_id: assistant_msg_id,
                 });
             }
             Err(e) => return Err(e.into()),
@@ -264,6 +276,7 @@ pub async fn execute<S: EventSink>(
                     thinking_json: None,
                     messages_len_at_end: messages.len(),
                     final_parent_msg_id: last_msg_id,
+                    assistant_message_id: assistant_msg_id,
                 });
             }
         };
@@ -351,6 +364,7 @@ pub async fn execute<S: EventSink>(
                         thinking_json: None,
                         messages_len_at_end: messages.len(),
                         final_parent_msg_id: last_msg_id,
+                        assistant_message_id: assistant_msg_id,
                     });
                 }
                 Err(e) => return Err(e.into()),
@@ -367,6 +381,7 @@ pub async fn execute<S: EventSink>(
                 thinking_json,
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
+                assistant_message_id: assistant_msg_id,
             });
         }
 
@@ -470,6 +485,7 @@ pub async fn execute<S: EventSink>(
                 thinking_json: None,
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
+                assistant_message_id: assistant_msg_id,
             });
         }
 
@@ -585,6 +601,7 @@ pub async fn execute<S: EventSink>(
                 thinking_json: None,
                 messages_len_at_end: messages.len(),
                 final_parent_msg_id: last_msg_id,
+                assistant_message_id: assistant_msg_id,
             });
         }
     }
@@ -611,6 +628,7 @@ pub async fn execute<S: EventSink>(
         thinking_json: None,
         messages_len_at_end: messages.len(),
         final_parent_msg_id: last_msg_id,
+        assistant_message_id: assistant_msg_id,
     })
 }
 

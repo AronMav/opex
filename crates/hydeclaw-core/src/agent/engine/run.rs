@@ -116,10 +116,10 @@ impl AgentEngine {
 
         // Slash-command early exit
         if let Some(text) = command_output.take() {
-            let msg_id = format!("msg_{}", Uuid::new_v4());
+            let slash_msg_id = Uuid::new_v4();
             let _ = s
                 .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
-                    message_id: msg_id,
+                    message_id: slash_msg_id.to_string(),
                 }))
                 .await;
             let _ = s
@@ -138,6 +138,7 @@ impl AgentEngine {
                 boot_for_execute.messages.len(),
                 Some(user_message_id),
                 compressor,
+                slash_msg_id, // same UUID as MessageStart so DB row ID matches SSE event
             );
             finalize::finalize(
                 fin_ctx,
@@ -165,6 +166,7 @@ impl AgentEngine {
             // pipeline::execute. For no-tool turns this equals user_message_id.
             Some(outcome.final_parent_msg_id),
             compressor,
+            outcome.assistant_message_id,
         );
         let fin_outcome = finalize::execute_status_to_finalize(
             outcome.status,
@@ -256,6 +258,7 @@ impl AgentEngine {
                 boot_for_execute.messages.len(),
                 Some(user_message_id),
                 compressor,
+                uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
             );
             return finalize::finalize(
                 fin_ctx,
@@ -281,6 +284,7 @@ impl AgentEngine {
             // pipeline::execute. For no-tool turns this equals user_message_id.
             Some(outcome.final_parent_msg_id),
             compressor,
+            outcome.assistant_message_id,
         );
         let fin_outcome = finalize::execute_status_to_finalize(
             outcome.status,
@@ -357,6 +361,7 @@ impl AgentEngine {
                 boot_for_execute.messages.len(),
                 Some(user_message_id),
                 compressor,
+                uuid::Uuid::new_v4(), // slash-command path: no MessageStart was sent
             );
             return finalize::finalize(
                 fin_ctx,
@@ -382,6 +387,7 @@ impl AgentEngine {
             // pipeline::execute. For no-tool turns this equals user_message_id.
             Some(outcome.final_parent_msg_id),
             compressor,
+            outcome.assistant_message_id,
         );
         let fin_outcome = finalize::execute_status_to_finalize(
             outcome.status,
