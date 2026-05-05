@@ -132,6 +132,93 @@ pub fn default_context_for_model(model: &str) -> usize {
     }
 }
 
+// ── Ollama /api/show context-limit discovery ────────────────────────
+
+static CONTEXT_LIMIT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>>
+    = std::sync::OnceLock::new();
+
+fn context_limit_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+    CONTEXT_LIMIT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Resolve the real context window for the current model.
+///
+/// For Ollama providers: queries `POST {base}/api/show` and extracts
+/// `model_info["*.context_length"]` or `parameters: "num_ctx N"`.
+/// Results are cached in-process (keyed by `"{base_url}::{model}"`).
+/// For all other providers: falls back to `default_context_for_model`.
+pub async fn resolve_context_limit(
+    provider: &dyn crate::agent::providers::LlmProvider,
+    model: &str,
+) -> u32 {
+    let Some(base) = provider.ollama_base_url() else {
+        return default_context_for_model(model) as u32;
+    };
+
+    let cache_key = format!("{}::{}", base, model);
+
+    // Check cache first (no async while holding the lock).
+    if let Ok(guard) = context_limit_cache().lock() {
+        if let Some(&cached) = guard.get(&cache_key) {
+            return cached;
+        }
+    }
+
+    // Cache miss — query Ollama.
+    let limit = fetch_ollama_context_limit(&base, model).await
+        .unwrap_or_else(|e| {
+            tracing::debug!(model, error = %e, "ollama /api/show failed, using default");
+            default_context_for_model(model) as u32
+        });
+
+    if let Ok(mut guard) = context_limit_cache().lock() {
+        guard.insert(cache_key, limit);
+    }
+    limit
+}
+
+async fn fetch_ollama_context_limit(base: &str, model: &str) -> anyhow::Result<u32> {
+    let url = format!("{}/api/show", base.trim_end_matches('/'));
+    let body = serde_json::json!({ "model": model });
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+
+    // Try model_info first: look for any key ending in ".context_length"
+    if let Some(info) = resp.get("model_info").and_then(|v| v.as_object()) {
+        for (key, val) in info {
+            if key.ends_with(".context_length") {
+                if let Some(n) = val.as_u64() {
+                    tracing::debug!(model, context_length = n, "resolved via model_info");
+                    return Ok(n as u32);
+                }
+            }
+        }
+    }
+
+    // Fallback: parse "parameters" field for "num_ctx N"
+    if let Some(params) = resp.get("parameters").and_then(|v| v.as_str()) {
+        for line in params.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() == 2 && parts[0] == "num_ctx" {
+                if let Ok(n) = parts[1].parse::<u32>() {
+                    tracing::debug!(model, num_ctx = n, "resolved via parameters field");
+                    return Ok(n);
+                }
+            }
+        }
+    }
+
+    anyhow::bail!("no context_length found in /api/show response for model {model}")
+}
+
 // ── Overflow recovery (non-streaming) ───────────────────────────────
 
 /// Call LLM with automatic context overflow recovery.

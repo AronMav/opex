@@ -11,6 +11,9 @@ pub struct OpenAiCompatibleProvider {
     client: reqwest::Client,
     streaming_client: reqwest::Client,
     url: String,
+    /// Raw base URL (before appending chat path), used for provider-specific API calls
+    /// such as Ollama's /api/show for context-limit discovery.
+    api_base_url: String,
     /// Optional secret name for dynamic base URL resolution (e.g. "`OLLAMA_URL`").
     /// When set, the URL is resolved from secrets on each call, overriding `url`.
     base_url_env: Option<String>,
@@ -87,6 +90,7 @@ impl OpenAiCompatibleProvider {
             client,
             streaming_client,
             url,
+            api_base_url: base,
             base_url_env: None,
             url_suffix: String::new(),
             api_key_name: key_env.to_string(),
@@ -773,6 +777,14 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
     fn run_max_duration_secs(&self) -> u64 {
         self.timeouts.run_max_duration_secs
+    }
+
+    fn ollama_base_url(&self) -> Option<String> {
+        if self.provider_name == "ollama" {
+            Some(self.api_base_url.clone())
+        } else {
+            None
+        }
     }
 }
 
