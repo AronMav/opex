@@ -196,9 +196,9 @@ sm.save_message_ex(
 ).await
 ```
 
-Replace with a direct DB call (bypassing `SessionManager`) so we can supply the pre-allocated ID:
+Replace with a direct DB call (bypassing `SessionManager`) so we can supply the pre-allocated ID. Preserve the existing `if let Err(e) = ...` error-handling wrapper:
 ```rust
-crate::db::sessions::save_message_ex_with_id(
+if let Err(e) = crate::db::sessions::save_message_ex_with_id(
     &ctx.db,
     ctx.assistant_message_id,
     ctx.session_id,
@@ -209,7 +209,15 @@ crate::db::sessions::save_message_ex_with_id(
     Some(agent_name_ref),
     thinking_json.as_ref(),
     ctx.user_message_id,
-).await
+)
+.await
+{
+    tracing::error!(
+        session_id = %ctx.session_id,
+        error = %e,
+        "finalize: failed to persist assistant message"
+    );
+}
 ```
 
 Leave the `Failed` and `Interrupted` branches unchanged — they still call `sm.save_message_ex(...)` without a pre-generated ID, because those are partial saves where ID sync does not matter (the stream has already ended in error or abort).
@@ -692,9 +700,8 @@ Add to `ui/src/stores/__tests__/message-order-stability.test.ts`:
 ```ts
 // These are pure type/contract tests — the async transition itself
 // is tested via integration (deploy + browser smoke test in Step 7).
-
-import { getLiveMessages } from "@/stores/chat-types";
-import type { MessageSource } from "@/stores/chat-types";
+// Note: no new imports needed — getLiveMessages and MessageSource
+// are already imported at the top of this file (added in Task 2).
 
 describe("finishing → history transition contract", () => {
   it("finishing mode preserves live messages while RQ refetches", () => {
