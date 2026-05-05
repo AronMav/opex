@@ -71,7 +71,7 @@ impl AgentEngine {
         detector: &mut LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
-    ) -> Result<Vec<crate::agent::pipeline::parallel::ToolBatchResult>, LoopBreak> {
+    ) -> crate::agent::pipeline::parallel::BatchOutcome {
         // Load YAML tools (cached for 30s)
         let yaml_tools: std::sync::Arc<std::collections::HashMap<String, crate::tools::yaml_tools::YamlToolDef>> = {
             let cache = self.tex().yaml_tools_cache.read().await;
@@ -130,7 +130,7 @@ impl crate::agent::tool_executor::ToolExecutorDeps for AgentEngine {
         detector: &mut crate::agent::tool_loop::LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
-    ) -> Result<Vec<crate::agent::pipeline::parallel::ToolBatchResult>, LoopBreak> {
+    ) -> crate::agent::pipeline::parallel::BatchOutcome {
         self.execute_tool_calls_partitioned(
             tool_calls,
             context,

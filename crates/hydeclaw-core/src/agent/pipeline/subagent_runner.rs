@@ -201,57 +201,55 @@ pub async fn run_subagent_with_session(
         let subagent_context = serde_json::json!({ "subagent_depth": ctx.subagent_depth });
         // Subagent runner does not persist tool messages to the DB
         // (subagent context is in-memory only) — pass `None`.
-        let loop_broken = match executor.execute_tool_calls_partitioned(
+        let outcome = executor.execute_tool_calls_partitioned(
             &response.tool_calls, &subagent_context, effective_session_id, crate::agent::channel_kind::channel::INTER_AGENT,
             messages.iter().map(|m| m.content.len()).sum(),
             &mut detector, loop_config.detect_loops, None,
-        ).await {
-            Ok(results) => {
-                for batch in &results {
-                    messages.push(Message {
-                        role: MessageRole::Tool,
-                        content: batch.result.clone(),
-                        tool_calls: None,
-                        tool_call_id: Some(batch.tool_call_id.clone()),
-                        thinking_blocks: vec![],
-            db_id: None,
-                    });
-                }
+        ).await;
+        for batch in &outcome.results {
+            messages.push(Message {
+                role: MessageRole::Tool,
+                content: batch.result.clone(),
+                tool_calls: None,
+                tool_call_id: Some(batch.tool_call_id.clone()),
+                thinking_blocks: vec![],
+                db_id: None,
+            });
+        }
+        let loop_broken = if let Some(reason) = outcome.loop_break {
+            if loop_nudge_count < loop_config.max_loop_nudges {
+                let nudge_desc = reason.as_deref().unwrap_or("repeating pattern");
+                let nudge_msg = format!(
+                    "LOOP DETECTED: You have repeated the same sequence of actions ({desc}). \
+                     Change your approach entirely. If the task is too large for a single session, \
+                     tell the user and suggest breaking it into smaller steps. Do NOT retry the same approach.",
+                    desc = nudge_desc
+                );
+                messages.push(Message {
+                    role: MessageRole::System,
+                    content: nudge_msg,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    thinking_blocks: vec![],
+                    db_id: None,
+                });
+                loop_nudge_count += 1;
+                detector.reset();
+                tracing::warn!(
+                    nudge_count = loop_nudge_count,
+                    reason = ?reason,
+                    "subagent loop nudge injected"
+                );
                 false
+            } else {
+                tracing::error!(
+                    nudge_count = loop_nudge_count,
+                    "subagent max loop nudges reached, force-stopping"
+                );
+                true
             }
-            Err(crate::agent::pipeline::parallel::LoopBreak(reason)) => {
-                if loop_nudge_count < loop_config.max_loop_nudges {
-                    let nudge_desc = reason.as_deref().unwrap_or("repeating pattern");
-                    let nudge_msg = format!(
-                        "LOOP DETECTED: You have repeated the same sequence of actions ({desc}). \
-                         Change your approach entirely. If the task is too large for a single session, \
-                         tell the user and suggest breaking it into smaller steps. Do NOT retry the same approach.",
-                        desc = nudge_desc
-                    );
-                    messages.push(Message {
-                        role: MessageRole::System,
-                        content: nudge_msg,
-                        tool_calls: None,
-                        tool_call_id: None,
-                        thinking_blocks: vec![],
-            db_id: None,
-                    });
-                    loop_nudge_count += 1;
-                    detector.reset();
-                    tracing::warn!(
-                        nudge_count = loop_nudge_count,
-                        reason = ?reason,
-                        "subagent loop nudge injected"
-                    );
-                    false // continue loop
-                } else {
-                    tracing::error!(
-                        nudge_count = loop_nudge_count,
-                        "subagent max loop nudges reached, force-stopping"
-                    );
-                    true // broken
-                }
-            }
+        } else {
+            false
         };
 
         // Log iteration to handle (if managed)

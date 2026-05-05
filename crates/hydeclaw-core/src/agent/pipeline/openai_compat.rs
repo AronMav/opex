@@ -168,26 +168,22 @@ pub async fn handle_openai(
 
         // OpenAI-compat path uses Uuid::nil() session_id and does NO DB
         // persistence — pass `None` for `persist_ctx`.
-        let loop_broken = match executor.execute_tool_calls_partitioned(
+        let outcome = executor.execute_tool_calls_partitioned(
             &response.tool_calls, &serde_json::Value::Null, uuid::Uuid::nil(), crate::agent::channel_kind::channel::INTER_AGENT,
             messages.iter().map(|m| m.content.len()).sum(),
             &mut detector, loop_config.detect_loops, None,
-        ).await {
-            Ok(results) => {
-                for batch in &results {
-                    messages.push(Message {
-                        role: MessageRole::Tool,
-                        content: batch.result.clone(),
-                        tool_calls: None,
-                        tool_call_id: Some(batch.tool_call_id.clone()),
-                        thinking_blocks: vec![],
-            db_id: None,
-                    });
-                }
-                false
-            }
-            Err(_) => true,
-        };
+        ).await;
+        for batch in &outcome.results {
+            messages.push(Message {
+                role: MessageRole::Tool,
+                content: batch.result.clone(),
+                tool_calls: None,
+                tool_call_id: Some(batch.tool_call_id.clone()),
+                thinking_blocks: vec![],
+                db_id: None,
+            });
+        }
+        let loop_broken = outcome.loop_break.is_some();
 
         if loop_broken || iteration == loop_config.effective_max_iterations() - 1 {
             let forced = cfg.provider.chat(&messages, &[], crate::agent::providers::CallOptions::default()).await?;

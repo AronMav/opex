@@ -40,7 +40,7 @@ pub trait ToolExecutor: Send + Sync {
         detector: &mut LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
-    ) -> Result<Vec<crate::agent::pipeline::parallel::ToolBatchResult>, LoopBreak>;
+    ) -> crate::agent::pipeline::parallel::BatchOutcome;
 }
 
 // ── ToolExecutorDeps private trait ───────────────────────────────────────────
@@ -62,7 +62,7 @@ pub(crate) trait ToolExecutorDeps: Send + Sync {
         detector: &mut LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
-    ) -> Result<Vec<crate::agent::pipeline::parallel::ToolBatchResult>, LoopBreak>;
+    ) -> crate::agent::pipeline::parallel::BatchOutcome;
 }
 
 // ── DefaultToolExecutor ───────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ impl ToolExecutor for DefaultToolExecutor {
         detector: &mut LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
-    ) -> Result<Vec<crate::agent::pipeline::parallel::ToolBatchResult>, LoopBreak> {
+    ) -> crate::agent::pipeline::parallel::BatchOutcome {
         // Weak upgrade is structurally safe: active requests hold a strong Arc<AgentEngine>
         // from the spawned task in chat.rs, so the engine cannot be dropped mid-request.
         let deps = self.deps.upgrade().expect(
