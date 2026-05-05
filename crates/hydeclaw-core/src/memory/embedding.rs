@@ -255,9 +255,13 @@ impl EmbeddingService for ToolgateEmbedder {
         if self.embed_dimensions > 0 {
             body["dimensions"] = serde_json::json!(self.embed_dimensions);
         }
-        let resp = self.http
-            .post(&url)
-            .json(&body)
+        // Inject W3C traceparent header so the toolgate-side FastAPI
+        // span attaches to the current `pipeline.execute` /
+        // `pipeline.finalize` parent span in Jaeger. No-op without
+        // the `otel` feature.
+        let req = self.http.post(&url).json(&body);
+        let req = crate::trace_propagation::inject_trace_context(req);
+        let resp = req
             .send()
             .await
             .context("embedding request failed")?;

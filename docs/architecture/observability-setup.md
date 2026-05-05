@@ -147,13 +147,44 @@ chaos drop happened before finalize fired.
 - The collector lives in a separate compose file (`docker-compose.observability.yml`)
   rather than the main `docker-compose.yml` so production deploys don't
   pay the memory cost when observability isn't needed.
-- The compose file declares `networks.hydeclaw.external: true` — it
-  joins the existing network created by the main compose file. Order
-  matters: bring up `docker-compose.yml` first.
 - `service.name` in `[otel] service_name` is the only piece of identity
   that surfaces in Jaeger's service dropdown. If you run multiple Core
   instances against the same collector, give each a distinct
   `service_name` (e.g. `hydeclaw-core-prod` vs `hydeclaw-core-dev`).
-- Toolgate (Python) and Channels (TypeScript/Bun) are not yet
-  instrumented — that's a follow-up so cross-process traces can be
-  correlated end-to-end.
+
+### Cross-process tracing (Core ↔ Toolgate ↔ Channels)
+
+All three processes export to the same Jaeger collector and share a
+W3C TraceContext propagator, so a `pipeline.execute` parent span on
+Core continues into the Toolgate `POST /v1/embeddings` and Channels
+`http send` child spans within a single Jaeger trace.
+
+- **Core**: `trace_propagation::inject_trace_context(req)` wraps a
+  `reqwest::RequestBuilder` and injects `traceparent` headers when the
+  `otel` feature is enabled. Currently used in `memory/embedding.rs`
+  for the embedding endpoint; extend to other Toolgate calls as
+  needed (TTS, STT, vision) by wrapping their reqwest builders the
+  same way.
+- **Toolgate**: `opentelemetry-instrumentation-fastapi` automatically
+  extracts `traceparent` from incoming requests and links new spans
+  to that trace. `opentelemetry-instrumentation-httpx` propagates
+  the same context onto outgoing calls (e.g. to the embedding
+  backend).
+- **Channels**: `@opentelemetry/auto-instrumentations-node` patches
+  `node:http` so outbound calls (Telegram, Discord, Slack APIs) get
+  `traceparent` injected automatically. Inbound WebSocket from Core
+  is wrapped manually if you need spans there.
+
+To enable observability for the managed processes on Pi, add these
+keys to the `[[managed_process]]` `env_extra` in `hydeclaw.toml`:
+
+```toml
+# Inline-table form used by hydeclaw.toml — service_name is "toolgate"
+# for the toolgate process and "channels" for the channels process.
+env_extra = { ...,
+    OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317",
+    OTEL_SERVICE_NAME = "toolgate" }
+```
+
+Both `toolgate` and `channels` no-op if the env var is absent — same
+contract as Core.

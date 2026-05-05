@@ -53,6 +53,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Activate OpenTelemetry export when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+# No-op otherwise — keeps the dependency tree off non-instrumented hosts.
+# Must run BEFORE FastAPI starts handling requests so every endpoint is
+# wrapped, and BEFORE any httpx.AsyncClient is created so the patched
+# transport applies. The lifespan handler runs after this.
+from otel_setup import init_otel as _init_otel
+_init_otel(app)
+
 from dependencies import _DegradedResponse, degraded_response
 
 

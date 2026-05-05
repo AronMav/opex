@@ -7,6 +7,12 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.51.0",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.55.0",
+    "@opentelemetry/resources": "^1.28.0",
+    "@opentelemetry/sdk-node": "^0.55.0",
+    "@opentelemetry/semantic-conventions": "^1.28.0",
     "@slack/bolt": "^4.1.0",
     "discord.js": "^14.16.0",
     "grammy": "^1.30.0",

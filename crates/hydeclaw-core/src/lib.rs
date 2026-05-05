@@ -31,6 +31,13 @@ pub use hydeclaw_types;
 #[path = "metrics.rs"]
 pub mod metrics;
 
+// Cross-process trace context propagation. Leaf module: std + reqwest +
+// opentelemetry only. Used by `memory/embedding.rs` (mounted in lib via
+// `__memory_bridge::embedding` below) so the same module path
+// `crate::trace_propagation` resolves in both the bin and lib trees.
+#[path = "trace_propagation.rs"]
+pub mod trace_propagation;
+
 // ── Phase 62 Plan 03: SSE coalescer + StreamEvent leaf exposure ────────
 // `agent::stream_event` and `gateway::sse::coalescer` are both leaf modules
 // (zero `crate::*` imports) so the lib can expose them for the
