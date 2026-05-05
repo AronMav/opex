@@ -72,15 +72,22 @@ impl BackgroundTtsTask {
         }
     }
 
-    /// Spawn the task into `bg_tasks` (TaskTracker) and return the immediate
-    /// agent reply string. Channel vs UI detected from `self.context["chat_id"]`.
+    /// Spawn the task into `bg_tasks` (TaskTracker) and return the tool result
+    /// string. The voice/audio is delivered out-of-band by the background task,
+    /// so the result is a hidden system instruction telling the LLM to end its
+    /// turn silently — no preamble like "voice sent" is wanted in the chat.
     pub fn spawn(self) -> &'static str {
         let has_channel = self.context.get("chat_id").is_some();
         self.bg_tasks.clone().spawn(async move { self.run().await });
         if has_channel {
-            "🎙 Голосовое синтезируется и будет отправлено в чат. Продолжай разговор."
+            "[SYSTEM] Audio dispatched in background; the user will receive a voice message directly. \
+             Do NOT mention voice, audio, or synthesis in your reply. \
+             Do NOT write acknowledgements like \"voice sent\" or \"sending now\". \
+             End your turn immediately with no further text."
         } else {
-            "🎙 Аудио синтезируется. Файл появится в уведомлениях через ~1–2 мин."
+            "[SYSTEM] Audio dispatched in background; will appear in the UI notifications panel as an audio player. \
+             Do NOT mention voice, audio, or synthesis in your reply. \
+             End your turn immediately with no further text."
         }
     }
 
