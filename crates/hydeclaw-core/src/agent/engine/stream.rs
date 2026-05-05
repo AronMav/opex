@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use super::AgentEngine;
 use crate::agent::error_classify;
+use crate::agent::pipeline::tool_loop_helpers as helpers;
 use crate::agent::session_manager::SessionManager;
 use crate::agent::thinking::{looks_incomplete, strip_thinking};
 use crate::agent::tool_loop::LoopDetector;
@@ -106,28 +107,33 @@ impl AgentEngine {
     /// Handle a message in a fully isolated session (no history from previous runs).
     /// Used by cron dynamic jobs to prevent context accumulation across invocations.
     ///
-    /// ARCHITECTURE NOTE — why this duplicates `pipeline::execute`:
-    /// Both implement an LLM+tools loop, but the contracts differ:
+    /// ARCHITECTURE NOTE — relationship with `pipeline::execute`:
+    /// Both implement an LLM+tools loop. Shared mid-level mechanics live
+    /// in `pipeline::tool_loop_helpers` (loop-nudge wording + bookkeeping,
+    /// intermediate-assistant append, persist-payload encoding,
+    /// per-iteration UUID allocation) and are called from BOTH paths so
+    /// drift is eliminated for those concerns.
+    /// The two paths still differ in concerns that genuinely cannot
+    /// share an implementation:
     ///   * `pipeline::execute` is a streaming pipeline driven by `EventSink`
-    ///     — emits MessageStart, StepStart (with per-iteration UUID),
-    ///     TextDelta, ToolCallStart, …, Finish for an SSE consumer.
+    ///     — emits MessageStart, StepStart, TextDelta, ToolCallStart,
+    ///     ToolResult, StepFinish, Finish for an SSE consumer; consumes
+    ///     per-chunk LLM output via `forward_chunks_into_sink`.
     ///   * `handle_isolated` is a synchronous RPC — returns the final
-    ///     response string. No SSE consumer, no per-iteration UUID
-    ///     surfaced to anyone.
-    /// This file additionally owns features that the unified pipeline
-    /// doesn't yet implement:
+    ///     response string; uses non-streaming `chat_with_transient_retry`.
+    /// Features unique to this RPC path (cron-specific):
     ///   * fallback provider switch on consecutive failures
     ///   * auto-continue when the LLM describes remaining work
     ///   * session corruption recovery (reset + retry)
     ///   * tool_policy_override application
+    ///   * forced final LLM call on iteration limit / loop break
+    ///   * direct `record_usage` call (no Usage SSE event to emit)
+    ///   * raw tool-result text into context (no `__file__:` /
+    ///     `__rich_card__:` marker extraction — there's no sink to emit
+    ///     RichCard / File events into)
     /// Phase 4 wire-up (step_id) is consistent across both paths so
     /// `messages.step_id` is uniform regardless of which path produced
-    /// the row. A future refactor (~1 day) could extract shared helpers
-    /// (`compact_and_call_llm`, `apply_loop_break`, `persist_intermediate`)
-    /// into a `pipeline::tool_loop_helpers` module and have both paths
-    /// build their loops on top — that's tracked in the architecture
-    /// backlog (docs/architecture/2026-05-05-id-based-dedup.md
-    /// "Negative / open" section).
+    /// the row.
     pub async fn handle_isolated(&self, msg: &IncomingMessage) -> Result<String> {
         // Hook: BeforeMessage
         let hook_event = crate::agent::hooks::HookEvent::BeforeMessage;
@@ -306,15 +312,16 @@ impl AgentEngine {
 
             let cleaned_content = strip_thinking(&response.content);
 
-            messages.push(Message {
-                role: MessageRole::Assistant,
-                content: cleaned_content.clone(),
-                tool_calls: Some(response.tool_calls.clone()),
-                tool_call_id: None,
-                thinking_blocks: response.thinking_blocks.clone(),
-                db_id: None,
-            });
-            context_chars += cleaned_content.chars().count();
+            // Append intermediate assistant (with tool_calls) to in-memory
+            // context. Shared with `pipeline::execute` via
+            // `tool_loop_helpers::append_intermediate_assistant_message`.
+            let chars_added = helpers::append_intermediate_assistant_message(
+                &mut messages,
+                cleaned_content.clone(),
+                response.tool_calls.clone(),
+                response.thinking_blocks.clone(),
+            );
+            context_chars += chars_added;
 
             // Persist intermediate assistant (with tool_calls) via detached spawn
             // — mirrors `pipeline::execute` so the row survives parent-task
@@ -325,13 +332,11 @@ impl AgentEngine {
             // reference a parent_id that doesn't exist → chain broken on
             // reload. Idempotent: pre-generated UUID + `ON CONFLICT (id) DO
             // NOTHING` in `save_message_ex_with_id`.
-            let tc_json = serde_json::to_value(&response.tool_calls).ok();
-            let tb_json = if response.thinking_blocks.is_empty() {
-                None
-            } else {
-                serde_json::to_value(&response.thinking_blocks).ok()
-            };
-            let assistant_msg_id = uuid::Uuid::new_v4();
+            let (tc_json, tb_json) = helpers::encode_intermediate_persist_payload(
+                &response.tool_calls,
+                &response.thinking_blocks,
+            );
+            let assistant_msg_id = helpers::allocate_iteration_message_id();
             let agent_name_for_persist = self.cfg().agent.name.clone();
             crate::agent::pipeline::parallel::spawn_persist_assistant_message(
                 &self.cfg().db,
@@ -362,55 +367,29 @@ impl AgentEngine {
                 &mut detector, loop_config.detect_loops,
                 Some(&persist_ctx),
             ).await;
-            for batch in &outcome.results {
-                let tc_id = &batch.tool_call_id;
-                let tool_result = &batch.result;
-                messages.push(Message {
-                    role: MessageRole::Tool,
-                    content: tool_result.clone(),
-                    tool_calls: None,
-                    tool_call_id: Some(tc_id.clone()),
-                    thinking_blocks: vec![],
-                    db_id: None,
-                });
-                context_chars += tool_result.chars().count();
-            }
-            let loop_broken = if let Some(reason) = outcome.loop_break {
-                if loop_nudge_count < loop_config.max_loop_nudges {
-                    let nudge_desc = reason.as_deref().unwrap_or("repeating pattern");
-                    let nudge_msg = format!(
-                        "LOOP DETECTED: You have repeated the same sequence of actions ({nudge_desc}). \
-                         Change your approach entirely. If the task is too large for a single session, \
-                         tell the user and suggest breaking it into smaller steps. Do NOT retry the same approach."
-                    );
-                    messages.push(Message {
-                        role: MessageRole::System,
-                        content: nudge_msg,
-                        tool_calls: None,
-                        tool_call_id: None,
-                        thinking_blocks: vec![],
-                        db_id: None,
-                    });
-                    loop_nudge_count += 1;
-                    detector.reset();
-                    tracing::warn!(
-                        agent = %self.cfg().agent.name,
-                        nudge_count = loop_nudge_count,
-                        reason = ?reason,
-                        "loop nudge injected, giving model another chance"
-                    );
-                    false
-                } else {
-                    tracing::error!(
-                        agent = %self.cfg().agent.name,
-                        nudge_count = loop_nudge_count,
-                        "max loop nudges reached, force-stopping agent"
-                    );
-                    true
-                }
-            } else {
-                false
-            };
+
+            // Drain results into the in-memory context and apply loop-nudge
+            // bookkeeping. Shared with `pipeline::execute` via
+            // `tool_loop_helpers::finalize_tool_batch` — single source of
+            // truth for the system-message wording, the detector reset on
+            // nudge, and the iteration counter.
+            //
+            // Note: this RPC path doesn't extract `__rich_card__:` / `__file__:`
+            // markers because there's no SSE sink; raw tool-result text is
+            // pushed verbatim into the LLM context. That's fine for cron
+            // jobs (which never see those markers from the tools they call)
+            // and matches pre-refactor behavior.
+            let agent_name_for_nudge = self.cfg().agent.name.clone();
+            let (tool_chars_added, decision) = helpers::finalize_tool_batch(
+                &mut messages,
+                outcome,
+                &mut loop_nudge_count,
+                loop_config.max_loop_nudges,
+                &mut detector,
+                &agent_name_for_nudge,
+            );
+            context_chars += tool_chars_added;
+            let loop_broken = decision.loop_broken;
 
             if loop_broken || iteration == loop_config.effective_max_iterations() - 1 {
                 // Notify if hitting iteration limit (not loop break)

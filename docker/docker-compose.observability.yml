@@ -1,0 +1,48 @@
+services:
+  # Jaeger all-in-one — receives OTLP traces over gRPC (4317) and exposes a
+  # web UI on 16686 for span exploration. Used by HydeClaw Core when built
+  # with `--features otel` and `[otel] enabled = true` in hydeclaw.toml.
+  #
+  # Why Jaeger all-in-one (not a separate otel-collector + storage):
+  #   * single ARM64 image (jaegertracing/all-in-one is multi-arch — runs on
+  #     Raspberry Pi 4/5 without modification)
+  #   * memory-resident span storage (no Cassandra / Elasticsearch dependency)
+  #     — enough for ~hours of traces, which is what the operator actually
+  #     looks at during incident review
+  #   * built-in OTLP receiver: HydeClaw points at port 4317 directly with
+  #     no intermediate collector to maintain
+  #
+  # Production-grade setups should swap to otel-collector → tempo/jaeger; this
+  # is the "wired and visible" baseline for a single-host Pi deploy.
+  jaeger:
+    image: jaegertracing/all-in-one:1.76.0
+    container_name: jaeger
+    mem_limit: ${JAEGER_MEM_LIMIT:-512m}
+    cpus: ${JAEGER_CPUS:-0.5}
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      # Span retention — in-memory only, oldest evicted when budget hit.
+      MEMORY_MAX_TRACES: "50000"
+    ports:
+      # OTLP gRPC receiver (HydeClaw Core sends here when otel feature enabled)
+      - "127.0.0.1:4317:4317"
+      # OTLP HTTP receiver (alternative; Toolgate Python could use this)
+      - "127.0.0.1:4318:4318"
+      # Jaeger UI — point a browser here to explore traces
+      - "127.0.0.1:16686:16686"
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:14269/ || exit 1" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [ observability ]
+    restart: unless-stopped
+
+# Standalone network — Jaeger only needs to be reachable from the host on
+# 127.0.0.1:4317 (HydeClaw Core is a native process, not a container, so it
+# reaches Jaeger via the published port, not via Docker DNS). Keeping this
+# isolated lets `docker compose up` work without first booting the main
+# `docker-compose.yml` to create the `hydeclaw` network.
+networks:
+  observability:
+    driver: bridge

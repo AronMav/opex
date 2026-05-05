@@ -26,9 +26,9 @@
 //!   to DB as-is; callers that need stripping should do it in finalize.
 
 use crate::agent::engine::AgentEngine;
-use crate::agent::engine::LoopBreak;
 use crate::agent::pipeline::bootstrap::BootstrapOutcome;
 use crate::agent::pipeline::sink::{EventSink, PipelineEvent, SinkError};
+use crate::agent::pipeline::tool_loop_helpers as helpers;
 use crate::agent::stream_event::StreamEvent;
 use crate::agent::tool_executor::ToolExecutor as _;
 use hydeclaw_types::{Message, MessageRole};
@@ -464,12 +464,10 @@ pub async fn execute<S: EventSink>(
         //
         // Idempotency: pre-generated UUID + `ON CONFLICT (id) DO NOTHING` in
         // `save_message_ex_with_id` mean retries are safe.
-        let tc_json = serde_json::to_value(&response.tool_calls).ok();
-        let tb_json = if response.thinking_blocks.is_empty() {
-            None
-        } else {
-            serde_json::to_value(&response.thinking_blocks).ok()
-        };
+        let (tc_json, tb_json) = helpers::encode_intermediate_persist_payload(
+            &response.tool_calls,
+            &response.thinking_blocks,
+        );
         // Use the per-iteration UUID we already emitted in StepStart so the
         // intermediate DB row id matches the live ChatMessage id the frontend
         // built from the same SSE event. Pure ID-based dedup downstream.
@@ -594,36 +592,19 @@ pub async fn execute<S: EventSink>(
                     }
                 }
             }
-            if let Some(reason_outer) = outcome.loop_break {
-                let reason = reason_outer;
-                if loop_nudge_count < loop_config.max_loop_nudges {
-                    messages.push(Message {
-                        role: MessageRole::System,
-                        content: build_loop_nudge_message(reason.as_deref()),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        thinking_blocks: vec![],
-                        db_id: None,
-                    });
-                    loop_nudge_count += 1;
-                    tracing::warn!(
-                        agent = %engine.cfg().agent.name,
-                        nudge_count = loop_nudge_count,
-                        reason = ?reason,
-                        "loop nudge injected (pipeline path)"
-                    );
-                    false
-                } else {
-                    tracing::error!(
-                        agent = %engine.cfg().agent.name,
-                        nudge_count = loop_nudge_count,
-                        "max loop nudges reached, force-stopping agent (pipeline path)"
-                    );
-                    true
-                }
-            } else {
-                false
-            }
+            // Loop-nudge bookkeeping is shared with the legacy
+            // `handle_isolated` path via `tool_loop_helpers::apply_loop_nudge`
+            // — single source of truth for the system-message wording and the
+            // detector reset on nudge.
+            helpers::apply_loop_nudge(
+                &mut messages,
+                &outcome.loop_break,
+                &mut loop_nudge_count,
+                loop_config.max_loop_nudges,
+                &mut loop_detector,
+                &engine.cfg().agent.name,
+            )
+            .loop_broken
         };
 
         let _ = sink
@@ -766,16 +747,8 @@ async fn extract_tool_result_events<S: EventSink>(
     }
 }
 
-/// Build the system nudge message injected when a tool-call loop is detected.
-fn build_loop_nudge_message(reason: Option<&str>) -> String {
-    let nudge_desc = reason.unwrap_or("repeating pattern");
-    format!(
-        "LOOP DETECTED: You have repeated the same sequence of actions ({desc}). \
-         Change your approach entirely. If the task is too large for a single session, \
-         tell the user and suggest breaking it into smaller steps. Do NOT retry the same approach.",
-        desc = nudge_desc
-    )
-}
+// `build_loop_nudge_message` moved to `pipeline::tool_loop_helpers` so the
+// streaming and RPC paths share the wording. See that module's tests.
 
 // ── Chunk forwarding helper ─────────────────────────────────────────────────
 //
@@ -1100,19 +1073,7 @@ mod tests {
         assert_eq!(partial, "Let me think. ");
     }
 
-    #[test]
-    fn loop_nudge_uses_reason_when_provided() {
-        let msg = build_loop_nudge_message(Some("calling the same tool repeatedly"));
-        assert!(msg.contains("calling the same tool repeatedly"));
-        assert!(msg.contains("LOOP DETECTED"));
-    }
-
-    #[test]
-    fn loop_nudge_falls_back_to_default_reason() {
-        let msg = build_loop_nudge_message(None);
-        assert!(msg.contains("repeating pattern"));
-        assert!(msg.contains("LOOP DETECTED"));
-    }
+    // `loop_nudge_*` tests moved to `pipeline::tool_loop_helpers::tests`.
 
     // ── extract_tool_result_events tests ──────────────────────────────────────
 

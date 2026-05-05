@@ -1,0 +1,159 @@
+# Observability — OTel + Jaeger Setup
+
+How to enable distributed tracing for HydeClaw Core on the Pi (or any host)
+and how to validate that spans actually arrive at Jaeger under load.
+
+## Prerequisites
+
+- HydeClaw deployed via the standard `make deploy` workflow.
+- Docker daemon running on the host (Pi or local).
+- ~512 MB free RAM for Jaeger all-in-one.
+
+## What's Wired
+
+The pipeline is already instrumented at three hot paths:
+
+| Span name | Where | Fields |
+| --- | --- | --- |
+| `pipeline.execute` | `pipeline/execute.rs` | `session_id`, `agent`, `iterations`, `assistant_message_id` |
+| `pipeline.finalize` | `pipeline/finalize.rs` | `session_id`, `agent`, `outcome` (done/failed/interrupted) |
+| `pipeline.execute_tools` | `pipeline/parallel.rs` | `session_id`, `tool_count`, `loop_break` |
+
+These spans are emitted via `tracing::instrument` and propagated to OTLP only
+when the `otel` feature is built in **and** `[otel] enabled = true` in
+`hydeclaw.toml`.
+
+## Local Development Workflow
+
+```bash
+# 1. Boot Jaeger locally (binds 4317 + 16686 on 127.0.0.1)
+docker compose -f docker/docker-compose.observability.yml up -d
+
+# 2. Build core with the otel feature
+cargo build --features otel -p hydeclaw-core --release
+
+# 3. Run core pointing at the local collector
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
+  ./target/release/hydeclaw-core
+
+# 4. Open Jaeger UI
+open http://localhost:16686
+```
+
+In `config/hydeclaw.toml`, set:
+
+```toml
+[otel]
+enabled = true
+service_name = "hydeclaw-core"
+```
+
+## Pi Production Workflow
+
+```bash
+# 1. Boot Jaeger on Pi
+make jaeger-up
+
+# 2. Build + deploy OTel-instrumented binary
+make deploy-binary-otel
+
+# 3. Edit /etc/systemd/system/hydeclaw-core.service to add:
+#    Environment="OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317"
+#    (or in ~/hydeclaw/.env if loaded by the unit)
+
+# 4. Set [otel] enabled = true in ~/hydeclaw/config/hydeclaw.toml on Pi
+
+# 5. Restart core to pick up env + config
+ssh $PI_HOST "systemctl --user restart hydeclaw-core"
+
+# 6. Tunnel + open the Jaeger UI from your laptop
+ssh -L 16686:127.0.0.1:16686 $PI_HOST
+# Then: http://localhost:16686
+```
+
+The convenience target `make deploy-jaeger` chains step 1 + 2 + restart.
+Steps 3–4 are one-time configuration and not automated by the Makefile.
+
+## Validating Spans Under Load
+
+A correctly instrumented system should show:
+
+1. **Smoke check (1 request).** Send one chat request and verify the span
+   tree appears in Jaeger UI within 5 seconds:
+   `pipeline.execute` → multiple `pipeline.execute_tools` (one per tool
+   batch) → one `pipeline.finalize`.
+2. **Field check.** Click into `pipeline.execute` and confirm
+   `iterations` and `assistant_message_id` are populated (these are
+   recorded mid-loop and at the end via `Span::current().record(...)`).
+3. **Outcome distribution.** Filter `pipeline.finalize` by the `outcome`
+   tag — `done` should dominate; `failed` and `interrupted` are visible
+   when reproduced (kill the request mid-stream, force a 5xx LLM error).
+
+Synthetic load script — runs the existing chaos test repeatedly to
+generate enough spans to detect drops:
+
+```bash
+for i in {1..20}; do
+  HYDECLAW_AUTH_TOKEN=<token> python3 test-pi-chaos.py &
+done
+wait
+```
+
+After the loop completes, in Jaeger UI:
+
+- Service: `hydeclaw-core`
+- Operation: `pipeline.execute`
+- Lookback: 1h
+- Limit: 100
+
+You should see ≥ 20 traces. Each one ends in either `pipeline.finalize`
+(outcome=done|failed) or terminates at `pipeline.execute` itself if the
+chaos drop happened before finalize fired.
+
+## Performance Notes
+
+- The OTel exporter is **batching** (`with_batch_exporter`) — spans are
+  not flushed on every call. Expect ~1–5s latency between span creation
+  and visibility in Jaeger.
+- On Pi, the `hydeclaw-core` binary grows by ~3 MB with the `otel`
+  feature enabled (extra dependency: `opentelemetry-otlp` + `tonic`).
+- Memory: Jaeger all-in-one is configured for 50k spans in memory
+  (~50–100 MB at saturation). Oldest spans evict first.
+- Disk: Jaeger all-in-one uses no disk storage — spans are lost on
+  container restart. Acceptable for a single-host Pi setup; for
+  durable storage swap to `otel-collector` → Tempo or Elasticsearch.
+
+## Troubleshooting
+
+**Spans don't appear in Jaeger UI:**
+
+1. Confirm core was built with `--features otel`:
+   `~/hydeclaw/hydeclaw-core-aarch64 --version 2>&1 | head -1` should
+   show `[otel]` in the boot log.
+2. Confirm `OTEL_EXPORTER_OTLP_ENDPOINT` env var is set on Pi:
+   `systemctl --user show hydeclaw-core | grep OTEL`.
+3. Confirm Jaeger is up and listening on 4317:
+   `ss -tlnp | grep 4317` should show docker-proxy or jaeger-all-in-one.
+4. Tail Core logs for `[otel]` boot messages:
+   `journalctl --user -u hydeclaw-core --no-pager | grep otel | tail`.
+
+**Jaeger UI shows no service:**
+
+- Service name appears only after the first span is exported. Send a
+  test request first.
+
+## Architectural Notes
+
+- The collector lives in a separate compose file (`docker-compose.observability.yml`)
+  rather than the main `docker-compose.yml` so production deploys don't
+  pay the memory cost when observability isn't needed.
+- The compose file declares `networks.hydeclaw.external: true` — it
+  joins the existing network created by the main compose file. Order
+  matters: bring up `docker-compose.yml` first.
+- `service.name` in `[otel] service_name` is the only piece of identity
+  that surfaces in Jaeger's service dropdown. If you run multiple Core
+  instances against the same collector, give each a distinct
+  `service_name` (e.g. `hydeclaw-core-prod` vs `hydeclaw-core-dev`).
+- Toolgate (Python) and Channels (TypeScript/Bun) are not yet
+  instrumented — that's a follow-up so cross-process traces can be
+  correlated end-to-end.

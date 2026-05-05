@@ -39,4 +39,5 @@ pub mod sink;
 pub mod finalize;
 pub mod bootstrap;
 pub mod execute;
+pub mod tool_loop_helpers;
 pub mod tts_background;
