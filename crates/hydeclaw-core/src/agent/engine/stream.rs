@@ -319,7 +319,12 @@ impl AgentEngine {
                 tc_json.as_ref(),
                 tb_json.as_ref(),
                 None,
-                None, // step_id — legacy stream path, not wired
+                // step_id = iteration index — same convention as the unified
+                // pipeline (execute.rs). Per-iteration UUID isn't surfaced in
+                // SSE here (this path uses ChunkSink/no-stream callers like
+                // cron jobs), but persistent step grouping in DB is uniform
+                // across both paths now.
+                i32::try_from(iteration).ok(),
             );
 
             // Legacy stream path — detached persistence in `execute_tool_calls_partitioned`
