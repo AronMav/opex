@@ -557,6 +557,7 @@ async fn deadline_retry_inner(
                                 tool_call_id: None,
                                 thinking_blocks: vec![],
             db_id: None,
+
                             });
                             prepare_messages = Some(next);
                         }
@@ -665,7 +666,6 @@ mod deadline_retry_tests {
             tools_used: vec![],
             iterations: 0,
             thinking_blocks: vec![],
-            db_id: None,
         }
     }
 

@@ -134,6 +134,7 @@ pub async fn compact_if_needed(
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         },
         Message {
             role: MessageRole::User,
@@ -142,6 +143,7 @@ pub async fn compact_if_needed(
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         },
     ];
 
@@ -172,6 +174,7 @@ pub async fn compact_if_needed(
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         },
         Message {
             role: MessageRole::User,
@@ -180,6 +183,7 @@ pub async fn compact_if_needed(
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         },
     ];
 
@@ -202,6 +206,7 @@ pub async fn compact_if_needed(
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         });
     }
 
@@ -440,6 +445,7 @@ pub fn sanitize_tool_pairs(messages: Vec<Message>) -> Vec<Message> {
                     tool_calls: None,
                     thinking_blocks: vec![],
             db_id: None,
+
                 });
             }
         } else {
@@ -558,6 +564,7 @@ that will continue this conversation.\n\nTURNS TO SUMMARIZE:\n{turns_text}\n\n{t
         tool_call_id: None,
         thinking_blocks: vec![],
             db_id: None,
+
     }];
 
     let empty_tools: Vec<ToolDefinition> = vec![];
@@ -609,6 +616,7 @@ Return ONLY the JSON array, no other text."
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         },
         Message {
             role: MessageRole::User,
@@ -617,6 +625,7 @@ Return ONLY the JSON array, no other text."
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         },
     ];
     let empty_tools: Vec<ToolDefinition> = vec![];
@@ -671,6 +680,7 @@ Context was compacted to free space. Continue based on the recent messages below
         tool_call_id: None,
         thinking_blocks: vec![],
             db_id: None,
+
     });
 
     result.extend_from_slice(tail);
@@ -804,6 +814,7 @@ Continue based on the recent messages below."
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         });
         assembled.extend(tail);
     } else {
@@ -876,10 +887,11 @@ mod tests {
             content: "You are a helpful assistant.".into(),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
             db_id: None,
+
         };
         let tail = vec![
-            Message { role: MessageRole::User,      content: "what is 2+2".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
-            Message { role: MessageRole::Assistant, content: "4".into(),            tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::User,      content: "what is 2+2".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::Assistant, content: "4".into(),            tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
         ];
         let seed = build_compressed_seed(Some(&system), "my summary", &tail);
         assert_eq!(seed.len(), 4, "system + summary + 2 tail");
@@ -894,7 +906,7 @@ mod tests {
     #[test]
     fn build_compressed_seed_no_system_message() {
         let tail = vec![
-            Message { role: MessageRole::User, content: "hi".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::User, content: "hi".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
         ];
         let seed = build_compressed_seed(None, "summary text", &tail);
         assert_eq!(seed.len(), 2, "summary + 1 tail (no system)");
@@ -927,7 +939,6 @@ mod tests {
                 tools_used: vec![],
                 iterations: 0,
                 thinking_blocks: vec![],
-            db_id: None,
             })
         }
         async fn chat_stream(&self, msgs: &[Message], tools: &[ToolDefinition], _tx: mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
@@ -944,6 +955,7 @@ mod tests {
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         }
     }
 
@@ -985,6 +997,7 @@ mod tests {
             tool_call_id: None,
             thinking_blocks: vec![],
             db_id: None,
+
         };
 
         let content_tokens = 10; // 0 / 4 + 10
@@ -1173,9 +1186,9 @@ mod tests {
         let dup_content = "x".repeat(300);
         let msgs = vec![
             Message { role: MessageRole::Tool, content: dup_content.clone(),
-                      tool_call_id: Some("a".into()), tool_calls: None, thinking_blocks: vec![] },
+                      tool_call_id: Some("a".into()), tool_calls: None, thinking_blocks: vec![], db_id: None },
             Message { role: MessageRole::Tool, content: dup_content.clone(),
-                      tool_call_id: Some("b".into()), tool_calls: None, thinking_blocks: vec![] },
+                      tool_call_id: Some("b".into()), tool_calls: None, thinking_blocks: vec![], db_id: None },
         ];
         let pruned = prune_old_tool_results(&msgs, 0);
         assert!(pruned[0].content.contains("Duplicate"));
@@ -1186,7 +1199,7 @@ mod tests {
     fn prune_replaces_large_tool_result_with_summary_line() {
         let msgs = vec![
             Message { role: MessageRole::Tool, content: "a".repeat(300),
-                      tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![] },
+                      tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![], db_id: None },
         ];
         let pruned = prune_old_tool_results(&msgs, 0);
         assert!(pruned[0].content.starts_with('['));
@@ -1198,7 +1211,7 @@ mod tests {
         let content = "b".repeat(300);
         let msgs = vec![
             Message { role: MessageRole::Tool, content: content.clone(),
-                      tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![] },
+                      tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![], db_id: None },
         ];
         let pruned = prune_old_tool_results(&msgs, 1);
         assert_eq!(pruned[0].content, content);
@@ -1213,6 +1226,7 @@ mod tests {
             content: "a".repeat(400),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
             db_id: None,
+
         }).collect();
         let tail_start = find_tail_start_by_tokens(&msgs, 0, 200);
         assert!(tail_start >= msgs.len() - 4);
@@ -1226,6 +1240,7 @@ mod tests {
             content: "a".repeat(400),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
             db_id: None,
+
         }).collect();
         msgs[3].role = MessageRole::User;
         let tail_start = find_tail_start_by_tokens(&msgs, 0, 50);
@@ -1235,10 +1250,10 @@ mod tests {
     #[test]
     fn head_end_skips_orphan_tool_results() {
         let msgs = vec![
-            Message { role: MessageRole::System,    content: "s".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
-            Message { role: MessageRole::User,      content: "u".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
-            Message { role: MessageRole::Tool,      content: "t".into(), tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![] },
-            Message { role: MessageRole::Assistant, content: "a".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+            Message { role: MessageRole::System,    content: "s".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::User,      content: "u".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::Tool,      content: "t".into(), tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::Assistant, content: "a".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
         ];
         let head_end = find_head_end(&msgs, 2);
         assert_eq!(head_end, 3);
@@ -1250,9 +1265,9 @@ mod tests {
     fn sanitize_removes_orphaned_tool_results() {
         let msgs = vec![
             Message { role: MessageRole::Tool, content: "orphan".into(),
-                      tool_call_id: Some("orphan_id".into()), tool_calls: None, thinking_blocks: vec![] },
+                      tool_call_id: Some("orphan_id".into()), tool_calls: None, thinking_blocks: vec![], db_id: None },
             Message { role: MessageRole::User, content: "hello".into(),
-                      tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+                      tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
         ];
         let sanitized = sanitize_tool_pairs(msgs);
         assert_eq!(sanitized.len(), 1);
@@ -1273,9 +1288,10 @@ mod tests {
                 tool_call_id: None,
                 thinking_blocks: vec![],
             db_id: None,
+
             },
             Message { role: MessageRole::User, content: "next".into(),
-                      tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
+                      tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
         ];
         let sanitized = sanitize_tool_pairs(msgs);
         assert_eq!(sanitized.len(), 3);
@@ -1307,7 +1323,6 @@ mod tests {
                 tools_used: vec![],
                 iterations: 0,
                 thinking_blocks: vec![],
-            db_id: None,
             })
         }
         async fn chat_stream(
@@ -1383,7 +1398,6 @@ mod tests {
                     tools_used: vec![],
                     iterations: 0,
                     thinking_blocks: vec![],
-            db_id: None,
                 })
             }
             async fn chat_stream(

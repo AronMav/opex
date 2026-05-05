@@ -934,6 +934,7 @@ mod tests {
                 thinking: "I need to reason carefully".to_string(),
                 signature: "sig_abc".to_string(),
             }],
+            db_id: None,
         };
         let messages = vec![msg];
 
@@ -976,6 +977,7 @@ mod tests {
                 thinking: "Should use tool".to_string(),
                 signature: "sig_xyz".to_string(),
             }],
+            db_id: None,
         };
         let messages = vec![msg];
 

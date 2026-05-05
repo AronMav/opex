@@ -129,16 +129,19 @@ async fn insert_seed_messages_preserves_order() {
             role: hydeclaw_types::MessageRole::System,
             content: "sys".into(),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+            db_id: None,
         },
         hydeclaw_types::Message {
             role: hydeclaw_types::MessageRole::Assistant,
             content: "summary".into(),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+            db_id: None,
         },
         hydeclaw_types::Message {
             role: hydeclaw_types::MessageRole::User,
             content: "user turn".into(),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
+            db_id: None,
         },
     ];
 

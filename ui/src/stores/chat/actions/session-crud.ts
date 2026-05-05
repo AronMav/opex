@@ -182,12 +182,11 @@ export function createSessionCrudActions(deps: ActionDeps) {
         const totalSegments = (get().agents[agentName] as any).sessionSegmentCount ?? 1;
         const withDividers = insertCompressionDividers(converted, res.compression_events ?? [], totalSegments);
 
-        set((draft: any) => {
-          const a = draft.agents[agentName];
-          const currentLive = getLiveMessages(a.messageSource);
-          a.messageSource = { mode: "live", messages: [...withDividers, ...currentLive] };
-          a.hasMoreHistory = res.has_more ?? false;
-          a.isLoadingHistory = false;
+        const currentLive = getLiveMessages(get().agents[agentName]?.messageSource ?? { mode: "new-chat" });
+        update(agentName, {
+          messageSource: { mode: "live", messages: [...withDividers, ...currentLive] },
+          hasMoreHistory: res.has_more ?? false,
+          isLoadingHistory: false,
         });
       } catch (_e) {
         const { toast } = await import("sonner");
