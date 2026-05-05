@@ -34,15 +34,16 @@ import type { ChatMessage, MessagePart, ReasoningPart, TextPart, ToolPart } from
 const MIN_DEDUP_TEXT_LEN = 20;
 
 /**
- * Dedup safety net: within a single step (between two step-boundary parts),
- * drop text/reasoning parts whose trimmed content has already appeared.
- * Crosses step-boundary → set resets, so duplicates ACROSS iterations are
- * preserved as semantically valid "same narration on next step".
+ * Dedup safety net for an assistant bubble:
+ *  • within a single step (between step-boundaries), drop text/reasoning
+ *    whose trimmed content has already appeared (≥20 chars only — short
+ *    legitimate utterances stay)
+ *  • collapse consecutive step-boundary markers (extras come from
+ *    convertHistory + live overlay both inserting one at the same point)
+ *  • drop a trailing step-boundary that has no content after it
  *
- * Defends against duplicate SSE events that may arrive on reconnect replay,
- * stream-registry edge cases, or any path that pushes the same text twice
- * within one iteration. Backend should not produce these but UI must be
- * robust to them.
+ * Crossing step-boundary resets the per-step set so duplicates ACROSS
+ * iterations remain (semantically valid: same narration on next step).
  */
 function dedupeWithinSteps(parts: MessagePart[]): MessagePart[] {
   if (parts.length < 2) return parts;
@@ -51,6 +52,12 @@ function dedupeWithinSteps(parts: MessagePart[]): MessagePart[] {
   let dropped = false;
   for (const p of parts) {
     if (p.type === "step-boundary") {
+      // Skip when previous emitted part is also a boundary.
+      const prev = result[result.length - 1];
+      if (prev && prev.type === "step-boundary") {
+        dropped = true;
+        continue;
+      }
       seen = new Set();
       result.push(p);
       continue;
@@ -65,6 +72,11 @@ function dedupeWithinSteps(parts: MessagePart[]): MessagePart[] {
     }
     result.push(p);
   }
+  // Drop trailing boundary (no content after it).
+  while (result.length > 0 && result[result.length - 1].type === "step-boundary") {
+    result.pop();
+    dropped = true;
+  }
   return dropped ? result : parts;
 }
 
@@ -77,6 +89,11 @@ export function mergeLiveOverlay(
   const historyIds = new Set(historyMessages.map((m) => m.id));
 
   const historyToolIds = new Set<string>();
+  // Text content already shown in the LAST history assistant — needed because
+  // SSE replay (e.g. backend StreamRegistry on reconnect) re-emits the same
+  // text events that convertHistory already turned into parts. Without
+  // content-based dedup the continuation merge duplicates them in the bubble.
+  let lastHistAssistantTexts = new Set<string>();
   let lastHistAssistantIdx = -1;
   for (let i = 0; i < historyMessages.length; i++) {
     const m = historyMessages[i];
@@ -84,6 +101,14 @@ export function mergeLiveOverlay(
       lastHistAssistantIdx = i;
       for (const p of m.parts) {
         if (p.type === "tool") historyToolIds.add((p as ToolPart).toolCallId);
+      }
+      // Refresh per-assistant — only the LAST one's texts go into the set.
+      lastHistAssistantTexts = new Set();
+      for (const p of m.parts) {
+        if (p.type === "text") {
+          const t = (p as TextPart).text.trim();
+          if (t) lastHistAssistantTexts.add(t);
+        }
       }
     }
   }
@@ -120,7 +145,18 @@ export function mergeLiveOverlay(
 
       // Continuation merge into the last history assistant when same user turn.
       if (!liveHasNewUserMsg && !historyEndsWithNewUserTurn && lastHistAssistantIdx >= 0) {
-        continuationParts.push(...parts);
+        // Filter parts whose content is already represented in the target
+        // bubble (text by trimmed content, tools by id). SSE replay on
+        // reconnect re-emits everything — without this filter the live
+        // overlay duplicates everything convertHistory already produced.
+        const dedupedParts = parts.filter((p) => {
+          if (p.type === "text") {
+            const t = (p as TextPart).text.trim();
+            return !t || !lastHistAssistantTexts.has(t);
+          }
+          return true; // tools already filtered by historyToolIds above
+        });
+        if (dedupedParts.length > 0) continuationParts.push(...dedupedParts);
         continue;
       }
 
