@@ -1481,6 +1481,153 @@ pub async fn mirror_to_session(
     Ok(true)
 }
 
+// ── Compression tracking ───────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct CompressionEventRow {
+    pub segment_index: i64,
+    pub first_live_message_id: Option<uuid::Uuid>,
+    pub summary: String,
+}
+
+#[derive(Debug)]
+pub struct MessagesPage {
+    pub messages: Vec<MessageRow>,
+    pub compression_events: Vec<CompressionEventRow>,
+    pub has_more: bool,
+}
+
+/// Mark a batch of messages as compressed (excluded from LLM context).
+pub async fn mark_messages_compressed(
+    db: &PgPool,
+    ids: &[uuid::Uuid],
+) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        "UPDATE messages SET compressed = TRUE WHERE id = ANY($1)",
+    )
+    .bind(ids)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Insert a session_events WAL record for a compression boundary.
+pub async fn insert_compression_event(
+    db: &PgPool,
+    session_id: uuid::Uuid,
+    segment_index: u32,
+    summary: &str,
+    first_compressed_id: Option<uuid::Uuid>,
+    first_live_id: Option<uuid::Uuid>,
+    tokens_before: i64,
+    tokens_after: i64,
+) -> Result<()> {
+    let payload = serde_json::json!({
+        "segment_index": segment_index,
+        "summary": summary,
+        "first_compressed_message_id": first_compressed_id,
+        "first_live_message_id": first_live_id,
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+    });
+    sqlx::query(
+        "INSERT INTO session_events (session_id, event_type, payload)
+         VALUES ($1, 'compression', $2)",
+    )
+    .bind(session_id)
+    .bind(payload)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Load a page of non-compressed messages with optional backward cursor.
+///
+/// Returns messages in ASC order (oldest first). Compression events whose
+/// `first_live_message_id` falls within the returned page are included so
+/// the frontend can render dividers.
+pub async fn get_messages_page(
+    db: &PgPool,
+    session_id: uuid::Uuid,
+    before_id: Option<uuid::Uuid>,
+    limit: i64,
+) -> Result<MessagesPage> {
+    // Fetch limit+1 in DESC order to detect has_more, then reverse to ASC.
+    let rows: Vec<MessageRow> = if let Some(bid) = before_id {
+        sqlx::query_as::<_, MessageRow>(
+            r#"SELECT id, role, content, tool_calls, tool_call_id, created_at,
+                      agent_id, feedback, edited_at, status, thinking_blocks,
+                      parent_message_id, branch_from_message_id, abort_reason, is_mirror
+               FROM messages
+               WHERE session_id = $1
+                 AND compressed = FALSE
+                 AND created_at < (SELECT created_at FROM messages WHERE id = $2)
+               ORDER BY created_at DESC
+               LIMIT $3"#,
+        )
+        .bind(session_id)
+        .bind(bid)
+        .bind(limit + 1)
+        .fetch_all(db)
+        .await?
+    } else {
+        sqlx::query_as::<_, MessageRow>(
+            r#"SELECT id, role, content, tool_calls, tool_call_id, created_at,
+                      agent_id, feedback, edited_at, status, thinking_blocks,
+                      parent_message_id, branch_from_message_id, abort_reason, is_mirror
+               FROM messages
+               WHERE session_id = $1
+                 AND compressed = FALSE
+               ORDER BY created_at DESC
+               LIMIT $2"#,
+        )
+        .bind(session_id)
+        .bind(limit + 1)
+        .fetch_all(db)
+        .await?
+    };
+
+    let has_more = rows.len() as i64 > limit;
+    let mut rows: Vec<MessageRow> = rows.into_iter().take(limit as usize).collect();
+    rows.reverse(); // ASC: oldest first
+
+    // Fetch compression events whose first_live_message_id is in this page.
+    let page_ids: Vec<uuid::Uuid> = rows.iter().map(|r| r.id).collect();
+    let events = if page_ids.is_empty() {
+        vec![]
+    } else {
+        sqlx::query(
+            r#"SELECT payload
+               FROM session_events
+               WHERE session_id = $1
+                 AND event_type = 'compression'
+                 AND (payload->>'first_live_message_id')::uuid = ANY($2)"#,
+        )
+        .bind(session_id)
+        .bind(&page_ids[..])
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .filter_map(|r| {
+            let p: Option<serde_json::Value> = r.try_get("payload").ok()?;
+            let p = p?;
+            Some(CompressionEventRow {
+                segment_index: p["segment_index"].as_i64().unwrap_or(0),
+                first_live_message_id: p["first_live_message_id"]
+                    .as_str()
+                    .and_then(|s| s.parse().ok()),
+                summary: p["summary"].as_str().unwrap_or("").to_string(),
+            })
+        })
+        .collect()
+    };
+
+    Ok(MessagesPage { messages: rows, compression_events: events, has_more })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{truncate_partial, MAX_PARTIAL_BYTES};
@@ -1572,5 +1719,23 @@ mod tests {
             &db, "nonexistent-agent", "telegram", "000", "nobody home"
         ).await.expect("mirror_to_session");
         assert!(!found, "should return false when no matching session");
+    }
+
+    #[test]
+    fn compression_event_row_has_required_fields() {
+        let _row = super::CompressionEventRow {
+            segment_index: 1,
+            first_live_message_id: None,
+            summary: String::new(),
+        };
+    }
+
+    #[test]
+    fn messages_page_has_required_fields() {
+        let _page = super::MessagesPage {
+            messages: vec![],
+            compression_events: vec![],
+            has_more: false,
+        };
     }
 }
