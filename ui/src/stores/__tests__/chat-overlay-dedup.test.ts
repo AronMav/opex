@@ -69,4 +69,34 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
     const result = mergeLiveOverlay(h, live);
     expect(result).toBe(h); // same reference — no new array
   });
+
+  it("merges consecutive live assistant iterations into one bubble (tool-loop)", () => {
+    // History: just the user message
+    const h = [msg("u", "user", "что нового?")];
+    // Live: user + 3 assistant iterations (tool-call loop)
+    const live = [
+      msg("u", "user", "что нового?"),
+      msg("a1", "assistant", "Загружаю навык."),
+      msg("a2", "assistant", "Ищу новости."),
+      msg("a3", "assistant", "Дайджест готов."),
+    ];
+    const result = mergeLiveOverlay(h, live);
+    // user already in history (deduplicated) + one merged assistant bubble
+    expect(result).toHaveLength(2);
+    expect(result[1].role).toBe("assistant");
+    expect(result[1].parts).toHaveLength(3); // 3 text parts merged
+  });
+
+  it("does NOT merge live assistant across user messages", () => {
+    // user1 + asst1 already in history; live adds user2 + asst2
+    const h = [msg("u1", "user", "первый"), msg("a1", "assistant", "ответ1")];
+    const live = [
+      msg("u2", "user", "второй"),
+      msg("a2", "assistant", "ответ2"),
+    ];
+    const result = mergeLiveOverlay(h, live);
+    expect(result).toHaveLength(4); // u1 a1 u2 a2 — not merged across user msg
+    expect(result[2].role).toBe("user");
+    expect(result[3].role).toBe("assistant");
+  });
 });
