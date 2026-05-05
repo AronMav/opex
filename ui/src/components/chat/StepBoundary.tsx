@@ -13,11 +13,13 @@ export function StepBoundary() {
     <div
       role="separator"
       aria-label="Step boundary"
-      className="my-2 flex items-center gap-2 text-muted-foreground/30 select-none"
+      className="my-3 flex items-center gap-2 text-muted-foreground/60 select-none"
     >
-      <div className="h-px flex-1 bg-border/40" />
-      <span className="h-1 w-1 rounded-full bg-muted-foreground/30" />
-      <div className="h-px flex-1 bg-border/40" />
+      <div className="h-px flex-1 bg-border" />
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">
+        next step
+      </span>
+      <div className="h-px flex-1 bg-border" />
     </div>
   );
 }
