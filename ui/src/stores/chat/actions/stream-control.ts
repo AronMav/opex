@@ -36,8 +36,9 @@ export function createStreamActions(deps: ActionDeps) {
         // Continue from history — get messages from React Query cache.
         // Do NOT flip messageSource here; startStream sets messageSource atomically.
         seedMessages = getCachedHistoryMessages(sessionId, st.selectedBranches);
-      } else if (st.messageSource.mode === "live" && st.messageSource.messages.length > 0) {
-        seedMessages = st.messageSource.messages;
+      } else {
+        const liveMsgs = getLiveMessages(st.messageSource);
+        if (liveMsgs.length > 0) seedMessages = liveMsgs;
       }
 
       renderer.startStream(agent, sessionId, seedMessages, text, attachments);
@@ -68,8 +69,9 @@ export function createStreamActions(deps: ActionDeps) {
 
       if (currentSt.messageSource.mode === "history") {
         seedMessages = getCachedHistoryMessages(sessionId, currentSt.selectedBranches);
-      } else if (currentSt.messageSource.mode === "live" && currentSt.messageSource.messages.length > 0) {
-        seedMessages = currentSt.messageSource.messages;
+      } else {
+        const liveMsgs = getLiveMessages(currentSt.messageSource);
+        if (liveMsgs.length > 0) seedMessages = liveMsgs;
       }
 
       renderer.startStream(agent, sessionId, seedMessages, text, attachments);
