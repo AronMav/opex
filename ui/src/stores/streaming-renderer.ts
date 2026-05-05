@@ -339,9 +339,10 @@ export function createStreamingRenderer(store: StoreAccess) {
       userParts.push({ type: "text", text: "" });
     }
 
-    // Build user message -- optimistic status: "sending" until data-session-id confirms receipt
+    // Build user message — use the pre-allocated UUID so the optimistic message
+    // ID matches the DB row after bootstrap saves it via save_message_ex_with_id.
     const userMsg: ChatMessage = {
-      id: uuid(),
+      id: userMessageId ?? uuid(),
       role: "user",
       parts: userParts,
       createdAt: new Date().toISOString(),

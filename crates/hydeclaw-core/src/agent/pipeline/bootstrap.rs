@@ -199,16 +199,32 @@ pub async fn bootstrap<S: EventSink>(
     // so the new turn stays anchored to a real chain instead of floating as a
     // root orphan. Without this fallback, reload-during-stream would leave the
     // user message invisible in active_path (seen 2026-04-20).
-    // When user_message_id is provided (forkAndRegenerate path), the branch user
-    // message was already persisted by POST /api/sessions/{id}/fork. Reuse it
-    // directly to avoid creating a duplicate message in the same branch.
-    let user_message_id: uuid::Uuid = if let Some(existing_id) = ctx.msg.user_message_id {
-        existing_id
+    // When user_message_id is provided the client pre-allocated the UUID so the
+    // optimistic message in the live overlay has the same ID as the DB row
+    // (symmetric to the assistant message pre-allocation in execute.rs). We save
+    // with save_message_ex_with_id (ON CONFLICT DO NOTHING) so the fork path is
+    // safe: if the message was already inserted by POST /fork, the insert is a
+    // no-op and we reuse the same UUID — no duplicate, no error.
+    let parent_message_id = match ctx.msg.leaf_message_id {
+        Some(id) => Some(id),
+        None => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
+    };
+    let user_message_id: uuid::Uuid = if let Some(prealloc_id) = ctx.msg.user_message_id {
+        crate::db::sessions::save_message_ex_with_id(
+            &engine.cfg().db,
+            prealloc_id,
+            session_id,
+            "user",
+            &enriched_text,
+            None,
+            None,
+            sender_agent_id,
+            None,
+            parent_message_id,
+        )
+        .await?;
+        prealloc_id
     } else {
-        let parent_message_id = match ctx.msg.leaf_message_id {
-            Some(id) => Some(id),
-            None => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
-        };
         sm.save_message_ex(
             session_id,
             "user",

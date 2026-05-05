@@ -4,7 +4,7 @@
 // factory provides, plus queryClient and the streaming renderer.
 
 import type { ActionDeps } from "../../chat-store";
-import { isActivePhase, emptyAgentState, getLiveMessages } from "../../chat-types";
+import { isActivePhase, emptyAgentState, getLiveMessages, uuid } from "../../chat-types";
 import type { ChatMessage, TextPart } from "../../chat-types";
 import { getCachedHistoryMessages } from "../../chat-history";
 import { apiPost } from "@/lib/api";
@@ -41,7 +41,7 @@ export function createStreamActions(deps: ActionDeps) {
         if (liveMsgs.length > 0) seedMessages = liveMsgs;
       }
 
-      renderer.startStream(agent, sessionId, seedMessages, text, attachments);
+      renderer.startStream(agent, sessionId, seedMessages, text, attachments, uuid());
     },
 
     interruptAndSend: async (text: string, attachments?: Array<any>) => {
@@ -74,7 +74,7 @@ export function createStreamActions(deps: ActionDeps) {
         if (liveMsgs.length > 0) seedMessages = liveMsgs;
       }
 
-      renderer.startStream(agent, sessionId, seedMessages, text, attachments);
+      renderer.startStream(agent, sessionId, seedMessages, text, attachments, uuid());
     },
 
     queueMessage: (text: string, attachments?: Array<any>) => {
