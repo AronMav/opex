@@ -578,6 +578,15 @@ pub(crate) async fn api_chat_sse(
     // pipeline_cancel.cancel() → engine_cancel propagates into execute().
     let pipeline_cancel = CancellationToken::new();
     let engine_cancel = pipeline_cancel.clone();
+    // Capture the current tracing span (which includes the OTel parent
+    // context extracted by `trace_propagation::extract_trace_context_layer`)
+    // and bind the spawned future to it via `.instrument()`. Without this,
+    // `tokio::spawn` would start the future under an empty span context and
+    // child spans inside `pipeline::execute` would land in a fresh trace,
+    // disconnected from any upstream `traceparent` we honoured at the
+    // gateway boundary.
+    use tracing::Instrument as _;
+    let request_span = tracing::Span::current();
     let engine_handle = bus.bg_tasks.spawn(async move {
         let current_agent_name = engine.name().to_string();
         if let Err(e) = engine.handle_sse(&msg, engine_event_tx.clone(), session_id, force_new_session, engine_cancel).await {
@@ -595,7 +604,7 @@ pub(crate) async fn api_chat_sse(
             "channel": crate::agent::channel_kind::channel::UI,
         });
         ui_tx.send(event.to_string()).ok();
-    });
+    }.instrument(request_span));
 
     // Converter task: StreamEvent → SSE JSON events (Vercel AI SDK v3 UI format)
     // Based on @ai-sdk/react UIMessageChunk types

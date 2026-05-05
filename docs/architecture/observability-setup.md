@@ -159,12 +159,21 @@ W3C TraceContext propagator, so a `pipeline.execute` parent span on
 Core continues into the Toolgate `POST /v1/embeddings` and Channels
 `http send` child spans within a single Jaeger trace.
 
-- **Core**: `trace_propagation::inject_trace_context(req)` wraps a
-  `reqwest::RequestBuilder` and injects `traceparent` headers when the
-  `otel` feature is enabled. Currently used in `memory/embedding.rs`
-  for the embedding endpoint; extend to other Toolgate calls as
-  needed (TTS, STT, vision) by wrapping their reqwest builders the
-  same way.
+- **Core (outgoing)**: `trace_propagation::inject_trace_context(req)`
+  wraps a `reqwest::RequestBuilder` and injects `traceparent` headers
+  when the `otel` feature is enabled. Wired into the four Toolgate
+  paths: `/v1/embeddings`, `/transcribe` (STT), `/describe` (vision),
+  `/web` (URL fetch).
+- **Core (incoming)**: `trace_propagation::extract_trace_context_layer`
+  is registered as the outermost Axum middleware on the gateway router.
+  It pulls `traceparent` from incoming HTTP headers, opens an
+  `http_request` span with method+target attributes, and binds the
+  upstream parent context. Any downstream span created during request
+  processing (`pipeline.execute`, `pipeline.execute_tools`, etc.)
+  inherits the upstream trace_id, so a single Jaeger trace covers
+  external caller → Core → Toolgate. The existing
+  `trace_context_middleware` (logging-correlation only) is preserved
+  in parallel — different concern, different scope.
 - **Toolgate**: `opentelemetry-instrumentation-fastapi` automatically
   extracts `traceparent` from incoming requests and links new spans
   to that trace. `opentelemetry-instrumentation-httpx` propagates

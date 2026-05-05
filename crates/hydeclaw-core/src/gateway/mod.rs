@@ -369,6 +369,14 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     // in journalctl returns the full lifecycle of one request" goal.
     let app = app.layer(axum_mw::from_fn(trace_context::trace_context_middleware));
 
+    // OTel-only: extract W3C parent context from incoming `traceparent` and
+    // attach it to a fresh `http_request` span so downstream pipeline spans
+    // (e.g. `pipeline.execute`) inherit the upstream trace_id. Complements
+    // `trace_context_middleware` above (which only handles plain-text
+    // logging correlation). Layered LAST → runs FIRST on ingress, before
+    // any OTel-instrumented downstream span opens.
+    let app = app.layer(axum_mw::from_fn(crate::trace_propagation::extract_trace_context_layer));
+
     Ok(app.with_state(state))
 }
 
