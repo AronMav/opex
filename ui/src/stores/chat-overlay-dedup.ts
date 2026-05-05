@@ -69,14 +69,21 @@ export function mergeLiveOverlay(
       if (uniqueParts.length === 0) continue;
 
       // Continuation merge: no new user message → still the same user turn.
-      // Merge into the last history assistant bubble, as convertHistory does
-      // for completed intermediate iterations in a tool-call loop.
+      // Merge into the last history assistant bubble (completing a previous turn),
+      // or merge consecutive live iterations together (active tool-call loop).
       if (!liveHasNewUserMsg && lastHistAssistantIdx >= 0) {
         continuationParts.push(...uniqueParts);
         continue;
       }
 
-      overlay.push({ ...m, parts: uniqueParts });
+      // Merge with the previous live overlay assistant when no user message
+      // separates them — collapses all tool-loop iterations into one bubble.
+      const lastOverlay = overlay.length > 0 ? overlay[overlay.length - 1] : null;
+      if (lastOverlay?.role === "assistant") {
+        overlay[overlay.length - 1] = { ...lastOverlay, parts: [...lastOverlay.parts, ...uniqueParts] };
+      } else {
+        overlay.push({ ...m, parts: uniqueParts });
+      }
     }
   }
 
