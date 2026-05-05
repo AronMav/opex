@@ -8,8 +8,6 @@ pub struct CompressorState {
     pub previous_summary: Option<String>,
     pub ineffective_count: u8,
     pub compression_count: u32,
-    #[serde(default)]
-    pub pending_split: bool,
 }
 
 // ── Runtime struct ─────────────────────────────────────────────────────────
@@ -20,7 +18,6 @@ pub struct Compressor {
     pub last_prompt_tokens: u32,
     pub compression_count: u32,
     pub context_limit: u32,
-    pub pending_split: bool,
 }
 
 impl Compressor {
@@ -31,7 +28,6 @@ impl Compressor {
             last_prompt_tokens: 0,
             compression_count: 0,
             context_limit,
-            pending_split: false,
         }
     }
 
@@ -43,7 +39,6 @@ impl Compressor {
                     c.previous_summary = s.previous_summary;
                     c.ineffective_count = s.ineffective_count;
                     c.compression_count = s.compression_count;
-                    c.pending_split = s.pending_split;
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "failed to deserialize compaction_state, starting fresh");
@@ -58,7 +53,6 @@ impl Compressor {
             previous_summary: self.previous_summary.clone(),
             ineffective_count: self.ineffective_count,
             compression_count: self.compression_count,
-            pending_split: self.pending_split,
         })
         .unwrap_or(serde_json::Value::Null)
     }
@@ -105,7 +99,6 @@ impl Compressor {
             self.ineffective_count = self.ineffective_count.saturating_add(1);
         } else {
             self.ineffective_count = 0;
-            self.pending_split = true;
         }
         self.compression_count = self.compression_count.saturating_add(1);
         tracing::info!(
@@ -197,74 +190,43 @@ mod tests {
     }
 
     #[test]
-    fn pending_split_roundtrips_through_json() {
-        let mut c = Compressor::new(128_000);
-        c.pending_split = true;
-        c.previous_summary = Some("summary".into());
-        let json = c.to_json();
-        let c2 = Compressor::load(Some(json), 128_000);
-        assert!(c2.pending_split);
-        assert_eq!(c2.previous_summary.as_deref(), Some("summary"));
+    fn compressor_state_serializes_without_pending_split() {
+        let s = CompressorState {
+            previous_summary: None,
+            ineffective_count: 0,
+            compression_count: 0,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("pending_split"), "field must be gone: {json}");
     }
 
+    // Old JSON with pending_split field deserializes without error (forward compat)
     #[test]
-    fn pending_split_defaults_false_from_old_json_without_field() {
+    fn load_tolerates_old_json_with_pending_split() {
         let old_json = serde_json::json!({
             "previous_summary": null,
             "ineffective_count": 0,
-            "compression_count": 2
+            "compression_count": 2,
+            "pending_split": true
         });
         let c = Compressor::load(Some(old_json), 128_000);
-        assert!(!c.pending_split);
         assert_eq!(c.compression_count, 2);
     }
 
-    #[test]
-    fn record_compression_result_sets_pending_split_when_effective() {
-        let mut c = Compressor::new(128_000);
-        let cfg = CompactionConfig {
-            enabled: true,
-            threshold: 0.75,
-            anti_thrash_min_savings: 0.10,
-            ..Default::default()
-        };
-        c.record_compression_result(100_000, 60_000, &cfg);
-        assert!(c.pending_split);
-    }
-
-    #[test]
-    fn record_compression_result_does_not_set_pending_split_when_ineffective() {
-        let mut c = Compressor::new(128_000);
-        let cfg = CompactionConfig {
-            enabled: true,
-            threshold: 0.75,
-            anti_thrash_min_savings: 0.10,
-            ..Default::default()
-        };
-        c.record_compression_result(100_000, 98_000, &cfg);
-        assert!(!c.pending_split);
-    }
-
-    // ── Unit 4: child state reset tests ────────────────────────────────────
-
-    /// CompressorState::default() must have zero counters and no summary.
     #[test]
     fn compressor_state_default_has_zero_counters() {
         let state = CompressorState::default();
         assert_eq!(state.ineffective_count, 0);
         assert_eq!(state.compression_count, 0);
-        assert!(!state.pending_split);
         assert!(state.previous_summary.is_none());
     }
 
-    /// bootstrap.rs constructs child state with `..Default::default()` — counters reset, summary kept.
     #[test]
     fn child_state_resets_counters_preserves_summary() {
         let parent_state = CompressorState {
             previous_summary: Some("summary".to_string()),
             ineffective_count: 3,
             compression_count: 7,
-            pending_split: true,
         };
         let child_state = CompressorState {
             previous_summary: parent_state.previous_summary.clone(),
@@ -272,12 +234,9 @@ mod tests {
         };
         assert_eq!(child_state.ineffective_count, 0);
         assert_eq!(child_state.compression_count, 0);
-        assert!(!child_state.pending_split);
         assert_eq!(child_state.previous_summary, Some("summary".to_string()));
     }
 
-    /// Regression: parent at anti_thrash_max_skips must not infect child.
-    /// Without the fix, child would inherit a maxed ineffective_count and never compress.
     #[test]
     fn child_at_max_ineffective_count_parent_gets_reset() {
         let default_cfg = cfg(0.75);
@@ -285,7 +244,6 @@ mod tests {
             previous_summary: Some("summary text".to_string()),
             ineffective_count: default_cfg.anti_thrash_max_skips,
             compression_count: 5,
-            pending_split: true,
         };
         let child_state = CompressorState {
             previous_summary: parent_state.previous_summary.clone(),
@@ -293,12 +251,9 @@ mod tests {
         };
         assert_eq!(child_state.ineffective_count, 0, "child must not inherit parent's exhausted ineffective_count");
         assert_eq!(child_state.compression_count, 0);
-        assert!(!child_state.pending_split);
-        // Child is below the threshold — can compress freely.
         assert!(child_state.ineffective_count < default_cfg.anti_thrash_max_skips);
     }
 
-    /// Child with no previous summary: counters are clear and summary stays None.
     #[test]
     fn child_state_no_summary_all_defaults() {
         let child_state = CompressorState {
@@ -308,6 +263,5 @@ mod tests {
         assert!(child_state.previous_summary.is_none());
         assert_eq!(child_state.ineffective_count, 0);
         assert_eq!(child_state.compression_count, 0);
-        assert!(!child_state.pending_split);
     }
 }
