@@ -7,7 +7,7 @@ export interface AgentTurnCard {
 }
 
 export type SseEvent =
-  | { type: "data-session-id"; data: { sessionId: string } }
+  | { type: "data-session-id"; data: { sessionId: string; contextLimit?: number } }
   | { type: "start"; messageId?: string; agentName?: string }
   | { type: "text-start"; id?: string; agentName?: string }
   | { type: "text-delta"; delta: string }
@@ -62,7 +62,13 @@ export function parseSseEvent(raw: string): SseEvent | null {
     case "data-session-id": {
       const data = e.data as Record<string, unknown> | undefined;
       if (!data || typeof data.sessionId !== "string") return null;
-      return { type, data: { sessionId: data.sessionId } };
+      return {
+        type,
+        data: {
+          sessionId: data.sessionId,
+          contextLimit: typeof data.contextLimit === "number" ? data.contextLimit : undefined,
+        },
+      };
     }
     case "start":
       return { type, messageId: typeof e.messageId === "string" ? e.messageId : undefined, agentName: typeof e.agentName === "string" ? e.agentName : undefined };

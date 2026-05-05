@@ -91,11 +91,12 @@ impl AgentEngine {
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
         let mut compressor = compressor;
 
-        // Emit SessionId so the UI can track which session is active.
+        // Emit SessionId so the UI can track which session is active and display the context bar.
         let _ = s
-            .emit(PipelineEvent::Stream(StreamEvent::SessionId(
-                session_id.to_string(),
-            )))
+            .emit(PipelineEvent::Stream(StreamEvent::SessionId {
+                session_id: session_id.to_string(),
+                context_limit: compressor.context_limit,
+            }))
             .await;
 
         let boot_for_execute = BootstrapOutcome {

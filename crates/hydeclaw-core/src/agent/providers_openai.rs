@@ -779,12 +779,78 @@ impl LlmProvider for OpenAiCompatibleProvider {
         self.timeouts.run_max_duration_secs
     }
 
-    fn ollama_base_url(&self) -> Option<String> {
+    async fn context_limit_hint(&self, model: &str) -> Option<u32> {
         if self.provider_name == "ollama" {
-            Some(self.api_base_url.clone())
+            self.ollama_context_limit(model).await
         } else {
-            None
+            self.openai_compat_context_limit(model).await
         }
+    }
+}
+
+impl OpenAiCompatibleProvider {
+    /// Query Ollama's /api/show for the real context window.
+    async fn ollama_context_limit(&self, model: &str) -> Option<u32> {
+        let url = format!("{}/api/show", self.api_base_url.trim_end_matches('/'));
+        let resp = self.client
+            .post(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .json(&serde_json::json!({ "model": model }))
+            .send().await.ok()?
+            .error_for_status().ok()?
+            .json::<serde_json::Value>().await.ok()?;
+
+        // model_info: any key ending in ".context_length"
+        if let Some(info) = resp.get("model_info").and_then(|v| v.as_object()) {
+            for (key, val) in info {
+                if key.ends_with(".context_length") {
+                    if let Some(n) = val.as_u64() {
+                        tracing::debug!(model, context_length = n, "ollama /api/show context_length");
+                        return Some(n as u32);
+                    }
+                }
+            }
+        }
+        // fallback: parse "parameters" field for "num_ctx N"
+        if let Some(params) = resp.get("parameters").and_then(|v| v.as_str()) {
+            for line in params.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() == 2 && parts[0] == "num_ctx" {
+                    if let Ok(n) = parts[1].parse::<u32>() {
+                        tracing::debug!(model, num_ctx = n, "ollama num_ctx parameter");
+                        return Some(n);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Query OpenAI-compatible /v1/models to find context_window for this model.
+    async fn openai_compat_context_limit(&self, model: &str) -> Option<u32> {
+        let url = format!("{}/v1/models", self.api_base_url.trim_end_matches('/'));
+        let api_key = self.resolve_api_key().await;
+        let mut req = self.client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5));
+        if !api_key.is_empty() {
+            req = req.bearer_auth(&api_key);
+        }
+        let resp = req.send().await.ok()?
+            .error_for_status().ok()?
+            .json::<serde_json::Value>().await.ok()?;
+
+        let models = resp.get("data").and_then(|v| v.as_array())?;
+        for m in models {
+            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            if id == model {
+                if let Some(n) = m.get("context_window").and_then(|v| v.as_u64()) {
+                    tracing::debug!(model, context_window = n, "provider /v1/models context_window");
+                    return Some(n as u32);
+                }
+            }
+        }
+        None
     }
 }
 

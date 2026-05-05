@@ -17,7 +17,8 @@
 #[allow(dead_code)]
 pub enum StreamEvent {
     /// Session ID resolved/created by `build_context` — emitted first so the UI can track it.
-    SessionId(String),
+    /// `context_limit` is the resolved token budget for this model (from /api/show or heuristic).
+    SessionId { session_id: String, context_limit: u32 },
     MessageStart { message_id: String },
     StepStart { step_id: String },
     TextDelta(String),

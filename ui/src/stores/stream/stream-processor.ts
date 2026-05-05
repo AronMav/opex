@@ -122,7 +122,10 @@ export async function processSSEStream(
                   }
                 }
               });
-              session.write({ activeSessionId: sid });
+              session.write({
+                activeSessionId: sid,
+                ...(event.data.contextLimit != null && { modelContextLimit: event.data.contextLimit }),
+              });
               callbacks.onSessionId(sid);
 
               const sessionsData = queryClient.getQueryData<{ sessions: SessionRow[] }>(

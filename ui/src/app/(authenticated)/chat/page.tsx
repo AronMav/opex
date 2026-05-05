@@ -108,6 +108,7 @@ export default function ChatPage() {
   const cacheReadTokens = useChatStore((s) => s.agents[s.currentAgent]?.cacheReadTokens ?? null);
   const cacheCreationTokens = useChatStore((s) => s.agents[s.currentAgent]?.cacheCreationTokens ?? null);
   const reasoningTokens = useChatStore((s) => s.agents[s.currentAgent]?.reasoningTokens ?? null);
+  const modelContextLimit = useChatStore((s) => s.agents[s.currentAgent]?.modelContextLimit ?? null);
   const modelOverride = useChatStore((s) => s.agents[s.currentAgent]?.modelOverride ?? null);
   const { data: agentsData } = useAgents();
   const currentAgentModel = useMemo(() => {
@@ -768,6 +769,7 @@ export default function ChatPage() {
           <ContextBar
             tokens={contextTokens}
             model={currentAgentModel}
+            modelContextLimit={modelContextLimit}
             outputTokens={contextOutputTokens}
             cacheReadTokens={cacheReadTokens}
             cacheCreationTokens={cacheCreationTokens}

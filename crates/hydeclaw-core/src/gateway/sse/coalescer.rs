@@ -16,7 +16,7 @@ pub const COALESCE_WINDOW_MS: u64 = 16;
 /// KEEP IN SYNC with the SSE event-type table in CLAUDE.md.
 fn event_type_label(ev: &StreamEvent) -> &'static str {
     match ev {
-        StreamEvent::SessionId(_) => "session-id",
+        StreamEvent::SessionId { .. } => "session-id",
         StreamEvent::MessageStart { .. } => "message-start",
         StreamEvent::StepStart { .. } => "step-start",
         StreamEvent::TextDelta(_) => "text-delta",

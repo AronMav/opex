@@ -173,10 +173,11 @@ pub trait LlmProvider: Send + Sync {
         false
     }
 
-    /// Returns the Ollama API base URL (e.g. `http://localhost:11434`) when this
-    /// is an Ollama provider, or `None` for all other providers.  Used by
-    /// `resolve_context_limit` to query `/api/show` for the real `num_ctx`.
-    fn ollama_base_url(&self) -> Option<String> {
+    /// Probe the provider's API to discover the real context-window size for `model`.
+    /// Returns `None` when the provider doesn't expose this information — callers fall
+    /// back to the name-based heuristic in `default_context_for_model`.
+    /// Results are cached by the caller; implementations should not cache internally.
+    async fn context_limit_hint(&self, _model: &str) -> Option<u32> {
         None
     }
 }
