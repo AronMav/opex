@@ -161,6 +161,25 @@ pub(crate) async fn api_list_sessions(
                 .collect()
             };
 
+            // Batch-fetch compression segment counts (single query, not N+1).
+            let segment_count_map: HashMap<uuid::Uuid, i32> = if session_ids.is_empty() {
+                HashMap::new()
+            } else {
+                sqlx::query_as::<_, (uuid::Uuid, i64)>(
+                    "SELECT session_id, COUNT(*)::bigint \
+                     FROM session_events \
+                     WHERE session_id = ANY($1) AND event_type = 'compression' \
+                     GROUP BY session_id",
+                )
+                .bind(&session_ids)
+                .fetch_all(&infra.db)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(id, cnt)| (id, cnt as i32))
+                .collect()
+            };
+
             let sessions: Vec<Value> = rows
                 .iter()
                 .map(|s| {
@@ -178,6 +197,7 @@ pub(crate) async fn api_list_sessions(
                         "parent_session_id": s.parent_session_id,
                         "end_reason": s.end_reason,
                         "last_input_tokens": token_map.get(&s.id),
+                        "segment_count": segment_count_map.get(&s.id).copied().unwrap_or(1),
                     })
                 })
                 .collect();
@@ -191,6 +211,7 @@ pub(crate) async fn api_list_sessions(
 pub(crate) struct MessagesQuery {
     limit: Option<i64>,
     agent: Option<String>,
+    before_id: Option<uuid::Uuid>,
 }
 
 pub(crate) async fn api_session_messages(
@@ -198,24 +219,38 @@ pub(crate) async fn api_session_messages(
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
     Query(q): Query<MessagesQuery>,
 ) -> impl IntoResponse {
-    let limit = q.limit.unwrap_or(50).min(200);
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
 
     if let Some(ref agent) = q.agent
         && let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
             return resp;
         }
 
-    // Phase 65 OBS-02: record db_query_duration around a representative
-    // high-traffic query. `result` label is bounded "ok" / "error".
     let db_start = std::time::Instant::now();
-    let query_result = sessions::load_messages(&infra.db, id, Some(limit)).await;
+    let query_result = sessions::get_messages_page(&infra.db, id, q.before_id, limit).await;
     let db_result_label = if query_result.is_ok() { "ok" } else { "error" };
     infra
         .metrics
         .record_db_query_duration(db_result_label, db_start.elapsed());
 
     match query_result {
-        Ok(rows) => Json(json!({ "messages": rows })).into_response(),
+        Ok(page) => {
+            let events_json: Vec<serde_json::Value> = page
+                .compression_events
+                .iter()
+                .map(|e| json!({
+                    "segment_index": e.segment_index,
+                    "first_live_message_id": e.first_live_message_id,
+                    "summary": e.summary,
+                }))
+                .collect();
+            Json(json!({
+                "messages": page.messages,
+                "compression_events": events_json,
+                "has_more": page.has_more,
+            }))
+            .into_response()
+        }
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
 }
