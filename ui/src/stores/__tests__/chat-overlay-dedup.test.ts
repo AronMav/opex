@@ -127,6 +127,71 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
     expect(result[3].role).toBe("assistant");
   });
 
+  it("MIGRATION: old history ChatMessage without mergedIds still dedups by primary id", () => {
+    // Sessions saved before the per-iteration UUID rework have history
+    // ChatMessages without `mergedIds`. Live overlay must still dedup
+    // them by their primary id alone (no mergedIds expansion).
+    const h: ChatMessage[] = [
+      msg("u-old", "user", "старый вопрос"),
+      // Old-style ChatMessage — no mergedIds field at all
+      { id: "old-asst", role: "assistant", parts: [
+        { type: "text", text: "old answer" },
+      ], createdAt: new Date().toISOString() },
+    ];
+    const live: ChatMessage[] = [
+      msg("old-asst", "assistant", "old answer"), // matches by primary id
+    ];
+    const result = mergeLiveOverlay(h, live);
+    expect(result).toHaveLength(2); // user + asst, no double
+  });
+
+  it("MIGRATION: new mergedIds set works alongside legacy parts list", () => {
+    // After deploy, history has a NEW assistant with mergedIds plus an
+    // OLD legacy assistant without. mergeLiveOverlay's index handles both.
+    const h: ChatMessage[] = [
+      msg("u1", "user", "old"),
+      { id: "old-asst", role: "assistant", parts: [{ type: "text", text: "ok" }], createdAt: "t1" },
+      msg("u2", "user", "new"),
+      { id: "iter-0", role: "assistant", parts: [
+        { type: "text", text: "intro" },
+        { type: "tool", toolCallId: "t1", toolName: "x", state: "output-available", input: {}, output: "" },
+      ], mergedIds: ["iter-1"], createdAt: "t2" },
+    ];
+    const live: ChatMessage[] = [
+      // Live attempt to add: iter-1 (already in mergedIds), old-asst (already by primary id)
+      msg("iter-1", "assistant", "intro"),
+      msg("old-asst", "assistant", "ok"),
+    ];
+    const result = mergeLiveOverlay(h, live);
+    // Both deduped — no overlay added
+    expect(result).toHaveLength(4); // u1 + old-asst + u2 + iter-0
+  });
+
+  it("CONCURRENCY: switching agent state doesn't leak live messages to history", () => {
+    // Property check: mergeLiveOverlay is pure on (history, live).
+    // Two parallel calls with different (history, live) inputs must yield
+    // independent outputs — no shared mutable state.
+    const h1: ChatMessage[] = [msg("u1", "user", "session A")];
+    const h2: ChatMessage[] = [msg("u2", "user", "session B")];
+    const live1: ChatMessage[] = [msg("a1", "assistant", "reply A")];
+    const live2: ChatMessage[] = [msg("a2", "assistant", "reply B")];
+
+    const r1a = mergeLiveOverlay(h1, live1);
+    const r2 = mergeLiveOverlay(h2, live2);
+    const r1b = mergeLiveOverlay(h1, live1);
+
+    // Calling with the same inputs again returns equivalent output —
+    // memoization cache does not pollute the result.
+    expect(r1a).toHaveLength(2);
+    expect(r1b).toHaveLength(2);
+    expect(r1a[1].id).toBe("a1");
+    expect(r1b[1].id).toBe("a1");
+
+    // Other session's output is untouched.
+    expect(r2).toHaveLength(2);
+    expect(r2[1].id).toBe("a2");
+  });
+
   it("does NOT merge live assistant across user messages", () => {
     const h = [msg("u1", "user", "первый"), msg("a1", "assistant", "ответ1")];
     const live = [
