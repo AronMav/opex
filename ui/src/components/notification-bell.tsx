@@ -18,6 +18,7 @@ import {
   useNotificationWsSync,
 } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
+import type { NotificationRow } from "@/types/api";
 
 // ── Sound helper ─────────────────────────────────────────────────────────────
 
@@ -40,15 +41,49 @@ function playNotificationSound() {
   }
 }
 
+// ── TTS notification body ─────────────────────────────────────────────────────
+
+interface TtsNotificationBodyProps {
+  notification: NotificationRow;
+}
+
+export function TtsNotificationBody({ notification }: TtsNotificationBodyProps) {
+  const { type, body, data } = notification;
+
+  if (type === "tts_ready" && data?.url) {
+    return (
+      <div className="flex flex-col gap-1 w-full" onClick={(e) => e.stopPropagation()}>
+        <span className="text-xs text-muted-foreground">{body}</span>
+        <audio
+          controls
+          src={data.url as string}
+          className="w-full mt-1 h-8"
+          data-testid="tts-audio-player"
+        />
+      </div>
+    );
+  }
+
+  if (type === "tts_error") {
+    return (
+      <span className="text-xs text-destructive line-clamp-2">{body}</span>
+    );
+  }
+
+  return <span className="text-xs text-muted-foreground line-clamp-2">{body}</span>;
+}
+
 // ── Notification type → target route ─────────────────────────────────────────
 
-function getNotificationRoute(type: string): string {
+function getNotificationRoute(type: string): string | null {
   switch (type) {
-    case "access_request": return "/access";
-    case "tool_approval": return "/monitor/?tab=approvals";
-    case "agent_error": return "/monitor/?tab=logs";
-    case "watchdog_alert": return "/monitor/?tab=watchdog";
-    default: return "/monitor/";
+    case "access_request":  return "/access";
+    case "tool_approval":   return "/monitor/?tab=approvals";
+    case "agent_error":     return "/monitor/?tab=logs";
+    case "watchdog_alert":  return "/monitor/?tab=watchdog";
+    case "tts_ready":       return null;  // audio player inline — no navigation
+    case "tts_error":       return null;
+    default:                return "/monitor/";
   }
 }
 
@@ -138,7 +173,8 @@ export function NotificationBell() {
                 key={n.id}
                 onClick={() => {
                   if (!n.read) markRead.mutate(n.id);
-                  router.push(getNotificationRoute(n.type));
+                  const route = getNotificationRoute(n.type);
+                  if (route) router.push(route);
                 }}
                 className={`flex w-full flex-col gap-1 px-4 py-3 text-left transition-colors hover:bg-accent border-b border-border/50 last:border-0 ${
                   n.read ? "opacity-60" : ""
@@ -154,9 +190,7 @@ export function NotificationBell() {
                     <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" />
                   )}
                 </div>
-                <span className="text-xs text-muted-foreground line-clamp-2">
-                  {n.body}
-                </span>
+                <TtsNotificationBody notification={n} />
                 <span className="text-[11px] text-muted-foreground/60">
                   {new Date(n.created_at).toLocaleString()}
                 </span>
