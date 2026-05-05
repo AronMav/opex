@@ -883,6 +883,31 @@ impl LlmProvider for AnthropicProvider {
     fn supports_prefill(&self) -> bool {
         true
     }
+
+    async fn context_limit_hint(&self, model: &str) -> Option<u32> {
+        let url = format!(
+            "{}/v1/models/{}",
+            self.base_url.trim_end_matches('/'),
+            model
+        );
+        let api_key = self.resolve_api_key().await;
+        let mut req = self.client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .header("anthropic-version", "2023-06-01");
+        if let Some(ref key) = api_key {
+            req = req.header("x-api-key", key.as_str());
+        }
+        let resp = req.send().await.ok()?
+            .error_for_status().ok()?
+            .json::<serde_json::Value>().await.ok()?;
+
+        if let Some(n) = resp.get("context_window").and_then(|v| v.as_u64()) {
+            tracing::debug!(model, context_window = n, "anthropic /v1/models context_window");
+            return Some(n as u32);
+        }
+        None
+    }
 }
 
 #[cfg(test)]
