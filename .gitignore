@@ -30,3 +30,6 @@ CLAUDE.md
 .worktrees/
 .planning/
 .mcp.json
+# Release notes drafts — copied into GitHub Release page via gh CLI,
+# not tracked in git (the source of truth is the release page).
+.release-notes-*.md

@@ -108,6 +108,7 @@ describe("MessageItem re-render count (REF-05)", () => {
         reconnectAttempt: 0,
         maxReconnectAttempts: 3,
         isLlmReconnecting: false,
+        lastEventId: null,
         selectedBranches: {},
         pendingMessage: null,
         contextTokens: null,
@@ -117,6 +118,7 @@ describe("MessageItem re-render count (REF-05)", () => {
         reasoningTokens: null,
         hasMoreHistory: false,
         isLoadingHistory: false,
+        modelContextLimit: null,
       };
     });
 

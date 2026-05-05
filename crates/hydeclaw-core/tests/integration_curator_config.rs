@@ -182,7 +182,10 @@ mod db_tests {
             .expect("last_run before insert");
         assert!(before.is_none(), "table must be empty before insert");
 
-        let run_id = curator_runs::insert_run(&pool, "manual")
+        // Pass dry_run=false (production-trigger semantics). The
+        // dry_run column on `curator_runs` was added after this test
+        // was written; the assertions below don't inspect it.
+        let run_id = curator_runs::insert_run(&pool, "manual", false)
             .await
             .expect("insert_run");
         assert_ne!(run_id, Uuid::nil(), "insert_run must return a non-nil UUID");
@@ -214,6 +217,7 @@ mod db_tests {
             1,
             Some("## Report\n- done"),
             None,
+            false, // dry_run
         )
         .await
         .expect("finish_run");
@@ -243,7 +247,7 @@ mod db_tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn get_run_round_trip(pool: PgPool) {
-        let run_id = curator_runs::insert_run(&pool, "cron")
+        let run_id = curator_runs::insert_run(&pool, "cron", false)
             .await
             .expect("insert_run");
 
@@ -269,12 +273,12 @@ mod db_tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn list_runs_ordering_and_limit(pool: PgPool) {
-        let id1 = curator_runs::insert_run(&pool, "cron")
+        let id1 = curator_runs::insert_run(&pool, "cron", false)
             .await
             .expect("insert run 1");
         // Ensure distinct `started_at` timestamps.
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        let id2 = curator_runs::insert_run(&pool, "manual")
+        let id2 = curator_runs::insert_run(&pool, "manual", false)
             .await
             .expect("insert run 2");
 
