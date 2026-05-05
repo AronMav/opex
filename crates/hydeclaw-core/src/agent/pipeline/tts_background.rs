@@ -33,6 +33,57 @@ pub struct BackgroundTtsTask {
 }
 
 impl BackgroundTtsTask {
+    /// Construct from the current pipeline context — clones all Arc/cheap fields.
+    pub fn from_ctx(
+        ctx: &super::CommandContext<'_>,
+        tool: &YamlToolDef,
+        args: &serde_json::Value,
+        ca: &ChannelActionConfig,
+    ) -> Self {
+        use crate::agent::pipeline::channel_actions::{make_resolver, make_oauth_context};
+
+        let mut tool_headers: Vec<(String, String)> = Vec::new();
+        if ca.action == "send_voice" {
+            if let Some(prov) = ctx.cfg.agent.tts_provider.as_deref() {
+                if !prov.is_empty() {
+                    tool_headers.push(("X-Hydeclaw-Provider".into(), prov.into()));
+                }
+            }
+        }
+        let context = args.get("_context").cloned().unwrap_or(serde_json::Value::Null);
+
+        Self {
+            tool:           tool.clone(),
+            args:           args.clone(),
+            ca:             ca.clone(),
+            http_client:    ctx.tex.http_client.clone(),
+            resolver:       Some(make_resolver(&ctx.tex.secrets, &ctx.cfg.agent.name)),
+            oauth_ctx:      make_oauth_context(ctx.tex.oauth.as_ref(), &ctx.cfg.agent.name),
+            channel_router: ctx.state.channel_router.clone(),
+            ui_event_tx:    ctx.state.ui_event_tx.clone(),
+            bg_tasks:       ctx.state.bg_tasks.clone(),
+            workspace_dir:  ctx.cfg.workspace_dir.clone(),
+            db:             ctx.cfg.db.clone(),
+            upload_key:     ctx.tex.secrets.get_upload_hmac_key(),
+            ttl_secs:       ctx.cfg.app_config.uploads.signed_url_ttl_secs,
+            tool_headers,
+            context,
+            agent_name:     ctx.cfg.agent.name.clone(),
+        }
+    }
+
+    /// Spawn the task into `bg_tasks` (TaskTracker) and return the immediate
+    /// agent reply string. Channel vs UI detected from `self.context["chat_id"]`.
+    pub fn spawn(self) -> &'static str {
+        let has_channel = self.context.get("chat_id").is_some();
+        self.bg_tasks.clone().spawn(async move { self.run().await });
+        if has_channel {
+            "🎙 Голосовое синтезируется и будет отправлено в чат. Продолжай разговор."
+        } else {
+            "🎙 Аудио синтезируется. Файл появится в уведомлениях через ~1–2 мин."
+        }
+    }
+
     /// Synthesise audio and deliver it. Called inside `bg_tasks.spawn(...)`.
     pub async fn run(self) {
         let has_channel = self.context.get("chat_id").is_some();
