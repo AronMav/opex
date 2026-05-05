@@ -39,6 +39,17 @@ export class StreamBuffer {
   }
 
   /**
+   * Closes the current text block on `text-end` SSE event: flushes the
+   * accumulator into parts and clears insideThink so the next iteration's
+   * text-deltas start with a fresh parser state. Without this, parser keeps
+   * accumulating across LLM iterations and old text bleeds into new ones.
+   */
+  endTextBlock(): void {
+    const flushed = this.parser.endTextBlock();
+    if (flushed.length > 0) this.parts.push(...flushed);
+  }
+
+  /**
    * Full snapshot of current message content — no side-effects.
    * Returns [...finalizedParts, ...liveParserSnapshot].
    */
