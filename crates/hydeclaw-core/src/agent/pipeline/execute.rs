@@ -517,7 +517,7 @@ pub async fn execute<S: EventSink>(
             agent_name: agent_name.as_str(),
             initial_parent: Some(last_msg_id),
         };
-        let loop_broken = match tool_executor
+        let outcome = tool_executor
             .execute_batch(
                 &response.tool_calls,
                 &incoming_context, // chat_id/message_id from originating channel (Telegram, etc.)
@@ -528,10 +528,14 @@ pub async fn execute<S: EventSink>(
                 loop_config.detect_loops,
                 Some(&persist_ctx),
             )
-            .await
-        {
-            Ok(results) => {
-                for batch in &results {
+            .await;
+        // Always emit ToolResult for completed tools, even if a loop break
+        // happened mid-batch. Otherwise the frontend's per-tool spinner stays
+        // forever for any tool that finished but landed in the same batch
+        // as the loop-break trigger.
+        let loop_broken = {
+            {
+                for batch in &outcome.results {
                     let tc_id = &batch.tool_call_id;
                     let tool_result = &batch.result;
                     // Extract rich-card / __file__: markers and emit File/RichCard
@@ -569,19 +573,17 @@ pub async fn execute<S: EventSink>(
                         last_msg_id = persisted;
                     }
                 }
-                false // loop continues
             }
-            Err(LoopBreak(reason)) => {
+            if let Some(reason_outer) = outcome.loop_break {
+                let reason = reason_outer;
                 if loop_nudge_count < loop_config.max_loop_nudges {
-                    // Inject nudge message and continue (mirrors engine_sse.rs lines 575-599)
                     messages.push(Message {
                         role: MessageRole::System,
                         content: build_loop_nudge_message(reason.as_deref()),
                         tool_calls: None,
                         tool_call_id: None,
                         thinking_blocks: vec![],
-            db_id: None,
-
+                        db_id: None,
                     });
                     loop_nudge_count += 1;
                     tracing::warn!(
@@ -590,16 +592,17 @@ pub async fn execute<S: EventSink>(
                         reason = ?reason,
                         "loop nudge injected (pipeline path)"
                     );
-                    false // continue — nudge was injected
+                    false
                 } else {
-                    // Max nudges exhausted — treat as Failed
                     tracing::error!(
                         agent = %engine.cfg().agent.name,
                         nudge_count = loop_nudge_count,
                         "max loop nudges reached, force-stopping agent (pipeline path)"
                     );
-                    true // broken
+                    true
                 }
+            } else {
+                false
             }
         };
 

@@ -19,6 +19,20 @@ use uuid::Uuid;
 /// Returned when the loop detector triggers a break mid-batch.
 pub struct LoopBreak(pub Option<String>);
 
+/// Outcome of a tool batch — always carries every completed tool's result so
+/// the caller can emit `ToolResult` SSE events for them, even if the loop
+/// detector stopped further iterations afterwards. Without this, a parallel
+/// batch that completed all its tools could still leave the SSE stream
+/// without `tool-output-available` for those tools whenever the loop detector
+/// raised LoopBreak right after `join_all`. Frontend would render a perpetual
+/// "in flight" spinner for tools that actually finished.
+pub struct BatchOutcome {
+    pub results: Vec<ToolBatchResult>,
+    /// When `Some`, the loop-break reason that should terminate the turn.
+    /// Caller still emits ToolResult for `results` first, then handles break.
+    pub loop_break: Option<Option<String>>,
+}
+
 /// One persisted tool result.
 ///
 /// `tool_msg_id` is the row id assigned to the tool message. It is generated
@@ -160,7 +174,7 @@ pub async fn execute_tool_calls_partitioned(
     yaml_tools: &HashMap<String, YamlToolDef>,
     executor: &(dyn ToolExecutor + '_),
     persist_ctx: Option<&ToolPersistCtx<'_>>,
-) -> Result<Vec<ToolBatchResult>, LoopBreak> {
+) -> BatchOutcome {
     let n = tool_calls.len();
     let mut results: Vec<Option<String>> = vec![None; n];
     // Pre-generated row ids for each tool's persisted message — assigned only
@@ -328,12 +342,29 @@ pub async fn execute_tool_calls_partitioned(
             .collect();
 
         for (i, result) in futures_util::future::join_all(futs).await {
+            // Record the result FIRST so a subsequent loop-break check still
+            // surfaces this completed tool's output to the caller. Without
+            // this, the early Err path would leave results[i] = None and the
+            // tool would render as "in flight forever" on the UI.
+            results[i] = Some(result.clone());
+
             if detect_loops {
                 if let LoopStatus::Break(reason) =
                     detector.check_limits(&tool_calls[i].name, &tool_calls[i].arguments)
                 {
                     tracing::error!(tool = %tool_calls[i].name, reason = %reason, "tool loop broken (parallel post-check)");
-                    return Err(LoopBreak(Some(reason)));
+                    return BatchOutcome {
+                        results: tool_calls
+                            .iter()
+                            .enumerate()
+                            .map(|(j, tc)| ToolBatchResult {
+                                tool_call_id: tc.id.clone(),
+                                result: results[j].take().unwrap_or_default(),
+                                tool_msg_id: persisted_ids[j],
+                            })
+                            .collect(),
+                        loop_break: Some(Some(reason)),
+                    };
                 }
                 let success = !result.starts_with("Error:")
                     && !result.starts_with("tool error:")
@@ -369,7 +400,7 @@ pub async fn execute_tool_calls_partitioned(
                 }
             }
 
-            results[i] = Some(result.clone());
+            // results[i] already set at the top of this loop iteration.
             let _ = crate::db::session_wal::log_event(
                 db,
                 session_id,
@@ -408,7 +439,18 @@ pub async fn execute_tool_calls_partitioned(
                 detector.check_limits(&tool_calls[i].name, &tool_calls[i].arguments)
         {
             tracing::error!(tool = %tool_calls[i].name, reason = %reason, "tool loop broken (pre-check)");
-            return Err(LoopBreak(Some(reason)));
+            return BatchOutcome {
+                results: tool_calls
+                    .iter()
+                    .enumerate()
+                    .map(|(j, tc)| ToolBatchResult {
+                        tool_call_id: tc.id.clone(),
+                        result: results[j].take().unwrap_or_default(),
+                        tool_msg_id: persisted_ids[j],
+                    })
+                    .collect(),
+                loop_break: Some(Some(reason)),
+            };
         }
         let _ = crate::db::session_wal::log_event(
             db,
@@ -499,15 +541,18 @@ pub async fn execute_tool_calls_partitioned(
     }
 
     // 5. Final reassemble
-    Ok(tool_calls
-        .iter()
-        .enumerate()
-        .map(|(i, tc)| ToolBatchResult {
-            tool_call_id: tc.id.clone(),
-            result: results[i].take().unwrap_or_default(),
-            tool_msg_id: persisted_ids[i],
-        })
-        .collect())
+    BatchOutcome {
+        results: tool_calls
+            .iter()
+            .enumerate()
+            .map(|(i, tc)| ToolBatchResult {
+                tool_call_id: tc.id.clone(),
+                result: results[i].take().unwrap_or_default(),
+                tool_msg_id: persisted_ids[i],
+            })
+            .collect(),
+        loop_break: None,
+    }
 }
 
 // ── Detached persistence helpers ─────────────────────────────────────────────

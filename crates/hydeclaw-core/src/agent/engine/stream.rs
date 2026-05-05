@@ -327,64 +327,60 @@ impl AgentEngine {
                 agent_name: agent_name_for_persist.as_str(),
                 initial_parent: Some(assistant_msg_id),
             };
-            let loop_broken = match self.execute_tool_calls_partitioned(
+            let outcome = self.execute_tool_calls_partitioned(
                 &response.tool_calls, &msg.context, session_id, &msg.channel,
                 messages.iter().map(|m| m.content.len()).sum(),
                 &mut detector, loop_config.detect_loops,
                 Some(&persist_ctx),
-            ).await {
-                Ok(results) => {
-                    for batch in &results {
-                        let tc_id = &batch.tool_call_id;
-                        let tool_result = &batch.result;
-                        messages.push(Message {
-                            role: MessageRole::Tool,
-                            content: tool_result.clone(),
-                            tool_calls: None,
-                            tool_call_id: Some(tc_id.clone()),
-                            thinking_blocks: vec![],
-            db_id: None,
-                        });
-                        context_chars += tool_result.chars().count();
-                        // tool message already persisted (detached) inside
-                        // execute_tool_calls_partitioned.
-                    }
+            ).await;
+            for batch in &outcome.results {
+                let tc_id = &batch.tool_call_id;
+                let tool_result = &batch.result;
+                messages.push(Message {
+                    role: MessageRole::Tool,
+                    content: tool_result.clone(),
+                    tool_calls: None,
+                    tool_call_id: Some(tc_id.clone()),
+                    thinking_blocks: vec![],
+                    db_id: None,
+                });
+                context_chars += tool_result.chars().count();
+            }
+            let loop_broken = if let Some(reason) = outcome.loop_break {
+                if loop_nudge_count < loop_config.max_loop_nudges {
+                    let nudge_desc = reason.as_deref().unwrap_or("repeating pattern");
+                    let nudge_msg = format!(
+                        "LOOP DETECTED: You have repeated the same sequence of actions ({nudge_desc}). \
+                         Change your approach entirely. If the task is too large for a single session, \
+                         tell the user and suggest breaking it into smaller steps. Do NOT retry the same approach."
+                    );
+                    messages.push(Message {
+                        role: MessageRole::System,
+                        content: nudge_msg,
+                        tool_calls: None,
+                        tool_call_id: None,
+                        thinking_blocks: vec![],
+                        db_id: None,
+                    });
+                    loop_nudge_count += 1;
+                    detector.reset();
+                    tracing::warn!(
+                        agent = %self.cfg().agent.name,
+                        nudge_count = loop_nudge_count,
+                        reason = ?reason,
+                        "loop nudge injected, giving model another chance"
+                    );
                     false
+                } else {
+                    tracing::error!(
+                        agent = %self.cfg().agent.name,
+                        nudge_count = loop_nudge_count,
+                        "max loop nudges reached, force-stopping agent"
+                    );
+                    true
                 }
-                Err(LoopBreak(reason)) => {
-                    if loop_nudge_count < loop_config.max_loop_nudges {
-                        let nudge_desc = reason.as_deref().unwrap_or("repeating pattern");
-                        let nudge_msg = format!(
-                            "LOOP DETECTED: You have repeated the same sequence of actions ({nudge_desc}). \
-                             Change your approach entirely. If the task is too large for a single session, \
-                             tell the user and suggest breaking it into smaller steps. Do NOT retry the same approach."
-                        );
-                        messages.push(Message {
-                            role: MessageRole::System,
-                            content: nudge_msg,
-                            tool_calls: None,
-                            tool_call_id: None,
-                            thinking_blocks: vec![],
-            db_id: None,
-                        });
-                        loop_nudge_count += 1;
-                        detector.reset();
-                        tracing::warn!(
-                            agent = %self.cfg().agent.name,
-                            nudge_count = loop_nudge_count,
-                            reason = ?reason,
-                            "loop nudge injected, giving model another chance"
-                        );
-                        false // continue loop
-                    } else {
-                        tracing::error!(
-                            agent = %self.cfg().agent.name,
-                            nudge_count = loop_nudge_count,
-                            "max loop nudges reached, force-stopping agent"
-                        );
-                        true // broken
-                    }
-                }
+            } else {
+                false
             };
 
             if loop_broken || iteration == loop_config.effective_max_iterations() - 1 {
