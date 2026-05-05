@@ -905,7 +905,11 @@ function ChatCanvasContent({
   const panelOpen = useCanvasStore((s) => s.panelOpen);
 
   if (panelOpen) {
-    return <CanvasPanel agent={currentAgent} />;
+    return (
+      <div className="flex flex-1 flex-col min-h-0">
+        <CanvasPanel agent={currentAgent} />
+      </div>
+    );
   }
 
   return (
