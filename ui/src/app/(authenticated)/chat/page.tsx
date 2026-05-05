@@ -689,6 +689,11 @@ export default function ChatPage() {
                             } ${!s.title && !s.user_id ? "italic text-muted-foreground/40" : ""}`}
                           >
                             {displayTitle}
+                            {s.segment_count != null && s.segment_count > 1 && (
+                              <span className="ml-1.5 text-xs text-muted-foreground/50 shrink-0 tabular-nums not-italic">
+                                ◈{s.segment_count}
+                              </span>
+                            )}
                           </p>
                           {s.parent_session_id && (
                             <ParentBadge
