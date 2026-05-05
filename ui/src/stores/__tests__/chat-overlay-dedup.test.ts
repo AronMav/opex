@@ -65,28 +65,6 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
     expect(result).toBe(h);
   });
 
-  it("preserves step-boundary parts from live in the merged bubble", () => {
-    // Live message with two iterations separated by a step-boundary
-    // (the boundary is inserted by stream-processor on step-start events).
-    const h = [msg("u", "user", "hi")];
-    const live: ChatMessage[] = [
-      msg("u", "user", "hi"),
-      { id: "a", role: "assistant", parts: [
-        { type: "text", text: "iter1 narration" },
-        { type: "tool", toolCallId: "t1", toolName: "x", state: "output-available", input: {}, output: "" },
-        { type: "step-boundary", stepId: "step_1" },
-        { type: "text", text: "iter1 narration" }, // duplicate by content — but LEGAL with boundary
-        { type: "tool", toolCallId: "t2", toolName: "y", state: "output-available", input: {}, output: "" },
-      ], createdAt: new Date().toISOString() },
-    ];
-    const result = mergeLiveOverlay(h, live);
-    expect(result).toHaveLength(2);
-    const parts = result[1].parts;
-    // Both iterations' text remain — duplicates are valid, separated by boundary
-    expect(parts.filter(p => p.type === "text")).toHaveLength(2);
-    expect(parts.filter(p => p.type === "step-boundary")).toHaveLength(1);
-    expect(parts.filter(p => p.type === "tool")).toHaveLength(2);
-  });
 
   it("dedups tool parts already in history by toolCallId across live ChatMessages", () => {
     // After Phase 1 (per-iteration UUIDs), live and history are distinct

@@ -175,9 +175,20 @@ export function createStreamingRenderer(store: StoreAccess) {
 
     const token = assertToken();
 
+    // Pass Last-Event-ID so backend replays only events newer than the last
+    // one the client processed (Phase 3 offset tracking). Carries across the
+    // session disposal-and-recreate that resumeStream does, because the
+    // *previous* session's id was preserved into agent state on prior runs;
+    // we read that via store. New stream → no header, full replay.
+    const lastEventHeader: Record<string, string> = {};
+    const prevId = store.get().agents[agent]?.lastEventId;
+    if (typeof prevId === "number" && prevId > 0) {
+      lastEventHeader["Last-Event-ID"] = String(prevId);
+    }
+
     fetch(`/api/chat/${sessionId}/stream`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${token}`, ...lastEventHeader },
       signal: session.signal,
     })
       .then((resp) => {
@@ -331,6 +342,12 @@ export function createStreamingRenderer(store: StoreAccess) {
     // current store value — used as the authoritative generation reference
     // inside processSSEStream.
     const session = streamSessionManager.start(agent);
+
+    // Reset Last-Event-ID — backend's seq counter is per-session and starts
+    // at 1 for any new session_id. Without this, a leftover id from the
+    // previous session would tell the backend to skip every event of the
+    // new session (seq <= stale_last_id) and the UI would freeze empty.
+    session.write({ lastEventId: null });
 
     const userParts: MessagePart[] = [];
     if (userText) userParts.push({ type: "text", text: userText });

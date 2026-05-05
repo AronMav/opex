@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{
         IntoResponse, Json,
@@ -635,12 +635,21 @@ pub(crate) async fn api_chat_sse(
             ($json_str:expr) => {{
                 let s: &str = &$json_str;
                 tracing::debug!(target: "SSE-OUT", agent = %agent_name, sid = ?session_id_str, event = %&s[..s.len().min(180)], "emit");
-                if let Some(ref sid) = session_id_str {
-                    registry.push_event(sid, &$json_str).await;
-                }
+                let seq: u64 = if let Some(ref sid) = session_id_str {
+                    registry.push_event(sid, &$json_str).await
+                } else {
+                    0
+                };
                 if !sse_tx.is_closed() {
                     client_gone_since = None;
-                    sse_tx.try_send(Ok(Event::default().data($json_str))).is_ok()
+                    // SSE `id:` field — client tracks via Last-Event-ID for
+                    // dedup-free reconnect. seq=0 (no session yet) emits no id.
+                    let event = if seq > 0 {
+                        Event::default().id(seq.to_string()).data($json_str)
+                    } else {
+                        Event::default().data($json_str)
+                    };
+                    sse_tx.try_send(Ok(event)).is_ok()
                 } else {
                     // Client disconnected — keep buffering for DB save + resume.
                     // Do NOT abort the engine: let it finish naturally so the result
@@ -1130,12 +1139,25 @@ pub(crate) async fn api_chat_sse(
 /// Resume an active SSE stream by session ID.
 /// AI SDK calls GET /api/chat/{id}/stream on mount when resume=true.
 /// Returns 204 if no active stream, or SSE with replay + live events.
+///
+/// Honours the `Last-Event-ID` header (standard SSE) and the equivalent
+/// `?last_event_id=<seq>` query string for fetch-based clients that can
+/// not set custom headers easily — only events with seq > last_event_id
+/// are replayed from the buffer, eliminating duplicates after reconnect.
 pub(crate) async fn api_chat_resume_stream(
     Path(id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
     State(bus): State<ChannelBus>,
 ) -> impl IntoResponse {
     use async_stream::stream;
     use tokio::sync::broadcast;
+
+    let last_event_id: Option<u64> = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .or_else(|| params.get("last_event_id").and_then(|s| s.parse::<u64>().ok()));
 
     match bus.stream_registry.subscribe(&id).await {
         None => {
@@ -1178,13 +1200,23 @@ pub(crate) async fn api_chat_resume_stream(
             StatusCode::NO_CONTENT.into_response()
         }
         Some((buffered_events, mut broadcast_rx, already_finished)) => {
-            let replay_count = buffered_events.len();
+            // Filter buffer by client's last seen seq before counting replays.
+            let filtered: Vec<(u64, String)> = buffered_events
+                .into_iter()
+                .filter(|(seq, _)| match last_event_id {
+                    Some(last) => *seq > last,
+                    None => true,
+                })
+                .collect();
+            let replay_count = filtered.len();
+            let mut highest_replayed: Option<u64> = filtered.last().map(|(seq, _)| *seq);
 
             let sse_stream = stream! {
-                // Phase 1: Replay buffered events
-                for (_seq, event_json) in buffered_events {
+                // Phase 1: Replay buffered events with SSE id field for the
+                // client to track (Last-Event-ID on reconnect).
+                for (seq, event_json) in filtered {
                     yield Ok::<_, std::convert::Infallible>(
-                        Event::default().data(event_json)
+                        Event::default().id(seq.to_string()).data(event_json)
                     );
                 }
 
@@ -1193,20 +1225,23 @@ pub(crate) async fn api_chat_resume_stream(
                     return;
                 }
 
-                // Phase 2: Live events via broadcast subscription
-                // Events between subscribe() and here may overlap with buffer — skip them
-                let mut skip_remaining = replay_count;
+                // Phase 2: Live events via broadcast subscription.
+                // Events between subscribe() and here may overlap with our
+                // filtered slice — skip everything <= the last replayed seq
+                // (or last_event_id when nothing was replayed).
+                let cutoff = highest_replayed.or(last_event_id);
                 loop {
                     match broadcast_rx.recv().await {
-                        Ok((_seq, event_json)) => {
-                            if skip_remaining > 0 {
-                                skip_remaining -= 1;
-                                continue;
-                            }
+                        Ok((seq, event_json)) => {
+                            if let Some(c) = cutoff
+                                && seq <= c {
+                                    continue;
+                                }
+                            let _ = highest_replayed.replace(seq);
                             let is_terminal =
                                 event_json.contains("\"type\":\"finish\"")
                                 || event_json.contains("\"type\":\"error\"");
-                            yield Ok(Event::default().data(event_json));
+                            yield Ok(Event::default().id(seq.to_string()).data(event_json));
                             if is_terminal {
                                 yield Ok(Event::default().data("[DONE]"));
                                 break;
@@ -1218,7 +1253,9 @@ pub(crate) async fn api_chat_resume_stream(
                                 session = %id,
                                 "Resume stream lagged"
                             );
-                            skip_remaining = skip_remaining.saturating_sub(n as usize);
+                            // With seq-based cutoff this branch needs no
+                            // explicit skip — events with seq <= cutoff are
+                            // skipped on the next match arm regardless.
                             continue;
                         }
                         Err(broadcast::error::RecvError::Closed) => {

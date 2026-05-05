@@ -456,6 +456,8 @@ pub async fn execute<S: EventSink>(
         // Use the per-iteration UUID we already emitted in StepStart so the
         // intermediate DB row id matches the live ChatMessage id the frontend
         // built from the same SSE event. Pure ID-based dedup downstream.
+        // step_id = iteration index lets analytics group intermediate rows
+        // of one turn by their tool-loop position.
         crate::agent::pipeline::parallel::spawn_persist_assistant_message(
             &engine.cfg().db,
             iter_msg_id,
@@ -465,6 +467,7 @@ pub async fn execute<S: EventSink>(
             tc_json.as_ref(),
             tb_json.as_ref(),
             Some(last_msg_id),
+            i32::try_from(iteration).ok(),
         );
         last_msg_id = iter_msg_id;
 

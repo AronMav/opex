@@ -691,6 +691,11 @@ fn spawn_persist_tool_message(
 /// (e.g. SSE client disconnect), the row is never written and subsequent tool
 /// messages have no parent assistant — the chain is broken on reload. Detached
 /// spawn closes that gap.
+///
+/// `step_id` — when `Some`, an UPDATE follows the insert to set the row's
+/// `step_id` column (added by migration 046). Lets analytics or per-step
+/// UI features query intermediate iterations by their tool-loop position.
+/// `None` is treated as "don't set" so legacy callers keep working.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_persist_assistant_message(
     db: &sqlx::PgPool,
@@ -701,6 +706,7 @@ pub(crate) fn spawn_persist_assistant_message(
     tool_calls_json: Option<&serde_json::Value>,
     thinking_blocks_json: Option<&serde_json::Value>,
     parent_id: Option<Uuid>,
+    step_id: Option<i32>,
 ) {
     spawn_persist_message_row(
         db,
@@ -714,4 +720,24 @@ pub(crate) fn spawn_persist_assistant_message(
         None,
         parent_id,
     );
+    if let Some(step) = step_id {
+        let db_clone = db.clone();
+        tokio::spawn(async move {
+            // Tiny delay so the insert above (also detached) gets a head start.
+            // Failures are non-fatal — step_id is metadata, not load-bearing.
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            for attempt in 0..3u32 {
+                match crate::db::sessions::update_message_step_id(&db_clone, id, step).await {
+                    Ok(()) => return,
+                    Err(_) if attempt < 2 => {
+                        tokio::time::sleep(std::time::Duration::from_millis(50 * (1 << attempt))).await;
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, msg_id = %id, "step_id update failed (non-fatal)");
+                        return;
+                    }
+                }
+            }
+        });
+    }
 }

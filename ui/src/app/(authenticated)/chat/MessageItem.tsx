@@ -105,10 +105,6 @@ function renderPart(part: MessagePart, index: number, _meta?: { stepGroupToolIds
           totalSegments={part.totalSegments}
         />
       );
-    case "step-boundary":
-      // Step boundaries are kept in the parts array for the per-step dedup
-      // logic in mergeLiveOverlay (resets the seen-set), but render nothing.
-      return null;
     default:
       return null;
   }
@@ -231,7 +227,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
 
 // ── Assistant message ───────────────────────────────────────────────────────
 
-function AssistantMessage({ message }: { message: ChatMessage }) {
+function AssistantMessage({ message, continuesPrevious = false }: { message: ChatMessage; continuesPrevious?: boolean }) {
   const { t, locale } = useTranslation();
   // REF-05: typed selector from chat-selectors (primitive value — Zustand's
   // default strict-equality gating is enough, no useShallow wrapper needed).
@@ -260,27 +256,41 @@ function AssistantMessage({ message }: { message: ChatMessage }) {
   }
 
   return (
-    <div data-role="assistant" className="group flex gap-3 py-5 md:py-6 border-t border-border/30 dark:border-border/20 first:border-t-0">
+    <div
+      data-role="assistant"
+      className={cn(
+        "group flex gap-3",
+        continuesPrevious
+          ? "pt-0 pb-2 md:pb-3"
+          : "py-5 md:py-6 border-t border-border/30 dark:border-border/20 first:border-t-0",
+      )}
+    >
       <span className="message-avatar">
-        <RoleAvatar role="assistant" iconUrl={agentIconUrl} agentName={agentName} />
+        {continuesPrevious ? (
+          <span className="block h-9 w-9" aria-hidden />
+        ) : (
+          <RoleAvatar role="assistant" iconUrl={agentIconUrl} agentName={agentName} />
+        )}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="message-header flex items-center justify-between min-h-[18px]">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 truncate max-w-[120px]">
-              {agentName || t("chat.assistant")}
-            </span>
-            {message.createdAt && (
-              <span className="text-[10px] font-mono tabular-nums text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
-                {formatMessageTime(message.createdAt, locale)}
+        {!continuesPrevious && (
+          <div className="message-header flex items-center justify-between min-h-[18px]">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 truncate max-w-[120px]">
+                {agentName || t("chat.assistant")}
               </span>
-            )}
-            {message.isMirror && (
-              <span className="text-[10px] text-orange-500 ml-1">↩ cron</span>
-            )}
+              {message.createdAt && (
+                <span className="text-[10px] font-mono tabular-nums text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {formatMessageTime(message.createdAt, locale)}
+                </span>
+              )}
+              {message.isMirror && (
+                <span className="text-[10px] text-orange-500 ml-1">↩ cron</span>
+              )}
+            </div>
+            <MessageActions message={message} showReload />
           </div>
-          <MessageActions message={message} showReload />
-        </div>
+        )}
         <div ref={animateRef} className="min-w-0 space-y-3">
           {hasParts ? renderedParts : <EmptyPartView />}
         </div>
@@ -302,15 +312,24 @@ function MessageItemImpl({
   message,
   sessionChannel,
   sessionUserId,
+  continuesPrevious = false,
 }: {
   message: ChatMessage;
   sessionChannel?: string;
   sessionUserId?: string;
+  /**
+   * True when this assistant ChatMessage is a continuation of the previous
+   * one — same agent, no user message in between (typically the next
+   * tool-loop iteration of the same turn after Phase 1's per-iteration
+   * UUIDs split a turn into multiple ChatMessages). Renderer hides the
+   * avatar + header so the bubble visually flows from the previous one.
+   */
+  continuesPrevious?: boolean;
 }) {
   if (message.role === "user") {
     return <UserMessage message={message} sessionChannel={sessionChannel} sessionUserId={sessionUserId} />;
   }
-  return <AssistantMessage message={message} />;
+  return <AssistantMessage message={message} continuesPrevious={continuesPrevious} />;
 }
 
 export const MessageItem = memo(MessageItemImpl);

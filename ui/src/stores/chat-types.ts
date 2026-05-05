@@ -92,17 +92,6 @@ export interface CompressionDividerPart {
   totalSegments: number;
 }
 
-/**
- * Marks the boundary between two LLM tool-loop iterations within one assistant
- * turn. Backend emits a `step-start` SSE event at the start of every iteration;
- * the frontend inserts a StepBoundaryPart in the assistant's parts array
- * (except before the very first iteration). The renderer draws a thin divider
- * — replaces the old "merge all iterations + heuristic text dedup" approach.
- */
-export interface StepBoundaryPart {
-  type: "step-boundary";
-  stepId: string;
-}
 
 export type MessagePart =
   | TextPart
@@ -113,8 +102,7 @@ export type MessagePart =
   | RichCardPart
   | StepGroupPart
   | ApprovalPart
-  | CompressionDividerPart
-  | StepBoundaryPart;
+  | CompressionDividerPart;
 
 export interface ChatMessage {
   /**
@@ -215,6 +203,13 @@ export interface AgentState {
   maxReconnectAttempts: number;
   /** True while the LLM deadline retry loop is backing off before next attempt. */
   isLlmReconnecting: boolean;
+  /**
+   * Highest SSE event seq number processed for the active stream. Persisted
+   * to agent state so it survives StreamSession disposal during reconnect.
+   * Sent as `Last-Event-ID` header on resume — backend skips events the
+   * client already saw. Null when no stream has run yet for this agent.
+   */
+  lastEventId: number | null;
   /** Branch selection state: parentMessageId -> selectedChildId. */
   selectedBranches: Record<string, string>;
   /**
@@ -317,6 +312,7 @@ export function emptyAgentState(): AgentState {
     reconnectAttempt: 0,
     maxReconnectAttempts: 3,
     isLlmReconnecting: false,
+    lastEventId: null,
     selectedBranches: {},
     pendingMessage: null,
     contextTokens: null,

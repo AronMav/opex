@@ -159,6 +159,9 @@ export function createNavigationActions(deps: ActionDeps) {
         cacheReadTokens: null,
         cacheCreationTokens: null,
         reasoningTokens: null,
+        // Different session = different SSE seq counter on backend. Reset
+        // so the next resume request doesn't send a stale Last-Event-ID.
+        lastEventId: null,
       });
       saveLastSession(agent, sessionId);
     },

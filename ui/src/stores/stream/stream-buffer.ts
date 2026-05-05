@@ -28,25 +28,28 @@ export class StreamBuffer {
   }
 
   /**
-   * Move completed text/reasoning from parser into parts[].
-   * Call before pushing a tool, file, or rich-card part.
-   * Parts pushed here are preserved by snapshot() — NOT filtered by type,
-   * fixing the bug where reasoning disappeared after a tool call.
+   * Move completed text/reasoning from parser into parts[] and close the
+   * current text scope. Call before pushing a tool, file, or rich-card
+   * part — parts pushed here are preserved by snapshot() (NOT filtered by
+   * type, fixing the bug where reasoning disappeared after a tool call).
+   *
+   * Uses parser.endTextBlock() (not plain flush) so insideThink is reset.
+   * Without that reset an unclosed <thinking> tag would leak into the
+   * next text block and route it into reasoning by mistake.
    */
   flushText(): void {
-    const flushed = this.parser.flush();
+    const flushed = this.parser.endTextBlock();
     if (flushed.length > 0) this.parts.push(...flushed);
   }
 
   /**
-   * Closes the current text block on `text-end` SSE event: flushes the
-   * accumulator into parts and clears insideThink so the next iteration's
-   * text-deltas start with a fresh parser state. Without this, parser keeps
-   * accumulating across LLM iterations and old text bleeds into new ones.
+   * Closes the current text block on `text-end` SSE event. Identical to
+   * flushText() now (both go through parser.endTextBlock); kept as a named
+   * alias so the call site in stream-processor reads as semantic intent
+   * ("text-end → close text block") rather than implementation detail.
    */
   endTextBlock(): void {
-    const flushed = this.parser.endTextBlock();
-    if (flushed.length > 0) this.parts.push(...flushed);
+    this.flushText();
   }
 
   /**
