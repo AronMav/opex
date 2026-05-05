@@ -3,6 +3,7 @@ import type { MessageRow } from "@/types/api";
 import { parseContentParts } from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
+import { dedupeBubbleTextParts } from "./chat-overlay-dedup";
 
 // ── User message part parser ─────────────────────────────────────────────────
 
@@ -238,12 +239,16 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
 
   if (lastAssistantMsg) messages.push(lastAssistantMsg);
 
-  // Final pass: filter empty messages, then sort tool parts within each consecutive
-  // group back into declared order (parallel tool calls complete out of order in DB).
+  // Final pass: filter empty messages, sort parallel tool parts back into
+  // declared order, then dedupe duplicate text within each bubble (safety net
+  // against LLM repeating intro text across iterations — proper fix is
+  // step-start boundaries from the AI SDK pattern).
   return messages.filter(m => m.parts.length > 0).map(m => {
     if (m.role !== "assistant") return m;
     const sorted = sortToolGroups(m.parts, toolCallOrderMap);
-    return sorted === m.parts ? m : { ...m, parts: sorted };
+    const deduped = dedupeBubbleTextParts(sorted);
+    if (sorted === m.parts && deduped === sorted) return m;
+    return { ...m, parts: deduped };
   });
 }
 

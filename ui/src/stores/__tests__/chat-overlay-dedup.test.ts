@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mergeLiveOverlay } from "@/stores/chat-overlay-dedup";
-import type { ChatMessage } from "@/stores/chat-types";
+import { mergeLiveOverlay, dedupeBubbleTextParts } from "@/stores/chat-overlay-dedup";
+import type { ChatMessage, MessagePart } from "@/stores/chat-types";
 
 function msg(id: string, role: "user" | "assistant", text = ""): ChatMessage {
   return {
@@ -136,6 +136,46 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
     expect(result[3].role).toBe("assistant");
     // old assistant must not be modified
     expect(result[1].parts).toHaveLength(1);
+  });
+
+  it("collapses duplicate long text parts within an assistant bubble (final dedup)", () => {
+    // Screenshot 2026-05-05: same long intro text appears twice in one bubble
+    const longText = "Загружаю навык анализа и получаю данные портфеля. Параллельно подготовлю контекст для мультиагентного анализа.";
+    const h: ChatMessage[] = [
+      { id: "u", role: "user", parts: [{ type: "text", text: "проанализируй" }], createdAt: new Date().toISOString() },
+    ];
+    const live: ChatMessage[] = [
+      { id: "a", role: "assistant", parts: [
+        { type: "text", text: longText },
+        { type: "text", text: longText }, // <-- duplicate that previously rendered
+        { type: "tool", toolCallId: "t1", toolName: "skill_use", state: "output-available", input: {}, output: "" },
+      ], createdAt: new Date().toISOString() },
+    ];
+    const result = mergeLiveOverlay(h, live);
+    const bubble = result.find(m => m.role === "assistant")!;
+    const texts = bubble.parts.filter(p => p.type === "text");
+    expect(texts).toHaveLength(1);
+    expect(bubble.parts.some(p => p.type === "tool")).toBe(true);
+  });
+
+  it("dedupeBubbleTextParts: keeps short legitimate repeats below threshold", () => {
+    const parts: MessagePart[] = [
+      { type: "text", text: "OK" },
+      { type: "tool", toolCallId: "t1", toolName: "x", state: "output-available", input: {}, output: "" },
+      { type: "text", text: "OK" }, // short → kept
+    ];
+    const result = dedupeBubbleTextParts(parts);
+    const texts = result.filter(p => p.type === "text");
+    expect(texts).toHaveLength(2);
+  });
+
+  it("dedupeBubbleTextParts: returns same reference when nothing dropped", () => {
+    const parts: MessagePart[] = [
+      { type: "text", text: "Hello world this is unique text content here." },
+      { type: "tool", toolCallId: "t1", toolName: "x", state: "output-available", input: {}, output: "" },
+    ];
+    const result = dedupeBubbleTextParts(parts);
+    expect(result).toBe(parts); // same reference — pure pass-through
   });
 
   it("does NOT merge live assistant across user messages", () => {
