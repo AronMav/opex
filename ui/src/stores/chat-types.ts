@@ -86,6 +86,12 @@ export interface ApprovalPart {
   modifiedInput?: Record<string, unknown>;
 }
 
+export interface CompressionDividerPart {
+  type: "compression-divider";
+  segmentIndex: number;
+  totalSegments: number;
+}
+
 export type MessagePart =
   | TextPart
   | ReasoningPart
@@ -94,7 +100,8 @@ export type MessagePart =
   | ToolPart
   | RichCardPart
   | StepGroupPart
-  | ApprovalPart;
+  | ApprovalPart
+  | CompressionDividerPart;
 
 export interface ChatMessage {
   id: string;
