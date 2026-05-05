@@ -3,7 +3,6 @@ import type { MessageRow } from "@/types/api";
 import { parseContentParts } from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
-import { dedupeBubbleTextParts } from "./chat-overlay-dedup";
 
 // ── User message part parser ─────────────────────────────────────────────────
 
@@ -157,19 +156,15 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
       const newParts = parseContentParts(m.content || "");
       const hasToolCalls = Array.isArray(m.tool_calls) && (m.tool_calls as unknown[]).length > 0;
 
-      // Merge intermediate assistant messages (those with tool_calls) into one block
-      // so tools don't stack as separate ARTY bubbles. The final message (no tool_calls)
-      // always starts a new block for the text response.
-      //
-      // Subsequent intermediate iterations contribute only their action parts
-      // (tool/file/rich-card). Their text/reasoning is suppressed because many
-      // models repeat the same intro narration on every iteration ("Делегирую…"
-      // → tool → "Делегирую…" → tool …), which produces visible duplicates in
-      // the merged bubble. The first intermediate iteration's text is kept as
-      // the single canonical narration for the whole tool-call sequence.
+      // Merge intermediate assistant messages (those with tool_calls) into one
+      // block. Each iteration is separated by a StepBoundaryPart — the same
+      // visual divider the live stream renders for SSE step-start events.
+      // The repeated narration models tend to emit on every iteration is no
+      // longer a visual duplicate; it's a labeled "next step" within the
+      // single assistant turn.
       if (hasToolCalls && lastAssistantMsg && lastAssistantMsg.agentId === assistantAgentId) {
-        const actionParts = newParts.filter((p) => p.type !== "text" && p.type !== "reasoning");
-        if (actionParts.length > 0) lastAssistantMsg.parts.push(...actionParts);
+        lastAssistantMsg.parts.push({ type: "step-boundary", stepId: m.id });
+        if (newParts.length > 0) lastAssistantMsg.parts.push(...newParts);
         continue; // tool rows will attach to lastAssistantMsg
       }
 
@@ -239,16 +234,14 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
 
   if (lastAssistantMsg) messages.push(lastAssistantMsg);
 
-  // Final pass: filter empty messages, sort parallel tool parts back into
-  // declared order, then dedupe duplicate text within each bubble (safety net
-  // against LLM repeating intro text across iterations — proper fix is
-  // step-start boundaries from the AI SDK pattern).
+  // Final pass: filter empty messages, sort parallel tool parts within each
+  // step's tool-group (parallel tool calls complete in execution order, not
+  // declaration order — sort restores declared order). Step boundaries
+  // already separate iterations so cross-iteration sorting is not a concern.
   return messages.filter(m => m.parts.length > 0).map(m => {
     if (m.role !== "assistant") return m;
     const sorted = sortToolGroups(m.parts, toolCallOrderMap);
-    const deduped = dedupeBubbleTextParts(sorted);
-    if (sorted === m.parts && deduped === sorted) return m;
-    return { ...m, parts: deduped };
+    return sorted === m.parts ? m : { ...m, parts: sorted };
   });
 }
 

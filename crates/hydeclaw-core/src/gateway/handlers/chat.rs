@@ -806,8 +806,14 @@ pub(crate) async fn api_chat_sse(
                 StreamEvent::MessageStart { message_id } => {
                     json!({"type": sse_types::START, "messageId": message_id, "agentName": current_responding_agent})
                 }
-                StreamEvent::StepStart { step_id: _ } => {
-                    continue;
+                StreamEvent::StepStart { step_id } => {
+                    // Boundary between LLM tool-loop iterations. The UI uses
+                    // it to render a visual divider so each iteration's text +
+                    // tools live in their own structural slice — replaces the
+                    // old "merge everything into one bubble + dedupe text"
+                    // heuristics. Open text block (if any) was already closed
+                    // by the non-TextDelta guard at the top of the loop.
+                    json!({"type": sse_types::STEP_START, "stepId": step_id, "agentName": current_responding_agent})
                 }
                 StreamEvent::TextDelta(ref text) => {
                     if session_uuid.is_none() && accumulated_text.is_empty() {

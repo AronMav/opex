@@ -92,6 +92,18 @@ export interface CompressionDividerPart {
   totalSegments: number;
 }
 
+/**
+ * Marks the boundary between two LLM tool-loop iterations within one assistant
+ * turn. Backend emits a `step-start` SSE event at the start of every iteration;
+ * the frontend inserts a StepBoundaryPart in the assistant's parts array
+ * (except before the very first iteration). The renderer draws a thin divider
+ * — replaces the old "merge all iterations + heuristic text dedup" approach.
+ */
+export interface StepBoundaryPart {
+  type: "step-boundary";
+  stepId: string;
+}
+
 export type MessagePart =
   | TextPart
   | ReasoningPart
@@ -101,7 +113,8 @@ export type MessagePart =
   | RichCardPart
   | StepGroupPart
   | ApprovalPart
-  | CompressionDividerPart;
+  | CompressionDividerPart
+  | StepBoundaryPart;
 
 export interface ChatMessage {
   id: string;
