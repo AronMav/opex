@@ -48,14 +48,30 @@ export type { AgentDetailDto as AgentDetail } from "./api.generated";
 // Source: crates/hydeclaw-core/src/db/sessions.rs
 // Regenerate: make gen-types
 import type { Session as _Session } from "./api.generated";
-// last_input_tokens is appended server-side from usage_log (not in the ts-rs DTO).
-export type SessionRow = _Session & { last_input_tokens?: number | null };
+// last_input_tokens and segment_count are appended server-side (not in the ts-rs DTO).
+export type SessionRow = _Session & {
+  last_input_tokens?: number | null;
+  segment_count?: number;
+};
 
 // MessageRow is now generated from Rust DTO via ts-rs codegen.
 // Note: feedback is number | null (DB-accurate); the old type had number (incorrect).
 // Source: crates/hydeclaw-core/src/db/sessions.rs
 // Regenerate: make gen-types
 export type { MessageRow } from "./api.generated";
+
+// Messages pagination with compression divider events.
+export interface CompressionEvent {
+  segment_index: number;
+  first_live_message_id: string;
+  summary: string;
+}
+
+export interface MessagesResponse {
+  messages: import("./api.generated").MessageRow[];
+  compression_events: CompressionEvent[];
+  has_more: boolean;
+}
 
 // CronJob is now generated from Rust DTO via ts-rs codegen.
 // Source: crates/hydeclaw-core/src/gateway/handlers/cron_dto_structs.rs
