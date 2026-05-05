@@ -129,6 +129,7 @@ where
                 }),
                 tool_call_id: m.tool_call_id,
                 thinking_blocks: vec![],
+            db_id: None,
             }).collect();
             let before = messages.len();
             let preserve = ctx.compaction_config

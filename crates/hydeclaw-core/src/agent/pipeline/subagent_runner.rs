@@ -93,6 +93,7 @@ pub async fn run_subagent_with_session(
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         },
         Message {
             role: MessageRole::User,
@@ -100,6 +101,7 @@ pub async fn run_subagent_with_session(
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         },
     ];
 
@@ -182,6 +184,7 @@ pub async fn run_subagent_with_session(
             tool_calls: Some(response.tool_calls.clone()),
             tool_call_id: None,
             thinking_blocks: response.thinking_blocks.clone(),
+            db_id: None,
         });
 
         // Use an empty object (not Null) so enrich_tool_args can inject session_id into _context.
@@ -211,6 +214,7 @@ pub async fn run_subagent_with_session(
                         tool_calls: None,
                         tool_call_id: Some(batch.tool_call_id.clone()),
                         thinking_blocks: vec![],
+            db_id: None,
                     });
                 }
                 false
@@ -230,6 +234,7 @@ pub async fn run_subagent_with_session(
                         tool_calls: None,
                         tool_call_id: None,
                         thinking_blocks: vec![],
+            db_id: None,
                     });
                     loop_nudge_count += 1;
                     detector.reset();

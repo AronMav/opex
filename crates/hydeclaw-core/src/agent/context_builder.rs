@@ -320,6 +320,7 @@ impl ContextBuilder for DefaultContextBuilder {
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         }];
 
         for row in &history {
@@ -379,6 +380,7 @@ impl ContextBuilder for DefaultContextBuilder {
                             tool_calls: None,
                             tool_call_id: Some(call_id),
                             thinking_blocks: vec![],
+            db_id: None,
                         });
                     }
                 }
@@ -622,6 +624,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         }];
         let mock = MockContextBuilder::with_snapshot(sid, msgs, vec![]);
 

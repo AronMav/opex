@@ -17,6 +17,10 @@ pub struct Message {
     /// Thinking blocks (Anthropic only). Stored separately from content.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thinking_blocks: Vec<ThinkingBlock>,
+    /// DB primary key — populated when loaded from DB, None for synthetic messages.
+    /// Not serialized; used only for in-session compression tracking.
+    #[serde(skip, default)]
+    pub db_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
