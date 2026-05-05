@@ -62,14 +62,18 @@ async fn fetch_via_toolgate_web(
     timeout_secs: u64,
 ) -> Result<String> {
     let endpoint = format!("{}/web", toolgate_url.trim_end_matches('/'));
-    let resp = http_client
+    // Inject W3C traceparent so the toolgate /web span attaches to the
+    // current Core parent. No-op without `otel`.
+    let req = http_client
         .post(&endpoint)
         .json(&serde_json::json!({
             "url": url,
             "mode": "read",
             "timeout": timeout_secs,
         }))
-        .timeout(std::time::Duration::from_secs(timeout_secs + 5))
+        .timeout(std::time::Duration::from_secs(timeout_secs + 5));
+    let req = crate::trace_propagation::inject_trace_context(req);
+    let resp = req
         .send()
         .await
         .map_err(|e| anyhow::anyhow!("toolgate /web request failed: {e}"))?;
