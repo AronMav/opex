@@ -319,6 +319,10 @@ pub struct FinalizeContext {
     /// Per-agent skill review config — when Some and enabled, `finalize` spawns
     /// a background session analysis after `Done` outcomes with enough tool calls.
     pub skill_review: Option<crate::config::SkillReviewConfig>,
+    /// Pre-generated UUID for the final assistant message row.
+    /// Matches the UUID sent in the `MessageStart` SSE event so the frontend's
+    /// live buffer ID equals the DB row ID, preventing duplicate messages.
+    pub assistant_message_id: Uuid,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -342,12 +346,17 @@ pub async fn finalize<S: EventSink>(
             // session must not be marked 'failed' by guard Drop — the LLM already
             // produced its response. Failure to persist is non-fatal for session status.
             lifecycle_guard.done().await;
-            if let Err(e) = sm.save_message_ex(
+            // Use the pre-generated UUID (sent as `messageId` in the `MessageStart`
+            // SSE event) so the DB row ID matches the live buffer ID in the frontend.
+            // This prevents duplicate messages caused by `historyIds.has(m.id)` misses.
+            if let Err(e) = crate::db::sessions::save_message_ex_with_id(
+                &ctx.db,
+                ctx.assistant_message_id,
                 ctx.session_id,
                 "assistant",
                 assistant_text,
-                None,
-                None,
+                None,               // tool_calls
+                None,               // tool_call_id
                 Some(agent_name_ref),
                 thinking_json.as_ref(),
                 ctx.user_message_id,
@@ -520,6 +529,7 @@ pub fn finalize_context_from_engine(
     message_count: usize,
     user_message_id: Option<Uuid>,
     compressor: crate::agent::compressor::Compressor,
+    assistant_message_id: Uuid,
 ) -> FinalizeContext {
     FinalizeContext {
         db: engine.cfg().db.clone(),
@@ -536,6 +546,7 @@ pub fn finalize_context_from_engine(
         llm_model: Some(engine.current_model()),
         compressor,
         skill_review: engine.cfg().agent.skill_review.clone(),
+        assistant_message_id,
     }
 }
 
