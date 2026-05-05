@@ -200,29 +200,63 @@ results for tools 0..N.
 
 ### Negative / open
 
-  * `engine/stream.rs::handle_isolated` (cron path) still has its own tool
-    loop that duplicates `pipeline::execute`. Both write `step_id` correctly
-    but other behavior (loop nudges, fallback provider, retry logic) lives
-    in two places. Future unification would consolidate that.
-  * No backend unit tests for `BatchOutcome.loop_break` mid-batch behavior
-    — covered only by Pi e2e (`test-pi-e2e.py` runs against real DB).
-    Adding unit-level mocks would require either a `PgPool` test fixture
-    or refactoring `parallel.rs` to be DB-injectable.
+  * **Resolved 2026-05-05**: Mid-level helpers extracted to
+    `pipeline::tool_loop_helpers`. Both `pipeline::execute` and
+    `engine/stream.rs::handle_isolated` now share a single source of
+    truth for the loop-nudge wording, loop-break bookkeeping,
+    intermediate-assistant append, persist-payload encoding, and
+    per-iteration UUID allocation. The two paths still diverge on
+    transport-specific concerns: SSE streaming vs. RPC return,
+    `forward_chunks_into_sink` vs. `chat_with_transient_retry`,
+    fallback provider switch, auto-continue, session-corruption
+    recovery, forced-final LLM call. These divergences are intentional
+    — they reflect contracts that genuinely cannot share an
+    implementation, not duplicated mechanics.
+  * **Resolved 2026-05-05**: Backend unit tests for `BatchOutcome`
+    invariants are now in `parallel.rs::tests` (4 tests covering
+    no-loop-break, loop-break-preserves-results, loop-break-without-
+    reason, optional `tool_msg_id`). `tool_loop_helpers::tests`
+    adds 9 more covering loop-nudge bookkeeping and helper purity.
+    Integration tests via `sqlx::test` run against an isolated
+    Postgres on `127.0.0.1:5434` — see `make test-db`. CI infrastructure
+    documented in [observability-setup.md](./observability-setup.md)
+    and the test-DB Makefile targets.
   * Render-side merge of consecutive same-agent ChatMessages
     (`continuesPrevious` in `MessageList`) is a UX choice that re-introduces
     visual coupling between technically-independent messages. Trade-off:
     semantic isolation lost (each ChatMessage is its own DB row) for
     user-facing simplicity (one bubble per turn).
+  * OTel observability is wired and ready (`pipeline.execute`,
+    `pipeline.finalize`, `pipeline.execute_tools` spans) but the Pi
+    operator step is manual — set `[otel] enabled = true` in
+    `hydeclaw.toml`, set `OTEL_EXPORTER_OTLP_ENDPOINT` in the systemd
+    unit, run `make deploy-jaeger`. End-to-end span validation under
+    load is operator-driven (Jaeger UI on port 16686).
 
 ### Verification
 
-  * Backend: 61 unit tests passing.
+  * Backend: **1122 unit tests passing** (full hydeclaw-core suite,
+    including all sqlx::test integration tests against the isolated
+    test Postgres on `127.0.0.1:5434`). 9 new helper tests in
+    `pipeline::tool_loop_helpers::tests` cover the shared loop
+    mechanics; 4 in `parallel.rs::tests` cover BatchOutcome invariants.
   * Frontend: 905 unit tests, 6 integration tests for multi-iteration scenarios.
   * Pi e2e: `test-pi-e2e.py` validates SSE contract (Phase 1+3+5+Finish),
-    `test-pi-concurrency.py` validates parallel-session isolation.
+    `test-pi-concurrency.py` validates parallel-session isolation,
+    `test-pi-chaos.py` validates Last-Event-ID resume across mid-stream
+    drops (PASSED on Pi: 4 unique step-start IDs, no duplicate seq IDs
+    across drop boundary).
   * Playwright: `architecture.spec.ts` runs against the deployed Pi UI.
   * Live UI verification: 5 DB rows (4 intermediate + 1 final) render as
     one ARTY bubble via `mergedIds` + `continuesPrevious`.
+  * Test infrastructure: `docker-compose.test.yml` boots an ephemeral
+    Postgres on port 5434 (tmpfs storage) so sqlx::test can
+    CREATE/DROP per-test databases without touching dev/prod data.
+    `make test-db` runs the full backend suite against it.
+  * Observability: `[otel]` feature compiles cleanly,
+    `docker-compose.observability.yml` runs Jaeger all-in-one
+    (verified locally: UI 200 on port 16686, OTLP receiver on 4317).
+    Detailed Pi rollout in [observability-setup.md](./observability-setup.md).
 
 ### End-to-end identity (the contract)
 
@@ -245,9 +279,20 @@ frontend state → DOM render. No content-based dedup heuristics required.
   * Migration: `migrations/046_messages_step_id.sql`
   * Backend Finish guarantee: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
     (Failed + Interrupted paths) and `engine/run.rs` (panic path)
+  * Shared loop mechanics: `crates/hydeclaw-core/src/agent/pipeline/tool_loop_helpers.rs`
+    (single source of truth for both `pipeline::execute` and
+    `engine/stream.rs::handle_isolated`)
   * Frontend dedup: `ui/src/stores/chat-overlay-dedup.ts`
   * Tests:
     * `ui/src/stores/__tests__/chat-overlay-dedup.test.ts`
     * `ui/src/stores/stream/__tests__/multi-iteration-integration.test.ts`
     * `ui/src/__e2e__/architecture.spec.ts`
-    * `test-pi-e2e.py`, `test-pi-concurrency.py`
+    * `test-pi-e2e.py`, `test-pi-concurrency.py`, `test-pi-chaos.py`
+  * Test infrastructure:
+    * `docker/docker-compose.test.yml` — isolated Postgres for sqlx::test
+    * `Makefile` targets: `test-db-up`, `test-db`, `test-db-down`
+  * Observability:
+    * `docker/docker-compose.observability.yml` — Jaeger all-in-one
+    * `Makefile` targets: `build-arm64-otel`, `deploy-binary-otel`,
+      `jaeger-up`, `jaeger-down`, `deploy-jaeger`
+    * Operational runbook: [observability-setup.md](./observability-setup.md)
