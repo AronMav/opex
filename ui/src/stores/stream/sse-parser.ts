@@ -63,7 +63,7 @@ export function parseSseEvent(raw: string): SseEvent | null {
       };
     case "step-start":
       if (typeof e.stepId !== "string") return null;
-      return { type, stepId: e.stepId };
+      return { type, stepId: e.stepId, messageId: typeof e.messageId === "string" ? e.messageId : undefined };
     case "step-finish":
       if (typeof e.stepId !== "string") return null;
       return { type, stepId: e.stepId, finishReason: typeof e.finishReason === "string" ? e.finishReason : "unknown" };
