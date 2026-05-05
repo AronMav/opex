@@ -141,18 +141,22 @@ export function isActivePhase(phase: ConnectionPhase | undefined): boolean {
 /**
  * Discriminated union for message source mode.
  * Replaces the dual-semantics of viewMode + liveMessages fields.
- * - "new-chat": no session selected, no messages
- * - "live": active or recently completed stream, messages held in store
- * - "history": viewing a DB session snapshot, messages fetched via React Query
+ * - "new-chat":   no session selected, no messages
+ * - "live":       active or recently completed stream, messages held in store
+ * - "finishing":  stream ended, frozen live messages visible while RQ refetches
+ * - "history":    viewing a DB session snapshot, messages fetched via React Query
  */
 export type MessageSource =
   | { mode: "new-chat" }
-  | { mode: "live"; messages: ChatMessage[] }
-  | { mode: "history"; sessionId: string };
+  | { mode: "live";      messages: ChatMessage[] }
+  | { mode: "finishing"; sessionId: string; messages: ChatMessage[] }
+  | { mode: "history";   sessionId: string };
 
 /** Helper: extract live messages from a MessageSource union. */
 export function getLiveMessages(source: MessageSource): ChatMessage[] {
-  return source.mode === "live" ? source.messages : [];
+  if (source.mode === "live") return source.messages;
+  if (source.mode === "finishing") return source.messages;
+  return [];
 }
 
 // ── Per-agent state ─────────────────────────────────────────────────────────
