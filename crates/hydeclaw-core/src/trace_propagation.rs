@@ -33,6 +33,22 @@ impl<'a> opentelemetry::propagation::Injector for HeaderInjector<'a> {
     }
 }
 
+/// Adapter that lets the OTel TextMapPropagator read W3C trace headers
+/// out of an Axum request's HeaderMap on the incoming side.
+#[cfg(feature = "otel")]
+struct AxumHeaderExtractor<'a>(&'a axum::http::HeaderMap);
+
+#[cfg(feature = "otel")]
+impl<'a> opentelemetry::propagation::Extractor for AxumHeaderExtractor<'a> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|v| v.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(|k| k.as_str()).collect()
+    }
+}
+
 /// Inject the current span's W3C trace context into an outgoing request.
 ///
 /// With `otel` feature: pulls `tracing::Span::current()` → OTel context
@@ -60,6 +76,58 @@ pub fn inject_trace_context(builder: RequestBuilder) -> RequestBuilder {
 #[cfg(not(feature = "otel"))]
 pub fn inject_trace_context(builder: RequestBuilder) -> RequestBuilder {
     builder
+}
+
+/// Axum middleware factory: extract a W3C trace context from the incoming
+/// request headers, wrap the request in a `tracing::Span` whose parent is
+/// the extracted context, and pass the request through. Any spans created
+/// downstream (e.g. `pipeline.execute`) inherit the upstream trace_id, so
+/// a single Jaeger trace spans the upstream caller → Core → Toolgate path.
+///
+/// Without this, an external client that already carries a `traceparent`
+/// (e.g. a future agent-to-agent call originating in another HydeClaw
+/// instance, or a synthetic load-test rig that wants its trace to follow
+/// the request) would have its context dropped at the gateway boundary
+/// and Core would start a fresh, unrelated trace.
+///
+/// With the `otel` feature: pulls the registered `TextMapPropagator`,
+/// extracts the parent context from headers, opens an `http_request`
+/// span with method + path attributes, binds the extracted context as
+/// its parent, and runs the rest of the request inside that span.
+///
+/// Without the `otel` feature: passes the request through unchanged
+/// (no span created — keeps default builds free of any OTel imports).
+#[cfg(feature = "otel")]
+pub async fn extract_trace_context_layer(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use tracing::Instrument;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+    let parent_cx = opentelemetry::global::get_text_map_propagator(|propagator| {
+        propagator.extract(&AxumHeaderExtractor(req.headers()))
+    });
+
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let span = tracing::info_span!(
+        "http_request",
+        otel.kind = "server",
+        http.method = %method,
+        http.target = %path,
+    );
+    span.set_parent(parent_cx);
+
+    next.run(req).instrument(span).await
+}
+
+#[cfg(not(feature = "otel"))]
+pub async fn extract_trace_context_layer(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    next.run(req).await
 }
 
 #[cfg(test)]

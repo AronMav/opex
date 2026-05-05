@@ -119,12 +119,13 @@ jobs:
       - name: Test
         # Bun test runner — covers driver factories, formatting prompts,
         # session loop helpers. No external services required.
-        # Currently non-blocking: 5 pre-existing failures in
-        # `getFormattingPrompt` (workspace prompts not present in CI
-        # checkout) and `splitText` multibyte handling. Promote to
-        # blocking once those are fixed in a follow-up.
+        # `formatting.test.ts` reads workspace/prompts/formatting/*.md;
+        # those files ARE tracked in git, so a fresh checkout on the
+        # runner provides them. (Locally on Pi the tests fail because
+        # deploy never copies workspace/prompts/ to ~/hydeclaw/ — that
+        # path is intentionally agent-state-managed, not a deploy
+        # artifact.)
         run: bun test
-        continue-on-error: true
 
   types-drift:
     name: API types drift check
