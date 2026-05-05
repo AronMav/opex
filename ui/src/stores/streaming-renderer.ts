@@ -188,7 +188,13 @@ export function createStreamingRenderer(store: StoreAccess) {
                 baseDelayMs: RECONNECT_DELAY_BASE_MS,
                 setTimer: (handle) => setReconnectTimer(agent, handle),
                 onMaxAttemptsReached: () => {
-                  session.write({ connectionPhase: "idle", messageSource: { mode: "history", sessionId: sid } });
+                  session.write({
+                    connectionPhase: "idle",
+                    messageSource: { mode: "history", sessionId: sid },
+                    isLlmReconnecting: false,
+                    reconnectAttempt: 0,
+                    streamError: null,
+                  });
                   queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
                   queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sid) });
                 },
@@ -212,7 +218,13 @@ export function createStreamingRenderer(store: StoreAccess) {
           baseDelayMs: RECONNECT_DELAY_BASE_MS,
           setTimer: (handle) => setReconnectTimer(agent, handle),
           onMaxAttemptsReached: () => {
-            session.write({ connectionPhase: "idle", messageSource: { mode: "history", sessionId } });
+            session.write({
+              connectionPhase: "idle",
+              messageSource: { mode: "history", sessionId },
+              isLlmReconnecting: false,
+              reconnectAttempt: 0,
+              streamError: null,
+            });
             queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
             queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
           },
@@ -422,7 +434,13 @@ export function createStreamingRenderer(store: StoreAccess) {
                 baseDelayMs: RECONNECT_DELAY_BASE_MS,
                 setTimer: (handle) => setReconnectTimer(agent, handle),
                 onMaxAttemptsReached: () => {
-                  session.write({ connectionPhase: "idle", messageSource: { mode: "history", sessionId: sid } });
+                  session.write({
+                    connectionPhase: "idle",
+                    messageSource: { mode: "history", sessionId: sid },
+                    isLlmReconnecting: false,
+                    reconnectAttempt: 0,
+                    streamError: null,
+                  });
                   queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
                   queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sid) });
                 },
