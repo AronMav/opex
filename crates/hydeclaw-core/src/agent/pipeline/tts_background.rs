@@ -314,4 +314,70 @@ mod tests {
         // Wait for run() to complete cleanly.
         run_handle.await.expect("task should complete without panic");
     }
+
+    #[tokio::test]
+    async fn channel_router_none_does_not_panic() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"fakewav!"))
+            .mount(&server)
+            .await;
+
+        let context = serde_json::json!({ "chat_id": 42 });
+        // router = None even though chat_id is present
+        let task = make_task(&server.uri(), None, context);
+        // Must not panic
+        task.run().await;
+    }
+
+    #[tokio::test]
+    async fn tts_error_sends_message_to_channel() {
+        // Arrange: toolgate returns 400 (non-retryable) → synthesis error
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("invalid request"))
+            .mount(&server)
+            .await;
+
+        let router = ChannelActionRouter::new();
+        let (_conn_id, mut rx) = router.subscribe("telegram").await;
+        let context = serde_json::json!({ "chat_id": 42, "channel": "telegram" });
+        let task = make_task(&server.uri(), Some(router), context);
+
+        task.run().await;
+
+        // Assert: error message sent to channel
+        let action = rx.try_recv().expect("error send_message must arrive");
+        assert_eq!(action.name, "send_message");
+        let text = action.params["text"].as_str().unwrap_or("");
+        assert!(text.contains('❌'), "error text must contain ❌, got: {text}");
+        // The error message from handle_error wraps the synthesis failure detail,
+        // which for a non-retryable HTTP 400 includes "HTTP 400" from yaml_tools.
+        assert!(
+            text.contains("Не удалось отправить голосовое") && text.contains("HTTP 400"),
+            "error text must include the wrapper phrase and the underlying HTTP failure, got: {text}"
+        );
+        let _ = action.reply.send(Ok(()));
+    }
+
+    #[tokio::test]
+    async fn ui_session_does_not_panic() {
+        // Arrange: no chat_id → UI path; toolgate returns audio bytes
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"fakewav!"))
+            .mount(&server)
+            .await;
+
+        // No chat_id → deliver_to_ui path
+        let context = serde_json::json!({});
+        let task = make_task(&server.uri(), None, context);
+
+        // Act — save_binary_to_uploads writes to temp dir; notify() fails silently
+        // (lazy DB never connects). Must complete without panic.
+        task.run().await;
+    }
 }
