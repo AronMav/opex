@@ -603,10 +603,11 @@ pub(crate) async fn api_chat_sse(
     //
     // AUDIT:SSE-01 (verified 2026-03-30): Event ordering is guaranteed by single-task
     // sequential processing. The `while let Some(event) = event_rx.recv().await` loop
-    // is the sole consumer of engine events. `pending_text_end` ensures text-end is
-    // flushed before any non-text event (Finish, Error, ToolCallStart) -- see top of
-    // loop (line ~469) and explicit flush in Finish handler. No concurrent emission
-    // possible because event_rx.recv() processes one event at a time in this task.
+    // is the sole consumer of engine events. `current_text_id` accumulates all
+    // consecutive TextDelta events under ONE text-start..text-end block; text-end is
+    // flushed before any non-text event (Finish, Error, ToolCallStart). Without this,
+    // each TextDelta would emit its own start/end → N text parts on the UI for one
+    // logical text block, and adjacent parts could fuse word boundaries on render.
     //
     // AUDIT:SSE-02 (verified 2026-03-30): Error delivery has two paths:
     // 1. LLM errors mid-stream: engine sends error as TextDelta via format_user_error()
@@ -618,7 +619,9 @@ pub(crate) async fn api_chat_sse(
     let registry = bus.stream_registry.clone();
     tokio::spawn(async move {
         let mut text_id_counter: usize = 0;
-        let mut pending_text_end: Option<String> = None;
+        // Tracks the OPEN text block so consecutive TextDelta events all carry the
+        // same id. None = no open block; Some(id) = block id `id` is currently open.
+        let mut current_text_id: Option<String> = None;
         let mut tool_name_map: HashMap<String, String> = HashMap::new();
         let mut session_id_str: Option<String> = None;
         // Tracks which agent is currently responding (updated on AgentSwitch)
@@ -753,8 +756,10 @@ pub(crate) async fn api_chat_sse(
                 engine_handle.abort();
                 break;
             }
-            // If there's a pending text-end needed, send it first
-            if let Some(text_id) = pending_text_end.take() {
+            // Close the open text block before any non-text event. Consecutive
+            // TextDelta events keep the block open and share the same id.
+            if !matches!(event, StreamEvent::TextDelta(_))
+                && let Some(text_id) = current_text_id.take() {
                 let end_data = json!({"type": sse_types::TEXT_END, "id": text_id}).to_string();
                 let _ = send_and_buffer!(end_data);
             }
@@ -808,14 +813,22 @@ pub(crate) async fn api_chat_sse(
                     if session_uuid.is_none() && accumulated_text.is_empty() {
                         tracing::error!("TextDelta received but session_uuid is None — DB flush will be skipped");
                     }
-                    // AI SDK v3: text-start → text-delta → text-end
-                    text_id_counter += 1;
-                    let text_id = format!("text-{text_id_counter}");
-                    let start_data = json!({"type": sse_types::TEXT_START, "id": text_id.clone(), "agentName": current_responding_agent}).to_string();
-                    let delta_data = json!({"type": sse_types::TEXT_DELTA, "id": text_id.clone(), "delta": text}).to_string();
-                    let _ = send_and_buffer!(start_data);
+                    // AI SDK v3: text-start → text-delta* → text-end
+                    // Open a new text block only if there isn't one open already; all
+                    // consecutive deltas of the same logical text block share one id.
+                    let text_id = match current_text_id.as_ref() {
+                        Some(id) => id.clone(),
+                        None => {
+                            text_id_counter += 1;
+                            let new_id = format!("text-{text_id_counter}");
+                            let start_data = json!({"type": sse_types::TEXT_START, "id": new_id.clone(), "agentName": current_responding_agent}).to_string();
+                            let _ = send_and_buffer!(start_data);
+                            current_text_id = Some(new_id.clone());
+                            new_id
+                        }
+                    };
+                    let delta_data = json!({"type": sse_types::TEXT_DELTA, "id": text_id, "delta": text}).to_string();
                     let _ = send_and_buffer!(delta_data);
-                    pending_text_end = Some(text_id);
                     accumulated_text.push_str(text);
                     // Periodic DB flush every 2s so reload shows partial response
                     // Uses append-mode SQL so accumulated_text can be cleared after flush (bounded memory)
@@ -914,8 +927,8 @@ pub(crate) async fn api_chat_sse(
                     continue;
                 }
                 StreamEvent::Finish { .. } => {
-                    // Send any pending text-end first
-                    if let Some(text_id) = pending_text_end.take() {
+                    // Close any still-open text block before Finish.
+                    if let Some(text_id) = current_text_id.take() {
                         let end_data = json!({"type": sse_types::TEXT_END, "id": text_id}).to_string();
                         let _ = send_and_buffer!(end_data);
                     }
@@ -1064,7 +1077,7 @@ pub(crate) async fn api_chat_sse(
                 registry.mark_finished(sid).await;
             }
             // Flush any remaining text-end (if stream ended without Finish event)
-            if let Some(text_id) = pending_text_end {
+            if let Some(text_id) = current_text_id {
                 let end_data = json!({"type": sse_types::TEXT_END, "id": text_id});
                 let _ = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
