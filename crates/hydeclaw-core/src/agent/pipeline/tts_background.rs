@@ -64,11 +64,21 @@ impl BackgroundTtsTask {
             bg_tool.timeout = 600;
         }
 
+        // The shared engine http_client has a 120s timeout
+        // (gateway/handlers/agents/lifecycle.rs). reqwest aborts the request
+        // at that deadline regardless of our outer tokio timeout — surfaces
+        // as "HTTP request failed". Build a dedicated long-timeout client
+        // here so a long news digest can finish synthesis.
+        let bg_http_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(600))
+            .build()
+            .unwrap_or_else(|_| ctx.tex.http_client.clone());
+
         Self {
             tool:           bg_tool,
             args:           args.clone(),
             ca:             ca.clone(),
-            http_client:    ctx.tex.http_client.clone(),
+            http_client:    bg_http_client,
             resolver:       Some(make_resolver(&ctx.tex.secrets, &ctx.cfg.agent.name)),
             oauth_ctx:      make_oauth_context(ctx.tex.oauth.as_ref(), &ctx.cfg.agent.name),
             channel_router: ctx.state.channel_router.clone(),
