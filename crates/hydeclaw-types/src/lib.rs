@@ -827,6 +827,7 @@ mod tests {
             ]),
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -846,6 +847,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: Some("tc-1".into()),
             thinking_blocks: vec![],
+            db_id: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
