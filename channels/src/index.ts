@@ -4,6 +4,13 @@
  * Credentials come from channel config JSON (bot_token field).
  */
 
+// IMPORTANT: OTel SDK bootstrap MUST run before any other module that
+// it should instrument is imported. The auto-instrumentations patch
+// node:http etc. at require-time, so a later import would miss them.
+// No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+import { initOtel } from "./otel";
+await initOtel();
+
 import { buildEnvConfig, wsToHttp } from "./config";
 import { spawnSessionLoop, type SessionConfig } from "./session";
 import { initHealth, startHealthServer } from "./health";

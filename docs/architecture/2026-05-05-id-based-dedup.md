@@ -255,7 +255,23 @@ results for tools 0..N.
     `make test-db` runs the full backend suite against it.
   * Observability: `[otel]` feature compiles cleanly,
     `docker-compose.observability.yml` runs Jaeger all-in-one
-    (verified locally: UI 200 on port 16686, OTLP receiver on 4317).
+    (verified live on Pi: UI 200 on port 16686, OTLP receiver on 4317).
+    Cross-process tracing wired end-to-end:
+      * Core (`hydeclaw-core` service) — `pipeline.execute`,
+        `pipeline.finalize`, `pipeline.execute_tools` spans with
+        `session_id`, `agent`, `iterations`, `assistant_message_id`,
+        `outcome`, `tool_count` tags populated.
+      * Toolgate (`toolgate` service) — FastAPI auto-instrumented
+        (`POST /v1/embeddings` etc.), httpx outgoing instrumented.
+      * Channels (`channels` service) — Node SDK auto-instrumentations
+        for outbound HTTP (Telegram/Discord/Slack APIs).
+      * Core's reqwest calls inject W3C `traceparent` via
+        `trace_propagation::inject_trace_context` so the Toolgate
+        span attaches to its Core parent. Verified live on Pi:
+        single trace (53 spans) contains both `hydeclaw-core` and
+        `toolgate` spans linked under one `pipeline.execute` parent
+        — see screenshot artifact in commit message of
+        `arch: cross-process tracing — Core → Toolgate → Channels`.
     Detailed Pi rollout in [observability-setup.md](./observability-setup.md).
 
 ### End-to-end identity (the contract)

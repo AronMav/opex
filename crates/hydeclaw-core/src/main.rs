@@ -18,6 +18,7 @@ mod skills;
 mod curator;
 mod tasks;
 mod tools;
+mod trace_propagation;
 mod uploads;
 
 use anyhow::Result;
@@ -180,6 +181,15 @@ fn init_tracing(log_tx: tokio::sync::broadcast::Sender<String>, cfg: &config::Ap
                 .with_resource(resource.clone())
                 .build();
             opentelemetry::global::set_tracer_provider(tracer_provider.clone());
+
+            // Install the W3C TraceContext propagator globally so
+            // `trace_propagation::inject_trace_context` can fetch it
+            // when stamping outgoing reqwest calls. Without this,
+            // `get_text_map_propagator` returns a no-op propagator and
+            // cross-process traceparent headers never get written.
+            opentelemetry::global::set_text_map_propagator(
+                opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+            );
 
             // ── Metric exporter + provider (Plan 02 OBS-02) ─────────────
             let metric_exporter = match opentelemetry_otlp::MetricExporter::builder()

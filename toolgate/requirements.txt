@@ -10,3 +10,12 @@ readability-lxml
 lxml[html_clean]
 google-api-python-client
 google-auth
+# OpenTelemetry — activated when OTEL_EXPORTER_OTLP_ENDPOINT is set.
+# Toolgate sits on the cross-process path between Core and LLM/STT/TTS/
+# embedding backends; instrumenting it lets traces from `pipeline.execute`
+# follow embedding calls (`POST /v1/embeddings`) and TTS synthesis end-to-end.
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx
