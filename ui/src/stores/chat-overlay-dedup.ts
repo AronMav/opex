@@ -22,7 +22,40 @@
  *      previous live overlay assistant when no user message separates them).
  */
 
-import type { ChatMessage, MessagePart, ToolPart } from "./chat-types";
+import type { ChatMessage, MessagePart, ReasoningPart, TextPart, ToolPart } from "./chat-types";
+
+// Below this length a duplicated text/reasoning is more likely a legitimate
+// short utterance ("OK", "yes") than an LLM-repeating-its-intro artifact.
+const MIN_DEDUP_TEXT_LEN = 20;
+
+/**
+ * Removes text/reasoning parts whose trimmed content has already appeared
+ * in the same bubble. The LLM-tool-loop architecture emits one DB row per
+ * iteration, and many models repeat the same intro narration on every
+ * iteration — without this pass, a single rendered bubble shows the same
+ * text two or three times.
+ *
+ * The proper architectural fix is per-iteration step-start boundaries
+ * (Vercel AI SDK pattern); this is a content-level safety net.
+ */
+export function dedupeBubbleTextParts(parts: MessagePart[]): MessagePart[] {
+  if (parts.length < 2) return parts;
+  const seen = new Set<string>();
+  const result: MessagePart[] = [];
+  let dropped = false;
+  for (const p of parts) {
+    if (p.type === "text" || p.type === "reasoning") {
+      const t = (p as TextPart | ReasoningPart).text.trim();
+      if (t.length >= MIN_DEDUP_TEXT_LEN && seen.has(t)) {
+        dropped = true;
+        continue;
+      }
+      if (t) seen.add(t);
+    }
+    result.push(p);
+  }
+  return dropped ? result : parts;
+}
 
 export function mergeLiveOverlay(
   historyMessages: ChatMessage[],
@@ -113,12 +146,25 @@ export function mergeLiveOverlay(
     }
   }
 
+  // Apply per-bubble text dedup as the last safety net. Pure post-processor:
+  // doesn't change rules above, only collapses any text duplicates that slipped
+  // through (e.g. live continuation merging text already present in history).
+  const dedupeAssistant = (m: ChatMessage): ChatMessage => {
+    if (m.role !== "assistant") return m;
+    const deduped = dedupeBubbleTextParts(m.parts);
+    return deduped === m.parts ? m : { ...m, parts: deduped };
+  };
+
   if (continuationParts.length > 0 && lastHistAssistantIdx >= 0) {
     const updated = [...historyMessages];
     const last = updated[lastHistAssistantIdx];
-    updated[lastHistAssistantIdx] = { ...last, parts: [...last.parts, ...continuationParts] };
-    return overlay.length > 0 ? [...updated, ...overlay] : updated;
+    const mergedParts = [...last.parts, ...continuationParts];
+    const dedupedParts = dedupeBubbleTextParts(mergedParts);
+    updated[lastHistAssistantIdx] = { ...last, parts: dedupedParts };
+    const tailOverlay = overlay.map(dedupeAssistant);
+    return tailOverlay.length > 0 ? [...updated, ...tailOverlay] : updated;
   }
 
-  return overlay.length > 0 ? [...historyMessages, ...overlay] : historyMessages;
+  if (overlay.length === 0) return historyMessages;
+  return [...historyMessages, ...overlay.map(dedupeAssistant)];
 }
