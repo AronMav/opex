@@ -633,6 +633,8 @@ pub(crate) async fn api_chat_sse(
         // Helper: send SSE event to client (if connected) and always buffer in registry
         macro_rules! send_and_buffer {
             ($json_str:expr) => {{
+                let s: &str = &$json_str;
+                tracing::debug!(target: "SSE-OUT", agent = %agent_name, sid = ?session_id_str, event = %&s[..s.len().min(180)], "emit");
                 if let Some(ref sid) = session_id_str {
                     registry.push_event(sid, &$json_str).await;
                 }
@@ -1053,9 +1055,6 @@ pub(crate) async fn api_chat_sse(
             };
 
             let json_str = data.to_string();
-            // SSE-DEBUG: trace every emitted event with its head. Filter in
-            // journalctl via:  journalctl --user -u hydeclaw-core -f | grep SSE-OUT
-            tracing::debug!(target: "SSE-OUT", agent = %agent_name, sid = ?session_id_str, event = %&json_str[..json_str.len().min(180)], "emit");
             let _ = send_and_buffer!(json_str);
         }
 
