@@ -70,6 +70,7 @@ export const selectVisibleMessages = (agent: string) =>
     const st = s.agents[agent];
     if (!st) return [];
     if (st.messageSource.mode === "live") return getLiveMessages(st.messageSource);
+    if (st.messageSource.mode === "finishing") return getLiveMessages(st.messageSource);
     if (st.messageSource.mode === "history") {
       return getCachedHistoryMessages(st.activeSessionId, st.selectedBranches);
     }
@@ -89,6 +90,9 @@ export const selectMessageById = (agent: string, messageId: string) =>
     const st = s.agents[agent];
     if (!st) return undefined;
     if (st.messageSource.mode === "live") {
+      return st.messageSource.messages.find((m) => m.id === messageId);
+    }
+    if (st.messageSource.mode === "finishing") {
       return st.messageSource.messages.find((m) => m.id === messageId);
     }
     if (st.messageSource.mode === "history") {
@@ -176,6 +180,12 @@ export function selectRenderMessages(state: ChatState, agent: string): ChatMessa
   if (src.mode === "new-chat") return [];
   if (src.mode === "history") {
     return getCachedHistoryMessages(src.sessionId, st.selectedBranches);
+  }
+  if (src.mode === "finishing") {
+    // Frozen live messages remain visible while React Query refetches history.
+    // Merge with whatever history is already cached so existing messages are shown.
+    const history = getCachedHistoryMessages(src.sessionId, st.selectedBranches);
+    return mergeLiveOverlay(history, src.messages);
   }
   // live mode
   const histSessionId = st.activeSessionId;
