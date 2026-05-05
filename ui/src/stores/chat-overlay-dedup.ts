@@ -1,54 +1,28 @@
 /**
  * Chat live-overlay dedup (Architecture C).
  *
- * History is React Query truth. Live is the SSE buffer (optimistic user
- * message + in-flight assistant). Rules:
+ * History is React Query truth. Live is the SSE buffer. Each LLM tool-loop
+ * iteration emits its own `start` event and creates a separate ChatMessage
+ * in the live buffer with a fresh UUID.
  *
- * User messages: ID-based. Client pre-allocates UUID in sendMessage(), sends as
- * user_message_id; bootstrap saves with that UUID via save_message_ex_with_id.
- *
- * Assistant messages:
- *   - ID-based dedup: if the live assistant ID is already in history (stream
- *     complete and finalize wrote the row), skip it.
- *   - Continuation merge: if the live assistant is NOT yet in history and
- *     there is no new user message in the overlay (= same turn), merge its
- *     unique parts (dedup by toolCallId) into the last history assistant.
- *     This mirrors what convertHistory does for completed iterations inside
- *     a tool-call loop, so the view is consistent in both live and history mode.
- *
- * Empty assistant placeholders (parts.length === 0) are always filtered.
+ * Rules:
+ *   1. ID-based dedup: skip a live message whose id is already in history
+ *      (finalize wrote the DB row with the same pre-allocated UUID).
+ *   2. Intermediate-iteration text suppression: when multiple non-history
+ *      assistant messages exist in live (= an active tool-call loop), the
+ *      EARLIER iterations show only their tool/file/etc. parts; their text
+ *      and reasoning are dropped. Only the LAST live assistant — the one
+ *      currently streaming — shows its text. This avoids the visual
+ *      "Делегирую..." → tool → "Делегирую..." → tool → "Делегирую..." stutter
+ *      caused by models that repeat the same intro narration on every iteration.
+ *   3. Continuation merge: when no new user message in live and history doesn't
+ *      end with a user message, the live parts are appended to the last history
+ *      assistant — same as convertHistory does for completed intermediate iterations.
+ *   4. Otherwise: a new live assistant message is pushed (or merged into the
+ *      previous live overlay assistant when no user message separates them).
  */
 
-import type { ChatMessage, MessagePart, TextPart, ToolPart } from "./chat-types";
-
-/**
- * Appends newParts to existingParts, skipping a leading text part in newParts
- * when it is identical to the last text already in existingParts.
- *
- * Rationale: each LLM tool-loop iteration emits a fresh "start" event and
- * opens a new live ChatMessage. When consecutive iterations begin with the
- * same narration text (e.g. "Delegating to agents..."), merging them naively
- * produces the text twice inside one bubble. We drop the duplicate leading
- * text while preserving every tool/file part from every iteration.
- */
-function appendDedupeLeadingText(existing: MessagePart[], adding: MessagePart[]): MessagePart[] {
-  if (!adding.length) return existing;
-  const firstNew = adding[0];
-  if (firstNew.type !== "text") return [...existing, ...adding];
-
-  const lastExistText = [...existing].reverse().find((p): p is TextPart => p.type === "text");
-  if (!lastExistText) return [...existing, ...adding];
-
-  const existTrimmed = lastExistText.text.trim();
-  const newTrimmed = (firstNew as TextPart).text.trim();
-
-  if (existTrimmed && newTrimmed && existTrimmed === newTrimmed) {
-    const rest = adding.slice(1);
-    return rest.length ? [...existing, ...rest] : existing;
-  }
-
-  return [...existing, ...adding];
-}
+import type { ChatMessage, MessagePart, ToolPart } from "./chat-types";
 
 export function mergeLiveOverlay(
   historyMessages: ChatMessage[],
@@ -56,7 +30,6 @@ export function mergeLiveOverlay(
 ): ChatMessage[] {
   if (liveMessages.length === 0) return historyMessages;
 
-  // Index history for O(1) lookups.
   const historyIds = new Set(historyMessages.map((m) => m.id));
 
   const historyToolIds = new Set<string>();
@@ -78,11 +51,24 @@ export function mergeLiveOverlay(
     lastHistAssistantIdx >= 0 &&
     historyMessages.slice(lastHistAssistantIdx + 1).some((m) => m.role === "user");
 
+  // Find the index of the LAST non-history live assistant with content.
+  // That iteration is the "current" one whose narration we keep; earlier
+  // iterations are intermediate and contribute only their action parts.
+  let lastLiveAssistantIdx = -1;
+  for (let i = liveMessages.length - 1; i >= 0; i--) {
+    const m = liveMessages[i];
+    if (m.role === "assistant" && m.parts.length > 0 && !historyIds.has(m.id)) {
+      lastLiveAssistantIdx = i;
+      break;
+    }
+  }
+
   let liveHasNewUserMsg = false;
   const continuationParts: MessagePart[] = [];
   const overlay: ChatMessage[] = [];
 
-  for (const m of liveMessages) {
+  for (let i = 0; i < liveMessages.length; i++) {
+    const m = liveMessages[i];
     if (m.parts.length === 0) continue;
 
     if (m.role === "user") {
@@ -94,42 +80,39 @@ export function mergeLiveOverlay(
     }
 
     if (m.role === "assistant") {
-      // Already in history (finalize wrote the row with the same pre-allocated UUID).
       if (historyIds.has(m.id)) continue;
 
-      // Dedup tool parts by toolCallId — parallel calls from the same iteration
-      // may arrive in a different order than history already recorded them.
-      const uniqueParts = m.parts.filter(
+      let parts = m.parts.filter(
         (p) => p.type !== "tool" || !historyToolIds.has((p as ToolPart).toolCallId),
       );
-      if (uniqueParts.length === 0) continue;
 
-      // Continuation merge: live assistant is a continuation of the SAME user turn
-      // already in history. Conditions:
-      //   • no new user msg in live (user msg already in history)
-      //   • history doesn't end with a user after the last assistant (would mean
-      //     live assistants are responding to a NEW user turn, not continuing the old one)
-      //   • there IS a previous history assistant to merge into
+      // Intermediate iterations: drop text/reasoning. Their narration is
+      // typically a near-duplicate of the next iteration's narration; keep
+      // only the actions (tool, file, rich-card, approval, step-group).
+      const isCurrentIteration = i === lastLiveAssistantIdx;
+      if (!isCurrentIteration) {
+        parts = parts.filter((p) => p.type !== "text" && p.type !== "reasoning");
+      }
+
+      if (parts.length === 0) continue;
+
+      // Continuation merge into the last history assistant when same user turn.
       if (!liveHasNewUserMsg && !historyEndsWithNewUserTurn && lastHistAssistantIdx >= 0) {
-        continuationParts.push(...uniqueParts);
+        continuationParts.push(...parts);
         continue;
       }
 
-      // Merge with the previous live overlay assistant when no user message
-      // separates them — collapses all tool-loop iterations into one bubble.
+      // Merge with the previous live overlay assistant — collapses all
+      // tool-loop iterations of the current turn into one bubble.
       const lastOverlay = overlay.length > 0 ? overlay[overlay.length - 1] : null;
       if (lastOverlay?.role === "assistant") {
-        overlay[overlay.length - 1] = {
-          ...lastOverlay,
-          parts: appendDedupeLeadingText(lastOverlay.parts, uniqueParts),
-        };
+        overlay[overlay.length - 1] = { ...lastOverlay, parts: [...lastOverlay.parts, ...parts] };
       } else {
-        overlay.push({ ...m, parts: uniqueParts });
+        overlay.push({ ...m, parts });
       }
     }
   }
 
-  // Attach continuation parts to the last history assistant bubble.
   if (continuationParts.length > 0 && lastHistAssistantIdx >= 0) {
     const updated = [...historyMessages];
     const last = updated[lastHistAssistantIdx];
