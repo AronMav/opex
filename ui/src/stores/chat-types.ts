@@ -117,7 +117,20 @@ export type MessagePart =
   | StepBoundaryPart;
 
 export interface ChatMessage {
+  /**
+   * Primary id — for assistants this is the FIRST DB row id when multiple
+   * intermediate rows of one tool-loop turn are merged into a single visual
+   * bubble (see convertHistory). For live ChatMessages, this is the row id
+   * the streaming iteration will be persisted under.
+   */
   id: string;
+  /**
+   * IDs of additional DB rows merged into this bubble (intermediate
+   * iterations of the same tool-loop turn). Used by mergeLiveOverlay so that
+   * a live ChatMessage whose id matches any merged id is correctly recognised
+   * as already represented in history. Empty/absent for non-merged messages.
+   */
+  mergedIds?: string[];
   role: "user" | "assistant";
   parts: MessagePart[];
   createdAt?: string;
