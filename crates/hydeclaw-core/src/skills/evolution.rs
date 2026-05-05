@@ -66,6 +66,7 @@ pub async fn analyze_and_evolve(
         tool_calls: None,
         tool_call_id: None,
         thinking_blocks: vec![],
+        db_id: None,
     };
 
     let analysis = match provider.chat(&[msg], &[], crate::agent::providers::CallOptions::default()).await {
@@ -276,6 +277,7 @@ async fn review_session_inner(
         tool_calls: None,
         tool_call_id: None,
         thinking_blocks: vec![],
+        db_id: None,
     };
 
     // 9. Call LLM with 30s timeout.

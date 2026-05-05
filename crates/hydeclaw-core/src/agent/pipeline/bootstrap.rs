@@ -251,6 +251,7 @@ pub async fn bootstrap<S: EventSink>(
         tool_calls: None,
         tool_call_id: None,
         thinking_blocks: vec![],
+            db_id: None,
     });
 
     // Compact the history now that the new user message is appended, matching

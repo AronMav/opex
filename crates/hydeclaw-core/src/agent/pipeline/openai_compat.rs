@@ -101,6 +101,7 @@ pub async fn handle_openai(
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         });
     }
 
@@ -116,6 +117,7 @@ pub async fn handle_openai(
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         });
     }
 
@@ -161,6 +163,7 @@ pub async fn handle_openai(
             tool_calls: Some(response.tool_calls.clone()),
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         });
 
         // OpenAI-compat path uses Uuid::nil() session_id and does NO DB
@@ -178,6 +181,7 @@ pub async fn handle_openai(
                         tool_calls: None,
                         tool_call_id: Some(batch.tool_call_id.clone()),
                         thinking_blocks: vec![],
+            db_id: None,
                     });
                 }
                 false

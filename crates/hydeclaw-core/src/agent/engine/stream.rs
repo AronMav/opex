@@ -157,6 +157,7 @@ impl AgentEngine {
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         });
 
         // For inter-agent messages (user_id starts with "agent:"), save the sender agent_id
@@ -196,7 +197,7 @@ impl AgentEngine {
                         did_reset_session = true;
                         tracing::warn!(error = %e, "session corrupted, resetting context");
                         messages.retain(|m| m.role == MessageRole::System);
-                        messages.push(Message { role: MessageRole::User, content: user_text.clone(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] });
+                        messages.push(Message { role: MessageRole::User, content: user_text.clone(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None });
                         context_chars = messages.iter().map(|m| m.content.chars().count()).sum();
                         continue;
                     }
@@ -256,6 +257,7 @@ impl AgentEngine {
                         tool_calls: None,
                         tool_call_id: None,
                         thinking_blocks: vec![],
+            db_id: None,
                     });
                     context_chars += AUTO_CONTINUE_NUDGE.len(); // all ASCII
                     continue;
@@ -287,6 +289,7 @@ impl AgentEngine {
                 tool_calls: Some(response.tool_calls.clone()),
                 tool_call_id: None,
                 thinking_blocks: response.thinking_blocks.clone(),
+                db_id: None,
             });
             context_chars += cleaned_content.chars().count();
 
@@ -340,6 +343,7 @@ impl AgentEngine {
                             tool_calls: None,
                             tool_call_id: Some(tc_id.clone()),
                             thinking_blocks: vec![],
+            db_id: None,
                         });
                         context_chars += tool_result.chars().count();
                         // tool message already persisted (detached) inside
@@ -361,6 +365,7 @@ impl AgentEngine {
                             tool_calls: None,
                             tool_call_id: None,
                             thinking_blocks: vec![],
+            db_id: None,
                         });
                         loop_nudge_count += 1;
                         detector.reset();

@@ -129,6 +129,7 @@ async fn extract_and_save_inner(
             tool_calls: None,
             tool_call_id: None,
             thinking_blocks: vec![],
+            db_id: None,
         },
     ];
 
@@ -202,6 +203,7 @@ async fn update_rolling_summary(
         tool_calls: None,
         tool_call_id: None,
         thinking_blocks: vec![],
+            db_id: None,
     }];
 
     // Retry up to 2 times on failure (LLM calls can be flaky)

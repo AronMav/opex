@@ -383,6 +383,7 @@ pub async fn execute<S: EventSink>(
             tool_calls: Some(response.tool_calls.clone()),
             tool_call_id: None,
             thinking_blocks: response.thinking_blocks.clone(),
+            db_id: None,
         });
         context_chars += partial.chars().count();
 
@@ -504,6 +505,7 @@ pub async fn execute<S: EventSink>(
                         tool_calls: None,
                         tool_call_id: Some(tc_id.clone()),
                         thinking_blocks: vec![],
+            db_id: None,
                     });
                     context_chars += display_len;
 
@@ -527,6 +529,7 @@ pub async fn execute<S: EventSink>(
                         tool_calls: None,
                         tool_call_id: None,
                         thinking_blocks: vec![],
+            db_id: None,
                     });
                     loop_nudge_count += 1;
                     tracing::warn!(
@@ -825,6 +828,7 @@ mod tests {
             tools_used: vec![],
             iterations: 0,
             thinking_blocks: vec![],
+            db_id: None,
         }
     }
 
