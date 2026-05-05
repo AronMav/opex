@@ -431,10 +431,10 @@ pub async fn execute<S: EventSink>(
         } else {
             serde_json::to_value(&response.thinking_blocks).ok()
         };
-        let assistant_msg_id = uuid::Uuid::new_v4();
+        let intermediate_msg_id = uuid::Uuid::new_v4();
         crate::agent::pipeline::parallel::spawn_persist_assistant_message(
             &engine.cfg().db,
-            assistant_msg_id,
+            intermediate_msg_id,
             session_id,
             &agent_name,
             &partial,
@@ -442,7 +442,7 @@ pub async fn execute<S: EventSink>(
             tb_json.as_ref(),
             Some(last_msg_id),
         );
-        last_msg_id = assistant_msg_id;
+        last_msg_id = intermediate_msg_id;
 
         // 9. Emit ToolCallStart + ToolCallArgs for each tool (UI feedback)
         for tc in &response.tool_calls {
