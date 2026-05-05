@@ -141,6 +141,25 @@ impl std::error::Error for SendError {
 /// - retryable codes (e.g. 429/500/502/503) → retried up to `max_retries - 1` times
 /// - other non-2xx → `SendError::Http` immediately
 /// - network error → retried; final attempt → `SendError::Network`
+#[tracing::instrument(
+    name = "llm.request",
+    skip_all,
+    fields(
+        provider = %provider_name,
+        // host / path of the upstream URL — useful for distinguishing
+        // routed providers (e.g. ollama vs openai-compatible proxy)
+        // when the same provider_name covers multiple endpoints.
+        http.host = tracing::field::Empty,
+        http.url_path = tracing::field::Empty,
+        // Request body size in bytes — proxy of request "weight"
+        // (large message history, attached tools schema). Recorded
+        // up front so the span carries it even on early-exit errors.
+        http.request_size_bytes = tracing::field::Empty,
+        // Final response status + retry count — recorded at exit.
+        http.status_code = tracing::field::Empty,
+        retry_attempts = tracing::field::Empty,
+    ),
+)]
 pub async fn send_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -150,6 +169,25 @@ pub async fn send_with_retry(
     max_retries: u32,
     mut customize: impl FnMut(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, SendError> {
+    // Populate static span fields. Parsing the URL once here is
+    // cheap and the result is the same across all retry attempts
+    // for a given call, so we don't need to re-record per attempt.
+    {
+        let span = tracing::Span::current();
+        if let Ok(parsed) = reqwest::Url::parse(url) {
+            if let Some(host) = parsed.host_str() {
+                span.record("http.host", tracing::field::display(host));
+            }
+            span.record("http.url_path", tracing::field::display(parsed.path()));
+        }
+        // serde_json::to_vec is the closest cheap proxy for the on-wire
+        // request size; reqwest's actual JSON serialization may differ
+        // by a handful of bytes (whitespace, key order) but this is
+        // accurate enough for cost/latency dashboards.
+        if let Ok(bytes) = serde_json::to_vec(body) {
+            span.record("http.request_size_bytes", bytes.len() as u64);
+        }
+    }
     let policy = BackoffPolicy { max_retries, ..Default::default() };
 
     for attempt in 0..policy.max_retries {
@@ -168,6 +206,9 @@ pub async fn send_with_retry(
                 );
 
                 if status.is_success() {
+                    let span = tracing::Span::current();
+                    span.record("http.status_code", status.as_u16());
+                    span.record("retry_attempts", attempt);
                     return Ok(resp);
                 }
 
@@ -183,10 +224,16 @@ pub async fn send_with_retry(
                         request_body = %&body_preview[..end],
                         "400 Bad Request — dumping request body for diagnosis"
                     );
+                    let span = tracing::Span::current();
+                    span.record("http.status_code", code);
+                    span.record("retry_attempts", attempt);
                     return Err(SendError::Http { status: code, body: err_text });
                 }
 
                 if !retryable_codes.contains(&code) || attempt == policy.max_retries - 1 {
+                    let span = tracing::Span::current();
+                    span.record("http.status_code", code);
+                    span.record("retry_attempts", attempt);
                     return Err(SendError::Http { status: code, body: err_text });
                 }
 
@@ -209,6 +256,7 @@ pub async fn send_with_retry(
                 );
 
                 if attempt == policy.max_retries - 1 {
+                    tracing::Span::current().record("retry_attempts", attempt);
                     return Err(SendError::Network(e));
                 }
 

@@ -626,7 +626,10 @@ pub(crate) async fn api_chat_sse(
     //    the streaming message, then sends [DONE]. Client always receives error before
     //    connection close in both paths.
     let registry = bus.stream_registry.clone();
-    tokio::spawn(async move {
+    // Use `spawn_traced` so the converter inherits the request's
+    // span context. SSE events emitted from this task (errors, finish
+    // markers) appear under the same trace as `pipeline.execute`.
+    crate::trace_propagation::spawn_traced(async move {
         let mut text_id_counter: usize = 0;
         // Tracks the OPEN text block so consecutive TextDelta events all carry the
         // same id. None = no open block; Some(id) = block id `id` is currently open.
@@ -1120,7 +1123,10 @@ pub(crate) async fn api_chat_sse(
         // Auto-title: set session title from first user message if not already titled
         if let Some(sid) = session_uuid {
             let title_db = chat_db.clone();
-            tokio::spawn(async move {
+            // spawn_traced so the auto-title query appears under the
+            // originating request's trace (lets us see how long the
+            // auto-title query took relative to the rest of the turn).
+            crate::trace_propagation::spawn_traced(async move {
                 if let Err(e) = crate::db::sessions::auto_title_session(&title_db, sid, &user_text_for_title).await {
                     tracing::debug!(error = %e, "auto-title failed");
                 }

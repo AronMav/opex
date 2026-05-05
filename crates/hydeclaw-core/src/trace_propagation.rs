@@ -130,6 +130,37 @@ pub async fn extract_trace_context_layer(
     next.run(req).await
 }
 
+/// Spawn a future on the tokio runtime while preserving the calling
+/// task's tracing span. Equivalent to:
+///
+/// ```ignore
+/// tokio::spawn(async move { ... }.instrument(tracing::Span::current()))
+/// ```
+///
+/// but with one import and one call. Use this **anywhere** you'd write
+/// `tokio::spawn(async move { ... })` on a path where the parent span
+/// matters — pipeline work, request handlers, anything that should
+/// appear under the originating `pipeline.execute` / `http_request`
+/// span in Jaeger.
+///
+/// Without `otel` feature: still applies `.instrument()` because the
+/// `tracing` subscriber may have other layers (file logging, broadcast)
+/// that benefit from the span context. The cost is one extra struct
+/// allocation per spawn — negligible compared to anything you'd spawn.
+///
+/// Don't use for fire-and-forget work that should NOT inherit the
+/// parent span (e.g. unrelated background sweepers, watchdog pings).
+/// For those, plain `tokio::spawn` is correct — the absence of a
+/// parent span is the signal that it's standalone.
+pub fn spawn_traced<F>(future: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    use tracing::Instrument;
+    tokio::spawn(future.instrument(tracing::Span::current()))
+}
+
 #[cfg(test)]
 #[cfg(feature = "otel")]
 mod tests {

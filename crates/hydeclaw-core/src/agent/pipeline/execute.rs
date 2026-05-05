@@ -349,7 +349,10 @@ pub async fn execute<S: EventSink>(
             // Extended fields are subsets of input/output (NOT additive); persisting
             // them lets dashboards split the bill by cache hits + reasoning.
             let usage = usage.clone();
-            tokio::spawn(async move {
+            // spawn_traced so the usage INSERT shows up as a child of
+            // the current `pipeline.execute` span in Jaeger — lets us
+            // correlate "slow request" traces with "slow DB write" tail.
+            crate::trace_propagation::spawn_traced(async move {
                 if let Err(e) = crate::db::usage::record_usage(
                     &db, &agent, &provider_name, &model, Some(session_id), &usage,
                 )
