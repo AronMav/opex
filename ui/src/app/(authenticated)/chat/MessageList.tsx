@@ -98,8 +98,23 @@ function ScrollToBottomButton({
 
 // ── Header / Footer ────────────────────────────────────────────────────────
 
-function VirtuosoHeader({ hiddenCount, onLoadEarlier }: { hiddenCount: number; onLoadEarlier: () => void }) {
+function VirtuosoHeader({
+  hiddenCount,
+  onLoadEarlier,
+  isLoadingHistory,
+}: {
+  hiddenCount: number;
+  onLoadEarlier: () => void;
+  isLoadingHistory: boolean;
+}) {
   const { t } = useTranslation();
+  if (isLoadingHistory) {
+    return (
+      <div className="flex justify-center py-3">
+        <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+      </div>
+    );
+  }
   if (hiddenCount <= 0) return null;
   return (
     <div className="flex items-center justify-center py-4">
@@ -203,7 +218,7 @@ export function MessageList({
   }, [messages, showThinking]);
 
   const virtuosoComponents = useMemo(() => ({
-    Header: () => <VirtuosoHeader hiddenCount={hiddenCount} onLoadEarlier={onLoadEarlier} />,
+    Header: () => <VirtuosoHeader hiddenCount={hiddenCount} onLoadEarlier={onLoadEarlier} isLoadingHistory={isLoadingHistory} />,
     Footer: () => (
       <>
         <VirtuosoFooter turnLimitMessage={turnLimitMessage} />
@@ -247,6 +262,7 @@ export function MessageList({
         atBottomThreshold={100}
         initialTopMostItemIndex={messages.length > 0 ? messages.length - 1 : 0}
         increaseViewportBy={{ top: 500, bottom: 200 }}
+        startReached={() => { if (onLoadEarlier) onLoadEarlier(); }}
         components={virtuosoComponents}
         itemContent={(index, msg) => {
           if (msg.id === THINKING_ID) {

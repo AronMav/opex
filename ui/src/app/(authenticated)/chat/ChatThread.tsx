@@ -156,6 +156,9 @@ export function ChatThread({
   const renderLimit = useChatStore((s) => s.agents[s.currentAgent]?.renderLimit ?? 100);
 
   const loadEarlierMessages = useChatStore((s) => s.loadEarlierMessages);
+  const loadPreviousMessages = useChatStore((s) => s.loadPreviousMessages);
+  const hasMoreHistory = useChatStore((s) => s.agents[s.currentAgent]?.hasMoreHistory ?? false);
+  const isScrollLoadingHistory = useChatStore((s) => s.agents[s.currentAgent]?.isLoadingHistory ?? false);
 
   // Architecture C: history + SSE overlay. See `chat-overlay-dedup.ts`
   // for the status-independent user-bubble merge (fixes the 2026-04-17
@@ -288,10 +291,14 @@ export function ChatThread({
         isStreaming={isStreaming}
         isTextStreaming={isTextStreaming}
         showThinking={showThinking}
-        isLoadingHistory={historyLoading && !liveHasContent}
+        isLoadingHistory={(historyLoading && !liveHasContent) || isScrollLoadingHistory}
         emptyState={<EmptyState />}
         hiddenCount={hiddenCount}
-        onLoadEarlier={() => loadEarlierMessages(currentAgent)}
+        onLoadEarlier={
+          hasMoreHistory
+            ? () => loadPreviousMessages(currentAgent)
+            : () => loadEarlierMessages(currentAgent)
+        }
         searchMatchIds={searchMatchIds ?? undefined}
         searchActive={search.isOpen && !!search.query}
       />
