@@ -275,15 +275,25 @@ export async function processSSEStream(
           }
 
           case "step-start": {
-            // Boundary between LLM tool-loop iterations within one assistant
-            // turn. Insert a StepBoundaryPart so the UI renders a visual divider
-            // — each iteration's text + tools live in their own structural
-            // slice and repeated narration ("Делегирую…") is no longer a
-            // duplicate but a labeled "next step" event.
+            // Each LLM tool-loop iteration is a separate live ChatMessage with
+            // a pre-allocated UUID that matches its eventual DB row id (sent
+            // as `messageId` in the step-start event). On every step-start we
+            // commit the current buffer as a finished ChatMessage and reset
+            // the buffer to start accumulating the next iteration under its
+            // own id. ID-based dedup with history "just works" — no content
+            // heuristics needed.
             //
-            // Skip the boundary before the first iteration's content (would
-            // appear as a leading divider with nothing above it).
-            if (session.buffer.snapshot().length > 0) {
+            // Fallback: if backend didn't send messageId (legacy / nil), keep
+            // the previous behaviour of inserting a step-boundary marker so
+            // the existing dedup safety nets still apply.
+            if (event.messageId) {
+              if (session.buffer.snapshot().length > 0) {
+                session.commit();
+              }
+              session.buffer.reset();
+              session.buffer.assistantId = event.messageId;
+              sseLog(agent, "step-start-new-message", { id: event.messageId });
+            } else if (session.buffer.snapshot().length > 0) {
               session.buffer.flushText();
               session.buffer.parts.push({ type: "step-boundary", stepId: event.stepId });
               sseLog(agent, "post-step-boundary-buffer", partsBrief(session.buffer.parts));

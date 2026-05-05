@@ -109,29 +109,14 @@ pub async fn execute<S: EventSink>(
         });
     }
 
-    // Signal the start of a message to the sink.
-    // Pre-generate the UUID here so the same ID is used both in the
-    // `MessageStart` SSE event (sent to the frontend) and in the final
-    // DB row persisted by `finalize`. This keeps the live buffer ID in
-    // sync with the DB row ID, preventing duplicate messages in the UI.
-    let assistant_msg_id = Uuid::new_v4();
-    match sink
-        .emit(PipelineEvent::Stream(StreamEvent::MessageStart { message_id: assistant_msg_id.to_string() }))
-        .await
-    {
-        Ok(()) => {}
-        Err(SinkError::Closed) | Err(SinkError::Full) => {
-            return Ok(ExecuteOutcome {
-                status: ExecuteStatus::Interrupted("sink_closed"),
-                final_text: String::new(),
-                thinking_json: None,
-                messages_len_at_end: messages.len(),
-                final_parent_msg_id: last_msg_id,
-                assistant_message_id: assistant_msg_id,
-            });
-        }
-        Err(e) => return Err(e.into()),
-    }
+    // Track the UUID of the most recent iteration's row — used as
+    // assistant_message_id in finalize when the loop exits. Updated to a
+    // freshly pre-allocated UUID at the top of every iteration so the SSE
+    // step-start event, the live buffer assistantId, and the DB row id all
+    // match. Eliminates the cross-source ID gap between intermediate live
+    // ChatMessages and DB intermediate rows that previously forced
+    // content-based dedup heuristics in the frontend.
+    let mut assistant_msg_id = Uuid::nil();
 
     // ── Mutable loop state ───────────────────────────────────────────────────
     let loop_config = engine.tool_loop_config();
@@ -155,11 +140,48 @@ pub async fn execute<S: EventSink>(
             });
         }
 
-        // 2. Emit StepStart
+        // 2. Pre-allocate the UUID this iteration's row will eventually be
+        //    persisted under. Frontend uses this id to open a fresh live
+        //    ChatMessage; once the row is saved (intermediate via
+        //    spawn_persist_assistant_message, final via finalize), DB row
+        //    id == live ChatMessage id → ID-based dedup just works.
+        let iter_msg_id = Uuid::new_v4();
+        assistant_msg_id = iter_msg_id;
+
+        // For the very first iteration emit a legacy `MessageStart` event so
+        // existing frontend code paths that bind on it (sse_types::START)
+        // continue to work. Subsequent iterations rely on the per-step
+        // message_id field below.
+        if iteration == 0 {
+            match sink
+                .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
+                    message_id: iter_msg_id.to_string(),
+                }))
+                .await
+            {
+                Ok(()) => {}
+                Err(SinkError::Closed) | Err(SinkError::Full) => {
+                    return Ok(ExecuteOutcome {
+                        status: ExecuteStatus::Interrupted("sink_closed"),
+                        final_text: String::new(),
+                        thinking_json: None,
+                        messages_len_at_end: messages.len(),
+                        final_parent_msg_id: last_msg_id,
+                        assistant_message_id: iter_msg_id,
+                    });
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        // 3. Emit StepStart with the iteration's row UUID. Frontend opens a
+        //    new live ChatMessage with this id (committing the previous one
+        //    as done) so each iteration is structurally isolated.
         let step_id = format!("step_{}", iteration);
         match sink
             .emit(PipelineEvent::Stream(StreamEvent::StepStart {
                 step_id: step_id.clone(),
+                message_id: iter_msg_id.to_string(),
             }))
             .await
         {
@@ -431,10 +453,12 @@ pub async fn execute<S: EventSink>(
         } else {
             serde_json::to_value(&response.thinking_blocks).ok()
         };
-        let intermediate_msg_id = uuid::Uuid::new_v4();
+        // Use the per-iteration UUID we already emitted in StepStart so the
+        // intermediate DB row id matches the live ChatMessage id the frontend
+        // built from the same SSE event. Pure ID-based dedup downstream.
         crate::agent::pipeline::parallel::spawn_persist_assistant_message(
             &engine.cfg().db,
-            intermediate_msg_id,
+            iter_msg_id,
             session_id,
             &agent_name,
             &partial,
@@ -442,7 +466,7 @@ pub async fn execute<S: EventSink>(
             tb_json.as_ref(),
             Some(last_msg_id),
         );
-        last_msg_id = intermediate_msg_id;
+        last_msg_id = iter_msg_id;
 
         // 9. Emit ToolCallStart + ToolCallArgs for each tool (UI feedback)
         for tc in &response.tool_calls {

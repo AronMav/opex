@@ -20,7 +20,13 @@ pub enum StreamEvent {
     /// `context_limit` is the resolved token budget for this model (from /api/show or heuristic).
     SessionId { session_id: String, context_limit: u32 },
     MessageStart { message_id: String },
-    StepStart { step_id: String },
+    /// `message_id` carries the pre-allocated UUID for the assistant DB row this
+    /// iteration will produce. Frontend uses it to open a new live ChatMessage
+    /// with the SAME id the DB row will eventually receive — enabling pure
+    /// ID-based dedup between live overlay and history without content-matching
+    /// heuristics. Empty string means "no row will be persisted for this step"
+    /// (legacy / intermediate-only flow).
+    StepStart { step_id: String, message_id: String },
     TextDelta(String),
     ToolCallStart { id: String, name: String },
     ToolCallArgs { id: String, args_text: String },

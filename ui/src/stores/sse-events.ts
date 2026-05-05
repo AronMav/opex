@@ -19,7 +19,7 @@ export type SseEvent =
   | { type: "file"; url: string; mediaType?: string }
   | { type: "rich-card"; cardType: string; data: Record<string, unknown> }
   | { type: "sync"; content: string; toolCalls: unknown[]; status: string; error?: string }
-  | { type: "step-start"; stepId: string }
+  | { type: "step-start"; stepId: string; messageId?: string }
   | { type: "step-finish"; stepId: string; finishReason: string }
   | { type: "tool-approval-needed"; approvalId: string; toolName: string; toolInput: Record<string, unknown>; timeoutMs: number }
   | { type: "tool-approval-resolved"; approvalId: string; action: "approved" | "rejected" | "timeout_rejected"; modifiedInput?: Record<string, unknown> }
@@ -105,7 +105,7 @@ export function parseSseEvent(raw: string): SseEvent | null {
       };
     case "step-start":
       if (typeof e.stepId !== "string") return null;
-      return { type, stepId: e.stepId };
+      return { type, stepId: e.stepId, messageId: typeof e.messageId === "string" ? e.messageId : undefined };
     case "step-finish":
       if (typeof e.stepId !== "string") return null;
       return { type, stepId: e.stepId, finishReason: typeof e.finishReason === "string" ? e.finishReason : "unknown" };
