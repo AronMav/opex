@@ -45,7 +45,6 @@ Create `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs`:
 //! Background TTS task — synthesise audio and deliver it outside the
 //! SSE session deadline so a slow Qwen3-TTS on Pi can't time out the agent.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine as _;
@@ -62,7 +61,8 @@ pub struct BackgroundTtsTask {
     pub(crate) args:           serde_json::Value,
     pub(crate) ca:             ChannelActionConfig,
     pub(crate) http_client:    reqwest::Client,
-    pub(crate) resolver:       SecretsEnvResolver,
+    /// None only in tests where the YAML tool has no env-var templates.
+    pub(crate) resolver:       Option<SecretsEnvResolver>,
     pub(crate) oauth_ctx:      Option<OAuthContext>,
     pub(crate) channel_router: Option<ChannelActionRouter>,
     pub(crate) ui_event_tx:    Option<broadcast::Sender<String>>,
@@ -121,16 +121,8 @@ mod tests {
             .expect("lazy connect cannot fail")
     }
 
-    fn fake_resolver() -> SecretsEnvResolver {
-        use crate::secrets::SecretsManager;
-        let sm = SecretsManager::new_for_tests();
-        SecretsEnvResolver {
-            secrets: Arc::new(sm),
-            agent_name: "Arty".into(),
-        }
-    }
-
     /// Build a minimal YamlToolDef pointing at `endpoint`.
+    /// No auth / env-var templates → resolver: None is safe.
     fn make_tool(endpoint: &str) -> YamlToolDef {
         serde_yaml::from_str(&format!(
             "name: synthesize_speech\nendpoint: \"{endpoint}\"\nmethod: POST\ntimeout: 10\n"
@@ -149,7 +141,9 @@ mod tests {
             args:           serde_json::json!({ "input": "test", "_context": context }),
             ca:             ChannelActionConfig { action: "send_voice".into(), data_field: "_binary".into() },
             http_client:    reqwest::Client::new(),
-            resolver:       fake_resolver(),
+            // None is valid: execute_binary accepts Option<&dyn EnvResolver>,
+            // and our test tool has no env-var templates.
+            resolver:       None,
             oauth_ctx:      None,
             channel_router: router,
             ui_event_tx:    Some(ui_tx),
@@ -222,12 +216,13 @@ impl BackgroundTtsTask {
         let has_channel = self.context.get("chat_id").is_some();
 
         // ── 1. Synthesise ─────────────────────────────────────────────────────
+        let resolver_ref = self.resolver.as_ref().map(|r| r as &dyn crate::tools::yaml_tools::EnvResolver);
         let bytes = match tokio::time::timeout(
             std::time::Duration::from_secs(600),
             self.tool.execute_binary(
                 &self.args,
                 &self.http_client,
-                Some(&self.resolver),
+                resolver_ref,
                 self.oauth_ctx.as_ref(),
                 &self.tool_headers,
             ),
@@ -271,12 +266,17 @@ impl BackgroundTtsTask {
         };
 
         let audio_b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let param_key = match self.ca.action.as_str() {
+            "send_photo" => "image_base64",
+            "send_voice" => "audio_base64",
+            _            => "data_base64",
+        };
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
 
         if router
             .send(ChannelAction {
-                name: "send_voice".into(),
-                params: serde_json::json!({ "audio_base64": audio_b64 }),
+                name: self.ca.action.clone(),
+                params: serde_json::json!({ param_key: audio_b64 }),
                 context: self.context.clone(),
                 reply: reply_tx,
                 target_channel: None,
@@ -451,6 +451,25 @@ Inside the `#[cfg(test)]` `mod tests` block, append:
         assert!(text.contains('❌'), "error text must start with ❌, got: {text}");
         let _ = action.reply.send(Ok(()));
     }
+
+    #[tokio::test]
+    async fn ui_session_does_not_panic() {
+        // Arrange: no chat_id → UI path; toolgate returns audio bytes
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"fakewav!"))
+            .mount(&server)
+            .await;
+
+        // No chat_id → deliver_to_ui path
+        let context = serde_json::json!({});
+        let task = make_task(&server.uri(), None, context);
+
+        // Act — save_binary_to_uploads writes to temp dir; notify() fails silently
+        // (lazy DB never connects). Must complete without panic.
+        task.run().await;
+    }
 ```
 
 - [ ] **Step 2: Run error-path tests**
@@ -504,7 +523,7 @@ Add these methods to the `impl BackgroundTtsTask` block, before `run()`:
             args:           args.clone(),
             ca:             ca.clone(),
             http_client:    ctx.tex.http_client.clone(),
-            resolver:       make_resolver(&ctx.tex.secrets, &ctx.cfg.agent.name),
+            resolver:       Some(make_resolver(&ctx.tex.secrets, &ctx.cfg.agent.name)),
             oauth_ctx:      make_oauth_context(ctx.tex.oauth.as_ref(), &ctx.cfg.agent.name),
             channel_router: ctx.state.channel_router.clone(),
             ui_event_tx:    ctx.state.ui_event_tx.clone(),
@@ -717,20 +736,37 @@ In `notification-bell.tsx`, find the notification list map (around line 136). Re
 <TtsNotificationBody notification={n} />
 ```
 
-Also update `getNotificationRoute` to not navigate away for `tts_ready`/`tts_error`:
+Also update `getNotificationRoute` to return `null` for `tts_ready`/`tts_error`, and update the onClick handler to skip navigation in that case:
 
 ```tsx
-function getNotificationRoute(type: string): string {
+function getNotificationRoute(type: string): string | null {
   switch (type) {
     case "access_request":  return "/access";
     case "tool_approval":   return "/monitor/?tab=approvals";
     case "agent_error":     return "/monitor/?tab=logs";
     case "watchdog_alert":  return "/monitor/?tab=watchdog";
-    case "tts_ready":       return "#";   // audio inline — no navigation
-    case "tts_error":       return "#";
+    case "tts_ready":       return null;  // audio player inline — no navigation
+    case "tts_error":       return null;
     default:                return "/monitor/";
   }
 }
+```
+
+Update the notification onClick to skip `router.push` when route is null:
+
+```tsx
+// Before:
+onClick={() => {
+  if (!n.read) markRead.mutate(n.id);
+  router.push(getNotificationRoute(n.type));
+}}
+
+// After:
+onClick={() => {
+  if (!n.read) markRead.mutate(n.id);
+  const route = getNotificationRoute(n.type);
+  if (route) router.push(route);
+}}
 ```
 
 - [ ] **Step 5: Run tests**
