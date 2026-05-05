@@ -3,7 +3,11 @@ import { useChatStore } from "@/stores/chat-store";
 
 // Mock react-query (used inside chat-store for cache invalidation)
 vi.mock("@/lib/query-client", () => ({
-  queryClient: { invalidateQueries: vi.fn(), getQueryData: vi.fn(() => undefined) },
+  queryClient: {
+    invalidateQueries: vi.fn(),
+    getQueryData: vi.fn(() => undefined),
+    refetchQueries: vi.fn(() => Promise.resolve()),
+  },
 }));
 
 // Mock api helpers (getToken reads localStorage which may not be set in jsdom)
