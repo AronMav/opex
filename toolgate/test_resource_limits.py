@@ -34,9 +34,14 @@ def test_app_py_uses_phase62_res07_limits():
     assert re.search(r"max_keepalive_connections\s*=\s*10", src), (
         "max_keepalive_connections=10 must appear in app.py (Phase 62 RES-07)"
     )
-    # Timeout 120s must be preserved.
-    assert re.search(r"timeout\s*=\s*120\.0", src), (
-        "timeout=120.0 must be preserved in app.py"
+    # Pool timeout 120s must be preserved on the shared AsyncClient — that's
+    # how PoolTimeout fires when the per-provider max_connections=20 queue
+    # backs up. The current code uses `httpx.Timeout(connect=10.0, read=None,
+    # write=10.0, pool=120.0)` (more precise than the original flat
+    # `timeout=120.0`); the 120s pool wait is what this test guards.
+    assert re.search(r"pool\s*=\s*120\.0", src), (
+        "pool=120.0 must be preserved in app.py's httpx.Timeout(...) "
+        "so PoolTimeout still fires after the queue-backpressure window"
     )
 
 

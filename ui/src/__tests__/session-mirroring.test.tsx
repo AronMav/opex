@@ -74,6 +74,7 @@ function seedStore() {
       reconnectAttempt: 0,
       maxReconnectAttempts: 3,
       isLlmReconnecting: false,
+      lastEventId: null,
       selectedBranches: {},
       pendingMessage: null,
       contextTokens: null,
@@ -83,6 +84,7 @@ function seedStore() {
       reasoningTokens: null,
       hasMoreHistory: false,
       isLoadingHistory: false,
+      modelContextLimit: null,
     };
   });
 }
