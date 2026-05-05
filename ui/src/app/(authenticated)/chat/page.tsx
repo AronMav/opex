@@ -770,10 +770,10 @@ export default function ChatPage() {
             tokens={contextTokens}
             model={currentAgentModel}
             modelContextLimit={modelContextLimit}
-            outputTokens={contextOutputTokens}
             cacheReadTokens={cacheReadTokens}
             cacheCreationTokens={cacheCreationTokens}
             reasoningTokens={reasoningTokens}
+            isGenerating={isStreaming}
           />
           {/* HISTORY / Return to live badge removed — confusing for users during agent switch */}
           {streamError && (

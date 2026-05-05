@@ -17,17 +17,18 @@ interface ContextBarProps {
   model: string | null | undefined;
   /** Real context window from backend (single source of truth). Overrides static table. */
   modelContextLimit?: number | null;
-  outputTokens?: number | null;
   cacheReadTokens?: number | null;
   cacheCreationTokens?: number | null;
   reasoningTokens?: number | null;
+  /** True while the model is actively generating — values are stale until done. */
+  isGenerating?: boolean;
 }
 
 function formatK(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`;
 }
 
-function formatAbsolute(n: number): string {
+function formatNum(n: number): string {
   return n.toLocaleString("ru-RU");
 }
 
@@ -40,15 +41,14 @@ export function ContextBar({
   tokens,
   model,
   modelContextLimit,
-  outputTokens,
   cacheReadTokens,
   cacheCreationTokens,
   reasoningTokens,
+  isGenerating = false,
 }: ContextBarProps) {
   // Backend-provided limit is the single source of truth; fall back to static table.
   const limit = modelContextLimit ?? (model ? getContextLimit(model) : null);
 
-  // Nothing to show at all
   if (!model && tokens == null) return null;
 
   const hasUsage = tokens != null && limit != null;
@@ -58,53 +58,66 @@ export function ContextBar({
   const barColor =
     ratio > 0.95 ? "bg-destructive" :
     ratio > 0.8  ? "bg-warning"     :
-                   "bg-muted-foreground/40";
+                   "bg-primary/50";
 
-  // Tooltip content
-  const lines: string[] = [];
+  // Tooltip: compact, no redundancy
+  const tooltipLines: string[] = [];
   if (hasUsage) {
     const remaining = Math.max(0, limit! - tokens!);
-    lines.push(`Контекст: ${formatAbsolute(tokens!)} / ${formatAbsolute(limit!)} (осталось ${formatAbsolute(remaining)})`);
-    lines.push("");
-    lines.push(`Input: ${formatAbsolute(tokens!)}`);
-    if (cacheCreationTokens != null && cacheCreationTokens > 0)
-      lines.push(`  └─ cache write: ${formatAbsolute(cacheCreationTokens)} (×1.25 cost)`);
-    if (cacheReadTokens != null && cacheReadTokens > 0)
-      lines.push(`  └─ cache read:  ${formatAbsolute(cacheReadTokens)} (×0.1 cost)`);
-    if (outputTokens != null && outputTokens > 0) {
-      lines.push(`Output: ${formatAbsolute(outputTokens)}`);
+    const pctUsed = Math.round(ratio * 100);
+    tooltipLines.push(`${formatNum(tokens!)} / ${formatNum(limit!)} токенов (${pctUsed}%)`);
+    tooltipLines.push(`Остаток: ${formatNum(remaining)}`);
+
+    const hasCacheDetails =
+      (cacheCreationTokens != null && cacheCreationTokens > 0) ||
+      (cacheReadTokens != null && cacheReadTokens > 0) ||
+      (reasoningTokens != null && reasoningTokens > 0);
+
+    if (hasCacheDetails) {
+      tooltipLines.push("");
+      if (cacheCreationTokens != null && cacheCreationTokens > 0)
+        tooltipLines.push(`↑ cache write: ${formatNum(cacheCreationTokens)}`);
+      if (cacheReadTokens != null && cacheReadTokens > 0)
+        tooltipLines.push(`↓ cache read: ${formatNum(cacheReadTokens)}`);
       if (reasoningTokens != null && reasoningTokens > 0)
-        lines.push(`  └─ reasoning:    ${formatAbsolute(reasoningTokens)}`);
+        tooltipLines.push(`✦ reasoning: ${formatNum(reasoningTokens)}`);
+    }
+
+    if (isGenerating) {
+      tooltipLines.push("");
+      tooltipLines.push("· обновится после ответа");
     }
   }
-  const tooltipText = lines.join("\n");
 
   return (
-    <TooltipProvider delayDuration={200}>
+    <TooltipProvider delayDuration={300}>
       <Tooltip>
         <TooltipTrigger asChild>
           <div className="flex items-center gap-2 cursor-default select-none">
 
-            {/* Model badge — always shown */}
+            {/* Model badge */}
             {model && (
-              <span className="rounded-md border border-border/50 bg-muted/40 px-2 py-0.5 font-mono text-[11px] text-muted-foreground/70 whitespace-nowrap">
+              <span className="rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 font-mono text-[11px] text-muted-foreground/60 whitespace-nowrap">
                 {shortModel(model)}
               </span>
             )}
 
-            {/* Token count + progress bar — shown after first usage event */}
+            {/* Token count + progress bar */}
             {hasUsage && (
               <>
-                <span className="text-[11px] text-muted-foreground/60 tabular-nums whitespace-nowrap">
+                <span className={`text-[11px] tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground/40" : "text-muted-foreground/60"}`}>
                   {formatK(tokens!)} / {formatK(limit!)}
                 </span>
-                <div className="h-[5px] w-16 rounded-full bg-muted/40 overflow-hidden">
+                <div className="relative h-[4px] w-14 rounded-full bg-muted/30 overflow-hidden">
                   <div
-                    className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+                    className={`h-full rounded-full transition-all duration-700 ${barColor} ${isGenerating ? "opacity-50" : ""}`}
                     style={{ width: `${pct}%` }}
                   />
+                  {isGenerating && (
+                    <div className="absolute inset-0 rounded-full bg-primary/20 animate-pulse" />
+                  )}
                 </div>
-                {ratio > 0.95 && (
+                {ratio > 0.95 && !isGenerating && (
                   <span className="text-[10px] text-destructive font-medium whitespace-nowrap">
                     Контекст почти заполнен
                   </span>
@@ -114,9 +127,13 @@ export function ContextBar({
 
           </div>
         </TooltipTrigger>
-        {tooltipText && (
-          <TooltipContent side="bottom" className="text-xs max-w-xs whitespace-pre-line font-mono">
-            {tooltipText}
+
+        {tooltipLines.length > 0 && (
+          <TooltipContent
+            side="bottom"
+            className="bg-popover/95 border border-border/60 text-popover-foreground backdrop-blur-sm text-[11px] font-mono max-w-[240px] whitespace-pre-line shadow-lg"
+          >
+            {tooltipLines.join("\n")}
           </TooltipContent>
         )}
       </Tooltip>
