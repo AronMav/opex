@@ -281,6 +281,14 @@ pub async fn execute<S: EventSink>(
             // Update compressor's token count so proactive compression can fire
             // on the next iteration when the context budget is exceeded.
             compressor.update_token_count(usage.input_tokens);
+        } else {
+            // Model didn't report usage (e.g. some Ollama models). Fall back to a
+            // char-based estimate (÷4) so compression can still trigger when the
+            // context grows large.
+            let estimated = (context_chars / 4) as u32;
+            if estimated > compressor.last_prompt_tokens {
+                compressor.update_token_count(estimated);
+            }
         }
 
         // Fire-and-forget usage recording (mirrors engine_sse.rs line 405)
