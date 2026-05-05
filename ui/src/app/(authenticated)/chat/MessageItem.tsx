@@ -18,6 +18,7 @@ import { BranchNavigator } from "./BranchNavigator";
 import { cn } from "@/lib/utils";
 import { AlertCircle, ChevronRight } from "lucide-react";
 // Collapsible removed — tool grouping disabled
+import { CompressionDivider } from "@/components/chat/CompressionDivider";
 import { CometLoader } from "@/components/ui/loader";
 import { MessageActions } from "./MessageActions";
 import { TextPart } from "./parts/TextPart";
@@ -96,6 +97,14 @@ function renderPart(part: MessagePart, index: number, _meta?: { stepGroupToolIds
       );
     case "approval":
       return <ApprovalCard key={`approval-${part.approvalId}`} part={part} />;
+    case "compression-divider":
+      return (
+        <CompressionDivider
+          key={`compression-divider-${part.segmentIndex}`}
+          segmentIndex={part.segmentIndex}
+          totalSegments={part.totalSegments}
+        />
+      );
     default:
       return null;
   }
