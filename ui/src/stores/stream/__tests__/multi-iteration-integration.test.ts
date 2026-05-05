@@ -1,0 +1,218 @@
+// Integration tests for the per-iteration UUID architecture (Phases 1-5).
+// Verifies the SSE protocol contract end-to-end through stream-processor:
+//   • each step-start opens a new live ChatMessage with the event's messageId
+//   • text-deltas inside one iteration accumulate under that id
+//   • Last-Event-ID is tracked across the run
+//   • Finish event closes the stream cleanly
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { processSSEStream } from "../stream-processor";
+import { streamSessionManager } from "../../stream-session";
+import { useChatStore } from "../../chat-store";
+import { getLiveMessages } from "../../chat-types";
+
+function makeStream(frames: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let i = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (i < frames.length) {
+        controller.enqueue(encoder.encode(frames[i++]));
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
+function makeCallbacks(overrides: Partial<Parameters<typeof processSSEStream>[2]["callbacks"]> = {}) {
+  return {
+    onSessionId: vi.fn(),
+    onReconnectNeeded: vi.fn(),
+    getAgentState: (agent: string) => useChatStore.getState().agents[agent],
+    updateSessionParticipants: vi.fn(),
+    onStreamDone: vi.fn(),
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  useChatStore.setState((draft: any) => {
+    draft.agents = {
+      Arty: {
+        activeSessionId: null,
+        activeSessionIds: [],
+        messageSource: { mode: "new-chat" },
+        connectionPhase: "idle",
+        connectionError: null,
+        streamError: null,
+        streamGeneration: 0,
+        reconnectAttempt: 0,
+        selectedBranches: {},
+        renderLimit: 100,
+        turnLimitMessage: null,
+        maxReconnectAttempts: 3,
+        modelOverride: null,
+        forceNewSession: false,
+        lastEventId: null,
+      },
+    };
+  });
+  streamSessionManager.disposeCurrent("Arty");
+});
+
+describe("multi-iteration: one step-start opens one ChatMessage per iteration", () => {
+  it("two iterations → two live ChatMessages with their own ids", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      // Iteration 0
+      `data: ${JSON.stringify({ type: "start", messageId: "iter-0-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_0", messageId: "iter-0-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-1", delta: "Calling tool" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "tool-input-start", toolCallId: "tc1", toolName: "search" })}\n\n`,
+      `data: ${JSON.stringify({ type: "tool-output-available", toolCallId: "tc1", output: "results" })}\n\n`,
+      // Iteration 1
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_1", messageId: "iter-1-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-2" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-2", delta: "Done!" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-2" })}\n\n`,
+      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      reconnectAttempt: 0,
+      callbacks: makeCallbacks(),
+    });
+    // Wait for any throttled commits
+    await new Promise(r => setTimeout(r, 100));
+
+    const live = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistants = live.filter(m => m.role === "assistant");
+    // Two iterations → two distinct ChatMessages
+    expect(assistants).toHaveLength(2);
+    const ids = assistants.map(a => a.id).sort();
+    expect(ids).toEqual(["iter-0-uuid", "iter-1-uuid"].sort());
+
+    // Iter 0: text "Calling tool" + tool tc1
+    const iter0 = assistants.find(a => a.id === "iter-0-uuid")!;
+    expect(iter0.parts.some(p => p.type === "text" && p.text.includes("Calling tool"))).toBe(true);
+    expect(iter0.parts.some(p => p.type === "tool" && (p as { toolCallId: string }).toolCallId === "tc1")).toBe(true);
+
+    // Iter 1: only text, no tools
+    const iter1 = assistants.find(a => a.id === "iter-1-uuid")!;
+    expect(iter1.parts.some(p => p.type === "text" && p.text.includes("Done!"))).toBe(true);
+    expect(iter1.parts.some(p => p.type === "tool")).toBe(false);
+  });
+
+  it("step-start with same id as current buffer is a no-op (iteration 0 dedup)", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      // Backend emits both MessageStart and step-start with SAME id on iteration 0
+      `data: ${JSON.stringify({ type: "start", messageId: "shared-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_0", messageId: "shared-uuid" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-1", delta: "Hello" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      reconnectAttempt: 0,
+      callbacks: makeCallbacks(),
+    });
+    await new Promise(r => setTimeout(r, 100));
+
+    const live = getLiveMessages(useChatStore.getState().agents.Arty.messageSource);
+    const assistants = live.filter(m => m.role === "assistant");
+    // Only ONE ChatMessage — the second step-start with same id was skipped
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].id).toBe("shared-uuid");
+    expect(assistants[0].parts.some(p => p.type === "text" && p.text.includes("Hello"))).toBe(true);
+  });
+});
+
+describe("Last-Event-ID tracking", () => {
+  it("session.lastEventId updates from SSE id: lines", async () => {
+    const session = streamSessionManager.start("Arty");
+    // Mix `id:` and `data:` lines like a real SSE response
+    const frames = [
+      "id: 5\n",
+      `data: ${JSON.stringify({ type: "start", messageId: "msg-1" })}\n\n`,
+      "id: 6\n",
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_0", messageId: "msg-1" })}\n\n`,
+      "id: 12\n",
+      `data: ${JSON.stringify({ type: "text-start", id: "text-1" })}\n\n`,
+      "id: 14\n",
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-1", delta: "hi" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      reconnectAttempt: 0,
+      callbacks: makeCallbacks(),
+    });
+    expect(session.lastEventId).toBe(14);
+    // Persisted to agent state for reconnect
+    expect(useChatStore.getState().agents.Arty.lastEventId).toBe(14);
+  });
+
+  it("non-numeric id: line is ignored gracefully", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      "id: not-a-number\n",
+      `data: ${JSON.stringify({ type: "start", messageId: "msg-1" })}\n\n`,
+      "id: 3\n",
+      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      reconnectAttempt: 0,
+      callbacks: makeCallbacks(),
+    });
+    expect(session.lastEventId).toBe(3);
+  });
+});
+
+describe("Finish event guarantee — closes connectionPhase cleanly", () => {
+  it("normal finish closes connectionPhase to non-error (complete or idle)", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "start", messageId: "m1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "step-start", stepId: "step_0", messageId: "m1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-start", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-delta", id: "text-1", delta: "ok" })}\n\n`,
+      `data: ${JSON.stringify({ type: "text-end", id: "text-1" })}\n\n`,
+      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      reconnectAttempt: 0,
+      callbacks: makeCallbacks(),
+    });
+    // Phase passes through "complete" during the post-finally refetch window
+    // and lands on "idle" once the (mocked / no-op) refetch resolves. Either
+    // is correct — both exit the loader; "streaming"/"reconnecting" are not.
+    const phase = useChatStore.getState().agents.Arty.connectionPhase;
+    expect(["complete", "idle"]).toContain(phase);
+  });
+
+  it("error event sets connectionPhase=error then finish does NOT overwrite", async () => {
+    const session = streamSessionManager.start("Arty");
+    const frames = [
+      `data: ${JSON.stringify({ type: "data-session-id", data: { sessionId: "s1" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "error", errorText: "oops" })}\n\n`,
+      `data: ${JSON.stringify({ type: "finish" })}\n\n`,
+    ];
+    await processSSEStream(session, makeStream(frames), {
+      sessionId: null,
+      reconnectAttempt: 0,
+      callbacks: makeCallbacks(),
+    });
+    expect(useChatStore.getState().agents.Arty.connectionPhase).toBe("error");
+    expect(useChatStore.getState().agents.Arty.streamError).toBe("oops");
+  });
+});

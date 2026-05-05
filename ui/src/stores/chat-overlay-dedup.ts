@@ -22,6 +22,41 @@
 
 import type { ChatMessage, MessagePart, ToolPart } from "./chat-types";
 
+interface HistoryIndex {
+  ids: Set<string>;
+  toolIds: Set<string>;
+}
+
+/**
+ * WeakMap cache of pre-computed history indexes keyed by the ChatMessage[]
+ * reference. PERF-02 in-place Immer mutations keep history arrays stable
+ * across renders that don't change DB content, so this cache hits the
+ * common case (typing into composer, focusing window, scrolling) where
+ * mergeLiveOverlay is called many times with the same history.
+ *
+ * GC-safe: entries vanish when the array goes out of scope.
+ */
+const historyIndexCache = new WeakMap<readonly ChatMessage[], HistoryIndex>();
+
+function buildHistoryIndex(history: readonly ChatMessage[]): HistoryIndex {
+  const cached = historyIndexCache.get(history);
+  if (cached) return cached;
+  const ids = new Set<string>();
+  const toolIds = new Set<string>();
+  for (const m of history) {
+    ids.add(m.id);
+    if (m.mergedIds) for (const mid of m.mergedIds) ids.add(mid);
+    if (m.role === "assistant") {
+      for (const p of m.parts) {
+        if (p.type === "tool") toolIds.add((p as ToolPart).toolCallId);
+      }
+    }
+  }
+  const idx: HistoryIndex = { ids, toolIds };
+  historyIndexCache.set(history, idx);
+  return idx;
+}
+
 export function mergeLiveOverlay(
   historyMessages: ChatMessage[],
   liveMessages: ChatMessage[],
@@ -32,19 +67,7 @@ export function mergeLiveOverlay(
   // mergedIds — convertHistory merges multiple intermediate DB rows into
   // one bubble keyed by the first row's id, but every merged row is a
   // valid match target for live dedup.
-  const historyIds = new Set<string>();
-  for (const m of historyMessages) {
-    historyIds.add(m.id);
-    if (m.mergedIds) for (const mid of m.mergedIds) historyIds.add(mid);
-  }
-  const historyToolIds = new Set<string>();
-  for (const m of historyMessages) {
-    if (m.role === "assistant") {
-      for (const p of m.parts) {
-        if (p.type === "tool") historyToolIds.add((p as ToolPart).toolCallId);
-      }
-    }
-  }
+  const { ids: historyIds, toolIds: historyToolIds } = buildHistoryIndex(historyMessages);
 
   const overlay: ChatMessage[] = [];
 
