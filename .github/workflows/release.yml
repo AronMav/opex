@@ -54,3 +54,12 @@ jobs:
         with:
           name: HydeClaw v${{ steps.ver.outputs.version }}
           files: release/hydeclaw-*.tar.gz
+          # Explicitly disable any automatic release notes generation.
+          # The release body is authored manually after the workflow
+          # finishes (`gh release edit <tag> --notes-file ...`). This
+          # keeps the release page authoritative and reviewable —
+          # auto-generated commit dumps are noisy and incentivise
+          # treating the release page as a build log instead of a
+          # changelog.
+          generate_release_notes: false
+          body: ""
