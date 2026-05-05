@@ -20,6 +20,11 @@ export function createNavigationActions(deps: ActionDeps) {
     const s = get().agents[agent];
     if (s) return s;
     const fresh = emptyAgentState();
+    // Restore persisted context limit so ContextBar shows correct value before first SSE.
+    try {
+      const stored = localStorage.getItem(`ctx_limit:${agent}`);
+      if (stored) fresh.modelContextLimit = Number(stored) || null;
+    } catch {}
     set((draft: any) => { draft.agents[agent] = fresh; });
     return fresh;
   }

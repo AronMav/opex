@@ -122,10 +122,15 @@ export async function processSSEStream(
                   }
                 }
               });
+              const contextLimit = event.data.contextLimit;
               session.write({
                 activeSessionId: sid,
-                ...(event.data.contextLimit != null && { modelContextLimit: event.data.contextLimit }),
+                ...(contextLimit != null && { modelContextLimit: contextLimit }),
               });
+              // Persist so the value survives page refresh (restored on agent init).
+              if (contextLimit != null) {
+                try { localStorage.setItem(`ctx_limit:${agent}`, String(contextLimit)); } catch {}
+              }
               callbacks.onSessionId(sid);
 
               const sessionsData = queryClient.getQueryData<{ sessions: SessionRow[] }>(
