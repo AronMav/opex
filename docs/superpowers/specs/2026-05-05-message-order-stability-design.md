@@ -510,12 +510,11 @@ if (!session.signal.aborted) {
     // Step 2: invalidate sessions list (non-blocking — just fires off)
     queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
 
-    // Step 3: await the messages refetch so cache is fresh before switching to history.
-    // refetchType: "active" (default) — only refetches if useSessionMessages is actively
-    // subscribed in ChatThread. Since ChatThread keeps useSessionMessages mounted while
-    // streaming, this is guaranteed to be active. If not subscribed, promise resolves
-    // immediately (safe fallback: history shows stale data, same as current behavior).
-    await queryClient.invalidateQueries({ queryKey: qk.sessionMessages(completedSessionId) });
+    // Step 3: explicitly refetch and wait — refetchQueries() is more reliable than
+    // invalidateQueries() here because it always triggers a network request regardless
+    // of subscriber state. invalidateQueries with refetchType:"active" resolves
+    // immediately if there are no active subscribers (edge case during tab switch).
+    await queryClient.refetchQueries({ queryKey: qk.sessionMessages(completedSessionId) });
 
     // Step 4: now it's safe to show history — RQ cache has the complete exchange
     session.write({ messageSource: { mode: "history", sessionId: completedSessionId } });
