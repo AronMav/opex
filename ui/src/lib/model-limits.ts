@@ -4,6 +4,10 @@
 // Longest matching prefix wins to avoid false matches.
 // Unknown model → null (ContextBar hides itself).
 
+// NOTE: This table is a fallback only — the authoritative value comes from the
+// backend via the SSE `data-session-id` event (`contextLimit` field) and is
+// stored in AgentState.modelContextLimit. Update this table when real values
+// are confirmed, but prefer the live backend value whenever available.
 export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   // Anthropic Claude
   "claude-opus-4": 200_000,
@@ -20,18 +24,21 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "gemini-2.0-flash": 1_048_576,
   "gemini-2.5-flash": 1_048_576,
   "gemini-2.5-pro": 1_048_576,
-  // Zhipu GLM (:cloud suffix stripped by prefix match)
-  "glm-5.1": 128_000,
-  "glm-5": 128_000,
+  // Zhipu GLM — real values from Ollama /api/show
+  "glm-5.1": 202_752,
+  "glm-5": 202_752,
   "glm-4": 128_000,
-  // Moonshot Kimi
-  "kimi-k2": 131_072,
+  // Moonshot Kimi — real values from Ollama /api/show
+  "kimi-k2": 262_144,
   "kimi-k1.5": 131_072,
-  // DeepSeek
-  "deepseek-v4": 64_000,
-  "deepseek-v3": 64_000,
-  "deepseek-chat": 64_000,
-  "deepseek-r1": 64_000,
+  // DeepSeek — real values from Ollama /api/show (cloud tier)
+  "deepseek-v4-pro": 1_048_576,
+  "deepseek-v4": 1_048_576,
+  "deepseek-v3": 128_000,
+  "deepseek-chat": 128_000,
+  "deepseek-r1": 128_000,
+  // MiniMax — real values from Ollama /api/show
+  "minimax-m2": 196_608,
   // Ollama local (common)
   "qwen2.5": 32_768,
   "qwen3": 32_768,
