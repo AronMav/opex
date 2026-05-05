@@ -85,7 +85,11 @@ pub(crate) async fn auto_transcribe_audio(
             .part("file", part)
             .text("language", language.to_string());
 
-        match http_client.post(&url).multipart(form).send().await {
+        // Inject W3C traceparent header so the toolgate-side STT span
+        // attaches to the current Core parent span. No-op without `otel`.
+        let req = http_client.post(&url).multipart(form);
+        let req = crate::trace_propagation::inject_trace_context(req);
+        match req.send().await {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(data) = resp.json::<serde_json::Value>().await
                     && let Some(transcript) = data["text"].as_str()
@@ -148,7 +152,11 @@ pub(crate) async fn auto_describe_images(
             .part("file", part)
             .text("language", language.to_string());
 
-        match http_client.post(&url).multipart(form).send().await {
+        // Inject W3C traceparent so the toolgate-side vision span
+        // attaches to the current Core parent. No-op without `otel`.
+        let req = http_client.post(&url).multipart(form);
+        let req = crate::trace_propagation::inject_trace_context(req);
+        match req.send().await {
             Ok(resp) if resp.status().is_success() => {
                 if let Ok(data) = resp.json::<serde_json::Value>().await
                     && let Some(description) = data["description"].as_str()
