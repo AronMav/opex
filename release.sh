@@ -117,7 +117,7 @@ cp -r migrations "$RELEASE_DIR/migrations"
 
 # Workspace (tools, skills, MCP — exclude uploads and user data)
 mkdir -p "$RELEASE_DIR/workspace"
-for dir in tools skills mcp agents; do
+for dir in tools skills mcp agents prompts; do
   [ -d "workspace/$dir" ] && cp -r "workspace/$dir" "$RELEASE_DIR/workspace/$dir"
 done
 # Copy workspace root docs (AGENTS.md, TOOLS.md, etc.)
