@@ -159,8 +159,16 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
       // Merge intermediate assistant messages (those with tool_calls) into one block
       // so tools don't stack as separate ARTY bubbles. The final message (no tool_calls)
       // always starts a new block for the text response.
+      //
+      // Subsequent intermediate iterations contribute only their action parts
+      // (tool/file/rich-card). Their text/reasoning is suppressed because many
+      // models repeat the same intro narration on every iteration ("Делегирую…"
+      // → tool → "Делегирую…" → tool …), which produces visible duplicates in
+      // the merged bubble. The first intermediate iteration's text is kept as
+      // the single canonical narration for the whole tool-call sequence.
       if (hasToolCalls && lastAssistantMsg && lastAssistantMsg.agentId === assistantAgentId) {
-        if (newParts.length > 0) lastAssistantMsg.parts.push(...newParts);
+        const actionParts = newParts.filter((p) => p.type !== "text" && p.type !== "reasoning");
+        if (actionParts.length > 0) lastAssistantMsg.parts.push(...actionParts);
         continue; // tool rows will attach to lastAssistantMsg
       }
 
