@@ -112,9 +112,13 @@ export function createSessionCrudActions(deps: ActionDeps) {
       await apiDelete(`/api/messages/${messageId}?agent=${encodeURIComponent(agent)}`);
       const st = get().agents[agent];
       if (!st) return;
-      const store = get();
-      if (selectIsReplayingHistory(store, agent) && st.activeSessionId) {
-        // Invalidate React Query cache to reload history
+      const mode = st.messageSource.mode;
+      if ((mode === "history" || mode === "finishing") && st.activeSessionId) {
+        // "history": invalidate RQ cache to reload without the deleted message.
+        // "finishing": the in-progress refetch (stream-processor post-finally) will
+        // complete and switch to history mode; just invalidate so the next render
+        // shows the correct state. Do NOT reset messageSource here — that would
+        // abort the finishing→history state machine.
         queryClient.invalidateQueries({ queryKey: qk.sessionMessages(st.activeSessionId) });
       } else {
         const currentMessages = getLiveMessages(st.messageSource);

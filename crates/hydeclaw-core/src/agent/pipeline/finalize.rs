@@ -395,8 +395,14 @@ pub async fn finalize<S: EventSink>(
         }
         FinalizeOutcome::Failed { partial, reason } => {
             if !partial.is_empty() {
-                let _ = sm
-                    .save_message_ex(
+                // Use the pre-allocated UUID (ON CONFLICT DO NOTHING) so the partial
+                // assistant message has the same ID the frontend buffered in the live
+                // overlay. Nil UUID means MessageStart was never emitted (pre-loop
+                // cancel) — fall back to auto-generated ID in that case.
+                if ctx.assistant_message_id != uuid::Uuid::nil() {
+                    let _ = crate::db::sessions::save_message_ex_with_id(
+                        &ctx.db,
+                        ctx.assistant_message_id,
                         ctx.session_id,
                         "assistant",
                         partial,
@@ -407,6 +413,20 @@ pub async fn finalize<S: EventSink>(
                         ctx.user_message_id,
                     )
                     .await;
+                } else {
+                    let _ = sm
+                        .save_message_ex(
+                            ctx.session_id,
+                            "assistant",
+                            partial,
+                            None,
+                            None,
+                            Some(agent_name_ref),
+                            None,
+                            ctx.user_message_id,
+                        )
+                        .await;
+                }
             }
             lifecycle_guard.fail(reason).await;
             // Structured failure log: persist diagnostic row in the background.
@@ -469,8 +489,10 @@ pub async fn finalize<S: EventSink>(
         }
         FinalizeOutcome::Interrupted { partial, reason } => {
             if !partial.is_empty() {
-                let _ = sm
-                    .save_message_ex(
+                if ctx.assistant_message_id != uuid::Uuid::nil() {
+                    let _ = crate::db::sessions::save_message_ex_with_id(
+                        &ctx.db,
+                        ctx.assistant_message_id,
                         ctx.session_id,
                         "assistant",
                         partial,
@@ -481,6 +503,20 @@ pub async fn finalize<S: EventSink>(
                         ctx.user_message_id,
                     )
                     .await;
+                } else {
+                    let _ = sm
+                        .save_message_ex(
+                            ctx.session_id,
+                            "assistant",
+                            partial,
+                            None,
+                            None,
+                            Some(agent_name_ref),
+                            None,
+                            ctx.user_message_id,
+                        )
+                        .await;
+                }
             }
             lifecycle_guard.interrupt(reason).await;
             if let Some(sr_cfg) = &ctx.skill_review {
