@@ -216,6 +216,12 @@ export interface AgentState {
   hasMoreHistory: boolean;
   /** True while loadPreviousMessages() is fetching (prevents concurrent loads). */
   isLoadingHistory: boolean;
+  /**
+   * Real context window size (tokens) for the current model, received from the backend
+   * via the data-session-id SSE event. Null until first session starts.
+   * Single source of truth — replaces the static model-limits.ts table.
+   */
+  modelContextLimit: number | null;
 }
 
 // ── Store interface ─────────────────────────────────────────────────────────
@@ -290,5 +296,6 @@ export function emptyAgentState(): AgentState {
     reasoningTokens: null,
     hasMoreHistory: false,
     isLoadingHistory: false,
+    modelContextLimit: null,
   };
 }

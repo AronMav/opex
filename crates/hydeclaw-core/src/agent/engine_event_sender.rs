@@ -240,7 +240,7 @@ mod tests {
         let sender = EngineEventSender::new(tx);
 
         let cases = vec![
-            StreamEvent::SessionId("s1".into()),
+            StreamEvent::SessionId { session_id: "s1".into(), context_limit: 128_000 },
             StreamEvent::MessageStart { message_id: "m1".into() },
             StreamEvent::StepStart { step_id: "st1".into() },
             StreamEvent::ToolCallStart { id: "t1".into(), name: "tool".into() },

@@ -15,6 +15,8 @@ import {
 interface ContextBarProps {
   tokens: number | null;
   model: string | null | undefined;
+  /** Real context window from backend (single source of truth). Overrides static table. */
+  modelContextLimit?: number | null;
   outputTokens?: number | null;
   cacheReadTokens?: number | null;
   cacheCreationTokens?: number | null;
@@ -37,12 +39,14 @@ function shortModel(model: string): string {
 export function ContextBar({
   tokens,
   model,
+  modelContextLimit,
   outputTokens,
   cacheReadTokens,
   cacheCreationTokens,
   reasoningTokens,
 }: ContextBarProps) {
-  const limit = model ? getContextLimit(model) : null;
+  // Backend-provided limit is the single source of truth; fall back to static table.
+  const limit = modelContextLimit ?? (model ? getContextLimit(model) : null);
 
   // Nothing to show at all
   if (!model && tokens == null) return null;

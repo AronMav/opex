@@ -760,7 +760,8 @@ pub(crate) async fn api_chat_sse(
             }
 
             let data = match event {
-                StreamEvent::SessionId(sid) => {
+                StreamEvent::SessionId { session_id: sid, context_limit } => {
+                    let context_limit = context_limit;
                     let parsed_uuid = uuid::Uuid::from_str(&sid).ok();
                     // Register stream in registry for resume + abort support (C3).
                     // Use register_with_token so the registry stores the SAME token
@@ -795,7 +796,7 @@ pub(crate) async fn api_chat_sse(
                             tracing::warn!(error = %e, "failed to upsert initial streaming message to DB");
                         }
                     // Custom data part: session_id for UI to track the active session
-                    json!({"type": sse_types::DATA_SESSION_ID, "data": {"sessionId": sid}, "transient": true})
+                    json!({"type": sse_types::DATA_SESSION_ID, "data": {"sessionId": sid, "contextLimit": context_limit}, "transient": true})
                 }
                 StreamEvent::MessageStart { message_id } => {
                     json!({"type": sse_types::START, "messageId": message_id, "agentName": current_responding_agent})
