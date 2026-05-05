@@ -29,7 +29,44 @@
  *     previous live overlay assistant when no user message separates them).
  */
 
-import type { ChatMessage, MessagePart, ToolPart } from "./chat-types";
+import type { ChatMessage, MessagePart, ReasoningPart, TextPart, ToolPart } from "./chat-types";
+
+const MIN_DEDUP_TEXT_LEN = 20;
+
+/**
+ * Dedup safety net: within a single step (between two step-boundary parts),
+ * drop text/reasoning parts whose trimmed content has already appeared.
+ * Crosses step-boundary → set resets, so duplicates ACROSS iterations are
+ * preserved as semantically valid "same narration on next step".
+ *
+ * Defends against duplicate SSE events that may arrive on reconnect replay,
+ * stream-registry edge cases, or any path that pushes the same text twice
+ * within one iteration. Backend should not produce these but UI must be
+ * robust to them.
+ */
+function dedupeWithinSteps(parts: MessagePart[]): MessagePart[] {
+  if (parts.length < 2) return parts;
+  let seen = new Set<string>();
+  const result: MessagePart[] = [];
+  let dropped = false;
+  for (const p of parts) {
+    if (p.type === "step-boundary") {
+      seen = new Set();
+      result.push(p);
+      continue;
+    }
+    if (p.type === "text" || p.type === "reasoning") {
+      const t = (p as TextPart | ReasoningPart).text.trim();
+      if (t.length >= MIN_DEDUP_TEXT_LEN && seen.has(t)) {
+        dropped = true;
+        continue;
+      }
+      if (t) seen.add(t);
+    }
+    result.push(p);
+  }
+  return dropped ? result : parts;
+}
 
 export function mergeLiveOverlay(
   historyMessages: ChatMessage[],
@@ -99,12 +136,24 @@ export function mergeLiveOverlay(
     }
   }
 
+  // Apply within-step dedup as a final safety net. Pure post-processor:
+  // does not change merge rules, only collapses identical text parts that
+  // landed inside the same step boundary (e.g. from reconnect replay).
+  const dedupeAssistant = (m: ChatMessage): ChatMessage => {
+    if (m.role !== "assistant") return m;
+    const deduped = dedupeWithinSteps(m.parts);
+    return deduped === m.parts ? m : { ...m, parts: deduped };
+  };
+
   if (continuationParts.length > 0 && lastHistAssistantIdx >= 0) {
     const updated = [...historyMessages];
     const last = updated[lastHistAssistantIdx];
-    updated[lastHistAssistantIdx] = { ...last, parts: [...last.parts, ...continuationParts] };
-    return overlay.length > 0 ? [...updated, ...overlay] : updated;
+    const merged = { ...last, parts: [...last.parts, ...continuationParts] };
+    updated[lastHistAssistantIdx] = dedupeAssistant(merged);
+    const tailOverlay = overlay.map(dedupeAssistant);
+    return tailOverlay.length > 0 ? [...updated, ...tailOverlay] : updated;
   }
 
-  return overlay.length > 0 ? [...historyMessages, ...overlay] : historyMessages;
+  if (overlay.length === 0) return historyMessages;
+  return [...historyMessages, ...overlay.map(dedupeAssistant)];
 }
