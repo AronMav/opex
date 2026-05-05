@@ -155,25 +155,49 @@ impl AgentEngine {
 
         // Full pipeline — `cancel` token is the same one registered with the
         // StreamRegistry, so POST /api/chat/{id}/abort propagates here (C3).
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor).await?;
+        // We MUST always emit a Finish event before returning so the SSE stream
+        // closes cleanly for the frontend. On any error path (execute/finalize
+        // returning Err, panic via `?`), the early-return would close the sink
+        // without Finish — frontend then loops trying to resume a finalized
+        // session. Wrap the pipeline so Finish is guaranteed on every exit.
+        let pipeline_result: anyhow::Result<()> = async {
+            let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor).await?;
+            let fin_ctx = finalize::finalize_context_from_engine(
+                self,
+                session_id,
+                outcome.messages_len_at_end,
+                // Final assistant parent = end of intermediate chain (last tool
+                // result or intermediate assistant with tool_calls) persisted by
+                // pipeline::execute. For no-tool turns this equals user_message_id.
+                Some(outcome.final_parent_msg_id),
+                compressor,
+                outcome.assistant_message_id,
+            );
+            let fin_outcome = finalize::execute_status_to_finalize(
+                outcome.status,
+                outcome.final_text,
+                outcome.thinking_json,
+            );
+            finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await?;
+            Ok(())
+        }
+        .await;
 
-        let fin_ctx = finalize::finalize_context_from_engine(
-            self,
-            session_id,
-            outcome.messages_len_at_end,
-            // Final assistant parent = end of intermediate chain (last tool
-            // result or intermediate assistant with tool_calls) persisted by
-            // pipeline::execute. For no-tool turns this equals user_message_id.
-            Some(outcome.final_parent_msg_id),
-            compressor,
-            outcome.assistant_message_id,
-        );
-        let fin_outcome = finalize::execute_status_to_finalize(
-            outcome.status,
-            outcome.final_text,
-            outcome.thinking_json,
-        );
-        finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await?;
+        if let Err(ref e) = pipeline_result {
+            // Hard error path — execute/finalize threw. Tell the client so the
+            // UI can render an error banner and stop the loading animation.
+            let msg = format!("pipeline error: {}", e);
+            tracing::error!(session = %session_id, error = %e, "pipeline failed");
+            let _ = s.emit(PipelineEvent::Stream(StreamEvent::Error(msg))).await;
+            let _ = s
+                .emit(PipelineEvent::Stream(StreamEvent::Finish {
+                    finish_reason: "error".to_string(),
+                    continuation: false,
+                }))
+                .await;
+        }
+
+        pipeline_result?;
 
         // Trim old messages if the agent's session.max_messages is configured.
         // Missed during the pipeline refactor (Tasks 7-10 dropped the tail call).

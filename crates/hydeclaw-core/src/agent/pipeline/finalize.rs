@@ -443,6 +443,17 @@ pub async fn finalize<S: EventSink>(
             let _ = sink
                 .emit(PipelineEvent::Stream(StreamEvent::Error(reason.clone())))
                 .await;
+            // Always close the SSE stream with Finish — the frontend uses it as
+            // the only reliable signal of "no more events coming". Without this,
+            // a Failed turn (subagent timeout, tool error, ...) leaves the live
+            // stream half-open and the UI keeps the loader animation running
+            // until reconnect retries are exhausted.
+            let _ = sink
+                .emit(PipelineEvent::Stream(StreamEvent::Finish {
+                    finish_reason: "error".to_string(),
+                    continuation: false,
+                }))
+                .await;
             // UI notification (DB + WS broadcast) — surfaces the failure in the bell
             // icon + notification list. Specialized reasons get their own notification
             // kind (loop_detected, iteration_limit) rather than the generic agent_error.
@@ -519,6 +530,15 @@ pub async fn finalize<S: EventSink>(
                 }
             }
             lifecycle_guard.interrupt(reason).await;
+            // Close SSE stream cleanly. Without Finish the frontend would keep
+            // the loader running and trigger reconnect attempts even though the
+            // turn is fully finalized in DB.
+            let _ = sink
+                .emit(PipelineEvent::Stream(StreamEvent::Finish {
+                    finish_reason: "interrupted".to_string(),
+                    continuation: false,
+                }))
+                .await;
             if let Some(sr_cfg) = &ctx.skill_review {
                 if sr_cfg.enabled {
                     spawn_skill_review(
