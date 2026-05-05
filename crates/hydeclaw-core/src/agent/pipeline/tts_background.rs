@@ -196,8 +196,9 @@ impl BackgroundTtsTask {
                 .await;
             }
         }
-        // UI error path: leave for handle_error callers that have bytes context
-        // (deliver_to_ui handles its own errors with notify).
+        // UI error path is intentionally absent here: synthesis errors arrive
+        // before any bytes exist, and notify() requires DB access. deliver_to_ui()
+        // owns the UI error path and calls notify() locally with bytes context.
     }
 }
 
