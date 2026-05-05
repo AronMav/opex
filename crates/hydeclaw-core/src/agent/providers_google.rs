@@ -552,6 +552,30 @@ impl LlmProvider for GoogleProvider {
     fn run_max_duration_secs(&self) -> u64 {
         self.timeouts.run_max_duration_secs
     }
+
+    async fn context_limit_hint(&self, model: &str) -> Option<u32> {
+        let api_key = self.resolve_api_key().await?;
+        // Strip "models/" prefix if present — some callers pass the bare name.
+        let model_id = model.strip_prefix("models/").unwrap_or(model);
+        let url = format!(
+            "{}/v1beta/models/{}?key={}",
+            self.base_url.trim_end_matches('/'),
+            model_id,
+            api_key,
+        );
+        let resp = self.client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send().await.ok()?
+            .error_for_status().ok()?
+            .json::<serde_json::Value>().await.ok()?;
+
+        if let Some(n) = resp.get("inputTokenLimit").and_then(|v| v.as_u64()) {
+            tracing::debug!(model, input_token_limit = n, "google /v1beta/models inputTokenLimit");
+            return Some(n as u32);
+        }
+        None
+    }
 }
 
 /// Recursively strip `"required": []` from JSON schemas.

@@ -826,17 +826,51 @@ impl OpenAiCompatibleProvider {
         None
     }
 
-    /// Query OpenAI-compatible /v1/models to find context_window for this model.
+    /// Query OpenAI-compatible /v1/models to find context window for this model.
+    ///
+    /// Tries the single-model endpoint first (`GET /v1/models/{id}`), then falls
+    /// back to the full list (`GET /v1/models`) and filters by id.
+    /// Checks multiple field names used across different providers:
+    /// `context_window` (OpenAI/Groq), `context_length` (OpenRouter/Together),
+    /// `max_context_length` (Mistral), `max_model_len` (vLLM), `max_seq_len` (SGLang).
     async fn openai_compat_context_limit(&self, model: &str) -> Option<u32> {
-        let url = format!("{}/v1/models", self.api_base_url.trim_end_matches('/'));
+        let base = self.api_base_url.trim_end_matches('/');
         let api_key = self.resolve_api_key().await;
-        let mut req = self.client
-            .get(&url)
-            .timeout(std::time::Duration::from_secs(5));
-        if !api_key.is_empty() {
-            req = req.bearer_auth(&api_key);
+
+        let auth = |req: reqwest::RequestBuilder| {
+            if api_key.is_empty() { req } else { req.bearer_auth(&api_key) }
+        };
+
+        // Helper: extract context limit from a model JSON object.
+        let extract = |obj: &serde_json::Value| -> Option<u32> {
+            let n = obj.get("context_window")
+                .or_else(|| obj.get("context_length"))
+                .or_else(|| obj.get("max_context_length"))
+                .or_else(|| obj.get("max_model_len"))
+                .or_else(|| obj.get("max_seq_len"))
+                .and_then(|v| v.as_u64())?;
+            Some(n as u32)
+        };
+
+        // 1. Try individual model endpoint (faster, lower bandwidth).
+        let single_url = format!("{}/v1/models/{}", base, model);
+        if let Ok(resp) = auth(self.client.get(&single_url).timeout(std::time::Duration::from_secs(5)))
+            .send().await
+        {
+            if let Ok(resp) = resp.error_for_status() {
+                if let Ok(obj) = resp.json::<serde_json::Value>().await {
+                    if let Some(n) = extract(&obj) {
+                        tracing::debug!(model, context = n, "openai-compat /v1/models/{model}");
+                        return Some(n);
+                    }
+                }
+            }
         }
-        let resp = req.send().await.ok()?
+
+        // 2. Fall back to full list and filter by id.
+        let list_url = format!("{}/v1/models", base);
+        let resp = auth(self.client.get(&list_url).timeout(std::time::Duration::from_secs(5)))
+            .send().await.ok()?
             .error_for_status().ok()?
             .json::<serde_json::Value>().await.ok()?;
 
@@ -844,9 +878,9 @@ impl OpenAiCompatibleProvider {
         for m in models {
             let id = m.get("id").and_then(|v| v.as_str()).unwrap_or_default();
             if id == model {
-                if let Some(n) = m.get("context_window").and_then(|v| v.as_u64()) {
-                    tracing::debug!(model, context_window = n, "provider /v1/models context_window");
-                    return Some(n as u32);
+                if let Some(n) = extract(m) {
+                    tracing::debug!(model, context = n, "openai-compat /v1/models list");
+                    return Some(n);
                 }
             }
         }
