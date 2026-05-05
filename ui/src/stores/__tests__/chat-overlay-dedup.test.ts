@@ -70,46 +70,51 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
     expect(result).toBe(h); // same reference — no new array
   });
 
-  it("merges consecutive live assistant iterations into one bubble (tool-loop)", () => {
+  it("intermediate iterations contribute only their tool parts; only LAST iteration shows text", () => {
     // History: just the user message
-    const h = [msg("u", "user", "что нового?")];
-    // Live: user + 3 assistant iterations with DIFFERENT texts (no dedup)
-    const live = [
-      msg("u", "user", "что нового?"),
-      msg("a1", "assistant", "Загружаю навык."),
-      msg("a2", "assistant", "Ищу новости."),
-      msg("a3", "assistant", "Дайджест готов."),
-    ];
-    const result = mergeLiveOverlay(h, live);
-    // user already in history (deduplicated) + one merged assistant bubble
-    expect(result).toHaveLength(2);
-    expect(result[1].role).toBe("assistant");
-    expect(result[1].parts).toHaveLength(3); // 3 different text parts merged
-  });
-
-  it("deduplicates identical leading text when merging consecutive live iterations", () => {
-    // Each LLM iteration starts with the same narration text — must not show twice
     const h = [msg("u", "user", "обсуди с агентами")];
     const live = [
       msg("u", "user", "обсуди с агентами"),
-      // iter1: same intro text + tool call
+      // iter1 (intermediate): same intro text + tool call
       { id: "a1", role: "assistant" as const, parts: [
         { type: "text" as const, text: "Делегирую задачу." },
         { type: "tool" as const, toolCallId: "tc1", toolName: "agent", state: "output-available" as const, input: {}, output: "" },
       ], createdAt: new Date().toISOString() },
-      // iter2: same intro text (duplicate)
+      // iter2 (intermediate): same intro text + another tool
       { id: "a2", role: "assistant" as const, parts: [
         { type: "text" as const, text: "Делегирую задачу." },
+        { type: "tool" as const, toolCallId: "tc2", toolName: "search", state: "output-available" as const, input: {}, output: "" },
+      ], createdAt: new Date().toISOString() },
+      // iter3 (LAST/final): the streaming current iteration — text shown
+      { id: "a3", role: "assistant" as const, parts: [
+        { type: "text" as const, text: "Делегирую задачу. Готов результат." },
       ], createdAt: new Date().toISOString() },
     ];
     const result = mergeLiveOverlay(h, live);
-    expect(result).toHaveLength(2); // user + one merged assistant
+    expect(result).toHaveLength(2);
     const parts = result[1].parts;
-    // text should appear only ONCE (deduplicated), tool preserved
     const texts = parts.filter(p => p.type === "text");
     const tools = parts.filter(p => p.type === "tool");
+    // Only iter3's text appears (iter1+iter2 text dropped); both tools preserved
     expect(texts).toHaveLength(1);
-    expect(tools).toHaveLength(1);
+    expect(tools).toHaveLength(2);
+    expect((texts[0] as { type: "text"; text: string }).text).toContain("Готов результат");
+  });
+
+  it("merges consecutive live assistant iterations: only LAST shows text", () => {
+    const h = [msg("u", "user", "вопрос")];
+    const live = [
+      msg("u", "user", "вопрос"),
+      msg("a1", "assistant", "intermediate text 1"),
+      msg("a2", "assistant", "intermediate text 2"),
+      msg("a3", "assistant", "FINAL text"),
+    ];
+    const result = mergeLiveOverlay(h, live);
+    expect(result).toHaveLength(2);
+    expect(result[1].role).toBe("assistant");
+    // Only the last iteration's text remains (intermediate texts dropped)
+    expect(result[1].parts).toHaveLength(1);
+    expect((result[1].parts[0] as { type: "text"; text: string }).text).toBe("FINAL text");
   });
 
   it("does NOT continuation-merge into old assistant when history ends with user", () => {
