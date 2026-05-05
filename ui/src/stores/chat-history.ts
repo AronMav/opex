@@ -156,16 +156,14 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
       const newParts = parseContentParts(m.content || "");
       const hasToolCalls = Array.isArray(m.tool_calls) && (m.tool_calls as unknown[]).length > 0;
 
-      // Merge intermediate assistant messages (those with tool_calls) into one
-      // block. Each iteration is separated by a StepBoundaryPart — the same
-      // visual divider the live stream renders for SSE step-start events.
-      // The repeated narration models tend to emit on every iteration is no
-      // longer a visual duplicate; it's a labeled "next step" within the
-      // single assistant turn.
+      // Merge intermediate iterations into one visual bubble (same UX as
+      // before). Each merged row's id is tracked in mergedIds so
+      // mergeLiveOverlay can do exact ID-based dedup against the live
+      // overlay without content-matching heuristics.
       if (hasToolCalls && lastAssistantMsg && lastAssistantMsg.agentId === assistantAgentId) {
-        lastAssistantMsg.parts.push({ type: "step-boundary", stepId: m.id });
         if (newParts.length > 0) lastAssistantMsg.parts.push(...newParts);
-        continue; // tool rows will attach to lastAssistantMsg
+        (lastAssistantMsg.mergedIds = lastAssistantMsg.mergedIds ?? []).push(m.id);
+        continue;
       }
 
       if (lastAssistantMsg) messages.push(lastAssistantMsg);

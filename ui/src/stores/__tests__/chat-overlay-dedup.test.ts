@@ -88,7 +88,10 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
     expect(parts.filter(p => p.type === "tool")).toHaveLength(2);
   });
 
-  it("dedups tool parts already in history by toolCallId (parallel reorder)", () => {
+  it("dedups tool parts already in history by toolCallId across live ChatMessages", () => {
+    // After Phase 1 (per-iteration UUIDs), live and history are distinct
+    // ChatMessages keyed by row-id. The live ChatMessage is pushed as a new
+    // overlay bubble; only its NEW (non-history) tool parts survive.
     const h: ChatMessage[] = [
       msg("u", "user", "hi"),
       { id: "a-h", role: "assistant", parts: [
@@ -97,16 +100,37 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
     ];
     const live: ChatMessage[] = [
       { id: "a-live", role: "assistant", parts: [
-        { type: "tool", toolCallId: "t1", toolName: "x", state: "output-available", input: {}, output: "" }, // dup
-        { type: "tool", toolCallId: "t2", toolName: "y", state: "output-available", input: {}, output: "" }, // new
+        { type: "tool", toolCallId: "t1", toolName: "x", state: "output-available", input: {}, output: "" }, // dup → dropped
+        { type: "tool", toolCallId: "t2", toolName: "y", state: "output-available", input: {}, output: "" }, // new → kept
       ], createdAt: new Date().toISOString() },
     ];
     const result = mergeLiveOverlay(h, live);
-    // history asst (1 tool) + live tool t2 merged in via continuation
-    const lastAsst = result[result.length - 1];
-    expect(lastAsst.role).toBe("assistant");
-    const tools = lastAsst.parts.filter(p => p.type === "tool") as { type: "tool"; toolCallId: string }[];
-    expect(tools.map(t => t.toolCallId)).toEqual(["t1", "t2"]);
+    expect(result).toHaveLength(3); // user + history asst + live asst
+    const histAsst = result[1];
+    expect((histAsst.parts.filter(p => p.type === "tool") as { toolCallId: string }[]).map(t => t.toolCallId)).toEqual(["t1"]);
+    const liveAsst = result[2];
+    expect((liveAsst.parts.filter(p => p.type === "tool") as { toolCallId: string }[]).map(t => t.toolCallId)).toEqual(["t2"]);
+  });
+
+  it("dedups live ChatMessage by mergedIds when convertHistory merged its row", () => {
+    // convertHistory merges multiple intermediate iteration rows into one
+    // bubble keyed by the FIRST row's id, tracking the rest in mergedIds.
+    // A live ChatMessage whose id matches any mergedId must be skipped.
+    const h: ChatMessage[] = [
+      msg("u", "user", "hi"),
+      { id: "iter-0", role: "assistant", parts: [
+        { type: "text", text: "intro" },
+        { type: "tool", toolCallId: "t1", toolName: "x", state: "output-available", input: {}, output: "" },
+      ], mergedIds: ["iter-1", "iter-2"], createdAt: new Date().toISOString() },
+    ];
+    const live: ChatMessage[] = [
+      // iter-1 was merged into the bubble above — must NOT show up again
+      { id: "iter-1", role: "assistant", parts: [
+        { type: "text", text: "intro" },
+      ], createdAt: new Date().toISOString() },
+    ];
+    const result = mergeLiveOverlay(h, live);
+    expect(result).toHaveLength(2); // user + history asst, no overlay
   });
 
   it("does NOT continuation-merge into old assistant when history ends with user", () => {
