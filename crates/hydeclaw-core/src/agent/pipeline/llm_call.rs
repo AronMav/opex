@@ -631,7 +631,29 @@ async fn deadline_retry_inner(
 ///
 /// Non-timeout errors (ConnectTimeout, AuthError, etc.) are returned immediately
 /// so the routing layer can fail over.
+/// Wraps `deadline_retry_inner` with an OTel span so the LLM provider
+/// boundary is visible in Jaeger as a child of `pipeline.execute`. The
+/// span captures provider name, model (when known), message count, and
+/// final outcome — enough to reason about cost / latency per call without
+/// reading logs. The provider itself is external and doesn't propagate
+/// `traceparent`, so this span IS the LLM-call observability layer.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    name = "llm.call",
+    skip_all,
+    fields(
+        provider = provider.name(),
+        message_count = messages.len(),
+        tool_count = tools.len(),
+        // Recorded after the call completes — providers report their
+        // chosen model in `LlmResponse`, which may differ from the
+        // configured one (fallback / routing).
+        model = tracing::field::Empty,
+        finish_reason = tracing::field::Empty,
+        input_tokens = tracing::field::Empty,
+        output_tokens = tracing::field::Empty,
+    )
+)]
 pub async fn chat_stream_with_deadline_retry(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,
@@ -644,7 +666,7 @@ pub async fn chat_stream_with_deadline_retry(
     sm: &crate::agent::session_manager::SessionManager,
     opts: crate::agent::providers::CallOptions,
 ) -> Result<hydeclaw_types::LlmResponse> {
-    deadline_retry_inner(
+    let result = deadline_retry_inner(
         provider, messages, tools, chunk_tx, compact, session_cancel, run_max_duration_secs,
         |attempt, delay_ms| {
             let sm_db = sm.db().clone();
@@ -658,7 +680,25 @@ pub async fn chat_stream_with_deadline_retry(
             });
         },
         opts,
-    ).await
+    ).await;
+
+    // Record outcome fields on the span before returning. These fields
+    // are declared as `Empty` above and populated here — empty-skip lets
+    // the span be useful even when the call errored out (no usage).
+    if let Ok(ref resp) = result {
+        let span = tracing::Span::current();
+        if let Some(ref m) = resp.model {
+            span.record("model", tracing::field::display(m));
+        }
+        if let Some(ref fr) = resp.finish_reason {
+            span.record("finish_reason", tracing::field::display(fr));
+        }
+        if let Some(ref usage) = resp.usage {
+            span.record("input_tokens", usage.input_tokens);
+            span.record("output_tokens", usage.output_tokens);
+        }
+    }
+    result
 }
 
 #[cfg(test)]

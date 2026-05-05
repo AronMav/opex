@@ -9,6 +9,12 @@ edition.workspace = true
 # release builds — the arm accepts arbitrary task rows and returns OK without
 # doing any work.
 test-noop = []
+# OTel observability — opt-in to keep the default binary lean and keep the
+# rustls-only invariant tested by the existing CI matrix. Mirrors the same
+# feature flag on hydeclaw-core so a single `--features otel` build of both
+# crates produces a unified Jaeger view with `hydeclaw-core` +
+# `hydeclaw-memory-worker` as separate services sharing trace_ids.
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 
 [dependencies]
 tokio = { workspace = true }
@@ -23,6 +29,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 dotenv = "0.15"
+# OTel deps — workspace-pinned, optional, activated only via `--features otel`.
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 sd-notify = "0.4"
