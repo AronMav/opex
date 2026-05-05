@@ -11,6 +11,19 @@ pub struct DispatchCtx<'a> {
     pub fts_language: &'a str,
 }
 
+/// Dispatch a `memory_tasks` row to its concrete handler.
+///
+/// Wrapped in a tracing span so each task's run is visible as a unit
+/// in Jaeger (`memory_worker.dispatch`). Span captures task_type and id
+/// so operators can filter by failed reindex tasks at a glance.
+#[tracing::instrument(
+    name = "memory_worker.dispatch",
+    skip_all,
+    fields(
+        task_id = %task.id,
+        task_type = %task.task_type,
+    ),
+)]
 pub async fn dispatch(
     task: &MemoryTask,
     db: &PgPool,

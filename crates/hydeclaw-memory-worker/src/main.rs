@@ -1,6 +1,8 @@
 mod config;
 mod tasks;
 mod handlers;
+#[cfg(feature = "otel")]
+mod otel_init;
 
 use sqlx::postgres::{PgListener, PgPoolOptions};
 
@@ -21,6 +23,13 @@ async fn main() -> anyhow::Result<()> {
     // Load .env from binary dir (memory-worker runs as separate binary)
     dotenv::dotenv().ok();
 
+    // Tracing subscriber init — when the `otel` feature is built and
+    // `OTEL_EXPORTER_OTLP_ENDPOINT` is set, spans flow to the same Jaeger
+    // collector as hydeclaw-core (separate `service.name`). Otherwise
+    // standard fmt-only logging.
+    #[cfg(feature = "otel")]
+    otel_init::init();
+    #[cfg(not(feature = "otel"))]
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()

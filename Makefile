@@ -5,7 +5,7 @@ TARGET    := aarch64-unknown-linux-gnu
 BIN       := target/$(TARGET)/release/hydeclaw-core
 AUTH      ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN")
 
-.PHONY: check test test-db test-db-up test-db-down build build-arm64 build-arm64-otel ui release gen-types deploy-binary deploy-binary-otel deploy-ui deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
+.PHONY: check test test-db test-db-up test-db-down build build-arm64 build-arm64-otel ui release gen-types deploy-binary deploy-binary-otel deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
 
 # ── Codegen ──────────────────────────────────────────────────────────────────
 
@@ -108,6 +108,16 @@ deploy-ui: ui
 deploy-migrations:
 	scp migrations/*.sql $(PI_HOST):$(PI_DIR)/migrations/
 
+# Channel formatting prompts — read at startup by `channels/src/formatting.ts`
+# to populate per-channel system-prompt augmentation. They live under
+# `workspace/` (which is intentionally a writable agent-state directory and
+# therefore not part of the binary deploy), but these specific files are
+# code-owned (tracked in git, edited by developers, not the agent). Sync
+# them on every `deploy` so the channels Bun process can find them.
+deploy-prompts:
+	ssh $(PI_HOST) "mkdir -p $(PI_DIR)/workspace/prompts/formatting"
+	scp workspace/prompts/formatting/*.md $(PI_HOST):$(PI_DIR)/workspace/prompts/formatting/
+
 deploy-docker:
 	@echo "Syncing docker/ source to Pi (excludes workspace files)..."
 	rsync -av --delete \
@@ -115,7 +125,7 @@ deploy-docker:
 		docker/ $(PI_HOST):$(PI_DIR)/docker/
 	ssh $(PI_HOST) "cd $(PI_DIR)/docker && docker compose up -d --build"
 
-deploy: deploy-binary deploy-ui deploy-migrations deploy-docker
+deploy: deploy-binary deploy-ui deploy-migrations deploy-prompts deploy-docker
 	@echo "Full deploy complete. Checking health..."
 	@sleep 5
 	@ssh $(PI_HOST) "curl -sf -H 'Authorization: Bearer $(AUTH)' http://localhost:18789/api/doctor | python3 -m json.tool"

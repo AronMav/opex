@@ -176,9 +176,25 @@ fn init_tracing(log_tx: tokio::sync::broadcast::Sender<String>, cfg: &config::Ap
                     return;
                 }
             };
+            // Sampler — `TraceIdRatioBased(ratio)` is *consistent*: the same
+            // trace_id either keeps the whole trace or drops the whole trace
+            // across every service that shares it. Critical for cross-process
+            // correlation — uniform sampling per-service would yield half-
+            // sampled traces (Core span kept, Toolgate span dropped) that
+            // look broken in Jaeger.
+            //
+            // Ratio 1.0 (default) → AlwaysOn semantics for compatibility with
+            // existing Pi setups. Production-scale should set 0.05–0.2 in
+            // hydeclaw.toml `[otel] sampling_ratio = 0.1`.
+            let ratio = cfg.otel.sampling_ratio.clamp(0.0, 1.0);
+            let sampler = opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
+                opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(ratio),
+            ));
+            eprintln!("[otel] trace sampler: ParentBased(TraceIdRatioBased({ratio}))");
             let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                 .with_batch_exporter(span_exporter)
                 .with_resource(resource.clone())
+                .with_sampler(sampler)
                 .build();
             opentelemetry::global::set_tracer_provider(tracer_provider.clone());
 

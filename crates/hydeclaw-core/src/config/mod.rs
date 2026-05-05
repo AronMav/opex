@@ -312,7 +312,7 @@ impl Default for ShutdownConfig {
 }
 
 /// OpenTelemetry configuration.
-#[derive(Debug, Clone, Deserialize, Serialize, Default, JsonSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[allow(dead_code)] // fields read only with `otel` feature
 pub struct OtelConfig {
     /// Enable OTEL trace export. Also set `OTEL_EXPORTER_OTLP_ENDPOINT` env var.
@@ -321,9 +321,28 @@ pub struct OtelConfig {
     /// Service name reported to the collector (default: "hydeclaw-core").
     #[serde(default = "default_otel_service")]
     pub service_name: String,
+    /// Trace sampling ratio in `[0.0, 1.0]`. `1.0` (default) = sample every
+    /// trace, `0.1` = sample 10% by trace_id, `0.0` = drop all. Uses
+    /// `TraceIdRatioBased` so the same trace is consistently kept or
+    /// dropped across all services that share its trace_id (essential for
+    /// cross-process correlation — half-sampled traces look broken in
+    /// Jaeger because Toolgate spans are missing while Core spans exist).
+    #[serde(default = "default_otel_sampling_ratio")]
+    pub sampling_ratio: f64,
 }
 
 fn default_otel_service() -> String { "hydeclaw-core".to_string() }
+fn default_otel_sampling_ratio() -> f64 { 1.0 }
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            service_name: default_otel_service(),
+            sampling_ratio: default_otel_sampling_ratio(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct GatewayConfig {

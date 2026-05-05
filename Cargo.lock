@@ -1186,6 +1186,9 @@ dependencies = [
  "anyhow",
  "chrono",
  "dotenv",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
  "reqwest",
  "sd-notify",
  "serde",
@@ -1197,6 +1200,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
 ]
