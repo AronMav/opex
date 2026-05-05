@@ -31,6 +31,7 @@ import {
   RichCardDataPartView,
 } from "./avatar/RoleAvatar";
 import { StepGroup } from "@/components/chat/StepGroup";
+import { StepBoundary } from "@/components/chat/StepBoundary";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { abortReasonLabel } from "@/components/chat/abort-reason-label";
 
@@ -105,6 +106,8 @@ function renderPart(part: MessagePart, index: number, _meta?: { stepGroupToolIds
           totalSegments={part.totalSegments}
         />
       );
+    case "step-boundary":
+      return <StepBoundary key={`step-boundary-${part.stepId}-${index}`} />;
     default:
       return null;
   }

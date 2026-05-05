@@ -98,6 +98,7 @@ mod sse_types {
     pub const APPROVAL_RESOLVED: &str = "tool-approval-resolved";
     pub const RECONNECTING: &str = "reconnecting";
     pub const USAGE: &str = "usage";
+    pub const STEP_START: &str = "step-start";
 }
 
 /// Public OpenAI-format message — used by gateway AND referenced from `engine::handle_openai`.

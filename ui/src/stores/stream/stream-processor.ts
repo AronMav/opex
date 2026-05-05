@@ -259,9 +259,23 @@ export async function processSSEStream(
             break;
           }
 
-          case "step-start":
+          case "step-start": {
+            // Boundary between LLM tool-loop iterations within one assistant
+            // turn. Insert a StepBoundaryPart so the UI renders a visual divider
+            // — each iteration's text + tools live in their own structural
+            // slice and repeated narration ("Делегирую…") is no longer a
+            // duplicate but a labeled "next step" event.
+            //
+            // Skip the boundary before the first iteration's content (would
+            // appear as a leading divider with nothing above it).
+            if (session.buffer.snapshot().length > 0) {
+              session.buffer.flushText();
+              session.buffer.parts.push({ type: "step-boundary", stepId: event.stepId });
+              session.scheduleCommit();
+            }
+            break;
+          }
           case "step-finish":
-            // Step groups removed — tools render as flat parts (matching history view)
             break;
 
           case "file": {
