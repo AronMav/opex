@@ -6,23 +6,45 @@ services:
   # Why Jaeger all-in-one (not a separate otel-collector + storage):
   #   * single ARM64 image (jaegertracing/all-in-one is multi-arch — runs on
   #     Raspberry Pi 4/5 without modification)
-  #   * memory-resident span storage (no Cassandra / Elasticsearch dependency)
-  #     — enough for ~hours of traces, which is what the operator actually
-  #     looks at during incident review
+  #   * built-in Badger storage — embedded key-value store, persists to
+  #     a Docker volume, no external dependency (Cassandra / Elasticsearch
+  #     would each be heavier than HydeClaw itself on a Pi)
   #   * built-in OTLP receiver: HydeClaw points at port 4317 directly with
   #     no intermediate collector to maintain
   #
-  # Production-grade setups should swap to otel-collector → tempo/jaeger; this
-  # is the "wired and visible" baseline for a single-host Pi deploy.
+  # Production-grade setups (multi-host, > ~1000 RPS) should swap to
+  # otel-collector → tempo. For a single-host Pi deploy, Badger gives
+  # durability without the operational complexity.
   jaeger:
     image: jaegertracing/all-in-one:1.76.0
     container_name: jaeger
     mem_limit: ${JAEGER_MEM_LIMIT:-512m}
     cpus: ${JAEGER_CPUS:-0.5}
+    # Run as root so Badger can create /badger/{data,key} on a fresh
+    # named volume (Docker creates the volume mount-point as root and
+    # the default jaeger image user (uid 10001) cannot mkdir into it).
+    # Acceptable for a single-host Pi setup; production multi-tenant
+    # deployments should use a host-mounted directory pre-chowned to
+    # the jaeger user instead.
+    user: "0:0"
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
-      # Span retention — in-memory only, oldest evicted when budget hit.
-      MEMORY_MAX_TRACES: "50000"
+      # Durable storage via Badger (embedded key-value store). Survives
+      # `docker compose down` and Pi reboots — incident review of
+      # historical traces is preserved across operator-initiated
+      # restarts (in-memory storage was the previous default and lost
+      # everything on every restart).
+      #
+      # Two TTLs:
+      #   * SPAN_STORAGE_TTL — how long individual spans live before
+      #     compaction reclaims their disk.
+      #   * DEPENDENCIES_TTL — how long the precomputed service-graph
+      #     edges live (cheap, can be longer).
+      SPAN_STORAGE_TYPE: "badger"
+      BADGER_EPHEMERAL: "false"
+      BADGER_DIRECTORY_VALUE: "/badger/data"
+      BADGER_DIRECTORY_KEY: "/badger/key"
+      BADGER_SPAN_STORE_TTL: "${JAEGER_SPAN_TTL:-72h}"
     ports:
       # OTLP gRPC receiver (HydeClaw Core sends here when otel feature enabled)
       - "127.0.0.1:4317:4317"
@@ -30,6 +52,11 @@ services:
       - "127.0.0.1:4318:4318"
       # Jaeger UI — point a browser here to explore traces
       - "127.0.0.1:16686:16686"
+    volumes:
+      # Persistent span storage — Pi disk. Badger compacts in place;
+      # at default TTL=72h the volume settles at a few hundred MB
+      # under typical load. Tunable via JAEGER_SPAN_TTL env var.
+      - jaeger-badger:/badger
     healthcheck:
       test: [ "CMD-SHELL", "wget -qO- http://localhost:14269/ || exit 1" ]
       interval: 30s
@@ -37,6 +64,10 @@ services:
       retries: 3
     networks: [ observability ]
     restart: unless-stopped
+
+volumes:
+  jaeger-badger:
+    driver: local
 
 # Standalone network — Jaeger only needs to be reachable from the host on
 # 127.0.0.1:4317 (HydeClaw Core is a native process, not a container, so it
