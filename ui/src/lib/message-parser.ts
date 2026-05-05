@@ -91,8 +91,48 @@ export function parseContentParts(raw: string): ParsedContentPart[] {
   return normalizeParts(parts);
 }
 
+const THINK_TAGS = ["think", "thinking", "thought", "antthinking"] as const;
+
+/**
+ * Returns the length of the longest suffix of `text` that could still grow
+ * into a valid `<tag>` opening tag for any tag in THINK_TAGS.
+ *
+ * Examples (THINK_TAGS includes "think"):
+ *   "...hello<th"       → 3   (could become "<think>")
+ *   "...hello<thinki"   → 6   (could become "<thinking>")
+ *   "...hello<"         → 1   (could be the start of any tag)
+ *   "...hello"          → 0   (no partial tag)
+ *
+ * This replaces a previous magic-number holdback (15 chars) which both wasted
+ * memory on text without partial tags and risked under-buffering for the
+ * longest tag (`</antthinking>` is 14 chars). Tag matching is case-insensitive
+ * to match the parser's regex behavior.
+ */
+function partialTagSuffixLen(text: string, isClosing: boolean): number {
+  if (!text) return 0;
+  const lower = text.toLowerCase();
+  let max = 0;
+  for (const tag of THINK_TAGS) {
+    const full = isClosing ? `</${tag}>` : `<${tag}>`;
+    const maxCheck = Math.min(full.length - 1, text.length);
+    for (let len = maxCheck; len > max; len--) {
+      if (lower.endsWith(full.slice(0, len).toLowerCase())) {
+        max = len;
+        break;
+      }
+    }
+  }
+  return max;
+}
+
 /**
  * State-aware incremental parser for SSE streams.
+ *
+ * Streams may split a tag like `</think>` across chunk boundaries. We never
+ * emit the trailing chars that could still become a tag — see partialTagSuffixLen.
+ * Once a chunk arrives whose suffix can no longer become a tag, the held-back
+ * text is released. The buffer also drains on `flush()`/`reset()` and at
+ * non-text events upstream (text-end, Finish, ToolCallStart, ...).
  */
 export class IncrementalParser {
   private parts: ParsedContentPart[] = [];
@@ -104,18 +144,16 @@ export class IncrementalParser {
    */
   processDelta(delta: string): ParsedContentPart[] {
     this.accum += delta;
-    
-    // We process the accumulator to find tags
+
     let remaining = this.accum;
-    const thinkTags = ["think", "thinking", "thought", "antthinking"];
-    
+
     while (remaining) {
       if (this.insideThink) {
-        // Look for any closing tag
+        // Look for the closest closing tag
         let closestEndIdx = -1;
         let tagLen = 0;
-        
-        for (const tag of thinkTags) {
+
+        for (const tag of THINK_TAGS) {
           const idx = remaining.toLowerCase().indexOf(`</${tag}>`);
           if (idx >= 0 && (closestEndIdx === -1 || idx < closestEndIdx)) {
             closestEndIdx = idx;
@@ -128,25 +166,24 @@ export class IncrementalParser {
           this.appendToLast("reasoning", text);
           this.insideThink = false;
           remaining = remaining.slice(closestEndIdx + tagLen);
-          this.accum = remaining; // update accum to what's left
+          this.accum = remaining;
         } else {
-          // No end tag yet, but we can emit partial reasoning if it's long enough
-          // or if we're sure it's not a partial closing tag.
-          // To be safe, we keep at least 15 chars in accum to avoid splitting </think>
-          if (remaining.length > 15) {
-            const safeToEmit = remaining.slice(0, remaining.length - 15);
+          // Hold back only the suffix that could still become a closing tag
+          const holdback = partialTagSuffixLen(remaining, true);
+          if (remaining.length > holdback) {
+            const safeToEmit = remaining.slice(0, remaining.length - holdback);
             this.appendToLast("reasoning", safeToEmit);
-            remaining = remaining.slice(remaining.length - 15);
+            remaining = remaining.slice(remaining.length - holdback);
             this.accum = remaining;
           }
           break;
         }
       } else {
-        // Look for any opening tag
+        // Look for the closest opening tag
         let closestStartIdx = -1;
         let tagLen = 0;
-        
-        for (const tag of thinkTags) {
+
+        for (const tag of THINK_TAGS) {
           const idx = remaining.toLowerCase().indexOf(`<${tag}>`);
           if (idx >= 0 && (closestStartIdx === -1 || idx < closestStartIdx)) {
             closestStartIdx = idx;
@@ -161,18 +198,19 @@ export class IncrementalParser {
           remaining = remaining.slice(closestStartIdx + tagLen);
           this.accum = remaining;
         } else {
-          // No start tag, emit plain text safely
-          if (remaining.length > 15) {
-            const safeToEmit = remaining.slice(0, remaining.length - 15);
+          // Hold back only the suffix that could still become an opening tag
+          const holdback = partialTagSuffixLen(remaining, false);
+          if (remaining.length > holdback) {
+            const safeToEmit = remaining.slice(0, remaining.length - holdback);
             this.appendToLast("text", safeToEmit);
-            remaining = remaining.slice(remaining.length - 15);
+            remaining = remaining.slice(remaining.length - holdback);
             this.accum = remaining;
           }
           break;
         }
       }
     }
-    
+
     return [...this.parts];
   }
 
