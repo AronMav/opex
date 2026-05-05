@@ -89,3 +89,26 @@ describe("finishing mode contract", () => {
     expect(getLiveMessages(src)).toHaveLength(0);
   });
 });
+
+// ── finishing → history transition contract ────────────────────────────────────
+
+describe("finishing → history transition contract", () => {
+  it("finishing mode preserves live messages while RQ refetches", () => {
+    const liveMsg = {
+      id: "db-uuid-123",
+      role: "assistant" as const,
+      parts: [{ type: "text" as const, text: "response" }],
+    };
+    const src: MessageSource = {
+      mode: "finishing",
+      sessionId: "sess-1",
+      messages: [liveMsg],
+    };
+    expect(getLiveMessages(src)).toContainEqual(liveMsg);
+  });
+
+  it("history mode has empty live messages (transition complete)", () => {
+    const src: MessageSource = { mode: "history", sessionId: "sess-1" };
+    expect(getLiveMessages(src)).toHaveLength(0);
+  });
+});

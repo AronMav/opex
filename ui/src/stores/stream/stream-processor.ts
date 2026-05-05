@@ -465,17 +465,51 @@ export async function processSSEStream(
     }
   }
 
-  // Post-finally: switch to history mode and invalidate React Query caches.
-  // This block is UNCHANGED — session.write() is not affected by this refactor.
+  // Post-finally: switch to finishing mode first, await RQ refetch, then history.
   if (!session.signal.aborted) {
     if (receivedSessionId) {
       callbacks.onSessionId(receivedSessionId);
     }
-    queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
-    const completedSessionId = receivedSessionId ?? callbacks.getAgentState(agent)?.activeSessionId;
+
+    const completedSessionId =
+      receivedSessionId ?? callbacks.getAgentState(agent)?.activeSessionId;
+
     if (completedSessionId) {
-      queryClient.invalidateQueries({ queryKey: qk.sessionMessages(completedSessionId) });
-      session.write({ messageSource: { mode: "history", sessionId: completedSessionId } });
+      // Step 1: freeze live messages in "finishing" mode so they stay visible
+      // while React Query fetches fresh data. The assistant response remains
+      // on screen during the refetch window instead of flashing out.
+      const agentState = callbacks.getAgentState(agent);
+      const frozenLive =
+        agentState?.messageSource.mode === "live"
+          ? agentState.messageSource.messages
+          : [];
+
+      session.write({
+        messageSource: {
+          mode: "finishing" as const,
+          sessionId: completedSessionId,
+          messages: frozenLive,
+        },
+      });
+
+      // Step 2: invalidate sessions list (non-blocking — just marks stale)
+      queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+
+      // Step 3: refetchQueries waits for the network request to complete
+      // regardless of subscriber state. invalidateQueries with refetchType:"active"
+      // (the default) resolves immediately if useSessionMessages is not mounted,
+      // which can happen during a tab switch — making refetchQueries safer here.
+      await queryClient.refetchQueries({
+        queryKey: qk.sessionMessages(completedSessionId),
+      });
+
+      // Step 4: RQ cache now has the fresh exchange — safe to switch to history.
+      // No flash: the assistant response was visible in "finishing" mode throughout.
+      session.write({
+        messageSource: { mode: "history" as const, sessionId: completedSessionId },
+      });
+    } else {
+      queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
     }
   }
 }
