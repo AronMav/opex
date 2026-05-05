@@ -1053,6 +1053,9 @@ pub(crate) async fn api_chat_sse(
             };
 
             let json_str = data.to_string();
+            // SSE-DEBUG: trace every emitted event with its head. Filter in
+            // journalctl via:  journalctl --user -u hydeclaw-core -f | grep SSE-OUT
+            tracing::debug!(target: "SSE-OUT", agent = %agent_name, sid = ?session_id_str, event = %&json_str[..json_str.len().min(180)], "emit");
             let _ = send_and_buffer!(json_str);
         }
 
