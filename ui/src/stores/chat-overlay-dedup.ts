@@ -19,7 +19,36 @@
  * Empty assistant placeholders (parts.length === 0) are always filtered.
  */
 
-import type { ChatMessage, MessagePart, ToolPart } from "./chat-types";
+import type { ChatMessage, MessagePart, TextPart, ToolPart } from "./chat-types";
+
+/**
+ * Appends newParts to existingParts, skipping a leading text part in newParts
+ * when it is identical to the last text already in existingParts.
+ *
+ * Rationale: each LLM tool-loop iteration emits a fresh "start" event and
+ * opens a new live ChatMessage. When consecutive iterations begin with the
+ * same narration text (e.g. "Delegating to agents..."), merging them naively
+ * produces the text twice inside one bubble. We drop the duplicate leading
+ * text while preserving every tool/file part from every iteration.
+ */
+function appendDedupeLeadingText(existing: MessagePart[], adding: MessagePart[]): MessagePart[] {
+  if (!adding.length) return existing;
+  const firstNew = adding[0];
+  if (firstNew.type !== "text") return [...existing, ...adding];
+
+  const lastExistText = [...existing].reverse().find((p): p is TextPart => p.type === "text");
+  if (!lastExistText) return [...existing, ...adding];
+
+  const existTrimmed = lastExistText.text.trim();
+  const newTrimmed = (firstNew as TextPart).text.trim();
+
+  if (existTrimmed && newTrimmed && existTrimmed === newTrimmed) {
+    const rest = adding.slice(1);
+    return rest.length ? [...existing, ...rest] : existing;
+  }
+
+  return [...existing, ...adding];
+}
 
 export function mergeLiveOverlay(
   historyMessages: ChatMessage[],
@@ -41,6 +70,13 @@ export function mergeLiveOverlay(
       }
     }
   }
+
+  // True when history ends with a user message after the last assistant.
+  // In that case live assistants are a NEW response, not a continuation of
+  // the previous assistant turn — continuation merge must not fire.
+  const historyEndsWithNewUserTurn =
+    lastHistAssistantIdx >= 0 &&
+    historyMessages.slice(lastHistAssistantIdx + 1).some((m) => m.role === "user");
 
   let liveHasNewUserMsg = false;
   const continuationParts: MessagePart[] = [];
@@ -68,10 +104,13 @@ export function mergeLiveOverlay(
       );
       if (uniqueParts.length === 0) continue;
 
-      // Continuation merge: no new user message → still the same user turn.
-      // Merge into the last history assistant bubble (completing a previous turn),
-      // or merge consecutive live iterations together (active tool-call loop).
-      if (!liveHasNewUserMsg && lastHistAssistantIdx >= 0) {
+      // Continuation merge: live assistant is a continuation of the SAME user turn
+      // already in history. Conditions:
+      //   • no new user msg in live (user msg already in history)
+      //   • history doesn't end with a user after the last assistant (would mean
+      //     live assistants are responding to a NEW user turn, not continuing the old one)
+      //   • there IS a previous history assistant to merge into
+      if (!liveHasNewUserMsg && !historyEndsWithNewUserTurn && lastHistAssistantIdx >= 0) {
         continuationParts.push(...uniqueParts);
         continue;
       }
@@ -80,7 +119,10 @@ export function mergeLiveOverlay(
       // separates them — collapses all tool-loop iterations into one bubble.
       const lastOverlay = overlay.length > 0 ? overlay[overlay.length - 1] : null;
       if (lastOverlay?.role === "assistant") {
-        overlay[overlay.length - 1] = { ...lastOverlay, parts: [...lastOverlay.parts, ...uniqueParts] };
+        overlay[overlay.length - 1] = {
+          ...lastOverlay,
+          parts: appendDedupeLeadingText(lastOverlay.parts, uniqueParts),
+        };
       } else {
         overlay.push({ ...m, parts: uniqueParts });
       }

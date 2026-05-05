@@ -73,7 +73,7 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
   it("merges consecutive live assistant iterations into one bubble (tool-loop)", () => {
     // History: just the user message
     const h = [msg("u", "user", "что нового?")];
-    // Live: user + 3 assistant iterations (tool-call loop)
+    // Live: user + 3 assistant iterations with DIFFERENT texts (no dedup)
     const live = [
       msg("u", "user", "что нового?"),
       msg("a1", "assistant", "Загружаю навык."),
@@ -84,7 +84,53 @@ describe("mergeLiveOverlay — pure ID-based dedup", () => {
     // user already in history (deduplicated) + one merged assistant bubble
     expect(result).toHaveLength(2);
     expect(result[1].role).toBe("assistant");
-    expect(result[1].parts).toHaveLength(3); // 3 text parts merged
+    expect(result[1].parts).toHaveLength(3); // 3 different text parts merged
+  });
+
+  it("deduplicates identical leading text when merging consecutive live iterations", () => {
+    // Each LLM iteration starts with the same narration text — must not show twice
+    const h = [msg("u", "user", "обсуди с агентами")];
+    const live = [
+      msg("u", "user", "обсуди с агентами"),
+      // iter1: same intro text + tool call
+      { id: "a1", role: "assistant" as const, parts: [
+        { type: "text" as const, text: "Делегирую задачу." },
+        { type: "tool" as const, toolCallId: "tc1", toolName: "agent", state: "output-available" as const, input: {}, output: "" },
+      ], createdAt: new Date().toISOString() },
+      // iter2: same intro text (duplicate)
+      { id: "a2", role: "assistant" as const, parts: [
+        { type: "text" as const, text: "Делегирую задачу." },
+      ], createdAt: new Date().toISOString() },
+    ];
+    const result = mergeLiveOverlay(h, live);
+    expect(result).toHaveLength(2); // user + one merged assistant
+    const parts = result[1].parts;
+    // text should appear only ONCE (deduplicated), tool preserved
+    const texts = parts.filter(p => p.type === "text");
+    const tools = parts.filter(p => p.type === "tool");
+    expect(texts).toHaveLength(1);
+    expect(tools).toHaveLength(1);
+  });
+
+  it("does NOT continuation-merge into old assistant when history ends with user", () => {
+    // RQ cache refreshed quickly: history now has [old_asst, new_user_msg]
+    // Live assistants are the RESPONSE to new_user_msg, not a continuation of old_asst
+    const h = [
+      msg("u1", "user", "старый вопрос"),
+      msg("a1", "assistant", "старый ответ"),
+      msg("u2", "user", "новый вопрос"),  // ← history ends with user
+    ];
+    const live = [
+      msg("u2", "user", "новый вопрос"), // already in history
+      msg("a2", "assistant", "новый ответ iter1"),
+      msg("a3", "assistant", "новый ответ iter2"),
+    ];
+    const result = mergeLiveOverlay(h, live);
+    // a2+a3 must appear AFTER u2, not merged into a1 (old turn)
+    expect(result).toHaveLength(4); // u1 a1 u2 merged(a2+a3)
+    expect(result[3].role).toBe("assistant");
+    // old assistant must not be modified
+    expect(result[1].parts).toHaveLength(1);
   });
 
   it("does NOT merge live assistant across user messages", () => {
