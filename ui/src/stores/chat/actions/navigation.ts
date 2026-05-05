@@ -153,6 +153,12 @@ export function createNavigationActions(deps: ActionDeps) {
         messageSource: { mode: "history", sessionId },
         forceNewSession: false,
         renderLimit: 100,
+        // Clear per-stream token counts so the ContextBar shows the new
+        // session's last_input_tokens from the session list (not stale live values).
+        contextTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        reasoningTokens: null,
       });
       saveLastSession(agent, sessionId);
     },
