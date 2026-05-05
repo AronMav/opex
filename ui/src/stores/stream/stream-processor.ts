@@ -335,13 +335,19 @@ export async function processSSEStream(
 
               if (existingIdx >= 0) {
                 const existingMsg = liveMessages[existingIdx];
+                // Skip text-replace when the parts list already has step-boundary
+                // markers — the bubble has multi-iteration structure that flat
+                // syncContent cannot recover. Streaming will keep filling it.
+                const hasStepBoundary = (existingMsg.parts as MessagePart[]).some(
+                  (p: MessagePart) => p.type === "step-boundary",
+                );
                 const localTextLen = (existingMsg.parts as MessagePart[])
                   .filter((p: MessagePart): p is TextPart => p.type === "text")
                   .reduce((acc: number, p: TextPart) => acc + (p.text?.length ?? 0), 0);
                 const syncTextLen = syncParts
                   .filter((p: MessagePart): p is TextPart => p.type === "text")
                   .reduce((acc: number, p: TextPart) => acc + (p.text?.length ?? 0), 0);
-                if (syncTextLen > localTextLen || Math.abs(syncTextLen - localTextLen) > 50) {
+                if (!hasStepBoundary && (syncTextLen > localTextLen || Math.abs(syncTextLen - localTextLen) > 50)) {
                   // H2: syncParts carries only text/reasoning — preserve tool, approval, file parts
                   const preserved = (existingMsg.parts as MessagePart[]).filter(
                     (p: MessagePart) => p.type !== "text" && p.type !== "reasoning"
