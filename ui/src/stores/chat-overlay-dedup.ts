@@ -1,14 +1,16 @@
 /**
- * Chat live-overlay dedup (Architecture C, simplified).
+ * Chat live-overlay dedup (Architecture C).
  *
  * History is React Query truth. Live is the SSE buffer (optimistic user
  * message + in-flight assistant). Merge rule: append live messages whose
  * ID is not yet in history, filtering empty assistant placeholders.
  *
- * ID-based dedup works because the backend now pre-allocates the assistant
- * message UUID and sends it in the `start` SSE event. The live buffer uses
- * the same ID as the eventual DB row, so `historyIds.has(m.id)` correctly
- * detects when history has caught up.
+ * ID-based dedup works for both roles because:
+ * - Assistant: backend pre-allocates UUID in execute.rs, sends it in the
+ *   `start` SSE event (Task 1). Live buffer uses the same ID as the DB row.
+ * - User: client pre-allocates UUID in sendMessage(), sends it as
+ *   `user_message_id` in the request body. Bootstrap uses it via
+ *   `save_message_ex_with_id` (same pattern as assistant).
  */
 
 import type { ChatMessage } from "./chat-types";
