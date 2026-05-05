@@ -8,6 +8,10 @@ import { qk } from "@/lib/queries";
 
 const USER_IMAGE_RE = /\[User attached an image: ([^\]]+)\]/g;
 const IMAGE_VISION_RE = /<vision>[\s\S]*?<\/vision>/g;
+// Strips URL-fetch enrichment injected by enrich_message_text() for LLM context.
+// Format: "[Content of URL <url>]:\n<<<EXTERNAL_CONTENT ...>>>...<END>>>".
+// This content is LLM-only context — not what the user typed.
+const URL_CONTENT_RE = /\[Content of URL [^\]]+\][\s\S]*/g;
 
 function guessImageMime(url: string): string {
   const ext = url.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
@@ -37,6 +41,7 @@ function parseUserMessageParts(content: string): MessagePart[] {
   }
 
   text = text.replace(IMAGE_VISION_RE, "");
+  text = text.replace(URL_CONTENT_RE, "");
 
   const trimmed = text.trim();
   if (trimmed) parts.push({ type: "text", text: trimmed });
