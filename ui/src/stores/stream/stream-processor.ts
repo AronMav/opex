@@ -3,6 +3,7 @@
 // All store writes go through session.commit() or session.write().
 
 import { parseSSELines, parseSseEvent } from "./sse-parser";
+import { sseLog } from "./sse-debug";
 import { parseContentParts } from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
@@ -106,6 +107,9 @@ export async function processSSEStream(
         // in streaming-renderer can detect a stalled socket on tab focus.
         callbacks.onEventActivity?.();
 
+        // Debug tracing — see ./sse-debug.ts. No-op when not enabled.
+        sseLog(agent, event.type, sseEventBrief(event));
+
         switch (event.type) {
           case "data-session-id": {
             const sid = event.data.sessionId;
@@ -147,9 +151,11 @@ export async function processSSEStream(
           case "start": {
             // Capture id before reset() generates a new one
             const preservedId = event.messageId || session.buffer.assistantId;
+            const partsBefore = session.buffer.parts.length;
             session.buffer.reset();
             session.buffer.assistantId = preservedId;
             if (event.agentName) session.buffer.currentRespondingAgent = event.agentName;
+            sseLog(agent, "post-start-reset", { assistantId: preservedId, partsBeforeReset: partsBefore });
             break;
           }
 
@@ -175,6 +181,7 @@ export async function processSSEStream(
             // mid-word concatenation and made step-boundary fall in the wrong
             // place inside the merged text.
             session.buffer.endTextBlock();
+            sseLog(agent, "post-text-end-buffer", partsBrief(session.buffer.parts));
             session.scheduleCommit();
             break;
           }
@@ -191,6 +198,7 @@ export async function processSSEStream(
               input: {},
             };
             session.buffer.parts.push(toolPart);
+            sseLog(agent, "post-tool-input-start-buffer", partsBrief(session.buffer.parts));
             session.scheduleCommit();
             break;
           }
@@ -278,7 +286,10 @@ export async function processSSEStream(
             if (session.buffer.snapshot().length > 0) {
               session.buffer.flushText();
               session.buffer.parts.push({ type: "step-boundary", stepId: event.stepId });
+              sseLog(agent, "post-step-boundary-buffer", partsBrief(session.buffer.parts));
               session.scheduleCommit();
+            } else {
+              sseLog(agent, "step-start-skipped-empty-buffer");
             }
             break;
           }
@@ -360,6 +371,11 @@ export async function processSSEStream(
                     (p: MessagePart) => p.type !== "text" && p.type !== "reasoning"
                   );
                   existingMsg.parts = [...syncParts, ...preserved];
+                  sseLog(agent, "sync-replaced-parts", { reason: "text-len-diff", localLen: localTextLen, syncLen: syncTextLen, partsBrief: partsBrief(existingMsg.parts as MessagePart[]) });
+                } else if (hasStepBoundary) {
+                  sseLog(agent, "sync-skipped-has-boundary", { localLen: localTextLen, syncLen: syncTextLen });
+                } else {
+                  sseLog(agent, "sync-noop", { localLen: localTextLen, syncLen: syncTextLen });
                 }
                 if (existingMsg.status !== "complete") {
                   existingMsg.status = (syncStatus === "done" || syncStatus === "finished") ? "complete" : "streaming";
@@ -549,5 +565,51 @@ export async function processSSEStream(
         session.write({ connectionPhase: "idle" as const });
       }
     }
+  }
+}
+
+// ── Debug helpers ────────────────────────────────────────────────────────────
+
+/** Compact summary of buffer.parts for debug logs. */
+function partsBrief(parts: MessagePart[]): { count: number; types: string; texts: { len: number; head: string }[] } {
+  const types = parts.map((p) => p.type[0]).join("");
+  const texts = parts
+    .filter((p): p is TextPart => p.type === "text")
+    .map((p) => ({ len: p.text.length, head: p.text.slice(0, 40) }));
+  return { count: parts.length, types, texts };
+}
+
+/** Brief representation of an SSE event for debug logging. */
+function sseEventBrief(event: { type: string } & Record<string, unknown>): Record<string, unknown> {
+  switch (event.type) {
+    case "text-delta":
+      return { id: event.id, delta: typeof event.delta === "string" ? event.delta.slice(0, 80) : "" };
+    case "text-start":
+    case "text-end":
+      return { id: event.id };
+    case "step-start":
+    case "step-finish":
+      return { stepId: event.stepId };
+    case "start":
+      return { messageId: event.messageId };
+    case "tool-input-start":
+      return { toolCallId: event.toolCallId, toolName: event.toolName };
+    case "tool-input-available":
+      return { toolCallId: event.toolCallId };
+    case "tool-output-available":
+      return { toolCallId: event.toolCallId };
+    case "sync": {
+      const content = typeof event.content === "string" ? event.content : "";
+      const calls = Array.isArray(event.toolCalls) ? event.toolCalls.length : 0;
+      return { contentLen: content.length, contentHead: content.slice(0, 60), toolCalls: calls, status: event.status };
+    }
+    case "finish":
+      return {};
+    case "data-session-id": {
+      const data = event.data as { sessionId?: string } | undefined;
+      return { sessionId: data?.sessionId };
+    }
+    default:
+      return {};
   }
 }
