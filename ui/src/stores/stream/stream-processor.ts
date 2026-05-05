@@ -456,7 +456,11 @@ export async function processSSEStream(
       }
 
       if (!isError) {
-        session.write({ connectionPhase: "idle", connectionError: null, reconnectAttempt: 0, isLlmReconnecting: false });
+        // Use "complete" (not "idle") when the stream finished normally so the
+        // auto-resume effect in ChatThread cannot fire during the refetch window.
+        // "idle" is restored once we transition to history mode below.
+        const finishedPhase = receivedFinishEvent ? ("complete" as const) : ("idle" as const);
+        session.write({ connectionPhase: finishedPhase, connectionError: null, reconnectAttempt: 0, isLlmReconnecting: false });
       }
       callbacks.onStreamDone?.();
     } else {
@@ -504,12 +508,19 @@ export async function processSSEStream(
       });
 
       // Step 4: RQ cache now has the fresh exchange — safe to switch to history.
-      // No flash: the assistant response was visible in "finishing" mode throughout.
+      // Restore "idle" only when transitioning from "complete" (clean finish).
+      // Do NOT overwrite "error" — the UI must keep showing the error state.
+      const phaseAfterRefetch = callbacks.getAgentState(agent)?.connectionPhase;
       session.write({
         messageSource: { mode: "history" as const, sessionId: completedSessionId },
+        ...(phaseAfterRefetch === "complete" ? { connectionPhase: "idle" as const } : {}),
       });
     } else {
       queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
+      // No session to refetch — still clear "complete" so the UI input is re-enabled.
+      if (callbacks.getAgentState(agent)?.connectionPhase === "complete") {
+        session.write({ connectionPhase: "idle" as const });
+      }
     }
   }
 }

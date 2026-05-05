@@ -209,13 +209,15 @@ pub async fn bootstrap<S: EventSink>(
         Some(id) => Some(id),
         None => sm.latest_leaf_message_id(session_id).await.unwrap_or(None),
     };
+    // Store the original user text in DB — enriched_text is LLM context only
+    // and must not be persisted (URL fetched content would show in the UI).
     let user_message_id: uuid::Uuid = if let Some(prealloc_id) = ctx.msg.user_message_id {
         crate::db::sessions::save_message_ex_with_id(
             &engine.cfg().db,
             prealloc_id,
             session_id,
             "user",
-            &enriched_text,
+            &user_text,
             None,
             None,
             sender_agent_id,
@@ -228,7 +230,7 @@ pub async fn bootstrap<S: EventSink>(
         sm.save_message_ex(
             session_id,
             "user",
-            &enriched_text,
+            &user_text,
             None,
             None,
             sender_agent_id,
@@ -261,8 +263,7 @@ pub async fn bootstrap<S: EventSink>(
     // 9. Push user message into message history for the LLM
     // Feed the enriched text to the LLM so it sees the transcribed voice /
     // attachment descriptions / fetched URL contents that enrich_message_text
-    // produced. The DB already persists the same enriched_text (above) so
-    // reload-from-active-path reproduces exactly what the LLM saw.
+    // produced. DB stores only user_text (original); enriched_text is LLM-only.
     messages.push(Message {
         role: MessageRole::User,
         content: enriched_text.clone(),

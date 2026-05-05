@@ -134,7 +134,11 @@ export function ChatThread({
   // Auto-resume SSE stream when engine is still processing. React 18+ batches
   // state updates; isActivePhase + isRunning guards prevent double-fire.
   useEffect(() => {
-    if (!activeSessionId || isActivePhase(connectionPhase)) return;
+    // "complete" is the finishing-window phase: stream done, RQ refetch in progress.
+    // Guard against auto-resume firing during this window (connectionPhase goes
+    // idle→complete→idle; the stale sessionRunStatus="running" would otherwise
+    // trigger a spurious resumeStream call → reconnection loop).
+    if (!activeSessionId || isActivePhase(connectionPhase) || connectionPhase === "complete") return;
     const isRunning = activeSessionIds.includes(activeSessionId) || sessionRunStatus === "running";
     if (!isRunning) return;
     // Re-entry guard against stale React Query cache (Fix #4).
