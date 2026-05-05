@@ -230,9 +230,14 @@ export function ChatThread({
   // incorrectly suppresses showThinking. Bypass lastAssistantHasText when live
   // mode has no overlay content yet (the stream hasn't sent any events yet).
   const isLiveEmpty = isLive && !liveHasContent;
+  // "complete" is the post-stream finishing window: stream ended cleanly, the
+  // post-finally is awaiting RQ refetch. RQ cache is stale (sessionRunStatus
+  // still says "running") for ~100-500ms — without this guard, the thinking
+  // animation lingers visibly after the response is fully rendered.
   const showThinking = isLiveOrHistory
     && (isLiveEmpty || !lastAssistantHasText)
     && !lastMsgIsOtherAgent
+    && connectionPhase !== "complete"
     && (connectionPhase === "submitted" || connectionPhase === "streaming" || connectionPhase === "reconnecting"
         || engineRunning || sessionRunStatus === "running");
 
