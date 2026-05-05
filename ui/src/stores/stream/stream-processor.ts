@@ -309,8 +309,10 @@ export async function processSSEStream(
 
               // Only skip the live-mode switch when we're in "history" mode for the same session.
               // For "new-chat" mode we always need to switch, even if session IDs match.
+              // "finishing" mode must also be preserved — its frozen messages must not be discarded.
               const isHistoryMode = agentDraft.messageSource.mode === "history";
-              if (agentDraft.messageSource.mode !== "live" && !(isHistoryMode && isSameSession)) {
+              const isLiveOrFinishing = agentDraft.messageSource.mode === "live" || agentDraft.messageSource.mode === "finishing";
+              if (!isLiveOrFinishing && !(isHistoryMode && isSameSession)) {
                 (agentDraft as any).messageSource = { mode: "live", messages: [] };
               }
 

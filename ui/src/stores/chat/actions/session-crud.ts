@@ -130,8 +130,9 @@ export function createSessionCrudActions(deps: ActionDeps) {
       const st = store.agents[agent];
       if (!st) return;
 
-      const messages = st.messageSource.mode === "live"
-        ? st.messageSource.messages
+      const liveMessages = getLiveMessages(st.messageSource);
+      const messages = liveMessages.length > 0
+        ? liveMessages
         : getCachedHistoryMessages(st.activeSessionId, st.selectedBranches);
       if (messages.length === 0) return;
 
