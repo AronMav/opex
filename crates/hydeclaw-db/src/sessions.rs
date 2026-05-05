@@ -420,6 +420,26 @@ pub async fn save_message_ex_with_id(
     Ok(())
 }
 
+/// Set the step_id column for an existing message row. Used by the agent
+/// pipeline immediately after `save_message_ex_with_id` inserts an
+/// intermediate iteration row, so the row gets a queryable step number
+/// without bloating the main insert signature with a parameter most
+/// callers don't need.
+///
+/// No-op if the row doesn't exist (e.g. the insert lost a race).
+pub async fn update_message_step_id(
+    db: &PgPool,
+    id: Uuid,
+    step_id: i32,
+) -> Result<()> {
+    sqlx::query("UPDATE messages SET step_id = $1 WHERE id = $2")
+        .bind(step_id)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 
 
 /// Load messages for a session. If `limit` is `Some`, returns at most that many rows.

@@ -319,6 +319,7 @@ impl AgentEngine {
                 tc_json.as_ref(),
                 tb_json.as_ref(),
                 None,
+                None, // step_id — legacy stream path, not wired
             );
 
             // Legacy stream path — detached persistence in `execute_tool_calls_partitioned`

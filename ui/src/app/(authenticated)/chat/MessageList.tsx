@@ -282,6 +282,19 @@ export function MessageList({
             !!prev.agentId && !!msg.agentId &&
             prev.agentId !== msg.agentId;
 
+          // True when this assistant message continues the previous one
+          // (same agent, no user message between, no agent transition).
+          // After Phase 1's per-iteration UUID split, one tool-loop turn
+          // produces multiple consecutive assistant ChatMessages — render
+          // them as a single visual bubble instead of stacking headers.
+          const continuesPrevious =
+            prev !== null &&
+            prev.id !== THINKING_ID &&
+            prev.role === "assistant" &&
+            msg.role === "assistant" &&
+            !showSeparator &&
+            (!prev.agentId || !msg.agentId || prev.agentId === msg.agentId);
+
           const isNew = (!isStreaming && isNewMessage(msg)) || (showSeparator && isStreaming);
 
           const isDimmed = searchActive && searchMatchIds && !searchMatchIds.has(msg.id);
@@ -298,7 +311,12 @@ export function MessageList({
               <div className={cn(
                 isNew && "animate-in fade-in slide-in-from-bottom-2 duration-300 ease-out",
               )}>
-                <MessageItem message={msg} sessionChannel={sessionChannel} sessionUserId={sessionUserId} />
+                <MessageItem
+                  message={msg}
+                  sessionChannel={sessionChannel}
+                  sessionUserId={sessionUserId}
+                  continuesPrevious={continuesPrevious}
+                />
                 {isTextStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && (
                   <div className="pb-1 pl-12">
                     <CometLoader />

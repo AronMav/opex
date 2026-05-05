@@ -89,6 +89,19 @@ export async function processSSEStream(
       const lines = parseSSELines(chunk, lineBuffer);
 
       for (const line of lines) {
+        // Standard SSE id field — backend emits it for every buffered event.
+        // Stash on the session AND in agent state so reconnect can pass
+        // Last-Event-ID even after StreamSession disposal (Phase 3 offset
+        // tracking).
+        if (line.startsWith("id:")) {
+          const idStr = line.slice(3).trim();
+          const idNum = Number.parseInt(idStr, 10);
+          if (!Number.isNaN(idNum)) {
+            session.lastEventId = idNum;
+            session.write({ lastEventId: idNum });
+          }
+          continue;
+        }
         if (!line.startsWith("data:")) continue;
         const raw = line.slice(5).trim();
         if (raw === "[DONE]") continue;
@@ -280,27 +293,26 @@ export async function processSSEStream(
             // as `messageId` in the step-start event). On every step-start we
             // commit the current buffer as a finished ChatMessage and reset
             // the buffer to start accumulating the next iteration under its
-            // own id. ID-based dedup with history "just works" — no content
-            // heuristics needed.
+            // own id.
             //
-            // Fallback: if backend didn't send messageId (legacy / nil), keep
-            // the previous behaviour of inserting a step-boundary marker so
-            // the existing dedup safety nets still apply.
-            if (event.messageId) {
-              if (session.buffer.snapshot().length > 0) {
-                session.commit();
-              }
-              session.buffer.reset();
-              session.buffer.assistantId = event.messageId;
-              sseLog(agent, "step-start-new-message", { id: event.messageId });
-            } else if (session.buffer.snapshot().length > 0) {
-              session.buffer.flushText();
-              session.buffer.parts.push({ type: "step-boundary", stepId: event.stepId });
-              sseLog(agent, "post-step-boundary-buffer", partsBrief(session.buffer.parts));
-              session.scheduleCommit();
-            } else {
-              sseLog(agent, "step-start-skipped-empty-buffer");
+            // Iteration 0 special case: backend also emits MessageStart with
+            // the same id for backward compatibility. The `start` handler
+            // already reset the buffer with that id, so this step-start is a
+            // no-op — skip without an extra reset.
+            if (!event.messageId) {
+              sseLog(agent, "step-start-no-message-id");
+              break;
             }
+            if (session.buffer.assistantId === event.messageId) {
+              sseLog(agent, "step-start-already-on-id", { id: event.messageId });
+              break;
+            }
+            if (session.buffer.snapshot().length > 0) {
+              session.commit();
+            }
+            session.buffer.reset();
+            session.buffer.assistantId = event.messageId;
+            sseLog(agent, "step-start-new-message", { id: event.messageId });
             break;
           }
           case "step-finish":
@@ -363,27 +375,19 @@ export async function processSSEStream(
 
               if (existingIdx >= 0) {
                 const existingMsg = liveMessages[existingIdx];
-                // Skip text-replace when the parts list already has step-boundary
-                // markers — the bubble has multi-iteration structure that flat
-                // syncContent cannot recover. Streaming will keep filling it.
-                const hasStepBoundary = (existingMsg.parts as MessagePart[]).some(
-                  (p: MessagePart) => p.type === "step-boundary",
-                );
                 const localTextLen = (existingMsg.parts as MessagePart[])
                   .filter((p: MessagePart): p is TextPart => p.type === "text")
                   .reduce((acc: number, p: TextPart) => acc + (p.text?.length ?? 0), 0);
                 const syncTextLen = syncParts
                   .filter((p: MessagePart): p is TextPart => p.type === "text")
                   .reduce((acc: number, p: TextPart) => acc + (p.text?.length ?? 0), 0);
-                if (!hasStepBoundary && (syncTextLen > localTextLen || Math.abs(syncTextLen - localTextLen) > 50)) {
+                if (syncTextLen > localTextLen || Math.abs(syncTextLen - localTextLen) > 50) {
                   // H2: syncParts carries only text/reasoning — preserve tool, approval, file parts
                   const preserved = (existingMsg.parts as MessagePart[]).filter(
                     (p: MessagePart) => p.type !== "text" && p.type !== "reasoning"
                   );
                   existingMsg.parts = [...syncParts, ...preserved];
                   sseLog(agent, "sync-replaced-parts", { reason: "text-len-diff", localLen: localTextLen, syncLen: syncTextLen, partsBrief: partsBrief(existingMsg.parts as MessagePart[]) });
-                } else if (hasStepBoundary) {
-                  sseLog(agent, "sync-skipped-has-boundary", { localLen: localTextLen, syncLen: syncTextLen });
                 } else {
                   sseLog(agent, "sync-noop", { localLen: localTextLen, syncLen: syncTextLen });
                 }
