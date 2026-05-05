@@ -281,6 +281,8 @@ describe("STATE-01: history to live transition", () => {
           cacheReadTokens: null,
           cacheCreationTokens: null,
           reasoningTokens: null,
+          hasMoreHistory: false,
+          isLoadingHistory: false,
         };
       } else {
         s.agents["TestAgent"].messageSource = { mode: "history", sessionId: "sess-history" };

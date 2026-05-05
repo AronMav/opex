@@ -212,6 +212,10 @@ export interface AgentState {
   cacheReadTokens: number | null;
   cacheCreationTokens: number | null;
   reasoningTokens: number | null;
+  /** True when there are older messages in DB not yet loaded (backward pagination). */
+  hasMoreHistory: boolean;
+  /** True while loadPreviousMessages() is fetching (prevents concurrent loads). */
+  isLoadingHistory: boolean;
 }
 
 // ── Store interface ─────────────────────────────────────────────────────────
@@ -252,6 +256,7 @@ export interface ChatStore {
   deleteAllSessions: () => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
   loadEarlierMessages: (agent: string) => void;
+  loadPreviousMessages: (agent: string) => Promise<void>;
   exportSession: () => Promise<void>;
 
   _selectCounter: Record<string, number>;
@@ -283,5 +288,7 @@ export function emptyAgentState(): AgentState {
     cacheReadTokens: null,
     cacheCreationTokens: null,
     reasoningTokens: null,
+    hasMoreHistory: false,
+    isLoadingHistory: false,
   };
 }

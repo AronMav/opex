@@ -81,6 +81,8 @@ function seedStore() {
       cacheReadTokens: null,
       cacheCreationTokens: null,
       reasoningTokens: null,
+      hasMoreHistory: false,
+      isLoadingHistory: false,
     };
   });
 }

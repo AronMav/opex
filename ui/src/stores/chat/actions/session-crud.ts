@@ -5,12 +5,40 @@
 
 import type { ActionDeps } from "../../chat-store";
 import { emptyAgentState, getLiveMessages } from "../../chat-types";
-import type { AgentState } from "../../chat-types";
+import type { AgentState, CompressionDividerPart, ChatMessage } from "../../chat-types";
+import type { CompressionEvent, MessagesResponse } from "@/types/api";
 import { qk } from "@/lib/queries";
-import { apiDelete, apiPatch } from "@/lib/api";
+import { apiDelete, apiPatch, getToken } from "@/lib/api";
 import { saveLastSession } from "../../chat-persistence";
-import { getCachedHistoryMessages } from "../../chat-history";
+import { getCachedHistoryMessages, convertHistory } from "../../chat-history";
 import { selectIsReplayingHistory } from "../../chat-selectors";
+
+function insertCompressionDividers(
+  messages: ChatMessage[],
+  events: CompressionEvent[],
+  totalSegments: number,
+): ChatMessage[] {
+  if (events.length === 0) return messages;
+  const dividerMap = new Map(events.map((e) => [e.first_live_message_id, e]));
+  const result: ChatMessage[] = [];
+  for (const msg of messages) {
+    const event = dividerMap.get(msg.id);
+    if (event) {
+      const dividerPart: CompressionDividerPart = {
+        type: "compression-divider",
+        segmentIndex: event.segment_index,
+        totalSegments,
+      };
+      result.push({
+        id: `compression-divider-${event.segment_index}`,
+        role: "assistant",
+        parts: [dividerPart],
+      });
+    }
+    result.push(msg);
+  }
+  return result;
+}
 
 export function createSessionCrudActions(deps: ActionDeps) {
   const { get, set, queryClient, renderer } = deps;
@@ -130,6 +158,41 @@ export function createSessionCrudActions(deps: ActionDeps) {
         document.body.removeChild(a);
       } finally {
         URL.revokeObjectURL(url);
+      }
+    },
+
+    loadPreviousMessages: async (agentName: string) => {
+      const st = get().agents[agentName];
+      if (!st || st.isLoadingHistory || !st.hasMoreHistory || !st.activeSessionId) return;
+
+      const liveMessages = getLiveMessages(st.messageSource);
+      const firstMsg = liveMessages.find((m) => !m.id.startsWith("compression-divider-"));
+      if (!firstMsg) return;
+
+      set((draft: any) => { draft.agents[agentName].isLoadingHistory = true; });
+
+      try {
+        const res: MessagesResponse = await fetch(
+          `/api/sessions/${st.activeSessionId}/messages?before_id=${firstMsg.id}&limit=50`,
+          { headers: { Authorization: `Bearer ${getToken()}` } },
+        ).then((r) => r.json());
+
+        const converted = convertHistory(res.messages ?? []);
+        // segment_count comes from the session record; fall back to 1
+        const totalSegments = (get().agents[agentName] as any).sessionSegmentCount ?? 1;
+        const withDividers = insertCompressionDividers(converted, res.compression_events ?? [], totalSegments);
+
+        set((draft: any) => {
+          const a = draft.agents[agentName];
+          const currentLive = getLiveMessages(a.messageSource);
+          a.messageSource = { mode: "live", messages: [...withDividers, ...currentLive] };
+          a.hasMoreHistory = res.has_more ?? false;
+          a.isLoadingHistory = false;
+        });
+      } catch (_e) {
+        const { toast } = await import("sonner");
+        toast.error("Не удалось загрузить историю сообщений");
+        set((draft: any) => { draft.agents[agentName].isLoadingHistory = false; });
       }
     },
   };

@@ -115,6 +115,8 @@ describe("MessageItem re-render count (REF-05)", () => {
         cacheReadTokens: null,
         cacheCreationTokens: null,
         reasoningTokens: null,
+        hasMoreHistory: false,
+        isLoadingHistory: false,
       };
     });
 
