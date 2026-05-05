@@ -1,7 +1,8 @@
 name: synthesize_speech
-description: "Send a voice message to the user via the channel. Use when the user asks to read aloud, send voice, or respond by voice. The voice/timbre is determined by the agent's TTS-provider configuration — you do not pick it here."
+description: "Send a voice message to the user via the channel. Use when the user asks to read aloud, send voice, or respond by voice. The voice/timbre is determined by the agent's TTS-provider configuration — you do not pick it here. IMPORTANT: this tool dispatches the voice in the background and the audio itself IS your reply to the user. After calling this tool, end your turn immediately. Do NOT write any acknowledgement text like 'Голосовое отправлено', 'Sending voice…', or 'Done' — the user does not want preamble; they only want the voice."
 endpoint: "http://localhost:9011/v1/audio/speech"
 method: POST
+timeout: 600
 parameters:
   text:
     type: string

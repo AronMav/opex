@@ -52,8 +52,20 @@ impl BackgroundTtsTask {
         }
         let context = args.get("_context").cloned().unwrap_or(serde_json::Value::Null);
 
+        // Background TTS bypasses the SSE deadline, but the YAML tool's own
+        // per-tool timeout (default 60s) wraps `builder.send()`. Toolgate
+        // (FastAPI) buffers the response until full audio is ready, so headers
+        // don't arrive until synthesis is complete — which can take 90–130s on
+        // a Raspberry Pi. Override to 600s here so background tasks aren't
+        // killed by the per-tool timeout. See:
+        // crates/hydeclaw-core/src/tools/yaml_tools.rs send_request.
+        let mut bg_tool = tool.clone();
+        if bg_tool.timeout < 600 {
+            bg_tool.timeout = 600;
+        }
+
         Self {
-            tool:           tool.clone(),
+            tool:           bg_tool,
             args:           args.clone(),
             ca:             ca.clone(),
             http_client:    ctx.tex.http_client.clone(),
