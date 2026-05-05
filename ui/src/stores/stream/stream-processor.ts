@@ -168,6 +168,13 @@ export async function processSSEStream(
           }
 
           case "text-end": {
+            // Close the text block immediately: flush parser accumulator into
+            // parts and clear insideThink. Without this the parser keeps any
+            // held-back chars in accum and any open <think> state across LLM
+            // iteration boundaries — which produced "iter0_text + iter1_tail"
+            // mid-word concatenation and made step-boundary fall in the wrong
+            // place inside the merged text.
+            session.buffer.endTextBlock();
             session.scheduleCommit();
             break;
           }

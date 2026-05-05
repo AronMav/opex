@@ -225,6 +225,21 @@ export class IncrementalParser {
   }
 
   /**
+   * Closes the current text block: flushes any accumulator content into parts
+   * and clears the insideThink flag. Used on `text-end` SSE events so the next
+   * text block (typically from the next LLM tool-loop iteration) starts fresh
+   * — without this, the held-back accum bleeds into the next iteration's text
+   * and any open <think> state leaks across the boundary.
+   *
+   * Returns the parts produced by this flush so callers can append to a buffer.
+   */
+  endTextBlock(): ParsedContentPart[] {
+    const flushed = this.flush();
+    this.insideThink = false;
+    return flushed;
+  }
+
+  /**
    * Flushes remaining accumulator into parts.
    */
   flush(): ParsedContentPart[] {
