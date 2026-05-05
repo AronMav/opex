@@ -90,9 +90,7 @@ pub async fn execute_yaml_channel_action(
 ) -> String {
     // existing: build resolver, tool_headers (unchanged)
     let task = BackgroundTtsTask::from_ctx(ctx, tool, args, ca);
-    let is_channel = args.get("_context")
-        .and_then(|c| c.get("chat_id")).is_some();
-    task.spawn(is_channel).to_string()
+    task.spawn().to_string()
 }
 ```
 
@@ -102,43 +100,49 @@ pub async fn execute_yaml_channel_action(
 
 ```
 1. tokio::time::timeout(600s, tool.execute_binary(...))
-        ↓ Ok(bytes)                     ↓ Err(e)
-        
-2. save_binary_to_uploads(workspace_dir, bytes, "audio", upload_key, ttl_secs)
-        ↓ (url, media_type)             ↓ Err → handle_error(e)
+        ↓ Ok(bytes)                     ↓ Err(e) → handle_error(e)
 
-3a. has_channel_context == true  →  channel path
-3b. has_channel_context == false →  ui path
+2a. has_channel_context == true  →  channel path (bytes passed directly)
+2b. has_channel_context == false →  ui path (save to uploads first)
 ```
 
 ### Channel path (Telegram / Discord)
 
+`save_binary_to_uploads` is skipped — agent already returned, FILE_PREFIX has nowhere to go.
+
 ```
-channel_router.send(ChannelAction {
-    name: "send_voice",
-    params: { audio_base64: base64(bytes) },
-    context,   // chat_id, etc.
-})
-→ Ok  →  log INFO, done
-→ Err →  channel_router.send(ChannelAction {
-              name: "send_message",
-              params: { text: "❌ Не удалось отправить голосовое: {e}" },
-          })
+match channel_router {
+    None => log WARN "channel_router missing despite chat_id, dropping"
+    Some(router) =>
+        router.send(ChannelAction {
+            name: "send_voice",
+            params: { audio_base64: base64(bytes) },
+            context,   // chat_id, etc.
+        })
+        → Ok  →  log INFO, done
+        → Err →  router.send(ChannelAction {
+                     name: "send_message",
+                     params: { text: "❌ Не удалось отправить голосовое: {e}" },
+                 })
+}
 ```
 
 ### UI path (no chat_id)
 
 ```
+save_binary_to_uploads(workspace_dir, bytes, "audio", upload_key, ttl_secs)
+        ↓ (url, media_type)             ↓ Err → handle_error(e)
+
 notify(db, ui_event_tx, "tts_ready",
        "Аудио готово",
-       "{agent_name}",
+       "Синтезировано агентом {agent_name}",
        json!({ "url": url, "mediaType": media_type }))
 → bell notification with inline <audio> player
 
 on any error:
 notify(db, ui_event_tx, "tts_error",
        "Не удалось синтезировать аудио",
-       "{agent_name}",
+       "Ошибка агента {agent_name}: {e}",
        json!({ "error": e.to_string() }))
 ```
 
@@ -195,6 +199,21 @@ Channel session errors go to the chat directly — no bell notification needed.
 | `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs` | replace body of `execute_yaml_channel_action` |
 | `ui/src/` (NotificationRow or notifications component) | add `tts_ready` / `tts_error` rendering |
 | `ui/src/types/api.ts` | add `tts_ready` / `tts_error` to notification type union (if typed) |
+
+## Testing
+
+`BackgroundTtsTask::run()` is a self-contained async fn — test it directly without mocking the full pipeline.
+
+| Scenario | Approach |
+|---|---|
+| Channel success | mock `ChannelActionRouter` (mpsc), assert send_voice action received |
+| Channel TTS error | mock `execute_binary` returning Err, assert send_message error text sent |
+| Channel `channel_router` None | assert WARN log, no panic |
+| UI success | mock toolgate HTTP server (wiremock/httpmock), assert `notify` call with `tts_ready` |
+| UI TTS error | assert `notify` call with `tts_error` |
+| Timeout 600s | mock toolgate that hangs, assert task exits after timeout |
+
+Existing unit tests for `execute_yaml_channel_action` should be updated to assert the immediate return string rather than the full synthesis result.
 
 ## Out of Scope
 
