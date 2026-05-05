@@ -331,6 +331,19 @@ pub struct FinalizeContext {
 /// guard, and (on `Done`) spawn knowledge extraction in the background.
 ///
 /// Returns the saved assistant text so callers can pass it upstream.
+#[tracing::instrument(
+    name = "pipeline.finalize",
+    skip_all,
+    fields(
+        session_id = %ctx.session_id,
+        agent = %ctx.agent_name,
+        outcome = match &outcome {
+            FinalizeOutcome::Done { .. } => "done",
+            FinalizeOutcome::Failed { .. } => "failed",
+            FinalizeOutcome::Interrupted { .. } => "interrupted",
+        },
+    )
+)]
 pub async fn finalize<S: EventSink>(
     ctx: FinalizeContext,
     outcome: FinalizeOutcome,
@@ -911,6 +924,19 @@ mod tests {
                 .any(|e| matches!(e, PipelineEvent::Stream(StreamEvent::Error(_)))),
             "Error event emitted"
         );
+        // Phase: Failed path MUST also emit Finish so the SSE stream closes
+        // cleanly. Frontend uses Finish as the single signal of "no more
+        // events coming"; without it the loader animation lingers and a
+        // reconnect storm starts.
+        assert!(
+            sink.events
+                .iter()
+                .any(|e| matches!(
+                    e,
+                    PipelineEvent::Stream(StreamEvent::Finish { .. })
+                )),
+            "Finish event MUST follow Error on Failed path",
+        );
         let role: String = sqlx::query_scalar(
             "SELECT role FROM messages WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
         )
@@ -951,5 +977,75 @@ mod tests {
                 .any(|e| matches!(e, PipelineEvent::Stream(StreamEvent::Error(_)))),
             "no Error event on interrupt"
         );
+        // Phase: Interrupted path MUST emit Finish (without Error) so the
+        // frontend stops streaming UI immediately and doesn't loop trying
+        // to resume a session the backend has finalized.
+        let finish_count = sink
+            .events
+            .iter()
+            .filter(|e| matches!(e, PipelineEvent::Stream(StreamEvent::Finish { .. })))
+            .count();
+        assert_eq!(
+            finish_count, 1,
+            "exactly one Finish event on Interrupted, got {finish_count}"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn update_message_step_id_sets_column(pool: PgPool) {
+        // Phase 4: update_message_step_id correctly populates the column
+        // for an existing intermediate row.
+        let session_id =
+            crate::db::sessions::create_new_session(&pool, "test-agent", "test-user", "test-channel")
+                .await
+                .unwrap();
+        let row_id = uuid::Uuid::new_v4();
+        crate::db::sessions::save_message_ex_with_id(
+            &pool,
+            row_id,
+            session_id,
+            "assistant",
+            "intermediate text",
+            Some(&serde_json::json!([{"id":"call_1","name":"x","arguments":{}}])),
+            None,
+            Some("test-agent"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Before update — step_id is NULL
+        let before: Option<i32> = sqlx::query_scalar(
+            "SELECT step_id FROM messages WHERE id = $1",
+        )
+        .bind(row_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(before.is_none());
+
+        crate::db::sessions::update_message_step_id(&pool, row_id, 2)
+            .await
+            .unwrap();
+
+        let after: Option<i32> = sqlx::query_scalar(
+            "SELECT step_id FROM messages WHERE id = $1",
+        )
+        .bind(row_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(after, Some(2), "step_id column populated");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn update_message_step_id_silent_on_missing_row(pool: PgPool) {
+        // No-op contract: updating a non-existent row returns Ok without
+        // raising. This matters because step_id update is detached and may
+        // race with delete operations.
+        let result =
+            crate::db::sessions::update_message_step_id(&pool, uuid::Uuid::new_v4(), 5).await;
+        assert!(result.is_ok());
     }
 }

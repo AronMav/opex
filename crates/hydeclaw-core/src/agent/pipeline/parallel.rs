@@ -160,6 +160,15 @@ pub fn enrich_tool_args(
 /// defense-in-depth so that a future sync action which bypasses the
 /// deadline-enforced waits cannot hang the engine indefinitely.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    name = "pipeline.execute_tools",
+    skip_all,
+    fields(
+        session_id = %session_id,
+        tool_count = tool_calls.len(),
+        loop_break = tracing::field::Empty,
+    )
+)]
 pub async fn execute_tool_calls_partitioned(
     tool_calls: &[ToolCall],
     context: &Value,
@@ -739,5 +748,89 @@ pub(crate) fn spawn_persist_assistant_message(
                 }
             }
         });
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_result(id: &str, body: &str) -> ToolBatchResult {
+        ToolBatchResult {
+            tool_call_id: id.to_string(),
+            result: body.to_string(),
+            tool_msg_id: None,
+        }
+    }
+
+    #[test]
+    fn batch_outcome_no_loop_break_carries_all_results() {
+        // Ok path: every tool completed, no break — outcome.results contains
+        // the full vec, loop_break is None. This is what callers depend on
+        // when emitting ToolResult SSE events.
+        let outcome = BatchOutcome {
+            results: vec![mk_result("t1", "ok1"), mk_result("t2", "ok2")],
+            loop_break: None,
+        };
+        assert_eq!(outcome.results.len(), 2);
+        assert!(outcome.loop_break.is_none());
+        // Both ids visible to the caller iteration:
+        let ids: Vec<&str> = outcome
+            .results
+            .iter()
+            .map(|r| r.tool_call_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["t1", "t2"]);
+    }
+
+    #[test]
+    fn batch_outcome_loop_break_preserves_completed_results() {
+        // The Phase-5 invariant: a loop break does NOT discard completed
+        // tools. Caller (execute.rs) must still see them so it can emit
+        // ToolResult SSE events for each, preventing perpetual frontend
+        // spinners on tools that actually completed.
+        let outcome = BatchOutcome {
+            results: vec![mk_result("t1", "completed"), mk_result("t2", "")],
+            loop_break: Some(Some("repeated_pattern".to_string())),
+        };
+        // Caller observes both completed and uncompleted entries; uncompleted
+        // entries (t2) have empty result string so the SSE event still fires.
+        assert_eq!(outcome.results.len(), 2);
+        assert_eq!(outcome.results[0].result, "completed");
+        assert_eq!(outcome.results[1].result, "");
+        assert_eq!(
+            outcome.loop_break,
+            Some(Some("repeated_pattern".to_string()))
+        );
+    }
+
+    #[test]
+    fn batch_outcome_loop_break_without_reason() {
+        // Loop break can fire without a specific reason string — the inner
+        // Option<String> represents "we know it's a loop, no specifics".
+        // Caller still sees Some(_) so it knows to break.
+        let outcome = BatchOutcome {
+            results: vec![],
+            loop_break: Some(None),
+        };
+        assert!(outcome.loop_break.is_some());
+        assert!(outcome.loop_break.as_ref().unwrap().is_none());
+    }
+
+    #[test]
+    fn tool_batch_result_tool_msg_id_optional() {
+        // tool_msg_id is None when persist_ctx was None (e.g. subagent path
+        // that doesn't persist tool results). Caller must treat as ephemeral.
+        let r = mk_result("t1", "result");
+        assert!(r.tool_msg_id.is_none());
+
+        let with_id = ToolBatchResult {
+            tool_call_id: "t2".to_string(),
+            result: "x".to_string(),
+            tool_msg_id: Some(uuid::Uuid::nil()),
+        };
+        assert!(with_id.tool_msg_id.is_some());
     }
 }

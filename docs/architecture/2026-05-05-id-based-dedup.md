@@ -1,0 +1,253 @@
+# ID-Based Dedup Architecture (2026-05-05)
+
+> **Status:** Implemented and live-verified on Pi.
+> **Supersedes:** Heuristic-based content dedup in `mergeLiveOverlay` (2026-04 era).
+
+## Context
+
+Live chat rendering merged two independent sources of truth into one view:
+
+  * **History** — React Query cache fetched from `/api/sessions/{id}/messages`.
+  * **Live** — SSE buffer accumulated by `streaming-renderer` from `/api/chat`.
+
+Each had its own pipeline. `convertHistory` turned DB rows into `ChatMessage[]`.
+`stream-processor` accumulated SSE events into a `StreamBuffer`. `mergeLiveOverlay`
+reconciled the two on every render.
+
+The reconciliation was content-based:
+
+  * `lastHistAssistantTexts: Set<string>` — drop a live text part if its trimmed
+    content already appeared in the history bubble.
+  * `dedupeBubbleTextParts` — within one bubble, drop text parts ≥ 20 chars
+    whose content repeated.
+  * `historyEndsWithNewUserTurn` flag.
+  * Continuation merge that appended live tools into the previous history
+    assistant.
+
+These heuristics fired in different orders depending on RQ cache state, SSE
+replay timing, and which iteration of the LLM tool loop was active. Each user-
+reported duplicate ("снова дубли!") added a new heuristic on top of the
+previous ones, never replacing them. The architecture became a stack of
+band-aids around a missing identity contract.
+
+The root problem: **live `ChatMessage` IDs and DB row IDs were unrelated**.
+
+  * `pipeline::execute` pre-allocated **one** UUID for the final assistant
+    message before the loop.
+  * Intermediate iteration rows got `Uuid::new_v4()` inside the loop body,
+    independent of the SSE pre-allocation.
+  * Frontend `streaming-renderer` opened a new live `ChatMessage` per `start`
+    SSE event — using the backend-supplied id, but only for the first
+    iteration.
+  * convertHistory built ChatMessages keyed by **the first row's id** when
+    merging intermediate iterations of one turn.
+
+Every dedup heuristic was compensation for that ID gap.
+
+## Decision
+
+Establish a single identity contract: **every assistant DB row has a UUID
+known by both backend and frontend before the row is persisted**.
+
+Concretely, the SSE `step-start` event carries `messageId: Uuid` — the same
+UUID the row will be saved under. The frontend opens a fresh live ChatMessage
+under that exact id at the start of each iteration. Once the row is persisted,
+ID-based dedup in `mergeLiveOverlay` is sufficient: live id matches history
+id, the live overlay drops the duplicate.
+
+Five concrete changes carried this:
+
+### Phase 1 — Per-iteration UUID in StepStart
+
+`crates/hydeclaw-core/src/agent/stream_event.rs`:
+
+```rust
+StepStart { step_id: String, message_id: String }
+```
+
+`crates/hydeclaw-core/src/agent/pipeline/execute.rs`:
+
+```rust
+for iteration in 0..max_iterations {
+    let iter_msg_id = Uuid::new_v4();
+    sink.emit(StepStart { step_id, message_id: iter_msg_id.to_string() }).await?;
+    // ... LLM call ...
+    spawn_persist_assistant_message(&db, iter_msg_id, ..., None /* parent */, Some(iteration));
+}
+```
+
+The first iteration also emits a legacy `MessageStart` with the same id for
+backward compatibility with existing frontend handlers.
+
+`crates/hydeclaw-core/src/gateway/handlers/chat.rs`:
+
+```rust
+StreamEvent::StepStart { step_id, message_id } => {
+    json!({"type": "step-start", "stepId": step_id, "messageId": message_id, ...})
+}
+```
+
+`ui/src/stores/stream/stream-processor.ts`:
+
+```ts
+case "step-start": {
+    if (event.messageId) {
+        if (session.buffer.assistantId === event.messageId) break; // iter 0 dedup
+        if (session.buffer.snapshot().length > 0) session.commit();
+        session.buffer.reset();
+        session.buffer.assistantId = event.messageId;
+    }
+    break;
+}
+```
+
+### Phase 2 — Pure ID-based dedup, heuristics removed
+
+`mergeLiveOverlay` collapsed to four invariants:
+
+  1. ID-based dedup (live message id present in history → skip).
+  2. Tool dedup by `toolCallId`.
+  3. Merge consecutive in-flight live assistants into one bubble.
+  4. Otherwise push to overlay.
+
+Removed: `lastHistAssistantTexts`, `dedupeWithinSteps`, `historyEndsWithNewUserTurn`,
+content-based continuation merge filtering.
+
+To preserve the existing UX (one bubble per turn even when multiple
+intermediate rows exist), `ChatMessage` gained a `mergedIds: string[]` field.
+`convertHistory` keeps the merge-by-tool_calls behavior and tracks every
+merged row id in `mergedIds`. `mergeLiveOverlay`'s `historyIds` set seeds
+from `m.id` plus `m.mergedIds` so live ChatMessages keyed by any merged row
+are correctly recognized as already in history.
+
+### Phase 3 — Last-Event-ID offset tracking
+
+`StreamRegistry::push_event` already returned a monotonic seq. `chat.rs`
+emits SSE `id: <seq>` on every event. `api_chat_resume_stream` reads the
+client's `Last-Event-ID` header (or `?last_event_id=` query) and replays
+only events with `seq > last_event_id`. Frontend `stream-processor` tracks
+the highest seq in `StreamSession.lastEventId` (and persists to agent
+state for survival across StreamSession disposal); `streaming-renderer`
+attaches the header on every resume fetch. New session resets the id
+because the backend's seq counter is per-session.
+
+### Phase 4 — Persistent step_id in DB
+
+Migration `046_messages_step_id.sql`:
+
+```sql
+ALTER TABLE messages ADD COLUMN step_id INT;
+CREATE INDEX messages_session_step_idx ON messages(session_id, step_id)
+  WHERE step_id IS NOT NULL;
+```
+
+`spawn_persist_assistant_message` accepts `step_id: Option<i32>`. When set,
+a follow-up `UPDATE` populates the column after the insert (detached
+spawn, retried 3× with backoff, non-fatal on persistent failure).
+
+`pipeline::execute` passes `iteration as i32`. `engine/stream.rs::handle_isolated`
+(legacy cron path) does the same.
+
+NULL means "not part of a tool-loop iteration" — final assistant rows,
+user rows, tool-result rows. Frontend treats NULL as "no step info".
+
+### Phase 5 — BatchOutcome guarantees ToolResult emission
+
+`pipeline::parallel::execute_tool_calls_partitioned` previously returned
+`Result<Vec<ToolBatchResult>, LoopBreak>`. The error path threw away every
+tool that had completed before the loop detector raised the break.
+Frontend left perpetual spinners on those tools.
+
+```rust
+pub struct BatchOutcome {
+    pub results: Vec<ToolBatchResult>,
+    pub loop_break: Option<Option<String>>,
+}
+```
+
+Callers (`pipeline::execute`, `engine::stream`, `subagent_runner`,
+`openai_compat`) unconditionally iterate `outcome.results` to emit
+`ToolResult` events, then check `outcome.loop_break` for the nudge/terminate
+decision.
+
+Inside `parallel.rs` the `join_all` loop records `results[i] = Some(result)`
+**before** the loop-detector check, so a break in iteration N still surfaces
+results for tools 0..N.
+
+## Consequences
+
+### Positive
+
+  * **Pure ID-based dedup**: 5 heuristics removed (`lastHistAssistantTexts`,
+    `dedupeWithinSteps`, `historyEndsWithNewUserTurn`, content-based
+    continuation filtering, prefix-strip dedup). 78 net lines deleted from
+    `chat-overlay-dedup.ts`.
+  * **Backend `Finish` event guaranteed**: Failed/Interrupted/Errored exit
+    paths in `finalize.rs` and `run.rs` now always close the SSE stream
+    with `Finish`. Frontend's reconnect loop bug (lingering loader after
+    backend marked session done) is fixed at the source.
+  * **Idempotent SSE replay**: `Last-Event-ID` makes reconnect protocol-
+    level dedup-free, no duplicates regardless of how often the client
+    reconnects.
+  * **`step_id` queryability**: analytics can `SELECT * FROM messages
+    WHERE step_id IS NOT NULL ORDER BY session_id, step_id`. Future per-
+    step UI features (iteration markers, deep-links into a specific
+    iteration) become a one-liner.
+  * **Concurrency safety**: tested with two parallel POST /api/chat for
+    same agent — distinct sessions, disjoint messageIds, both emit `finish`.
+  * **Migration safety**: legacy ChatMessages without `mergedIds` continue
+    to dedup correctly (only by primary id).
+
+### Negative / open
+
+  * `engine/stream.rs::handle_isolated` (cron path) still has its own tool
+    loop that duplicates `pipeline::execute`. Both write `step_id` correctly
+    but other behavior (loop nudges, fallback provider, retry logic) lives
+    in two places. Future unification would consolidate that.
+  * No backend unit tests for `BatchOutcome.loop_break` mid-batch behavior
+    — covered only by Pi e2e (`test-pi-e2e.py` runs against real DB).
+    Adding unit-level mocks would require either a `PgPool` test fixture
+    or refactoring `parallel.rs` to be DB-injectable.
+  * Render-side merge of consecutive same-agent ChatMessages
+    (`continuesPrevious` in `MessageList`) is a UX choice that re-introduces
+    visual coupling between technically-independent messages. Trade-off:
+    semantic isolation lost (each ChatMessage is its own DB row) for
+    user-facing simplicity (one bubble per turn).
+
+### Verification
+
+  * Backend: 61 unit tests passing.
+  * Frontend: 905 unit tests, 6 integration tests for multi-iteration scenarios.
+  * Pi e2e: `test-pi-e2e.py` validates SSE contract (Phase 1+3+5+Finish),
+    `test-pi-concurrency.py` validates parallel-session isolation.
+  * Playwright: `architecture.spec.ts` runs against the deployed Pi UI.
+  * Live UI verification: 5 DB rows (4 intermediate + 1 final) render as
+    one ARTY bubble via `mergedIds` + `continuesPrevious`.
+
+### End-to-end identity (the contract)
+
+For session `64552e34-2bc1-4eec-a1f6-faf8f538ddbb` observed live on Pi
+2026-05-05:
+
+| Layer | Iteration 0 | Iteration 1 | Iteration 2 | Iteration 3 | Final |
+|---|---|---|---|---|---|
+| SSE step-start `messageId` | `7400e25f-…` | `2c750850-…` | `a0f70ae6-…` | `8c6c575e-…` | (n/a) |
+| `messages.id` | `7400e25f-…` | `2c750850-…` | `a0f70ae6-…` | `8c6c575e-…` | `8796aa00-…` |
+| `messages.step_id` | `0` | `1` | `2` | `3` | `NULL` |
+| Frontend `ChatMessage.id` | `7400e25f-…` (mergedIds includes 1,2,3) | merged | merged | merged | `8796aa00-…` |
+| Visual rendering | ┐ | │ | │ | │ | ┘ — one ARTY bubble |
+
+One UUID per logical message, threading from SSE event → DB row →
+frontend state → DOM render. No content-based dedup heuristics required.
+
+## References
+
+  * Migration: `migrations/046_messages_step_id.sql`
+  * Backend Finish guarantee: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
+    (Failed + Interrupted paths) and `engine/run.rs` (panic path)
+  * Frontend dedup: `ui/src/stores/chat-overlay-dedup.ts`
+  * Tests:
+    * `ui/src/stores/__tests__/chat-overlay-dedup.test.ts`
+    * `ui/src/stores/stream/__tests__/multi-iteration-integration.test.ts`
+    * `ui/src/__e2e__/architecture.spec.ts`
+    * `test-pi-e2e.py`, `test-pi-concurrency.py`
