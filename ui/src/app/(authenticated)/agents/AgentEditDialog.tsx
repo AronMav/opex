@@ -89,6 +89,11 @@ export interface FormState {
   routing: RoutingRule[];
   voice: string;
   icon: string;
+  /// Pre-signed `/uploads/{filename}?sig=&exp=` URL for icon preview.
+  /// Hydrated from `AgentDetailDto.icon_url` or from `/api/media/upload`'s
+  /// `url` after a fresh upload. `icon` keeps just the filename for the PUT
+  /// payload — the backend re-signs on every GET.
+  iconUrl: string;
   approvalEnabled: boolean;
   approvalRequireFor: string[];
   approvalCategories: string[];
@@ -267,8 +272,18 @@ export function AgentEditDialog({
                             });
                             if (!resp.ok) throw new Error(t("common.upload_error"));
                             const data = await resp.json();
-                            const filename = data.filename || data.url?.split("/").pop();
-                            if (filename) upd({ icon: filename });
+                            const filename: string | undefined =
+                              data.filename || (typeof data.url === "string" ? data.url.split("?")[0].split("/").pop() : undefined);
+                            // Use `url` straight from the upload response so the
+                            // preview shows the freshly-signed image without a
+                            // round-trip through the agents GET. `icon` keeps just
+                            // the filename — backend re-signs on every read.
+                            const previewUrl = (() => {
+                              if (typeof data.url !== "string") return "";
+                              try { return new URL(data.url).pathname + new URL(data.url).search; }
+                              catch { return data.url as string; }
+                            })();
+                            if (filename) upd({ icon: filename, iconUrl: previewUrl });
                           } catch {
                             toast.error(t("common.icon_upload_error"));
                           }
@@ -276,8 +291,8 @@ export function AgentEditDialog({
                         input.click();
                       }}
                     >
-                      {form.icon ? (
-                        <img src={`/uploads/${form.icon}`} alt={t("agents.icon_alt")} className="h-10 w-10 rounded-lg object-cover border border-border group-hover:border-primary/50 transition-colors" />
+                      {form.iconUrl ? (
+                        <img src={form.iconUrl} alt={t("agents.icon_alt")} className="h-10 w-10 rounded-lg object-cover border border-border group-hover:border-primary/50 transition-colors" />
                       ) : (
                         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted/50 border border-border text-muted-foreground group-hover:border-primary/50 transition-colors">
                           <Bot className="h-4 w-4" />
