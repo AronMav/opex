@@ -181,7 +181,7 @@ pub(crate) struct WatchdogPayload {
 // ── Config builder ──────────────────────────────────────
 
 pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentConfig {
-    use crate::config::{AgentConfig, AgentSettings, AgentAccessConfig, HeartbeatConfig, AgentToolPolicy, CompactionConfig, DelegationConfig};
+    use crate::config::{AgentConfig, AgentSettings, AgentAccessConfig, HeartbeatConfig, AgentToolPolicy, CompactionConfig, DelegationConfig, ToolDispatcherConfig};
 
     AgentConfig {
         agent: AgentSettings {
@@ -277,6 +277,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
             // Default 3 matches the `#[serde(default)]` on AgentSettings.
             max_failover_attempts: p.max_failover_attempts.unwrap_or(3),
             base: false,
+            tool_dispatcher: ToolDispatcherConfig::default(),
         },
     }
 }
