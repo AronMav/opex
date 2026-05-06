@@ -32,6 +32,7 @@ mod models;
 mod openai_compat;
 mod resume;
 mod sse;
+mod sse_converter;
 mod streaming_db;
 
 // Re-exported so `handlers::agents` can mount it under
