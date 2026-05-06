@@ -42,7 +42,7 @@ describe("initial state", () => {
 describe("login", () => {
   it("sets token, isAuthenticated, agents, version on valid token", async () => {
     mockFetch
-      .mockResolvedValueOnce(jsonResponse({ agents: [{ name: "Agent1", icon: "robot" }] })) // /api/agents
+      .mockResolvedValueOnce(jsonResponse({ agents: [{ name: "Agent1", icon: "robot.png", icon_url: "/uploads/robot.png?sig=abc&exp=999" }] })) // /api/agents
       .mockResolvedValueOnce(
         jsonResponse({
           version: "1.2.3",
@@ -59,7 +59,7 @@ describe("login", () => {
     expect(state.isAuthenticated).toBe(true);
     expect(state.agents).toEqual(["Agent1"]);
     expect(state.version).toBe("1.2.3");
-    expect(state.agentIcons).toEqual({ Agent1: "robot" });
+    expect(state.agentIcons).toEqual({ Agent1: "/uploads/robot.png?sig=abc&exp=999" });
   });
 
   it("returns 'invalid' on 401 response", async () => {
