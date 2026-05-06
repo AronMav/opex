@@ -251,33 +251,6 @@ impl AgentEngine {
     }
 
 
-    /// Record LLM token usage to the database (fire-and-forget).
-    pub(super) fn record_usage(&self, response: &hydeclaw_types::LlmResponse, session_id: Option<uuid::Uuid>) {
-        if let Some(ref usage) = response.usage {
-            let db = self.cfg().db.clone();
-            let agent = self.cfg().agent.name.clone();
-            let provider = response.provider.clone()
-                .unwrap_or_else(|| self.cfg().provider.name().to_string());
-            let model = response.model.clone().unwrap_or_default();
-            // Clone usage by-value so the spawned task gets owned data.
-            let usage = usage.clone();
-            tokio::spawn(async move {
-                if let Err(e) = crate::db::usage::record_usage(
-                    &db, &agent, &provider, &model, session_id, &usage,
-                ).await {
-                    tracing::warn!(
-                        error = %e,
-                        agent = %agent,
-                        provider = %provider,
-                        model = %model,
-                        session_id = ?session_id,
-                        "failed to record usage"
-                    );
-                }
-            });
-        }
-    }
-
     /// Filter tools based on per-agent allow/deny policy.
     /// Merge a cron-job tool policy override on top of the agent's base policy,
     /// then re-filter the already-filtered tool list.

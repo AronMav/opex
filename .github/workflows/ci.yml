@@ -47,7 +47,6 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
-        continue-on-error: true
 
   frontend:
     name: UI typecheck + build

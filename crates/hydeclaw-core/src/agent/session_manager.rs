@@ -56,22 +56,6 @@ impl SessionManager {
         crate::db::sessions::create_new_session(&self.db, agent_id, user_id, channel).await
     }
 
-    /// Create an isolated session. Used by cron dynamic jobs.
-    pub async fn create_isolated(
-        &self,
-        agent_id: &str,
-        user_id: &str,
-        channel: &str,
-    ) -> Result<Uuid> {
-        crate::db::sessions::create_isolated_session_with_user(
-            &self.db,
-            agent_id,
-            user_id,
-            channel,
-        )
-        .await
-    }
-
     /// Resume an existing session (updates `last_message_at`).
     pub async fn resume(&self, session_id: Uuid) -> Result<Uuid> {
         crate::db::sessions::resume_session(&self.db, session_id).await

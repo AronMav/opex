@@ -145,12 +145,6 @@ pub async fn load_skills(workspace_dir: &str) -> Vec<SkillDef> {
     skills
 }
 
-/// Returns all skills in the workspace including archived ones.
-/// Identical to `load_skills()` — archived skills are never excluded from the file scan.
-pub async fn load_skills_all_states(workspace_dir: &str) -> Vec<SkillDef> {
-    load_skills(workspace_dir).await
-}
-
 /// Load skills including base-agent-only skills from config/skills/base/.
 /// Used for base agents — they see everything regular agents see plus base-only skills.
 pub async fn load_skills_for_base(workspace_dir: &str) -> Vec<SkillDef> {

@@ -8,13 +8,11 @@
 //! Phase 39-02: `DefaultToolExecutor` now holds 13 tool-only fields migrated from `AgentEngine`,
 //! reducing the engine struct by 13 fields (TOOL-04).
 
-use anyhow::Result;
 use async_trait::async_trait;
 use hydeclaw_types::ToolCall;
 use std::sync::{Arc, OnceLock, Weak};
 use uuid::Uuid;
 
-pub use crate::agent::engine::LoopBreak;
 use crate::agent::tool_loop::LoopDetector;
 
 // ── ToolExecutor public trait ─────────────────────────────────────────────────

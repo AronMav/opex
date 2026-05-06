@@ -71,25 +71,6 @@ impl AgentEngine {
         .await
     }
 
-    /// Call LLM with exponential backoff retry.
-    pub(super) async fn chat_with_transient_retry(
-        &self,
-        messages: &mut Vec<Message>,
-        tools: &[ToolDefinition],
-    ) -> Result<hydeclaw_types::LlmResponse> {
-        self.check_budget().await?;
-        let start = std::time::Instant::now();
-        let result = crate::agent::pipeline::llm_call::chat_with_transient_retry(
-            self.cfg().provider.as_ref(),
-            messages,
-            tools,
-            self,
-        )
-        .await;
-        self.record_llm_metrics(self.cfg().provider.as_ref(), start.elapsed(), result.as_ref());
-        result
-    }
-
     /// Streaming variant of chat_with_overflow_recovery.
     #[allow(dead_code)]
     pub(super) async fn chat_stream_with_overflow_recovery(
@@ -130,26 +111,6 @@ impl AgentEngine {
         )
         .await;
         self.record_llm_metrics(self.cfg().provider.as_ref(), start.elapsed(), result.as_ref());
-        result
-    }
-
-    /// Variant that uses an explicit provider (for fallback switching).
-    pub(super) async fn chat_with_transient_retry_using(
-        &self,
-        provider: &Arc<dyn crate::agent::providers::LlmProvider>,
-        messages: &mut Vec<Message>,
-        tools: &[ToolDefinition],
-    ) -> Result<hydeclaw_types::LlmResponse> {
-        self.check_budget().await?;
-        let start = std::time::Instant::now();
-        let result = crate::agent::pipeline::llm_call::chat_with_transient_retry_using(
-            provider,
-            messages,
-            tools,
-            self,
-        )
-        .await;
-        self.record_llm_metrics(provider.as_ref(), start.elapsed(), result.as_ref());
         result
     }
 

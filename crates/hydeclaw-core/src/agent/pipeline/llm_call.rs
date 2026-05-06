@@ -154,11 +154,10 @@ pub async fn resolve_context_limit(
 ) -> u32 {
     let cache_key = format!("{}::{}", provider.name(), model);
 
-    if let Ok(guard) = context_limit_cache().lock() {
-        if let Some(&cached) = guard.get(&cache_key) {
+    if let Ok(guard) = context_limit_cache().lock()
+        && let Some(&cached) = guard.get(&cache_key) {
             return cached;
         }
-    }
 
     let limit = provider.context_limit_hint(model).await
         .unwrap_or_else(|| default_context_for_model(model) as u32);
@@ -252,50 +251,6 @@ pub async fn chat_stream_with_overflow_recovery(
     }))
 }
 
-// ── Transient retry (non-streaming) ─────────────────────────────────
-
-/// Call LLM with exponential backoff retry (up to 5 attempts, 500ms–32s).
-/// Wraps [`chat_with_overflow_recovery`] to add engine-level transient retry.
-/// RateLimit (429) uses full 60s cooldown; Retry-After header overrides both.
-pub async fn chat_with_transient_retry(
-    provider: &dyn LlmProvider,
-    messages: &mut Vec<Message>,
-    tools: &[ToolDefinition],
-    compact: &impl Compactor,
-) -> Result<hydeclaw_types::LlmResponse> {
-    let config = error_classify::RetryConfig::default();
-    let mut last_error: Option<anyhow::Error> = None;
-
-    for attempt in 0..config.max_attempts {
-        let result =
-            chat_with_overflow_recovery(provider, messages, tools, compact).await;
-        match result {
-            Ok(resp) => return Ok(resp),
-            Err(e) => {
-                let class = error_classify::classify(&e);
-                if !error_classify::is_retryable(&class) {
-                    return Err(e);
-                }
-                let delay = error_classify::extract_retry_after(&e.to_string())
-                    .unwrap_or_else(|| config.retry_delay_for_error(&class, attempt));
-                tracing::warn!(
-                    attempt = attempt + 1,
-                    max_attempts = config.max_attempts,
-                    delay_ms = delay.as_millis() as u64,
-                    error_class = ?class,
-                    error = %e,
-                    "retrying LLM call"
-                );
-                last_error = Some(e);
-                if attempt < config.max_attempts - 1 {
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
-    }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("LLM call failed after retries")))
-}
-
 // ── Transient retry (streaming) ─────────────────────────────────────
 
 /// Streaming variant of [`chat_with_transient_retry`].
@@ -346,58 +301,6 @@ pub async fn chat_stream_with_transient_retry(
     }
     Err(last_error.unwrap_or_else(|| {
         anyhow::anyhow!("LLM stream call failed after retries")
-    }))
-}
-
-// ── Transient retry with explicit provider (non-streaming) ──────────
-
-/// Variant of [`chat_with_transient_retry`] that uses an explicit provider.
-/// Used for fallback provider switching without modifying engine state.
-pub async fn chat_with_transient_retry_using(
-    provider: &Arc<dyn LlmProvider>,
-    messages: &mut Vec<Message>,
-    tools: &[ToolDefinition],
-    compact: &impl Compactor,
-) -> Result<hydeclaw_types::LlmResponse> {
-    let config = error_classify::RetryConfig::default();
-    let mut last_error: Option<anyhow::Error> = None;
-
-    for attempt in 0..config.max_attempts {
-        let result = match provider.chat(messages, tools, crate::agent::providers::CallOptions::default()).await {
-            Ok(resp) => Ok(resp),
-            Err(e) if crate::agent::tool_loop::is_context_overflow(&e) => {
-                tracing::warn!("context overflow on fallback provider, compacting and retrying");
-                compact.compact(messages).await;
-                provider.chat(messages, tools, crate::agent::providers::CallOptions::default()).await
-            }
-            Err(e) => Err(e),
-        };
-        match result {
-            Ok(resp) => return Ok(resp),
-            Err(e) => {
-                let class = error_classify::classify(&e);
-                if !error_classify::is_retryable(&class) {
-                    return Err(e);
-                }
-                let delay = error_classify::extract_retry_after(&e.to_string())
-                    .unwrap_or_else(|| config.retry_delay_for_error(&class, attempt));
-                tracing::warn!(
-                    attempt = attempt + 1,
-                    max_attempts = config.max_attempts,
-                    delay_ms = delay.as_millis() as u64,
-                    error_class = ?class,
-                    error = %e,
-                    "retrying LLM call (fallback provider)"
-                );
-                last_error = Some(e);
-                if attempt < config.max_attempts - 1 {
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
-    }
-    Err(last_error.unwrap_or_else(|| {
-        anyhow::anyhow!("LLM call failed after retries (fallback provider)")
     }))
 }
 

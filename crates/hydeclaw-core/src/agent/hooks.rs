@@ -4,6 +4,8 @@
 //! Use hooks for automated blocking; use the approval system for human-in-the-loop.
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // AfterResponse and OnError are part of the hook-event API surface
+                    // but nothing emits them today — kept for future extension.
 pub enum HookEvent {
     BeforeMessage,
     AfterResponse,

@@ -469,8 +469,8 @@ pub(crate) async fn api_update_config(
 
     // Reschedule backup if its config changed
     if let Some(ref cfg) = new_config {
-        if payload.backup_enabled.is_some() || payload.backup_cron.is_some() || payload.backup_retention_days.is_some() {
-            if cfg.backup.enabled {
+        if (payload.backup_enabled.is_some() || payload.backup_cron.is_some() || payload.backup_retention_days.is_some())
+            && cfg.backup.enabled {
                 if let Err(e) = agents.scheduler.reschedule_backup(
                     &cfg.backup.cron,
                     cfg.backup.retention_days,
@@ -483,7 +483,6 @@ pub(crate) async fn api_update_config(
                     tracing::info!(cron = %cfg.backup.cron, "backup rescheduled");
                 }
             }
-        }
         // Reschedule curator if its config changed
         if payload.curator_enabled.is_some() || payload.curator_cron.is_some() {
             if let Err(e) = agents.scheduler.reschedule_curator(

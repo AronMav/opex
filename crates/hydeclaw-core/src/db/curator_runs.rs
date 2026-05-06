@@ -102,6 +102,7 @@ pub async fn skip_run(db: &PgPool, run_id: Uuid, reason: &str) -> Result<()> {
 ///
 /// Pass `report_md = Some(...)` and `error = None` on success.
 /// Pass `report_md = None` and `error = Some(...)` on failure.
+#[allow(clippy::too_many_arguments)]
 pub async fn finish_run(
     db: &PgPool,
     run_id: Uuid,

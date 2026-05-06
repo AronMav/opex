@@ -222,7 +222,6 @@ pub(super) async fn run_converter(
 
         let data = match event {
             StreamEvent::SessionId { session_id: sid, context_limit } => {
-                let context_limit = context_limit;
                 let parsed_uuid = uuid::Uuid::from_str(&sid).ok();
                 // Register stream in registry for resume + abort support (C3).
                 // Use register_with_token so the registry stores the SAME token

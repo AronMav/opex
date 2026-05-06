@@ -312,15 +312,14 @@ pub fn prune_old_tool_results(messages: &[Message], protect_tail: usize) -> Vec<
     // Pass 2: replace large tool results outside protected tail with 1-line summary.
     // Skip canonical dup indices — their content must survive intact so callers can
     // verify deduplication worked correctly.
-    for i in 0..prune_end {
+    for (i, msg) in result.iter_mut().enumerate().take(prune_end) {
         if canonical_dup_indices.contains(&i) { continue; }
-        let msg = &result[i];
         if msg.role != MessageRole::Tool { continue; }
         if msg.content.len() <= 200 { continue; }
         if msg.content.starts_with('[') { continue; }
         let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
         let char_count = msg.content.len();
-        result[i].content = format!("[tool result {tool_call_id}] ({char_count} chars — pruned)");
+        msg.content = format!("[tool result {tool_call_id}] ({char_count} chars — pruned)");
     }
 
     result
@@ -363,11 +362,10 @@ pub fn find_tail_start_by_tokens(messages: &[Message], head_end: usize, tail_bud
         .iter()
         .rposition(|m| m.role == MessageRole::User)
         .map(|rel| rel + head_end);
-    if let Some(user_idx) = last_user_idx {
-        if user_idx < cut_idx {
+    if let Some(user_idx) = last_user_idx
+        && user_idx < cut_idx {
             cut_idx = user_idx;
         }
-    }
 
     // Align backward past tool groups
     while cut_idx > head_end && messages[cut_idx].role == MessageRole::Tool {
@@ -651,6 +649,7 @@ Return ONLY the JSON array, no other text."
 /// The summary role is always `MessageRole::Assistant` — since the head is
 /// at most a `system` message, the first conversation message must be `assistant`
 /// to satisfy the alternating-roles invariant expected by LLM providers.
+#[cfg(test)]
 pub fn build_compressed_seed(
     system_msg: Option<&Message>,
     summary: &str,

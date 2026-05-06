@@ -446,11 +446,9 @@ mod tests {
 
     #[test]
     fn build_task_summary_joins_user_messages() {
-        let messages = vec![
-            ("user", "first question"),
+        let messages = [("user", "first question"),
             ("assistant", "answer"),
-            ("user", "second question"),
-        ];
+            ("user", "second question")];
         let user_parts: Vec<&str> = messages.iter()
             .filter(|(role, _)| *role == "user")
             .map(|(_, content)| *content)

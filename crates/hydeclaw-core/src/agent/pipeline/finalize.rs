@@ -391,8 +391,8 @@ pub async fn finalize<S: EventSink>(
                 ctx.message_count,
                 &ctx.bg_tasks,
             );
-            if let Some(sr_cfg) = &ctx.skill_review {
-                if sr_cfg.enabled {
+            if let Some(sr_cfg) = &ctx.skill_review
+                && sr_cfg.enabled {
                     spawn_skill_review(
                         ctx.db.clone(),
                         ctx.session_id,
@@ -403,7 +403,6 @@ pub async fn finalize<S: EventSink>(
                         &ctx.bg_tasks,
                     );
                 }
-            }
             assistant_text.clone()
         }
         FinalizeOutcome::Failed { partial, reason } => {
@@ -496,8 +495,8 @@ pub async fn finalize<S: EventSink>(
                     &ctx.bg_tasks,
                 );
             }
-            if let Some(sr_cfg) = &ctx.skill_review {
-                if sr_cfg.enabled {
+            if let Some(sr_cfg) = &ctx.skill_review
+                && sr_cfg.enabled {
                     spawn_skill_review(
                         ctx.db.clone(),
                         ctx.session_id,
@@ -508,7 +507,6 @@ pub async fn finalize<S: EventSink>(
                         &ctx.bg_tasks,
                     );
                 }
-            }
             partial.clone()
         }
         FinalizeOutcome::Interrupted { partial, reason } => {
@@ -552,8 +550,8 @@ pub async fn finalize<S: EventSink>(
                     continuation: false,
                 }))
                 .await;
-            if let Some(sr_cfg) = &ctx.skill_review {
-                if sr_cfg.enabled {
+            if let Some(sr_cfg) = &ctx.skill_review
+                && sr_cfg.enabled {
                     spawn_skill_review(
                         ctx.db.clone(),
                         ctx.session_id,
@@ -564,7 +562,6 @@ pub async fn finalize<S: EventSink>(
                         &ctx.bg_tasks,
                     );
                 }
-            }
             partial.clone()
         }
     };

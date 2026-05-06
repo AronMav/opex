@@ -18,10 +18,7 @@ pub fn decide_transition(
     if matches!(current, SkillState::Archived) {
         return None;
     }
-    let anchor = match anchor {
-        Some(a) => a,
-        None => return None, // never used — no transition
-    };
+    let anchor = anchor?;
     let age = now.signed_duration_since(anchor);
     let stale = Duration::days(i64::from(stale_after_days));
     let archive = Duration::days(i64::from(archive_after_days));
