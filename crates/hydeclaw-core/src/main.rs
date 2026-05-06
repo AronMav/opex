@@ -618,6 +618,7 @@ async fn main() -> Result<()> {
             agents_map.clone(),
             agent_deps,
             Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            Arc::new(dashmap::DashMap::new()),
             tool_registry.clone(),
             sched.clone(),
         ),
