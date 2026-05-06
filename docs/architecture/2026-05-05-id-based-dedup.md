@@ -2,6 +2,12 @@
 
 > **Status:** Implemented and live-verified on Pi.
 > **Supersedes:** Heuristic-based content dedup in `mergeLiveOverlay` (2026-04 era).
+>
+> **Note (post-refactor):** References below to `gateway/handlers/chat.rs`
+> describe the pre-2026-05-06 layout. The SSE conversion logic discussed
+> here now lives in `gateway/handlers/chat/sse_converter.rs` after the
+> chat.rs decomposition. The behaviour and invariants documented are
+> unchanged.
 
 ## Context
 
