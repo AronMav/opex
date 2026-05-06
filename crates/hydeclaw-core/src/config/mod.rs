@@ -847,7 +847,7 @@ pub struct HeartbeatConfig {
     pub announce_to: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct AgentToolPolicy {
     #[serde(default)]
     pub allow: Vec<String>,
