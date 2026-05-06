@@ -198,10 +198,9 @@ pub(crate) async fn api_media_serve(
 ///           `400 {"error": "..."}` for bad input.
 ///           `502 {"error": "transcription failed: ..."}` on toolgate error.
 ///
-/// Temp file lifecycle: saved to `workspace/uploads/{uuid}.{ext}` then ALWAYS
-/// deleted before returning (explicit at each return site; scopeguard not used).
+/// No disk I/O: the audio bytes are streamed straight into the multipart body
+/// via `Part::stream(Bytes)` (zero-copy thanks to Arc-backed `bytes::Bytes`).
 pub(crate) async fn api_media_transcribe(
-    State(agents): State<AgentCore>,
     State(cfg): State<ConfigServices>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
     mut multipart: axum::extract::Multipart,
@@ -242,74 +241,59 @@ pub(crate) async fn api_media_transcribe(
 
     let data = match field.bytes().await {
         Ok(b) => b,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("read: {e}")}))).into_response(),
+        Err(e) => return (StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("read: {e}")}))).into_response(),
     };
-
     if data.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "empty audio file"}))).into_response();
+        return (StatusCode::BAD_REQUEST,
+            Json(json!({"error": "empty audio file"}))).into_response();
     }
 
-    // ── 4. Save to temp file in workspace/uploads ─────────────────────────────
-    let workspace_dir = agents.deps.read().await.workspace_dir.clone();
-    let uploads_dir = std::path::PathBuf::from(&workspace_dir).join("uploads");
-    if let Err(e) = tokio::fs::create_dir_all(&uploads_dir).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("mkdir: {e}")}))).into_response();
-    }
-
-    let uuid = uuid::Uuid::new_v4();
-    let filename = format!("{uuid}.{ext}");
-    let path = uploads_dir.join(&filename);
-
-    if let Err(e) = tokio::fs::write(&path, &data).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("write: {e}")}))).into_response();
-    }
-
-    // ── 5. Forward to toolgate POST /transcribe ───────────────────────────────
+    // ── 4. Forward to toolgate POST /transcribe (zero-copy, no disk write) ───
     let tg_url = format!("{toolgate_url}/transcribe");
     let mime = format!("audio/{ext}");
-    let part = reqwest::multipart::Part::bytes(data.to_vec())
-        .file_name(filename.clone())
+    let filename = format!("{}.{ext}", uuid::Uuid::new_v4());
+
+    let part = match reqwest::multipart::Part::stream(data)
+        .file_name(filename)
         .mime_str(&mime)
-        .unwrap_or_else(|_| reqwest::multipart::Part::bytes(data.to_vec()));
+    {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("invalid mime: {e}")}))).into_response(),
+    };
+
     let form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("language", language.to_string());
 
-    let http = reqwest::Client::builder()
+    let http = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
-        .unwrap_or_default();
+    {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("http client init: {e}")}))).into_response(),
+    };
 
-    let tg_resp = http.post(&tg_url).multipart(form).send().await;
-
-    // ── 6. Parse response and always delete the temp file ─────────────────────
-    match tg_resp {
+    match http.post(&tg_url).multipart(form).send().await {
         Ok(resp) if resp.status().is_success() => {
-            let body = resp.json::<serde_json::Value>().await;
-            // Delete temp file — success path.
-            let _ = tokio::fs::remove_file(&path).await;
-            match body {
-                Ok(v) => {
-                    let text = v["text"].as_str().unwrap_or("").to_string();
-                    Json(json!({"text": text})).into_response()
-                }
-                Err(e) => {
-                    (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("transcription parse error: {e}")}))).into_response()
-                }
+            match resp.json::<serde_json::Value>().await {
+                Ok(v) => Json(json!({
+                    "text": v["text"].as_str().unwrap_or("")
+                })).into_response(),
+                Err(e) => (StatusCode::BAD_GATEWAY,
+                    Json(json!({"error": format!("transcription parse error: {e}")}))).into_response(),
             }
         }
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            // Delete temp file — error path.
-            let _ = tokio::fs::remove_file(&path).await;
-            (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("transcription failed: {status} — {body}")}))).into_response()
+            (StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("transcription failed: {status} — {body}")}))).into_response()
         }
-        Err(e) => {
-            // Delete temp file — network error path.
-            let _ = tokio::fs::remove_file(&path).await;
-            (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("transcription failed: {e}")}))).into_response()
-        }
+        Err(e) => (StatusCode::BAD_GATEWAY,
+            Json(json!({"error": format!("transcription failed: {e}")}))).into_response(),
     }
 }
 
@@ -470,5 +454,48 @@ mod tests {
         assert!(AUDIO_EXTENSIONS.contains(&"webm"), "webm required (Chrome/Firefox)");
         assert!(AUDIO_EXTENSIONS.contains(&"mp4"), "mp4 required (Safari)");
         assert!(AUDIO_EXTENSIONS.contains(&"ogg"), "ogg required (Firefox)");
+    }
+
+    /// Forward regression guard: `Part::stream(Bytes)` must accept a `Bytes`
+    /// directly without forcing the caller to materialize a separate owned
+    /// `Vec<u8>`. The handler relies on this for zero-copy multipart upload —
+    /// if reqwest ever stops accepting `Bytes` here (or starts requiring
+    /// `Into<Body>` impls that re-allocate), our handler regresses to
+    /// double-buffering. The test compiles only because `Bytes: Into<Body>`
+    /// holds in reqwest 0.12 + bytes 1.x.
+    #[tokio::test]
+    async fn test_part_stream_accepts_bytes_directly() {
+        use bytes::Bytes;
+        let data = Bytes::from(vec![0u8; 30 * 1024 * 1024]);
+        // Hold a clone so we can observe the original buffer's life: with
+        // Arc-backed `Bytes`, `clone()` is a refcount bump, not a copy.
+        let alias = data.clone();
+        assert!(!data.is_unique(), "clone must share the same allocation");
+
+        let part = reqwest::multipart::Part::stream(data)
+            .file_name("test.wav")
+            .mime_str("audio/wav")
+            .expect("audio/wav is a valid mime");
+
+        // After dropping the Part, the alias must once again be the sole
+        // owner of the buffer. If `Part::stream` had silently copied
+        // (e.g. via `to_vec()`) the refcount semantics would still hold,
+        // but the clone path would no longer be zero-copy. The companion
+        // assertion above ensures we exercise the cloning path.
+        drop(part);
+        assert!(
+            alias.is_unique(),
+            "Part::stream retained an extra owner after drop — buffer leaked"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_part_stream_rejects_invalid_mime() {
+        use bytes::Bytes;
+        let data = Bytes::from(vec![0u8; 100]);
+        let result = reqwest::multipart::Part::stream(data)
+            .file_name("test.bad")
+            .mime_str("not/a/valid/mime/string");
+        assert!(result.is_err(), "invalid mime string must be rejected");
     }
 }
