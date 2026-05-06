@@ -96,7 +96,7 @@ mod hmac_tests {
         let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("valid key");
         mac.update(body);
         let computed = mac.finalize().into_bytes();
-        let sig = format!("sha256={}", hex::encode(&computed));
+        let sig = format!("sha256={}", hex::encode(computed));
 
         // Simulate handler: strip prefix, decode, compare.
         let hex_part = sig.strip_prefix("sha256=").expect("prefix present");
