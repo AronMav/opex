@@ -54,6 +54,7 @@ expression: dto
     "prune_tool_output_after_turns": 3
   },
   "icon": "uploads/robot.png",
+  "icon_url": null,
   "max_tools_in_context": 20,
   "tool_loop": {
     "max_iterations": 30,

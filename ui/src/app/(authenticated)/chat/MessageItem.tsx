@@ -158,9 +158,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
   const senderAgentName = message.agentId
     || (isReadOnly && sessionUserId?.startsWith("agent:") ? sessionUserId.slice(6) : null);
   const isAgentSender = !!senderAgentName;
-  const senderIconUrl = senderAgentName && agentIcons[senderAgentName]
-    ? `/uploads/${agentIcons[senderAgentName]}`
-    : undefined;
+  const senderIconUrl = senderAgentName ? agentIcons[senderAgentName] || undefined : undefined;
 
   const isSending = message.status === "sending";
   const isFailed = message.status === "failed";
@@ -237,7 +235,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
 
   // Direct agentId from message props -- no more AgentTurnCounterContext hack
   const agentName = message.agentId || currentAgent;
-  const agentIconUrl = agentName && agentIcons[agentName] ? `/uploads/${agentIcons[agentName]}` : null;
+  const agentIconUrl = agentName ? agentIcons[agentName] || null : null;
 
   const hasParts = message.parts.length > 0;
 

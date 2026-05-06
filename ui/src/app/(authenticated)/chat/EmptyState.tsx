@@ -9,7 +9,7 @@ export function EmptyState() {
   const { t } = useTranslation();
   const currentAgent = useChatStore((s) => s.currentAgent);
   const agentIcons = useAuthStore((s) => s.agentIcons);
-  const agentIconUrl = currentAgent && agentIcons[currentAgent] ? `/uploads/${agentIcons[currentAgent]}` : null;
+  const agentIconUrl = currentAgent ? agentIcons[currentAgent] || null : null;
 
   return (
     <div className="flex h-full flex-col items-center justify-center p-6 text-center">

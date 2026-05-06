@@ -39,13 +39,16 @@ export const useAuthStore = create<AuthState>()(
               if (!resp.ok) return "error";
 
               const agentsData = await resp.json();
-              const agentList: Array<{ name: string; icon?: string | null }> =
+              const agentList: Array<{ name: string; icon?: string | null; icon_url?: string | null }> =
                 Array.isArray(agentsData.agents) ? agentsData.agents : [];
 
               const agentNames = agentList.map((a) => a.name);
+              // Stores the pre-signed `/uploads/{filename}?sig=&exp=` URL produced
+              // by the backend with HISTORICAL_URL_TTL_SECS. Plain `/uploads/{name}`
+              // returns 403 when `uploads.require_signature = true`.
               const icons: Record<string, string | null> = {};
               for (const a of agentList) {
-                icons[a.name] = a.icon || null;
+                icons[a.name] = a.icon_url || null;
               }
 
               // Fetch version from /health (unauthenticated — only status/version exposed there)

@@ -578,8 +578,8 @@ export default function AgentsPage() {
               <div className="flex items-start gap-3 mb-4 min-w-0">
                 <div className="relative shrink-0">
                   <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-primary/20 bg-muted/50 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
-                    {a.icon ? (
-                      <img src={`/uploads/${a.icon}`} alt={a.name} loading="lazy" className="h-full w-full object-cover" />
+                    {a.icon_url ? (
+                      <img src={a.icon_url} alt={a.name} loading="lazy" className="h-full w-full object-cover" />
                     ) : (
                       <span className="font-mono text-lg font-black text-primary/80 group-hover:text-primary transition-colors">
                         {a.name.charAt(0).toUpperCase()}
