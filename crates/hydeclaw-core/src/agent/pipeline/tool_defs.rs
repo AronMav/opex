@@ -45,6 +45,24 @@ pub fn all_system_tool_names() -> &'static [&'static str] {
     .as_slice()
 }
 
+/// Names of tools always preloaded in the LLM tools array when the
+/// dispatcher is enabled. Source of truth for `engine/context_builder.rs`
+/// partition logic. Spec: tool-dispatcher-design.md §"Core / extension partition".
+pub fn static_core_tool_names() -> &'static [&'static str] {
+    &[
+        "workspace_read",
+        "workspace_write",
+        "workspace_edit",
+        "workspace_list",
+        "code_exec",
+        "memory",
+        "agent",
+        "skill_use",
+        "web_fetch",
+        "tool_use",
+    ]
+}
+
 // ── Context for building tool definitions ───────────────────────────────
 
 /// Read-only inputs required to assemble the tool definition list.
@@ -811,6 +829,25 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         }),
     });
 
+    tools.push(ToolDefinition {
+        name: "tool_use".to_string(),
+        description: "Discover and invoke extension tools (YAML, MCP, rare system tools). Use action=\"search\" with a query to find relevant tools, action=\"describe\" to load full schema, action=\"call\" to invoke. For frequent tools (workspace_*, code_exec, memory, agent, skill_use, web_fetch) call them directly.".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search", "describe", "call"],
+                    "description": "Operation to perform"
+                },
+                "query": { "type": "string", "description": "For action=search" },
+                "name":  { "type": "string", "description": "Tool name (describe/call)" },
+                "arguments": { "type": "object", "description": "For action=call" }
+            },
+            "required": ["action"]
+        }),
+    });
+
     // Browser automation (conditional on browser-renderer availability)
     if ctx.browser_renderer_url != "disabled" {
         tools.push(ToolDefinition {
@@ -1147,6 +1184,20 @@ mod tests {
                 props.contains_key(required),
                 "{required:?} must exist in agent tool schema"
             );
+        }
+    }
+
+    #[test]
+    fn static_core_is_exactly_ten_tools() {
+        let names: Vec<&'static str> = static_core_tool_names().into();
+        assert_eq!(names.len(), 10, "static core must be exactly 10 tools (spec)");
+
+        let expected = [
+            "workspace_read", "workspace_write", "workspace_edit", "workspace_list",
+            "code_exec", "memory", "agent", "skill_use", "web_fetch", "tool_use",
+        ];
+        for name in expected {
+            assert!(names.contains(&name), "static core missing expected tool: {name}");
         }
     }
 }
