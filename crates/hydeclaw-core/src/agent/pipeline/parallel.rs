@@ -180,7 +180,72 @@ pub async fn execute_tool_calls_partitioned(
     yaml_tools: &HashMap<String, YamlToolDef>,
     executor: &(dyn ToolExecutor + '_),
     persist_ctx: Option<&ToolPersistCtx<'_>>,
+    policy: Option<&crate::config::AgentToolPolicy>,
+    session_tool_state: Option<Arc<crate::agent::dispatcher::SessionToolState>>,
+    promotion_max: u32,
 ) -> BatchOutcome {
+    // ── Dispatcher rewrite (Task 11) ─────────────────────────────────────────
+    //
+    // For every `tool_use(action="call", name=X, arguments=Y)` call, rewrite
+    // to a synthetic ToolCall { name: X, arguments: Y } so dispatch below sees
+    // the underlying tool. Runtime deny-gate runs inside `rewrite_tool_use_calls`
+    // (Task 10) — a denied call is replaced with a synthesized tool result and
+    // never reaches dispatch.
+    //
+    // `via_dispatcher_map` records which rewritten calls came in as `tool_use`
+    // — Task 13 will consume this map to bump per-session call counts and
+    // eligibility for auto-promotion (driven by `promotion_max`).
+    // `session_tool_state` is similarly threaded through for Task 13; today
+    // it's accepted-and-ignored to keep the call surface stable.
+    let _ = (&session_tool_state, promotion_max);
+
+    let known_tools: std::collections::HashSet<String> = {
+        let mut s = std::collections::HashSet::new();
+        for n in crate::agent::pipeline::tool_defs::all_system_tool_names() {
+            s.insert((*n).to_string());
+        }
+        for name in yaml_tools.keys() {
+            s.insert(name.clone());
+        }
+        // MCP tools — for v1 we trust the system list + yaml_tools map.
+        // MCP coverage in known_tools requires plumbing the registry into
+        // this function; deferred to follow-up if pilot reveals false-rejects.
+        s
+    };
+
+    let rewritten = crate::agent::dispatcher::rewrite_tool_use_calls(
+        tool_calls, policy, &known_tools,
+    );
+
+    let mut direct_pending: Vec<(ToolCall, bool)> = Vec::with_capacity(rewritten.len());
+    let mut denied_results: Vec<(String, String)> = Vec::new();
+
+    for (orig, r) in tool_calls.iter().zip(rewritten.into_iter()) {
+        match r {
+            crate::agent::dispatcher::RewriteResult::Direct(rewritten_tc) => {
+                let via_dispatcher = orig.name == "tool_use" && rewritten_tc.name != "tool_use";
+                direct_pending.push((rewritten_tc, via_dispatcher));
+            }
+            crate::agent::dispatcher::RewriteResult::Denied { id, reason } => {
+                denied_results.push((id, reason));
+            }
+        }
+    }
+
+    let direct_calls: Vec<ToolCall> = direct_pending.iter().map(|(tc, _)| tc.clone()).collect();
+    // Built for Task 13 (promotion increment). Carried but unused this commit.
+    let _via_dispatcher_map: std::collections::HashMap<String, bool> = direct_pending
+        .iter()
+        .map(|(tc, via)| (tc.id.clone(), *via))
+        .collect();
+
+    // Hold onto the original input slice — the final BatchOutcome.results must
+    // be ordered by the original `tool_calls` input (denied + dispatched, by
+    // tool_call_id). The dispatch loop below operates on `direct_calls` (the
+    // post-rewrite batch).
+    let original_calls: &[ToolCall] = tool_calls;
+    let tool_calls: &[ToolCall] = &direct_calls;
+
     let n = tool_calls.len();
     let mut results: Vec<Option<String>> = vec![None; n];
     // Pre-generated row ids for each tool's persisted message — assigned only
@@ -360,15 +425,13 @@ pub async fn execute_tool_calls_partitioned(
                 {
                     tracing::error!(tool = %tool_calls[i].name, reason = %reason, "tool loop broken (parallel post-check)");
                     return BatchOutcome {
-                        results: tool_calls
-                            .iter()
-                            .enumerate()
-                            .map(|(j, tc)| ToolBatchResult {
-                                tool_call_id: tc.id.clone(),
-                                result: results[j].take().unwrap_or_default(),
-                                tool_msg_id: persisted_ids[j],
-                            })
-                            .collect(),
+                        results: assemble_ordered(
+                            original_calls,
+                            tool_calls,
+                            &mut results,
+                            &persisted_ids,
+                            &denied_results,
+                        ),
                         loop_break: Some(Some(reason)),
                     };
                 }
@@ -446,15 +509,13 @@ pub async fn execute_tool_calls_partitioned(
         {
             tracing::error!(tool = %tool_calls[i].name, reason = %reason, "tool loop broken (pre-check)");
             return BatchOutcome {
-                results: tool_calls
-                    .iter()
-                    .enumerate()
-                    .map(|(j, tc)| ToolBatchResult {
-                        tool_call_id: tc.id.clone(),
-                        result: results[j].take().unwrap_or_default(),
-                        tool_msg_id: persisted_ids[j],
-                    })
-                    .collect(),
+                results: assemble_ordered(
+                    original_calls,
+                    tool_calls,
+                    &mut results,
+                    &persisted_ids,
+                    &denied_results,
+                ),
                 loop_break: Some(Some(reason)),
             };
         }
@@ -546,19 +607,61 @@ pub async fn execute_tool_calls_partitioned(
         }
     }
 
-    // 5. Final reassemble
+    // 5. Final reassemble — merge denied + dispatched, re-order by original input.
     BatchOutcome {
-        results: tool_calls
-            .iter()
-            .enumerate()
-            .map(|(i, tc)| ToolBatchResult {
-                tool_call_id: tc.id.clone(),
-                result: results[i].take().unwrap_or_default(),
-                tool_msg_id: persisted_ids[i],
-            })
-            .collect(),
+        results: assemble_ordered(
+            original_calls,
+            tool_calls,
+            &mut results,
+            &persisted_ids,
+            &denied_results,
+        ),
         loop_break: None,
     }
+}
+
+/// Merge dispatched tool results (`results`/`persisted_ids` indexed by
+/// `dispatched_calls`) with `denied` (`(id, reason)` pairs synthesized by the
+/// rewrite step), re-ordered by the original input slice. Empty result strings
+/// are emitted for any dispatched id that was never written (e.g. early-loop-
+/// break path) so the SSE event still fires and the UI doesn't render a
+/// perpetual "in flight" spinner.
+fn assemble_ordered(
+    original_calls: &[ToolCall],
+    dispatched_calls: &[ToolCall],
+    results: &mut [Option<String>],
+    persisted_ids: &[Option<Uuid>],
+    denied: &[(String, String)],
+) -> Vec<ToolBatchResult> {
+    let mut by_id: std::collections::HashMap<String, ToolBatchResult> =
+        std::collections::HashMap::with_capacity(original_calls.len());
+
+    for (id, reason) in denied {
+        by_id.insert(
+            id.clone(),
+            ToolBatchResult {
+                tool_call_id: id.clone(),
+                result: format!("Error: {reason}"),
+                tool_msg_id: None,
+            },
+        );
+    }
+
+    for (j, tc) in dispatched_calls.iter().enumerate() {
+        by_id.insert(
+            tc.id.clone(),
+            ToolBatchResult {
+                tool_call_id: tc.id.clone(),
+                result: results[j].take().unwrap_or_default(),
+                tool_msg_id: persisted_ids[j],
+            },
+        );
+    }
+
+    original_calls
+        .iter()
+        .filter_map(|tc| by_id.remove(&tc.id))
+        .collect()
 }
 
 // ── Detached persistence helpers ─────────────────────────────────────────────
