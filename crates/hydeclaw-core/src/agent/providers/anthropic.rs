@@ -657,9 +657,9 @@ impl LlmProvider for AnthropicProvider {
 
         let api_key = self.resolve_api_key().await;
 
-        let body_text = crate::agent::providers_http::retry_http_post_custom(
+        let body_text = crate::agent::providers::http::retry_http_post_custom(
             &self.client, &url, &body, "anthropic",
-            crate::agent::providers_http::RETRYABLE_ANTHROPIC,
+            crate::agent::providers::http::RETRYABLE_ANTHROPIC,
             self.max_retries,
             |req| {
                 let req = req.header("anthropic-version", "2023-06-01");

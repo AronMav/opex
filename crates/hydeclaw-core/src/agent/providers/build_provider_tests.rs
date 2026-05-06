@@ -93,7 +93,7 @@ async fn build_provider_stores_timeouts_on_openai_provider() {
 async fn openai_new_from_row_honors_overrides_and_timeouts() {
     // Issue #4: `ProviderOverrides { temperature, max_tokens, model }` wins over
     // row defaults. Issue #1: the constructor stores the passed-in timeouts.
-    use super::openai_impl::OpenAiCompatibleProvider;
+    use super::openai::OpenAiCompatibleProvider;
 
     let row = make_row(json!({}));
     let timeouts = TimeoutsConfig {
@@ -182,7 +182,7 @@ async fn openai_new_from_row_falls_back_to_defaults_without_overrides() {
     // When `ProviderOverrides::default()` is passed, the constructor must
     // fall back to the last-resort hardcoded defaults (0.7 / None) — NOT
     // crash or pick up stale data.
-    use super::openai_impl::OpenAiCompatibleProvider;
+    use super::openai::OpenAiCompatibleProvider;
 
     let row = make_row(json!({}));
     let timeouts = TimeoutsConfig::default();
