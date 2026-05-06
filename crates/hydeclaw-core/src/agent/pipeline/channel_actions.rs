@@ -106,16 +106,118 @@ pub async fn send_channel_message(
 
 /// Execute a system YAML tool that has a channel_action (e.g. TTS -> send_voice,
 /// generate_image -> send_photo, future video generators -> send_video).
-/// Dispatches a `BackgroundMediaTask` so slow synthesis / generation (Qwen3-TTS,
-/// FLUX, etc. on Pi) cannot block or time out the active SSE session. Returns
-/// the LLM-facing system instruction; the actual media is delivered out-of-band.
+///
+/// Two delivery paths depending on whether the call originates from a chat
+/// channel (Telegram/Discord/etc.) or a web-UI session:
+///
+/// - **chat channel** (`chat_id` present): defer to a `BackgroundMediaTask`
+///   so a slow generator (Qwen3-TTS / FLUX on Pi) cannot block or time out
+///   the active SSE session. The media is delivered out-of-band via the
+///   channel adapter (`send_photo` / `send_voice` / ...).
+/// - **web UI** (no `chat_id`): generate inline so the media renders in the
+///   chat stream itself (via `__file__:` marker that chat-history.ts parses
+///   into an inline image / audio / video element). The user sees it in
+///   place rather than only in the notification bell.
 pub async fn execute_yaml_channel_action(
     ctx: &CommandContext<'_>,
     tool: &crate::tools::yaml_tools::YamlToolDef,
     args: &serde_json::Value,
     ca: &crate::tools::yaml_tools::ChannelActionConfig,
 ) -> String {
+    let context = args.get("_context").cloned().unwrap_or(serde_json::Value::Null);
+    let has_channel = context.get("chat_id").is_some();
+
+    if !has_channel {
+        return execute_inline_for_ui(ctx, tool, args, ca).await;
+    }
+
     let task =
         crate::agent::pipeline::media_background::BackgroundMediaTask::from_ctx(ctx, tool, args, ca);
     task.spawn()
+}
+
+/// Synchronous web-UI delivery: generate the media bytes, save them to
+/// `workspace/uploads/`, and return a tool result whose first line is a
+/// `__file__:` marker. The UI's chat-history reducer turns that into an
+/// inline preview in place. No notification bell row is created — duplicating
+/// what's already inline would be noise.
+async fn execute_inline_for_ui(
+    ctx: &CommandContext<'_>,
+    tool: &crate::tools::yaml_tools::YamlToolDef,
+    args: &serde_json::Value,
+    ca: &crate::tools::yaml_tools::ChannelActionConfig,
+) -> String {
+    use crate::agent::pipeline::handlers::save_binary_to_uploads;
+    use crate::agent::pipeline::media_background::{provider_header_for, MediaKind};
+
+    let kind = MediaKind::from_action(&ca.action);
+    let resolver = make_resolver(&ctx.tex.secrets, &ctx.cfg.agent.name);
+    let oauth_ctx = make_oauth_context(ctx.tex.oauth.as_ref(), &ctx.cfg.agent.name);
+
+    let mut tool_headers: Vec<(String, String)> = Vec::new();
+    if let Some(header) = provider_header_for(
+        kind,
+        ctx.cfg.agent.tts_provider.as_deref(),
+        ctx.cfg.agent.imagegen_provider.as_deref(),
+    ) {
+        tool_headers.push(header);
+    }
+
+    // Lift the per-tool timeout the same way BackgroundMediaTask does — UI
+    // sessions still have to wait, but FLUX / Qwen3-TTS on Pi can take
+    // 30-120s and the YAML default of 60s is too tight.
+    let mut bg_tool = tool.clone();
+    if bg_tool.timeout < 600 {
+        bg_tool.timeout = 600;
+    }
+
+    // Fresh long-timeout client so reqwest doesn't abort at the shared
+    // engine 120s deadline. Mirrors BackgroundMediaTask::from_ctx.
+    let bg_http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .unwrap_or_else(|_| ctx.tex.http_client.clone());
+
+    let bytes = match bg_tool
+        .execute_binary(
+            args,
+            &bg_http_client,
+            Some(&resolver as &dyn crate::tools::yaml_tools::EnvResolver),
+            oauth_ctx.as_ref(),
+            &tool_headers,
+        )
+        .await
+    {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(tool = %tool.name, kind = ?kind, error = %e, "inline media generation failed");
+            return format!("Error: media generation failed: {e}");
+        }
+    };
+
+    let upload_key = ctx.tex.secrets.get_upload_hmac_key();
+    let ttl_secs = ctx.cfg.app_config.uploads.signed_url_ttl_secs;
+    let (url, media_type) = match save_binary_to_uploads(
+        &ctx.cfg.workspace_dir,
+        &bytes,
+        kind.upload_hint(),
+        &upload_key,
+        ttl_secs,
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::warn!(tool = %tool.name, kind = ?kind, error = %e, "inline media save failed");
+            return format!("Error: save_to_uploads failed: {e}");
+        }
+    };
+
+    tracing::info!(
+        tool = %tool.name, kind = ?kind, url = %url, mime = %media_type,
+        "inline media delivered to web UI"
+    );
+
+    let marker_json = serde_json::json!({"url": url, "mediaType": media_type}).to_string();
+    kind.inline_tool_result(&marker_json)
 }
