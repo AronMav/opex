@@ -26,6 +26,7 @@
 //!   to DB as-is; callers that need stripping should do it in finalize.
 
 use crate::agent::engine::AgentEngine;
+use crate::agent::pipeline::behaviour::{BehaviourLayers, LayerRuntimeState};
 use crate::agent::pipeline::bootstrap::BootstrapOutcome;
 use crate::agent::pipeline::sink::{EventSink, PipelineEvent, SinkError};
 use crate::agent::pipeline::tool_loop_helpers as helpers;
@@ -86,6 +87,7 @@ pub async fn execute<S: EventSink>(
     sink: &mut S,
     cancel: CancellationToken,
     compressor: &mut crate::agent::compressor::Compressor,
+    layers: &BehaviourLayers,
 ) -> anyhow::Result<ExecuteOutcome> {
     let BootstrapOutcome {
         session_id,
@@ -136,6 +138,11 @@ pub async fn execute<S: EventSink>(
     let mut final_thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
     let mut context_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
     let mut loop_nudge_count: usize = 0;
+    // Per-turn mutable state owned by the behaviour layers. Every counter
+    // here is gated by `layers.<feature>.is_some()` checks below — when the
+    // layer is `None`, the counter never advances and the legacy "no fallback"
+    // / "no auto-continue" / "no recovery" semantics are preserved exactly.
+    let mut layer_state = LayerRuntimeState::default();
 
     // ── Turn loop ────────────────────────────────────────────────────────────
     for iteration in 0..loop_config.effective_max_iterations() {
@@ -252,13 +259,22 @@ pub async fn execute<S: EventSink>(
         //    `tests::streams_chunks_individually_during_no_tool_turn` and
         //    `tests::emits_reasoning_text_before_tool_call` below.
         let (chunk_tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let provider = engine.cfg().provider.as_ref();
-        let run_max = provider.run_max_duration_secs();
+        // When the fallback layer is engaged for this turn, the live
+        // provider points at the fallback Arc instead of the engine's
+        // primary. Either way, `chat_stream_with_deadline_retry` takes a
+        // `&dyn LlmProvider`, so the call shape is identical.
+        let primary_provider = engine.cfg().provider.as_ref();
+        let live_provider: &dyn crate::agent::providers::LlmProvider =
+            match (layer_state.using_fallback, layer_state.fallback_provider.as_ref()) {
+                (true, Some(fb)) => fb.as_ref(),
+                _ => primary_provider,
+            };
+        let run_max = live_provider.run_max_duration_secs();
         let call_opts = crate::agent::providers::CallOptions {
             thinking_level: engine.state().thinking_level.load(std::sync::atomic::Ordering::Relaxed),
         };
         let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
-            provider,
+            live_provider,
             &mut messages,
             &tools,
             chunk_tx,
@@ -279,14 +295,89 @@ pub async fn execute<S: EventSink>(
 
         // 6. Handle LLM result
         //
-        // Omitted from Task 6b:
-        //   - Fallback provider switching (consecutive_failures threshold)
-        //   - SessionCorruption recovery (did_reset_session + messages.retain)
-        //
-        // Both are handled by engine_sse.rs for the SSE call-site.
+        // Behaviour layers consulted (when enabled by the caller):
+        //   * `fallback_provider` — on consecutive failures, lazily build a
+        //     fallback provider and swap the live provider for the rest of
+        //     the turn. SSE callers leave the layer `None` and get the
+        //     unchanged "first error returns Failed" semantics.
+        //   * `session_recovery` — on `LlmErrorClass::SessionCorruption`,
+        //     reset to system+user once and continue. (Wired in Phase 5.)
         let response = match llm_result {
-            Ok(r) => r,
+            Ok(r) => {
+                // Successful call — reset the consecutive-failure counter so
+                // a temporary blip on the primary doesn't permanently push us
+                // toward the fallback. No-op when the fallback layer is off.
+                layer_state.consecutive_failures = 0;
+                r
+            }
             Err(e) => {
+                // Session-recovery layer (A3 in the divergent feature map).
+                // Must run BEFORE the fallback layer — a SessionCorruption
+                // error shouldn't increment the consecutive-failure counter
+                // that drives fallback.
+                if let Some(ref recovery) = layers.session_recovery {
+                    let class = crate::agent::error_classify::classify(&e);
+                    if class == crate::agent::error_classify::LlmErrorClass::SessionCorruption
+                        && !layer_state.did_reset_session
+                    {
+                        layer_state.did_reset_session = true;
+                        tracing::warn!(error = %e, "session corrupted, resetting context");
+                        messages.retain(|m| m.role == MessageRole::System);
+                        messages.push(Message {
+                            role: MessageRole::User,
+                            content: recovery.original_user_text.clone(),
+                            tool_calls: None,
+                            tool_call_id: None,
+                            thinking_blocks: vec![],
+                            db_id: None,
+                        });
+                        context_chars =
+                            messages.iter().map(|m| m.content.chars().count()).sum();
+                        let _ = sink
+                            .emit(PipelineEvent::Stream(StreamEvent::StepFinish {
+                                step_id,
+                                finish_reason: "session_recovery".into(),
+                            }))
+                            .await;
+                        continue;
+                    }
+                }
+
+                // Fallback layer (A1 in the divergent feature map). Increment
+                // the counter and, on threshold, lazily build the fallback
+                // provider and `continue` the turn with it.
+                if let Some(ref fb_policy) = layers.fallback_provider {
+                    layer_state.consecutive_failures += 1;
+                    if !layer_state.using_fallback
+                        && layer_state.consecutive_failures >= fb_policy.consecutive_failure_threshold
+                    {
+                        if layer_state.fallback_provider.is_none() {
+                            layer_state.fallback_provider =
+                                engine.create_fallback_provider().await;
+                        }
+                        if layer_state.fallback_provider.is_some() {
+                            layer_state.using_fallback = true;
+                            layer_state.consecutive_failures = 0;
+                            tracing::warn!(
+                                agent = %engine.cfg().agent.name,
+                                iteration,
+                                "switching to fallback provider after consecutive failures"
+                            );
+                            // Emit StepFinish for the failed step so the
+                            // frontend stops the spinner; then `continue`
+                            // — the next iteration will use the fallback
+                            // provider via the live_provider selector above.
+                            let _ = sink
+                                .emit(PipelineEvent::Stream(StreamEvent::StepFinish {
+                                    step_id,
+                                    finish_reason: "fallback_switch".into(),
+                                }))
+                                .await;
+                            continue;
+                        }
+                    }
+                }
+
                 tracing::error!(error = %e, iteration, "pipeline LLM call failed");
                 let reason = format!("LLM call failed: {e}");
                 // Emit the error text as TextDelta so the UI shows it
@@ -375,7 +466,109 @@ pub async fn execute<S: EventSink>(
         //    `forward_chunks_into_sink` during the LLM call — do NOT re-emit a
         //    batched TextDelta here or the UI will duplicate the whole response.
         if response.tool_calls.is_empty() {
-            final_text = partial;
+            // Strip thinking-block content from the final text. Some
+            // providers (Anthropic extended thinking) emit reasoning
+            // text alongside the regular response; we keep the thinking
+            // structurally separate via `response.thinking_blocks`.
+            let stripped = crate::agent::thinking::strip_thinking(&partial);
+
+            // ── Auto-continue / empty-retry layers ────────────────────────
+            //
+            // When `AutoContinuePolicy` is engaged, two recovery paths fire
+            // before we accept the response as final:
+            //   * If the response is empty AND the policy has `retry_on_empty`
+            //     enabled, we retry once — some providers return empty bodies
+            //     on transient backpressure (Ollama 503-like states) and the
+            //     next attempt usually succeeds.
+            //   * If the response is non-empty but `looks_incomplete()` —
+            //     describes remaining work without executing it — we push the
+            //     `AUTO_CONTINUE_NUDGE` system message and retry.
+            //
+            // SSE callers leave the layer `None` and skip both paths entirely.
+            if let Some(ref ac_policy) = layers.auto_continue {
+                // Empty-retry path (one shot per turn).
+                if ac_policy.retry_on_empty
+                    && stripped.is_empty()
+                    && layer_state.empty_retry_count < 1
+                {
+                    layer_state.empty_retry_count += 1;
+                    tracing::warn!(
+                        iteration,
+                        "LLM returned empty response, retrying once"
+                    );
+                    let _ = sink
+                        .emit(PipelineEvent::Stream(StreamEvent::StepFinish {
+                            step_id,
+                            finish_reason: "empty_retry".into(),
+                        }))
+                        .await;
+                    continue;
+                }
+
+                // Auto-continue path (capped per-turn).
+                if layer_state.auto_continue_count < ac_policy.max_continues
+                    && !stripped.is_empty()
+                    && crate::agent::thinking::looks_incomplete(&stripped)
+                {
+                    layer_state.auto_continue_count += 1;
+                    tracing::info!(
+                        iteration,
+                        count = layer_state.auto_continue_count,
+                        max = ac_policy.max_continues,
+                        "auto-continue: response looks incomplete, nudging LLM"
+                    );
+
+                    // Spawn the operator notification, same way
+                    // handle_isolated did. `spawn_traced` keeps the trace
+                    // context attached so the notification INSERT shows up
+                    // under the originating `pipeline.execute` span.
+                    if let Some(ref ui_tx) = engine.state().ui_event_tx {
+                        let db = engine.cfg().db.clone();
+                        let ui_tx = ui_tx.clone();
+                        let agent_name_for_notify = engine.cfg().agent.name.clone();
+                        let cnt = layer_state.auto_continue_count;
+                        let max_cnt = ac_policy.max_continues;
+                        crate::trace_propagation::spawn_traced(async move {
+                            crate::gateway::notify(
+                                &db,
+                                &ui_tx,
+                                "auto_continue",
+                                &format!("Auto-continue: {agent_name_for_notify}"),
+                                &format!(
+                                    "Agent continued unfinished task (attempt {cnt}/{max_cnt})"
+                                ),
+                                serde_json::json!({"agent": agent_name_for_notify}),
+                            )
+                            .await
+                            .ok();
+                        });
+                    }
+
+                    // Push nudge into LLM context, advance budget tracker,
+                    // emit StepFinish for this iteration so the next iteration
+                    // opens a clean StepStart.
+                    messages.push(Message {
+                        role: MessageRole::User,
+                        content: crate::agent::pipeline::behaviour::AUTO_CONTINUE_NUDGE.to_string(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        thinking_blocks: vec![],
+                        db_id: None,
+                    });
+                    context_chars += crate::agent::pipeline::behaviour::AUTO_CONTINUE_NUDGE.len();
+                    let _ = sink
+                        .emit(PipelineEvent::Stream(StreamEvent::StepFinish {
+                            step_id,
+                            finish_reason: "auto_continue".into(),
+                        }))
+                        .await;
+                    continue;
+                }
+            }
+
+            // Either no auto-continue layer was engaged, or the response
+            // passed the layer's checks — accept it as final.
+            final_text = stripped;
             final_thinking_blocks = response.thinking_blocks.clone();
 
             let _ = sink
@@ -617,17 +810,48 @@ pub async fn execute<S: EventSink>(
             }))
             .await;
 
-        // Loop break after max nudges → terminate with Failed
+        // Loop break after max nudges → terminate.
         if loop_broken {
-            let reason = "loop_detected_max_nudges".to_string();
+            // Forced-final-call layer also fires on the loop-broken path
+            // so cron jobs return a natural-language explanation rather
+            // than a raw "loop_detected_max_nudges" reason string. SSE
+            // callers leave the layer `None` and get the legacy Failed
+            // status with the reason intact.
+            let (status, finish_reason) = if layers.forced_final_call.is_some() {
+                match engine
+                    .cfg()
+                    .provider
+                    .chat(
+                        &messages,
+                        &[],
+                        crate::agent::providers::CallOptions::default(),
+                    )
+                    .await
+                {
+                    Ok(forced) => {
+                        final_text = crate::agent::thinking::strip_thinking(&forced.content);
+                        (ExecuteStatus::Done, "loop_detected")
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "forced final LLM call after loop-break failed");
+                        final_text = crate::agent::error_classify::format_user_error(&e);
+                        (ExecuteStatus::Done, "loop_detected")
+                    }
+                }
+            } else {
+                (
+                    ExecuteStatus::Failed("loop_detected_max_nudges".to_string()),
+                    "loop_detected",
+                )
+            };
             let _ = sink
                 .emit(PipelineEvent::Stream(StreamEvent::Finish {
-                    finish_reason: "loop_detected".into(),
+                    finish_reason: finish_reason.into(),
                     continuation: false,
                 }))
                 .await;
             return Ok(ExecuteOutcome {
-                status: ExecuteStatus::Failed(reason),
+                status,
                 final_text,
                 thinking_json: None,
                 messages_len_at_end: messages.len(),
@@ -638,14 +862,39 @@ pub async fn execute<S: EventSink>(
     }
 
     // ── Turn limit reached ────────────────────────────────────────────────────
-    // All iterations exhausted without a clean stop. Emit Finish and return Done
-    // with finish_reason = "turn_limit" (mirrors engine_sse.rs forced-final-call path,
-    // but omits the extra LLM call — that optimization is Task 6b omitted scope).
+    // All iterations exhausted without a clean stop.
     tracing::warn!(
         agent = %engine.cfg().agent.name,
         max = loop_config.effective_max_iterations(),
         "pipeline turn limit reached"
     );
+
+    // Forced-final-call layer (A5 in the divergent feature map). When
+    // engaged, makes one extra non-tools LLM call to coax a final
+    // natural-language summary into `final_text` before we return. SSE
+    // callers leave the layer `None` and get the legacy "no extra call,
+    // just emit Finish { reason: turn_limit }" semantics.
+    if layers.forced_final_call.is_some() {
+        match engine
+            .cfg()
+            .provider
+            .chat(
+                &messages,
+                &[],
+                crate::agent::providers::CallOptions::default(),
+            )
+            .await
+        {
+            Ok(forced) => {
+                final_text = crate::agent::thinking::strip_thinking(&forced.content);
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "forced final LLM call failed");
+                final_text = crate::agent::error_classify::format_user_error(&e);
+            }
+        }
+    }
+
     let _ = sink
         .emit(PipelineEvent::Stream(StreamEvent::Finish {
             finish_reason: "turn_limit".into(),
