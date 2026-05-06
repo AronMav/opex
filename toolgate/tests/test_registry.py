@@ -1,6 +1,7 @@
 """Unit tests for ProviderRegistry degraded-mode flag."""
 
 import importlib
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from registry import ProviderRegistry
@@ -17,7 +18,7 @@ async def _empty_load():
 
 def _degraded_test_client(monkeypatch) -> TestClient:
     """Reload app with an empty provider config and return a TestClient over it."""
-    monkeypatch.setattr("registry.aload_config", _empty_load)
+    monkeypatch.setattr("registry._aload_config_from_api", _empty_load)
     import app as app_module
     importlib.reload(app_module)
     return TestClient(app_module.app)
@@ -27,7 +28,7 @@ def _degraded_test_client(monkeypatch) -> TestClient:
 
 @pytest.mark.asyncio
 async def test_is_degraded_true_when_no_providers_loaded(monkeypatch):
-    monkeypatch.setattr("registry.aload_config", _empty_load)
+    monkeypatch.setattr("registry._aload_config_from_api", _empty_load)
     reg = ProviderRegistry()
     await reg.aload()
     assert reg.is_degraded() is True
@@ -48,7 +49,7 @@ async def test_is_degraded_false_after_successful_load(monkeypatch):
             },
         )
 
-    monkeypatch.setattr("registry.aload_config", _populated_load)
+    monkeypatch.setattr("registry._aload_config_from_api", _populated_load)
     reg = ProviderRegistry()
     await reg.aload()
     assert reg.is_degraded() is False
@@ -98,3 +99,77 @@ async def test_embedding_endpoint_uses_structured_503(monkeypatch):
     body = resp.json()
     assert body["error"] == "no_embedding_provider"
     assert body["degraded"] is True
+
+
+# ── T5: pull-on-call (TTL=0) semantics ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_aget_active_calls_core_api_each_time():
+    """Pull-on-call: every aget_active triggers a config fetch."""
+    registry = ProviderRegistry()
+    fake_config = ProvidersConfig(
+        active={"stt": "p1"},
+        providers={
+            "p1": ProviderConfig(type="stt", driver="whisper-local", enabled=True)
+        },
+    )
+
+    with patch("registry._aload_config_from_api", new_callable=AsyncMock) as mock:
+        mock.return_value = fake_config
+        for _ in range(5):
+            await registry.aget_active("stt")
+        assert mock.call_count == 5
+
+
+@pytest.mark.asyncio
+async def test_aget_active_falls_back_on_core_down():
+    """Core unreachable → aget_active returns last-known config."""
+    registry = ProviderRegistry()
+    initial_config = ProvidersConfig(
+        active={"stt": "p1"},
+        providers={
+            "p1": ProviderConfig(type="stt", driver="whisper-local", enabled=True)
+        },
+    )
+
+    with patch("registry._aload_config_from_api", new_callable=AsyncMock) as mock:
+        mock.return_value = initial_config
+        first = await registry.aget_active("stt")  # populate
+        assert first is not None
+        mock.return_value = None  # simulate Core down
+        result = await registry.aget_active("stt")
+        assert result is not None, "should return last-known instance"
+
+
+@pytest.mark.asyncio
+async def test_provider_swap_takes_effect_on_next_call():
+    """Change Core's config → next aget_active reflects the change."""
+    registry = ProviderRegistry()
+    config_v1 = ProvidersConfig(
+        active={"stt": "p1"},
+        providers={"p1": ProviderConfig(type="stt", driver="whisper-local", enabled=True)},
+    )
+    config_v2 = ProvidersConfig(
+        active={"stt": "p2"},
+        providers={"p2": ProviderConfig(type="stt", driver="openai", enabled=True)},
+    )
+
+    with patch("registry._aload_config_from_api", new_callable=AsyncMock) as mock:
+        mock.return_value = config_v1
+        first = await registry.aget_active("stt")
+        mock.return_value = config_v2
+        second = await registry.aget_active("stt")
+        assert type(first) is not type(second), "different drivers expected"
+
+
+def test_no_reload_endpoint():
+    """POST /reload should return 404 or 405 — endpoint removed."""
+    async def _empty():
+        return ProvidersConfig()
+    # Stub config loader so app starts in degraded mode without making outbound calls.
+    with patch("registry._aload_config_from_api", new=_empty):
+        import app as app_module
+        importlib.reload(app_module)
+        with TestClient(app_module.app) as client:
+            resp = client.post("/reload")
+            assert resp.status_code in (404, 405)

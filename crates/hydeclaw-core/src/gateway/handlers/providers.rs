@@ -17,7 +17,7 @@ use regex::Regex;
 use crate::agent::providers::PROVIDER_CREDENTIALS;
 use crate::db::providers::{self, CreateProvider, UpdateProvider, ProviderRow};
 use crate::gateway::AppState;
-use crate::gateway::clusters::{AuthServices, ConfigServices, InfraServices};
+use crate::gateway::clusters::{AuthServices, InfraServices};
 use crate::secrets::SecretsManager;
 use super::secrets::mask_secret_value;
 
@@ -42,35 +42,12 @@ static NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-zA-Z0-9_-]+$").expect("valid regex pattern")
 });
 
-/// Media capabilities that should trigger toolgate reload when changed.
+/// Media capabilities listed in `build_media_config` exports — only these
+/// `provider_active` rows are surfaced to toolgate. Toolgate pulls config
+/// on every provider call (TTL=0), so Core no longer pushes reload notifications.
 const MEDIA_CAPABILITIES: &[&str] = &["stt", "tts", "vision", "imagegen", "embedding"];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-/// Notify toolgate to reload config and invalidate caches.
-/// Retries up to 3 times with a 1-second delay between attempts.
-pub(crate) fn notify_toolgate_reload(toolgate_url: Option<String>) {
-    let url = toolgate_url.unwrap_or_else(|| "http://localhost:9011".to_string());
-    tokio::spawn(async move {
-        let client = reqwest::Client::new();
-        const MAX_ATTEMPTS: u32 = 3;
-        for attempt in 1..=MAX_ATTEMPTS {
-            match client.post(format!("{url}/reload")).send().await {
-                Ok(_) => {
-                    tracing::debug!("toolgate config reloaded successfully");
-                    return;
-                }
-                Err(e) if attempt < MAX_ATTEMPTS => {
-                    tracing::debug!(attempt, error = %e, "toolgate reload failed, retrying in 1s");
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to reload toolgate config after {MAX_ATTEMPTS} attempts");
-                }
-            }
-        }
-    });
-}
 
 /// Resolve API key for a provider from vault (scoped by UUID).
 async fn resolve_key(secrets: &SecretsManager, provider: &ProviderRow) -> Option<String> {
@@ -196,7 +173,6 @@ async fn validate_tts_options_db(db: &PgPool, options: Option<&Value>) -> Result
 pub(crate) async fn api_create_provider(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
-    State(cfg): State<ConfigServices>,
     Json(body): Json<CreateProviderBody>,
 ) -> impl IntoResponse {
     // Validate type
@@ -254,9 +230,7 @@ pub(crate) async fn api_create_provider(
                     tracing::warn!(provider = %p.name, error = %e, "failed to store provider key in vault");
                 }
             }
-            if p.category != "text" {
-                notify_toolgate_reload(cfg.config.toolgate_url.clone());
-            }
+            // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
             let json = provider_json(&auth.secrets, &p).await;
             (StatusCode::CREATED, Json(json)).into_response()
         }
@@ -297,7 +271,6 @@ pub(crate) struct UpdateProviderBody {
 pub(crate) async fn api_update_provider(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
-    State(cfg): State<ConfigServices>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateProviderBody>,
 ) -> impl IntoResponse {
@@ -381,9 +354,7 @@ pub(crate) async fn api_update_provider(
                 }
             }
 
-            if p.category != "text" {
-                notify_toolgate_reload(cfg.config.toolgate_url.clone());
-            }
+            // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
             let json = provider_json(&auth.secrets, &p).await;
             (StatusCode::OK, Json(json)).into_response()
         }
@@ -395,19 +366,14 @@ pub(crate) async fn api_update_provider(
 pub(crate) async fn api_delete_provider(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
-    State(cfg): State<ConfigServices>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    // Check type before deleting to decide about toolgate reload
-    let provider = providers::get_provider(&infra.db, id).await.ok().flatten();
     match providers::delete_provider(&infra.db, id).await {
         Ok(true) => {
             if let Err(e) = auth.secrets.delete_scoped(PROVIDER_CREDENTIALS, &id.to_string()).await {
                 tracing::debug!(provider = %id, error = %e, "no vault key to delete for provider");
             }
-            if provider.is_some_and(|p| p.category != "text") {
-                notify_toolgate_reload(cfg.config.toolgate_url.clone());
-            }
+            // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response(),
@@ -502,7 +468,6 @@ pub(crate) struct SetProviderActiveInput {
 
 pub(crate) async fn api_set_provider_active(
     State(infra): State<InfraServices>,
-    State(cfg): State<ConfigServices>,
     Json(input): Json<SetProviderActiveInput>,
 ) -> impl IntoResponse {
     if !VALID_CAPABILITIES.contains(&input.capability.as_str()) {
@@ -518,9 +483,7 @@ pub(crate) async fn api_set_provider_active(
     .await
     {
         Ok(row) => {
-            if MEDIA_CAPABILITIES.contains(&input.capability.as_str()) {
-                notify_toolgate_reload(cfg.config.toolgate_url.clone());
-            }
+            // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
             (StatusCode::OK, Json(json!(row))).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),

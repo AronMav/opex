@@ -203,7 +203,7 @@ async def health():
     active = {}
     available = {}
     for cap in CAPABILITIES:
-        p = registry.get_active(cap)
+        p = await registry.aget_active(cap)
         active[cap] = p.name if p else None
         available[cap] = p is not None
     degraded = registry.is_degraded()
@@ -214,26 +214,3 @@ async def health():
         "capabilities": available,
         "active_providers": active,
     }
-
-
-@app.post("/reload")
-async def reload_providers():
-    """Reload provider configuration and invalidate router caches."""
-    await registry.areload()
-    # Invalidate cached credentials in workspace routers
-    _invalidate_router_caches()
-    active = {}
-    for cap in CAPABILITIES:
-        p = registry.get_active(cap)
-        active[cap] = p.name if p else None
-    log.info("Provider config reloaded via /reload endpoint")
-    return {"ok": True, "active_providers": active}
-
-
-def _invalidate_router_caches():
-    """Clear cached tokens/state in primitives that read secrets."""
-    try:
-        from primitives.bcs import invalidate_cache
-        invalidate_cache()
-    except (ImportError, AttributeError):
-        pass

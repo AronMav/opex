@@ -66,30 +66,6 @@ async def _aload_config_from_api() -> ProvidersConfig | None:
         _log.warning("Failed to load config from Core API: %s — will retry", e)
     return None
 
-def load_config_from_api_sync() -> ProvidersConfig | None:
-    """Synchronous fallback for lazy loading."""
-    core_url = os.environ.get("CORE_API_URL", CORE_API_URL)
-    if not core_url:
-        return None
-    auth_token = os.environ.get("HYDECLAW_AUTH_TOKEN", os.environ.get("AUTH_TOKEN", ""))
-    try:
-        headers: dict[str, str] = {}
-        if auth_token:
-            headers["Authorization"] = f"Bearer {auth_token}"
-        with httpx.Client() as client:
-            resp = client.get(
-                f"{core_url}/api/media-config",
-                headers=headers,
-                timeout=5.0,
-            )
-        if resp.status_code == 200:
-            data = resp.json()
-            return ProvidersConfig(**data)
-    except Exception as e:
-        _log.warning("Sync load failed: %s", e)
-    return None
-
-
 async def aload_config() -> ProvidersConfig:
     """Load config from Core API with retry.
     Returns empty ProvidersConfig if Core is unreachable after all retries.

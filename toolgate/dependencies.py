@@ -22,17 +22,20 @@ def require_provider(capability: str):
     (and thus its own voice) without changing the global `provider_active` map.
 
     The body contains `{error, degraded, hint}` so callers can distinguish
-    'no provider configured' vs 'core unreachable' states."""
-    def _dep(request: Request):
+    'no provider configured' vs 'core unreachable' states.
+
+    Async dependency: pulls the latest config from Core API on every call
+    (`aget_active`/`aget_instance`) — there is no /reload endpoint anymore."""
+    async def _dep(request: Request):
         registry = request.app.state.registry
         override = request.headers.get("x-hydeclaw-provider")
         if override:
-            provider = registry.get_instance(override)
+            provider = await registry.aget_instance(override)
             if provider is not None:
                 return provider
             # Override name unknown → fall back to active rather than 503,
             # so a stale agent config doesn't break the whole capability.
-        provider = registry.get_active(capability)
+        provider = await registry.aget_active(capability)
         if not provider:
             raise _DegradedResponse(capability, registry.is_degraded())
         return provider
