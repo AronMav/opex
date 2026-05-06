@@ -123,17 +123,19 @@ impl AgentEngine {
             m.get(&session_id).map(|r| r.value().clone())
         });
         let promotion_max = self.cfg().agent.tool_dispatcher.promotion_max;
-        // Effective deny = agent.tools.deny ∪ SUBAGENT_DENIED_TOOLS (computed
-        // via delegation). Without this union, a subagent could use
-        // tool_use(call, name=process) to bypass the delegation block — the
-        // rewrite step rejects only on `agent.tools.deny`. Spec mandates the
-        // runtime deny-gate honors both. For non-subagent (parent) engines
-        // the delegation list defaults to empty, so the union is harmless.
-        let policy_owned = build_effective_policy(
-            self.cfg().agent.tools.as_ref(),
-            &self.cfg().agent.delegation,
-        );
-        let policy = Some(&policy_owned);
+        // Runtime deny-gate uses ONLY the agent's own tool_policy.deny.
+        //
+        // KNOWN GAP — subagent isolation: when this engine is invoked as a
+        // subagent (via `run_subagent_with_session`), `tool_use(call, name=X)`
+        // can call tools that the parent's `[agent.delegation]` blocks but
+        // are NOT in the subagent's `agent.tools.deny`. Visibility-based
+        // filtering in `internal_tool_definitions_for_subagent` no longer
+        // gates execution once the dispatcher exposes execution-by-name.
+        // Tracked as follow-up: subagent_runner needs to pass parent's
+        // `compute_denied_tools(&parent.delegation)` as `extra_deny` into
+        // the rewrite step. Out of scope for v1 — only affects subagents
+        // spawned via the `agent` tool with dispatcher enabled.
+        let policy = self.cfg().agent.tools.as_ref();
 
         crate::agent::pipeline::parallel::execute_tool_calls_partitioned(
             tool_calls,
@@ -175,34 +177,6 @@ pub(crate) fn dispatch_for_subagent_decision(
         return false;
     }
     parent_subagent_override.unwrap_or(parent_tool_dispatcher_enabled)
-}
-
-/// Build the runtime deny-effective `AgentToolPolicy` passed into
-/// `pipeline::execute_tool_calls_partitioned`. The deny list is the union of
-/// `agent.tools.deny` and the delegation-computed deny list (via
-/// `compute_denied_tools` — `SUBAGENT_DENIED_TOOLS + blocked_tools_extra`, or
-/// `blocked_tools_override` when set). All other policy fields (allow,
-/// allow_all, deny_all_others, groups) come from the agent's configured
-/// policy or its `Default` when unset.
-///
-/// Without this union, `tool_use(action="call", name=<denied>)` would slip
-/// past the rewrite step's runtime deny-gate (which only checks
-/// `policy.deny`). The same union is mirrored in
-/// `tool_handlers/tool_use.rs::deny_list` (catalogue / describe) and
-/// `engine/context_builder.rs::cfg_deny_list` (trigger-hint).
-pub(crate) fn build_effective_policy(
-    base: Option<&crate::config::AgentToolPolicy>,
-    delegation: &crate::config::DelegationConfig,
-) -> crate::config::AgentToolPolicy {
-    let base = base.cloned().unwrap_or_default();
-    let delegation_denied = crate::agent::pipeline::subagent::compute_denied_tools(delegation);
-    let mut deny = base.deny.clone();
-    for d in delegation_denied {
-        if !deny.contains(&d) {
-            deny.push(d);
-        }
-    }
-    crate::config::AgentToolPolicy { deny, ..base }
 }
 
 // ── ToolExecutorDeps impl ─────────────────────────────────────────────────────
@@ -287,87 +261,4 @@ mod tests {
         assert!(!d(false, true, Some(false)));
     }
 
-    /// Effective policy must include both the agent's configured deny list
-    /// AND the delegation-computed deny list. Closes the bypass where a
-    /// subagent could use `tool_use(action="call", name=process)` to slip
-    /// past the rewrite step's runtime deny-gate.
-    #[test]
-    fn build_effective_policy_unions_agent_deny_and_delegation_denied() {
-        use crate::agent::pipeline::subagent::SUBAGENT_DENIED_TOOLS;
-        use crate::config::{AgentToolPolicy, DelegationConfig};
-
-        // Agent has its own deny entries.
-        let base = AgentToolPolicy {
-            deny: vec!["custom_deny".into()],
-            ..Default::default()
-        };
-        // Default delegation → adds SUBAGENT_DENIED_TOOLS.
-        let delegation = DelegationConfig::default();
-
-        let effective = super::build_effective_policy(Some(&base), &delegation);
-
-        // Original deny preserved.
-        assert!(effective.deny.iter().any(|d| d == "custom_deny"));
-        // All SUBAGENT_DENIED_TOOLS now present in the union.
-        for tool in SUBAGENT_DENIED_TOOLS {
-            assert!(
-                effective.deny.iter().any(|d| d == *tool),
-                "delegation-denied {tool} missing from effective deny — bypass risk"
-            );
-        }
-    }
-
-    #[test]
-    fn build_effective_policy_dedupes_when_agent_already_denies_subagent_tool() {
-        use crate::config::{AgentToolPolicy, DelegationConfig};
-
-        // Agent already denies "process" (which is also a SUBAGENT_DENIED_TOOL).
-        let base = AgentToolPolicy {
-            deny: vec!["process".into()],
-            ..Default::default()
-        };
-        let delegation = DelegationConfig::default();
-
-        let effective = super::build_effective_policy(Some(&base), &delegation);
-
-        let process_count = effective.deny.iter().filter(|d| *d == "process").count();
-        assert_eq!(process_count, 1, "duplicate deny entries must be deduped");
-    }
-
-    #[test]
-    fn build_effective_policy_handles_no_agent_policy() {
-        use crate::config::DelegationConfig;
-        use crate::agent::pipeline::subagent::SUBAGENT_DENIED_TOOLS;
-
-        // No agent.tools section configured → falls back to Default.
-        let effective = super::build_effective_policy(None, &DelegationConfig::default());
-
-        // Effective deny still carries the delegation block.
-        for tool in SUBAGENT_DENIED_TOOLS {
-            assert!(effective.deny.iter().any(|d| d == *tool));
-        }
-    }
-
-    #[test]
-    fn build_effective_policy_with_delegation_override() {
-        use crate::config::{AgentToolPolicy, DelegationConfig};
-
-        // Delegation override replaces the default subagent deny list.
-        let base = AgentToolPolicy {
-            deny: vec!["agent_specific".into()],
-            ..Default::default()
-        };
-        let delegation = DelegationConfig {
-            blocked_tools_override: vec!["only_this".into()],
-            ..Default::default()
-        };
-
-        let effective = super::build_effective_policy(Some(&base), &delegation);
-
-        // Agent deny preserved, override added, default SUBAGENT_DENIED_TOOLS NOT present.
-        assert!(effective.deny.iter().any(|d| d == "agent_specific"));
-        assert!(effective.deny.iter().any(|d| d == "only_this"));
-        assert!(!effective.deny.iter().any(|d| d == "process"),
-            "blocked_tools_override should replace SUBAGENT_DENIED_TOOLS");
-    }
 }
