@@ -964,7 +964,12 @@ mod tests {
     /// fix (2026-04-17), the absolute `resolved` path never equaled the
     /// relative `Path::new("workspace").join("AGENTS.md")`, so the guard never
     /// fired in production.
+    // Both tests below mutate the process-wide CWD via
+    // `std::env::set_current_dir` to validate behaviour when
+    // `workspace_dir` is a relative path. They MUST run serially —
+    // parallel execution leaves them racing on the same global.
     #[test]
+    #[serial_test::serial(cwd)]
     fn is_read_only_blocks_agents_md_when_workspace_dir_is_relative() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd_backup = std::env::current_dir().unwrap();
@@ -982,6 +987,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(cwd)]
     fn is_read_only_blocks_tools_write_for_non_base_with_relative_workspace_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd_backup = std::env::current_dir().unwrap();

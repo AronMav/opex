@@ -7,9 +7,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Rust
 make check              # cargo check --all-targets
-make test               # cargo test
+make test               # cargo test (skips DB-backed tests if DATABASE_URL unset)
+make test-db            # boots isolated postgres on :5434 + runs full suite
 make lint               # cargo clippy --all-targets -- -D warnings
+make audit              # cargo audit (RustSec advisories — see .cargo/audit.toml)
 cargo test test_name -- --nocapture  # single test
+
+# 8 tests under #[sqlx::test] need a live Postgres + DATABASE_URL.
+# `cargo test` without DB will fail them with "EnvVar(NotPresent)" — that's
+# expected; use `make test-db` (or set DATABASE_URL) to run the full suite.
 
 # UI (Next.js)
 cd ui && npm run build  # production build
