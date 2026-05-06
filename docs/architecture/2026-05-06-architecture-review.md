@@ -1,5 +1,13 @@
 # HydeClaw Architecture Review
 
+> **Snapshot of repo state on 2026-05-06.** This review captured the
+> codebase BEFORE the chat.rs split, providers.rs split, providers/ flat
+> layout, dead-code audit, blocking clippy, and providers_http relocation.
+> The "2179-line `agent/providers.rs`", "1420-line `chat.rs`", "parallel
+> `engine::stream::handle_isolated` path", and several other observations
+> below have since been resolved. Kept as a snapshot of the audit
+> rationale, not as a description of the current source tree.
+
 **Date:** 2026-05-06
 **Reviewer:** Architectural audit pass
 **Repository state:** `master` at v0.26.0, working tree clean

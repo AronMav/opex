@@ -1,6 +1,15 @@
 # LLM-Loop Unification — Implementation Plan
 
-**Status:** Active — Phases 1–5 delivered (commit `7b4c4cd`); Phases 6–8 pending.
+> **Historical record (completed 2026-05-06).** This plan describes the
+> design for deleting `engine::stream::handle_isolated` and unifying every
+> LLM-loop path through `pipeline::execute` + behaviour layers. It was
+> implemented in full. References below to
+> `engine::stream::handle_isolated`, `chat_with_transient_retry_using`,
+> `SessionManager::create_isolated`, etc., describe the **pre-refactor
+> source tree** — those names no longer exist in the codebase. Kept for
+> the design rationale; not maintained against the current layout.
+
+**Status:** Completed 2026-05-06 (commits `7b4c4cd`, then cron migration in subsequent commits, dead-code purge in `6168252`).
 **Owner:** Phase 67+1 (post-observability)
 **Tracking artifact:** this file
 **Origin:** Architecture review 2026-05-06 (`docs/architecture/2026-05-06-architecture-review.md`), top-priority recommendation #1.
