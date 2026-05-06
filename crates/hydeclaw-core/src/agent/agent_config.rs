@@ -53,6 +53,10 @@ pub struct AgentConfig {
     pub scheduler: Option<Arc<Scheduler>>,
     pub agent_map: Option<AgentMap>,
     pub session_pools: Option<SessionPoolsMap>,
+    /// Per-session tool dispatcher state map (describe cache, call counts,
+    /// promoted system extensions). `None` for engines created outside of
+    /// `AgentCore` (e.g. some test helpers).
+    pub session_tool_state: Option<crate::agent::dispatcher::SessionToolStateMap>,
     pub audit_queue: Arc<AuditQueue>,
     /// Phase 65 OBS-02: process-wide metrics registry for recording tool
     /// latency, LLM call duration, and token usage. Cloned from
