@@ -131,6 +131,11 @@ sd-notify = { workspace = true }
 hydeclaw-db           = { path = "../hydeclaw-db" }
 hydeclaw-gateway-util = { path = "../hydeclaw-gateway-util" }
 tempfile = "3.27.0"
+# Serialize tests that mutate process-global state (current_dir, env vars).
+# `cargo test` runs tests in parallel by default; `#[serial]` enforces a
+# critical section across the named lock so std::env::set_current_dir
+# calls can't trample each other.
+serial_test = "3"
 insta = { version = "1", features = ["json"] }
 # Phase 64 SEC-05: in-process axum integration via Router::oneshot (no TCP server).
 tower = { workspace = true }

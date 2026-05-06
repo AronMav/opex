@@ -5,7 +5,7 @@ TARGET    := aarch64-unknown-linux-gnu
 BIN       := target/$(TARGET)/release/hydeclaw-core
 AUTH      ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN")
 
-.PHONY: check test test-db test-db-up test-db-down build build-arm64 build-arm64-otel ui release gen-types deploy-binary deploy-binary-otel deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
+.PHONY: check test test-db test-db-up test-db-down lint audit build build-arm64 build-arm64-otel ui release gen-types deploy-binary deploy-binary-otel deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
 
 # ── Codegen ──────────────────────────────────────────────────────────────────
 
@@ -53,6 +53,11 @@ test-db: test-db-up
 
 lint:
 	cargo clippy --all-targets -- -D warnings
+
+# Run RustSec advisory check. Ignore policy lives in `.cargo/audit.toml`
+# with per-entry rationale — re-evaluate every release.
+audit:
+	cargo audit --deny warnings
 
 # ── Build ────────────────────────────────────────────────────────────────────
 
