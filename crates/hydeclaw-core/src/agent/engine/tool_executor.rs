@@ -91,6 +91,16 @@ impl AgentEngine {
             }
         };
 
+        // Per-session dispatcher state — pulled from the engine's
+        // `session_tool_state` map by session id, when wired. None when the
+        // engine was built outside of `AgentCore` (test helpers, openai_compat
+        // synthetic Uuid::nil).
+        let session_tool_state = self.cfg().session_tool_state.as_ref().and_then(|m| {
+            m.get(&session_id).map(|r| r.value().clone())
+        });
+        let promotion_max = self.cfg().agent.tool_dispatcher.promotion_max;
+        let policy = self.cfg().agent.tools.as_ref();
+
         crate::agent::pipeline::parallel::execute_tool_calls_partitioned(
             tool_calls,
             context,
@@ -105,6 +115,9 @@ impl AgentEngine {
             &yaml_tools,
             self,
             persist_ctx,
+            policy,
+            session_tool_state,
+            promotion_max,
         )
         .await
     }
