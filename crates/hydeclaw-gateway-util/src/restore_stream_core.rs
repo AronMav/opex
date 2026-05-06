@@ -104,7 +104,6 @@ where
 ///
 /// Only referenced from integration tests via the lib facade; the binary target
 /// uses the typed `parse_backup_stream` walker.
-#[allow(dead_code)]
 pub fn parse_stream_value<R: std::io::Read>(reader: R) -> Result<Value, String> {
     let mut json = JsonStreamReader::new(reader);
     json.deserialize_next::<Value>().map_err(|e| e.to_string())

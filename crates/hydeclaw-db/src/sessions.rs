@@ -19,7 +19,6 @@ use crate::session_status::SessionStatus;
 pub const MAX_PARAMS_PER_QUERY: usize = 32767;
 
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
-#[allow(dead_code)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
 pub struct Session {
@@ -478,7 +477,6 @@ pub async fn load_messages(
 }
 
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
-#[allow(dead_code)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
 pub struct MessageRow {

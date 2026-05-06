@@ -269,29 +269,6 @@ pub async fn write_skill(
     Ok(())
 }
 
-/// List skill file names in the shared skills directory.
-#[allow(dead_code)]
-pub async fn list_skills(workspace_dir: &str) -> Vec<String> {
-    let skills_dir = Path::new(workspace_dir).join("skills");
-    let mut names = Vec::new();
-
-    let mut read_dir = match fs::read_dir(&skills_dir).await {
-        Ok(d) => d,
-        Err(_) => return names,
-    };
-
-    while let Ok(Some(entry)) = read_dir.next_entry().await {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("md")
-            && let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                names.push(stem.to_string());
-            }
-    }
-
-    names.sort();
-    names
-}
-
 /// Atomically updates `last_used_at` in skill frontmatter.
 /// Skips write if existing value is fresher than `min_age`.
 /// Errors are logged — never panics.

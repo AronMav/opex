@@ -20,6 +20,8 @@ use tokio::sync::Mutex;
 // ── Config ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // health_url/memory_max/cpu_quota are reserved fields per the
+                    // doc comments; accepted from TOML but not yet enforced at runtime.
 pub struct ManagedProcessConfig {
     /// Service name (e.g. "channels", "toolgate").
     pub name: String,
@@ -34,15 +36,12 @@ pub struct ManagedProcessConfig {
     #[serde(default)]
     pub env_extra: HashMap<String, String>,
     /// HTTP URL for health-check polling (reserved for future use).
-    #[allow(dead_code)]
     pub health_url: Option<String>,
     /// TCP port the service binds; used for port-release wait before respawn.
     pub port: Option<u16>,
     /// Memory / CPU limits (reserved; not used with direct spawn — Core's systemd unit enforces limits).
-    #[allow(dead_code)]
     #[serde(default)]
     pub memory_max: Option<String>,
-    #[allow(dead_code)]
     #[serde(default)]
     pub cpu_quota: Option<String>,
 }

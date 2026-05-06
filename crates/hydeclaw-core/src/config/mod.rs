@@ -21,17 +21,13 @@ pub struct AppConfig {
     #[serde(default)]
     pub subagents: SubagentsConfig,
     #[serde(default)]
-    #[allow(dead_code)]
     pub discussion: DiscussionConfig,
     #[serde(default)]
-    #[allow(dead_code)]
     #[schemars(skip)]
     pub mcp: HashMap<String, McpConfig>,
     #[serde(default)]
-    #[allow(dead_code)]
     pub memory: crate::memory::MemoryConfig,
     #[serde(default)]
-    #[allow(dead_code)]
     pub sandbox: SandboxConfig,
     #[serde(default)]
     pub docker: DockerConfig,
@@ -634,7 +630,7 @@ pub struct ProviderRouteConfig {
 }
 
 impl ProviderRouteConfig {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn validate(&self) -> Result<(), String> {
         if self.cooldown_secs == 0 {
             return Err("cooldown_secs must be >= 1".into());

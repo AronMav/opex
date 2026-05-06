@@ -125,7 +125,8 @@ pub enum SystemPromptWhen {
 // ── CLI Presets ─────────────────────────────────────────────────────────────
 
 /// Built-in CLI provider preset -- static defaults that work out of the box.
-#[allow(dead_code)]
+#[allow(dead_code)] // Some fields (name, resume_output) describe preset metadata for the
+                    // /api/providers types endpoint and aren't read by the runtime path.
 pub struct CliPreset {
     pub id: &'static str,
     pub name: &'static str,

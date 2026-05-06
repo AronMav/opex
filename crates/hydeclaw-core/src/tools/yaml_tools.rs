@@ -113,8 +113,8 @@ pub struct YamlAuth {
 // ── Rate limit ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // YAML schema field — accepted on parse, runtime enforcement TBD.
 pub struct YamlRateLimit {
-    #[allow(dead_code)]
     pub max_calls_per_minute: Option<u32>,
 }
 
@@ -141,8 +141,8 @@ fn default_content_type() -> String { "application/json".to_string() }
 
 // Fields are parsed from YAML for forward-compatibility; not used at runtime
 // since ToolExecutionContext (the cache runtime) is test-only.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct YamlCacheConfig {
     /// TTL in seconds.
     pub ttl: u64,
@@ -382,13 +382,13 @@ fn apply_pipeline(value: serde_json::Value, pipeline: &[ResponsePipelineStep]) -
 /// After a successful HTTP call, instruct the engine to perform a channel action
 /// using the binary response body (e.g. send TTS audio as a Telegram voice message).
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // data_field is parsed from YAML for forward-compat with planned channel actions.
 pub struct ChannelActionConfig {
     /// Action name: "`send_voice`", "`send_file`", etc.
     pub action: String,
     /// Where to take the data from:
     /// - "_binary" — use the raw binary response body
     /// - "$.field"  — extract a JSON field from the response
-    #[allow(dead_code)]
     pub data_field: String,
 }
 
@@ -396,14 +396,14 @@ pub struct ChannelActionConfig {
 
 /// Full YAML tool definition loaded from a file.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
+#[allow(dead_code)] // YAML schema fields (extends/created_by/rate_limit/cache) are accepted on
+                    // parse for forward-compat; runtime enforcement lives elsewhere.
 pub struct YamlToolDef {
     #[serde(default)]
     pub extends: Option<String>,
     pub name: String,
     pub description: String,
     #[serde(default)]
-    #[allow(dead_code)]
     pub tags: Vec<String>,
     pub endpoint: String,
     pub method: String,
@@ -423,7 +423,6 @@ pub struct YamlToolDef {
     #[serde(default)]
     pub status: ToolStatus,
     #[serde(default)]
-    #[allow(dead_code)]
     pub created_by: String,
     pub rate_limit: Option<YamlRateLimit>,
     /// Per-tool timeout in seconds (default 60).
@@ -836,17 +835,6 @@ impl YamlToolDef {
     /// Backoff base in ms.
     fn backoff_base_ms(&self) -> u64 {
         self.retry.as_ref().map_or(1000, |r| r.backoff_base_ms)
-    }
-
-    /// Execute this tool with the given parameters. Returns the response body as a string.
-    #[allow(dead_code)]
-    pub async fn execute(
-        &self,
-        params: &serde_json::Value,
-        http_client: &reqwest::Client,
-        env_resolver: Option<&dyn EnvResolver>,
-    ) -> Result<String> {
-        self.execute_with_ctx(params, http_client, env_resolver, None, &[]).await
     }
 
     /// Execute with OAuth context for provider-based auth.
@@ -1450,7 +1438,7 @@ pub fn tool_file_path(workspace_dir: &str, _status: &ToolStatus, name: &str) -> 
 
 /// Convert an `OpenAPI` security scheme JSON to a `YamlAuth` config.
 /// Supports apiKey (header/query), http (bearer/basic), and oauth2 schemes.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn openapi_security_to_yaml_auth(scheme: &serde_json::Value) -> Option<YamlAuth> {
     let scheme_type = scheme.get("type")?.as_str()?;
     match scheme_type {

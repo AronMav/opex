@@ -2,7 +2,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Debug, sqlx::FromRow)]
-#[allow(dead_code)]
+#[allow(dead_code)] // FromRow-mapped from stream_jobs; some fields are read by the
+                    // /api/chat/{id}/stream resume handler via field access elsewhere.
 pub struct StreamJob {
     pub id: Uuid,
     pub session_id: Uuid,

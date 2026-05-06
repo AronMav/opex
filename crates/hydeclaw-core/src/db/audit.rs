@@ -1,10 +1,11 @@
 //! Structured audit logging for security-relevant events.
 
 /// Well-known audit event types.
+#[allow(dead_code)] // Some constants are part of the canonical event-type taxonomy
+                    // referenced from external systems; not all are emitted yet.
 pub mod event_types {
     pub const APPROVAL_REQUESTED: &str = "approval_requested";
     pub const APPROVAL_RESOLVED: &str = "approval_resolved";
-    #[allow(dead_code)]
     pub const PROMPT_INJECTION: &str = "prompt_injection_detected";
     pub const COMPACTION: &str = "compaction";
     // Agent lifecycle
@@ -28,7 +29,6 @@ pub mod event_types {
     pub const MEMORY_DELETED: &str = "memory_deleted";
     pub const MEMORY_PINNED: &str = "memory_pinned";
     // Rate limiting (reserved for future per-event logging)
-    #[allow(dead_code)]
     pub const RATE_LIMITED: &str = "rate_limited";
 }
 

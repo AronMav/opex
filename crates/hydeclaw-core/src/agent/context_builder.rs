@@ -474,16 +474,6 @@ pub mod mock {
     }
 
     impl MockContextBuilder {
-        /// Create a mock that returns a minimal empty snapshot on every `build()` call.
-        #[allow(dead_code)]
-        pub fn new() -> Self {
-            Self {
-                session_id: Uuid::new_v4(),
-                messages: vec![],
-                tools: vec![],
-            }
-        }
-
         /// Create a mock with specific canned data.
         pub fn with_snapshot(
             session_id: Uuid,
@@ -516,7 +506,6 @@ pub mod mock {
 
 /// Strip `<minimax:tool_call>…</minimax:tool_call>` blocks from a string.
 // Called from DefaultContextBuilder::build() via ContextBuilder trait object dispatch.
-#[allow(dead_code)]
 fn strip_minimax_xml(s: &str) -> String {
     const OPEN: &str = "<minimax:tool_call>";
     const CLOSE: &str = "</minimax:tool_call>";
@@ -546,7 +535,6 @@ fn strip_minimax_xml(s: &str) -> String {
 
 /// Proactively strip tool result content from old turns to reduce LLM context on load.
 // Called from DefaultContextBuilder::build() via ContextBuilder trait object dispatch.
-#[allow(dead_code)]
 fn prune_old_tool_outputs(messages: &[hydeclaw_types::Message], keep_turns: usize) -> Vec<hydeclaw_types::Message> {
     let user_indices: Vec<usize> = messages
         .iter()

@@ -367,7 +367,7 @@ pub fn resolve_chat_url(provider_type: &str, base_url: &str) -> String {
 }
 
 /// Default base URL for a provider type (from `PROVIDER_TYPES`).
-#[allow(dead_code)]
+#[allow(dead_code)] // Public API surface — kept for stability across plugin boundaries.
 pub fn default_base_url_for_type(provider_type: &str) -> &'static str {
     PROVIDER_TYPES.iter()
         .find(|pt| pt.id == provider_type)

@@ -21,7 +21,6 @@ pub enum ApprovalError {
 }
 
 #[derive(Debug, FromRow, Clone)]
-#[allow(dead_code)]
 pub struct PendingApproval {
     pub id: Uuid,
     pub agent_id: String,

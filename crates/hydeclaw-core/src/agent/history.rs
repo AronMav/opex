@@ -12,7 +12,6 @@ this summary; they were already addressed. Your current task is identified in th
 section — resume exactly from there. Respond ONLY to the latest user message that appears AFTER \
 this summary.";
 
-#[allow(dead_code)]
 const SUMMARY_NOTE_FOR_SYSTEM: &str = "[Note: Some earlier conversation turns have been compacted \
 into a handoff summary to preserve context space. Build on that summary rather than re-doing work.]";
 

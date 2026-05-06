@@ -275,7 +275,6 @@ impl MetricsRegistry {
 
     /// Read current count for a specific directive (0 if absent).
     /// Test-facing accessor (used by `integration_csp_report.rs`).
-    #[allow(dead_code)]
     pub fn csp_violations_total_count(&self, directive: &str) -> u64 {
         let read = self
             .csp_violations_total
@@ -288,7 +287,6 @@ impl MetricsRegistry {
 
     /// Number of distinct directives currently stored (useful for cap tests).
     /// Test-facing accessor.
-    #[allow(dead_code)]
     pub fn csp_violations_map_len(&self) -> usize {
         let read = self
             .csp_violations_total
@@ -298,7 +296,6 @@ impl MetricsRegistry {
     }
 
     /// Snapshot all stored directive keys (test-facing; allocates a Vec).
-    #[allow(dead_code)]
     pub fn csp_violations_keys_snapshot(&self) -> Vec<String> {
         let read = self
             .csp_violations_total

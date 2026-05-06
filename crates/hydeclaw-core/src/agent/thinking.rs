@@ -1,34 +1,7 @@
 //! Thinking block handling — stripping `<think>`, `<thinking>`, `<thought>`, `<antthinking>`
 //! tags from LLM responses and streaming chunks.
 
-use hydeclaw_types::{IncomingMessage, Message, MessageRole};
-
-/// Check if thinking blocks should be stripped for this message.
-/// Returns false (don't strip) when /think directive is present in context.
-#[allow(dead_code)]
-pub(crate) fn should_strip_thinking(msg: &IncomingMessage) -> bool {
-    !msg.context
-        .get("directives")
-        .and_then(|d| d.get("think"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-}
-
-/// Conditionally strip thinking blocks based on message directives and engine thinking level.
-/// Level 0: always strip. Level 1-2: strip (summary TBD). Level 3+: preserve.
-#[allow(dead_code)]
-pub(crate) fn maybe_strip_thinking(text: &str, msg: &IncomingMessage, thinking_level: u8) -> String {
-    // Per-message /think directive overrides engine level
-    if !should_strip_thinking(msg) {
-        return text.to_string();
-    }
-    if thinking_level >= 3 {
-        // Level 3+ — preserve thinking blocks
-        text.to_string()
-    } else {
-        strip_thinking(text)
-    }
-}
+use hydeclaw_types::{Message, MessageRole};
 
 /// Remove `<think>...</think>` (and `<thinking>`, `<thought>`, `<antthinking>`) blocks
 /// from LLM response. Uses ASCII case-insensitive search to avoid byte offset mismatches.

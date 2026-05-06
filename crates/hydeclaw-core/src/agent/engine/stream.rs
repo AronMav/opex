@@ -22,7 +22,8 @@ pub use crate::agent::stream_event::StreamEvent;
 
 /// Status phases emitted during message processing.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // CallingTool/Composing are part of the wire enum;
+                    // emitted via channel adapters that build them outside this crate.
 pub enum ProcessingPhase {
     Thinking,
     CallingTool(String),
