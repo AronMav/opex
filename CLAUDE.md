@@ -112,7 +112,15 @@ Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/p
 Axum HTTP API on port 18789. **Sub-router pattern:** 27 handler modules each export `pub(crate) fn routes() -> Router<AppState>`; `mod.rs` composes them via `.merge()`. Key handlers:
 
 - `agents.rs` — CRUD for agent configs; sorts base agents first
-- `chat.rs` — SSE streaming chat endpoint; converts `StreamEvent` to JSON events; bounded channels (256/512) with backpressure
+- `chat/` — SSE streaming chat split by route family. `chat/mod.rs` (`routes()` only) merges:
+  - `openai_compat.rs` — `/v1/chat/completions`
+  - `models.rs` — `/v1/models`
+  - `embeddings.rs` — `/v1/embeddings`
+  - `sse.rs` — `/api/chat` (request parse + spawn)
+  - `sse_converter.rs` — `StreamEvent` → SSE-JSON converter loop (AUDIT:SSE-01/02/03 invariants)
+  - `resume.rs` — `/api/chat/{id}/stream` resume + replay
+  - `streaming_db.rs` — `StreamingMessageGuard` + `upsert_streaming_append` etc.
+  - `misc.rs` — `/health`, `/api/mcp/callback`, `/api/chat/{id}/abort`, model-override
 - `sessions.rs` — session CRUD + fork endpoint (`POST /api/sessions/{id}/fork`) + active-path endpoint
 - `services.rs` — managed native processes (channels, toolgate) + Docker container management (MCP, browser-renderer)
 - `state.rs: agent_names()` / `agent_summaries()` — return agents sorted base-first then alphabetical
@@ -121,7 +129,7 @@ Axum HTTP API on port 18789. **Sub-router pattern:** 27 handler modules each exp
 
 ### Tools (`src/tools/`)
 
-**System tools:** hardcoded in `engine.rs` (memory, workspace_write, workspace_edit, code_exec, agent, etc.). Tool policy `deny` list applies to ALL tools including core system tools — deny is checked first, before the core tools allowlist.
+**System tools:** registered in `agent/tool_registry.rs` (memory, workspace_write, workspace_edit, code_exec, agent, etc.). Tool policy `deny` list applies to ALL tools including core system tools — deny is checked first, before the core tools allowlist.
 
 **YAML tools:** `workspace/tools/*.yaml` — define HTTP API calls with optional response transforms:
 - `response_transform: "$.path.to.field"` (JSONPath) — extracts from JSON response
@@ -443,7 +451,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 ## Naming Patterns
 - React components: PascalCase (e.g., `AgentEditDialog.tsx`, `LanguageToggle.tsx`)
 - Utilities and hooks: camelCase (e.g., `api.ts`, `queries.ts`, `chat-store.ts`)
-- Rust modules: snake_case (e.g., `engine.rs`, `json_repair.rs`, `cli_backend.rs`)
+- Rust modules: snake_case (e.g., `json_repair.rs`, `cli_backend.rs`, `tool_registry.rs`)
 - TypeScript stores: camelCase with `-store` suffix (e.g., `chat-store.ts`, `auth-store.ts`, `language-store.ts`)
 - Rust: snake_case for all functions (e.g., `parse_json_valid_result`, `strip_markdown_fences`, `repair_json`)
 - TypeScript: camelCase for all functions (e.g., `buildEnvConfig`, `wsToHttp`, `getToken`, `handleUnauthorized`)
@@ -488,7 +496,10 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Used selectively in Rust for public APIs
 - Not heavily used in TypeScript (types are preferred for documentation)
 ## Function Design
-- `engine.rs` is 127KB with many `pub async fn` methods
+- After the engine refactor (Phase 38+) the engine god-object was decomposed.
+  `engine/mod.rs` is now ~600 LoC; tool execution lives in
+  `agent/tool_executor.rs`, context building in `agent/context_builder.rs`,
+  and the LLM-loop body in `agent/pipeline/execute.rs`.
 - Smaller utility functions tend to be under 50 lines
 - Use named parameters; avoid positional arguments when more than 3
 - Async functions take `&self` for methods or explicit parameters
@@ -542,13 +553,13 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Used by: All external clients (web UI, OpenAI-compatible APIs, channel adapters, webhooks)
 - Purpose: Main request handler - calls LLM, parses tool calls, executes tools, streams results
 - Location: `crates/hydeclaw-core/src/agent/`
-- Contains: `engine.rs` (~127KB main loop), provider implementations (OpenAI, Anthropic, Google, HTTP), tool execution, workspace reading, memory augmentation
+- Contains: `engine/` (entry adapters + dispatch, ~600 LoC mod.rs), `pipeline/` (bootstrap/execute/finalize + behaviour layers), `providers/` (LlmProvider trait + 4 impls + factory + routing + http util), tool execution, workspace reading, memory augmentation
 - Depends on: LLM providers, tools, workspace, memory, secrets, database
 - Used by: Gateway handlers (chat, channel, webhooks)
 - Purpose: Execute user-requested operations (workspace edit, web search, code execution, custom HTTP calls)
 - Location: `crates/hydeclaw-core/src/tools/`
 - Contains: YAML tool loader, HTTP client wrappers, SSRF protection, embedding service client
-- System tools: hardcoded in `engine.rs` (memory_write, workspace_write, workspace_edit, code_exec, agent, browser_action, etc.)
+- System tools: registered via `agent/tool_registry.rs` SystemToolRegistry (memory_write, workspace_write, workspace_edit, code_exec, agent, browser_action, etc.)
 - YAML tools: loaded from `workspace/tools/*.yaml`, define HTTP API calls with response transforms
 - Depends on: Workspace, memory, HTTP client, docker sandbox
 - Used by: Agent engine tool execution loop
@@ -609,11 +620,11 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Channel credentials: Stored in secrets vault under `CHANNEL_CREDENTIALS` (not in agent_channels config column).
 ## Key Abstractions
 - Purpose: Abstract LLM backends so engine doesn't care if it's OpenAI, Anthropic, Google, or custom HTTP
-- Examples: `crates/hydeclaw-core/src/agent/providers.rs`, `providers_openai.rs`, `providers_anthropic.rs`, `providers_google.rs`
-- Pattern: Implement `async fn call_model()` returning token stream. Engine calls repeatedly in tool loop.
+- Examples: `crates/hydeclaw-core/src/agent/providers/{mod,openai,anthropic,google,claude_cli,http,factory,routing,registry}.rs`
+- Pattern: Implement `chat()` / `chat_stream()` from the `LlmProvider` trait. Engine calls repeatedly in the LLM-loop (`pipeline::execute`).
 - Purpose: Unified representation of all events emitted during message processing (text, tool call, file, error, etc.)
 - Examples: `TextDelta("hello")`, `ToolCallStart { id, name }`, `File { url, media_type }`, `Finish { reason }`
-- Marshalled to SSE JSON format in `gateway/handlers/chat.rs` for Vercel AI SDK v3 compatibility
+- Marshalled to SSE JSON format in `gateway/handlers/chat/sse_converter.rs` for Vercel AI SDK v3 compatibility
 - Purpose: Declarative tool definition loaded from YAML - HTTP method, URL template, auth, response transform
 - Examples: `workspace/tools/searxng_search.yaml`, `workspace/tools/github_api.yaml`
 - Pattern: Load at startup, cache in engine, parse on execution, render auth + body from Jinja2-like templates
