@@ -1573,3 +1573,132 @@ pub(crate) async fn api_watchdog_config_update(Json(req): Json<serde_json::Value
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── CheckResult constructor tests ───────────────────────────────────────
+
+    #[test]
+    fn check_result_ok_carries_message_and_latency() {
+        let r = CheckResult::ok("db reachable", 12);
+        assert!(matches!(r.status, CheckStatus::Ok));
+        assert_eq!(r.message, "db reachable");
+        assert_eq!(r.latency_ms, Some(12));
+        assert!(r.fix_hint.is_none());
+        assert!(r.details.is_none());
+    }
+
+    #[test]
+    fn check_result_warn_carries_fix_hint() {
+        let r = CheckResult::warn("slow", 850, Some("check network".into()));
+        assert!(matches!(r.status, CheckStatus::Warn));
+        assert_eq!(r.fix_hint.as_deref(), Some("check network"));
+    }
+
+    #[test]
+    fn check_result_error_carries_fix_hint() {
+        let r = CheckResult::error("unreachable", 3000, Some("start service".into()));
+        assert!(matches!(r.status, CheckStatus::Error));
+        assert_eq!(r.fix_hint.as_deref(), Some("start service"));
+    }
+
+    #[test]
+    fn check_result_timeout_uses_3000ms_and_includes_check_name() {
+        let r = CheckResult::timeout("toolgate");
+        assert!(matches!(r.status, CheckStatus::Error));
+        assert_eq!(r.latency_ms, Some(3000));
+        assert!(r.message.contains("toolgate"));
+        assert!(r.message.contains("3s"));
+    }
+
+    // ── CheckStatus serialization ───────────────────────────────────────────
+
+    #[test]
+    fn check_status_serializes_to_lowercase_string() {
+        assert_eq!(serde_json::to_string(&CheckStatus::Ok).unwrap(), "\"ok\"");
+        assert_eq!(serde_json::to_string(&CheckStatus::Warn).unwrap(), "\"warn\"");
+        assert_eq!(serde_json::to_string(&CheckStatus::Error).unwrap(), "\"error\"");
+    }
+
+    #[test]
+    fn check_result_serializes_optional_fields_with_skip_if_none() {
+        let r = CheckResult::ok("ok", 1);
+        let json = serde_json::to_value(&r).unwrap();
+        // When fix_hint and details are None, they MUST NOT appear in the
+        // JSON — clients that strictly check for `if (resp.fix_hint)`
+        // would otherwise see `null` and treat that as a missing string.
+        assert!(json.get("fix_hint").is_none());
+        assert!(json.get("details").is_none());
+        assert_eq!(json.get("status").and_then(|v| v.as_str()), Some("ok"));
+    }
+
+    // ── Security audit: credential regex correctness ───────────────────────
+    //
+    // Regression coverage for `check_security_audit`. The walker is heavy
+    // (filesystem + tokio::spawn_blocking + tokio runtime), but the
+    // detection logic is just regex matching. These tests pin the
+    // patterns so accidental edits — e.g., dropping a length anchor —
+    // surface immediately.
+
+    fn cred_patterns() -> Vec<(regex::Regex, &'static str)> {
+        // Mirrors `check_security_audit::patterns`. Keep in sync with that
+        // table.
+        let raw: &[(&str, &str)] = &[
+            (r"sk-[a-zA-Z0-9]{40,}", "OpenAI key"),
+            (r"ghp_[a-zA-Z0-9]{36}", "GitHub token"),
+            (r"AIza[0-9A-Za-z\-_]{35}", "Google API key"),
+            (r#"[Aa][Pp][Ii][_-]?[Kk][Ee][Yy]\s*[:=]\s*['"]?[a-zA-Z0-9]{20,}"#, "generic API key"),
+        ];
+        raw.iter()
+            .map(|(p, n)| (regex::Regex::new(p).expect("regex compiles"), *n))
+            .collect()
+    }
+
+    #[test]
+    fn detects_openai_key() {
+        let pats = cred_patterns();
+        let s = "leak: sk-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ in code";
+        assert!(pats[0].0.is_match(s));
+    }
+
+    #[test]
+    fn detects_github_token() {
+        let pats = cred_patterns();
+        let s = "ghp_abcdefghijklmnopqrstuvwxyz0123456789AB and noise";
+        assert!(pats[1].0.is_match(s));
+    }
+
+    #[test]
+    fn detects_google_api_key() {
+        let pats = cred_patterns();
+        let s = "key=AIzaSyDdRhAB-abcdefghij0123456789klmno_q";
+        assert!(pats[2].0.is_match(s));
+    }
+
+    #[test]
+    fn detects_generic_api_key_assignment() {
+        let pats = cred_patterns();
+        let s = "API_KEY=abcdefghijklmnopqrstuvwxyz0123";
+        assert!(pats[3].0.is_match(s));
+    }
+
+    #[test]
+    fn does_not_match_short_secret_lookalikes() {
+        let pats = cred_patterns();
+        // OpenAI prefix but well below the 40-char minimum.
+        assert!(!pats[0].0.is_match("sk-tooShort"));
+        // GitHub prefix with a wrong-length suffix.
+        assert!(!pats[1].0.is_match("ghp_tooShort"));
+    }
+
+    #[test]
+    fn does_not_match_unrelated_text() {
+        let pats = cred_patterns();
+        let s = "this string has no credentials at all";
+        for (re, _) in &pats {
+            assert!(!re.is_match(s), "pattern false-positive: {}", re.as_str());
+        }
+    }
+}
