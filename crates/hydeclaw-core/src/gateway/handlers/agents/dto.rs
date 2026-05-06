@@ -23,6 +23,7 @@ impl AgentDetailDto {
             provider_connection: a.provider_connection.clone(),
             fallback_provider: a.fallback_provider.clone(),
             tts_provider: a.tts_provider.clone(),
+            imagegen_provider: a.imagegen_provider.clone(),
             temperature: a.temperature,
             max_tokens: a.max_tokens,
             access: a.access.as_ref().map(|ac| AgentDetailAccessDto {

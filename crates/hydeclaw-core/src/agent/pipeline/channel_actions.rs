@@ -104,15 +104,18 @@ pub async fn send_channel_message(
     Ok(())
 }
 
-/// Execute a system YAML tool that has a channel_action (e.g. TTS -> send_voice, screenshot -> send_photo).
-/// Dispatches a `BackgroundTtsTask` so slow synthesis (e.g. Qwen3-TTS on Pi) cannot
-/// block or time out the active SSE session.
+/// Execute a system YAML tool that has a channel_action (e.g. TTS -> send_voice,
+/// generate_image -> send_photo, future video generators -> send_video).
+/// Dispatches a `BackgroundMediaTask` so slow synthesis / generation (Qwen3-TTS,
+/// FLUX, etc. on Pi) cannot block or time out the active SSE session. Returns
+/// the LLM-facing system instruction; the actual media is delivered out-of-band.
 pub async fn execute_yaml_channel_action(
     ctx: &CommandContext<'_>,
     tool: &crate::tools::yaml_tools::YamlToolDef,
     args: &serde_json::Value,
     ca: &crate::tools::yaml_tools::ChannelActionConfig,
 ) -> String {
-    let task = crate::agent::pipeline::tts_background::BackgroundTtsTask::from_ctx(ctx, tool, args, ca);
-    task.spawn().to_string()
+    let task =
+        crate::agent::pipeline::media_background::BackgroundMediaTask::from_ctx(ctx, tool, args, ca);
+    task.spawn()
 }

@@ -162,6 +162,7 @@ pub struct AgentDetailDto {
     pub provider_connection: Option<String>,
     pub fallback_provider: Option<String>,
     pub tts_provider: Option<String>,
+    pub imagegen_provider: Option<String>,
     pub temperature: f64,
     pub max_tokens: Option<u32>,
     pub access: Option<AgentDetailAccessDto>,

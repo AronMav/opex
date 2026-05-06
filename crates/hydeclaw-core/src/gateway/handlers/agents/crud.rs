@@ -17,6 +17,30 @@ use super::lifecycle::start_agent_from_config;
 
 include!("approvals_dto_structs.rs");
 
+// ── Field merge helpers ─────────────────────────────────────────────────────
+
+/// Merge a clearable optional-string field with the existing config value.
+///
+/// Used by the PUT /api/agents/{name} round-trip for fields where the UI sends
+/// `Some("")` as a "clear this" signal:
+/// - `payload = None`     → preserve the existing value
+/// - `payload = Some("")` → explicit clear (return `None`)
+/// - `payload = Some(v)`  → take the new value
+///
+/// Without this helper, each callsite (fallback_provider, tts_provider,
+/// imagegen_provider, …) duplicates a `match payload.as_deref()` block; one
+/// regression in any of them silently changes UI save semantics.
+pub(super) fn merge_clearable_string(
+    payload: Option<String>,
+    existing: Option<&str>,
+) -> Option<String> {
+    match payload.as_deref() {
+        None => existing.map(String::from),
+        Some("") => None,
+        Some(_) => payload,
+    }
+}
+
 // ── Agent list ──────────────────────────────────────────
 
 pub(crate) async fn api_agents(State(agents): State<AgentCore>) -> Json<Value> {
@@ -403,16 +427,12 @@ pub(crate) async fn api_update_agent(
         }
         if payload.icon.is_none() { payload.icon = a.icon.clone(); }
         if payload.provider_connection.is_none() { payload.provider_connection = a.provider_connection.clone(); }
-        match payload.fallback_provider.as_deref() {
-            None => payload.fallback_provider = a.fallback_provider.clone(),
-            Some("") => payload.fallback_provider = None,
-            Some(_) => {}
-        }
-        match payload.tts_provider.as_deref() {
-            None => payload.tts_provider = a.tts_provider.clone(),
-            Some("") => payload.tts_provider = None,
-            Some(_) => {}
-        }
+        payload.fallback_provider =
+            merge_clearable_string(payload.fallback_provider.take(), a.fallback_provider.as_deref());
+        payload.tts_provider =
+            merge_clearable_string(payload.tts_provider.take(), a.tts_provider.as_deref());
+        payload.imagegen_provider =
+            merge_clearable_string(payload.imagegen_provider.take(), a.imagegen_provider.as_deref());
         if payload.approval.is_none() {
             payload.approval = Some(a.approval.as_ref().map(|ap| ApprovalPayload {
                 enabled: Some(ap.enabled),
@@ -963,6 +983,64 @@ pub(crate) async fn api_agent_tasks(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
+    // ── merge_clearable_string ──────────────────────────────────────────────
+    //
+    // Drives the PUT /api/agents/{name} round-trip semantics for fallback_provider,
+    // tts_provider, and imagegen_provider:
+    //   None       — payload field absent → keep existing value
+    //   Some("")   — explicit clear from UI → set to None
+    //   Some(val)  — update to the new non-empty value
+    //
+    // Without these tests, regressing the match arms (e.g. swapping `None` and
+    // `Some("")` semantics) would silently change existing-field preservation
+    // on UI saves.
+
+    use super::merge_clearable_string;
+
+    #[test]
+    fn merge_clearable_none_payload_preserves_existing_some() {
+        assert_eq!(
+            merge_clearable_string(None, Some("nova-cloud")),
+            Some("nova-cloud".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_clearable_none_payload_preserves_existing_none() {
+        assert_eq!(merge_clearable_string(None, None), None);
+    }
+
+    #[test]
+    fn merge_clearable_empty_payload_clears_even_with_existing() {
+        // `Some("")` is the UI's "clear this field" signal — must not keep existing.
+        assert_eq!(
+            merge_clearable_string(Some(String::new()), Some("nova-cloud")),
+            None
+        );
+    }
+
+    #[test]
+    fn merge_clearable_empty_payload_with_no_existing_returns_none() {
+        assert_eq!(merge_clearable_string(Some(String::new()), None), None);
+    }
+
+    #[test]
+    fn merge_clearable_value_payload_overrides_existing() {
+        assert_eq!(
+            merge_clearable_string(Some("flux-pro".to_string()), Some("nova-cloud")),
+            Some("flux-pro".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_clearable_value_payload_with_no_existing_uses_payload() {
+        assert_eq!(
+            merge_clearable_string(Some("flux-pro".to_string()), None),
+            Some("flux-pro".to_string())
+        );
+    }
+
 
     /// Per D-09: Simulated failure mid-rename should leave DB in pre-rename state.
     /// In production, sqlx Transaction provides this guarantee via DROP (implicit rollback).
