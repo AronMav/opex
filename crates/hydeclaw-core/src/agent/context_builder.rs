@@ -122,6 +122,42 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
         query: &str,
         k: usize,
     ) -> Vec<ToolDefinition>;
+
+    // Dispatcher-related accessors below are unused until Tasks 16-18 wire
+    // them into `DefaultContextBuilder::build`. `#[allow(dead_code)]` is
+    // required while the methods are pure plumbing — clippy `-D warnings`
+    // raises dead_code on the trait declaration when no caller exists.
+    /// Whether the dispatcher is enabled for this agent.
+    #[allow(dead_code)]
+    fn agent_tool_dispatcher_enabled(&self) -> bool;
+
+    /// Names the operator wants kept in the per-turn core array regardless
+    /// of dispatcher partition. Subject to deny + base + existence filters
+    /// at apply time.
+    #[allow(dead_code)]
+    fn agent_core_extra(&self) -> &[String];
+
+    /// Cap on number of auto-promoted tools per session.
+    #[allow(dead_code)]
+    fn agent_promotion_max(&self) -> u32;
+
+    /// Read-only handle to per-session dispatcher state. None when no session
+    /// is bound (subagent / cron paths in some configurations).
+    #[allow(dead_code)]
+    fn session_tool_state(
+        &self,
+        session_id: uuid::Uuid,
+    ) -> Option<std::sync::Arc<crate::agent::dispatcher::SessionToolState>>;
+
+    /// Agent's tool-policy deny list (consumed by trigger-hint logic and
+    /// extension-list assembly). Returns `&[]` when no policy is set.
+    #[allow(dead_code)]
+    fn cfg_deny_list(&self) -> &[String];
+
+    /// Optional MCP registry for tool discovery (consumed by extension-list
+    /// build). Returns `None` when MCP is not configured for this agent.
+    #[allow(dead_code)]
+    fn mcp_registry(&self) -> Option<&crate::mcp::McpRegistry>;
 }
 
 // ── DefaultContextBuilder ─────────────────────────────────────────────────────
