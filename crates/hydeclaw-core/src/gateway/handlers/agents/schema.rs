@@ -75,6 +75,8 @@ pub(crate) struct AgentCreatePayload {
     #[serde(default, deserialize_with = "nullable")]
     pub tool_loop: Option<Option<ToolLoopPayload>>,
     #[serde(default, deserialize_with = "nullable")]
+    pub tool_dispatcher: Option<Option<ToolDispatcherPayload>>,
+    #[serde(default, deserialize_with = "nullable")]
     pub watchdog: Option<Option<WatchdogPayload>>,
     #[serde(default, deserialize_with = "nullable")]
     pub hooks: Option<Option<HooksPayload>>,
@@ -171,6 +173,13 @@ pub(crate) struct ToolLoopPayload {
     pub max_loop_nudges: Option<usize>,
     pub ngram_cycle_length: Option<usize>,
     pub error_break_threshold: Option<usize>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ToolDispatcherPayload {
+    pub enabled: Option<bool>,
+    pub core_extra: Option<Vec<String>>,
+    pub promotion_max: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -277,7 +286,11 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
             // Default 3 matches the `#[serde(default)]` on AgentSettings.
             max_failover_attempts: p.max_failover_attempts.unwrap_or(3),
             base: false,
-            tool_dispatcher: ToolDispatcherConfig::default(),
+            tool_dispatcher: p.tool_dispatcher.flatten().map(|td| ToolDispatcherConfig {
+                enabled: td.enabled.unwrap_or(false),
+                core_extra: td.core_extra.unwrap_or_default(),
+                promotion_max: td.promotion_max.unwrap_or(8),
+            }).unwrap_or_default(),
         },
     }
 }
@@ -361,6 +374,7 @@ mod tests {
             icon: None,
             approval: None,
             tool_loop: None,
+            tool_dispatcher: None,
             watchdog: None,
             hooks: None,
             max_history_messages: None,

@@ -66,6 +66,11 @@ expression: dto
     "max_loop_nudges": 2,
     "ngram_cycle_length": 4
   },
+  "tool_dispatcher": {
+    "enabled": false,
+    "core_extra": [],
+    "promotion_max": 8
+  },
   "approval": {
     "enabled": true,
     "require_for": [

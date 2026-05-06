@@ -22,6 +22,11 @@ expression: dto
   "icon": null,
   "max_tools_in_context": null,
   "tool_loop": null,
+  "tool_dispatcher": {
+    "enabled": false,
+    "core_extra": [],
+    "promotion_max": 8
+  },
   "approval": null,
   "routing": [],
   "watchdog": null,

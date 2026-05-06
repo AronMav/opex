@@ -77,6 +77,11 @@ impl AgentDetailDto {
                 max_loop_nudges: tl.max_loop_nudges,
                 ngram_cycle_length: tl.ngram_cycle_length,
             }),
+            tool_dispatcher: Some(AgentDetailToolDispatcherDto {
+                enabled: a.tool_dispatcher.enabled,
+                core_extra: a.tool_dispatcher.core_extra.clone(),
+                promotion_max: a.tool_dispatcher.promotion_max,
+            }),
             approval: a.approval.as_ref().map(|ap| AgentDetailApprovalDto {
                 enabled: ap.enabled,
                 require_for: ap.require_for.clone(),
