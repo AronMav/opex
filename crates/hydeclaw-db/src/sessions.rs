@@ -47,6 +47,72 @@ pub struct Session {
     pub end_reason: Option<String>,
 }
 
+/// Resolve `(user_id, channel)` lookup keys based on the agent's DM scope.
+///
+/// Pure function — used by `get_or_create_session`, `resolve_active_dm_session`,
+/// and the channel WS dispatcher (`SessionKey`) so all three derive the same
+/// logical session identifier.
+///
+/// - `"per-channel-peer"` (default): `(user_id, channel)` — distinct sessions
+///   per chat platform for the same user.
+/// - `"shared"` / `"per-peer"`: `(user_id, "*")` — single cross-channel DM.
+/// - `"per-chat"`: `("*", channel)` — group-chat sessions keyed only on
+///   channel.
+/// - Any other value falls back to `per-channel-peer` (matches the legacy
+///   wildcard arm in `get_or_create_session`).
+pub fn dm_scope_keys<'a>(
+    user_id: &'a str,
+    channel: &'a str,
+    dm_scope: &str,
+) -> (&'a str, &'a str) {
+    match dm_scope {
+        "shared" | "per-peer" => (user_id, "*"),
+        "per-chat" => ("*", channel),
+        _ => (user_id, channel),
+    }
+}
+
+/// Look up the most recent active DM session for `(agent, user, channel)`
+/// after applying `dm_scope`, or `None` if none qualifies.
+///
+/// "Active" means `last_message_at > now() - 4h` AND `run_status` is one of
+/// `{NULL, 'running', 'done'}`. Sessions in soft-terminal states
+/// (`'failed'`, `'interrupted'`, `'timeout'`, `'cancelled'`) are excluded —
+/// their context is potentially polluted, and silently picking up a
+/// poisoned conversation surprises users.
+///
+/// Returns `(session_id, parsed_run_status)`. The status is parsed via
+/// `SessionStatus::parse` so callers can hand it to `ReentryMode::classify`.
+///
+/// Read-only — no writes, no transactions, no advisory locks. Use
+/// `get_or_create_session` when you need create-on-miss semantics.
+pub async fn resolve_active_dm_session(
+    db: &PgPool,
+    agent_id: &str,
+    user_id: &str,
+    channel: &str,
+    dm_scope: &str,
+) -> Result<Option<(Uuid, Option<SessionStatus>)>> {
+    let (eff_user, eff_channel) = dm_scope_keys(user_id, channel, dm_scope);
+    let row: Option<(Uuid, Option<String>)> = sqlx::query_as(
+        "SELECT id, run_status FROM sessions \
+         WHERE agent_id = $1 AND user_id = $2 AND channel = $3 \
+           AND last_message_at > now() - interval '4 hours' \
+           AND (run_status IS NULL OR run_status IN ('running', 'done')) \
+         ORDER BY last_message_at DESC LIMIT 1",
+    )
+    .bind(agent_id)
+    .bind(eff_user)
+    .bind(eff_channel)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.map(|(id, status_str)| {
+        let status = status_str.as_deref().and_then(SessionStatus::parse);
+        (id, status)
+    }))
+}
+
 /// Find or create a session for the user+agent pair.
 /// Creates a new session if the last message was more than 4 hours ago.
 ///
@@ -61,11 +127,7 @@ pub async fn get_or_create_session(
     channel: &str,
     dm_scope: &str,
 ) -> Result<Uuid> {
-    let (eff_user, eff_channel) = match dm_scope {
-        "shared" | "per-peer" => (user_id, "*"),
-        "per-chat" => ("*", channel),
-        _ => (user_id, channel), // per-channel-peer
-    };
+    let (eff_user, eff_channel) = dm_scope_keys(user_id, channel, dm_scope);
 
     // Advisory lock keyed on (agent_id, user_id, channel) hash prevents concurrent
     // transactions from both inserting when no session exists. The CTE alone is NOT
