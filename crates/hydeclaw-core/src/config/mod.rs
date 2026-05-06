@@ -729,6 +729,9 @@ pub struct AgentSettings {
     /// (re-added after commit c55b039 → 8d33376 regression).
     #[serde(default = "default_max_failover_attempts")]
     pub max_failover_attempts: u32,
+    /// Tool dispatcher configuration — meta-tool for context reduction.
+    #[serde(default)]
+    pub tool_dispatcher: ToolDispatcherConfig,
 }
 
 fn default_max_failover_attempts() -> u32 { 3 }
@@ -910,6 +913,12 @@ pub struct DelegationConfig {
     /// If non-empty, REPLACES SUBAGENT_DENIED_TOOLS entirely. Use with care.
     #[serde(default)]
     pub blocked_tools_override: Vec<String>,
+
+    /// When `Some(true|false)`, overrides parent's tool_dispatcher.enabled
+    /// for subagents spawned by this agent. When `None`, subagent inherits
+    /// parent's setting.
+    #[serde(default)]
+    pub subagent_dispatcher_enabled: Option<bool>,
 }
 
 fn default_max_depth() -> u8 { 1 }
@@ -920,6 +929,7 @@ impl Default for DelegationConfig {
             max_depth: default_max_depth(),
             blocked_tools_extra: Vec::new(),
             blocked_tools_override: Vec::new(),
+            subagent_dispatcher_enabled: None,
         }
     }
 }
@@ -964,6 +974,42 @@ impl DelegationConfig {
         }
 
         errors
+    }
+}
+
+/// Configuration for the tool dispatcher meta-tool (`tool_use`).
+///
+/// Maps to `[agent.tool_dispatcher]` section in agent TOML config. All fields
+/// have defaults — section can be omitted (existing agents preserved).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolDispatcherConfig {
+    /// When true, the agent emits a compact tools array (static core + tool_use)
+    /// and most tools are reachable only via tool_use(action="call", ...).
+    /// Default: false (no behaviour change for existing agents).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Extra tool names always kept in the tools array even when enabled.
+    /// Subject to deny-list and base-only filtering at context-build time.
+    #[serde(default)]
+    pub core_extra: Vec<String>,
+
+    /// Cap on auto-promoted-per-session system extension tools.
+    /// Hardcoded threshold = 2 successful calls; cap at this value prevents
+    /// runaway promotion in long sessions.
+    #[serde(default = "default_promotion_max")]
+    pub promotion_max: u32,
+}
+
+fn default_promotion_max() -> u32 { 8 }
+
+impl Default for ToolDispatcherConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            core_extra: Vec::new(),
+            promotion_max: default_promotion_max(),
+        }
     }
 }
 
@@ -1750,6 +1796,7 @@ model = "m2.5"
                 daily_budget_tokens: 0,
                 max_agent_turns: None,
                 max_failover_attempts: default_max_failover_attempts(),
+                tool_dispatcher: ToolDispatcherConfig::default(),
             },
         };
 
@@ -1825,6 +1872,7 @@ model = "m2.5"
                 daily_budget_tokens: 0,
                 max_agent_turns: None,
                 max_failover_attempts: default_max_failover_attempts(),
+                tool_dispatcher: ToolDispatcherConfig::default(),
             },
         };
 
@@ -2487,6 +2535,7 @@ foo_bar_baz = 42
             max_depth: 0,
             blocked_tools_extra: vec![],
             blocked_tools_override: vec![],
+            subagent_dispatcher_enabled: None,
         };
         let errors = cfg.validate();
         assert!(!errors.is_empty(), "max_depth=0 must be rejected");
@@ -2499,6 +2548,7 @@ foo_bar_baz = 42
             max_depth: 1,
             blocked_tools_extra: vec!["foo".into()],
             blocked_tools_override: vec!["bar".into()],
+            subagent_dispatcher_enabled: None,
         };
         let errors = cfg.validate();
         assert!(!errors.is_empty(), "extra+override combo must be rejected");
@@ -2511,6 +2561,7 @@ foo_bar_baz = 42
             max_depth: 1,
             blocked_tools_extra: vec!["valid_tool".into(), "bad name".into()],
             blocked_tools_override: vec![],
+            subagent_dispatcher_enabled: None,
         };
         let errors = cfg.validate();
         assert!(errors.iter().any(|e| e.contains("invalid tool name")));
@@ -2529,6 +2580,7 @@ foo_bar_baz = 42
             max_depth: 2,
             blocked_tools_extra: vec!["code_exec".into(), "process".into()],
             blocked_tools_override: vec![],
+            subagent_dispatcher_enabled: None,
         };
         assert!(cfg.validate().is_empty());
     }

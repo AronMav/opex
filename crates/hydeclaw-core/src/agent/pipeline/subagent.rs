@@ -666,6 +666,7 @@ mod tests {
             max_depth: 1,
             blocked_tools_extra: vec!["code_exec".into(), "cron".into()], // cron is already in default
             blocked_tools_override: vec![],
+            subagent_dispatcher_enabled: None,
         };
         let denied = compute_denied_tools(&cfg);
         // All default tools must still be present
@@ -687,6 +688,7 @@ mod tests {
             max_depth: 1,
             blocked_tools_extra: vec!["this_should_be_ignored".into()],
             blocked_tools_override: vec!["only_this".into()],
+            subagent_dispatcher_enabled: None,
         };
         let denied = compute_denied_tools(&cfg);
         // Only override entries
@@ -707,6 +709,7 @@ mod tests {
             max_depth: 1,
             blocked_tools_extra: vec!["code_exec".into()],
             blocked_tools_override: vec![],  // empty = fall back to default + extra
+            subagent_dispatcher_enabled: None,
         };
         let denied = compute_denied_tools(&cfg);
         assert!(denied.iter().any(|d| d == "code_exec"));
