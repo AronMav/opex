@@ -2074,6 +2074,80 @@ mod get_or_create_with_mode_tests {
 }
 
 #[cfg(test)]
+mod claim_for_reentry_tests {
+    use super::*;
+    use crate::ReentryMode;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn new_session_transitions_null_to_running(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        let claimed = claim_session_for_reentry(&pool, sid, ReentryMode::NewSession).await.unwrap();
+        assert!(claimed);
+        let s = get_session_run_status(&pool, sid).await.unwrap();
+        assert_eq!(s.as_deref(), Some("running"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn new_turn_transitions_done_to_running(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "done").await.unwrap();
+        let claimed = claim_session_for_reentry(&pool, sid, ReentryMode::NewTurnAfterDone).await.unwrap();
+        assert!(claimed);
+        let s = get_session_run_status(&pool, sid).await.unwrap();
+        assert_eq!(s.as_deref(), Some("running"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resume_running_is_idempotent(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "running").await.unwrap();
+        let claimed = claim_session_for_reentry(&pool, sid, ReentryMode::ResumeRunning).await.unwrap();
+        assert!(claimed);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn explicit_resume_works_from_failed(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "failed").await.unwrap();
+        let claimed = claim_session_for_reentry(&pool, sid, ReentryMode::ExplicitResume).await.unwrap();
+        assert!(claimed, "ExplicitResume must allow failed → running");
+        let s = get_session_run_status(&pool, sid).await.unwrap();
+        assert_eq!(s.as_deref(), Some("running"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn strict_mode_rejects_wrong_prior(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "done").await.unwrap();
+        // NewSession requires NULL prior — done is wrong.
+        let claimed = claim_session_for_reentry(&pool, sid, ReentryMode::NewSession).await.unwrap();
+        assert!(!claimed);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn missing_session_returns_false(pool: sqlx::PgPool) {
+        let claimed = claim_session_for_reentry(&pool, Uuid::new_v4(), ReentryMode::NewTurnAfterDone).await.unwrap();
+        assert!(!claimed);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn retry_recovers_after_status_flip(pool: sqlx::PgPool) {
+        // Scenario: resolve saw 'done', but by the time we claim, status is 'failed'.
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "failed").await.unwrap();
+        // Caller naively passes NewTurnAfterDone (stale resolve result).
+        let claimed = claim_session_with_retry(&pool, sid, ReentryMode::NewTurnAfterDone).await.unwrap();
+        assert!(claimed, "retry with ExplicitResume must succeed");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn retry_returns_false_for_missing(pool: sqlx::PgPool) {
+        let claimed = claim_session_with_retry(&pool, Uuid::new_v4(), ReentryMode::NewSession).await.unwrap();
+        assert!(!claimed);
+    }
+}
+
+#[cfg(test)]
 mod get_session_run_status_tests {
     use super::*;
 
