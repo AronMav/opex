@@ -404,6 +404,51 @@ pub async fn select_top_k_tools_semantic(
     result
 }
 
+/// Variant of `select_top_k_tools_semantic` that does NOT force-include
+/// any tools from a hardcoded ALWAYS_INCLUDE list. For use by callers (e.g.
+/// the dispatcher search handler) where the input is already filtered to
+/// the relevant subset and force-include would starve the embedding-ranking
+/// (returning the same system tools regardless of query).
+pub async fn select_top_k_tools_semantic_no_force(
+    embedder: &dyn crate::memory::EmbeddingService,
+    tool_embed_cache: &crate::tools::embedding::ToolEmbeddingCache,
+    memory_available: bool,
+    candidates: Vec<hydeclaw_types::ToolDefinition>,
+    query: &str,
+    k: usize,
+) -> Vec<hydeclaw_types::ToolDefinition> {
+    if k == 0 || candidates.is_empty() {
+        return Vec::new();
+    }
+
+    if memory_available {
+        match select_by_embedding(embedder, tool_embed_cache, &candidates, query, k).await {
+            Ok(selected) => {
+                tracing::debug!(
+                    total = selected.len(),
+                    k,
+                    method = "embedding-no-force",
+                    "tool search top-K applied"
+                );
+                return selected;
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "embedding unavailable, falling back to keyword scoring");
+            }
+        }
+    }
+
+    // Fallback: keyword scoring across ALL candidates (no ALWAYS_INCLUDE split).
+    let selected = select_top_k_by_keywords(candidates, query, k);
+    tracing::debug!(
+        total = selected.len(),
+        k,
+        method = "keyword-no-force",
+        "tool search top-K applied (fallback)"
+    );
+    selected
+}
+
 /// Keyword-based top-K fallback (original algorithm).
 pub fn select_top_k_by_keywords(
     tools: Vec<hydeclaw_types::ToolDefinition>,
@@ -486,6 +531,81 @@ mod tests {
         // Query matches nothing — all score 0, still returns up to k
         let result = select_top_k_by_keywords(tools, "zzz yyy xxx", 2);
         assert_eq!(result.len(), 2);
+    }
+
+    // ── select_top_k_tools_semantic_no_force ────────────────────────────────
+
+    /// Stub embedder that always returns an error, forcing the
+    /// no_force variant down the keyword-fallback path.
+    struct ErroringEmbedder;
+    #[async_trait::async_trait]
+    impl crate::memory::EmbeddingService for ErroringEmbedder {
+        fn is_available(&self) -> bool { false }
+        fn embed_dim(&self) -> u32 { 0 }
+        fn embed_model_name(&self) -> Option<String> { None }
+        async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+            anyhow::bail!("embedding disabled in test")
+        }
+        async fn embed_batch(&self, _texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+            anyhow::bail!("embedding disabled in test")
+        }
+    }
+
+    #[tokio::test]
+    async fn no_force_ranks_relevant_tool_above_system_tools() {
+        // Verifies the bug fix: with the OLD `select_top_k_tools_semantic`,
+        // `cron`/`session`/`agents_list` are in ALWAYS_INCLUDE and would be
+        // force-returned regardless of query. The no_force variant must
+        // rank by query relevance only.
+        let candidates = vec![
+            make_tool("cron", "schedule recurring jobs"),
+            make_tool("session", "manage sessions"),
+            make_tool("agents_list", "list all agents"),
+            make_tool("github_create_issue", "create a github issue in a repository"),
+            make_tool("slack_send_message", "send a slack message to a channel"),
+        ];
+
+        let embedder = ErroringEmbedder;
+        let cache = crate::tools::embedding::ToolEmbeddingCache::new();
+
+        let result = select_top_k_tools_semantic_no_force(
+            &embedder,
+            &cache,
+            false, // memory_available = false → keyword fallback
+            candidates,
+            "github",
+            5,
+        )
+        .await;
+
+        // github_create_issue must appear (it's the only relevant match).
+        assert!(
+            result.iter().any(|t| t.name == "github_create_issue"),
+            "expected 'github_create_issue' in results, got: {:?}",
+            result.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+        // And it should rank first (only tool with a keyword match).
+        assert_eq!(
+            result[0].name, "github_create_issue",
+            "expected 'github_create_issue' to rank first; got order: {:?}",
+            result.iter().map(|t| &t.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn no_force_returns_empty_when_no_candidates() {
+        let embedder = ErroringEmbedder;
+        let cache = crate::tools::embedding::ToolEmbeddingCache::new();
+        let result = select_top_k_tools_semantic_no_force(
+            &embedder,
+            &cache,
+            false,
+            Vec::new(),
+            "anything",
+            5,
+        )
+        .await;
+        assert!(result.is_empty());
     }
 
     #[test]

@@ -12,6 +12,9 @@ use std::fmt::Write;
 use crate::agent::dispatcher;
 use crate::agent::tool_registry::{SystemToolHandler, ToolDeps};
 
+/// Number of search results returned by `tool_use(action="search")`.
+const SEARCH_TOP_K: usize = 5;
+
 pub struct ToolUseHandler;
 
 #[async_trait]
@@ -76,13 +79,13 @@ async fn handle_search(deps: ToolDeps<'_>, query: &str) -> String {
         return "No matching tools found. Try a different query, or check that the tool you need is not in the deny-list.".to_string();
     }
 
-    let top_k = crate::agent::pipeline::subagent::select_top_k_tools_semantic(
+    let top_k = crate::agent::pipeline::subagent::select_top_k_tools_semantic_no_force(
         deps.embedder,
         deps.tool_embed_cache,
         deps.memory_available,
         candidates,
         query,
-        5,
+        SEARCH_TOP_K,
     ).await;
 
     if top_k.is_empty() {
