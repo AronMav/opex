@@ -18,6 +18,10 @@ pub struct SessionToolState {
     /// Cached `describe()` rendered output, keyed by tool name.
     pub describe_cache: RwLock<HashMap<String, String>>,
     /// Number of successful calls per extension tool name in this session.
+    // allow(dead_code): consumed by a later dispatcher task (call-count
+    // tracking and promotion threshold). Landed early alongside the rest of
+    // the per-session state.
+    #[allow(dead_code)]
     pub call_counts: RwLock<HashMap<String, u32>>,
     /// System extension tools promoted to per-session core after threshold.
     pub promoted: RwLock<HashSet<String>>,

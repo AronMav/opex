@@ -7,6 +7,7 @@ use tokio::sync::broadcast;
 
 use crate::agent::agent_config::AgentConfig;
 use crate::agent::agent_state::AgentState;
+use crate::agent::context_builder::ContextBuilderDeps;
 use crate::agent::memory_service::MemoryService;
 use crate::agent::session_agent_pool::SessionPoolsMap;
 use crate::agent::tool_executor::DefaultToolExecutor;
@@ -45,14 +46,46 @@ pub struct ToolDeps<'a> {
     pub tex:                 &'a DefaultToolExecutor,
     // Pre-computed (avoids async inside handlers)
     pub available_tools:     &'a HashSet<String>,
+    // ── Dispatcher fields (added in Task 8) ─────────────────────────────────
+    /// Per-session dispatcher state for the current session, if known.
+    /// Lifted via clone of the `Arc` from `cfg.session_tool_state` keyed by
+    /// the session_id passed to `from_engine`.
+    pub session_tool_state:  Option<Arc<crate::agent::dispatcher::SessionToolState>>,
+    /// MCP registry borrowed from the engine's tool executor.
+    pub mcp:                 Option<&'a crate::mcp::McpRegistry>,
+    /// Embedding service used by the dispatcher to rank candidate tools.
+    pub embedder:            &'a dyn crate::memory::EmbeddingService,
+    /// Per-process cache of tool-text → embedding vectors.
+    pub tool_embed_cache:    &'a crate::tools::embedding::ToolEmbeddingCache,
+    /// Whether the memory store backing `embedder` is available
+    /// (controls semantic vs. keyword fallback in `select_top_k_tools_semantic`).
+    pub memory_available:    bool,
+    /// Snapshot of the agent's full internal tool definitions, used by the
+    /// `tool_use` handler to fill in descriptions for system extensions
+    /// (whose entries from `build_extension_tool_list` carry empty descriptions).
+    pub full_internal_tools: Vec<hydeclaw_types::ToolDefinition>,
 }
 
 impl<'a> ToolDeps<'a> {
     pub fn from_engine(
         engine: &'a crate::agent::engine::AgentEngine,
         available: &'a HashSet<String>,
+        session_id: Option<uuid::Uuid>,
     ) -> Self {
         let cfg = engine.cfg();
+
+        // Resolve per-session dispatcher state (if a session_id is known and
+        // the AgentConfig was wired with a session_tool_state map).
+        let session_tool_state = match (session_id, cfg.session_tool_state.as_ref()) {
+            (Some(sid), Some(map)) => {
+                let entry = map
+                    .entry(sid)
+                    .or_insert_with(crate::agent::dispatcher::SessionToolState::new);
+                Some(entry.value().clone())
+            }
+            _ => None,
+        };
+
         Self {
             workspace_dir:       &cfg.workspace_dir,
             agent_name:          &cfg.agent.name,
@@ -80,6 +113,13 @@ impl<'a> ToolDeps<'a> {
             state:               engine.state(),
             tex:                 engine.tex(),
             available_tools:     available,
+            // Dispatcher fields
+            session_tool_state,
+            mcp:                 engine.mcp().as_deref(),
+            embedder:            cfg.embedder.as_ref(),
+            tool_embed_cache:    engine.tool_embed_cache().as_ref(),
+            memory_available:    cfg.memory_store.is_available(),
+            full_internal_tools: engine.internal_tool_definitions(),
         }
     }
 
@@ -108,6 +148,12 @@ impl<'a> ToolDeps<'a> {
             state:               self.state,
             tex:                 self.tex,
             available_tools:     self.available_tools,
+            session_tool_state:  self.session_tool_state.clone(),
+            mcp:                 self.mcp,
+            embedder:            self.embedder,
+            tool_embed_cache:    self.tool_embed_cache,
+            memory_available:    self.memory_available,
+            full_internal_tools: self.full_internal_tools.clone(),
         }
     }
 }

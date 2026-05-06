@@ -8,6 +8,7 @@ mod code;
 mod comms;
 mod secrets_tool;
 mod session;
+mod tool_use;
 
 use workspace::*;
 use memory::*;
@@ -19,6 +20,7 @@ use code::*;
 use comms::*;
 use secrets_tool::*;
 use session::*;
+use tool_use::*;
 
 use crate::agent::tool_registry::SystemToolRegistry;
 
@@ -53,6 +55,7 @@ impl SystemToolRegistry {
         r.register("canvas",           CanvasHandler);
         r.register("rich_card",        RichCardHandler);
         r.register("process",          ProcessHandler);
+        r.register("tool_use",         ToolUseHandler);
         r
     }
 }

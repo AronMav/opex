@@ -151,7 +151,16 @@ impl AgentEngine {
 
             // 1. System tools (registry)
             let available = self.available_tool_names().await;
-            let deps = crate::agent::tool_registry::ToolDeps::from_engine(self, &available);
+            let dispatch_session_id = arguments
+                .get("_context")
+                .and_then(|c| c.get("session_id"))
+                .and_then(|s| s.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok());
+            let deps = crate::agent::tool_registry::ToolDeps::from_engine(
+                self,
+                &available,
+                dispatch_session_id,
+            );
             if let Some(result) = self.tool_registry.dispatch(name, &deps, arguments).await {
                 return result;
             }
