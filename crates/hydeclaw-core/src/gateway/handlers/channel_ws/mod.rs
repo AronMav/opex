@@ -18,6 +18,7 @@ use crate::db::outbound;
 use crate::gateway::clusters::{AgentCore, AuthServices, ChannelBus, ConfigServices, InfraServices, StatusMonitor};
 
 mod types;
+mod writer;
 
 use types::CwsCtx;
 
