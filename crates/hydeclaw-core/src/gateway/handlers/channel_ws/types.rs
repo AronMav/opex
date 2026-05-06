@@ -79,6 +79,13 @@ pub(super) struct InflightMessage {
 /// looks up + aborts on `Cancel`.
 pub(super) type InflightRegistry = Arc<Mutex<HashMap<String, InflightMessage>>>;
 
+/// Concurrent map of in-flight engine-action waiters: `action_id` → oneshot
+/// reply channel. Inserted by the action-forwarder when sending an action
+/// to the adapter, resolved by the reader when `ChannelInbound::ActionResult`
+/// arrives, drained on disconnect (waiters get `Err("disconnected")`).
+pub(super) type PendingActionsMap =
+    Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
