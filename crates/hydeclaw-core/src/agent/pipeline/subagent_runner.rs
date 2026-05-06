@@ -80,8 +80,14 @@ pub async fn run_subagent_with_session(
         formatting_prompt: None,
         channels: vec![],
     };
-    let system_prompt =
-        workspace::build_system_prompt(&ws_prompt, &[], &capabilities, &cfg.agent.language, &runtime);
+    let system_prompt = workspace::build_system_prompt(
+        &ws_prompt,
+        &[],
+        &capabilities,
+        &cfg.agent.language,
+        &runtime,
+        None,
+    );
 
     let mut messages = vec![
         Message {

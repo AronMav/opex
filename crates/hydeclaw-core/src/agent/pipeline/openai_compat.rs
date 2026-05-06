@@ -91,6 +91,7 @@ pub async fn handle_openai(
             &capabilities,
             &cfg.agent.language,
             &runtime,
+            None,
         );
 
         // Skill auto-injection removed -- skills are loaded on-demand via skill_use tool.

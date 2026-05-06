@@ -270,6 +270,7 @@ pub fn build_system_prompt(
     capabilities: &CapabilityFlags,
     language: &str,
     runtime: &RuntimeContext,
+    extension_catalogue: Option<&str>,
 ) -> String {
     let mut prompt = String::with_capacity(4096 + workspace_content.len());
 
@@ -388,6 +389,15 @@ pub fn build_system_prompt(
     // Agent tool: 1-line pointer, full delegation patterns live in the
     // `multi-agent-coordination` skill (already in the catalogue).
     prompt.push_str("- **Agent Tool**: `agent` to delegate and coordinate agents — load `multi-agent-coordination` skill for patterns\n");
+
+    // Extension tools catalogue — only present when the dispatcher is enabled
+    // for this agent. The caller assembles the catalogue body; we just inject
+    // it as a labeled section between Capabilities and Language.
+    if let Some(catalogue) = extension_catalogue {
+        prompt.push_str("\n# Extension Tools (load on demand)\n\n");
+        prompt.push_str(catalogue);
+        prompt.push('\n');
+    }
 
     // Language instruction reinforced at end of prompt — must stay load-bearing.
     prompt.push_str(&format!(
@@ -1129,7 +1139,7 @@ mod tests {
 
     #[test]
     fn prompt_contains_load_bearing_core_rules() {
-        let p = build_system_prompt("", &[], &test_caps(), "ru", &test_runtime());
+        let p = build_system_prompt("", &[], &test_caps(), "ru", &test_runtime(), None);
         assert!(
             p.contains("final message to the user MUST contain text") ||
             p.contains("final message"),
@@ -1147,7 +1157,7 @@ mod tests {
 
     #[test]
     fn prompt_enforces_language_twice() {
-        let p = build_system_prompt("", &[], &test_caps(), "ru", &test_runtime());
+        let p = build_system_prompt("", &[], &test_caps(), "ru", &test_runtime(), None);
         let first = p.find("Russian").expect("language mentioned in Runtime section");
         // The tail-end Language block was trimmed in faf3498 — the "# Language"
         // header + "Respond EXCLUSIVELY in <lang>" sentence is the reinforcement
@@ -1164,7 +1174,7 @@ mod tests {
 
     #[test]
     fn skills_section_does_not_enumerate_individual_skills() {
-        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime());
+        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime(), None);
         // Refactor invariant: skill catalogue is discovered via runtime tool call,
         // NOT enumerated in every prompt. If someone re-adds an enumeration
         // (e.g. "- `web-search` — ..."), this test catches it.
@@ -1185,7 +1195,7 @@ mod tests {
 
     #[test]
     fn agent_tool_section_points_to_skill_no_inline_patterns() {
-        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime());
+        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime(), None);
         // Full parallel-execution pattern (run-then-collect) lives in the
         // multi-agent-coordination skill, not the base prompt.
         assert!(
@@ -1200,7 +1210,7 @@ mod tests {
 
     #[test]
     fn memory_section_is_brief_not_inline_ruleset() {
-        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime());
+        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime(), None);
         // Memory capability must still be announced — agents need to know
         // the tool exists. The detailed categorization/dedup rules live in
         // the memory-management skill, which is discoverable via the always-
@@ -1227,7 +1237,7 @@ mod tests {
         // pointer branch.
         let mut runtime = test_runtime();
         runtime.channel = "telegram".into();
-        let p = build_system_prompt("", &[], &test_caps(), "en", &runtime);
+        let p = build_system_prompt("", &[], &test_caps(), "en", &runtime, None);
         assert!(
             p.contains("channel-formatting"),
             "output section must reference channel-formatting skill when no override on messenger channel"
@@ -1245,7 +1255,7 @@ mod tests {
         // was ~5600 chars. After the 2026-04-18 refactor it should drop under
         // ~4000 chars of fixed content. This guard catches regressions that
         // re-inline the skill catalogue, agent patterns, or memory rules.
-        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime());
+        let p = build_system_prompt("", &[], &test_caps(), "en", &test_runtime(), None);
         assert!(
             p.len() < 4000,
             "base prompt should be <4000 chars after slim refactor; got {} chars",
@@ -1257,7 +1267,7 @@ mod tests {
     fn memory_pointer_absent_when_memory_capability_disabled() {
         let mut caps = test_caps();
         caps.has_memory = false;
-        let p = build_system_prompt("", &[], &caps, "en", &test_runtime());
+        let p = build_system_prompt("", &[], &caps, "en", &test_runtime(), None);
         assert!(
             !p.contains("Memory"),
             "memory line must not appear when has_memory=false"
@@ -1268,7 +1278,7 @@ mod tests {
     fn formatting_prompt_override_replaces_channel_skill_pointer() {
         let mut runtime = test_runtime();
         runtime.formatting_prompt = Some("Telegram MarkdownV2. No HTML.".into());
-        let p = build_system_prompt("", &[], &test_caps(), "en", &runtime);
+        let p = build_system_prompt("", &[], &test_caps(), "en", &runtime, None);
         assert!(
             p.contains("Telegram MarkdownV2"),
             "runtime-provided formatting_prompt must be injected"
