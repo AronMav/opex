@@ -248,7 +248,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "memory".to_string(),
-            description: "Long-term memory: action=search to recall, action=index to save.".to_string(),
+            description: "Long-term memory: action=search/index/get/delete/update/compress. Use pinned=true for permanent facts.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -899,7 +899,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
     if ctx.is_base && !ctx.has_sandbox {
         tools.push(ToolDefinition {
             name: "code_exec".to_string(),
-            description: "Execute bash or Python in a sandboxed container (or directly on host for base agents). Returns stdout/stderr.".to_string(),
+            description: "Execute bash or Python on the host. Full filesystem access; cwd = binary dir. Returns stdout/stderr.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -969,7 +969,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
 pub fn build_sandbox_tool_definitions() -> Vec<ToolDefinition> {
     vec![ToolDefinition {
         name: "code_exec".to_string(),
-        description: "Execute bash or Python in a sandboxed container (or directly on host for base agents). Returns stdout/stderr.".to_string(),
+        description: "Execute bash or Python in an isolated container. Workspace files NOT accessible — pass data via variables. Returns stdout/stderr.".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
