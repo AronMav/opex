@@ -1611,12 +1611,24 @@ pub async fn insert_assistant_partial(
     Ok(id)
 }
 
-/// Append a delivery-mirror record to the most recent DM session for the given
+/// Append a delivery-mirror record to the active DM session for the given
 /// agent + channel + participant.
 ///
+/// Delegates session lookup to `resolve_active_dm_session` so mirrors land
+/// in exactly the session a live Telegram message would land in. This means:
+/// - Soft-terminal sessions (`failed`/`interrupted`/`timeout`/`cancelled`)
+///   are skipped — mirroring into a poisoned session would compound damage.
+/// - Stale sessions older than the 4h horizon are skipped — the cron should
+///   not silently resurrect a closed conversation.
+///
+/// `dm_scope` is hard-coded to `"per-channel-peer"` because callers (cron,
+/// heartbeat) don't have the agent config in scope. Agents using `"shared"`
+/// or `"per-chat"` scopes won't be reached by mirrors — known limitation
+/// inherited from the legacy implementation; tracked separately.
+///
 /// Returns `Ok(true)` if a matching session was found and the record inserted.
-/// Returns `Ok(false)` if no matching DM session exists (group chat, no prior conversation).
-/// Never fails fatally — callers should fire-and-forget via `tokio::spawn`.
+/// Returns `Ok(false)` if no active DM session exists. Never fails fatally —
+/// callers fire-and-forget via `tokio::spawn`.
 pub async fn mirror_to_session(
     db: &PgPool,
     agent_id: &str,
@@ -1624,25 +1636,17 @@ pub async fn mirror_to_session(
     participant_id: &str,
     text: &str,
 ) -> anyhow::Result<bool> {
-    // Find the most recent DM session for this agent+channel+participant.
-    // Excludes per-chat group sessions (user_id = '*').
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM sessions \
-         WHERE agent_id = $1 \
-           AND channel   = $2 \
-           AND user_id   = $3 \
-           AND user_id  != '*' \
-         ORDER BY started_at DESC \
-         LIMIT 1",
+    let resolved = resolve_active_dm_session(
+        db,
+        agent_id,
+        participant_id,
+        channel,
+        "per-channel-peer",
     )
-    .bind(agent_id)
-    .bind(channel)
-    .bind(participant_id)
-    .fetch_optional(db)
     .await?;
 
-    let session_id = match row {
-        Some((id,)) => id,
+    let session_id = match resolved {
+        Some((id, _status)) => id,
         None => return Ok(false),
     };
 
@@ -1861,43 +1865,75 @@ mod tests {
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
     }
 
-    #[tokio::test]
-    async fn mirror_to_session_inserts_when_session_exists() {
-        let url = match std::env::var("DATABASE_URL") { Ok(u) => u, Err(_) => return };
-        let db = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2).connect(&url).await.expect("connect");
-
-        // Create a session with a known user_id (lookup is by user_id, not participants)
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mirror_to_session_inserts_when_session_exists(pool: sqlx::PgPool) {
+        // Create a session with a known user_id (lookup is by user_id).
         let session_id = uuid::Uuid::new_v4();
         let agent_id = format!("test-agent-{}", &session_id.to_string()[..8]);
         sqlx::query(
             "INSERT INTO sessions (id, agent_id, user_id, channel, participants)
              VALUES ($1, $2, '999', 'telegram', ARRAY['999'])"
-        ).bind(session_id).bind(&agent_id).execute(&db).await.expect("insert session");
+        ).bind(session_id).bind(&agent_id).execute(&pool).await.expect("insert session");
 
-        let found = super::mirror_to_session(&db, &agent_id, "telegram", "999", "hello from cron")
+        let found = super::mirror_to_session(&pool, &agent_id, "telegram", "999", "hello from cron")
             .await.expect("mirror_to_session");
         assert!(found, "should return true when session exists");
 
         let (role, content, is_mirror): (String, String, bool) = sqlx::query_as(
             "SELECT role, content, is_mirror FROM messages WHERE session_id = $1 AND is_mirror = true"
-        ).bind(session_id).fetch_one(&db).await.expect("fetch mirror row");
+        ).bind(session_id).fetch_one(&pool).await.expect("fetch mirror row");
 
         assert_eq!(role, "assistant");
         assert_eq!(content, "hello from cron");
         assert!(is_mirror);
     }
 
-    #[tokio::test]
-    async fn mirror_to_session_returns_false_when_no_session() {
-        let url = match std::env::var("DATABASE_URL") { Ok(u) => u, Err(_) => return };
-        let db = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2).connect(&url).await.expect("connect");
-
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mirror_to_session_returns_false_when_no_session(pool: sqlx::PgPool) {
         let found = super::mirror_to_session(
-            &db, "nonexistent-agent", "telegram", "000", "nobody home"
+            &pool, "nonexistent-agent", "telegram", "000", "nobody home"
         ).await.expect("mirror_to_session");
         assert!(!found, "should return false when no matching session");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mirror_targets_same_session_as_get_or_create(pool: sqlx::PgPool) {
+        // get_or_create creates a session for (agent, alice, telegram). A cron
+        // mirror to the same key MUST land in that exact session.
+        let (sid, _) = super::get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await.unwrap();
+
+        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", "hello cron")
+            .await.unwrap();
+        assert!(inserted);
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages WHERE session_id = $1 AND is_mirror = true"
+        ).bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mirror_skips_failed_session(pool: sqlx::PgPool) {
+        let sid = super::create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        super::set_session_run_status(&pool, sid, "failed").await.unwrap();
+
+        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", "hello cron")
+            .await.unwrap();
+        assert!(!inserted, "mirror must not write into a failed session");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mirror_skips_done_older_than_4h(pool: sqlx::PgPool) {
+        let sid = super::create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        super::set_session_run_status(&pool, sid, "done").await.unwrap();
+        // Backdate last_message_at past the 4h horizon.
+        sqlx::query("UPDATE sessions SET last_message_at = now() - interval '5 hours' WHERE id = $1")
+            .bind(sid).execute(&pool).await.unwrap();
+
+        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", "hello cron")
+            .await.unwrap();
+        assert!(!inserted, "mirror must not resurrect a stale session");
     }
 
     #[test]
