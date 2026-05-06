@@ -17,6 +17,10 @@ use super::super::AppState;
 use crate::db::outbound;
 use crate::gateway::clusters::{AgentCore, AuthServices, ChannelBus, ConfigServices, InfraServices, StatusMonitor};
 
+mod types;
+
+use types::CwsCtx;
+
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/ws", get(ws_handler))
@@ -33,19 +37,6 @@ pub(crate) fn ws_json(msg: &impl serde::Serialize) -> WsMessage {
             WsMessage::Text(r#"{"error":"serialization error"}"#.into())
         }
     }
-}
-
-// ── Context bundle for channel WS loop ────────────────────────────────────────
-
-/// All cluster state needed by the channel WS loop. Cheap to clone (all Arc-backed).
-#[derive(Clone)]
-struct CwsCtx {
-    agents:  AgentCore,
-    auth:    AuthServices,
-    bus:     ChannelBus,
-    infra:   InfraServices,
-    status:  StatusMonitor,
-    cfg:     ConfigServices,
 }
 
 // ── Channel Connector WebSocket (external adapters: Telegram, Discord, etc.) ──
