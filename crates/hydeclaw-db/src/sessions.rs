@@ -1821,3 +1821,89 @@ mod tests {
         };
     }
 }
+
+#[cfg(test)]
+mod resolve_active_dm_session_tests {
+    use super::*;
+
+    #[test]
+    fn dm_scope_keys_per_channel_peer() {
+        assert_eq!(
+            dm_scope_keys("alice", "telegram", "per-channel-peer"),
+            ("alice", "telegram"),
+        );
+    }
+
+    #[test]
+    fn dm_scope_keys_shared_strips_channel() {
+        assert_eq!(dm_scope_keys("alice", "telegram", "shared"), ("alice", "*"));
+        assert_eq!(dm_scope_keys("alice", "discord", "per-peer"), ("alice", "*"));
+    }
+
+    #[test]
+    fn dm_scope_keys_per_chat_strips_user() {
+        assert_eq!(dm_scope_keys("alice", "telegram", "per-chat"), ("*", "telegram"));
+    }
+
+    #[test]
+    fn dm_scope_keys_unknown_falls_back_to_per_channel_peer() {
+        assert_eq!(
+            dm_scope_keys("alice", "telegram", "garbage"),
+            ("alice", "telegram"),
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resolve_returns_none_when_no_session(pool: sqlx::PgPool) {
+        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await
+            .unwrap();
+        assert!(got.is_none());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resolve_returns_recent_done_session(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "done").await.unwrap();
+
+        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await
+            .unwrap();
+        assert_eq!(got, Some((sid, Some(SessionStatus::Done))));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resolve_skips_failed_session(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "failed").await.unwrap();
+
+        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await
+            .unwrap();
+        assert!(got.is_none(), "failed sessions must NOT be reused");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resolve_skips_interrupted_timeout_cancelled(pool: sqlx::PgPool) {
+        for status in ["interrupted", "timeout", "cancelled"] {
+            let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+            set_session_run_status(&pool, sid, status).await.unwrap();
+
+            let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+                .await
+                .unwrap();
+            assert!(got.is_none(), "{status} sessions must NOT be reused");
+        }
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resolve_returns_running_session(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "running").await.unwrap();
+
+        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await
+            .unwrap();
+        assert_eq!(got, Some((sid, Some(SessionStatus::Running))));
+    }
+}
