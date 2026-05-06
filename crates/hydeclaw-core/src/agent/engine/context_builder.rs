@@ -398,4 +398,37 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
             k,
         ).await
     }
+
+    fn agent_tool_dispatcher_enabled(&self) -> bool {
+        self.cfg().agent.tool_dispatcher.enabled
+    }
+
+    fn agent_core_extra(&self) -> &[String] {
+        &self.cfg().agent.tool_dispatcher.core_extra
+    }
+
+    fn agent_promotion_max(&self) -> u32 {
+        self.cfg().agent.tool_dispatcher.promotion_max
+    }
+
+    fn session_tool_state(
+        &self,
+        session_id: uuid::Uuid,
+    ) -> Option<std::sync::Arc<crate::agent::dispatcher::SessionToolState>> {
+        let map = self.cfg().session_tool_state.as_ref()?;
+        Some(map.entry(session_id)
+            .or_insert_with(crate::agent::dispatcher::SessionToolState::new)
+            .value()
+            .clone())
+    }
+
+    fn cfg_deny_list(&self) -> &[String] {
+        self.cfg().agent.tools.as_ref()
+            .map(|p| p.deny.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn mcp_registry(&self) -> Option<&crate::mcp::McpRegistry> {
+        self.mcp().as_deref()
+    }
 }
