@@ -101,7 +101,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
     let mut tools = vec![
         ToolDefinition {
             name: "workspace_write".to_string(),
-            description: "Create or overwrite a file in your workspace. Bare filenames go to your agent directory. Paths with '/' are relative to workspace root. Agent-specific: SOUL.md, IDENTITY.md, MEMORY.md, HEARTBEAT.md. Shared (base only): TOOLS.md. Shared: USER.md, AGENTS.md.".to_string(),
+            description: "Create or overwrite a file in your workspace. Bare names go to your agent dir; paths with '/' are relative to workspace root.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -119,7 +119,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "workspace_read".to_string(),
-            description: "Read a file from your workspace. Returns the file contents as text.".to_string(),
+            description: "Read a file from the workspace. Returns full text content.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -133,7 +133,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "workspace_list".to_string(),
-            description: "List files and directories in your workspace. Shows file names and sizes.".to_string(),
+            description: "List files in a workspace directory. Returns names only.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -147,7 +147,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "workspace_edit".to_string(),
-            description: "Edit a file by replacing a text substring. Finds old_text in the file and replaces it with new_text. More precise than workspace_write for small changes.".to_string(),
+            description: "Apply targeted text edits to a workspace file. Specify search/replace pairs.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -201,14 +201,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "agent".to_string(),
-            description: "Talk to a peer agent and get its answer. \
-                'ask' — give the peer a task or follow-up question and wait for the result \
-                (auto-spawns if the peer is idle, continues the dialog if it is alive, \
-                pass fresh=true to reset). \
-                'status' — inspect what peers are doing. \
-                'kill' — free a peer's slot. \
-                For parallel fan-out, emit multiple 'ask' calls in a single tool batch — \
-                the engine runs them concurrently.".to_string(),
+            description: "Coordinate with other agents: action=run/message/status/kill. See multi-agent-coordination skill for patterns.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -236,7 +229,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "web_fetch".to_string(),
-            description: "Fetch a URL and return its text content. Useful for reading web pages, APIs, documentation. Returns plain text (HTML tags stripped for web pages, raw for APIs).".to_string(),
+            description: "Fetch URL content. Returns rendered text (HTML stripped). Cached for 5 min.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -255,7 +248,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "memory".to_string(),
-            description: "Manage long-term memory. Actions: search, index, get, delete, update, compress. Use pinned=true for permanent facts.".to_string(),
+            description: "Long-term memory: action=search to recall, action=index to save.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -684,7 +677,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
     // skill_use: on-demand skill loading (always available, not gated by skill_editing)
     tools.push(ToolDefinition {
         name: "skill_use".to_string(),
-        description: "Load or capture a reusable skill. action='list': show catalog. action='load' + name: get full instructions. action='capture': create a new skill from a session pattern.".to_string(),
+        description: "Discover and load reusable skills. action=list to enumerate, action=load to read.".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -906,7 +899,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
     if ctx.is_base && !ctx.has_sandbox {
         tools.push(ToolDefinition {
             name: "code_exec".to_string(),
-            description: "Execute Python or bash code directly on the host (base agents only). Full access to filesystem, package managers (pip/apt/npm/bun), and all services. Use language='bash' for shell commands, language='python' for Python scripts. Working directory is the HydeClaw binary dir — use absolute paths or cd.".to_string(),
+            description: "Execute bash or Python in a sandboxed container (or directly on host for base agents). Returns stdout/stderr.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -976,7 +969,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
 pub fn build_sandbox_tool_definitions() -> Vec<ToolDefinition> {
     vec![ToolDefinition {
         name: "code_exec".to_string(),
-        description: "Execute Python or bash code in an isolated Docker sandbox. Use for calculations, data processing, or analysis. Workspace files NOT accessible (use workspace_read first, pass data via variables). Network access available. Cannot modify workspace files — use workspace_write for that.".to_string(),
+        description: "Execute bash or Python in a sandboxed container (or directly on host for base agents). Returns stdout/stderr.".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
