@@ -34,3 +34,4 @@ CLAUDE.md
 # not tracked in git (the source of truth is the release page).
 .release-notes-*.md
 /.release-notes-archive/
+/.release-notes-final/
