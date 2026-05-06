@@ -43,13 +43,11 @@ impl BackgroundTtsTask {
         use crate::agent::pipeline::channel_actions::{make_resolver, make_oauth_context};
 
         let mut tool_headers: Vec<(String, String)> = Vec::new();
-        if ca.action == "send_voice" {
-            if let Some(prov) = ctx.cfg.agent.tts_provider.as_deref() {
-                if !prov.is_empty() {
+        if ca.action == "send_voice"
+            && let Some(prov) = ctx.cfg.agent.tts_provider.as_deref()
+                && !prov.is_empty() {
                     tool_headers.push(("X-Hydeclaw-Provider".into(), prov.into()));
                 }
-            }
-        }
         let context = args.get("_context").cloned().unwrap_or(serde_json::Value::Null);
 
         // Background TTS bypasses the SSE deadline, but the YAML tool's own
@@ -266,8 +264,8 @@ impl BackgroundTtsTask {
 
     /// Dispatch error either to channel or log only (no UI notify — requires DB).
     async fn handle_error(&self, msg: &str, has_channel: bool) {
-        if has_channel {
-            if let Some(ref router) = self.channel_router {
+        if has_channel
+            && let Some(ref router) = self.channel_router {
                 send_error_to_channel(
                     router,
                     &self.context,
@@ -275,7 +273,6 @@ impl BackgroundTtsTask {
                 )
                 .await;
             }
-        }
         // UI error path is intentionally absent here: synthesis errors arrive
         // before any bytes exist, and notify() requires DB access. deliver_to_ui()
         // owns the UI error path and calls notify() locally with bytes context.

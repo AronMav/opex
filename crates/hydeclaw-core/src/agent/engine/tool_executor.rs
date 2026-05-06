@@ -11,11 +11,10 @@
 //!
 //! Extracted from `engine/mod.rs` as part of plan 66-02.
 
-use anyhow::Result;
 use hydeclaw_types::{Message, ToolDefinition};
 use uuid::Uuid;
 
-use super::{AgentEngine, LoopBreak};
+use super::AgentEngine;
 use crate::agent::tool_loop::LoopDetector;
 
 impl AgentEngine {

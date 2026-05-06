@@ -1536,6 +1536,7 @@ pub async fn mark_messages_compressed(
 }
 
 /// Insert a session_events WAL record for a compression boundary.
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_compression_event(
     db: &PgPool,
     session_id: uuid::Uuid,

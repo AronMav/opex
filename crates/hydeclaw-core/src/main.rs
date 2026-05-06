@@ -1136,8 +1136,8 @@ async fn schedule_periodic_jobs(
     }
 
     // Skill Curator
-    if state.config.config.curator.enabled {
-        if let Err(e) = sched.add_curator(
+    if state.config.config.curator.enabled
+        && let Err(e) = sched.add_curator(
             &state.config.config.curator.cron,
             state.config.config.curator.clone(),
             db.clone(),
@@ -1145,7 +1145,6 @@ async fn schedule_periodic_jobs(
         ).await {
             tracing::error!(error = %e, "failed to schedule skill curator");
         }
-    }
 
     sched.start().await.context("failed to start scheduler")?;
     Ok(())

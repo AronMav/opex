@@ -1483,6 +1483,7 @@ pub fn update_backup_config(
 }
 
 /// Update [curator] section in TOML config file.
+#[allow(clippy::too_many_arguments)]
 pub fn update_curator_config(
     config_path: &str,
     enabled: Option<bool>,

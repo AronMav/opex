@@ -109,16 +109,6 @@ impl AgentEngine {
         crate::agent::pipeline::context::build_context(cb.as_ref(), msg, include_tools, resume_session_id, force_new_session).await
     }
 
-    /// Replace old tool results with "[compacted]" when context exceeds 70% of model window.
-    pub(super) fn compact_tool_results(&self, messages: &mut [Message], context_chars: &mut usize) {
-        crate::agent::pipeline::context::compact_tool_results(
-            &self.cfg().agent.model,
-            self.cfg().agent.compaction.as_ref(),
-            messages,
-            context_chars,
-        )
-    }
-
     /// Get compaction parameters from agent config.
     #[allow(dead_code)]
     pub(super) fn compaction_params(&self) -> (usize, usize) {

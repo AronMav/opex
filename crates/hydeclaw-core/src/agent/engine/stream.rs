@@ -19,7 +19,6 @@ use super::AgentEngine;
 /// here so every existing `crate::agent::engine::StreamEvent` path resolves.
 pub use crate::agent::stream_event::StreamEvent;
 
-pub use crate::agent::pipeline::parallel::LoopBreak;
 
 /// Status phases emitted during message processing.
 #[derive(Debug, Clone)]

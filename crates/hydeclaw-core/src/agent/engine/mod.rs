@@ -10,7 +10,6 @@ use crate::mcp::McpRegistry;
 
 
 // Extracted impl AgentEngine blocks (submodules of engine for full super:: access)
-pub use crate::agent::pipeline::parallel::LoopBreak;
 pub(crate) use crate::agent::pipeline::subagent::parse_subagent_timeout;
 pub mod run;
 
@@ -363,11 +362,6 @@ mod dispatch_impl;
 // ── Thin wrappers delegating to pipeline free functions (Phase 2) ─────────────
 
 impl AgentEngine {
-    pub(super) async fn handle_message_action(&self, args: &serde_json::Value) -> String {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
-        crate::agent::pipeline::channel_actions::handle_message_action(&ctx, args).await
-    }
-
     pub async fn send_channel_message(&self, channel: &str, chat_id: i64, text: &str) -> anyhow::Result<()> {
         let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
         crate::agent::pipeline::channel_actions::send_channel_message(&ctx, channel, chat_id, text).await
@@ -381,11 +375,6 @@ impl AgentEngine {
     ) -> String {
         let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
         crate::agent::pipeline::channel_actions::execute_yaml_channel_action(&ctx, tool, args, ca).await
-    }
-
-    pub(super) async fn handle_cron(&self, args: &serde_json::Value) -> String {
-        let ctx = crate::agent::pipeline::CommandContext { cfg: self.cfg(), state: self.state(), tex: self.tex(), subagent_depth: 0 };
-        crate::agent::pipeline::cron::handle_cron(&ctx, args).await
     }
 }
 

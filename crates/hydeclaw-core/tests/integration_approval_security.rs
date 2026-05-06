@@ -38,7 +38,7 @@ fn make_guard(owner_id: Option<&str>) -> AccessGuard {
 fn no_guard_is_not_owner() {
     let live_guard: Option<AccessGuard> = None;
     let user_id = "any_user";
-    let is_owner = live_guard.as_ref().map_or(false, |g| g.is_owner(user_id));
+    let is_owner = live_guard.as_ref().is_some_and(|g| g.is_owner(user_id));
     assert!(!is_owner, "no guard must deny ownership for any user");
 }
 
@@ -86,7 +86,7 @@ fn old_is_none_or_was_security_hole() {
 #[test]
 fn map_or_false_correct_semantics() {
     let live_guard: Option<()> = None;
-    let new_behavior = live_guard.as_ref().map_or(false, |_| true);
+    let new_behavior = live_guard.as_ref().is_some_and(|_| true);
     assert!(
         !new_behavior,
         "map_or(false, ...) must return false for None — this is the correct fix"

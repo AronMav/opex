@@ -137,14 +137,13 @@ pub(crate) async fn api_curator_run(
     let db = infra.db.clone();
     let cfg = cfg_svc.shared_config.read().await.curator.clone();
 
-    if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await {
-        if last.finished_at.is_none() {
+    if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await
+        && last.finished_at.is_none() {
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
             ).into_response();
         }
-    }
 
     let run_id = match crate::db::curator_runs::insert_run(&db, "manual", false).await {
         Ok(id) => id,
@@ -178,14 +177,13 @@ pub(crate) async fn api_curator_preview(
     let db = infra.db.clone();
     let cfg = cfg_svc.shared_config.read().await.curator.clone();
 
-    if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await {
-        if last.finished_at.is_none() {
+    if let Ok(Some(last)) = crate::db::curator_runs::last_run(&db).await
+        && last.finished_at.is_none() {
             return (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({"error": "curator already running", "run_id": last.id})),
             ).into_response();
         }
-    }
 
     let run_id = match crate::db::curator_runs::insert_run(&db, "preview", true).await {
         Ok(id) => id,

@@ -840,8 +840,8 @@ pub async fn handle_skill_capture(
     };
 
     // Version snapshot.
-    if !content.is_empty() {
-        if let Err(e) = crate::db::skill_versions::save_version(
+    if !content.is_empty()
+        && let Err(e) = crate::db::skill_versions::save_version(
             db,
             name,
             &content,
@@ -851,7 +851,6 @@ pub async fn handle_skill_capture(
         ).await {
             tracing::warn!(skill = %name, agent = %agent_name, error = %e, "skill capture: version save failed");
         }
-    }
 
     // Audit row in curator_decisions for Phase 3 visibility.
     if let Err(e) = crate::db::curator_decisions::save_decision(
@@ -865,8 +864,8 @@ pub async fn handle_skill_capture(
     }
 
     // UI notification (best-effort).
-    if let Some(tx) = ui_event_tx {
-        if let Err(e) = crate::gateway::notify(
+    if let Some(tx) = ui_event_tx
+        && let Err(e) = crate::gateway::notify(
             db,
             tx,
             "skill_captured",
@@ -876,7 +875,6 @@ pub async fn handle_skill_capture(
         ).await {
             tracing::warn!(skill = %name, agent = %agent_name, error = %e, "skill capture: notify failed");
         }
-    }
 
     tracing::info!(skill = %name, agent = %agent_name, "skill captured in-session");
     format!("Skill '{}' captured and active.", name)

@@ -16,9 +16,6 @@ use uuid::Uuid;
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
-/// Returned when the loop detector triggers a break mid-batch.
-pub struct LoopBreak(pub Option<String>);
-
 /// Outcome of a tool batch — always carries every completed tool's result so
 /// the caller can emit `ToolResult` SSE events for them, even if the loop
 /// detector stopped further iterations afterwards. Without this, a parallel

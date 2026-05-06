@@ -153,7 +153,7 @@ pub async fn run_upload_signature_migration(
                 total_updated += 1;
             }
             processed += 1;
-            if processed % 1_000 == 0 {
+            if processed.is_multiple_of(1_000) {
                 tracing::info!(processed, "upload migration in progress");
             }
         }

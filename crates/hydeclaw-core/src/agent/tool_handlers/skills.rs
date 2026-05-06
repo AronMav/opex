@@ -47,11 +47,11 @@ impl SystemToolHandler for SkillUseHandler {
             .await;
         }
 
-        if action == "load" {
-            if let Some(name) = args.get("name").and_then(|v| v.as_str()) {
+        if action == "load"
+            && let Some(name) = args.get("name").and_then(|v| v.as_str()) {
                 let skills = crate::skills::load_skills(deps.workspace_dir).await;
-                if let Some(skill) = skills.iter().find(|s| s.meta.name == name) {
-                    if matches!(skill.meta.state, crate::skills::SkillState::Archived) {
+                if let Some(skill) = skills.iter().find(|s| s.meta.name == name)
+                    && matches!(skill.meta.state, crate::skills::SkillState::Archived) {
                         let workspace = deps.workspace_dir.to_string();
                         let skill_name = name.to_string();
                         let db = deps.db.clone();
@@ -80,9 +80,7 @@ impl SystemToolHandler for SkillUseHandler {
                             result
                         );
                     }
-                }
             }
-        }
 
         ph::handle_skill_use(
             deps.workspace_dir,
