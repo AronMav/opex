@@ -111,7 +111,13 @@ pub async fn run_subagent_with_session(
         },
     ];
 
-    let mut available_tools = executor.internal_tool_definitions_for_subagent(allowed_tools.as_deref());
+    // `executor` is the subagent's own engine — its `agent.base` flag
+    // determines whether the called subagent gets full tools or the
+    // dispatcher's compact array. Base subagents always get full tools
+    // regardless of the parent's dispatcher settings.
+    let subagent_is_base = executor.cfg().agent.base;
+    let mut available_tools = executor
+        .internal_tool_definitions_for_subagent(allowed_tools.as_deref(), subagent_is_base);
     let yaml_tools: Vec<crate::tools::yaml_tools::YamlToolDef> = {
         let cache = ctx.tex.yaml_tools_cache.read().await;
         if cache.0.elapsed() < std::time::Duration::from_secs(30) && !cache.1.is_empty() {

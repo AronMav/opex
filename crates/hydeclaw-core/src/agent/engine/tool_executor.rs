@@ -43,15 +43,39 @@ impl AgentEngine {
     /// The deny list is computed from the agent's `[agent.delegation]`
     /// config via `compute_denied_tools` (so per-agent overrides /
     /// extensions take effect).
+    ///
+    /// `subagent_is_base` is the called subagent's own `agent.base` flag.
+    /// Base subagents always receive the full tools array regardless of the
+    /// parent's dispatcher settings — see `dispatch_for_subagent_decision`.
     pub(crate) fn internal_tool_definitions_for_subagent(
         &self,
         allowed_tools: Option<&[String]>,
+        subagent_is_base: bool,
     ) -> Vec<hydeclaw_types::ToolDefinition> {
         let denied = crate::agent::pipeline::subagent::compute_denied_tools(
             &self.cfg().agent.delegation,
         );
+
+        let dispatch_for_subagent = dispatch_for_subagent_decision(
+            subagent_is_base,
+            self.cfg().agent.tool_dispatcher.enabled,
+            self.cfg().agent.delegation.subagent_dispatcher_enabled,
+        );
+
+        let mut tools = self.internal_tool_definitions();
+
+        if dispatch_for_subagent {
+            // Apply the same partition the parent uses: static core only.
+            let core: std::collections::HashSet<&str> =
+                crate::agent::pipeline::tool_defs::static_core_tool_names()
+                    .iter()
+                    .copied()
+                    .collect();
+            tools.retain(|t| core.contains(t.name.as_str()));
+        }
+
         crate::agent::pipeline::tool_defs::filter_for_subagent(
-            self.internal_tool_definitions(),
+            tools,
             &denied,
             allowed_tools,
         )
@@ -128,6 +152,20 @@ pub fn all_system_tool_names() -> &'static [&'static str] {
     crate::agent::pipeline::tool_defs::all_system_tool_names()
 }
 
+/// Decide whether a subagent should run with the dispatcher (compact tools
+/// array) or with the full tools array. The subagent's own `is_base` flag
+/// overrides everything: base subagents always receive full tools.
+pub(crate) fn dispatch_for_subagent_decision(
+    subagent_is_base: bool,
+    parent_tool_dispatcher_enabled: bool,
+    parent_subagent_override: Option<bool>,
+) -> bool {
+    if subagent_is_base {
+        return false;
+    }
+    parent_subagent_override.unwrap_or(parent_tool_dispatcher_enabled)
+}
+
 // ── ToolExecutorDeps impl ─────────────────────────────────────────────────────
 
 #[async_trait::async_trait]
@@ -188,5 +226,25 @@ impl crate::agent::pipeline::parallel::ToolExecutor for AgentEngine {
 impl crate::agent::pipeline::llm_call::Compactor for AgentEngine {
     async fn compact(&self, messages: &mut Vec<Message>) {
         self.compact_messages(messages, None).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dispatch_for_subagent_decision as d;
+
+    #[test]
+    fn base_subagent_always_gets_full_tools() {
+        // Base subagent → never dispatcher, regardless of parent flags.
+        assert!(!d(true, true, None));
+        assert!(!d(true, true, Some(true)));
+        assert!(!d(true, false, None));
+        assert!(!d(true, false, Some(true)));
+
+        // Non-base subagent: explicit override wins, else inherit parent.
+        assert!(d(false, true, None));
+        assert!(!d(false, false, None));
+        assert!(d(false, false, Some(true)));
+        assert!(!d(false, true, Some(false)));
     }
 }
