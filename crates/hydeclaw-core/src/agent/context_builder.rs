@@ -19,6 +19,10 @@ pub struct ContextSnapshot {
     pub session_id: Uuid,
     pub messages: Vec<Message>,
     pub tools: Vec<ToolDefinition>,
+    /// How this session is being entered. Threaded through to bootstrap so
+    /// it can decide on `LoopDetector` warm-up and pick the correct
+    /// `claim_session_for_reentry` mode.
+    pub reentry_mode: hydeclaw_db::ReentryMode,
 }
 
 /// Abstraction over context building so unit tests can inject a `MockContextBuilder`
@@ -49,7 +53,12 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
         user_id: &str,
         channel: &str,
         dm_scope: &str,
-    ) -> Result<Uuid>;
+    ) -> Result<(Uuid, hydeclaw_db::ReentryMode)>;
+    /// Read-only `run_status` lookup. Used by `DefaultContextBuilder::build`
+    /// when classifying `resume_session_id` paths so a UI-explicit reopen
+    /// of a `failed`/`interrupted` session uses `ReentryMode::ExplicitResume`
+    /// rather than mis-classifying as `ResumeRunning`.
+    async fn session_get_run_status(&self, sid: Uuid) -> Result<Option<String>>;
     async fn session_load_messages(
         &self,
         session_id: Uuid,
@@ -195,10 +204,24 @@ impl ContextBuilder for DefaultContextBuilder {
         let deps = self.deps.upgrade().context("engine dropped during context build")?;
 
         // 1. Get or create session (or resume existing)
-        let session_id = if let Some(sid) = resume_session_id {
-            deps.session_resume(sid).await?
+        let (session_id, reentry_mode) = if let Some(sid) = resume_session_id {
+            let id = deps.session_resume(sid).await?;
+            // Classify based on actual current status. UI users explicitly
+            // opening a failed/interrupted session should be ALLOWED to
+            // continue (their choice). Soft-terminal → ExplicitResume so
+            // claim_session_for_reentry skips the strict per-mode WHERE.
+            let status_str = deps.session_get_run_status(id).await?;
+            let parsed = status_str.as_deref().and_then(hydeclaw_db::SessionStatus::parse);
+            let mode = match parsed {
+                None => hydeclaw_db::ReentryMode::NewSession,
+                Some(hydeclaw_db::SessionStatus::Running) => hydeclaw_db::ReentryMode::ResumeRunning,
+                Some(hydeclaw_db::SessionStatus::Done) => hydeclaw_db::ReentryMode::NewTurnAfterDone,
+                Some(_) => hydeclaw_db::ReentryMode::ExplicitResume,
+            };
+            (id, mode)
         } else if force_new_session {
-            deps.session_create_new(&msg.user_id, &msg.channel).await?
+            let id = deps.session_create_new(&msg.user_id, &msg.channel).await?;
+            (id, hydeclaw_db::ReentryMode::NewSession)
         } else {
             let dm_scope = deps.agent_dm_scope().to_string();
             deps.session_get_or_create(&msg.user_id, &msg.channel, &dm_scope).await?
@@ -598,6 +621,7 @@ impl ContextBuilder for DefaultContextBuilder {
             session_id,
             messages,
             tools,
+            reentry_mode,
         })
     }
 }
@@ -614,16 +638,23 @@ pub mod mock {
         pub session_id: Uuid,
         pub messages: Vec<Message>,
         pub tools: Vec<ToolDefinition>,
+        pub reentry_mode: hydeclaw_db::ReentryMode,
     }
 
     impl MockContextBuilder {
-        /// Create a mock with specific canned data.
+        /// Create a mock with specific canned data. Defaults `reentry_mode`
+        /// to `NewSession` (use the field directly to override).
         pub fn with_snapshot(
             session_id: Uuid,
             messages: Vec<Message>,
             tools: Vec<ToolDefinition>,
         ) -> Self {
-            Self { session_id, messages, tools }
+            Self {
+                session_id,
+                messages,
+                tools,
+                reentry_mode: hydeclaw_db::ReentryMode::NewSession,
+            }
         }
     }
 
@@ -640,6 +671,7 @@ pub mod mock {
                 session_id: self.session_id,
                 messages: self.messages.clone(),
                 tools: self.tools.clone(),
+                reentry_mode: self.reentry_mode,
             })
         }
     }

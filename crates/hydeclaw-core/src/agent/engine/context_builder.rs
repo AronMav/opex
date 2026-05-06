@@ -197,10 +197,14 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         user_id: &str,
         channel: &str,
         dm_scope: &str,
-    ) -> Result<Uuid> {
+    ) -> Result<(Uuid, hydeclaw_db::ReentryMode)> {
         SessionManager::new(self.cfg().db.clone())
             .get_or_create(&self.cfg().agent.name, user_id, channel, dm_scope)
             .await
+    }
+
+    async fn session_get_run_status(&self, sid: Uuid) -> Result<Option<String>> {
+        crate::db::sessions::get_session_run_status(&self.cfg().db, sid).await
     }
 
     async fn session_load_messages(

@@ -113,20 +113,25 @@ pub async fn resolve_active_dm_session(
     }))
 }
 
-/// Find or create a session for the user+agent pair.
-/// Creates a new session if the last message was more than 4 hours ago.
+/// Find or create a session for the user+agent pair, returning the resolved
+/// session id together with a `ReentryMode` describing what kind of entry
+/// this is (new row, continuation after `done`, resume of a still-`running`
+/// session).
 ///
-/// `dm_scope` controls session isolation:
-/// - `"per-channel-peer"` (default): unique per agent+user+channel
-/// - `"shared"` / `"per-peer"`: unique per agent+user (channel = "*")
-/// - `"per-chat"`: unique per agent+channel (user = "*", for groups)
+/// Sessions in soft-terminal statuses (`'failed'`, `'interrupted'`,
+/// `'timeout'`, `'cancelled'`) are NOT reused — they are filtered by the
+/// same WHERE clause `resolve_active_dm_session` uses, and a fresh row is
+/// created instead. Rationale: previous run failed; the next user message
+/// should not silently inherit a polluted context.
+///
+/// `dm_scope` controls session isolation (see `dm_scope_keys`).
 pub async fn get_or_create_session(
     db: &PgPool,
     agent_id: &str,
     user_id: &str,
     channel: &str,
     dm_scope: &str,
-) -> Result<Uuid> {
+) -> Result<(Uuid, crate::ReentryMode)> {
     let (eff_user, eff_channel) = dm_scope_keys(user_id, channel, dm_scope);
 
     // Advisory lock keyed on (agent_id, user_id, channel) hash prevents concurrent
@@ -142,11 +147,16 @@ pub async fn get_or_create_session(
         .execute(&mut *tx)
         .await?;
 
-    let row = sqlx::query(
+    // Same filter as resolve_active_dm_session — soft-terminal statuses are
+    // skipped so a fresh row is inserted on miss instead of resurrecting a
+    // poisoned context. The `was_new` boolean disambiguates existing-vs-new
+    // for ReentryMode classification.
+    let row: (Uuid, Option<String>, bool) = sqlx::query_as(
         "WITH existing AS ( \
-           SELECT id FROM sessions \
+           SELECT id, run_status FROM sessions \
            WHERE agent_id = $1 AND user_id = $2 AND channel = $3 \
              AND last_message_at > now() - interval '4 hours' \
+             AND (run_status IS NULL OR run_status IN ('running', 'done')) \
            ORDER BY last_message_at DESC LIMIT 1 \
          ), inserted AS ( \
            INSERT INTO sessions (agent_id, user_id, channel, participants) \
@@ -154,7 +164,10 @@ pub async fn get_or_create_session(
            WHERE NOT EXISTS (SELECT 1 FROM existing) \
            RETURNING id \
          ) \
-         SELECT id FROM existing UNION ALL SELECT id FROM inserted LIMIT 1",
+         SELECT id, run_status, false AS was_new FROM existing \
+         UNION ALL \
+         SELECT id, NULL::text AS run_status, true AS was_new FROM inserted \
+         LIMIT 1",
     )
     .bind(agent_id)
     .bind(eff_user)
@@ -162,9 +175,16 @@ pub async fn get_or_create_session(
     .fetch_one(&mut *tx)
     .await?;
 
-    let id: Uuid = row.get("id");
     tx.commit().await?;
-    Ok(id)
+
+    let (id, run_status_str, was_new) = row;
+    let mode = if was_new {
+        crate::ReentryMode::NewSession
+    } else {
+        let parsed = run_status_str.as_deref().and_then(SessionStatus::parse);
+        crate::ReentryMode::classify(parsed)
+    };
+    Ok((id, mode))
 }
 
 /// Load session metadata needed for chain split operations.
@@ -618,6 +638,21 @@ pub async fn finalize_streaming_message(db: &PgPool, message_id: Uuid) -> Result
         .execute(db)
         .await?;
     Ok(())
+}
+
+/// Read-only helper: fetch the current `run_status` of a session as a String.
+/// Returns `Ok(None)` if the row doesn't exist OR `run_status IS NULL`.
+/// Used by `DefaultContextBuilder::build` to classify `resume_session_id`
+/// re-entries and by `claim_session_with_retry` to reclassify on a TOCTOU
+/// race.
+pub async fn get_session_run_status(db: &PgPool, session_id: Uuid) -> Result<Option<String>> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT run_status FROM sessions WHERE id = $1",
+    )
+    .bind(session_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.and_then(|(s,)| s))
 }
 
 /// Set `run_status` for a session (finalize path: running → terminal).
@@ -1905,5 +1940,99 @@ mod resolve_active_dm_session_tests {
             .await
             .unwrap();
         assert_eq!(got, Some((sid, Some(SessionStatus::Running))));
+    }
+}
+
+#[cfg(test)]
+mod get_or_create_with_mode_tests {
+    use super::*;
+    use crate::ReentryMode;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn fresh_session_classified_as_new(pool: sqlx::PgPool) {
+        let (sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await
+            .unwrap();
+        assert_eq!(mode, ReentryMode::NewSession);
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1)")
+            .bind(sid)
+            .fetch_one(&pool).await.unwrap();
+        assert!(exists);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn done_session_classified_as_new_turn(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "done").await.unwrap();
+
+        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await
+            .unwrap();
+        assert_eq!(got_sid, sid);
+        assert_eq!(mode, ReentryMode::NewTurnAfterDone);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn running_session_classified_as_resume(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "running").await.unwrap();
+
+        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await
+            .unwrap();
+        assert_eq!(got_sid, sid);
+        assert_eq!(mode, ReentryMode::ResumeRunning);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn failed_session_creates_fresh_one(pool: sqlx::PgPool) {
+        let old = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, old, "failed").await.unwrap();
+
+        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            .await
+            .unwrap();
+        assert_ne!(got_sid, old, "must create a NEW session, not reuse failed");
+        assert_eq!(mode, ReentryMode::NewSession);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn interrupted_timeout_cancelled_create_fresh(pool: sqlx::PgPool) {
+        for status in ["interrupted", "timeout", "cancelled"] {
+            let old = create_new_session(&pool, "agent", &format!("u_{status}"), "telegram").await.unwrap();
+            set_session_run_status(&pool, old, status).await.unwrap();
+
+            let (got_sid, mode) = get_or_create_session(&pool, "agent", &format!("u_{status}"), "telegram", "per-channel-peer")
+                .await
+                .unwrap();
+            assert_ne!(got_sid, old, "{status} must create a NEW session");
+            assert_eq!(mode, ReentryMode::NewSession);
+        }
+    }
+}
+
+#[cfg(test)]
+mod get_session_run_status_tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn returns_none_for_missing(pool: sqlx::PgPool) {
+        let got = get_session_run_status(&pool, Uuid::new_v4()).await.unwrap();
+        assert!(got.is_none());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn returns_none_for_null_status(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        let got = get_session_run_status(&pool, sid).await.unwrap();
+        assert!(got.is_none(), "fresh session should have NULL run_status");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn returns_set_status(pool: sqlx::PgPool) {
+        let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+        set_session_run_status(&pool, sid, "done").await.unwrap();
+        let got = get_session_run_status(&pool, sid).await.unwrap();
+        assert_eq!(got.as_deref(), Some("done"));
     }
 }

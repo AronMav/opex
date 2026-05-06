@@ -35,13 +35,15 @@ impl SessionManager {
     }
 
     /// Find or create a session for the given agent+user+channel.
+    /// Returns `(session_id, reentry_mode)` so bootstrap can decide whether
+    /// to warm the LoopDetector from WAL.
     pub async fn get_or_create(
         &self,
         agent_id: &str,
         user_id: &str,
         channel: &str,
         dm_scope: &str,
-    ) -> Result<Uuid> {
+    ) -> Result<(Uuid, hydeclaw_db::ReentryMode)> {
         crate::db::sessions::get_or_create_session(&self.db, agent_id, user_id, channel, dm_scope)
             .await
     }
