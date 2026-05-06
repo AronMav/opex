@@ -48,6 +48,20 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+  audit:
+    name: cargo audit (RustSec advisories)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+
+      - name: Audit dependencies
+        # Reads ignore policy from .cargo/audit.toml. Each ignore there must
+        # carry a rationale. Re-evaluate on every release.
+        run: cargo audit --deny warnings
+
   frontend:
     name: UI typecheck + build
     runs-on: ubuntu-latest

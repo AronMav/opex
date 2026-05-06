@@ -1,0 +1,42 @@
+# cargo-audit configuration. Run via `cargo audit` (CI: .github/workflows/ci.yml).
+#
+# Ignore policy: each entry MUST carry a rationale. Re-evaluate every release.
+
+[advisories]
+# Stop on warnings too — informational + unmaintained surface in CI.
+# Remove a warning kind here only when adding a corresponding `ignore` entry below.
+
+ignore = [
+    # ── Stuck (no upgrade available) ────────────────────────────────────────
+
+    # `rsa` (sqlx-mysql transitive). We use PostgreSQL only — the MySQL
+    # backend is pulled in by `sqlx-macros-core` for compile-time query
+    # checking but never invoked at runtime. Marvin Attack requires
+    # attacker-controlled timing, which we don't expose for an unused
+    # codepath. Tracked upstream: https://github.com/launchbadge/sqlx/issues/3346
+    "RUSTSEC-2023-0071",
+
+    # `tokio-tar` (testcontainers transitive). Dev-only — testcontainers is
+    # used by integration tests. Production binaries do not link this.
+    "RUSTSEC-2025-0111",
+
+    # ── Unmaintained (warning kind, not vulnerability) ──────────────────────
+
+    # `dotenv` — used by sqlx for migrations DATABASE_URL lookup. Replacement
+    # `dotenvy` is a drop-in but blocked on sqlx upstream switch.
+    "RUSTSEC-2021-0141",
+
+    # `instant` — transitive via tracing-subscriber/parking_lot test deps.
+    # Not on the production hot path.
+    "RUSTSEC-2024-0384",
+
+    # `rustls-pemfile` — transitive via reqwest's rustls-native-roots.
+    # Replacement is `rustls-pki-types` already; reqwest needs to drop the
+    # legacy crate. Tracked: https://github.com/seanmonstar/reqwest/issues/2497
+    "RUSTSEC-2025-0134",
+
+    # `rand` — unsound only when a custom logger calls `rand::rng()`. We
+    # use `tracing` for logging and never invoke rand from a logger
+    # callback. Will clear when rand 0.10 lands.
+    "RUSTSEC-2026-0097",
+]
