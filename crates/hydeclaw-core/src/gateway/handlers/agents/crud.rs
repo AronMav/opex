@@ -92,6 +92,27 @@ pub(super) const TABLES_WITH_AGENT_ID_NULLABLE: &[&str] = &[
     "messages",
 ];
 
+/// Tables from which to DELETE rows when an agent is deleted.
+///
+/// This is a STRICT SUBSET of `TABLES_WITH_AGENT_ID_NOT_NULL`. The other
+/// tables (e.g., `audit_log`, `audit_events`, `usage_log`, `cron_runs`,
+/// `sessions`, `tasks`) hold compliance / history / user-owned data that
+/// must SURVIVE agent deletion. Cascade-deleting those would destroy audit
+/// trails or user chat history. The "right" delete behavior for those is
+/// open product question — see follow-up issue [FF-T2-followup-delete-scope].
+///
+/// Until that's resolved, this list preserves the pre-T2 inline-array
+/// scope: only the per-agent state tables that have no compliance value.
+pub(super) const TABLES_TO_DELETE_BY_AGENT_ID: &[&str] = &[
+    "scheduled_jobs",
+    "webhooks",
+    "agent_oauth_bindings",
+    "gmail_triggers",
+    "agent_github_repos",
+    "approval_allowlist",
+    "channel_allowed_users",
+];
+
 /// Rename `agent_id` from `old` to `new` across every catalogued table.
 /// Iterates both NOT NULL and NULLABLE constants; the NULLABLE branch adds an
 /// `IS NOT NULL` predicate so the index can stay tight on non-null rows.
@@ -136,9 +157,16 @@ async fn rename_agent_id_in_tables(
     Ok(())
 }
 
-/// Delete every row whose `agent_id` matches `agent_id` across every
-/// NOT NULL table. NULLABLE tables are intentionally skipped — see the doc
-/// comment on `TABLES_WITH_AGENT_ID_NULLABLE`.
+/// Delete every row whose `agent_id` matches `agent_id` across the
+/// per-agent state tables.
+///
+/// CRITICAL: this iterates `TABLES_TO_DELETE_BY_AGENT_ID`, NOT the broader
+/// `TABLES_WITH_AGENT_ID_NOT_NULL`. Rename and delete have different
+/// semantics — rename touches every catalogued table (it just changes a
+/// string), but delete must preserve compliance / history tables
+/// (`audit_log`, `audit_events`, `usage_log`, `cron_runs`, `sessions`,
+/// `tasks`, …). See `TABLES_TO_DELETE_BY_AGENT_ID`'s doc comment for the
+/// rationale and the open follow-up issue.
 ///
 /// Returns the underlying `sqlx::Error` on first failure — caller is
 /// responsible for the surrounding transaction's rollback.
@@ -146,8 +174,8 @@ async fn delete_agent_id_in_tables(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     agent_id: &str,
 ) -> Result<(), sqlx::Error> {
-    for table in TABLES_WITH_AGENT_ID_NOT_NULL {
-        // SAFETY: `table` is a compile-time literal from TABLES_WITH_AGENT_ID_NOT_NULL;
+    for table in TABLES_TO_DELETE_BY_AGENT_ID {
+        // SAFETY: `table` is a compile-time literal from TABLES_TO_DELETE_BY_AGENT_ID;
         // agent_id flows through a bind parameter.
         let sql = format!("DELETE FROM {table} WHERE agent_id = $1");
         sqlx::query(&sql)
@@ -778,7 +806,9 @@ async fn cleanup_agent_data(db: &sqlx::PgPool, agent_name: &str) -> Result<(), s
     // agent_channels uses agent_name (separate from the agent_id catalogue)
     sqlx::query("DELETE FROM agent_channels WHERE agent_name = $1")
         .bind(agent_name).execute(&mut *tx).await?;
-    // Everything else uses agent_id — see TABLES_WITH_AGENT_ID_NOT_NULL.
+    // Per-agent state tables — see TABLES_TO_DELETE_BY_AGENT_ID. This is a
+    // strict subset of TABLES_WITH_AGENT_ID_NOT_NULL; compliance / history
+    // tables are intentionally skipped.
     delete_agent_id_in_tables(&mut tx, agent_name).await?;
     tx.commit().await?;
     Ok(())
@@ -1258,9 +1288,13 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn test_tables_with_agent_id_all_exist_in_schema(pool: sqlx::PgPool) {
+        // Cover all three constants — including TABLES_TO_DELETE_BY_AGENT_ID,
+        // which by contract is a subset of NOT_NULL but is still iterated here
+        // to defend against the subset invariant being broken in a future PR.
         let all_tables: Vec<&str> = super::TABLES_WITH_AGENT_ID_NOT_NULL
             .iter()
             .chain(super::TABLES_WITH_AGENT_ID_NULLABLE.iter())
+            .chain(super::TABLES_TO_DELETE_BY_AGENT_ID.iter())
             .copied()
             .collect();
         for table in all_tables {
@@ -1272,6 +1306,23 @@ mod tests {
             assert!(
                 exists.0.is_some(),
                 "table {table} does not exist in schema"
+            );
+        }
+    }
+
+    /// `TABLES_TO_DELETE_BY_AGENT_ID` MUST be a strict subset of
+    /// `TABLES_WITH_AGENT_ID_NOT_NULL`. The delete list intentionally omits
+    /// compliance / history tables (`audit_log`, `audit_events`, `usage_log`,
+    /// `cron_runs`, `sessions`, `tasks`, …) — see the constant's doc comment.
+    /// This invariant is the whole reason for the two constants existing
+    /// separately; if it ever breaks, agent deletion silently destroys
+    /// audit data again.
+    #[test]
+    fn test_tables_to_delete_is_subset_of_not_null() {
+        for table in super::TABLES_TO_DELETE_BY_AGENT_ID {
+            assert!(
+                super::TABLES_WITH_AGENT_ID_NOT_NULL.contains(table),
+                "table {table} in TABLES_TO_DELETE_BY_AGENT_ID but not in TABLES_WITH_AGENT_ID_NOT_NULL"
             );
         }
     }
