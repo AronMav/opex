@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { Play, Pause, Volume2, VolumeX } from "lucide-react";
+import { Play, Pause } from "lucide-react";
 
 // Single visual language for both shape AND progress: a bar waveform built
 // from the actual audio buffer (RMS per bucket), where bars to the left of
@@ -82,7 +82,6 @@ export function AudioPlayer({ src }: { src: string }) {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [muted, setMuted] = useState(false);
   const [error, setError] = useState(false);
 
   // ── Decode bars once per src ──────────────────────────────────────────────
@@ -111,13 +110,6 @@ export function AudioPlayer({ src }: { src: string }) {
     if (playing) a.pause();
     else a.play().catch(() => setError(true));
   }, [playing]);
-
-  const toggleMute = useCallback(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    a.muted = !muted;
-    setMuted(m => !m);
-  }, [muted]);
 
   // Streaming WAVs (TTS) sometimes report Infinity for duration — fall back
   // to seekable.end(0) which the browser fills in once the buffer is loaded.
@@ -309,28 +301,18 @@ export function AudioPlayer({ src }: { src: string }) {
           </div>
         </div>
 
-        {/* Time + mute */}
-        <div className="flex-shrink-0 flex items-center gap-2">
-          <span
-            className="text-[11px] tabular-nums leading-none"
-            style={{
-              color: "var(--muted-foreground)",
-              fontFamily: "var(--font-mono, monospace)",
-              minWidth: duration > 0 ? "9ch" : "4ch",
-              textAlign: "right",
-            }}
-          >
-            {timeLabel}
-          </span>
-          <button
-            onClick={toggleMute}
-            className="focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded transition-opacity hover:opacity-100"
-            style={{ color: "var(--muted-foreground)", opacity: 0.45 }}
-            aria-label={muted ? "Включить звук" : "Выключить звук"}
-          >
-            {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
-          </button>
-        </div>
+        {/* Time */}
+        <span
+          className="flex-shrink-0 text-[11px] tabular-nums leading-none"
+          style={{
+            color: "var(--muted-foreground)",
+            fontFamily: "var(--font-mono, monospace)",
+            minWidth: duration > 0 ? "9ch" : "4ch",
+            textAlign: "right",
+          }}
+        >
+          {timeLabel}
+        </span>
       </div>
 
       {error && (
