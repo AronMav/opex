@@ -10,6 +10,7 @@ expression: dto
   "provider_connection": "main-claude",
   "fallback_provider": "openai-fallback",
   "tts_provider": null,
+  "imagegen_provider": null,
   "temperature": 0.8,
   "max_tokens": 4096,
   "access": {

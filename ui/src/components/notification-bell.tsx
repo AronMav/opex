@@ -41,48 +41,126 @@ function playNotificationSound() {
   }
 }
 
-// ── TTS notification body ─────────────────────────────────────────────────────
+// ── Media notification body ───────────────────────────────────────────────────
 
-interface TtsNotificationBodyProps {
+interface MediaNotificationBodyProps {
   notification: NotificationRow;
 }
 
-export function TtsNotificationBody({ notification }: TtsNotificationBodyProps) {
-  const { type, body, data } = notification;
+// Event types emitted by `media_background.rs`.
+// Voice keeps the historical `tts_*` names for back-compat with code paths
+// outside the notification bell (e.g. analytics, hooks). Photo / video / other
+// have dedicated events with kind-appropriate inline rendering.
+const READY_EVENTS = new Set([
+  "tts_ready",
+  "image_ready",
+  "video_ready",
+  "media_ready",
+]);
+const ERROR_EVENTS = new Set([
+  "tts_error",
+  "image_error",
+  "video_error",
+  "media_error",
+]);
 
-  if (type === "tts_ready" && data?.url) {
+function readyKindFromType(type: string): "voice" | "image" | "video" | "media" | null {
+  switch (type) {
+    case "tts_ready":   return "voice";
+    case "image_ready": return "image";
+    case "video_ready": return "video";
+    case "media_ready": return "media";
+    default:            return null;
+  }
+}
+
+export function MediaNotificationBody({ notification }: MediaNotificationBodyProps) {
+  const { type, title, body, data } = notification;
+  const url = typeof data?.url === "string" ? (data.url as string) : null;
+
+  // Success path — render an inline preview when we have a url, otherwise
+  // fall through to a plain body line.
+  const readyKind = readyKindFromType(type);
+  if (readyKind && url) {
     return (
       <div className="flex flex-col gap-1 w-full" onClick={(e) => e.stopPropagation()}>
         <span className="text-xs text-muted-foreground">{body}</span>
-        <audio
-          controls
-          src={data.url as string}
-          className="w-full mt-1 h-8"
-          data-testid="tts-audio-player"
-        />
+        {readyKind === "voice" && (
+          <audio
+            controls
+            src={url}
+            className="w-full mt-1 h-8"
+            data-testid="tts-audio-player"
+          />
+        )}
+        {readyKind === "image" && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={url}
+            alt={title}
+            className="mt-1 max-h-48 w-auto rounded-md border border-border object-contain"
+            data-testid="image-preview"
+            loading="lazy"
+          />
+        )}
+        {readyKind === "video" && (
+          <video
+            controls
+            src={url}
+            className="w-full mt-1 max-h-48 rounded-md border border-border"
+            data-testid="video-player"
+            preload="metadata"
+          />
+        )}
+        {readyKind === "media" && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-1 text-xs text-primary underline underline-offset-2"
+            data-testid="media-download"
+          >
+            {url.split("/").pop() || url}
+          </a>
+        )}
       </div>
     );
   }
 
-  if (type === "tts_error") {
+  // Error path for any media-flavoured event.
+  if (ERROR_EVENTS.has(type)) {
     return (
       <span className="text-xs text-destructive line-clamp-2">{body}</span>
     );
   }
 
+  // Default body line — also used when a ready event arrives without a usable url.
   return <span className="text-xs text-muted-foreground line-clamp-2">{body}</span>;
+}
+
+// Back-compat alias — kept so any external consumer still imports the old name
+// without breaking. Internal code uses `MediaNotificationBody` directly.
+export const TtsNotificationBody = MediaNotificationBody;
+
+// Used by `getNotificationRoute` to decide that a notification is rendered
+// inline (no navigation) rather than linking somewhere.
+function isMediaEvent(type: string): boolean {
+  return READY_EVENTS.has(type) || ERROR_EVENTS.has(type);
 }
 
 // ── Notification type → target route ─────────────────────────────────────────
 
-function getNotificationRoute(type: string): string | null {
+// Exported so unit tests can verify routing decisions for every notification
+// type without rendering the bell. Keeping it free-standing also documents
+// the routing contract in one place.
+export function getNotificationRoute(type: string): string | null {
+  // Media events (tts/image/video/media — ready + error) render inline; no nav.
+  if (isMediaEvent(type)) return null;
   switch (type) {
     case "access_request":  return "/access";
     case "tool_approval":   return "/monitor/?tab=approvals";
     case "agent_error":     return "/monitor/?tab=logs";
     case "watchdog_alert":  return "/monitor/?tab=watchdog";
-    case "tts_ready":       return null;  // audio player inline — no navigation
-    case "tts_error":       return null;
     default:                return "/monitor/";
   }
 }
@@ -190,7 +268,7 @@ export function NotificationBell() {
                     <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" />
                   )}
                 </div>
-                <TtsNotificationBody notification={n} />
+                <MediaNotificationBody notification={n} />
                 <span className="text-[11px] text-muted-foreground/60">
                   {new Date(n.created_at).toLocaleString()}
                 </span>

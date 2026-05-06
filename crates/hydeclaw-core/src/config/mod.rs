@@ -667,6 +667,13 @@ pub struct AgentSettings {
     /// determines the voice. Useful for per-agent voice personalities.
     #[serde(default)]
     pub tts_provider: Option<String>,
+    /// Optional image-generation provider name override. When set, channel actions
+    /// calling YAML tools with `channel_action: send_photo` inject
+    /// `X-Hydeclaw-Provider: <name>` so toolgate routes the generation request
+    /// to this specific imagegen provider instead of the global
+    /// `provider_active[imagegen]`. Useful for per-agent visual styles.
+    #[serde(default)]
+    pub imagegen_provider: Option<String>,
     #[serde(default = "default_temperature")]
     pub temperature: f64,
     /// Maximum output tokens for LLM responses. None = provider default.
@@ -1694,6 +1701,7 @@ model = "m2.5"
                 provider: "openai".into(),
                 model: "gpt-4".into(),
                 tts_provider: None,
+                imagegen_provider: None,
                 temperature: 0.7,
                 max_tokens: None,
                 access: Some(AgentAccessConfig {
@@ -1762,6 +1770,7 @@ model = "m2.5"
                 provider: "minimax".into(),
                 model: "m2.5".into(),
                 tts_provider: None,
+                imagegen_provider: None,
                 temperature: 1.0,
                 max_tokens: None,
                 access: None,
