@@ -425,6 +425,13 @@ pub(crate) async fn api_update_agent(
                 error_break_threshold: tl.error_break_threshold,
             }));
         }
+        if payload.tool_dispatcher.is_none() {
+            payload.tool_dispatcher = Some(Some(ToolDispatcherPayload {
+                enabled: Some(a.tool_dispatcher.enabled),
+                core_extra: Some(a.tool_dispatcher.core_extra.clone()),
+                promotion_max: Some(a.tool_dispatcher.promotion_max),
+            }));
+        }
         if payload.icon.is_none() { payload.icon = a.icon.clone(); }
         if payload.provider_connection.is_none() { payload.provider_connection = a.provider_connection.clone(); }
         payload.fallback_provider =

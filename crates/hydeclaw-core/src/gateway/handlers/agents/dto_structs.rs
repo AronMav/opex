@@ -103,6 +103,16 @@ crate::register_ts_dto!(AgentDetailToolLoopDto);
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
+pub struct AgentDetailToolDispatcherDto {
+    pub enabled: bool,
+    pub core_extra: Vec<String>,
+    pub promotion_max: u32,
+}
+crate::register_ts_dto!(AgentDetailToolDispatcherDto);
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-gen", ts(export))]
 pub struct AgentDetailApprovalDto {
     pub enabled: bool,
     pub require_for: Vec<String>,
@@ -174,6 +184,7 @@ pub struct AgentDetailDto {
     pub icon: Option<String>,
     pub max_tools_in_context: Option<usize>,
     pub tool_loop: Option<AgentDetailToolLoopDto>,
+    pub tool_dispatcher: Option<AgentDetailToolDispatcherDto>,
     pub approval: Option<AgentDetailApprovalDto>,
     pub routing: Vec<AgentDetailRoutingDto>,
     pub watchdog: Option<AgentDetailWatchdogDto>,

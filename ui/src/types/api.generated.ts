@@ -10,7 +10,7 @@ export type AgentDetailApprovalDto = { enabled: boolean, require_for: Array<stri
 
 export type AgentDetailCompactionDto = { enabled: boolean, threshold: number, preserve_tool_calls: boolean, preserve_last_n: number, max_context_tokens: number | null, };
 
-export type AgentDetailDto = { name: string, language: string, provider: string, model: string, provider_connection: string | null, fallback_provider: string | null, tts_provider: string | null, imagegen_provider: string | null, temperature: number, max_tokens: number | null, access: AgentDetailAccessDto | null, heartbeat: AgentDetailHeartbeatDto | null, tools: AgentDetailToolsDto | null, compaction: AgentDetailCompactionDto | null, skill_review: AgentDetailSkillReviewDto | null, session: AgentDetailSessionDto | null, icon: string | null, max_tools_in_context: number | null, tool_loop: AgentDetailToolLoopDto | null, approval: AgentDetailApprovalDto | null, routing: Array<AgentDetailRoutingDto>, watchdog: AgentDetailWatchdogDto | null, hooks: AgentDetailHooksDto | null, max_history_messages: number | null, daily_budget_tokens: number, max_agent_turns: number | null, max_failover_attempts: number, is_running: boolean, config_dirty: boolean, 
+export type AgentDetailDto = { name: string, language: string, provider: string, model: string, provider_connection: string | null, fallback_provider: string | null, tts_provider: string | null, imagegen_provider: string | null, temperature: number, max_tokens: number | null, access: AgentDetailAccessDto | null, heartbeat: AgentDetailHeartbeatDto | null, tools: AgentDetailToolsDto | null, compaction: AgentDetailCompactionDto | null, skill_review: AgentDetailSkillReviewDto | null, session: AgentDetailSessionDto | null, icon: string | null, max_tools_in_context: number | null, tool_loop: AgentDetailToolLoopDto | null, tool_dispatcher: AgentDetailToolDispatcherDto | null, approval: AgentDetailApprovalDto | null, routing: Array<AgentDetailRoutingDto>, watchdog: AgentDetailWatchdogDto | null, hooks: AgentDetailHooksDto | null, max_history_messages: number | null, daily_budget_tokens: number, max_agent_turns: number | null, max_failover_attempts: number, is_running: boolean, config_dirty: boolean, 
 /**
  * Injected by the handler from scoped TTS_VOICE secret; absent when not set.
  */
@@ -25,6 +25,8 @@ export type AgentDetailRoutingDto = { condition: string, connection: string | nu
 export type AgentDetailSessionDto = { dm_scope: string, ttl_days: number, max_messages: number, prune_tool_output_after_turns: number | null, };
 
 export type AgentDetailSkillReviewDto = { enabled: boolean, min_tool_calls: number, };
+
+export type AgentDetailToolDispatcherDto = { enabled: boolean, core_extra: Array<string>, promotion_max: number, };
 
 export type AgentDetailToolGroupsDto = { git: boolean, tool_management: boolean, skill_editing: boolean, session_tools: boolean, };
 
