@@ -94,7 +94,7 @@ generate enough spans to detect drops:
 
 ```bash
 for i in {1..20}; do
-  HYDECLAW_AUTH_TOKEN=<token> python3 test-pi-chaos.py &
+  HYDECLAW_AUTH_TOKEN=<token> python3 tests/integration/pi/test-pi-chaos.py &
 done
 wait
 ```
