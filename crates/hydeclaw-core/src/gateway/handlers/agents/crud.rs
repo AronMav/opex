@@ -168,6 +168,11 @@ pub(crate) async fn api_create_agent(
         }
     }
 
+    // Capture whether the caller omitted [agent.tool_dispatcher] before the
+    // payload is moved into build_agent_config. Used below for the
+    // setup-wizard default (T22).
+    let payload_tool_dispatcher_was_absent = payload.tool_dispatcher.is_none();
+
     let mut cfg = build_agent_config(name.clone(), payload);
 
     // First agent created is automatically base (system agent) with safe defaults
@@ -192,6 +197,17 @@ pub(crate) async fn api_create_agent(
                 mode: "restricted".into(),
                 owner_id: None,
             });
+        }
+        // Setup-wizard default: enable the tool dispatcher for fresh installs
+        // unless the payload explicitly opts out (T22).
+        // The wizard always creates the first agent on a clean install, so
+        // gating on `agents.map.is_empty()` matches the wizard's lifecycle.
+        if payload_tool_dispatcher_was_absent {
+            cfg.agent.tool_dispatcher = crate::config::ToolDispatcherConfig {
+                enabled: true,
+                core_extra: Vec::new(),
+                promotion_max: 8,
+            };
         }
     } else {
         // Non-base agents: deny dangerous tools by default (security audit compliance)
