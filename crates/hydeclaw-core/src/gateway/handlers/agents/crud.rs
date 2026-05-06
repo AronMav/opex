@@ -41,6 +41,127 @@ pub(super) fn merge_clearable_string(
     }
 }
 
+// ── agent_id table catalogue + helpers ──────────────────────────────────────
+//
+// Centralized list of every table whose `agent_id` column references
+// `agents.name`. Built from `information_schema.columns` introspection (T2,
+// 2026-05-07): see migrations 001/006/034. Two separate constants encode the
+// nullability classification because the rename SQL differs by one predicate.
+//
+// Adding a new entry MUST satisfy both:
+//   1. It is a string literal at compile time (interpolated into the SQL via
+//      `format!`; the table name itself is never user-controlled).
+//   2. The classification (NOT NULL vs NULLABLE) matches the live schema —
+//      `tests::test_tables_with_agent_id_*` enforce both at PR time.
+
+/// Tables with NOT NULL `agent_id` column referencing `agents.name`.
+/// Both rename and delete iterate over this list with simple UPDATE/DELETE.
+///
+/// SAFETY contract: every entry MUST be a string literal at compile time AND
+/// MUST correspond to a table whose `agent_id` column is `NOT NULL` in
+/// schema. Adding a new entry requires PR review confirming both.
+pub(super) const TABLES_WITH_AGENT_ID_NOT_NULL: &[&str] = &[
+    "agent_github_repos",
+    "agent_oauth_bindings",
+    "approval_allowlist",
+    "audit_events",
+    "audit_log",
+    "channel_allowed_users",
+    "cron_runs",
+    "gmail_triggers",
+    "memory_chunks",
+    "outbound_queue",
+    "pairing_codes",
+    "pending_approvals",
+    "pending_messages",
+    "scheduled_jobs",
+    "session_failures",
+    "sessions",
+    "stream_jobs",
+    "tasks",
+    "usage_log",
+    "webhooks",
+];
+
+/// Tables with NULLABLE `agent_id`. Rename uses
+/// `WHERE agent_id IS NOT NULL AND agent_id = $old`. Delete intentionally
+/// skips these — NULL rows are not the deleted agent's data, and non-NULL
+/// rows in `messages` are part of the session history we may want to keep
+/// readable after the agent is gone.
+pub(super) const TABLES_WITH_AGENT_ID_NULLABLE: &[&str] = &[
+    "messages",
+];
+
+/// Rename `agent_id` from `old` to `new` across every catalogued table.
+/// Iterates both NOT NULL and NULLABLE constants; the NULLABLE branch adds an
+/// `IS NOT NULL` predicate so the index can stay tight on non-null rows.
+///
+/// Returns the underlying `sqlx::Error` on first failure — caller is
+/// responsible for the surrounding transaction's rollback.
+async fn rename_agent_id_in_tables(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    old: &str,
+    new: &str,
+) -> Result<(), sqlx::Error> {
+    for table in TABLES_WITH_AGENT_ID_NOT_NULL {
+        // SAFETY: `table` is a compile-time literal from TABLES_WITH_AGENT_ID_NOT_NULL;
+        // agent names flow through bind parameters.
+        let sql = format!("UPDATE {table} SET agent_id = $1 WHERE agent_id = $2");
+        sqlx::query(&sql)
+            .bind(new)
+            .bind(old)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| {
+                tracing::warn!(table = %table, error = %e, "failed to update agent_id on rename");
+                e
+            })?;
+    }
+    for table in TABLES_WITH_AGENT_ID_NULLABLE {
+        // SAFETY: `table` is a compile-time literal from TABLES_WITH_AGENT_ID_NULLABLE;
+        // agent names flow through bind parameters.
+        let sql = format!(
+            "UPDATE {table} SET agent_id = $1 WHERE agent_id IS NOT NULL AND agent_id = $2"
+        );
+        sqlx::query(&sql)
+            .bind(new)
+            .bind(old)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| {
+                tracing::warn!(table = %table, error = %e, "failed to update agent_id on rename");
+                e
+            })?;
+    }
+    Ok(())
+}
+
+/// Delete every row whose `agent_id` matches `agent_id` across every
+/// NOT NULL table. NULLABLE tables are intentionally skipped — see the doc
+/// comment on `TABLES_WITH_AGENT_ID_NULLABLE`.
+///
+/// Returns the underlying `sqlx::Error` on first failure — caller is
+/// responsible for the surrounding transaction's rollback.
+async fn delete_agent_id_in_tables(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    agent_id: &str,
+) -> Result<(), sqlx::Error> {
+    for table in TABLES_WITH_AGENT_ID_NOT_NULL {
+        // SAFETY: `table` is a compile-time literal from TABLES_WITH_AGENT_ID_NOT_NULL;
+        // agent_id flows through a bind parameter.
+        let sql = format!("DELETE FROM {table} WHERE agent_id = $1");
+        sqlx::query(&sql)
+            .bind(agent_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| {
+                tracing::warn!(table = %table, error = %e, "failed to delete rows on agent delete");
+                e
+            })?;
+    }
+    Ok(())
+}
+
 // ── Agent list ──────────────────────────────────────────
 
 pub(crate) async fn api_agents(
@@ -532,50 +653,21 @@ pub(crate) async fn api_update_agent(
 
     // If renaming, update DB references first, then remove old TOML
     if is_rename {
-        // Update agent_id in all DB tables (within a transaction for consistency)
-        // SAFETY: table names are hardcoded literals — never user input. Do NOT add dynamic values.
-        // SAFETY: Rename transaction covers 21 tables total:
-        //   - 18 via tables_agent_id loop (agent_id column)
-        //   - 1 messages (agent_id, nullable)
-        //   - 1 agent_channels (agent_name column)
-        //   - 1 sessions.participants (TEXT[] array_replace)
-        // All updates share a single sqlx::Transaction — failure at any point triggers
-        // automatic rollback (via explicit rollback or Transaction::Drop).
-        let tables_agent_id = [
-            "sessions", "tasks", "scheduled_jobs", "channel_allowed_users",
-            "usage_log", "cron_runs", "audit_events", "pending_approvals",
-            "pending_messages", "webhooks", "stream_jobs", "outbound_queue",
-            "audit_log", "agent_github_repos", "gmail_triggers",
-            "agent_oauth_bindings", "approval_allowlist",
-            "memory_chunks",
-        ];
+        // Update agent_id in all DB tables (within a transaction for consistency).
+        // Table catalogue + UPDATE loop live in `rename_agent_id_in_tables`;
+        // see TABLES_WITH_AGENT_ID_NOT_NULL / TABLES_WITH_AGENT_ID_NULLABLE.
+        // Rename transaction covers all `agent_id` tables plus:
+        //   - agent_channels (agent_name column)
+        //   - sessions.participants (TEXT[] array_replace)
+        // All updates share a single sqlx::Transaction — failure at any point
+        // triggers automatic rollback (via explicit rollback or Transaction::Drop).
         let mut tx = match infra.db.begin().await {
             Ok(tx) => tx,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("transaction start failed: {}", e)}))).into_response(),
         };
-        for table in tables_agent_id {
-            let query = format!("UPDATE {table} SET agent_id = $1 WHERE agent_id = $2");
-            if let Err(e) = sqlx::query(&query)
-                .bind(&new_name)
-                .bind(&name)
-                .execute(&mut *tx)
-                .await
-            {
-                tracing::warn!(table = %table, error = %e, "failed to update agent_id on rename");
-                tx.rollback().await.ok();
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed at table {}: {}", table, e)}))).into_response();
-            }
-        }
-        // messages.agent_id is nullable (used in discuss mode)
-        if let Err(e) = sqlx::query("UPDATE messages SET agent_id = $1 WHERE agent_id = $2")
-            .bind(&new_name)
-            .bind(&name)
-            .execute(&mut *tx)
-            .await
-        {
-            tracing::warn!(error = %e, "failed to update messages.agent_id on rename");
+        if let Err(e) = rename_agent_id_in_tables(&mut tx, &name, &new_name).await {
             tx.rollback().await.ok();
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed at table messages: {}", e)}))).into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed: {}", e)}))).into_response();
         }
         // agent_channels uses agent_name instead of agent_id
         if let Err(e) = sqlx::query("UPDATE agent_channels SET agent_name = $1 WHERE agent_name = $2")
@@ -683,19 +775,11 @@ pub(crate) async fn api_update_agent(
 
 async fn cleanup_agent_data(db: &sqlx::PgPool, agent_name: &str) -> Result<(), sqlx::Error> {
     let mut tx = db.begin().await?;
-    // agent_channels uses agent_name
+    // agent_channels uses agent_name (separate from the agent_id catalogue)
     sqlx::query("DELETE FROM agent_channels WHERE agent_name = $1")
         .bind(agent_name).execute(&mut *tx).await?;
-    // Everything else uses agent_id
-    // SAFETY: table names are hardcoded string literals in the array below -- no user input.
-    for table in &[
-        "scheduled_jobs", "webhooks", "agent_oauth_bindings",
-        "gmail_triggers", "agent_github_repos", "approval_allowlist",
-        "channel_allowed_users",
-    ] {
-        sqlx::query(&format!("DELETE FROM {table} WHERE agent_id = $1"))
-            .bind(agent_name).execute(&mut *tx).await?;
-    }
+    // Everything else uses agent_id — see TABLES_WITH_AGENT_ID_NOT_NULL.
+    delete_agent_id_in_tables(&mut tx, agent_name).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -1161,6 +1245,65 @@ mod tests {
                 !rows.contains(&old_name.to_string()),
                 "table '{}' should not contain old name after successful rename",
                 table
+            );
+        }
+    }
+
+    // ── TABLES_WITH_AGENT_ID_* schema reconciliation (T2) ────────────────
+    //
+    // Guard the two centralized constants against schema drift. Without
+    // these, adding a new `agent_id`-bearing migration without updating
+    // the constants would silently leave orphan rows on agent rename or
+    // delete.
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_tables_with_agent_id_all_exist_in_schema(pool: sqlx::PgPool) {
+        let all_tables: Vec<&str> = super::TABLES_WITH_AGENT_ID_NOT_NULL
+            .iter()
+            .chain(super::TABLES_WITH_AGENT_ID_NULLABLE.iter())
+            .copied()
+            .collect();
+        for table in all_tables {
+            let exists: (Option<String>,) = sqlx::query_as("SELECT to_regclass($1)::text")
+                .bind(table)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert!(
+                exists.0.is_some(),
+                "table {table} does not exist in schema"
+            );
+        }
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_tables_with_agent_id_nullability_matches_classification(pool: sqlx::PgPool) {
+        for table in super::TABLES_WITH_AGENT_ID_NOT_NULL {
+            let row: (String,) = sqlx::query_as(
+                "SELECT is_nullable FROM information_schema.columns
+                 WHERE table_name = $1 AND column_name = 'agent_id'",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("table {table}: failed to query agent_id nullability: {e}"));
+            assert_eq!(
+                row.0, "NO",
+                "table {table} listed as NOT NULL but schema says nullable"
+            );
+        }
+        for table in super::TABLES_WITH_AGENT_ID_NULLABLE {
+            let row: (String,) = sqlx::query_as(
+                "SELECT is_nullable FROM information_schema.columns
+                 WHERE table_name = $1 AND column_name = 'agent_id'",
+            )
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("table {table}: failed to query agent_id nullability: {e}"));
+            assert_eq!(
+                row.0, "YES",
+                "table {table} listed as NULLABLE but schema says NOT NULL"
             );
         }
     }
