@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::AppState;
-use crate::gateway::clusters::{AuthServices, ConfigServices, InfraServices};
+use crate::gateway::clusters::{AuthServices, InfraServices};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -41,7 +41,6 @@ pub(crate) struct SetSecretRequest {
 pub(crate) async fn set_secret(
     State(auth): State<AuthServices>,
     State(infra): State<InfraServices>,
-    State(cfg): State<ConfigServices>,
     Json(req): Json<SetSecretRequest>,
 ) -> impl IntoResponse {
     if req.name.is_empty() {
@@ -92,8 +91,8 @@ pub(crate) async fn set_secret(
     {
         Ok(()) => {
             crate::db::audit::audit_spawn(infra.db.clone(), scope.to_string(), crate::db::audit::event_types::SECRET_CREATED, None, json!({"name": req.name, "scope": scope}));
-            // Notify toolgate to invalidate cached tokens that may depend on this secret
-            super::providers::notify_toolgate_reload(cfg.config.toolgate_url.clone());
+            // Toolgate pulls config + provider keys on every provider call (TTL=0)
+            // — no reload notification needed.
             Json(json!({"ok": true})).into_response()
         }
         Err(e) => {

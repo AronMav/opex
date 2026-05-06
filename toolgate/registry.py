@@ -1,11 +1,24 @@
-"""Provider registry — resolves active providers by capability."""
+"""Provider registry — resolves active providers by capability.
+
+Pull-on-call (TTL=0): every `aget_active` / `aget_instance` fetches the latest
+config from Core API. On fetch failure the registry keeps the last-known
+config — readers never see an empty registry just because Core blipped.
+
+Driver instances are rebuilt only when the fetched config differs from the
+cached one (deep equality on the pydantic model), so the steady-state cost
+of pull-on-call is one HTTP round-trip per call, not a full re-instantiation.
+"""
 
 from __future__ import annotations
 
 import logging
 import threading
 
-from config import ProviderConfig, ProvidersConfig, aload_config, load_config_from_api_sync
+from config import (
+    ProviderConfig,
+    ProvidersConfig,
+    _aload_config_from_api,
+)
 from providers.base import STTProvider, VisionProvider, TTSProvider, ImageGenProvider, EmbeddingProvider
 
 Provider = STTProvider | VisionProvider | TTSProvider | ImageGenProvider | EmbeddingProvider
@@ -115,33 +128,35 @@ class ProviderRegistry:
     def __init__(self) -> None:
         self.config: ProvidersConfig = ProvidersConfig()
         self._instances: dict[str, Provider] = {}
-        self._loaded: bool = False
         self._lock = threading.Lock()
 
-    async def aload(self) -> None:
-        config = await aload_config()
+    async def _refresh(self) -> None:
+        """Pull-on-call: best-effort fetch; on failure, keep last-known.
+        Rebuilds driver instances only when the fetched config differs."""
+        config = await _aload_config_from_api()
+        if config is None:
+            return  # Core unreachable — keep cached
         with self._lock:
+            if config == self.config:
+                return  # No change — skip rebuild
             self.config = config
             self._instantiate_all()
-            self._loaded = bool(self.config.providers)
 
-    async def areload(self) -> None:
-        """Reload from Core API asynchronously."""
-        await self.aload()
+    async def aload(self) -> None:
+        """Startup warm-up — same as `_refresh` now.
+        Retained for backwards compatibility with `app.py` lifespan."""
+        await self._refresh()
 
-    def _ensure_loaded(self) -> None:
-        """Lazy-load: if startup returned empty config, retry from Core API on first use."""
-        if self._loaded:
-            return
+    async def aget_active(self, capability: str) -> Provider | None:
+        await self._refresh()
         with self._lock:
-            if self._loaded:
-                return
-            config = load_config_from_api_sync()
-            if config and config.providers:
-                log.info("Lazy-load: got %d providers from Core API", len(config.providers))
-                self.config = config
-                self._instantiate_all()
-                self._loaded = True
+            active_id = self.config.active.get(capability)
+            return self._instances.get(active_id) if active_id else None
+
+    async def aget_instance(self, provider_id: str) -> Provider | None:
+        await self._refresh()
+        with self._lock:
+            return self._instances.get(provider_id)
 
     def _instantiate_all(self) -> None:
         self._instances.clear()
@@ -164,19 +179,6 @@ class ProviderRegistry:
             except Exception:
                 log.exception("Failed to instantiate provider %s", pid)
 
-    def get_active(self, capability: str) -> Provider | None:
-        self._ensure_loaded()
-        with self._lock:
-            active_id = self.config.active.get(capability)
-            if active_id and active_id in self._instances:
-                return self._instances[active_id]
-        return None
-
-    def get_instance(self, provider_id: str) -> Provider | None:
-        self._ensure_loaded()
-        with self._lock:
-            return self._instances.get(provider_id)
-
     def list_providers(self) -> dict[str, ProviderConfig]:
         with self._lock:
             return self.config.providers
@@ -185,4 +187,4 @@ class ProviderRegistry:
         """True iff the last successful load produced zero providers.
         When degraded, capability endpoints should return 503."""
         with self._lock:
-            return not self._loaded
+            return not self.config.providers

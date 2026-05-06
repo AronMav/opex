@@ -10,7 +10,7 @@ from providers.tts_local import Qwen3TTS
 
 
 class _FakeTextProvider:
-    """Stand-in for a resolved text provider returned by registry.get_instance()."""
+    """Stand-in for a resolved text provider returned by registry.aget_instance()."""
     def __init__(self):
         self.base_url = "http://llm-test/v1/chat/completions"
         self.api_key = "sk-test"
@@ -21,7 +21,7 @@ class _FakeRegistry:
     def __init__(self, instance_by_id: dict[str, object]):
         self._map = instance_by_id
 
-    def get_instance(self, provider_id: str):
+    async def aget_instance(self, provider_id: str):
         return self._map.get(provider_id)
 
 

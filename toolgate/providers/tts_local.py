@@ -36,7 +36,7 @@ class Qwen3TTS:
             else None
         )
 
-    def _resolve_llm_config(self, registry) -> NormalizeLLMConfig | None:
+    async def _resolve_llm_config(self, registry) -> NormalizeLLMConfig | None:
         """Resolve normalize-LLM config from the referenced text provider.
         Returns None (caller will fall back to pre/post-only normalize) if:
           - normalize flag is disabled
@@ -52,7 +52,7 @@ class Qwen3TTS:
             log.warning("no registry passed to synthesize — cannot resolve "
                         "normalize_provider_id=%s", self.normalize_provider_id)
             return None
-        text_provider = registry.get_instance(self.normalize_provider_id)
+        text_provider = await registry.aget_instance(self.normalize_provider_id)
         if text_provider is None:
             log.warning("normalize_provider_id=%s not found in registry — "
                         "falling back to basic normalize",
@@ -72,7 +72,7 @@ class Qwen3TTS:
                          voice: str, model: str | None = None,
                          response_format: str = "mp3",
                          registry=None) -> bytes:
-        llm_config = self._resolve_llm_config(registry)
+        llm_config = await self._resolve_llm_config(registry)
         processed = await normalize_text(http, text, config=llm_config)
         resolved_voice = voice if voice else self.default_voice
 
