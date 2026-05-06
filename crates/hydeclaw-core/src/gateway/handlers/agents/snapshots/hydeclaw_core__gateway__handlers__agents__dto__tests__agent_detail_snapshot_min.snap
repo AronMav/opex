@@ -20,6 +20,7 @@ expression: dto
   "skill_review": null,
   "session": null,
   "icon": null,
+  "icon_url": null,
   "max_tools_in_context": null,
   "tool_loop": null,
   "tool_dispatcher": {

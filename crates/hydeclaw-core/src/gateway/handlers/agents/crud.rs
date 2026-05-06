@@ -43,7 +43,10 @@ pub(super) fn merge_clearable_string(
 
 // ── Agent list ──────────────────────────────────────────
 
-pub(crate) async fn api_agents(State(agents): State<AgentCore>) -> Json<Value> {
+pub(crate) async fn api_agents(
+    State(agents): State<AgentCore>,
+    State(auth): State<AuthServices>,
+) -> Json<Value> {
     // Read configs from disk (source of truth)
     let mut disk_configs = crate::config::load_agent_configs("config/agents").unwrap_or_default();
     // Base (base infrastructure) agents first, then alphabetical
@@ -53,6 +56,7 @@ pub(crate) async fn api_agents(State(agents): State<AgentCore>) -> Json<Value> {
     });
     let agents_map = agents.map.read().await;
 
+    let upload_key = auth.secrets.get_upload_hmac_key();
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut agents: Vec<AgentInfoDto> = Vec::new();
 
@@ -76,6 +80,7 @@ pub(crate) async fn api_agents(State(agents): State<AgentCore>) -> Json<Value> {
             config_dirty,
             Some(cfg.agent.base),
             None,
+            Some(&upload_key),
         ));
     }
 
@@ -92,6 +97,7 @@ pub(crate) async fn api_agents(State(agents): State<AgentCore>) -> Json<Value> {
             false,
             None,
             Some(true),
+            Some(&upload_key),
         ));
     }
 
@@ -121,7 +127,8 @@ pub(crate) async fn api_get_agent(
     };
 
     let voice = auth.secrets.get_scoped("TTS_VOICE", &name).await;
-    let detail = AgentDetailDto::from_config(&cfg, is_running, config_dirty, voice);
+    let upload_key = auth.secrets.get_upload_hmac_key();
+    let detail = AgentDetailDto::from_config(&cfg, is_running, config_dirty, voice, Some(&upload_key));
     Json(detail).into_response()
 }
 

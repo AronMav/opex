@@ -182,6 +182,10 @@ pub struct AgentDetailDto {
     pub skill_review: Option<AgentDetailSkillReviewDto>,
     pub session: Option<AgentDetailSessionDto>,
     pub icon: Option<String>,
+    /// Pre-signed URL for the icon under `/uploads/{filename}`. Long-TTL
+    /// (`HISTORICAL_URL_TTL_SECS`) so a saved agent icon stays viewable across
+    /// restarts. `None` when `icon` is absent or no upload key is available.
+    pub icon_url: Option<String>,
     pub max_tools_in_context: Option<usize>,
     pub tool_loop: Option<AgentDetailToolLoopDto>,
     pub tool_dispatcher: Option<AgentDetailToolDispatcherDto>,
@@ -227,6 +231,8 @@ pub struct AgentInfoDto {
     pub provider_connection: Option<String>,
     pub fallback_provider: Option<String>,
     pub icon: Option<String>,
+    /// Pre-signed URL for the icon (see `AgentDetailDto::icon_url`).
+    pub icon_url: Option<String>,
     pub temperature: f64,
     pub has_access: bool,
     pub access_mode: Option<String>,

@@ -706,6 +706,68 @@ pub async fn claim_session_running(db: &PgPool, session_id: Uuid) -> Result<bool
     Ok(rows > 0)
 }
 
+/// Mode-aware variant of `claim_session_running`. Sets `run_status = 'running'`
+/// only when the transition is consistent with `mode`:
+///
+/// - `NewSession`: row was just inserted; allow `NULL → running`.
+/// - `NewTurnAfterDone`: allow `done → running` (chat continuation).
+/// - `ResumeRunning`: idempotent self-update; allow `running → running`.
+/// - `ExplicitResume`: user explicitly opened a session via UI / fork /
+///   `resume_session_id`. Status may be soft-terminal — allow ANY → running.
+///
+/// Returns `Ok(true)` when the row was updated, `Ok(false)` when the row
+/// is missing or in an incompatible status. The narrow TOCTOU race (status
+/// flipped between resolve and claim) is handled by `claim_session_with_retry`.
+pub async fn claim_session_for_reentry(
+    db: &PgPool,
+    session_id: Uuid,
+    mode: crate::ReentryMode,
+) -> Result<bool> {
+    let allowed_from = match mode {
+        crate::ReentryMode::NewSession => "(run_status IS NULL)",
+        crate::ReentryMode::NewTurnAfterDone => "(run_status = 'done')",
+        crate::ReentryMode::ResumeRunning => "(run_status = 'running')",
+        crate::ReentryMode::ExplicitResume => "TRUE",
+    };
+    // Allowed-from is a literal SQL fragment from a closed match arm —
+    // never user input — so it cannot be SQL-injected.
+    let q = format!(
+        "UPDATE sessions SET run_status = 'running' WHERE id = $1 AND {allowed_from}",
+    );
+    let rows = sqlx::query(&q).bind(session_id).execute(db).await?.rows_affected();
+    Ok(rows > 0)
+}
+
+/// Convenience: claim with one retry on race. If the initial claim fails
+/// (status changed between resolve and claim), re-fetch status and retry
+/// using `ExplicitResume` mode (any → running). Without retry, the user's
+/// message would be lost on a narrow but real race window.
+pub async fn claim_session_with_retry(
+    db: &PgPool,
+    session_id: Uuid,
+    initial_mode: crate::ReentryMode,
+) -> Result<bool> {
+    if claim_session_for_reentry(db, session_id, initial_mode).await? {
+        return Ok(true);
+    }
+    tracing::warn!(
+        %session_id,
+        ?initial_mode,
+        "claim_session_for_reentry raced; retrying with ExplicitResume",
+    );
+    // If the row was deleted between resolve and now, no point retrying.
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = $1)",
+    )
+    .bind(session_id)
+    .fetch_one(db)
+    .await?;
+    if !exists {
+        return Ok(false);
+    }
+    claim_session_for_reentry(db, session_id, crate::ReentryMode::ExplicitResume).await
+}
+
 /// Mark any `status='streaming'` messages in `session_id` as `'interrupted'`.
 ///
 /// Called in bootstrap just after `claim_session_running` so that a streaming
