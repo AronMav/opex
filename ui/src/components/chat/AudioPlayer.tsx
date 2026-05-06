@@ -205,16 +205,13 @@ export function AudioPlayer({ src }: { src: string }) {
     [seekMax, togglePlay],
   );
 
-  // Time label: show "current / total" once we know the duration, otherwise
-  // just current. After `ended`, currentTime resets to 0 — UI returns to the
-  // duration-only display so the row doesn't look stuck at 100%.
+  // Time label: always "current / total" once we know the duration so the
+  // user sees both at a glance — no mode-switch between rest and playback.
+  // Streaming audio without a duration header still falls back to current.
   const timeLabel = useMemo(() => {
-    if (duration > 0) {
-      if (currentTime > 0 || playing) return `${formatTime(currentTime)} / ${formatTime(duration)}`;
-      return formatTime(duration);
-    }
+    if (duration > 0) return `${formatTime(currentTime)} / ${formatTime(duration)}`;
     return formatTime(currentTime);
-  }, [currentTime, duration, playing]);
+  }, [currentTime, duration]);
 
   return (
     <div
@@ -319,7 +316,7 @@ export function AudioPlayer({ src }: { src: string }) {
             style={{
               color: "var(--muted-foreground)",
               fontFamily: "var(--font-mono, monospace)",
-              minWidth: duration > 0 ? "7ch" : "3ch",
+              minWidth: duration > 0 ? "9ch" : "4ch",
               textAlign: "right",
             }}
           >
