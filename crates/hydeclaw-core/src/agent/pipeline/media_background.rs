@@ -122,6 +122,22 @@ impl MediaKind {
         }
     }
 
+    /// Build an inline tool result for the web-UI session path so the media
+    /// renders directly in the chat stream (via [`engine::FILE_PREFIX`] which
+    /// chat-history.ts parses into an inline image / audio / video element)
+    /// rather than only landing in the notification bell.
+    ///
+    /// `file_marker_json` must be a JSON object string with at least `url`
+    /// (and ideally `mediaType`), as produced by `save_binary_to_uploads`.
+    pub fn inline_tool_result(self, file_marker_json: &str) -> String {
+        format!(
+            "{}{}\n[SYSTEM] {} delivered inline in chat; do NOT mention or repeat it. End your turn with no further text.",
+            crate::agent::engine::FILE_PREFIX,
+            file_marker_json,
+            self.subject(),
+        )
+    }
+
     /// Localised (ru) title for the success-path UI notification.
     pub fn notification_ready_title(self) -> &'static str {
         match self {
@@ -629,6 +645,49 @@ mod tests {
     fn provider_header_other_returns_none_even_with_both_set() {
         let h = provider_header_for(MediaKind::Other, Some("nova"), Some("flux"));
         assert_eq!(h, None, "Other has no provider override");
+    }
+
+    // ── inline_tool_result (web UI in-chat delivery) ────────────────────────
+    //
+    // For UI sessions (no chat_id), media should appear inline in the chat
+    // stream — not just as a notification in the bell. The tool result must
+    // start with FILE_PREFIX so chat-history.ts:196 picks it up and renders
+    // an image/audio/video element in place.
+
+    #[test]
+    fn inline_tool_result_starts_with_file_prefix_for_image() {
+        let json = r#"{"url":"/uploads/x.png","mediaType":"image/png"}"#;
+        let out = MediaKind::Photo.inline_tool_result(json);
+        assert!(
+            out.starts_with(crate::agent::engine::FILE_PREFIX),
+            "inline result must start with __file__: prefix so the UI parses it: {out}"
+        );
+        assert!(out.contains(json), "marker payload must be embedded verbatim: {out}");
+        assert!(out.contains("Image"), "follow-up text must reference Image kind: {out}");
+        assert!(
+            out.to_lowercase().contains("end your turn"),
+            "must instruct LLM to stay quiet (image already in chat): {out}"
+        );
+    }
+
+    #[test]
+    fn inline_tool_result_voice_says_audio_not_image() {
+        let json = r#"{"url":"/uploads/x.wav","mediaType":"audio/wav"}"#;
+        let out = MediaKind::Voice.inline_tool_result(json);
+        assert!(out.contains("Audio"), "voice must say Audio: {out}");
+        assert!(!out.contains("Image"), "voice must NOT mention Image: {out}");
+    }
+
+    #[test]
+    fn inline_tool_result_video_says_video() {
+        let out = MediaKind::Video.inline_tool_result(r#"{"url":"/x.mp4","mediaType":"video/mp4"}"#);
+        assert!(out.contains("Video"));
+    }
+
+    #[test]
+    fn inline_tool_result_other_falls_back_to_media() {
+        let out = MediaKind::Other.inline_tool_result(r#"{"url":"/x.bin","mediaType":"application/octet-stream"}"#);
+        assert!(out.contains("Media"));
     }
 
     // ── upload_hint per kind (regression guard) ─────────────────────────────
