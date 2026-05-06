@@ -1,7 +1,16 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Play, Pause, Volume2, VolumeX } from "lucide-react";
+
+// Single visual language for both shape AND progress: a bar waveform built
+// from the actual audio buffer (RMS per bucket), where bars to the left of
+// the playhead are coloured primary and the rest fade into muted-foreground.
+// Click anywhere on the bars to seek. Mirrors the Telegram/Threads voice
+// message UX — one canvas-free, accessible, mobile-friendly element.
+
+const BAR_COUNT = 48;
+const MIN_BAR_HEIGHT = 0.12; // floor so quiet samples still show as a tick
 
 function formatTime(secs: number): string {
   if (!isFinite(secs) || secs < 0) return "0:00";
@@ -10,173 +19,87 @@ function formatTime(secs: number): string {
   return `${m}:${s}`;
 }
 
-// Static waveform shape for paused state — three overlapping sine waves
-const STATIC_WAVE: { x: number; y: number }[] = Array.from({ length: 120 }, (_, i) => {
-  const t = i / 119;
-  const amp =
-    Math.sin(t * Math.PI * 7) * 0.22 +
-    Math.sin(t * Math.PI * 13 + 1.5) * 0.12 +
-    Math.sin(t * Math.PI * 23 + 0.8) * 0.07;
-  return { x: t, y: 0.5 + amp };
-});
-
-function getCSSColor(varName: string, fallback: string): string {
-  if (typeof window === "undefined") return fallback;
-  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim() || fallback;
+// Pleasant placeholder shape used until real bars are decoded — three
+// detuned sines so the player never looks empty during the network round-trip.
+function makePlaceholderBars(): number[] {
+  return Array.from({ length: BAR_COUNT }, (_, i) => {
+    const t = i / (BAR_COUNT - 1);
+    const a =
+      Math.sin(t * Math.PI * 4) * 0.30 +
+      Math.sin(t * Math.PI * 9 + 0.7) * 0.18 +
+      Math.sin(t * Math.PI * 17 + 1.3) * 0.10;
+    return Math.max(MIN_BAR_HEIGHT, Math.min(1, 0.45 + a));
+  });
 }
 
-function strokePath(
-  ctx: CanvasRenderingContext2D,
-  pts: { x: number; y: number }[],
-  W: number,
-  H: number,
-  color: string,
-  opacity: number,
-  glow: boolean,
-) {
-  ctx.save();
-  ctx.globalAlpha = opacity;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 1.5;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  if (glow) { ctx.shadowBlur = 10; ctx.shadowColor = color; }
-  ctx.beginPath();
-  pts.forEach((p, i) => {
-    const x = p.x * W, y = p.y * H;
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-  ctx.restore();
+// Decode the audio file once and reduce it to BAR_COUNT amplitudes (RMS per
+// bucket, normalised to the peak so quiet recordings still fill the row).
+// Aborts cleanly on unmount.
+async function decodeBars(src: string, signal: AbortSignal): Promise<number[] | null> {
+  try {
+    const resp = await fetch(src, { signal });
+    if (!resp.ok) return null;
+    const buf = await resp.arrayBuffer();
+    if (signal.aborted) return null;
+    // Web Audio: a fresh context per decode is fine — close it immediately.
+    const Ctor: typeof AudioContext =
+      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return null;
+    const ctx = new Ctor();
+    const audioBuf = await ctx.decodeAudioData(buf.slice(0));
+    await ctx.close();
+    if (signal.aborted) return null;
+
+    const channelData = audioBuf.getChannelData(0);
+    const samplesPerBar = Math.max(1, Math.floor(channelData.length / BAR_COUNT));
+    const bars: number[] = new Array(BAR_COUNT);
+    let peak = 0;
+    for (let b = 0; b < BAR_COUNT; b++) {
+      let sumSq = 0;
+      const start = b * samplesPerBar;
+      const end = Math.min(channelData.length, start + samplesPerBar);
+      for (let i = start; i < end; i++) {
+        const v = channelData[i];
+        sumSq += v * v;
+      }
+      const rms = Math.sqrt(sumSq / Math.max(1, end - start));
+      bars[b] = rms;
+      if (rms > peak) peak = rms;
+    }
+    if (peak === 0) return null;
+    return bars.map(v => Math.max(MIN_BAR_HEIGHT, v / peak));
+  } catch {
+    return null;
+  }
 }
 
 export function AudioPlayer({ src }: { src: string }) {
-  const audioRef  = useRef<HTMLAudioElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const audioCtxRef  = useRef<AudioContext | null>(null);
-  const analyserRef  = useRef<AnalyserNode | null>(null);
-  const dataArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
-  const rafRef       = useRef<number>(0);
-  // Refs for RAF loop — avoids stale closures without re-creating the loop
-  const currentTimeRef = useRef(0);
-  const durationRef    = useRef(0);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const barsRef = useRef<HTMLDivElement>(null);
 
-  const [playing,     setPlaying]     = useState(false);
+  const [bars, setBars] = useState<number[]>(makePlaceholderBars);
+  const [decoded, setDecoded] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration,    setDuration]    = useState(0);
-  const [muted,       setMuted]       = useState(false);
-  const [error,       setError]       = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [error, setError] = useState(false);
 
-  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
-  useEffect(() => { durationRef.current    = duration;    }, [duration]);
-
-  // ── Canvas ────────────────────────────────────────────────────────────────
-
-  const setupCanvas = useCallback(() => {
-    const c = canvasRef.current;
-    if (!c) return;
-    const dpr = window.devicePixelRatio || 1;
-    const r   = c.getBoundingClientRect();
-    if (r.width === 0) return;
-    c.width  = Math.round(r.width  * dpr);
-    c.height = Math.round(r.height * dpr);
-  }, []);
-
-  // Draw the pre-baked static shape — used when paused
-  const drawStatic = useCallback(() => {
-    const c = canvasRef.current;
-    if (!c || c.width === 0) return;
-    const ctx = c.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const W = c.width / dpr, H = c.height / dpr;
-    ctx.clearRect(0, 0, c.width, c.height);
-    ctx.save(); ctx.scale(dpr, dpr);
-    strokePath(ctx, STATIC_WAVE, W, H, getCSSColor("--muted-foreground", "#8b96a8"), 0.3, false);
-    ctx.restore();
-  }, []);
-
-  // Live oscilloscope RAF loop — single primary-colour line, no progress split
-  const startLiveLoop = useCallback(() => {
-    const loop = () => {
-      const c        = canvasRef.current;
-      const analyser = analyserRef.current;
-      const data     = dataArrayRef.current;
-      if (!c || !analyser || !data || c.width === 0) {
-        rafRef.current = requestAnimationFrame(loop);
-        return;
+  // ── Decode bars once per src ──────────────────────────────────────────────
+  useEffect(() => {
+    setDecoded(false);
+    setBars(makePlaceholderBars());
+    const ctrl = new AbortController();
+    decodeBars(src, ctrl.signal).then(b => {
+      if (b) {
+        setBars(b);
+        setDecoded(true);
       }
-      analyser.getByteTimeDomainData(data);
-      const ctx = c.getContext("2d");
-      if (!ctx) { rafRef.current = requestAnimationFrame(loop); return; }
-
-      const dpr = window.devicePixelRatio || 1;
-      const W = c.width / dpr, H = c.height / dpr;
-      const N = data.length;
-
-      // Amplify: TTS deviation ≈ ±10–20 out of 128, ×2.5 fills the canvas nicely
-      const GAIN = 2.5;
-      const pts: { x: number; y: number }[] = Array.from({ length: N }, (_, i) => ({
-        x: i / (N - 1),
-        y: Math.max(0.04, Math.min(0.96, 0.5 + ((data[i] - 128) / 128) * GAIN)),
-      }));
-
-      ctx.clearRect(0, 0, c.width, c.height);
-      ctx.save(); ctx.scale(dpr, dpr);
-      strokePath(ctx, pts, W, H, getCSSColor("--primary", "#6b9eff"), 0.9, true);
-      ctx.restore();
-
-      rafRef.current = requestAnimationFrame(loop);
-    };
-    rafRef.current = requestAnimationFrame(loop);
-  }, []);
-
-  // ── AudioContext init (lazy, requires user gesture) ────────────────────────
-
-  const initAudioContext = useCallback(() => {
-    if (analyserRef.current || !audioRef.current) return;
-    try {
-      const actx    = new AudioContext();
-      const analyser = actx.createAnalyser();
-      analyser.fftSize              = 256;
-      analyser.smoothingTimeConstant = 0.55;
-      const source = actx.createMediaElementSource(audioRef.current);
-      source.connect(analyser);
-      analyser.connect(actx.destination);
-      audioCtxRef.current  = actx;
-      analyserRef.current  = analyser;
-      dataArrayRef.current = new Uint8Array(analyser.frequencyBinCount);
-    } catch { /* CORS or policy — visualisation falls back to static */ }
-  }, []);
-
-  // ── Effects ───────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    // Wait one frame so the canvas has layout dimensions
-    const id = requestAnimationFrame(() => { setupCanvas(); drawStatic(); });
-    const ro = new ResizeObserver(() => { setupCanvas(); if (!analyserRef.current) drawStatic(); });
-    if (canvasRef.current) ro.observe(canvasRef.current);
-    return () => {
-      cancelAnimationFrame(id);
-      cancelAnimationFrame(rafRef.current);
-      ro.disconnect();
-      audioCtxRef.current?.close();
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (playing) {
-      initAudioContext();
-      cancelAnimationFrame(rafRef.current);
-      if (analyserRef.current) startLiveLoop();
-    } else {
-      cancelAnimationFrame(rafRef.current);
-      drawStatic();
-    }
-  }, [playing, initAudioContext, startLiveLoop, drawStatic]);
+    });
+    return () => ctrl.abort();
+  }, [src]);
 
   // ── Audio handlers ────────────────────────────────────────────────────────
-
   const handleDurationUpdate = useCallback(() => {
     const d = audioRef.current?.duration;
     if (d && isFinite(d) && d > 0) setDuration(d);
@@ -185,18 +108,9 @@ export function AudioPlayer({ src }: { src: string }) {
   const togglePlay = useCallback(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (playing) a.pause(); else a.play().catch(() => setError(true));
+    if (playing) a.pause();
+    else a.play().catch(() => setError(true));
   }, [playing]);
-
-  // Scrubber seeks via the audio element's seekable range (works even when
-  // duration is Infinity for streaming audio — uses seekable.end(0) as ceiling)
-  const handleSeek = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const a = audioRef.current;
-    if (!a) return;
-    const t = Number(e.target.value);
-    try { a.currentTime = t; } catch { return; }
-    setCurrentTime(t);
-  }, []);
 
   const toggleMute = useCallback(() => {
     const a = audioRef.current;
@@ -205,36 +119,132 @@ export function AudioPlayer({ src }: { src: string }) {
     setMuted(m => !m);
   }, [muted]);
 
-  // Use seekable end as max if duration is unknown (streaming WAV without header length)
-  const seekMax = duration > 0
-    ? duration
-    : (audioRef.current?.seekable?.length
+  // Streaming WAVs (TTS) sometimes report Infinity for duration — fall back
+  // to seekable.end(0) which the browser fills in once the buffer is loaded.
+  const seekMax =
+    duration > 0
+      ? duration
+      : audioRef.current?.seekable?.length
         ? audioRef.current.seekable.end(0)
-        : 0);
-  const canSeek  = seekMax > 0 && !error;
+        : 0;
+  const canSeek = seekMax > 0 && !error;
   const progress = seekMax > 0 ? Math.min(1, currentTime / seekMax) : 0;
+
+  // Click / drag anywhere on the bars to seek. Pointer events cover mouse +
+  // touch + stylus uniformly; capture lets us track drag past the element.
+  const seekFromPointer = useCallback(
+    (clientX: number) => {
+      const el = barsRef.current;
+      const a = audioRef.current;
+      if (!el || !a || !canSeek) return;
+      const rect = el.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const t = ratio * seekMax;
+      try {
+        a.currentTime = t;
+      } catch {
+        /* unseekable mid-stream — ignore */
+      }
+      setCurrentTime(t);
+    },
+    [canSeek, seekMax],
+  );
+
+  const draggingRef = useRef(false);
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!canSeek) return;
+      draggingRef.current = true;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      seekFromPointer(e.clientX);
+    },
+    [canSeek, seekFromPointer],
+  );
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!draggingRef.current) return;
+      seekFromPointer(e.clientX);
+    },
+    [seekFromPointer],
+  );
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released */
+    }
+  }, []);
+
+  // Keyboard: ←/→ seek by 5s, space toggles play. Hooked on the bars region
+  // because the play button has its own native space/enter handling.
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const a = audioRef.current;
+      if (!a) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        try {
+          a.currentTime = Math.max(0, (a.currentTime || 0) - 5);
+        } catch {
+          /* no-op */
+        }
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        try {
+          a.currentTime = Math.min(seekMax || a.currentTime, (a.currentTime || 0) + 5);
+        } catch {
+          /* no-op */
+        }
+      } else if (e.key === " " || e.key === "Spacebar") {
+        e.preventDefault();
+        togglePlay();
+      }
+    },
+    [seekMax, togglePlay],
+  );
+
+  // Time label: show "current / total" once we know the duration, otherwise
+  // just current. After `ended`, currentTime resets to 0 — UI returns to the
+  // duration-only display so the row doesn't look stuck at 100%.
+  const timeLabel = useMemo(() => {
+    if (duration > 0) {
+      if (currentTime > 0 || playing) return `${formatTime(currentTime)} / ${formatTime(duration)}`;
+      return formatTime(duration);
+    }
+    return formatTime(currentTime);
+  }, [currentTime, duration, playing]);
 
   return (
     <div
-      className={`audio-player w-full max-w-md rounded-2xl border border-border bg-card${playing ? " audio-player-playing" : ""}`}
-      style={{ padding: "12px 14px 10px" }}
+      className="audio-player w-full max-w-md rounded-2xl border border-border bg-card"
+      style={{ padding: "12px 14px" }}
+      data-decoded={decoded || undefined}
+      data-playing={playing || undefined}
     >
-      {/* <audio> without controls renders nothing — no need to hide it */}
+      {/* <audio> without controls renders nothing */}
       <audio
         ref={audioRef}
         src={src}
-        preload="auto"
+        preload="metadata"
         onLoadedMetadata={handleDurationUpdate}
         onDurationChange={handleDurationUpdate}
         onCanPlay={handleDurationUpdate}
         onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime ?? 0)}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
-        onEnded={() => { setPlaying(false); handleDurationUpdate(); }}
-        onError={() => { setPlaying(false); setError(true); }}
+        onEnded={() => {
+          setPlaying(false);
+          setCurrentTime(0);
+          handleDurationUpdate();
+        }}
+        onError={() => {
+          setPlaying(false);
+          setError(true);
+        }}
       />
 
-      {/* ── Controls row ── */}
       <div className="flex items-center gap-3">
         {/* Play / Pause */}
         <button
@@ -246,31 +256,79 @@ export function AudioPlayer({ src }: { src: string }) {
         >
           {playing && (
             <span
-              className="absolute inset-0 rounded-xl opacity-20 pointer-events-none"
-              style={{ background: "var(--primary)", animation: "thin-pulse 1.8s ease-in-out infinite" }}
+              className="absolute inset-0 rounded-xl pointer-events-none"
+              style={{
+                background: "var(--primary)",
+                opacity: 0.18,
+                animation: "audio-player-pulse 1.6s ease-in-out infinite",
+              }}
             />
           )}
-          {playing
-            ? <Pause className="h-3.5 w-3.5" style={{ color: "var(--primary-foreground)" }} />
-            : <Play  className="h-3.5 w-3.5 ml-0.5" style={{ color: "var(--primary-foreground)" }} />
-          }
+          {playing ? (
+            <Pause className="h-3.5 w-3.5 relative" style={{ color: "var(--primary-foreground)" }} />
+          ) : (
+            <Play className="h-3.5 w-3.5 ml-0.5 relative" style={{ color: "var(--primary-foreground)" }} />
+          )}
         </button>
 
-        {/* Oscilloscope — single colour line, no progress split */}
-        <canvas ref={canvasRef} className="flex-1 h-8" aria-hidden="true" />
+        {/* Bar waveform — fills with primary up to playhead, the rest fades.
+            Click + drag anywhere to seek. Keyboard: ←/→ seek 5s, space play. */}
+        <div
+          ref={barsRef}
+          role="slider"
+          tabIndex={canSeek ? 0 : -1}
+          aria-label="Перемотка по волне"
+          aria-valuemin={0}
+          aria-valuemax={seekMax > 0 ? Math.round(seekMax) : 0}
+          aria-valuenow={Math.round(currentTime)}
+          aria-valuetext={`${formatTime(currentTime)} из ${formatTime(seekMax)}`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
+          onKeyDown={onKeyDown}
+          className="relative flex-1 h-9 cursor-pointer select-none touch-none focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md"
+          style={{ touchAction: "none" }}
+        >
+          <div className="absolute inset-0 flex items-center gap-[2px] px-[1px]">
+            {bars.map((amp, i) => {
+              // One bar = one slot of the row. Filled iff its slot is to the
+              // LEFT of the playhead (use centre of the slot for fairness).
+              const slotCentre = (i + 0.5) / BAR_COUNT;
+              const filled = slotCentre <= progress;
+              return (
+                <div
+                  key={i}
+                  className="flex-1 rounded-[1.5px] transition-[background-color,opacity] duration-75 ease-out"
+                  style={{
+                    height: `${Math.max(MIN_BAR_HEIGHT, amp) * 100}%`,
+                    minHeight: 2,
+                    background: filled ? "var(--primary)" : "var(--muted-foreground)",
+                    opacity: filled ? 0.95 : 0.32,
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
 
-        {/* Current time only + mute */}
+        {/* Time + mute */}
         <div className="flex-shrink-0 flex items-center gap-2">
           <span
             className="text-[11px] tabular-nums leading-none"
-            style={{ color: "var(--muted-foreground)", fontFamily: "var(--font-mono, monospace)", minWidth: "2.8ch" }}
+            style={{
+              color: "var(--muted-foreground)",
+              fontFamily: "var(--font-mono, monospace)",
+              minWidth: duration > 0 ? "7ch" : "3ch",
+              textAlign: "right",
+            }}
           >
-            {formatTime(currentTime)}
+            {timeLabel}
           </span>
           <button
             onClick={toggleMute}
             className="focus:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded transition-opacity hover:opacity-100"
-            style={{ color: "var(--muted-foreground)", opacity: 0.4 }}
+            style={{ color: "var(--muted-foreground)", opacity: 0.45 }}
             aria-label={muted ? "Включить звук" : "Выключить звук"}
           >
             {muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
@@ -278,46 +336,21 @@ export function AudioPlayer({ src }: { src: string }) {
         </div>
       </div>
 
-      {/* ── Scrubber ── */}
-      <div className="relative mt-2.5 py-2 group/scrubber">
-        {/* Track */}
-        <div className="relative h-[2px] rounded-full" style={{ background: "var(--border)" }}>
-          {/* Fill */}
-          <div
-            className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-100"
-            style={{ width: `${progress * 100}%`, background: "var(--primary)" }}
-          />
-          {/* Thumb — appears on hover */}
-          <div
-            className="absolute top-1/2 w-2.5 h-2.5 rounded-full pointer-events-none opacity-0 group-hover/scrubber:opacity-100 transition-opacity duration-150"
-            style={{
-              left: `${progress * 100}%`,
-              transform: "translate(-50%, -50%)",
-              background: "var(--primary)",
-              boxShadow: "0 0 0 2px var(--card)",
-            }}
-          />
-        </div>
-        {/* Native range input — invisible, handles all drag interaction */}
-        <input
-          type="range"
-          min={0}
-          max={seekMax || 0}
-          step={0.05}
-          value={canSeek ? currentTime : 0}
-          onChange={handleSeek}
-          disabled={!canSeek}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-default"
-          style={{ margin: 0, padding: 0 }}
-          aria-label="Перемотка"
-        />
-      </div>
-
       {error && (
         <p className="mt-1 text-[11px]" style={{ color: "var(--destructive)" }}>
           Не удалось воспроизвести аудио
         </p>
       )}
+
+      <style>{`
+        @keyframes audio-player-pulse {
+          0%, 100% { transform: scale(1);   opacity: 0.18; }
+          50%      { transform: scale(1.08); opacity: 0.04; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .audio-player [style*="audio-player-pulse"] { animation: none !important; }
+        }
+      `}</style>
     </div>
   );
 }
