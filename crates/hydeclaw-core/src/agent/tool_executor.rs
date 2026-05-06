@@ -116,7 +116,6 @@ pub struct DefaultToolExecutor {
     /// In-memory waiters for pending tool-call approvals (shared with ApprovalManager).
     /// Phase 66 REF-02: backed by `DashMap` (sharded sync lock) — see
     /// `crate::agent::approval_manager::ApprovalWaitersMap`.
-    #[allow(dead_code)]
     pub(crate) approval_waiters: crate::agent::approval_manager::ApprovalWaitersMap,
     /// SSE event sender for current streaming session — set/cleared by SSE loop.
     pub(crate) sse_event_tx: Arc<tokio::sync::Mutex<Option<crate::agent::engine_event_sender::EngineEventSender>>>,

@@ -304,65 +304,6 @@ pub async fn chat_stream_with_transient_retry(
     }))
 }
 
-// ── Transient retry with explicit provider (streaming) ──────────────
-
-/// Streaming variant of [`chat_with_transient_retry_using`].
-#[allow(dead_code)]
-pub async fn chat_stream_with_transient_retry_using(
-    provider: &Arc<dyn LlmProvider>,
-    messages: &mut Vec<Message>,
-    tools: &[ToolDefinition],
-    chunk_tx: mpsc::UnboundedSender<String>,
-    compact: &impl Compactor,
-    opts: crate::agent::providers::CallOptions,
-) -> Result<hydeclaw_types::LlmResponse> {
-    let config = error_classify::RetryConfig::default();
-    let mut last_error: Option<anyhow::Error> = None;
-
-    for attempt in 0..config.max_attempts {
-        let result = match provider
-            .chat_stream(messages, tools, chunk_tx.clone(), opts)
-            .await
-        {
-            Ok(resp) => Ok(resp),
-            Err(e) if crate::agent::tool_loop::is_context_overflow(&e) => {
-                tracing::warn!(
-                    "context overflow on fallback provider (stream), compacting and retrying"
-                );
-                compact.compact(messages).await;
-                provider.chat_stream(messages, tools, chunk_tx.clone(), opts).await
-            }
-            Err(e) => Err(e),
-        };
-        match result {
-            Ok(resp) => return Ok(resp),
-            Err(e) => {
-                let class = error_classify::classify(&e);
-                if !error_classify::is_retryable(&class) {
-                    return Err(e);
-                }
-                let delay = error_classify::extract_retry_after(&e.to_string())
-                    .unwrap_or_else(|| config.retry_delay_for_error(&class, attempt));
-                tracing::warn!(
-                    attempt = attempt + 1,
-                    max_attempts = config.max_attempts,
-                    delay_ms = delay.as_millis() as u64,
-                    error_class = ?class,
-                    error = %e,
-                    "retrying LLM call (fallback provider, stream)"
-                );
-                last_error = Some(e);
-                if attempt < config.max_attempts - 1 {
-                    tokio::time::sleep(delay).await;
-                }
-            }
-        }
-    }
-    Err(last_error.unwrap_or_else(|| {
-        anyhow::anyhow!("LLM stream call failed after retries (fallback provider)")
-    }))
-}
-
 // ── Compactor trait ─────────────────────────────────────────────────
 
 /// Trait abstracting message compaction so free functions don't depend on `AgentEngine`.

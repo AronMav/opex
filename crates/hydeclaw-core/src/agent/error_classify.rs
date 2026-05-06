@@ -145,12 +145,6 @@ pub fn format_user_error(error: &anyhow::Error) -> String {
     format!("⚠️ {}", user_message(&classify(error)))
 }
 
-/// Format error for user display with explicit language.
-#[allow(dead_code)]
-pub fn format_user_error_lang(error: &anyhow::Error, language: &str) -> String {
-    format!("⚠️ {}", user_message_lang(&classify(error), language))
-}
-
 /// Whether the error class is worth retrying at the engine level.
 pub fn is_retryable(class: &LlmErrorClass) -> bool {
     matches!(
@@ -160,7 +154,6 @@ pub fn is_retryable(class: &LlmErrorClass) -> bool {
 }
 
 /// Asserts that CallTimeout is not included in the retryable set.
-#[allow(dead_code)]
 fn _assert_call_timeout_not_retryable() {
     // Compile-time assertion: if CallTimeout becomes retryable, this would need updating.
     let ct = LlmErrorClass::CallTimeout;

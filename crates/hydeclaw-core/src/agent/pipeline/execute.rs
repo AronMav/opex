@@ -919,12 +919,12 @@ pub async fn execute<S: EventSink>(
 /// `display_result` is what goes into the LLM context (markers stripped) and
 /// the `ToolResult` event. `db_result` is preserved verbatim for DB storage
 /// so reload/active_path rebuild can recover the full marker set.
+#[allow(dead_code)] // db_result kept for tests that assert marker preservation.
 struct ToolResultParts {
     display_result: String,
     /// Raw tool result with markers preserved. Persistence now happens
     /// upstream (detached, inside `execute_batch`) so this field is unused
     /// in the production path; kept for tests that assert marker preservation.
-    #[allow(dead_code)]
     db_result: String,
 }
 

@@ -305,7 +305,8 @@ pub(crate) struct CreateGmailTriggerReq {
 }
 
 #[derive(Debug, sqlx::FromRow)]
-#[allow(dead_code)]
+#[allow(dead_code)] // FromRow-mapped from the gmail_triggers table; some fields are
+                    // serialized into JSON responses but never read from the Rust struct.
 struct GmailTriggerRow {
     id: uuid::Uuid,
     agent_id: String,

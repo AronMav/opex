@@ -146,7 +146,7 @@ pub fn api_csp_report_bytes_handler(
 /// (it lives on the route layer).
 ///
 /// Consumed only by `tests/integration_csp_report.rs` (re-exported via lib.rs).
-#[allow(dead_code)]
+#[allow(dead_code)] // integration test consumer — invisible to clippy's lib build.
 pub fn routes_for_test(metrics: Arc<MetricsRegistry>) -> Router {
     Router::new()
         .route("/api/csp-report", post(api_csp_report_test))
@@ -156,7 +156,7 @@ pub fn routes_for_test(metrics: Arc<MetricsRegistry>) -> Router {
 
 /// Test-facing axum handler — extracts a bare `Arc<MetricsRegistry>` from
 /// state for `routes_for_test`. Accepts any content-type (matches production).
-#[allow(dead_code)]
+#[allow(dead_code)] // mounted via routes_for_test (above).
 async fn api_csp_report_test(
     State(metrics): State<Arc<MetricsRegistry>>,
     body: Bytes,

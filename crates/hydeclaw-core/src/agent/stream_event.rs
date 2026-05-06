@@ -14,7 +14,8 @@
 
 /// Events emitted during SSE streaming (AI SDK UI Message Stream Protocol v1).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Some variants (AgentSwitch) and field bindings are part of the
+                    // wire protocol but pattern-matched with `_` in the converter.
 pub enum StreamEvent {
     /// Session ID resolved/created by `build_context` — emitted first so the UI can track it.
     /// `context_limit` is the resolved token budget for this model (from /api/show or heuristic).

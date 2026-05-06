@@ -11,6 +11,7 @@ use thiserror::Error;
 /// `CancelReason::ConnectTimeout` variant because the reqwest stream never
 /// reaches our cancellable layer when a connect fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // ShutdownDrain — see set_shutdown_drain_reason.
 pub enum CancelReason {
     InactivityTimeout { silent_secs: u64 },
     MaxDurationExceeded { elapsed_secs: u64 },
@@ -23,7 +24,6 @@ pub enum CancelReason {
     // helper, which a future shutdown handler will call BEFORE cancelling
     // the root token. No runtime caller today — `#[allow(dead_code)]`
     // keeps the variant in the match surface so all providers compile.
-    #[allow(dead_code)]
     ShutdownDrain,
 }
 
@@ -32,6 +32,7 @@ pub enum CancelReason {
 /// Only `Text` can be used for Anthropic-style assistant prefill.
 /// `ToolUse` and `Thinking` cannot be partially resumed.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Thinking — reserved for future extended-thinking support.
 pub enum PartialState {
     /// Accumulated text deltas — usable for Anthropic assistant prefill.
     Text(String),
@@ -40,7 +41,6 @@ pub enum PartialState {
     /// Stream cut during a thinking block — cannot resume.
     /// Reserved for future Anthropic extended-thinking support; not yet constructed
     /// by any provider (ThinkingFilter discards thinking deltas before cancellation).
-    #[allow(dead_code)]
     Thinking,
     /// Nothing accumulated before the timeout.
     Empty,
@@ -49,11 +49,6 @@ pub enum PartialState {
 impl PartialState {
     pub fn is_resumable(&self) -> bool {
         matches!(self, Self::Text(s) if !s.is_empty())
-    }
-
-    #[allow(dead_code)]
-    pub fn text(&self) -> Option<&str> {
-        if let Self::Text(s) = self { Some(s) } else { None }
     }
 }
 

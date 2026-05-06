@@ -24,11 +24,12 @@ pub(crate) struct CapabilityEntry {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "lowercase")]
+#[allow(dead_code)] // `reason` fields preserve LLM-supplied rationale for the
+                    // audit trail; not all variants read every field at runtime.
 pub(crate) enum Proposal {
     Archive {
         skill: String,
         replacement: String,
-        #[allow(dead_code)]
         reason: String,
         capability_map: Vec<CapabilityEntry>,
     },

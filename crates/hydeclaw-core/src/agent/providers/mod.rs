@@ -196,7 +196,6 @@ pub trait LlmProvider: Send + Sync {
         Ok(response)
     }
 
-    #[allow(dead_code)]
     fn name(&self) -> &str;
 
     /// Override the model for subsequent calls. None clears the override.

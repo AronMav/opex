@@ -24,7 +24,6 @@ pub struct MemoryChunk {
     // `accessed_at` is read by `scheduler::run_memory_decay` via raw SQL
     // (decay formula uses `now() - accessed_at`); the Rust struct copy is
     // currently unread. Kept for future use when struct-side decay runs locally.
-    #[allow(dead_code)]
     pub accessed_at: DateTime<Utc>,
 }
 

@@ -109,12 +109,6 @@ impl AgentEngine {
         crate::agent::pipeline::context::build_context(cb.as_ref(), msg, include_tools, resume_session_id, force_new_session).await
     }
 
-    /// Get compaction parameters from agent config.
-    #[allow(dead_code)]
-    pub(super) fn compaction_params(&self) -> (usize, usize) {
-        crate::agent::pipeline::context::compaction_params(&self.cfg().agent.model, self.cfg().agent.compaction.as_ref())
-    }
-
     /// Run compaction on messages if token budget exceeded, indexing extracted facts to memory.
     pub(crate) async fn compact_messages(&self, messages: &mut Vec<Message>, detector: Option<&LoopDetector>) {
         let engine = self;

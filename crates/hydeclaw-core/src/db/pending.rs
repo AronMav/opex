@@ -8,7 +8,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // DB row mapped from pending_messages; some fields are serialized
+                    // into JSON responses but not read from the Rust struct.
 pub struct PendingMessage {
     pub id: Uuid,
     pub agent_id: String,

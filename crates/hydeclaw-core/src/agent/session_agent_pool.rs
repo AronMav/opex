@@ -76,7 +76,7 @@ impl Drop for LiveAgent {
 /// Pool of always-alive agents for a single session.
 pub struct SessionAgentPool {
     agents: HashMap<String, LiveAgent>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // retained for diagnostics / future per-pool routing.
     session_id: Uuid,
 }
 

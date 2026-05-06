@@ -237,7 +237,6 @@ impl SecretsManager {
 
     /// Set (upsert) a per-agent scoped secret.
     /// Encrypts, stores in DB, updates cache.
-    #[allow(dead_code)]
     pub async fn set_scoped(
         &self,
         name: &str,

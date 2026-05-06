@@ -45,7 +45,8 @@ pub use self::tool_executor::all_system_tool_names;
 // re-exported above via `pub use self::stream::{ProcessingPhase, StreamEvent}`.
 
 /// A background process started by the `process_start` tool (base agents only).
-#[allow(dead_code)]
+#[allow(dead_code)] // process_id/command/started_at are diagnostic metadata
+                    // surfaced via tool result strings, not Rust field reads.
 pub struct BgProcess {
     pub process_id: String,
     pub command: String,
@@ -92,10 +93,7 @@ pub(crate) const RICH_CARD_PREFIX: &str = "__rich_card__:";
 /// Format: `__file__:{"url":"...","mediaType":"image/png"}`
 pub(crate) const FILE_PREFIX: &str = "__file__:";
 
-/// Nudge message injected when auto-continue detects incomplete LLM response.
-#[allow(dead_code)]
-const AUTO_CONTINUE_NUDGE: &str = "[system] You described remaining steps but didn't execute them. Continue and complete the task using tools.";
-
+// AUTO_CONTINUE_NUDGE moved to pipeline::behaviour (single source of truth).
 // CACHEABLE_SEARCH_TOOLS + search_cache_key() — moved to self::yaml_tool_runner (REF-01 task 4).
 
 // ApprovalResult — moved to self::approval_flow (REF-01 task 3), re-exported
@@ -288,14 +286,6 @@ impl AgentEngine {
 
     // invalidate_yaml_tools_cache / check_search_cache / store_search_cache
     // — moved to self::yaml_tool_runner (REF-01 task 4).
-
-    /// Broadcast a UI event to connected WebSocket clients.
-    #[allow(dead_code)]
-    fn broadcast_ui_event(&self, event: serde_json::Value) {
-        if let Some(ref tx) = self.state().ui_event_tx {
-            tx.send(event.to_string()).ok();
-        }
-    }
 
     // needs_approval() + resolve_approval() — moved to self::approval_flow (REF-01 task 3).
 

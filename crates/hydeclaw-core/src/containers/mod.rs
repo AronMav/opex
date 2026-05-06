@@ -30,11 +30,6 @@ impl ContainerManager {
         })
     }
 
-    /// Check if an MCP server is configured.
-    pub async fn has_mcp(&self, name: &str) -> bool {
-        self.mcp.read().await.contains_key(name)
-    }
-
     /// Add or update an MCP server config at runtime.
     pub async fn add_or_update_mcp(&self, name: String, cfg: McpConfig) {
         self.mcp.write().await.insert(name, cfg);

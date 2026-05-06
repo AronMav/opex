@@ -23,17 +23,16 @@ struct ActiveStreamInner {
 
 /// A single SSE stream. `broadcast_tx` is outside the Mutex because
 /// `broadcast::Sender::send` only requires `&self`.
+#[allow(dead_code)] // session_id/created_at are diagnostic metadata, not read at runtime.
 struct ActiveStream {
     inner: Mutex<ActiveStreamInner>,
     broadcast_tx: broadcast::Sender<(u64, String)>,
     cancel_token: CancellationToken,
     /// Lock-free finished flag — prevents deadlock in eviction
     finished: AtomicBool,
-    #[allow(dead_code)]
     session_id: Uuid,
     /// Link to `stream_jobs` row in `PostgreSQL` for persistence.
     pub job_id: Uuid,
-    #[allow(dead_code)]
     created_at: Instant,
 }
 
