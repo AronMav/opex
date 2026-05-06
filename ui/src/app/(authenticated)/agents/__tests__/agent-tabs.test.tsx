@@ -229,6 +229,7 @@ describe("AgentEditDialog — Behavior tab", () => {
             accessEnabled: true,
             hbEnabled: true,
             hooksLogAll: true,
+            toolDispatcherEnabled: true,
           },
           upd
         )}
@@ -297,6 +298,7 @@ describe("AgentEditDialog — Session tab", () => {
             hbEnabled: true,
             hooksLogAll: true,
             srEnabled: true,
+            toolDispatcherEnabled: true,
           },
           upd
         )}
@@ -342,6 +344,7 @@ describe("AgentEditDialog — Session tab", () => {
             hbEnabled: true,
             hooksLogAll: true,
             srEnabled: true,
+            toolDispatcherEnabled: true,
           },
           upd
         )}
@@ -373,6 +376,7 @@ describe("AgentEditDialog — Schedule tab", () => {
             accessEnabled: true,
             hooksLogAll: true,
             srEnabled: true,
+            toolDispatcherEnabled: true,
           },
           upd
         )}
