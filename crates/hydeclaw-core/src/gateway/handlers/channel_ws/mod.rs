@@ -17,6 +17,7 @@ use super::super::AppState;
 use crate::db::outbound;
 use crate::gateway::clusters::{AgentCore, AuthServices, ChannelBus, ConfigServices, InfraServices, StatusMonitor};
 
+mod session_locks;
 mod types;
 mod writer;
 
