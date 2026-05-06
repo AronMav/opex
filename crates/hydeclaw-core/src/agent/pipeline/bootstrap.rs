@@ -245,19 +245,31 @@ pub async fn bootstrap<S: EventSink>(
         .await?
     };
 
-    // 7. LoopDetector: warm-up from WAL if session has prior tool history (BUG-026).
-    //    Restores error-streak state so a looping agent cannot get a free
-    //    break_threshold reset after crash/resume.
-    //    DB errors are non-fatal — unwrap_or_default() gives a fresh detector
-    //    (same behaviour as before this fix).
+    // 7. LoopDetector: warm from WAL ONLY when this is a true continuation
+    //    of an in-flight run (`ResumeRunning` after a crash, or `ExplicitResume`
+    //    where the user re-opened a session via UI). For `NewSession` and
+    //    `NewTurnAfterDone` the user is starting a fresh conversational turn —
+    //    prior tool errors from a previous turn are not relevant and would
+    //    falsely trip `error_break_threshold`. (BUG-026 originally added the
+    //    warm-up unconditionally; we now scope it to crash-recovery only.)
     let loop_config = engine.tool_loop_config();
-    let wal_events = crate::db::session_wal::load_tool_events(&engine.cfg().db, session_id)
-        .await
-        .unwrap_or_default();
-    let loop_detector = LoopDetector::warm_up_from_wal(&loop_config, &wal_events);
-    if !wal_events.is_empty() {
-        tracing::debug!(session = %session_id, events = wal_events.len(), "LoopDetector warmed from WAL");
-    }
+    let loop_detector = if reentry_mode.warm_loop_detector() {
+        let wal_events =
+            crate::db::session_wal::load_tool_events(&engine.cfg().db, session_id)
+                .await
+                .unwrap_or_default();
+        if !wal_events.is_empty() {
+            tracing::debug!(
+                session = %session_id,
+                events = wal_events.len(),
+                ?reentry_mode,
+                "LoopDetector warmed from WAL",
+            );
+        }
+        LoopDetector::warm_up_from_wal(&loop_config, &wal_events)
+    } else {
+        LoopDetector::new(&loop_config)
+    };
 
     // 8. Slash-command detection (spec §11.1 — future extension point for richer outputs)
     let command_output = match engine.handle_command(&user_text, ctx.msg).await {
