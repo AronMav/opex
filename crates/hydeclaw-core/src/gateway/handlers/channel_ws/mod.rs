@@ -189,6 +189,7 @@ async fn channel_ws_loop(
                     let agent = action_agent.clone();
                     let act = name.clone();
                     let ch = channel_type.clone();
+                    // AUDIT-FF-006: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                     tokio::spawn(async move {
                         if let Ok(qid) = crate::db::outbound::enqueue_action(
                             &db, &agent, &ch, &act, &payload,
@@ -242,6 +243,7 @@ async fn channel_ws_loop(
                     let db = action_db.clone();
                     let oids = action_oids.clone();
                     let aid = action_id;
+                    // AUDIT-FF-007: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                     tokio::spawn(async move {
                         for _ in 0..5 {
                             if let Some(qid) = oids.lock().await.get(&aid).copied() {

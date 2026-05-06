@@ -162,6 +162,7 @@ pub(super) async fn run(
                             let oids = outbound_ids.clone();
                             let aid = action_id.clone();
                             let is_success = success;
+                            // AUDIT-FF-005: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                             tokio::spawn(async move {
                                 if let Some(qid) = oids.lock().await.remove(&aid) {
                                     if is_success {

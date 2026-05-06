@@ -514,6 +514,7 @@ pub async fn chat_stream_with_deadline_retry(
         provider, messages, tools, chunk_tx, compact, session_cancel, run_max_duration_secs,
         |attempt, delay_ms| {
             let sm_db = sm.db().clone();
+            // AUDIT-FF-012: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
             tokio::spawn(async move {
                 let details = serde_json::json!({
                     "attempt": attempt,
