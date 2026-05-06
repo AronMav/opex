@@ -168,6 +168,19 @@ Channel credentials (`bot_token`, `access_token`, `password`, `app_token`) are e
 
 Agent opts in via TOML: `[agent.channel.telegram] enabled = true`
 
+**Channel WS architecture (post-2026-05-06, plan `2026-05-06-channel-ws-session-correctness.md`):** the per-connection loop in `gateway/handlers/channel_ws/` is split into three concurrent tasks instead of one monolithic `select!`:
+
+- **`reader.rs`** parses `ChannelInbound` and routes by variant. Crucially never awaits engine work — `Message` arriving during processing is no longer silently dropped (the previous bug).
+- **`writer.rs`** is the single owner of `ws_sink`, draining `mpsc<OutboundMsg>` from reader / dispatcher / inline / action-forwarder. Eliminates the need for `Arc<Mutex<SplitSink>>`.
+- **`dispatcher.rs`** spawns one task per `Message`, serialised by a per-`SessionKey` `tokio::sync::Mutex` from `session_locks.rs`. Different users / chats run concurrently; the same session's messages stay FIFO. `Cancel` for any in-flight `request_id` works (was previously only the foregrounded one).
+- **`handshake.rs`** owns the `Ready` exchange + Config reply + pending/outbound replay. Hands off `(channel_type, channel_action_rx)` to the action-forwarder via a oneshot.
+- **`inline.rs`** holds non-Message handlers: `Ping`, `AccessCheck`, `Pairing*`, approval-callback intercept.
+- **`session_locks.rs`** is a `DashMap<SessionKey, Arc<Mutex<()>>>` with refcount-based eviction (`LockHandle::Drop` releases the guard before counting refs — the `_guard` placement matters).
+
+**Session re-entry:** `get_or_create_session` returns `(Uuid, ReentryMode)`. Soft-terminal sessions (`failed`/`interrupted`/`timeout`/`cancelled`) within the 4-hour window are NOT reused — a fresh session is created instead. `done` sessions are reused (chat continuity). The bootstrap then calls `claim_session_with_retry` which retries once with `ExplicitResume` if a TOCTOU race flipped the status between resolve and claim. `LoopDetector` warm-up from WAL only runs for `ResumeRunning` (true crash recovery) and `ExplicitResume` (UI-explicit reopen) — `NewSession` and `NewTurnAfterDone` get a fresh detector so prior tool errors don't pollute the next turn.
+
+**Cron mirror:** `mirror_to_session` uses `resolve_active_dm_session` so mirrors land in the same session a live Telegram message would land in — soft-terminal and >4h-stale sessions are skipped.
+
 ### Memory (`src/memory.rs`)
 
 PostgreSQL pgvector. Hybrid search: semantic (halfvec) + FTS. MMR reranking. Two tiers: raw (time-decay) + pinned permanent. Embedding is delegated to Toolgate (`POST /v1/embeddings`), which proxies to the configured embedding backend via the `providers` table. Core never calls Ollama or any embedding service directly. Config: `[memory]` section in `hydeclaw.toml` — no `embed_url`/`embed_model` keys (those are managed through the providers registry). `embed_dim` is auto-detected at startup.
