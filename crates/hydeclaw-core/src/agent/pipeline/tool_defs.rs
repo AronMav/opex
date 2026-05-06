@@ -201,7 +201,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         },
         ToolDefinition {
             name: "agent".to_string(),
-            description: "Coordinate with other agents: action=run/message/status/kill. See multi-agent-coordination skill for patterns.".to_string(),
+            description: "Delegate to or query other agents: action=ask/status/kill. See multi-agent-coordination skill for patterns.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
