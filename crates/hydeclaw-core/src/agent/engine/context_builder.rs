@@ -423,26 +423,13 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
     }
 
     fn cfg_deny_list(&self) -> Vec<String> {
-        // Effective deny = agent.tools.deny ∪ SUBAGENT_DENIED_TOOLS (via
-        // delegation). Mirrors the union applied in
-        // `engine/tool_executor.rs::execute_tool_calls_partitioned` and
-        // `tool_handlers/tool_use.rs::deny_list`. For non-subagent (parent)
-        // engines the delegation list defaults to empty, so the union is
-        // harmless; for subagents this closes the bypass where
-        // tool_use(action="call", name=process) would slip past the
-        // catalogue / trigger-hint deny gate.
-        let mut d = self.cfg().agent.tools.as_ref()
+        // Trigger-hint uses ONLY the agent's own tool_policy.deny for the
+        // same reason as `tool_handlers/tool_use.rs::deny_list`: applying
+        // delegation deny here would hide cron / secret_set / process from
+        // hint candidates for main agents.
+        self.cfg().agent.tools.as_ref()
             .map(|p| p.deny.clone())
-            .unwrap_or_default();
-        let delegation_denied = crate::agent::pipeline::subagent::compute_denied_tools(
-            &self.cfg().agent.delegation,
-        );
-        for x in delegation_denied {
-            if !d.contains(&x) {
-                d.push(x);
-            }
-        }
-        d
+            .unwrap_or_default()
     }
 
     fn mcp_registry(&self) -> Option<&crate::mcp::McpRegistry> {
