@@ -24,7 +24,13 @@ impl AgentEngine {
     }
 
     /// Create fallback LLM provider from agent config.
-    pub(super) async fn create_fallback_provider(&self) -> Option<Arc<dyn crate::agent::providers::LlmProvider>> {
+    ///
+    /// `pub(crate)` so `pipeline::execute` can engage the fallback layer
+    /// (`BehaviourLayers::fallback_provider`) without going through the
+    /// engine's private API. The legacy `handle_isolated` caller is in
+    /// the same module and used `pub(super)`; widening visibility is
+    /// safe — every caller is still inside `hydeclaw-core`.
+    pub(crate) async fn create_fallback_provider(&self) -> Option<Arc<dyn crate::agent::providers::LlmProvider>> {
         crate::agent::pipeline::llm_call::create_fallback_provider(
             &self.cfg().db,
             self.cfg().agent.fallback_provider.as_deref(),

@@ -153,6 +153,91 @@ Each policy is a small data-only struct describing **what** the layer does, not 
 - Streaming-vs-RPC contract divergence is preserved. `handle_with_status` still returns a final `String` to the channel adapter; `handle_sse` still streams events to the SSE consumer. The unification is about the **loop body**, not the **transport contract**. Both transports already feed into `pipeline::execute` via `EventSink` implementations; that doesn't change.
 - The architecture review's other recommendations (handler decomposition, `lib.rs` facade cleanup, blocking clippy) are tracked separately. Each gets its own plan when it becomes the next priority.
 
-## Appendix A — Divergent feature map (to be filled in Phase 1)
+## Appendix A — Divergent feature map (Phase 1 output)
 
-*To be completed during Phase 1. This section will document, per feature, the trigger condition, mutated state, side effects, and observability events that each behaviour layer must reproduce.*
+Mapped from `crates/hydeclaw-core/src/agent/engine/stream.rs` (lines 137–490, the body of `handle_isolated`). Six divergent behaviours need re-homing; one is one-shot bootstrap policy; one is post-loop side-effect.
+
+### A1 — `fallback_provider`
+
+* **Trigger.** LLM call returns `Err(e)` and `consecutive_failures >= loop_config.max_consecutive_failures` and `!using_fallback`.
+* **Action.** Lazily construct fallback provider via `engine.create_fallback_provider().await`. If construction succeeds, switch live provider to the fallback for all subsequent iterations and reset `consecutive_failures = 0`. If fallback is `None`, fall through to error path.
+* **Local state.** `consecutive_failures: usize`, `using_fallback: bool`, `fallback_provider: Option<Arc<dyn LlmProvider>>`.
+* **Observability.** One `tracing::warn!("switching to fallback provider after consecutive failures")` on switch.
+* **DB / UI side effects.** None.
+* **Reset on success.** `consecutive_failures = 0` on every successful LLM call (whether on primary or fallback).
+
+### A2 — `auto_continue`
+
+* **Trigger.** Inside the no-tool-calls branch, after `final_response = strip_thinking(content)`, when `auto_continue_count < loop_config.max_auto_continues && !final_response.is_empty() && looks_incomplete(&final_response)`.
+* **Action.** Increment `auto_continue_count`, push an `AUTO_CONTINUE_NUDGE` user message into `messages`, advance `context_chars`, and `continue` the loop (don't break with the current `final_response`).
+* **Local state.** `auto_continue_count: u8`.
+* **Observability.** `tracing::info!("auto-continue: response looks incomplete, nudging LLM")` per attempt.
+* **DB / UI side effects.** Spawned `notify()` to `ui_event_tx` with `auto_continue` notification type, body `"Agent continued unfinished task (attempt {cnt}/{max})"`.
+* **Constants.** `AUTO_CONTINUE_NUDGE` is a static string defined in `engine/stream.rs` at module level.
+
+### A3 — `session_recovery` (SessionCorruption)
+
+* **Trigger.** LLM call returns `Err(e)`, `error_classify::classify(&e) == LlmErrorClass::SessionCorruption`, and `!did_reset_session` (one-shot per turn).
+* **Action.** Set `did_reset_session = true`, retain only `MessageRole::System` messages in `messages`, push the original `user_text` back as a fresh user message, recompute `context_chars`, `continue` (next iteration retries on the cleaned context).
+* **Local state.** `did_reset_session: bool` (flips once per turn).
+* **Observability.** `tracing::warn!("session corrupted, resetting context")`.
+* **DB / UI side effects.** None.
+* **Order.** Must be checked **before** `consecutive_failures`/fallback logic — a SessionCorruption error shouldn't count as a "consecutive failure" for fallback-switch purposes.
+
+### A4 — `tool_policy_override`
+
+* **Trigger.** `msg.tool_policy_override` is `Some(json)` and the JSON deserializes to `AgentToolPolicy`.
+* **Action.** One-shot at bootstrap time: `available_tools = engine.apply_tool_policy_override(available_tools, &override_policy)`.
+* **Local state.** None — applied once before the loop starts, mutates `available_tools` directly.
+* **Observability.** `tracing::info!("cron tool policy override applied")` with `before` and `after` tool counts when the count changed.
+* **DB / UI side effects.** None.
+* **Architectural placement.** This belongs in `bootstrap`, not in the loop. The behaviour layer carries the override; bootstrap consumes it.
+
+### A5 — `forced_final_call` (iteration limit + loop break)
+
+* **Trigger.** `loop_broken || iteration == loop_config.effective_max_iterations() - 1` at the end of the iteration.
+* **Action.** One extra LLM call with `provider.chat(&messages, &[], CallOptions::default()).await` — note the empty `&[]` tools list, this is a no-tools call to extract a final natural-language summary. The result replaces `final_response`.
+* **Local state.** None.
+* **Observability.** Two notifications spawned conditionally:
+  * On `loop_broken && nudges_exhausted` → `agent_loop_detected` notification.
+  * On `iteration == max - 1 && !loop_broken` → `iteration_limit` notification.
+* **DB / UI side effects.** Notification spawns via `crate::gateway::notify(...)`.
+* **Failure handling.** If the forced final call itself errors, `final_response = error_classify::format_user_error(&e)` (degrade gracefully).
+
+### A6 — `empty_retry`
+
+* **Trigger.** Inside no-tool-calls branch, `final_response.is_empty() && empty_retry_count < 1`.
+* **Action.** Increment `empty_retry_count`, `continue` the loop (provider gets one shot to produce non-empty output).
+* **Local state.** `empty_retry_count: u8` (capped at 1).
+* **Observability.** `tracing::warn!("LLM returned empty response, retrying once")`.
+* **DB / UI side effects.** None.
+* **Decision.** Small enough to fold into `auto_continue` as a sub-policy, but architecturally cleaner as its own one-line check inside `BehaviourLayers`. Treat as part of the auto-continue policy struct (`AutoContinuePolicy { max_continues: u8, retry_on_empty: bool }`).
+
+### A7 — Inter-agent message sender (`sender_agent_id`)
+
+* **Trigger.** `msg.user_id.starts_with("agent:")` at bootstrap.
+* **Action.** Strip the `agent:` prefix and pass the remainder as `sender_agent_id` to `sm.save_message_ex(...)` — DB row gains a non-NULL `sender_agent_id`.
+* **Local state.** None.
+* **Observability.** None (the DB row carries the provenance).
+* **Architectural placement.** Already partially in `bootstrap.rs` for the SSE path; the cron path open-codes the prefix check. Phase 6 moves the open-coded check into bootstrap so both paths share it.
+
+### A8 — Post-loop knowledge extraction
+
+* **Trigger.** `messages.len() >= 5` after the loop exits.
+* **Action.** Background `tokio::spawn` calls `knowledge_extractor::extract_and_save(...)`.
+* **Architectural placement.** Already in `pipeline::finalize` for the SSE path with the same threshold. The cron path duplicates the logic. Phase 6 just removes the duplication; not a behaviour-layer concern.
+
+### State variable re-homing summary
+
+| Variable | Today's home | After Phase 6 |
+|---|---|---|
+| `loop_nudge_count` | both paths | already in `pipeline::execute` |
+| `did_reset_session` | only handle_isolated | local in `execute()`, set guard `layers.session_recovery.is_some()` |
+| `empty_retry_count` | only handle_isolated | local in `execute()`, set guard `layers.auto_continue.as_ref().map_or(false, \|p\| p.retry_on_empty)` |
+| `auto_continue_count` | only handle_isolated | local in `execute()`, set guard `layers.auto_continue.is_some()` |
+| `context_chars` | both paths | already in `pipeline::execute` |
+| `consecutive_failures` | only handle_isolated | local in `execute()`, set guard `layers.fallback_provider.is_some()` |
+| `using_fallback`, `fallback_provider` | only handle_isolated | local in `execute()`, lazily constructed when threshold trips |
+| `final_response` | only handle_isolated | already represented by `ExecuteOutcome::final_text` |
+
+All state stays as `let mut` locals inside `execute()`. Behaviour layers are read-only **policy** that gates whether each piece of state is active. No layer carries mutable state across iterations — that would force unnecessary borrow gymnastics.

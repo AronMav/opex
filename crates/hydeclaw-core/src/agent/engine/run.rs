@@ -9,6 +9,7 @@ use uuid::Uuid;
 use super::stream::ProcessingPhase;
 use super::AgentEngine;
 use crate::agent::engine_event_sender::EngineEventSender;
+use crate::agent::pipeline::behaviour::BehaviourLayers;
 use crate::agent::pipeline::bootstrap::{self, BootstrapContext, BootstrapOutcome};
 use crate::agent::pipeline::sink::{self, EventSink, PipelineEvent};
 use crate::agent::pipeline::{execute, finalize};
@@ -161,7 +162,7 @@ impl AgentEngine {
         // without Finish — frontend then loops trying to resume a finalized
         // session. Wrap the pipeline so Finish is guaranteed on every exit.
         let pipeline_result: anyhow::Result<()> = async {
-            let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor).await?;
+            let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &BehaviourLayers::none()).await?;
             let fin_ctx = finalize::finalize_context_from_engine(
                 self,
                 session_id,
@@ -297,7 +298,7 @@ impl AgentEngine {
         }
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor).await?;
+        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &BehaviourLayers::none()).await?;
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
@@ -400,7 +401,7 @@ impl AgentEngine {
         }
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor).await?;
+        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &BehaviourLayers::none()).await?;
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
