@@ -380,7 +380,8 @@ async fn search_fts_inner(
         .bind(lang)
         .fetch_all(db)
         .await
-        .map_err(|e| map_fts_lang_error(lang, e))?;
+        .map_err(|e| map_fts_lang_error(lang, e))
+        .context("FTS search query failed")?;
 
     Ok(rows.iter().map(row_to_memory_result).collect())
 }
@@ -461,7 +462,8 @@ where
         .bind(lang)         // $8 (regconfig)
         .execute(executor)
         .await
-        .map_err(|e| map_fts_lang_error(lang, e))?;
+        .map_err(|e| map_fts_lang_error(lang, e))
+        .context("failed to insert memory chunk")?;
     Ok(())
 }
 
@@ -562,7 +564,8 @@ pub async fn rebuild_fts(db: &PgPool, lang: &str) -> Result<u64> {
         .bind(lang)
         .execute(db)
         .await
-        .map_err(|e| map_fts_lang_error(lang, e))?;
+        .map_err(|e| map_fts_lang_error(lang, e))
+        .context("failed to rebuild FTS index")?;
     Ok(res.rows_affected())
 }
 
@@ -741,7 +744,10 @@ mod tests {
             "test_agent",
         ).await;
         assert!(result.is_err(), "klingon should be rejected");
-        let err = result.unwrap_err().to_string();
+        // Use {:#} so anyhow's alternate display walks the full chain — the
+        // outer context ("failed to insert memory chunk") wraps the inner
+        // domain error from map_fts_lang_error.
+        let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("invalid FTS language"), "expected domain error, got: {err}");
         assert!(err.contains("klingon"), "expected error to include offending value, got: {err}");
     }
