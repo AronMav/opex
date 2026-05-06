@@ -27,20 +27,33 @@ pub struct MemoryChunk {
     pub accessed_at: DateTime<Utc>,
 }
 
-/// Allowed PostgreSQL FTS dictionaries (whitelist prevents SQL injection).
-const ALLOWED_FTS_LANGS: &[&str] = &[
-    "simple", "english", "russian", "spanish", "french", "german",
-    "italian", "portuguese", "dutch", "swedish", "norwegian", "danish",
-    "finnish", "hungarian", "romanian", "turkish", "arabic", "hindi",
-    "indonesian", "irish", "nepali", "serbian", "tamil", "yiddish",
-    "greek", "armenian", "basque", "catalan", "lithuanian",
-];
+/// Shared INSERT SQL for `memory_chunks`. Lang is bound as `$8::regconfig` so
+/// Postgres validates the dictionary name (no string interpolation, no
+/// hand-rolled whitelist). Invalid configs surface as a Postgres error and are
+/// mapped to a domain error by [`map_fts_lang_error`].
+const INSERT_CHUNK_SQL: &str = r"
+    INSERT INTO memory_chunks
+        (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)
+    VALUES
+        ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector($8::regconfig, $3), $7)
+";
 
-fn validate_fts_lang(lang: &str) -> Result<()> {
-    if !ALLOWED_FTS_LANGS.contains(&lang) {
-        anyhow::bail!("invalid FTS language: {lang} (not in whitelist)");
+/// Translate Postgres errors raised by an unknown text-search config
+/// (`$N::regconfig` cast or `to_tsvector` lookup) into a clear domain error
+/// that names the offending input. Other DB errors pass through as-is.
+///
+/// Two SQLSTATEs surface in practice:
+/// - `42704` (`undefined_object`) — `'klingon'::regconfig` cast failure
+/// - `22023` (`invalid_parameter_value`) — alternative path for some configs
+fn map_fts_lang_error(lang: &str, e: sqlx::Error) -> anyhow::Error {
+    if let Some(db_err) = e.as_database_error()
+        && matches!(db_err.code().as_deref(), Some("42704") | Some("22023"))
+    {
+        return anyhow::anyhow!(
+            "invalid FTS language: '{lang}' (must match a Postgres text search config)"
+        );
     }
-    Ok(())
+    anyhow::Error::new(e)
 }
 
 // ── Helper ───────────────────────────────────────────────────────────────────
@@ -334,9 +347,8 @@ async fn search_fts_inner(
     agent_id: &str,
     or_mode: bool,
 ) -> Result<Vec<MemoryResult>> {
-    validate_fts_lang(lang)?;
-    // SAFETY: `lang` is validated by validate_fts_lang() whitelist
-    // letters. Not user input -- comes from server config.
+    // `lang` is bound as `$4::regconfig` (Postgres validates the dictionary
+    // name); `tsquery_fn` is a Rust-controlled string literal, not input.
     let (effective_query, tsquery_fn) = if or_mode {
         let or_q = or_tsquery_from(query);
         if or_q.is_empty() {
@@ -352,11 +364,11 @@ async fn search_fts_inner(
                   COALESCE(source, '') AS source,
                   pinned,
                   COALESCE(relevance_score, 1.0)::float8 AS relevance_score,
-                  ts_rank_cd(tsv, {tsquery_fn}('{lang}', $1))::float8 AS similarity
+                  ts_rank_cd(tsv, {tsquery_fn}($4::regconfig, $1))::float8 AS similarity
            FROM memory_chunks
-           WHERE tsv @@ {tsquery_fn}('{lang}', $1)
+           WHERE tsv @@ {tsquery_fn}($4::regconfig, $1)
              AND ($3 = '' OR agent_id = $3 OR scope = 'shared')
-           ORDER BY ts_rank_cd(tsv, {tsquery_fn}('{lang}', $1)) DESC,
+           ORDER BY ts_rank_cd(tsv, {tsquery_fn}($4::regconfig, $1)) DESC,
                     relevance_score DESC
            LIMIT $2",
     );
@@ -365,9 +377,10 @@ async fn search_fts_inner(
         .bind(&effective_query)
         .bind(limit)
         .bind(agent_id)
+        .bind(lang)
         .fetch_all(db)
         .await
-        .context("FTS search query failed")?;
+        .map_err(|e| map_fts_lang_error(lang, e))?;
 
     Ok(rows.iter().map(row_to_memory_result).collect())
 }
@@ -411,6 +424,47 @@ pub async fn fetch_recent(db: &PgPool, limit: i64) -> Result<Vec<MemoryResult>> 
 
 // ── Index ────────────────────────────────────────────────────────────────────
 
+/// Shared INSERT body used by both pool and transaction entry points.
+///
+/// Generic over `Executor<'e, Database = Postgres>` so the same SQL path
+/// runs on `&PgPool` and `&mut Transaction`. Lang is bound as `regconfig`
+/// — invalid values surface as SQLSTATE `22023` and are mapped to a clear
+/// domain error.
+///
+/// History:
+///   m032 dropped category ($9) and topic ($10) — scope shifted $11 → $9
+///   m033 dropped parent_id ($7) and chunk_index ($8) — scope shifted $9 → $7
+/// Current: 9 columns, 7 unique binds; lang at $8 is the regconfig.
+#[allow(clippy::too_many_arguments)]
+async fn insert_chunk_inner<'e, E>(
+    executor: E,
+    id: &str,
+    content: &str,
+    vec_str: &str,
+    source: &str,
+    pinned: bool,
+    lang: &str,
+    scope: &str,
+    agent_id: &str,
+) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    sqlx::query(INSERT_CHUNK_SQL)
+        .bind(id)           // $1
+        .bind(agent_id)     // $2
+        .bind(content)      // $3
+        .bind(vec_str)      // $4 (embedding)
+        .bind(source)       // $5
+        .bind(pinned)       // $6
+        .bind(scope)        // $7
+        .bind(lang)         // $8 (regconfig)
+        .execute(executor)
+        .await
+        .map_err(|e| map_fts_lang_error(lang, e))?;
+    Ok(())
+}
+
 /// Insert a new memory chunk with embedding and FTS tsvector.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_chunk(
@@ -424,36 +478,11 @@ pub async fn insert_chunk(
     scope: &str,
     agent_id: &str,
 ) -> Result<()> {
-    validate_fts_lang(lang)?;
-    // SAFETY: `lang` is validated by validate_fts_lang() whitelist
-    // letters. Not user input -- comes from server config.
-    //
-    // History:
-    //   m032 dropped category ($9) and topic ($10) — scope shifted $11 → $9
-    //   m033 dropped parent_id ($7) and chunk_index ($8) — scope shifted $9 → $7
-    // Current: 9 columns, 7 unique binds, scope at $7.
-    let sql = format!(
-        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)
-           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7)",
-    );
-
-    sqlx::query(&sql)
-        .bind(id)           // $1
-        .bind(agent_id)     // $2
-        .bind(content)      // $3
-        .bind(vec_str)      // $4 (embedding)
-        .bind(source)       // $5
-        .bind(pinned)       // $6
-        .bind(scope)        // $7
-        .execute(db)
-        .await
-        .context("failed to insert memory chunk")?;
-
-    Ok(())
+    insert_chunk_inner(db, id, content, vec_str, source, pinned, lang, scope, agent_id).await
 }
 
 /// Insert a new memory chunk within an existing transaction.
-/// Identical SQL to `insert_chunk`, but executes on a transaction handle.
+/// Identical SQL path to `insert_chunk`, but executes on a transaction handle.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_chunk_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -466,28 +495,7 @@ pub async fn insert_chunk_tx(
     scope: &str,
     agent_id: &str,
 ) -> Result<()> {
-    validate_fts_lang(lang)?;
-    // SAFETY: `lang` is validated by validate_fts_lang() whitelist.
-    // Mirrors insert_chunk above; same shape after m032 + m033 drops:
-    // 9 columns, $1..$7 placeholders, scope occupies $7.
-    let sql = format!(
-        r"INSERT INTO memory_chunks (id, agent_id, content, embedding, source, pinned, relevance_score, tsv, scope)
-           VALUES ($1::uuid, $2, $3, $4::vector, $5, $6, 1.0, to_tsvector('{lang}', $3), $7)",
-    );
-
-    sqlx::query(&sql)
-        .bind(id)           // $1
-        .bind(agent_id)     // $2
-        .bind(content)      // $3
-        .bind(vec_str)      // $4 (embedding)
-        .bind(source)       // $5
-        .bind(pinned)       // $6
-        .bind(scope)        // $7
-        .execute(&mut **tx)
-        .await
-        .context("failed to insert memory chunk")?;
-
-    Ok(())
+    insert_chunk_inner(&mut **tx, id, content, vec_str, source, pinned, lang, scope, agent_id).await
 }
 
 // ── Get ──────────────────────────────────────────────────────────────────────
@@ -548,16 +556,13 @@ pub async fn get_chunks_recent(db: &PgPool, limit: i64) -> Result<Vec<MemoryChun
 
 /// Rebuild all tsv columns with the given FTS language.
 pub async fn rebuild_fts(db: &PgPool, lang: &str) -> Result<u64> {
-    validate_fts_lang(lang)?;
-    // SAFETY: `lang` is validated by validate_fts_lang() whitelist
-    // letters. Not user input -- comes from server config.
-    let sql = format!(
-        "UPDATE memory_chunks SET tsv = to_tsvector('{lang}', content)"
-    );
-    let res = sqlx::query(&sql)
+    // `lang` is bound as `$1::regconfig`; Postgres validates the dictionary
+    // name and raises SQLSTATE 22023 if it's unknown.
+    let res = sqlx::query("UPDATE memory_chunks SET tsv = to_tsvector($1::regconfig, content)")
+        .bind(lang)
         .execute(db)
         .await
-        .context("failed to rebuild FTS index")?;
+        .map_err(|e| map_fts_lang_error(lang, e))?;
     Ok(res.rows_affected())
 }
 
@@ -678,23 +683,109 @@ mod tests {
         assert_eq!(super::or_tsquery_from("foo & bar"), "foo | bar");
     }
 
-    /// Verify FTS language validation rejects injection attempts.
-    #[test]
-    fn fts_lang_validation_blocks_injection() {
-        assert!(super::validate_fts_lang("russian").is_ok());
-        assert!(super::validate_fts_lang("english").is_ok());
-        assert!(super::validate_fts_lang("simple").is_ok());
-        assert!(super::validate_fts_lang("french").is_ok());
-        assert!(super::validate_fts_lang("Russian").is_err(), "Must reject — not in whitelist");
-        assert!(super::validate_fts_lang("english; DROP TABLE").is_err(), "Must reject SQL injection");
-        assert!(super::validate_fts_lang("").is_err(), "Must reject empty");
-        assert!(super::validate_fts_lang("lang123").is_err(), "Must reject unknown lang");
-        assert!(super::validate_fts_lang("custom_dict").is_err(), "Must reject custom dicts");
-    }
-
     #[test]
     fn or_tsquery_embedded_operators_within_word_are_stripped() {
         // "foo&bar" → split_whitespace → ["foo&bar"] → strip '&' → "foobar" → "foobar"
         // Distinct from "foo & bar" where '&' is a separate token
         assert_eq!(super::or_tsquery_from("foo&bar"), "foobar");
-    }}
+    }
+
+    // ── INSERT helper integration tests (T1) ────────────────────────
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_insert_chunk_with_russian_lang_succeeds(pool: sqlx::PgPool) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let result = super::insert_chunk(
+            &pool,
+            &id,
+            "тестовое содержимое",
+            "[0.0,0.0,0.0,0.0]",
+            "test_source",
+            false,
+            "russian",
+            "shared",
+            "test_agent",
+        ).await;
+        assert!(result.is_ok(), "russian lang insert failed: {:?}", result);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_insert_chunk_with_english_lang_succeeds(pool: sqlx::PgPool) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let result = super::insert_chunk(
+            &pool,
+            &id,
+            "english test content",
+            "[0.0,0.0,0.0,0.0]",
+            "test_source",
+            false,
+            "english",
+            "shared",
+            "test_agent",
+        ).await;
+        assert!(result.is_ok(), "english lang insert failed: {:?}", result);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_insert_chunk_invalid_lang_returns_domain_error(pool: sqlx::PgPool) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let result = super::insert_chunk(
+            &pool,
+            &id,
+            "content",
+            "[0.0,0.0,0.0,0.0]",
+            "test_source",
+            false,
+            "klingon",
+            "shared",
+            "test_agent",
+        ).await;
+        assert!(result.is_err(), "klingon should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("invalid FTS language"), "expected domain error, got: {err}");
+        assert!(err.contains("klingon"), "expected error to include offending value, got: {err}");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_insert_chunk_sql_injection_attempt_returns_error(pool: sqlx::PgPool) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let attack = "'; DROP TABLE memory_chunks --";
+        let result = super::insert_chunk(
+            &pool,
+            &id,
+            "content",
+            "[0.0,0.0,0.0,0.0]",
+            "test_source",
+            false,
+            attack,
+            "shared",
+            "test_agent",
+        ).await;
+        assert!(result.is_err(), "injection attempt should be rejected");
+        let count: (i64,) = sqlx::query_as("SELECT count(*) FROM memory_chunks")
+            .fetch_one(&pool).await.expect("table memory_chunks still exists");
+        let _ = count;
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn test_insert_chunk_tx_uses_same_sql_path(pool: sqlx::PgPool) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut tx = pool.begin().await.unwrap();
+        let result = super::insert_chunk_tx(
+            &mut tx,
+            &id,
+            "tx test content",
+            "[0.0,0.0,0.0,0.0]",
+            "test_source",
+            false,
+            "russian",
+            "shared",
+            "test_agent",
+        ).await;
+        assert!(result.is_ok(), "tx insert failed: {:?}", result);
+        tx.commit().await.unwrap();
+        let row: (String,) = sqlx::query_as("SELECT content FROM memory_chunks WHERE id = $1::uuid")
+            .bind(&id).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, "tx test content");
+    }
+}
