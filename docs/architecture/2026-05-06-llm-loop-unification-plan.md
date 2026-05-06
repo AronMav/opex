@@ -1,9 +1,10 @@
 # LLM-Loop Unification — Implementation Plan
 
-**Status:** Active
+**Status:** Active — Phases 1–5 delivered (commit `7b4c4cd`); Phases 6–8 pending.
 **Owner:** Phase 67+1 (post-observability)
 **Tracking artifact:** this file
 **Origin:** Architecture review 2026-05-06 (`docs/architecture/2026-05-06-architecture-review.md`), top-priority recommendation #1.
+**Plan revisions:** v2 (2026-05-06) after self-review found three text-vs-code drifts and two under-specified phases — see "Revision history" at the end.
 
 ## Goal
 
@@ -44,19 +45,26 @@ pub async fn execute<S: EventSink>(
 ) -> anyhow::Result<ExecuteOutcome>;
 ```
 
-We add a `BehaviourLayers` parameter (default-constructed for the SSE path; populated for cron) that bundles opt-in policy:
+We add a `BehaviourLayers` parameter (constructed via `none()` for the SSE path; populated via `for_cron(...)` for cron) that bundles opt-in policy. As implemented in commit `7b4c4cd`:
 
 ```rust
 pub struct BehaviourLayers {
-    pub fallback_provider: Option<FallbackPolicy>,
-    pub auto_continue:     Option<AutoContinuePolicy>,
-    pub session_recovery:  Option<SessionRecoveryPolicy>,
-    pub tool_policy_override: Option<AgentToolPolicy>,
-    pub forced_final_call: bool,  // emit one extra non-tools LLM call on iteration limit
+    pub fallback_provider:    Option<FallbackPolicy>,
+    pub auto_continue:        Option<AutoContinuePolicy>,
+    pub session_recovery:     Option<SessionRecoveryPolicy>,
+    pub tool_policy_override: Option<ToolPolicyOverride>,    // wrapper, see below
+    pub forced_final_call:    Option<ForcedFinalCallPolicy>, // unit struct, see below
 }
 ```
 
+Two intentional deviations from the first sketch of this plan:
+
+1. **`tool_policy_override` carries a wrapper struct (`ToolPolicyOverride { policy: AgentToolPolicy }`) instead of `Option<AgentToolPolicy>` directly.** Cost: one struct definition. Benefit: a place to add per-layer metadata later without touching every call-site (e.g., `applied_at_iteration` for diagnostic spans, or a `reason: &'static str` for telemetry). This is a small forward-looking choice, not a present requirement.
+2. **`forced_final_call` is `Option<ForcedFinalCallPolicy>` (unit struct) rather than a `bool`.** Cost: one extra `Option` layer for a feature with no current parameters. Benefit: identical `is_some()` predicate across all five fields makes the `execute()` body uniform — every layer guard reads the same way. If `forced_final_call` ever needs configuration (e.g., a custom prompt for the final call), the type is already in the right shape.
+
 Each policy is a small data-only struct describing **what** the layer does, not **how** the engine calls it. The dispatch lives inside `execute()` as cheap `if let Some(...)` guards — same control-flow shape as today, just with one decision point per feature instead of an entire parallel function.
+
+**Constructor naming.** The plan uses `BehaviourLayers::none()` everywhere it talks about "all layers off" rather than the bare `Default::default()` trait method. Both exist and are byte-equivalent (`none() { Self::default() }`); `none()` is preferred at call sites because it reads as a deliberate decision, not as accidental defaulting. A unit test (`none_equals_default`) pins the equivalence.
 
 **Key design choice:** behaviours are **data**, not traits. Trait-object indirection here would buy us nothing (only one implementation per layer ever), would muddy the OTel span tree (one extra layer of dynamic dispatch per call), and would push the divergent features even further from the call site. A flat `BehaviourLayers` struct keeps the loop readable and the span tree clean.
 
@@ -85,9 +93,9 @@ Each policy is a small data-only struct describing **what** the layer does, not 
 
 - Plumb `BehaviourLayers` through `execute()` as a `&BehaviourLayers` parameter (immutable; layers are policy, not state).
 - Inside the iteration loop, replace the unconditional `chat_stream_with_deadline_retry(provider, ...)` with a small helper that consults `BehaviourLayers::fallback_provider` and switches the live provider on consecutive-failure threshold.
-- Add a unit test in `pipeline::execute::tests` that constructs a fake provider returning Err N times, asserts the fallback path activates on the (N+1)-th call.
+- Add a unit test in `pipeline::behaviour::tests` (not `pipeline::execute::tests` — the construction of `BehaviourLayers::for_cron` and the policy types is what we pin; the integration of the layer into `execute()` is exercised by the existing 1100+ test suite plus the Phase 7 Pi run).
 - Cron callers continue to use `handle_isolated` for now — Phase 3 only proves the layer works inside `execute()`.
-- **Exit:** new test passes. SSE chat still produces identical traces (with the layer off, the new code path is byte-identical to the old). `cargo test` green.
+- **Exit:** new tests pass. SSE chat still produces identical traces (with the layer off, the new code path is byte-identical to the old). `cargo test` green.
 
 ### Phase 4 — Wire `auto_continue`
 
@@ -103,27 +111,67 @@ Each policy is a small data-only struct describing **what** the layer does, not 
 
 ### Phase 6 — Replace `handle_isolated` callers
 
-- Find every caller of `handle_isolated`. Today it's `agent::engine::run_isolated` for cron jobs and possibly a couple of test sites.
-- For each caller, replace with:
-  - `bootstrap::bootstrap()` → `BootstrapOutcome` (the cron path's session creation moves into bootstrap as `BootstrapOutcome::isolated_session_for_cron(...)` if the existing call surface doesn't already cover it)
-  - `pipeline::execute(engine, bootstrap_outcome, ChunkSink::new(), cancel_token, compressor, BehaviourLayers::for_cron(cfg, msg))`
-  - `pipeline::finalize(...)` exit
+This phase is more invasive than the first sketch suggested. `handle_isolated` does five things `bootstrap()` doesn't currently do, and the cron-style `finalize` differs from the SSE-style one in ways that need explicit migration. Split into two sub-phases:
+
+#### Phase 6a — Extend `bootstrap` and `finalize` for the isolated case
+
+`handle_isolated` performs these steps that `bootstrap`/`finalize` don't yet cover or differ on:
+
+| Step (in handle_isolated) | Current state in pipeline | What Phase 6a adds |
+|---|---|---|
+| `SessionManager::create_isolated(name, user_id, channel)` | `bootstrap` calls `engine.build_context(msg, force_new_session=true, None, false)` which creates a session via `build_context`'s session-creation path | Verify the two paths produce identical session rows (`channel`, `user_id`, `agent_id`, `created_at`); add `BootstrapContext::isolated: bool` if any divergence requires per-path branching |
+| `enrich_message_text(...)` (toolgate `/web` + `/transcribe` + `/describe`) before user-message persist | `bootstrap` already calls `enrich_message_text` for the SSE path | None — already covered |
+| `sm.save_message_ex(... sender_agent_id ...)` with `agent:` prefix handling | `bootstrap` open-codes the `agent:` prefix check inside `extract_sender_agent_id`; cron path duplicates it | Move the duplicated check to `bootstrap::extract_sender_agent_id` and ensure cron's `BootstrapContext` reaches that helper |
+| `compact_messages(&mut messages, None)` (model-aware budget) before loop | `bootstrap` calls `compact_messages` via `build_context`, but only conditionally based on history mode | Add unit test: empty-history isolated session triggers compaction when context_chars > budget |
+| `sm.save_message_ex(... assistant ...)` post-loop, synchronous | `pipeline::finalize` writes via `save_message_ex_with_id` with pre-allocated UUID + WAL `done`/`failed`/`interrupted` lifecycle | **Behavioural change**: cron-saved assistant rows will now carry the same UUID-aligned semantics as SSE rows. Verify `messages` table queries return cron-saved rows correctly (the row shape matches; only the insert path changes) |
+| Background `knowledge_extractor::extract_and_save` spawn when `messages.len() >= 5` | `pipeline::finalize` already spawns `extract_and_save` with the same threshold | None — already covered, just remove duplication in cron path |
+| Returns `Result<String>` to caller | `pipeline::execute → finalize` returns `FinalizeOutcome` with `final_text: String` | Caller wrapper unwraps `final_text` from `FinalizeOutcome` to preserve the `Result<String>` API |
+
+**Exit (6a):** `bootstrap` and `finalize` accept an isolated-style call without behaviour change for SSE. New unit test in `pipeline::bootstrap::tests` exercises `force_new_session=true, use_history=false, sender_agent_id="agent:Foo"` and asserts the resulting `BootstrapOutcome` matches what `handle_isolated` builds today (compare `messages`, `tools`, `session_id` shape).
+
+#### Phase 6b — Migrate cron callers
+
+- Find every caller of `handle_isolated`. As of commit `7b4c4cd`, callers are: `gateway/handlers/cron.rs:450`, `scheduler/mod.rs:918, 1057, 1398, 1518` (5 sites total).
+- Add a thin wrapper method `AgentEngine::handle_isolated_via_pipeline(msg) -> Result<String>` that:
+  - Builds a `BootstrapContext { msg, resume_session_id: None, force_new_session: true, use_history: false }`
+  - Constructs a `ChunkSink` (transparent — chunks are dropped, pipeline events are no-ops) and a `cancel_token`
+  - Calls `bootstrap::bootstrap(self, ctx, &mut sink)` → `BootstrapOutcome`
+  - Calls `execute::execute(self, outcome, &mut sink, cancel_token, &mut compressor, &BehaviourLayers::for_cron(loop_config, msg))` → `ExecuteOutcome`
+  - Calls `finalize::finalize(...)` and unwraps `final_text`
 - The `ChunkSink` already exists for this exact purpose — it consumes `PipelineEvent`s and produces a plain-text chunk channel, which matches what `handle_isolated` returned.
-- Knowledge extraction (background `extract_and_save` spawn) moves into `finalize::execute()` behind a small caller-supplied flag — already half-done; complete it.
-- **Exit:** no caller of `handle_isolated` remains. The function still exists, dead-coded behind `#[allow(dead_code)]`. `cargo check --all-targets` is green; integration tests pass.
+- Switch the 5 call sites one at a time from `handle_isolated` to `handle_isolated_via_pipeline`. After each swap, run `cargo test` — if green, commit. If a test breaks, the rollback is one git revert.
+- **Exit:** no caller of `handle_isolated` remains. The function still exists, dead-coded behind `#[allow(dead_code)]`. `cargo check --all-targets` is green; full integration test suite passes (1127 + new bootstrap/finalize tests).
 
 ### Phase 7 — Delete `handle_isolated` + Pi verification
+
+Split into two sub-phases so the validation-script work doesn't gate the deletion commit, and so we can demonstrate the layers actually fire on Pi before removing the legacy path.
+
+#### Phase 7a — Build the validation script
+
+The plan's exit criteria requires "one fallback switch, one auto-continue nudge, one session-corruption recovery" exercised on Pi. No existing test produces those three signals — `test-pi-chaos.py` only validates SSE drop + Last-Event-ID resume. Phase 7a creates the missing test:
+
+- New script `tests/integration/pi/test-pi-cron-features.py` (next to the existing chaos test).
+- The script POSTs three independent cron-trigger requests through `/api/cron/trigger`, each configured to use a **mock provider** that returns the desired failure mode:
+  - **Run 1: fallback switch.** Mock returns HTTP 503 twice in a row, then a normal completion. Asserts that the resulting Jaeger trace contains exactly one `llm.request` span with `http.status_code=503, retry_attempts=N` followed by `llm.request` spans with `provider=<fallback>` rather than `<primary>`.
+  - **Run 2: auto-continue nudge.** Mock returns one no-tool-calls response containing the substring `"далее нужно"` (a documented `looks_incomplete` trigger), then a normal completion. Asserts that the trace contains two `llm.call` spans inside one `pipeline.execute`, and that the `messages` table for the resulting session has an `AUTO_CONTINUE_NUDGE` user message.
+  - **Run 3: session-corruption recovery.** Mock returns one error whose class maps to `LlmErrorClass::SessionCorruption` (provider-specific HTTP shape). Asserts that the trace contains exactly two `llm.call` spans and the post-recovery messages list has system messages only plus one fresh user message.
+- The mock provider is a small Python fixture that registers as a temporary provider via `POST /api/providers` and gets cleaned up on teardown. Reuses the same Jaeger-query helper as `test-pi-chaos.py`.
+- **Exit:** new script passes against the **current** legacy `handle_isolated` path on Pi (so we know the assertions are calibrated to actual cron behaviour, not just to what the new pipeline path produces).
+
+#### Phase 7b — Delete and re-verify
 
 - Remove `handle_isolated` from `engine/stream.rs` (and the `pub use` in `engine/mod.rs`).
 - Remove the long architectural-divergence comment that documents the parallel implementation — it stops being true.
 - Remove `tool_loop_helpers::*` items that only the legacy path used (if any).
-- Build with `--features otel`, deploy to Pi, run a cron-driven dynamic job that exercises:
-  - One fallback-provider switch (force the primary to 503 twice)
-  - One auto-continue nudge (provider response that names remaining work but doesn't execute)
-  - One session-corruption recovery (synthetic provider that returns the corruption error class once)
+- Remove the legacy `AUTO_CONTINUE_NUDGE` constant from `engine/stream.rs` — the new home in `pipeline::behaviour` is the single source of truth (during Phases 4–7a both definitions coexist; the legacy one becomes dead code only after deletion in this step).
+- Build with `--features otel`, deploy to Pi, re-run `test-pi-cron-features.py` against the new path. All three runs must still pass.
 - Verify in Jaeger that the cron job produces a span tree shaped identically to an SSE chat (`pipeline.execute` → `llm.call` × N → `pipeline.execute_tools` × N → `pipeline.finalize`).
-- Verify the existing `test-pi-chaos.py` still passes.
-- **Exit:** `handle_isolated` gone, Pi cron jobs produce normal pipeline traces, no regressions.
+- Verify the existing `test-pi-chaos.py` still passes (regression guard for SSE behaviour).
+- **Pre-delete telemetry snapshot.** Before deploying the deletion commit, capture from Jaeger UI a 24-hour count of:
+  - `pipeline.execute` spans (SSE) — should not change post-deploy
+  - cron-job notifications (`auto_continue`, `iteration_limit`, `agent_loop_detected`) — should be ≥ pre-deploy count if cron jobs continue running normally
+  These act as a smoke-test for "did we accidentally turn off the layers" — a 24h post-deploy comparison flags the regression early.
+- **Exit:** `handle_isolated` gone, Pi cron jobs produce normal pipeline traces, no regressions, post-deploy telemetry within ±5% of pre-deploy baseline for the listed metrics.
 
 ### Phase 8 — Documentation
 
@@ -135,11 +183,14 @@ Each policy is a small data-only struct describing **what** the layer does, not 
 
 | Risk | Mitigation |
 |---|---|
-| Behaviour drift mid-refactor — a layer doesn't quite reproduce the legacy semantics | Each phase ships unit tests that lock the layer's behaviour against the documented legacy behaviour before any caller is migrated. The cron caller is the last thing to move. |
-| Span tree changes for SSE callers | `BehaviourLayers::default()` produces zero new span emissions and zero new control-flow branches in the hot path. SSE traces stay byte-identical. |
-| Crash recovery / WAL semantics differ between paths | Phase 1's appendix is the gate: every state variable in `handle_isolated` gets explicit re-homing before any code moves. WAL writes happen via the same helpers in both paths today (`session_wal::log_event`); the layers don't touch them. |
-| Pi cron jobs hit an unexpected layer interaction in production | Phase 7's deploy is gated behind a manual operator approval. The chaos test on Pi catches resume-correctness; if a regression appears, `git revert` of the deletion commit immediately restores the legacy path. |
-| Test-DB unavailable at CI time for some new tests | New tests in phases 3–5 use `MockProvider` and don't need a database; integration tests with `sqlx::test` come in phase 7 and are gated to the existing `test-db` Makefile target. |
+| Behaviour drift mid-refactor — a layer doesn't quite reproduce the legacy semantics | Each phase ships unit tests that lock the layer's behaviour against the documented legacy behaviour before any caller is migrated. The cron caller is the last thing to move. Phase 7a additionally calibrates the validation script against the **current** `handle_isolated` path before deletion, so post-deletion assertions are anchored to real behaviour. |
+| Span tree changes for SSE callers | `BehaviourLayers::none()` produces zero new span emissions and zero new control-flow branches in the hot path. SSE traces stay byte-identical. Pinned by re-running the SSE-side assertions in `test-pi-chaos.py` post-deploy. |
+| Crash recovery / WAL semantics differ between paths | Phase 1's appendix is the gate: every state variable in `handle_isolated` gets explicit re-homing before any code moves. WAL writes happen via the same helpers in both paths today (`session_wal::log_event`); the layers don't touch them. Phase 6a's `bootstrap`/`finalize` rework explicitly preserves WAL `done`/`failed`/`interrupted` lifecycle for the cron path. |
+| Pi cron jobs hit an unexpected layer interaction in production | Phase 7's deploy is gated behind a manual operator approval. The new `test-pi-cron-features.py` exercises all three layer-driven paths before deletion. If a regression appears, `git revert` of the deletion commit immediately restores the legacy path. |
+| Test-DB unavailable at CI time for some new tests | New tests in phases 3–5 use mock policy data only and don't need a database; integration tests with `sqlx::test` come in phase 6a and are gated to the existing `test-db` Makefile target. The Pi-side validation in phase 7 needs a live Pi but no CI infrastructure. |
+| Layer silently disengages post-deploy (e.g., a guard becomes always-false through a typo) | Pre-deploy telemetry snapshot in Phase 7b records 24-hour counts of `auto_continue` / `iteration_limit` / `agent_loop_detected` notifications. A post-deploy 24-hour comparison flags a >5% drop as a regression — silent layer disengagement reads as zero notifications, which the snapshot catches. |
+| User-visible behaviour change for operators with cron jobs that depend on legacy quirks | The intent is "no behaviour change for any existing caller" (see Non-goals). However, cron jobs that previously observed only `iteration_limit` notifications without `pipeline.execute` traces will start observing both. This is additive — no existing notification or DB row is removed. Worth a one-line CHANGELOG note in the v0.27 release notes when this ships. |
+| Two parallel `AUTO_CONTINUE_NUDGE` constants drift between Phases 4 and 7b | Mitigated by replacing the legacy constant in `engine/stream.rs` with `pub use crate::agent::pipeline::behaviour::AUTO_CONTINUE_NUDGE` immediately after Phase 4 lands — keeps a single source of truth across the ~weeks the two paths coexist. (Tracked as a sub-task in Phase 7b's deletion list to confirm the re-export goes away with the legacy file.) |
 
 ## Telemetry / success metrics
 
@@ -241,3 +292,20 @@ Mapped from `crates/hydeclaw-core/src/agent/engine/stream.rs` (lines 137–490, 
 | `final_response` | only handle_isolated | already represented by `ExecuteOutcome::final_text` |
 
 All state stays as `let mut` locals inside `execute()`. Behaviour layers are read-only **policy** that gates whether each piece of state is active. No layer carries mutable state across iterations — that would force unnecessary borrow gymnastics.
+
+## Revision history
+
+### v2 — 2026-05-06 (post-Phase-5 self-review)
+
+After Phases 1–5 landed in commit `7b4c4cd`, a self-review found the plan's text had drifted from the implementation in three places, and that two phases were under-specified for the engineer who'd pick up Phases 6–7. This revision:
+
+- **Fixed type signatures in "Architecture: composable behaviours".** `tool_policy_override` is `Option<ToolPolicyOverride>` (wrapper) not `Option<AgentToolPolicy>`. `forced_final_call` is `Option<ForcedFinalCallPolicy>` (unit struct) not `bool`. Both deviations are intentional and now documented inline with the trade-off.
+- **Documented the `none()` vs `default()` constructor naming.** Both exist; `none()` is preferred at call sites; a unit test pins their equivalence.
+- **Corrected Phase 3's test location.** New tests live in `pipeline::behaviour::tests`, not `pipeline::execute::tests`.
+- **Split Phase 6 into 6a (extend bootstrap/finalize) + 6b (migrate callers).** The bootstrap rework was previously hand-waved; the new sub-phase enumerates the seven specific differences between `handle_isolated`'s startup and `bootstrap()`'s, and pins finalize-side semantics for the cron path.
+- **Split Phase 7 into 7a (build validation script) + 7b (delete + re-verify).** The previous wording assumed a script existed for "exercise fallback / auto-continue / recovery on Pi"; it didn't. 7a creates `tests/integration/pi/test-pi-cron-features.py` calibrated against the legacy path before the deletion happens.
+- **Expanded the risk table** with two new rows: silent-layer-disengagement (caught by 24h pre/post-deploy notification snapshot) and operator-visible behaviour-additive change (CHANGELOG note in v0.27). Added the `AUTO_CONTINUE_NUDGE` deduplication note pointing at the `pub use` re-export pattern that keeps one source of truth across the weeks the two paths coexist.
+
+### v1 — 2026-05-06 (initial)
+
+Initial plan.
