@@ -421,6 +421,119 @@ impl AgentEngine {
         );
         finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await
     }
+
+    /// RPC-style isolated turn — used by cron jobs and other callers that
+    /// just want a final assistant string back. Same `pipeline::{bootstrap,
+    /// execute, finalize}` route as `handle_sse`, but with:
+    ///
+    ///   * `force_new_session: true, use_history: false` so each call gets
+    ///     a clean session with no prior message history.
+    ///   * `BehaviourLayers::for_cron(...)` enabled — fallback provider,
+    ///     auto-continue, session-corruption recovery, tool-policy override,
+    ///     forced-final-call all engaged with the same defaults the legacy
+    ///     `handle_isolated` used.
+    ///   * `NoopSink` instead of `SseSink` — the caller doesn't observe
+    ///     stream events, only the final text.
+    ///
+    /// Returns the final assistant text (or a graceful user-facing error
+    /// message when the LLM call failed unrecoverably). The same DB
+    /// row-shape and WAL lifecycle the SSE path produces — cron runs are
+    /// now first-class sessions in `messages` and `session_events`.
+    pub async fn handle_isolated_via_pipeline(
+        &self,
+        msg: &IncomingMessage,
+    ) -> Result<String> {
+        let hook_event = crate::agent::hooks::HookEvent::BeforeMessage;
+        let action = self.hooks().fire(&hook_event);
+        self.hooks().fire_webhooks(&hook_event);
+        if let crate::agent::hooks::HookAction::Block(reason) = action {
+            anyhow::bail!("blocked by hook: {}", reason);
+        }
+
+        let mut s = sink::NoopSink::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
+
+        let boot = bootstrap::bootstrap(
+            self,
+            BootstrapContext {
+                msg,
+                resume_session_id: None,
+                force_new_session: true,
+                use_history: false,
+            },
+            &mut s,
+        )
+        .await?;
+
+        let BootstrapOutcome {
+            session_id,
+            mut messages,
+            mut tools,
+            loop_detector,
+            processing_guard,
+            lifecycle_guard,
+            command_output: _,
+            enriched_text,
+            user_message_id,
+            incoming_context,
+            channel,
+            compressor,
+        } = boot;
+        let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
+        let mut compressor = compressor;
+
+        // Build behaviour layers for the cron-style call site.
+        let loop_config = self.tool_loop_config();
+        let layers = BehaviourLayers::for_cron(&loop_config, msg);
+
+        // Apply tool-policy override at the bootstrap boundary (A4 in the
+        // divergent-feature map). The layer carries the policy; we apply
+        // it to `tools` here so `pipeline::execute` sees the narrowed set.
+        // Logged so cron-job operators see the override taking effect.
+        if let Some(ref override_layer) = layers.tool_policy_override {
+            let before = tools.len();
+            tools = self.apply_tool_policy_override(tools, &override_layer.policy);
+            if tools.len() != before {
+                tracing::info!(
+                    agent = %self.cfg().agent.name,
+                    before,
+                    after = tools.len(),
+                    "cron tool policy override applied"
+                );
+            }
+        }
+
+        let boot_for_execute = BootstrapOutcome {
+            lifecycle_guard: None,
+            command_output: None,
+            session_id,
+            messages: std::mem::take(&mut messages),
+            tools,
+            loop_detector,
+            processing_guard,
+            enriched_text,
+            user_message_id,
+            incoming_context,
+            channel,
+            compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
+        };
+
+        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &layers).await?;
+        let fin_ctx = finalize::finalize_context_from_engine(
+            self,
+            session_id,
+            outcome.messages_len_at_end,
+            Some(outcome.final_parent_msg_id),
+            compressor,
+            outcome.assistant_message_id,
+        );
+        let fin_outcome = finalize::execute_status_to_finalize(
+            outcome.status,
+            outcome.final_text,
+            outcome.thinking_json,
+        );
+        finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await
+    }
 }
 
 #[cfg(test)]

@@ -160,6 +160,40 @@ impl EventSink for ChunkSink {
     }
 }
 
+/// Sink that drops every event. Used by RPC-style callers (cron jobs,
+/// agent-to-agent messaging) that consume only the final assistant text
+/// from `ExecuteOutcome`/`finalize` and have no use for the per-chunk
+/// streaming events.
+///
+/// Does buffer text deltas so callers that want the final message
+/// without going through the DB can read it from `buffer` after
+/// `pipeline::execute` returns. (`finalize` writes the same text to
+/// the DB regardless.)
+pub struct NoopSink {
+    pub buffer: String,
+}
+
+impl Default for NoopSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NoopSink {
+    pub fn new() -> Self {
+        Self { buffer: String::new() }
+    }
+}
+
+impl EventSink for NoopSink {
+    async fn emit(&mut self, ev: PipelineEvent) -> Result<(), SinkError> {
+        if let PipelineEvent::Stream(StreamEvent::TextDelta(s)) = ev {
+            self.buffer.push_str(&s);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

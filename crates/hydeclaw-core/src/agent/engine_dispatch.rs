@@ -285,7 +285,12 @@ impl AgentEngine {
     /// Logic:
     ///  - deny list is unioned (base deny ∪ override deny)
     ///  - allow list: if override has non-empty allow, restrict to those tools only (intersection with current list)
-    pub(super) fn apply_tool_policy_override(
+    ///
+    /// `pub(crate)` so `engine::run::handle_isolated_via_pipeline` can
+    /// apply the cron-side `BehaviourLayers::tool_policy_override` at
+    /// the bootstrap boundary. Widening from `pub(super)` is safe — the
+    /// function still lives inside `hydeclaw-core`.
+    pub(crate) fn apply_tool_policy_override(
         &self,
         tools: Vec<ToolDefinition>,
         override_policy: &crate::config::AgentToolPolicy,
