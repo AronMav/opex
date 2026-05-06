@@ -103,20 +103,23 @@ pub async fn bootstrap<S: EventSink>(
             ctx.force_new_session,
         )
         .await?;
-    let _ = reentry_mode; // consumed by claim_session_with_retry in Task A4
-
-    // 2. Atomically claim the session as 'running'. Allows re-entry from any
-    //    status, including 'done', so users can continue completed sessions.
-    //    Ok(false) means the session was deleted between build_context and here
-    //    (race between UI and a concurrent delete) — bail in that case only.
+    // 2. Atomically claim the session as 'running' using mode-aware semantics.
+    //    `claim_session_with_retry` retries once with `ExplicitResume` if a
+    //    narrow TOCTOU race (status flipped between resolve and claim) caused
+    //    the strict per-mode WHERE guard to miss. `Ok(false)` after retry
+    //    means the row was deleted — bail.
     let sm = SessionManager::new(engine.cfg().db.clone());
-    match crate::db::sessions::claim_session_running(&engine.cfg().db, session_id).await {
+    match crate::db::sessions::claim_session_with_retry(
+        &engine.cfg().db,
+        session_id,
+        reentry_mode,
+    ).await {
         Ok(true) => {}
         Ok(false) => {
-            anyhow::bail!("session {} not found; bootstrap aborted", session_id);
+            anyhow::bail!("session {} not claimable after retry; bootstrap aborted", session_id);
         }
         Err(e) => {
-            tracing::warn!(session_id = %session_id, error = %e, "claim_session_running failed");
+            tracing::warn!(session_id = %session_id, error = %e, "claim_session_with_retry failed");
         }
     }
 
