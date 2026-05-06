@@ -210,6 +210,7 @@ pub async fn execute_tool_calls_partitioned(
     policy: Option<&crate::config::AgentToolPolicy>,
     session_tool_state: Option<Arc<crate::agent::dispatcher::SessionToolState>>,
     promotion_max: u32,
+    mcp: Option<&crate::mcp::McpRegistry>,
 ) -> BatchOutcome {
     // ── Dispatcher rewrite (Task 11) ─────────────────────────────────────────
     //
@@ -233,9 +234,14 @@ pub async fn execute_tool_calls_partitioned(
         for name in yaml_tools.keys() {
             s.insert(name.clone());
         }
-        // MCP tools — for v1 we trust the system list + yaml_tools map.
-        // MCP coverage in known_tools requires plumbing the registry into
-        // this function; deferred to follow-up if pilot reveals false-rejects.
+        // MCP tools — without this, the rewrite step rejects MCP calls as
+        // "not found" so MCP becomes uncallable when the dispatcher is on
+        // (since tool_use is the only entry point for them).
+        if let Some(reg) = mcp {
+            for d in reg.all_tool_definitions().await {
+                s.insert(d.name);
+            }
+        }
         s
     };
 
