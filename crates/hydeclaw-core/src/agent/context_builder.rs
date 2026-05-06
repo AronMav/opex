@@ -123,18 +123,18 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
         k: usize,
     ) -> Vec<ToolDefinition>;
 
-    // Dispatcher-related accessors below are unused until Tasks 16-18 wire
-    // them into `DefaultContextBuilder::build`. `#[allow(dead_code)]` is
-    // required while the methods are pure plumbing — clippy `-D warnings`
-    // raises dead_code on the trait declaration when no caller exists.
+    // Dispatcher-related accessors. Three are now consumed by
+    // `DefaultContextBuilder::build` (Task 16). The remaining three are still
+    // pure plumbing for Tasks 17-18 (promotion-cap enforcement and
+    // catalogue-from-registry assembly), so they keep `#[allow(dead_code)]`
+    // until those wires land — clippy `-D warnings` raises dead_code on the
+    // trait declaration when no caller exists.
     /// Whether the dispatcher is enabled for this agent.
-    #[allow(dead_code)]
     fn agent_tool_dispatcher_enabled(&self) -> bool;
 
     /// Names the operator wants kept in the per-turn core array regardless
     /// of dispatcher partition. Subject to deny + base + existence filters
     /// at apply time.
-    #[allow(dead_code)]
     fn agent_core_extra(&self) -> &[String];
 
     /// Cap on number of auto-promoted tools per session.
@@ -143,7 +143,6 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
 
     /// Read-only handle to per-session dispatcher state. None when no session
     /// is bound (subagent / cron paths in some configurations).
-    #[allow(dead_code)]
     fn session_tool_state(
         &self,
         session_id: uuid::Uuid,
@@ -235,6 +234,27 @@ impl ContextBuilder for DefaultContextBuilder {
             is_base: deps.agent_base(),
         };
 
+        // Dispatcher partition gating: when enabled, the LLM only sees a small
+        // tools array (static core ∪ core_extra ∪ promoted) and a catalogue
+        // hint pointing it at the `tool_use` discovery flow.
+        let dispatcher_enabled = deps.agent_tool_dispatcher_enabled();
+        let extension_catalogue = if dispatcher_enabled {
+            Some(
+                "These tools are not preloaded. To use them: search → describe → call.\n\n\
+                 Categories: agent management, scheduling, secrets, system services, \
+                 channel actions, git operations, browser, canvas, rich cards, YAML tools, \
+                 MCP tools.\n\n\
+                 Workflow:\n\
+                 1. tool_use(action=\"search\", query=\"<keywords>\") — discover relevant tools\n\
+                 2. tool_use(action=\"describe\", name=\"<tool>\") — read full input schema\n\
+                 3. tool_use(action=\"call\", name=\"<tool>\", arguments={...}) — invoke\n\n\
+                 Tip: search by intent (\"send notification\", \"schedule task\"), not exact names.\n"
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
         let mut runtime = deps.runtime_context(msg);
         runtime.channels = deps.get_channel_info().await;
         let mut system_prompt = crate::agent::workspace::build_system_prompt(
@@ -243,6 +263,7 @@ impl ContextBuilder for DefaultContextBuilder {
             &capabilities,
             deps.agent_language(),
             &runtime,
+            extension_catalogue.as_deref(),
         );
 
         let msg_lower = user_text.to_lowercase();
@@ -449,6 +470,9 @@ impl ContextBuilder for DefaultContextBuilder {
         }
 
         // 6. Available tools (if requested)
+        // TODO(dispatcher-integration-test): cover the partition branch with an
+        // integration test once a richer Deps mock is available — see
+        // tests/manual_smoke.md for the manual repro.
         let tools = if include_tools {
             let mut tool_list = deps.internal_tool_definitions();
 
@@ -472,14 +496,38 @@ impl ContextBuilder for DefaultContextBuilder {
 
             let mut all_tools = deps.filter_tools_by_policy(tool_list);
 
-            // Dynamic top-K
-            if let Some(max_k) = deps.agent_max_tools_in_context()
-                && all_tools.len() > max_k
-                && !user_text.is_empty()
-            {
-                all_tools = deps
-                    .select_top_k_tools_semantic(all_tools, &user_text, max_k)
-                    .await;
+            if dispatcher_enabled {
+                // Partition: keep only static core ∪ core_extra ∪ promoted.
+                // Everything else is reachable via the `tool_use` dispatcher,
+                // which is itself part of the static core.
+                let core_names: std::collections::HashSet<&str> =
+                    crate::agent::pipeline::tool_defs::static_core_tool_names()
+                        .iter()
+                        .copied()
+                        .collect();
+
+                let core_extra: std::collections::HashSet<String> =
+                    deps.agent_core_extra().iter().cloned().collect();
+
+                let promoted: std::collections::HashSet<String> =
+                    if let Some(state) = deps.session_tool_state(session_id) {
+                        state.promoted.read().await.clone()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+
+                all_tools.retain(|t| {
+                    core_names.contains(t.name.as_str())
+                        || core_extra.contains(&t.name)
+                        || promoted.contains(&t.name)
+                });
+            } else if let Some(max_k) = deps.agent_max_tools_in_context() {
+                // Legacy dynamic top-K path — only when dispatcher is OFF.
+                if all_tools.len() > max_k && !user_text.is_empty() {
+                    all_tools = deps
+                        .select_top_k_tools_semantic(all_tools, &user_text, max_k)
+                        .await;
+                }
             }
 
             all_tools
