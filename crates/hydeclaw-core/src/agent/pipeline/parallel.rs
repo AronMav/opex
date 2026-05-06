@@ -100,6 +100,17 @@ fn loop_detector_key(tc: &hydeclaw_types::ToolCall) -> String {
     format!("tool_use:{action}")
 }
 
+/// Variant A: only system extension tools may auto-promote. YAML and MCP
+/// tools never promote — operators must add them to `core_extra` explicitly.
+fn is_system_extension_tool(name: &str) -> bool {
+    let core = crate::agent::pipeline::tool_defs::static_core_tool_names();
+    if core.contains(&name) {
+        return false;
+    }
+    let all_sys = crate::agent::pipeline::tool_defs::all_system_tool_names();
+    all_sys.contains(&name)
+}
+
 fn is_system_tool_parallel_safe(name: &str) -> bool {
     matches!(
         name,
@@ -209,11 +220,10 @@ pub async fn execute_tool_calls_partitioned(
     // never reaches dispatch.
     //
     // `via_dispatcher_map` records which rewritten calls came in as `tool_use`
-    // — Task 13 will consume this map to bump per-session call counts and
-    // eligibility for auto-promotion (driven by `promotion_max`).
-    // `session_tool_state` is similarly threaded through for Task 13; today
-    // it's accepted-and-ignored to keep the call surface stable.
-    let _ = (&session_tool_state, promotion_max);
+    // — Task 13 consumes this map to bump per-session call counts and elect
+    // tools for auto-promotion (driven by `promotion_max`). Promotion is
+    // gated to system extension tools only (Variant A — YAML/MCP never
+    // auto-promote).
 
     let known_tools: std::collections::HashSet<String> = {
         let mut s = std::collections::HashSet::new();
@@ -249,8 +259,9 @@ pub async fn execute_tool_calls_partitioned(
     }
 
     let direct_calls: Vec<ToolCall> = direct_pending.iter().map(|(tc, _)| tc.clone()).collect();
-    // Built for Task 13 (promotion increment). Carried but unused this commit.
-    let _via_dispatcher_map: std::collections::HashMap<String, bool> = direct_pending
+    // Maps tool_call_id → "originated as tool_use(action=call)?" — consumed by
+    // Task 13 promotion logic at each `record_execution` site below.
+    let via_dispatcher_map: std::collections::HashMap<String, bool> = direct_pending
         .iter()
         .map(|(tc, via)| (tc.id.clone(), *via))
         .collect();
@@ -456,6 +467,43 @@ pub async fn execute_tool_calls_partitioned(
                     && !result.starts_with("tool error:")
                     && !result.contains("timed out");
                 detector.record_execution(&key, &tool_calls[i].arguments, success);
+
+                // Promote eligible system extension tools after threshold-many
+                // successful dispatcher-originated calls. Variant A — YAML/MCP
+                // never auto-promote.
+                let tc = &tool_calls[i];
+                let via_dispatcher =
+                    via_dispatcher_map.get(&tc.id).copied().unwrap_or(false);
+                if via_dispatcher
+                    && success
+                    && is_system_extension_tool(&tc.name)
+                    && let Some(state) = session_tool_state.as_ref()
+                {
+                    const PROMOTION_THRESHOLD: u32 = 2;
+                    let cap: u32 = promotion_max;
+
+                    let new_count = {
+                        let mut counts = state.call_counts.write().await;
+                        let entry = counts.entry(tc.name.clone()).or_insert(0);
+                        *entry += 1;
+                        *entry
+                    };
+
+                    if new_count >= PROMOTION_THRESHOLD {
+                        let mut promoted = state.promoted.write().await;
+                        if !promoted.contains(&tc.name)
+                            && (promoted.len() as u32) < cap
+                        {
+                            promoted.insert(tc.name.clone());
+                            tracing::info!(
+                                tool = %tc.name,
+                                count = new_count,
+                                promoted_total = promoted.len(),
+                                "tool_use promotion triggered"
+                            );
+                        }
+                    }
+                }
             }
 
             // Store in semantic cache if successful
@@ -568,6 +616,43 @@ pub async fn execute_tool_calls_partitioned(
                 && !res.starts_with("tool error:")
                 && !res.contains("timed out");
             detector.record_execution(&seq_key, &tool_calls[i].arguments, success);
+
+            // Promote eligible system extension tools after threshold-many
+            // successful dispatcher-originated calls. Variant A — YAML/MCP
+            // never auto-promote.
+            let tc = &tool_calls[i];
+            let via_dispatcher =
+                via_dispatcher_map.get(&tc.id).copied().unwrap_or(false);
+            if via_dispatcher
+                && success
+                && is_system_extension_tool(&tc.name)
+                && let Some(state) = session_tool_state.as_ref()
+            {
+                const PROMOTION_THRESHOLD: u32 = 2;
+                let cap: u32 = promotion_max;
+
+                let new_count = {
+                    let mut counts = state.call_counts.write().await;
+                    let entry = counts.entry(tc.name.clone()).or_insert(0);
+                    *entry += 1;
+                    *entry
+                };
+
+                if new_count >= PROMOTION_THRESHOLD {
+                    let mut promoted = state.promoted.write().await;
+                    if !promoted.contains(&tc.name)
+                        && (promoted.len() as u32) < cap
+                    {
+                        promoted.insert(tc.name.clone());
+                        tracing::info!(
+                            tool = %tc.name,
+                            count = new_count,
+                            promoted_total = promoted.len(),
+                            "tool_use promotion triggered"
+                        );
+                    }
+                }
+            }
         }
 
         // Store in semantic cache if successful
@@ -931,6 +1016,16 @@ mod tests {
         };
         assert!(outcome.loop_break.is_some());
         assert!(outcome.loop_break.as_ref().unwrap().is_none());
+    }
+
+    #[test]
+    fn system_extension_predicate() {
+        assert!(is_system_extension_tool("cron"));
+        assert!(is_system_extension_tool("agents_list"));
+        assert!(!is_system_extension_tool("workspace_read")); // static core
+        assert!(!is_system_extension_tool("memory")); // static core
+        assert!(!is_system_extension_tool("yaml_tool_xyz")); // not in all_sys
+        assert!(!is_system_extension_tool("tool_use")); // static core
     }
 
     #[test]
