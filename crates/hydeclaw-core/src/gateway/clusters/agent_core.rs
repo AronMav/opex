@@ -22,6 +22,8 @@ pub struct AgentCore {
     pub deps: Arc<tokio::sync::RwLock<AgentDeps>>,
     /// Session-scoped agent pools: maps session UUID → pool of alive agents.
     pub session_pools: SessionPoolsMap,
+    /// Per-session tool dispatcher state (describe cache, call counts, promotions).
+    pub session_tool_state: crate::agent::dispatcher::SessionToolStateMap,
     /// Registered tool definitions (YAML + service tools).
     pub tools: ToolRegistry,
     /// Cron scheduler for heartbeat and dynamic jobs.
@@ -33,10 +35,11 @@ impl AgentCore {
         map: AgentMap,
         deps: Arc<tokio::sync::RwLock<AgentDeps>>,
         session_pools: SessionPoolsMap,
+        session_tool_state: crate::agent::dispatcher::SessionToolStateMap,
         tools: ToolRegistry,
         scheduler: Arc<Scheduler>,
     ) -> Self {
-        Self { map, deps, session_pools, tools, scheduler }
+        Self { map, deps, session_pools, session_tool_state, tools, scheduler }
     }
 
     // ── Agent lookup helpers ─────────────────────────────────────────────────
@@ -120,6 +123,7 @@ impl AgentCore {
             map: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             deps: Arc::new(tokio::sync::RwLock::new(AgentDeps::test_new())),
             session_pools: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_tool_state: Arc::new(dashmap::DashMap::new()),
             tools: ToolRegistry::empty(),
             scheduler: Scheduler::new_noop().await,
         }
