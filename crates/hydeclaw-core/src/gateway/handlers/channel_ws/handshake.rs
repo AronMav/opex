@@ -269,6 +269,7 @@ async fn replay_outbound_queue(
             break;
         }
         let db = ctx.infra.db.clone();
+        // AUDIT-FF-004: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
         tokio::spawn(async move {
             if let Err(e) = outbound::mark_sent(&db, queue_id).await {
                 tracing::warn!(queue_id = %queue_id, error = %e, "outbound mark_sent failed");

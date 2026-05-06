@@ -85,6 +85,7 @@ pub(super) async fn handle_pairing_create(
             let uid = user_id.clone();
             let dname = display_name.clone();
             let code_val = c.clone();
+            // AUDIT-FF-003: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
             tokio::spawn(async move {
                 let display_label = dname.as_deref().map_or_else(
                     || uid.clone(),

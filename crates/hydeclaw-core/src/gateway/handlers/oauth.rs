@@ -47,6 +47,7 @@ async fn restart_agent_sandboxes(infra: &InfraServices, auth: &AuthServices, age
 
 /// Spawn sandbox restart in background for given agents.
 fn spawn_sandbox_restart(infra: InfraServices, auth: AuthServices, agents: Vec<String>) {
+    // AUDIT-FF-013: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
     tokio::spawn(async move { restart_agent_sandboxes(&infra, &auth, &agents).await; });
 }
 

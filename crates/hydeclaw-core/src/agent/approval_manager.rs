@@ -124,6 +124,7 @@ impl ApprovalManager {
                     let tool_name_owned = tool_name.to_string();
                     let agent_name_owned = agent_name.to_string();
                     let approval_id_str = id.to_string();
+                    // AUDIT-FF-001: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                     tokio::spawn(async move {
                         crate::gateway::notify(
                             &db,

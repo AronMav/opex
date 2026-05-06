@@ -597,6 +597,7 @@ pub(crate) async fn api_channel_notify(
                 let body = text.to_string();
                 let agent = agent_name.clone();
                 let ctype = channel_type_for_notify;
+                // AUDIT-FF-002: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                 tokio::spawn(async move {
                     let data = serde_json::json!({"agent": agent, "channel_type": ctype});
                     crate::gateway::handlers::notifications::notify(

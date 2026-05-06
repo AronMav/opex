@@ -57,6 +57,7 @@ impl SystemToolHandler for SkillUseHandler {
                         let db = deps.db.clone();
                         let agent_name = deps.agent_name.to_string();
                         let now_iso = chrono::Utc::now().to_rfc3339();
+                        // AUDIT-FF-011: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                         tokio::spawn(async move {
                             crate::skills::reactivate_skill(
                                 &workspace,

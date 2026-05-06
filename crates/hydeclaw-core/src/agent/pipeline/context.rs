@@ -229,6 +229,7 @@ pub async fn compact_messages<F, Fut>(
             let db = db.clone();
             let tx = ui_tx.clone();
             let agent_name = agent_name.to_string();
+            // AUDIT-FF-014: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
             tokio::spawn(async move {
                 crate::gateway::notify(
                     &db,

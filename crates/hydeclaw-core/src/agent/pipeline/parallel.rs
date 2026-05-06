@@ -810,6 +810,7 @@ fn spawn_persist_message_row(
     let tool_call_id_owned = tool_call_id.map(std::string::ToString::to_string);
     let tool_calls_owned = tool_calls_json.cloned();
     let thinking_owned = thinking_blocks_json.cloned();
+    // AUDIT-FF-015: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
     tokio::spawn(async move {
         // Retry up to 3 times with short backoff to handle the race where a
         // parent message insert (also detached) hasn't committed yet when this

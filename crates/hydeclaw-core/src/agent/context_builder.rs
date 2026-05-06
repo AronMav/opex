@@ -341,6 +341,7 @@ impl ContextBuilder for DefaultContextBuilder {
                     if matches!(skill_state, crate::skills::SkillState::Archived) {
                         let db = deps.db();
                         let agent_name = deps.agent_name().to_string();
+                        // AUDIT-FF-009: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                         tokio::spawn(async move {
                             crate::skills::reactivate_skill(
                                 &workspace,
@@ -351,6 +352,7 @@ impl ContextBuilder for DefaultContextBuilder {
                             ).await;
                         });
                     } else {
+                        // AUDIT-FF-010: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                         tokio::spawn(async move {
                             let safe_name = skill_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
                             let skill_path = format!("{}/skills/{}.md", workspace, safe_name);
