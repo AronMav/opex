@@ -94,6 +94,7 @@ pub async fn bootstrap<S: EventSink>(
         session_id,
         mut messages,
         tools,
+        reentry_mode,
     } = engine
         .build_context(
             ctx.msg,
@@ -102,6 +103,7 @@ pub async fn bootstrap<S: EventSink>(
             ctx.force_new_session,
         )
         .await?;
+    let _ = reentry_mode; // consumed by claim_session_with_retry in Task A4
 
     // 2. Atomically claim the session as 'running'. Allows re-entry from any
     //    status, including 'done', so users can continue completed sessions.
