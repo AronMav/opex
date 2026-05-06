@@ -123,12 +123,14 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
         k: usize,
     ) -> Vec<ToolDefinition>;
 
-    // Dispatcher-related accessors. Three are now consumed by
-    // `DefaultContextBuilder::build` (Task 16). The remaining three are still
-    // pure plumbing for Tasks 17-18 (promotion-cap enforcement and
-    // catalogue-from-registry assembly), so they keep `#[allow(dead_code)]`
-    // until those wires land — clippy `-D warnings` raises dead_code on the
-    // trait declaration when no caller exists.
+    // Dispatcher-related accessors. Most are now consumed by
+    // `DefaultContextBuilder::build` (Tasks 16/17/18). `agent_promotion_max`
+    // is still pure plumbing for promotion-cap enforcement (consumed via
+    // parameter pass-through to `execute_tool_calls_partitioned`); the trait
+    // method itself is not called from `DefaultContextBuilder::build`, so it
+    // keeps `#[allow(dead_code)]` until that wire lands — clippy
+    // `-D warnings` raises dead_code on the trait declaration when no caller
+    // exists.
     /// Whether the dispatcher is enabled for this agent.
     fn agent_tool_dispatcher_enabled(&self) -> bool;
 
@@ -150,12 +152,10 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
 
     /// Agent's tool-policy deny list (consumed by trigger-hint logic and
     /// extension-list assembly). Returns `&[]` when no policy is set.
-    #[allow(dead_code)]
     fn cfg_deny_list(&self) -> &[String];
 
     /// Optional MCP registry for tool discovery (consumed by extension-list
     /// build). Returns `None` when MCP is not configured for this agent.
-    #[allow(dead_code)]
     fn mcp_registry(&self) -> Option<&crate::mcp::McpRegistry>;
 }
 
@@ -342,6 +342,42 @@ impl ContextBuilder for DefaultContextBuilder {
             }
         }
 
+        // Tool trigger hint — top-1 extension match.
+        // Both `cfg_deny_list()` and `mcp_registry()` were added to
+        // ContextBuilderDeps in Tasks 14/15.
+        if dispatcher_enabled && !user_text.is_empty() {
+            let promoted_set = if let Some(state) = deps.session_tool_state(session_id) {
+                state.promoted.read().await.clone()
+            } else {
+                std::collections::HashSet::new()
+            };
+            let deny: Vec<String> = deps.cfg_deny_list().to_vec();
+
+            let candidates = crate::agent::dispatcher::build_extension_tool_list(
+                deps.agent_base(),
+                &deny,
+                &promoted_set,
+                deps.workspace_dir(),
+                deps.mcp_registry(),
+            ).await;
+
+            if !candidates.is_empty() {
+                let top1 = deps.select_top_k_tools_semantic(
+                    candidates, &user_text, 1,
+                ).await;
+                if let Some(t) = top1.first()
+                    && shares_significant_token(&user_text, &t.name, &t.description)
+                {
+                    system_prompt.push_str(&format!(
+                        "\n\n## Relevant Tool Hint\n\
+                         Your task may need the **{}** tool: {}.\n\
+                         Call tool_use(action=\"describe\", name=\"{}\") to load its schema.\n",
+                        t.name, t.description, t.name,
+                    ));
+                }
+            }
+        }
+
         // 4e. Multi-agent session context
         if let Ok(participants) = deps.session_get_participants(session_id).await
             && participants.len() > 1
@@ -369,6 +405,10 @@ impl ContextBuilder for DefaultContextBuilder {
             prompt_approx_tokens = system_prompt.len() / 4,
             "system_prompt_size"
         );
+
+        // Captured before `system_prompt` is moved into the system message — used by
+        // the `context_size` log emitted after `tools` is built.
+        let prompt_tokens = system_prompt.len() / 4;
 
         // 5. Assemble messages
         let mut messages: Vec<hydeclaw_types::Message> = vec![hydeclaw_types::Message {
@@ -535,6 +575,21 @@ impl ContextBuilder for DefaultContextBuilder {
             vec![]
         };
 
+        let tools_tokens = tools.iter()
+            .map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(0))
+            .sum::<usize>() / 4;
+        let promoted_count = if let Some(state) = deps.session_tool_state(session_id) {
+            state.promoted.read().await.len()
+        } else { 0 };
+        tracing::info!(
+            agent = %deps.agent_name(),
+            prompt_tokens = prompt_tokens,
+            tools_tokens = tools_tokens,
+            dispatcher_enabled = dispatcher_enabled,
+            promoted_count = promoted_count,
+            "context_size"
+        );
+
         Ok(ContextSnapshot {
             session_id,
             messages,
@@ -587,6 +642,21 @@ pub mod mock {
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Check whether the user message shares a non-trivial token (≥3 chars, not a stop word)
+/// with the candidate tool's name or description. Used by trigger-hint logic as a
+/// keyword-overlap floor on top of semantic similarity.
+fn shares_significant_token(user_text: &str, tool_name: &str, tool_desc: &str) -> bool {
+    let stop: &[&str] = &["the", "a", "an", "is", "to", "of", "for", "and", "or", "in", "on"];
+    let user_lower = user_text.to_lowercase();
+    let user_words: std::collections::HashSet<&str> = user_lower
+        .split_whitespace()
+        .filter(|w| w.len() >= 3 && !stop.contains(w))
+        .collect();
+    let combined = format!("{tool_name} {tool_desc}").to_lowercase();
+    combined.split_whitespace()
+        .any(|w| w.len() >= 3 && user_words.contains(w))
+}
 
 /// Strip `<minimax:tool_call>…</minimax:tool_call>` blocks from a string.
 // Called from DefaultContextBuilder::build() via ContextBuilder trait object dispatch.
