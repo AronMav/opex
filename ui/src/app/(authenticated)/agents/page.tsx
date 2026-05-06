@@ -102,6 +102,9 @@ export const emptyForm: FormState = {
   fallbackProvider: "",
   ttsProvider: "",
   maxAgentTurles: "",
+  toolDispatcherEnabled: false,
+  toolDispatcherCoreExtra: [],
+  toolDispatcherPromotionMax: "8",
 };
 
 export function detailToForm(d: AgentDetail): FormState {
@@ -171,6 +174,9 @@ export function detailToForm(d: AgentDetail): FormState {
     srEnabled: !!d.skill_review && d.skill_review.enabled,
     srMinToolCalls: String(d.skill_review?.min_tool_calls ?? 3),
     maxAgentTurles: d.max_agent_turns != null ? String(d.max_agent_turns) : '',
+    toolDispatcherEnabled: d.tool_dispatcher?.enabled ?? false,
+    toolDispatcherCoreExtra: d.tool_dispatcher?.core_extra ?? [],
+    toolDispatcherPromotionMax: d.tool_dispatcher?.promotion_max != null ? String(d.tool_dispatcher.promotion_max) : '8',
   };
 }
 
@@ -268,6 +274,13 @@ export function formToPayload(f: FormState) {
     fallback_provider: f.fallbackProvider,
     tts_provider: f.ttsProvider || null,
     max_agent_turns: f.maxAgentTurles ? parseInt(f.maxAgentTurles) : undefined,
+    tool_dispatcher: {
+      enabled: f.toolDispatcherEnabled,
+      core_extra: f.toolDispatcherCoreExtra,
+      promotion_max: f.toolDispatcherPromotionMax.trim() !== ""
+        ? Math.max(0, Math.min(16, parseInt(f.toolDispatcherPromotionMax) || 0))
+        : 8,
+    },
   };
 }
 
@@ -658,6 +671,7 @@ export default function AgentsPage() {
         onOpenChannelDialog={openChannelDialog}
         onRestartChannel={restartChannel}
         onDeleteChannelRequest={(id) => setDeleteChannelId(id)}
+        editingBase={editName ? agents.find((a) => a.name === editName)?.base ?? false : false}
       />
 
       {/* Channel Dialog (Create / Edit) */}

@@ -123,6 +123,10 @@ export interface FormState {
   srMinToolCalls: string;
   // Agent turns limit per-agent override (typo kept for backward compat)
   maxAgentTurles: string;
+  // Tool Dispatcher
+  toolDispatcherEnabled: boolean;
+  toolDispatcherCoreExtra: string[];
+  toolDispatcherPromotionMax: string;
 }
 
 export interface AgentEditDialogProps {
@@ -150,6 +154,8 @@ export interface AgentEditDialogProps {
   onOpenChannelDialog: (ch?: ChannelRow) => void;
   onRestartChannel: (channelId: string) => void;
   onDeleteChannelRequest: (channelId: string) => void;
+  // Whether the agent being edited is a base agent (affects Tool Dispatcher copy).
+  editingBase?: boolean;
 }
 
 type AgentTab = "general" | "tools" | "behavior" | "session" | "schedule" | "channels";
@@ -182,6 +188,7 @@ export function AgentEditDialog({
   onOpenChannelDialog,
   onRestartChannel,
   onDeleteChannelRequest,
+  editingBase,
 }: AgentEditDialogProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<AgentTab>("general");
@@ -505,6 +512,49 @@ export function AgentEditDialog({
                     </div>
                     <Field label={t("agents.approval_specific_tools")}>
                       <ToolMultiSelect tools={toolNames} selected={form.approvalRequireFor} onChange={(v) => upd({ approvalRequireFor: v })} placeholder={t("agents.approval_tools_placeholder")} />
+                    </Field>
+                  </div>
+                </SwitchSection>
+                <SwitchSection
+                  title={t("agents.section_tool_dispatcher")}
+                  enabled={form.toolDispatcherEnabled}
+                  onToggle={(v) => upd({ toolDispatcherEnabled: v })}
+                >
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      {t("agents.tool_dispatcher_hint")}
+                      {editingBase && (
+                        <>
+                          <br />
+                          <strong>{t("agents.tool_dispatcher_base_note_label")}</strong>{" "}
+                          {t("agents.tool_dispatcher_base_note")}
+                        </>
+                      )}
+                    </p>
+                    <Field label={t("agents.tool_dispatcher_core_extra")}>
+                      <p className="text-[10px] text-muted-foreground -mt-1 mb-1 leading-snug">
+                        {t("agents.tool_dispatcher_core_extra_hint")}
+                      </p>
+                      <TagInput
+                        values={form.toolDispatcherCoreExtra}
+                        onChange={(v) => upd({ toolDispatcherCoreExtra: v })}
+                        placeholder={t("agents.tool_dispatcher_core_extra_placeholder")}
+                        suggestions={toolNames}
+                      />
+                    </Field>
+                    <Field label={t("agents.tool_dispatcher_promotion_max")}>
+                      <Input
+                        type="number"
+                        step="1"
+                        min={0}
+                        max={16}
+                        value={form.toolDispatcherPromotionMax}
+                        className="bg-background border-border font-mono text-sm h-8"
+                        onChange={(e) => upd({ toolDispatcherPromotionMax: e.target.value })}
+                      />
+                      <span className="text-[10px] text-muted-foreground">
+                        {t("agents.tool_dispatcher_promotion_max_hint")}
+                      </span>
                     </Field>
                   </div>
                 </SwitchSection>
@@ -919,5 +969,78 @@ function ToolMultiSelect({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function TagInput({
+  values,
+  onChange,
+  placeholder,
+  suggestions,
+}: {
+  values: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+  suggestions?: string[];
+}) {
+  const [draft, setDraft] = useState("");
+  const datalistId = useMemo(
+    () => `taginput-${Math.random().toString(36).slice(2, 10)}`,
+    [],
+  );
+  const commit = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (values.includes(trimmed)) {
+      setDraft("");
+      return;
+    }
+    onChange([...values, trimmed]);
+    setDraft("");
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 min-h-8">
+      {values.map((v) => (
+        <span
+          key={v}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 pl-2 pr-1 py-0.5 font-mono text-[11px]"
+        >
+          <span className="truncate max-w-[160px]">{v}</span>
+          <button
+            type="button"
+            onClick={() => onChange(values.filter((x) => x !== v))}
+            className="rounded-full hover:bg-muted text-muted-foreground hover:text-foreground h-4 w-4 inline-flex items-center justify-center text-xs leading-none"
+            aria-label={`Remove ${v}`}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <input
+        type="text"
+        list={suggestions && suggestions.length > 0 ? datalistId : undefined}
+        value={draft}
+        placeholder={values.length === 0 ? placeholder : ""}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            commit(draft);
+          } else if (e.key === "Backspace" && draft.length === 0 && values.length > 0) {
+            e.preventDefault();
+            onChange(values.slice(0, -1));
+          }
+        }}
+        onBlur={() => commit(draft)}
+        className="flex-1 min-w-[120px] bg-transparent outline-none text-xs font-mono placeholder:text-muted-foreground"
+      />
+      {suggestions && suggestions.length > 0 && (
+        <datalist id={datalistId}>
+          {suggestions.map((s) => (
+            <option key={s} value={s} />
+          ))}
+        </datalist>
+      )}
+    </div>
   );
 }
