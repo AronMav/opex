@@ -116,6 +116,17 @@ pub async fn run_subagent_with_session(
     // dispatcher's compact array. Base subagents always get full tools
     // regardless of the parent's dispatcher settings.
     let subagent_is_base = executor.cfg().agent.base;
+    // Mirror the parent-side decision: when the dispatcher is engaged for
+    // this subagent, the array stays at static-core only — yaml/mcp are
+    // discovered via `tool_use` and never preloaded. Without this gate, the
+    // `extends` below re-injected yaml+mcp unconditionally and the
+    // subagent's array stayed full-size, defeating the dispatcher's whole
+    // point on the subagent path.
+    let dispatch_for_subagent = crate::agent::engine::tool_executor::dispatch_for_subagent_decision(
+        subagent_is_base,
+        executor.cfg().agent.tool_dispatcher.enabled,
+        executor.cfg().agent.delegation.subagent_dispatcher_enabled,
+    );
     let mut available_tools = executor
         .internal_tool_definitions_for_subagent(allowed_tools.as_deref(), subagent_is_base);
     let yaml_tools: Vec<crate::tools::yaml_tools::YamlToolDef> = {
@@ -131,9 +142,11 @@ pub async fn run_subagent_with_session(
             loaded
         }
     };
-    available_tools.extend(yaml_tools.into_iter().map(|t| t.to_tool_definition()));
-    if let Some(mcp) = &ctx.tex.mcp {
-        available_tools.extend(mcp.all_tool_definitions().await);
+    if !dispatch_for_subagent {
+        available_tools.extend(yaml_tools.into_iter().map(|t| t.to_tool_definition()));
+        if let Some(mcp) = &ctx.tex.mcp {
+            available_tools.extend(mcp.all_tool_definitions().await);
+        }
     }
     available_tools = executor.filter_tools_by_policy(available_tools);
 

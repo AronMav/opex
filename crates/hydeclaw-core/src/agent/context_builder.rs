@@ -150,9 +150,13 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
         session_id: uuid::Uuid,
     ) -> Option<std::sync::Arc<crate::agent::dispatcher::SessionToolState>>;
 
-    /// Agent's tool-policy deny list (consumed by trigger-hint logic and
-    /// extension-list assembly). Returns `&[]` when no policy is set.
-    fn cfg_deny_list(&self) -> &[String];
+    /// Agent's effective tool-policy deny list (consumed by trigger-hint
+    /// logic and extension-list assembly). Returns the union of
+    /// `agent.tools.deny` and the delegation-computed deny list
+    /// (`SUBAGENT_DENIED_TOOLS` + `blocked_tools_extra`, or
+    /// `blocked_tools_override` when set). Returns an empty Vec when no
+    /// policy is set and delegation defaults are empty.
+    fn cfg_deny_list(&self) -> Vec<String>;
 
     /// Optional MCP registry for tool discovery (consumed by extension-list
     /// build). Returns `None` when MCP is not configured for this agent.
@@ -351,7 +355,7 @@ impl ContextBuilder for DefaultContextBuilder {
             } else {
                 std::collections::HashSet::new()
             };
-            let deny: Vec<String> = deps.cfg_deny_list().to_vec();
+            let deny: Vec<String> = deps.cfg_deny_list();
 
             let candidates = crate::agent::dispatcher::build_extension_tool_list(
                 deps.agent_base(),
