@@ -272,9 +272,9 @@ impl LlmProvider for GoogleProvider {
         );
 
         // Google uses ?key= in URL, no auth header needed
-        let body_text = crate::agent::providers_http::retry_http_post(
+        let body_text = crate::agent::providers::http::retry_http_post(
             &self.client, &url, &body, "",
-            "google", crate::agent::providers_http::RETRYABLE_OPENAI,
+            "google", crate::agent::providers::http::RETRYABLE_OPENAI,
             self.max_retries,
         ).await?;
 

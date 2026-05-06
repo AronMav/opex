@@ -2,7 +2,7 @@
 //! extracted from providers.rs for readability.
 
 use super::{async_trait, Deserialize, Arc, SecretsManager, ModelOverride, LlmProvider, Message, ToolDefinition, Result, LlmResponse, messages_to_openai_format, mpsc};
-use crate::agent::providers_http::SendError;
+use crate::agent::providers::http::SendError;
 
 // ── OpenAI-Compatible Provider (works with MiniMax, OpenAI, Ollama, etc.) ──
 
@@ -294,13 +294,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
         let api_key = self.resolve_api_key().await;
         let effective_url = self.resolve_url().await;
-        let body_text = crate::agent::providers_http::retry_http_post(
+        let body_text = crate::agent::providers::http::retry_http_post(
             &self.client,
             &effective_url,
             &body,
             &api_key,
             &self.provider_name,
-            crate::agent::providers_http::RETRYABLE_OPENAI,
+            crate::agent::providers::http::RETRYABLE_OPENAI,
             self.max_retries,
         ).await?;
         let api_resp: ChatCompletionResponse = serde_json::from_str(&body_text)
@@ -504,12 +504,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let api_key = self.resolve_api_key().await;
         let effective_url = self.resolve_url().await;
         let api_key_clone = api_key.clone();
-        let resp = crate::agent::providers_http::send_with_retry(
+        let resp = crate::agent::providers::http::send_with_retry(
             &self.streaming_client,
             &effective_url,
             &body,
             &self.provider_name,
-            crate::agent::providers_http::RETRYABLE_OPENAI,
+            crate::agent::providers::http::RETRYABLE_OPENAI,
             self.max_retries,
             move |req| if api_key_clone.is_empty() { req } else { req.bearer_auth(&api_key_clone) },
         )

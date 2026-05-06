@@ -4,13 +4,11 @@
 //! (`build_provider_clients`, `resolve_credential`, `forced_skill_tool`,
 //! `messages_to_openai_format`, `strip_orphaned_tool_messages`).
 //!
-//! The concrete provider implementations live as siblings under
-//! `agent/providers_*.rs` and are mounted here as private submodules
-//! (`openai_impl`, `anthropic_impl`, `google_impl`, `claude_cli_impl`)
-//! via `#[path]`. Their `super::` paths resolve relative to this module,
-//! so adding a sub-module here shifts the relative reachability —
-//! anything they consume must be re-exported in this `mod.rs` or
-//! addressed via the `super::sub_module::*` path explicitly.
+//! Concrete provider implementations live as plain submodules of this
+//! module (`openai`, `anthropic`, `google`, `claude_cli`). Their `super::`
+//! paths resolve to `agent::providers::*`, so anything they consume must
+//! be re-exported in this `mod.rs` or addressed via the explicit
+//! `super::sub_module::*` path.
 //!
 //! Sub-modules:
 //! - [`registry`] — `ProviderTypeMeta` + the static `PROVIDER_TYPES` table
@@ -28,26 +26,22 @@ use tokio::sync::mpsc;
 
 use crate::secrets::SecretsManager;
 
-// Concrete provider implementations live as siblings of this module.
-// Mounted via `#[path]` so `super::*` from their bodies still resolves
-// to `agent::providers::*`, keeping their existing `super::PROVIDER_TYPES`
-// / `super::ModelOverride` / `super::resolve_credential` references valid.
-#[path = "../providers_openai.rs"]
-mod openai_impl;
-pub(crate) use openai_impl::OpenAiCompatibleProvider;
-#[path = "../providers_anthropic.rs"]
-mod anthropic_impl;
-pub(crate) use anthropic_impl::AnthropicProvider;
+// Concrete provider implementations.
+mod openai;
+pub(crate) use openai::OpenAiCompatibleProvider;
+mod anthropic;
+pub(crate) use anthropic::AnthropicProvider;
 #[cfg(test)]
-use anthropic_impl::{AnthropicContentBlock, AnthropicResponse, AnthropicUsage, parse_anthropic_response};
-#[path = "../providers_google.rs"]
-mod google_impl;
-pub(crate) use google_impl::GoogleProvider;
+use anthropic::{AnthropicContentBlock, AnthropicResponse, AnthropicUsage, parse_anthropic_response};
+mod google;
+pub(crate) use google::GoogleProvider;
 #[cfg(test)]
-use google_impl::messages_to_gemini_format;
-#[path = "../providers_claude_cli.rs"]
-mod claude_cli_impl;
-pub(crate) use claude_cli_impl::ClaudeCliProvider;
+use google::messages_to_gemini_format;
+mod claude_cli;
+pub(crate) use claude_cli::ClaudeCliProvider;
+
+// Shared HTTP retry/backoff helpers used by openai/anthropic/google impls.
+pub(crate) mod http;
 
 pub mod timeouts;
 pub use timeouts::TimeoutsConfig;

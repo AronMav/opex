@@ -22,7 +22,6 @@ pub mod handle;
 pub mod history;
 pub mod model_discovery;
 pub mod providers;
-pub(crate) mod providers_http;
 pub(crate) mod openapi;
 pub(crate) mod pii;
 pub(crate) mod json_repair;
