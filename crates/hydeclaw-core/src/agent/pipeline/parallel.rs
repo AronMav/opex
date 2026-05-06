@@ -84,6 +84,22 @@ pub trait ToolExecutor: Send + Sync {
 
 // ── Helper predicates ────────────────────────────────────────────────────────
 
+/// Derive the LoopDetector key for a tool call. For `tool_use` calls that
+/// are not rewritten (search/describe), include the action so the detector
+/// distinguishes legitimate `search → describe → call` sequences from
+/// pathological loops on a single action.
+fn loop_detector_key(tc: &hydeclaw_types::ToolCall) -> String {
+    if tc.name != "tool_use" {
+        return tc.name.clone();
+    }
+    let action = tc
+        .arguments
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    format!("tool_use:{action}")
+}
+
 fn is_system_tool_parallel_safe(name: &str) -> bool {
     matches!(
         name,
@@ -420,8 +436,9 @@ pub async fn execute_tool_calls_partitioned(
             results[i] = Some(result.clone());
 
             if detect_loops {
+                let key = loop_detector_key(&tool_calls[i]);
                 if let LoopStatus::Break(reason) =
-                    detector.check_limits(&tool_calls[i].name, &tool_calls[i].arguments)
+                    detector.check_limits(&key, &tool_calls[i].arguments)
                 {
                     tracing::error!(tool = %tool_calls[i].name, reason = %reason, "tool loop broken (parallel post-check)");
                     return BatchOutcome {
@@ -438,11 +455,7 @@ pub async fn execute_tool_calls_partitioned(
                 let success = !result.starts_with("Error:")
                     && !result.starts_with("tool error:")
                     && !result.contains("timed out");
-                detector.record_execution(
-                    &tool_calls[i].name,
-                    &tool_calls[i].arguments,
-                    success,
-                );
+                detector.record_execution(&key, &tool_calls[i].arguments, success);
             }
 
             // Store in semantic cache if successful
@@ -503,9 +516,10 @@ pub async fn execute_tool_calls_partitioned(
 
     // 4b. Sequential
     for &i in &sequential_indices {
+        let seq_key = loop_detector_key(&tool_calls[i]);
         if detect_loops
             && let LoopStatus::Break(reason) =
-                detector.check_limits(&tool_calls[i].name, &tool_calls[i].arguments)
+                detector.check_limits(&seq_key, &tool_calls[i].arguments)
         {
             tracing::error!(tool = %tool_calls[i].name, reason = %reason, "tool loop broken (pre-check)");
             return BatchOutcome {
@@ -553,7 +567,7 @@ pub async fn execute_tool_calls_partitioned(
             let success = !res.starts_with("Error:")
                 && !res.starts_with("tool error:")
                 && !res.contains("timed out");
-            detector.record_execution(&tool_calls[i].name, &tool_calls[i].arguments, success);
+            detector.record_execution(&seq_key, &tool_calls[i].arguments, success);
         }
 
         // Store in semantic cache if successful
@@ -932,5 +946,39 @@ mod tests {
             tool_msg_id: Some(uuid::Uuid::nil()),
         };
         assert!(with_id.tool_msg_id.is_some());
+    }
+}
+
+#[cfg(test)]
+mod loop_key_tests {
+    use super::*;
+
+    fn make_tc(name: &str, args: serde_json::Value) -> hydeclaw_types::ToolCall {
+        hydeclaw_types::ToolCall {
+            id: "test".to_string(),
+            name: name.to_string(),
+            arguments: args,
+        }
+    }
+
+    #[test]
+    fn key_for_non_tool_use_is_real_name() {
+        let tc = make_tc("cron", serde_json::json!({}));
+        assert_eq!(loop_detector_key(&tc), "cron");
+    }
+
+    #[test]
+    fn key_for_tool_use_includes_action() {
+        let tc = make_tc("tool_use", serde_json::json!({"action": "search"}));
+        assert_eq!(loop_detector_key(&tc), "tool_use:search");
+
+        let tc = make_tc("tool_use", serde_json::json!({"action": "describe"}));
+        assert_eq!(loop_detector_key(&tc), "tool_use:describe");
+    }
+
+    #[test]
+    fn key_for_tool_use_missing_action_is_question_mark() {
+        let tc = make_tc("tool_use", serde_json::json!({}));
+        assert_eq!(loop_detector_key(&tc), "tool_use:?");
     }
 }
