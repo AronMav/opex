@@ -200,18 +200,27 @@ results for tools 0..N.
 
 ### Negative / open
 
+  * **Resolved 2026-05-06**: `engine/stream.rs::handle_isolated` is
+    deleted. Cron, agent-to-agent, and other RPC-style callers now
+    route through `pipeline::execute` via
+    `engine::run::handle_isolated_via_pipeline`, with the previously
+    cron-only features (fallback provider, auto-continue,
+    session-corruption recovery, tool-policy override, forced-final
+    LLM call) re-expressed as opt-in `BehaviourLayers` consulted by
+    `execute()` at well-defined insertion points. SSE callers pass
+    `BehaviourLayers::none()` for byte-identical legacy semantics;
+    cron callers pass `BehaviourLayers::for_cron(loop_config, msg)`.
+    `engine/stream.rs` shrunk from 469 to 101 lines. Single span
+    shape across all turn types (cron sessions now produce
+    `pipeline.execute` + `pipeline.finalize` traces in Jaeger,
+    matching SSE chats). Documented in
+    [2026-05-06-llm-loop-unification-plan.md](./2026-05-06-llm-loop-unification-plan.md).
   * **Resolved 2026-05-05**: Mid-level helpers extracted to
-    `pipeline::tool_loop_helpers`. Both `pipeline::execute` and
-    `engine/stream.rs::handle_isolated` now share a single source of
-    truth for the loop-nudge wording, loop-break bookkeeping,
-    intermediate-assistant append, persist-payload encoding, and
-    per-iteration UUID allocation. The two paths still diverge on
-    transport-specific concerns: SSE streaming vs. RPC return,
-    `forward_chunks_into_sink` vs. `chat_with_transient_retry`,
-    fallback provider switch, auto-continue, session-corruption
-    recovery, forced-final LLM call. These divergences are intentional
-    — they reflect contracts that genuinely cannot share an
-    implementation, not duplicated mechanics.
+    `pipeline::tool_loop_helpers` (precursor to the unification
+    above). Both `pipeline::execute` and the (then-still-living)
+    `handle_isolated` shared a single source of truth for loop-nudge
+    wording, loop-break bookkeeping, intermediate-assistant append,
+    persist-payload encoding, and per-iteration UUID allocation.
   * **Resolved 2026-05-05**: Backend unit tests for `BatchOutcome`
     invariants are now in `parallel.rs::tests` (4 tests covering
     no-loop-break, loop-break-preserves-results, loop-break-without-

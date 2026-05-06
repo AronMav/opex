@@ -915,7 +915,7 @@ impl Scheduler {
                     }
                 };
 
-                match engine2.handle_isolated(&msg).await {
+                match engine2.handle_isolated_via_pipeline(&msg).await {
                     Ok(reply) => {
                         if let Some(rid) = run_id {
                             let preview = reply.chars().take(500).collect::<String>();
@@ -1054,7 +1054,7 @@ impl Scheduler {
                 // Wrap execution in AssertUnwindSafe + catch_unwind so the agent lock
                 // is always released even if handle_isolated panics.
                 let exec_result = std::panic::AssertUnwindSafe(async {
-                    match engine.handle_isolated(&msg).await {
+                    match engine.handle_isolated_via_pipeline(&msg).await {
                         Ok(reply) => {
                             // Update last_run_at
                             if let Err(e) = sqlx::query("UPDATE scheduled_jobs SET last_run_at = now() WHERE id = $1")
@@ -1395,7 +1395,7 @@ async fn run_heartbeat(
         user_message_id: None,
     };
 
-    let response = engine.handle_isolated(&msg).await?;
+    let response = engine.handle_isolated_via_pipeline(&msg).await?;
 
     // Suppress announcement when agent reports nothing to do
     let suppress = response.trim().eq_ignore_ascii_case(HEARTBEAT_OK);
@@ -1515,7 +1515,7 @@ pub async fn run_first_run_onboarding(
         user_message_id: None,
     };
 
-    let response = engine.handle_isolated(&msg).await?;
+    let response = engine.handle_isolated_via_pipeline(&msg).await?;
 
     if !response.is_empty()
         && let Some(router) = engine.channel_router_ref()

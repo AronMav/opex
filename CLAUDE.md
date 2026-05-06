@@ -67,18 +67,20 @@ HydeClaw is a Rust-based AI gateway. The core binary (`crates/hydeclaw-core`) ha
 
 ### Agent Engine (`src/agent/`)
 
-Three entry points on `AgentEngine`, all thin adapters in [engine/run.rs](crates/hydeclaw-core/src/agent/engine/run.rs) that construct an `EventSink` and delegate to `pipeline::execute`:
+Four entry points on `AgentEngine`, all thin adapters in [engine/run.rs](crates/hydeclaw-core/src/agent/engine/run.rs) that construct an `EventSink` and delegate to `pipeline::execute`:
 
 - `handle_sse` — web SSE via `SseSink` (over `EngineEventSender`/flume)
 - `handle_with_status` — channel adapters (Telegram/Discord) with typing indicator via `ChannelStatusSink` (two `UnboundedSender` channels)
 - `handle_streaming` — plain-chunk text via `ChunkSink`
+- `handle_isolated_via_pipeline` — RPC-style cron/agent-to-agent calls via `NoopSink`; returns final assistant text. Constructs `BehaviourLayers::for_cron(...)` so fallback provider, auto-continue, session-corruption recovery, tool-policy override, and forced-final LLM call all engage with cron-defaults.
 
 Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/pipeline/):
 
-- `sink.rs` — `EventSink` trait, `PipelineEvent` (`Stream(StreamEvent)` | `Phase(ProcessingPhase)`), `SinkError`, three production sinks
-- `bootstrap.rs` — session entry, user-message persist, WAL `running`, `ProcessingGuard`, slash-command detection
-- `execute.rs` — main LLM+tools loop, transport-agnostic
+- `sink.rs` — `EventSink` trait, `PipelineEvent` (`Stream(StreamEvent)` | `Phase(ProcessingPhase)`), `SinkError`, four production sinks (`SseSink`, `ChannelStatusSink`, `ChunkSink`, `NoopSink`)
+- `bootstrap.rs` — session entry, user-message persist, WAL `running`, `ProcessingGuard`, slash-command detection. Same code path drives both SSE (`use_history=true`) and cron (`force_new_session=true, use_history=false`)
+- `execute.rs` — main LLM+tools loop, transport-agnostic. Takes `&BehaviourLayers` parameter (see below)
 - `finalize.rs` — single exit point: persist assistant or partial, WAL `done|failed|interrupted` via `SessionLifecycleGuard`, enqueue knowledge extraction
+- `behaviour.rs` — five composable opt-in policy structs (`FallbackPolicy`, `AutoContinuePolicy`, `SessionRecoveryPolicy`, `ToolPolicyOverride`, `ForcedFinalCallPolicy`) bundled into `BehaviourLayers`. SSE callers use `BehaviourLayers::none()`; cron callers use `BehaviourLayers::for_cron(loop_config, msg)`. Each layer adds zero hot-path branches when disengaged. See [docs/architecture/2026-05-06-llm-loop-unification-plan.md](docs/architecture/2026-05-06-llm-loop-unification-plan.md).
 
 **Key execution paths:**
 - `pipeline::execute::execute()` — LLM call + tool loop, transport-agnostic

@@ -447,7 +447,7 @@ pub(crate) async fn api_run_cron(
         .ok()
         .flatten();
 
-        match engine.handle_isolated(&msg).await {
+        match engine.handle_isolated_via_pipeline(&msg).await {
             Ok(reply) => {
                 sqlx::query("UPDATE scheduled_jobs SET last_run_at = now() WHERE id = $1")
                     .bind(id)
