@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use hydeclaw_types::approvals::ApprovalAction;
 use hydeclaw_types::ids::ApprovalId;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -309,7 +310,7 @@ impl ApprovalManager {
                     && let Err(e) = tx
                         .send_async(StreamEvent::ApprovalResolved {
                             approval_id,
-                            action: "timeout_rejected".to_string(),
+                            action: ApprovalAction::TimeoutRejected,
                             modified_input: None,
                         })
                         .await

@@ -273,7 +273,7 @@ mod tests {
             },
             StreamEvent::ApprovalResolved {
                 approval_id: hydeclaw_types::ids::ApprovalId::from(uuid::Uuid::nil()),
-                action: "approved".into(),
+                action: hydeclaw_types::approvals::ApprovalAction::Approved,
                 modified_input: None,
             },
             StreamEvent::Finish { finish_reason: "stop".into(), continuation: false },

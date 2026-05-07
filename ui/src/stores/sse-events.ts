@@ -13,19 +13,10 @@ export type {
   DataSessionIdPayload,
   SyncStatus,
   UsagePayload,
+  ApprovalAction,
 } from "@/types/sse.generated";
 
 import type { SseEvent } from "@/types/sse.generated";
-
-// Recognized values for `tool-approval-resolved.action`. Use these to
-// narrow the wire `string` field statically. Tightening the wire type
-// to a Rust enum is a separate work item (S6.5 spec §5 schema note).
-export const RECOGNIZED_APPROVAL_ACTIONS = [
-  "approved",
-  "rejected",
-  "timeout_rejected",
-] as const;
-export type ApprovalAction = (typeof RECOGNIZED_APPROVAL_ACTIONS)[number];
 
 // NOTE: `reconnecting` event is server-AND-client emitted with the same
 // shape (server: LLM-retry; client: SSE-reconnect). Both go through the

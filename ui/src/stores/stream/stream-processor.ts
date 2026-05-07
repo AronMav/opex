@@ -7,7 +7,6 @@ import {
   parseContentParts,
   parseSSELines,
   parseSseEvent,
-  RECOGNIZED_APPROVAL_ACTIONS,
 } from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
@@ -281,13 +280,11 @@ export async function processSSEStream(
             );
             if (idx >= 0) {
               const existing = session.buffer.parts[idx] as ApprovalPart;
-              // event.action is wire `string` — narrow against recognized values.
-              const action = (RECOGNIZED_APPROVAL_ACTIONS as readonly string[]).includes(event.action)
-                ? (event.action as ApprovalPart["status"])
-                : existing.status;
+              // event.action is the typed ApprovalAction union — strict subset of
+              // ApprovalPart["status"]; assigns directly without a runtime check.
               session.buffer.parts[idx] = {
                 ...existing,
-                status: action,
+                status: event.action,
                 modifiedInput: (event.modifiedInput ?? undefined) as Record<string, unknown> | undefined,
               };
             }

@@ -89,7 +89,7 @@ pub enum StreamEvent {
     /// Approval resolved: a pending approval was approved, rejected, or timed out.
     ApprovalResolved {
         approval_id: hydeclaw_types::ids::ApprovalId,
-        action: String, // "approved" | "rejected" | "timeout_rejected"
+        action: hydeclaw_types::approvals::ApprovalAction,
         modified_input: Option<serde_json::Value>,
     },
     /// Internal event: signals that a different agent is now responding (multi-agent session).

@@ -291,6 +291,7 @@ impl SseStreamWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hydeclaw_types::approvals::ApprovalAction;
     use hydeclaw_types::ids::{ApprovalId, MessageId, ParallelBatchId, ToolCallId};
     use uuid::Uuid;
 
@@ -343,7 +344,7 @@ mod tests {
         let aid = ApprovalId::from(Uuid::nil());
         let stream = StreamEvent::ApprovalResolved {
             approval_id: aid,
-            action: "approved".to_string(),
+            action: ApprovalAction::Approved,
             modified_input: None,
         };
         let json = serde_json::to_string(&SseEvent::from(stream)).unwrap();

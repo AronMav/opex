@@ -5,6 +5,7 @@
 //! Run: `cargo test -p hydeclaw-types --test sse_wire`
 //! Fixtures path: ../../ui/src/__tests__/fixtures/sse/
 
+use hydeclaw_types::approvals::ApprovalAction;
 use hydeclaw_types::ids::{ApprovalId, MessageId, ParallelBatchId, ToolCallId};
 use hydeclaw_types::sse::{
     DataSessionIdPayload, MetricCard, MetricTrend, RichCardData, SseEvent,
@@ -186,7 +187,7 @@ fn sse_tool_approval_needed_fixture() {
 fn sse_tool_approval_resolved_fixture() {
     let ev = SseEvent::ToolApprovalResolved {
         approval_id: ApprovalId::from(Uuid::nil()),
-        action: "approved".to_string(),
+        action: ApprovalAction::Approved,
         modified_input: Some(serde_json::json!({"path": "/y.txt"})),
     };
     write_fixture("tool-approval-resolved", &ev);

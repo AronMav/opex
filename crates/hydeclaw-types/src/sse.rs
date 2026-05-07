@@ -21,6 +21,7 @@
 //!
 //! Round-trip lock-in via fixtures in T7.
 
+use crate::approvals::ApprovalAction;
 use crate::ids::{ApprovalId, MessageId, ParallelBatchId, ToolCallId};
 use serde::{Deserialize, Serialize};
 
@@ -125,12 +126,13 @@ pub enum SseEvent {
         #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
         timeout_ms: u64,
     },
-    /// action kept as String to match StreamEvent's untyped wire shape.
+    /// `action` is a typed enum (`ApprovalAction`) — wire shape is identical
+    /// to the previous `String` form (`"approved" | "rejected" | "timeout_rejected"`).
     ToolApprovalResolved {
         #[serde(rename = "approvalId")]
         #[cfg_attr(feature = "ts-gen", ts(type = "string"))]
         approval_id: ApprovalId,
-        action: String,
+        action: ApprovalAction,
         #[serde(skip_serializing_if = "Option::is_none", rename = "modifiedInput")]
         #[cfg_attr(feature = "ts-gen", ts(type = "unknown | null"))]
         modified_input: Option<serde_json::Value>,
