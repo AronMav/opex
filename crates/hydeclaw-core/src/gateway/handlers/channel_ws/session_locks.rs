@@ -36,11 +36,10 @@ impl SessionLockMap {
             .entry(key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone();
-        let guard = arc.clone().lock_owned().await;
+        let guard = arc.lock_owned().await;
         LockHandle {
             key,
             map: Arc::clone(self),
-            arc,
             guard: Some(guard),
         }
     }
@@ -57,7 +56,6 @@ impl SessionLockMap {
 pub(super) struct LockHandle {
     key: SessionKey,
     map: Arc<SessionLockMap>,
-    arc: Arc<Mutex<()>>,
     /// `Option` so [`Drop::drop`] can `take()` and explicitly release the
     /// guard BEFORE checking [`Arc::strong_count`]. Rust drops fields after
     /// `Drop::drop` returns, but the guard internally holds its own Arc
@@ -68,16 +66,25 @@ pub(super) struct LockHandle {
 
 impl Drop for LockHandle {
     fn drop(&mut self) {
-        // 1) Release the mutex by dropping the guard. This also drops the
-        //    guard's internal Arc clone, decrementing strong_count by 1.
+        // 1) Release the mutex by dropping the guard. The guard internally
+        //    holds an Arc clone; dropping it decrements strong_count by 1.
         drop(self.guard.take());
-        // 2) After release: we hold one ref (self.arc), the map holds one.
-        //    strong_count == 2 means nobody else is waiting; safe to evict.
-        if Arc::strong_count(&self.arc) <= 2 {
-            // remove_if rechecks the count under the bucket lock to avoid
-            // racing a concurrent acquire that just bumped it.
-            self.map.inner.remove_if(&self.key, |_, v| Arc::strong_count(v) <= 2);
-        }
+        // 2) Eviction decision: the predicate runs under DashMap's bucket
+        //    lock, so it observes a consistent strong_count. We do NOT do an
+        //    outer count check first — that creates a TOCTOU window where a
+        //    concurrent `acquire` can clone the Arc between the check and
+        //    `remove_if`'s entry into the bucket lock. Evicting then would
+        //    leave the concurrent acquirer holding a stale Arc while the
+        //    next acquirer creates a fresh Mutex for the same key, breaking
+        //    the per-key FIFO invariant.
+        //
+        //    The predicate counts: map(1) when nobody else holds an Arc.
+        //    Anything ≥ 2 means a concurrent acquire is in flight — keep the
+        //    entry. (We intentionally do NOT keep our own Arc clone inside
+        //    `LockHandle` anymore: it inflated strong_count and complicated
+        //    the predicate without buying anything that the bucket lock +
+        //    `Arc::strong_count(v)` doesn't already give us.)
+        self.map.inner.remove_if(&self.key, |_, v| Arc::strong_count(v) <= 1);
     }
 }
 
