@@ -285,8 +285,14 @@ pub(crate) async fn auth_middleware(
     // Don't count static asset failures — browsers preflight these without tokens.
     let is_static_asset = path.starts_with("/_next/") || path.ends_with(".js") || path.ends_with(".css")
         || path.ends_with(".png") || path.ends_with(".jpg") || path.ends_with(".ico") || path.ends_with(".svg")
-        || path.ends_with(".woff2") || path.starts_with("/api/setup/");
-    if !exempt_from_lockout && !is_static_asset {
+        || path.ends_with(".woff2");
+    // First-run setup wizard: failures here should NOT count toward the auth
+    // lockout — the browser legitimately probes /api/setup/status before any
+    // token exists. Kept separate from `is_static_asset` so the bypass list
+    // doesn't grow to include arbitrary API paths the next time someone
+    // adds a new pre-auth endpoint here.
+    let is_setup_wizard = path.starts_with("/api/setup/");
+    if !exempt_from_lockout && !is_static_asset && !is_setup_wizard {
         rate_limiter.record_failure(&client_ip).await;
     }
     StatusCode::UNAUTHORIZED.into_response()
