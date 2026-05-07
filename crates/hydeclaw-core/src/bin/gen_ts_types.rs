@@ -16,19 +16,13 @@ use hydeclaw_core::dto_export::registry::TsDecl;
 use hydeclaw_core::dto_export::*;
 
 fn main() {
-    // `inventory::iter::<T>` is a const item, iterated via `.into_iter()`.
-    let mut decls: Vec<(&str, String)> = inventory::iter::<TsDecl>
-        .into_iter()
-        .map(|d| (d.name, (d.decl_fn)()))
-        .collect();
+    let mut decls: Vec<&TsDecl> = inventory::iter::<TsDecl>.into_iter().collect();
+    decls.sort_by_key(|d| d.name);
 
-    // Stable sort by type name → deterministic output across builds.
-    decls.sort_by_key(|(name, _)| *name);
-
-    // Detect duplicate registrations (two structs with the same name).
+    // Detect duplicate registrations (two registrations with the same name).
     let mut seen = std::collections::HashSet::new();
     let dups: Vec<&str> = decls.iter()
-        .filter_map(|(name, _)| if !seen.insert(*name) { Some(*name) } else { None })
+        .filter_map(|d| if !seen.insert(d.name) { Some(d.name) } else { None })
         .collect();
     if !dups.is_empty() {
         panic!(
@@ -38,31 +32,62 @@ fn main() {
         );
     }
 
-    // Sanity check: catches silent registration loss.
-    let count = decls.len();
-    assert!(
-        count >= 31,
-        "expected >= 31 registered DTOs, got {count}. \
-         Possible cause: linker dropped inventory sections, \
-         or a DTO file lost its register_ts_dto! call."
-    );
+    // Partition by dest.
+    let mut by_dest: std::collections::HashMap<&str, Vec<&TsDecl>> =
+        std::collections::HashMap::new();
+    for d in decls {
+        by_dest.entry(d.dest).or_default().push(d);
+    }
+
+    // Min-count assertions catch accidental registration loss (linker dropped
+    // inventory section, dropped register_ts_dto call, etc.).
+    // ui count: tightened to current production count (34, verified via
+    //   `grep -rn "register_ts_dto!" crates/hydeclaw-core/src --include="*.rs"
+    //     | grep -v "macro_rules\|stringify\|#!\[\|//"`).
+    // channels count: 0 temporarily (tightened in T3 commit when channel
+    //   types are registered).
+    let dest_paths: &[(&str, &str, usize)] = &[
+        ("ui",       "ui/src/types/api.generated.ts",         34),
+        ("channels", "channels/src/types.generated.ts",        0),  // T3 will tighten
+    ];
 
     let header = "// @generated — do not edit by hand.\n\
         // Source of truth: types annotated with #[ts(export)] in crates/hydeclaw-core/.\n\
         // Regenerate with: make gen-types\n\n";
 
-    let body: String = decls.iter()
-        .map(|(_, d)| d.as_str())
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    for (dest, path, min_count) in dest_paths {
+        let group = by_dest.remove(dest).unwrap_or_default();
+        let count = group.len();
+        assert!(
+            count >= *min_count,
+            "expected >= {min_count} registered DTOs for dest={dest}, got {count}. \
+             Possible cause: linker dropped inventory sections, \
+             or a DTO file lost its register_ts_dto! call."
+        );
 
-    let out_path = std::path::Path::new("ui/src/types/api.generated.ts");
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)
-            .unwrap_or_else(|e| panic!("failed to create output dir {}: {e}", parent.display()));
+        let body: String = group.iter()
+            .map(|d| (d.decl_fn)())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let out_path = std::path::Path::new(path);
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|e| panic!("failed to create output dir {}: {e}", parent.display()));
+        }
+        std::fs::write(out_path, format!("{header}{body}\n"))
+            .unwrap_or_else(|e| panic!("failed to write {}: {e}", out_path.display()));
+
+        println!("Generated {} ({count} types, dest={dest})", out_path.display());
     }
-    std::fs::write(out_path, format!("{header}{body}\n"))
-        .unwrap_or_else(|e| panic!("failed to write {}: {e}", out_path.display()));
 
-    println!("Generated {} ({count} types)", out_path.display());
+    // Sanity: no unrouted dests (catches typos in `dest = "..."`).
+    if !by_dest.is_empty() {
+        let extras: Vec<&str> = by_dest.keys().copied().collect();
+        panic!(
+            "registered DTOs with unknown dest values: {extras:?}\n\
+             Add the new dest to dest_paths above OR fix the typo in \
+             register_ts_dto!(.., dest = \"...\")."
+        );
+    }
 }
