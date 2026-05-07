@@ -6,7 +6,8 @@
 import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import { simpleParser } from "mailparser";
-import type { BridgeHandle } from "../bridge";
+import type { BridgeHandle, OutboundAction } from "../bridge";
+import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto } from "../types";
 import { getStrings } from "../localization";
 import { parseDirectives } from "./common";
@@ -17,7 +18,7 @@ export function createEmailDriver(
   channelConfig: Record<string, unknown> | undefined,
   language: string,
   _typingMode: string,
-) {
+): ChannelDriver {
   const strings = getStrings(language);
   const password = credential;
   
@@ -69,10 +70,16 @@ export function createEmailDriver(
         await client.connect();
         let lock = await client.getMailboxLock("INBOX");
         try {
-          // Search for UNSEEN messages, then fetch each
+          // Search for UNSEEN messages, then fetch each. ImapFlow returns
+          // `false` when the search yields no results — narrow that out.
           const unseenUids = await client.search({ seen: false });
-          if (unseenUids.length === 0) { lock.release(); await new Promise(r => setTimeout(r, 30_000)); continue; }
+          if (!Array.isArray(unseenUids) || unseenUids.length === 0) {
+            lock.release();
+            await new Promise(r => setTimeout(r, 30_000));
+            continue;
+          }
           for await (let msg of client.fetch(unseenUids, { envelope: true, source: true })) {
+            if (!msg.source || !msg.envelope) continue;
             const parsed = await simpleParser(msg.source);
             const from = parsed.from?.value[0]?.address || "";
             const subject = parsed.subject || "No Subject";
@@ -133,13 +140,15 @@ export function createEmailDriver(
       stopPolling = true;
       try { await client.logout(); } catch {}
     },
-    onAction: async (action: any) => {
-      const to = action.action.context.from as string;
-      const subject = action.action.context.subject as string;
-      const messageId = action.action.context.message_id as string;
-      
+    onAction: async (action: OutboundAction) => {
+      const context = action.action.context as Record<string, unknown>;
+      const params = action.action.params as Record<string, unknown>;
+      const to = context.from as string;
+      const subject = context.subject as string;
+      const messageId = context.message_id as string;
+
       if (action.action.action === "send_message" || action.action.action === "reply") {
-        await sendEmail(to, subject, action.action.params.text as string, messageId);
+        await sendEmail(to, subject, params.text as string, messageId);
       }
     },
   };

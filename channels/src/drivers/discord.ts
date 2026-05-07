@@ -9,6 +9,7 @@ import {
   type Message as DMessage,
 } from "discord.js";
 import type { BridgeHandle, OutboundAction } from "../bridge";
+import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto, MediaAttachment } from "../types";
 import { getStrings, type Strings } from "../localization";
 import { splitText, toolEmoji, parseDirectives, parseUserCommand, classifyMediaType, reUploadAttachments, commonMarkToDiscord } from "./common";
@@ -22,7 +23,7 @@ export function createDiscordDriver(
   _channelConfig: Record<string, unknown> | undefined,
   language: string,
   _typingMode: string,
-): { start: () => Promise<void>; stop: () => Promise<void> } {
+): ChannelDriver {
   const strings = getStrings(language);
 
   const client = new Client({
@@ -148,7 +149,10 @@ export function createDiscordDriver(
       }
     });
 
-    // Streaming display
+    // Streaming display.
+    // streamMsg is assigned inside the setInterval closure below; TS flow
+    // analysis can't see assignments across closure boundaries, so we
+    // capture into a local at the use-site (see "captured" below).
     let streamMsg: DMessage | null = null;
     let fullText = "";
     let dirty = false;
@@ -178,14 +182,20 @@ export function createDiscordDriver(
       clearInterval(streamTimer);
 
       if (response) {
-        if (streamMsg) {
+        // streamMsg is assigned inside a setInterval closure; TS flow analysis
+        // can't see that across the closure boundary, so we capture into a
+        // non-null local once and use that for editing.
+        const captured = streamMsg as DMessage | null;
+        if (captured) {
           if (response.length <= MAX_MESSAGE_LEN) {
-            await streamMsg.edit(response).catch(() => {});
+            await captured.edit(response).catch(() => {});
           } else {
             const parts = splitText(response, MAX_MESSAGE_LEN, true);
-            await streamMsg.edit(parts[0]).catch(() => {});
+            await captured.edit(parts[0]).catch(() => {});
             for (let i = 1; i < parts.length; i++) {
-              await msg.channel.send(parts[i]).catch(() => {});
+              if (msg.channel.isSendable()) {
+                await msg.channel.send(parts[i]).catch(() => {});
+              }
             }
           }
         } else {
@@ -221,32 +231,36 @@ export function createDiscordDriver(
       await client.destroy();
     },
     onAction: async (action: OutboundAction) => {
-      const channelId = action.action.context.channel_id as string;
-      const messageId = action.action.context.message_id as string | undefined;
+      const context = action.action.context as Record<string, unknown>;
+      const params = action.action.params as Record<string, unknown>;
+      const channelId = context.channel_id as string;
+      const messageId = context.message_id as string | undefined;
       const channel = await client.channels.fetch(channelId);
-      if (!channel?.isTextBased()) return;
-      const textChannel = channel as import("discord.js").TextChannel;
+      // isSendable() narrows to SendableChannels — text-based channels that
+      // support .send/.messages/.edit (excludes PartialGroupDMChannel etc.).
+      if (!channel?.isSendable()) return;
+      const textChannel = channel;
 
       switch (action.action.action) {
         case "react":
           if (messageId) {
             const m = await textChannel.messages.fetch(messageId);
-            await m.react(action.action.params.emoji as string);
+            await m.react(params.emoji as string);
           }
           break;
         case "send_message":
-          await textChannel.send(commonMarkToDiscord(action.action.params.text as string));
+          await textChannel.send(commonMarkToDiscord(params.text as string));
           break;
         case "reply":
           if (messageId) {
             const m = await textChannel.messages.fetch(messageId);
-            await m.reply(commonMarkToDiscord(action.action.params.text as string));
+            await m.reply(commonMarkToDiscord(params.text as string));
           }
           break;
         case "edit":
           if (messageId) {
             const m = await textChannel.messages.fetch(messageId);
-            await m.edit(commonMarkToDiscord(action.action.params.text as string));
+            await m.edit(commonMarkToDiscord(params.text as string));
           }
           break;
         case "delete":

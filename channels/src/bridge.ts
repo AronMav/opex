@@ -244,7 +244,7 @@ export class BridgeHandle {
       }
       case "phase": {
         const pending = this.pendingRequests.get(msg.request_id);
-        if (pending?.phaseCb) pending.phaseCb(msg.phase, msg.tool_name);
+        if (pending?.phaseCb) pending.phaseCb(msg.phase, msg.tool_name ?? undefined);
         return null;
       }
       case "done": {
@@ -285,7 +285,7 @@ export class BridgeHandle {
         const resolve = this.pendingPairingOps.get(msg.request_id);
         if (resolve) {
           this.pendingPairingOps.delete(msg.request_id);
-          resolve({ success: msg.success, error: msg.error });
+          resolve({ success: msg.success, error: msg.error ?? undefined });
         }
         return null;
       }

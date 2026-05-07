@@ -76,10 +76,11 @@ describe("ChannelInbound serialization", () => {
       type: "action_result",
       action_id: "a1",
       success: true,
+      error: null,
     };
     const parsed = JSON.parse(JSON.stringify(msg));
     expect(parsed.success).toBe(true);
-    expect(parsed.error).toBeUndefined();
+    expect(parsed.error).toBeNull();
   });
 });
 

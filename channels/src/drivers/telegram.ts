@@ -6,7 +6,8 @@
 import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
 import type { Message } from "grammy/types";
 import type { BridgeHandle, OutboundAction, UserEntry } from "../bridge";
-import type { IncomingMessageDto, MediaAttachment } from "../types";
+import type { ChannelDriver } from "../session";
+import type { ChannelActionDto, IncomingMessageDto, MediaAttachment } from "../types";
 import { getStrings, type Strings } from "../localization";
 import { splitText, toolEmoji, parseDirectives, parseUserCommand, reUploadAttachments, commonMarkToMarkdownV2, isTgPermanentError, extractTgErrorCode, extractTgRetryAfter, exponentialDelay, chatCooldownKey } from "./common";
 import * as fs from "fs";
@@ -157,7 +158,7 @@ export function createTelegramDriver(
   channelConfig: Record<string, unknown> | undefined,
   language: string,
   typingMode: string,
-): { start: () => Promise<void>; stop: () => Promise<void> } {
+): ChannelDriver {
   const strings = getStrings(language);
   const groupMode = (channelConfig?.group_mode as string) ?? "mention";
   const apiUrl = channelConfig?.api_url as string | undefined;
@@ -702,7 +703,7 @@ async function processMessage(
     if (err.message === "cancelled") {
       await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "🛑" as any }]).catch(() => {});
     } else {
-      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "❌" }]).catch(() => {});
+      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👎" }]).catch(() => {});
       const isGroup = chatId < 0;
       await bot.api.sendMessage(chatId, strings.errorMessage(err.message), {
         reply_parameters: safeReplyParams(msg.message_id),
@@ -921,9 +922,16 @@ function getMimeType(msg: Message): string | undefined {
 async function executeAction(
   bot: Bot,
   actionId: string,
-  action: { action: string; params: Record<string, unknown>; context: Record<string, unknown> },
+  actionDto: ChannelActionDto,
   strings?: Strings,
 ): Promise<void> {
+  // ChannelActionDto.params/.context are `unknown` (S6 codegen). Narrow once
+  // here for the rest of the function.
+  const action = {
+    action: actionDto.action,
+    params: actionDto.params as Record<string, unknown>,
+    context: actionDto.context as Record<string, unknown>,
+  };
   const chatId = action.context?.chat_id as number | undefined;
   const messageId = action.context?.message_id as number | undefined;
 
@@ -1065,7 +1073,7 @@ async function executeAction(
           for (const btn of buttons) {
             keyboard.text(btn.text, btn.data);
           }
-          await bot.api.sendMessage(chatId, action.params.text as string ?? strings.choose, {
+          await bot.api.sendMessage(chatId, (action.params.text as string) ?? strings?.choose ?? "Choose:", {
             reply_markup: keyboard,
             reply_parameters: safeReplyParams(messageId),
           });
