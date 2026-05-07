@@ -1636,6 +1636,14 @@ pub async fn mirror_to_session(
     participant_id: &str,
     text: &str,
 ) -> anyhow::Result<bool> {
+    // Per-chat group sessions use `user_id = "*"` as a sentinel; they are
+    // not DM sessions and must never receive mirror records (cron deliveries
+    // would leak into group chats). Skip early before touching the DB —
+    // covered by `mirror_skips_per_chat_group_sessions` integration test.
+    if participant_id == "*" {
+        return Ok(false);
+    }
+
     let resolved = resolve_active_dm_session(
         db,
         agent_id,
