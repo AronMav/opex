@@ -167,6 +167,14 @@ pub async fn execute<S: EventSink>(
         let iter_msg_id = Uuid::new_v4();
         assistant_msg_id = iter_msg_id;
 
+        // S2 T2: bundle (iteration index, message_id) into a single struct.
+        // Threaded into StepStart, the intermediate-row step_id DB column,
+        // and any other site that needs to identify "which iteration is this".
+        let iteration_id = hydeclaw_types::ids::IterationId {
+            index: iteration as u32,
+            message_id: hydeclaw_types::ids::MessageId::from(iter_msg_id),
+        };
+
         // For the very first iteration emit a legacy `MessageStart` event so
         // existing frontend code paths that bind on it (sse_types::START)
         // continue to work. Subsequent iterations rely on the per-step
@@ -196,11 +204,16 @@ pub async fn execute<S: EventSink>(
         // 3. Emit StepStart with the iteration's row UUID. Frontend opens a
         //    new live ChatMessage with this id (committing the previous one
         //    as done) so each iteration is structurally isolated.
-        let step_id = format!("step_{}", iteration);
+        //
+        // `step_id` (the legacy `step_{N}` String) is still used by the
+        // StepFinish events below — wire format unchanged. StepStart now
+        // carries an `IterationId` struct (T2): the SSE converter rebuilds
+        // the legacy `step_{N}` string from `iteration.index` so frontends
+        // observe a byte-identical payload.
+        let step_id = format!("step_{}", iteration_id.index);
         match sink
             .emit(PipelineEvent::Stream(StreamEvent::StepStart {
-                step_id: step_id.clone(),
-                message_id: iter_msg_id.to_string(),
+                iteration: iteration_id,
             }))
             .await
         {
@@ -678,7 +691,7 @@ pub async fn execute<S: EventSink>(
             tc_json.as_ref(),
             tb_json.as_ref(),
             Some(last_msg_id),
-            i32::try_from(iteration).ok(),
+            Some(iteration_id.index as i32),
         );
         last_msg_id = iter_msg_id;
 
