@@ -3,9 +3,11 @@
 //! The converter is the sole consumer of `event_rx` (engine → coalescer →
 //! converter pipeline). It:
 //!
-//!   - Maps `StreamEvent` variants to AI SDK v3 wire JSON.
+//!   - Maps `StreamEvent` variants to AI SDK v3 wire JSON via
+//!     [`SseStreamWriter`] (typed builder owns the contextual state:
+//!     text-id counter, tool_name_map, current_responding_agent).
 //!   - Maintains the open-text-block invariant: consecutive `TextDelta`s
-//!     share one `text-start..text-end` pair (`current_text_id`).
+//!     share one `text-start..text-end` pair (writer-owned).
 //!   - Buffers every emitted event into [`StreamRegistry`] regardless of
 //!     client-connection state, so reconnects via
 //!     `/api/chat/{id}/stream` see a complete reply.
@@ -17,7 +19,6 @@
 //! AUDIT:SSE-01 / SSE-02 / SSE-03 invariants are preserved verbatim from
 //! the pre-extraction inline body — see comments below.
 
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -28,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use super::streaming_db::{
     StreamingMessageGuard, build_tools_json, read_streaming_content, upsert_streaming_append,
 };
-use super::super::super::sse_types;
+use super::sse_writer::SseStreamWriter;
 use crate::agent::engine::StreamEvent;
 use crate::gateway::stream_registry::StreamRegistry;
 
@@ -63,15 +64,12 @@ pub(super) async fn run_converter(
         user_text_for_title,
     } = ctx;
 
-    let mut text_id_counter: usize = 0;
-    // Tracks the OPEN text block so consecutive TextDelta events all carry the
-    // same id. None = no open block; Some(id) = block id `id` is currently open.
-    let mut current_text_id: Option<String> = None;
-    let mut tool_name_map: HashMap<String, String> = HashMap::new();
+    // Typed builder for SSE wire emission. Owns text-id counter,
+    // tool_name_map, current_responding_agent — replaces the four
+    // pre-T5 mutable locals.
+    let mut writer = SseStreamWriter::new(agent_name.clone());
+    tracing::debug!(current_responding_agent = %writer.current_agent(), "converter: initial agent for SSE");
     let mut session_id_str: Option<String> = None;
-    // Tracks which agent is currently responding (updated on AgentSwitch)
-    let mut current_responding_agent = agent_name.clone();
-    tracing::debug!(current_responding_agent = %current_responding_agent, "converter: initial agent for SSE");
     #[allow(unused_assignments)]
     let mut client_gone_since: Option<std::time::Instant> = None;
 
@@ -215,12 +213,12 @@ pub(super) async fn run_converter(
         // Close the open text block before any non-text event. Consecutive
         // TextDelta events keep the block open and share the same id.
         if !matches!(event, StreamEvent::TextDelta(_))
-            && let Some(text_id) = current_text_id.take() {
-            let end_data = json!({"type": sse_types::TEXT_END, "id": text_id}).to_string();
-            let _ = send_and_buffer!(end_data);
+            && let Some(end_frame) = writer.build_text_end_if_open()
+        {
+            let _ = send_and_buffer!(end_frame);
         }
 
-        let data = match event {
+        match event {
             StreamEvent::SessionId { session_id: sid, context_limit } => {
                 let parsed_uuid = uuid::Uuid::from_str(&sid).ok();
                 // Register stream in registry for resume + abort support (C3).
@@ -256,52 +254,37 @@ pub(super) async fn run_converter(
                     ).await {
                         tracing::warn!(error = %e, "failed to upsert initial streaming message to DB");
                     }
-                // Custom data part: session_id for UI to track the active session
-                json!({"type": sse_types::DATA_SESSION_ID, "data": {"sessionId": sid, "contextLimit": context_limit}, "transient": true})
+                let frame = writer.build_session_id(sid, Some(context_limit));
+                let _ = send_and_buffer!(frame);
+                continue;
             }
             StreamEvent::MessageStart { message_id } => {
-                // S2 T5: `message_id` is `MessageId` (Uuid newtype). Wire format
-                // preserved via `.to_string()` (delegates to inner Uuid Display).
-                json!({"type": sse_types::START, "messageId": message_id.to_string(), "agentName": current_responding_agent})
+                let frame = writer.build_start(message_id);
+                let _ = send_and_buffer!(frame);
+                continue;
             }
             StreamEvent::StepStart { iteration } => {
-                // Boundary between LLM tool-loop iterations. `messageId`
-                // is the pre-allocated DB row UUID for the iteration —
-                // frontend opens a fresh live ChatMessage with this id so
-                // it matches the eventual DB row. Open text block was
-                // already closed by the non-TextDelta guard at the top
-                // of the loop.
-                //
-                // CRITICAL: stepId wire format is `step_{N}` for backward
-                // compat with pre-S2 code (verified at execute.rs — the
-                // pre-S2 producer literally did `format!("step_{}", iteration)`).
-                json!({
-                    "type": sse_types::STEP_START,
-                    "stepId": format!("step_{}", iteration.index),
-                    "messageId": iteration.message_id.to_string(),
-                    "agentName": current_responding_agent
-                })
+                // Boundary between LLM tool-loop iterations. Open text block
+                // was already closed by the non-TextDelta guard at the top
+                // of the loop. CRITICAL: stepId wire format is `step_{N}`
+                // (writer formats it).
+                let frame = writer.build_step_start(iteration);
+                let _ = send_and_buffer!(frame);
+                continue;
             }
             StreamEvent::TextDelta(ref text) => {
                 if session_uuid.is_none() && accumulated_text.is_empty() {
                     tracing::error!("TextDelta received but session_uuid is None — DB flush will be skipped");
                 }
                 // AI SDK v3: text-start → text-delta* → text-end
-                // Open a new text block only if there isn't one open already; all
-                // consecutive deltas of the same logical text block share one id.
-                let text_id = match current_text_id.as_ref() {
-                    Some(id) => id.clone(),
-                    None => {
-                        text_id_counter += 1;
-                        let new_id = format!("text-{text_id_counter}");
-                        let start_data = json!({"type": sse_types::TEXT_START, "id": new_id.clone(), "agentName": current_responding_agent}).to_string();
-                        let _ = send_and_buffer!(start_data);
-                        current_text_id = Some(new_id.clone());
-                        new_id
-                    }
-                };
-                let delta_data = json!({"type": sse_types::TEXT_DELTA, "id": text_id, "delta": text}).to_string();
-                let _ = send_and_buffer!(delta_data);
+                // Writer opens a new text block only if there isn't one open
+                // already; all consecutive deltas of the same logical text
+                // block share one id.
+                let (start_frame, delta_frame) = writer.build_text_delta(text.clone());
+                if let Some(start) = start_frame {
+                    let _ = send_and_buffer!(start);
+                }
+                let _ = send_and_buffer!(delta_frame);
                 accumulated_text.push_str(text);
                 // Periodic DB flush every 2s so reload shows partial response
                 // Uses append-mode SQL so accumulated_text can be cleared after flush (bounded memory)
@@ -319,107 +302,74 @@ pub(super) async fn run_converter(
                 continue;
             }
             StreamEvent::ToolCallStart { id, name, parallel_batch_id } => {
-                let id_str = id.as_str().to_string();
-                tool_name_map.insert(id_str.clone(), name.clone());
-                let mut payload = json!({
-                    "type": sse_types::TOOL_INPUT_START,
-                    "toolCallId": id_str,
-                    "toolName": name,
-                    "agentName": current_responding_agent,
-                });
-                // T3: emit parallelBatchId only when present so single-tool
-                // turns stay byte-identical to the pre-T3 wire format.
-                if let Some(batch) = parallel_batch_id {
-                    payload["parallelBatchId"] = json!(batch.to_string());
-                }
-                payload
+                let frame = writer.build_tool_input_start(id, name, parallel_batch_id);
+                let _ = send_and_buffer!(frame);
+                continue;
             }
             StreamEvent::ToolCallArgs { id, args_text } => {
-                let id_str = id.as_str();
-                let delta_data = json!({
-                    "type": sse_types::TOOL_INPUT_DELTA,
-                    "toolCallId": id_str,
-                    "inputTextDelta": args_text
-                }).to_string();
-                let _ = send_and_buffer!(delta_data);
+                let delta_frame = writer.build_tool_input_delta(id.clone(), args_text.clone());
+                let _ = send_and_buffer!(delta_frame);
 
                 let input: serde_json::Value = serde_json::from_str(&args_text)
                     .unwrap_or(serde_json::Value::Object(Default::default()));
-                let tool_name = tool_name_map.get(id_str).cloned().unwrap_or_default();
-                json!({
-                    "type": sse_types::TOOL_INPUT_AVAILABLE,
-                    "toolCallId": id_str,
-                    "toolName": tool_name,
-                    "input": input
-                })
+                let avail_frame = writer.build_tool_input_available(id, input);
+                let _ = send_and_buffer!(avail_frame);
+                continue;
             }
-            StreamEvent::ToolResult { ref id, ref result } => {
+            StreamEvent::ToolResult { id, result } => {
                 // Accumulate tool calls in-memory (single DB write at finish)
-                let id_str = id.as_str();
-                let tname = tool_name_map.get(id_str).cloned().unwrap_or_default();
-                accumulated_tools.push(json!({"toolCallId": id_str, "toolName": tname, "output": result}));
+                let id_str = id.as_str().to_string();
+                let tname = writer.tool_name_for(&id_str).unwrap_or_default();
+                accumulated_tools.push(json!({"toolCallId": id_str, "toolName": tname, "output": &result}));
                 cached_tools_json = None; // Invalidate cache when new tool arrives
-                json!({
-                    "type": sse_types::TOOL_OUTPUT_AVAILABLE,
-                    "toolCallId": id_str,
-                    "output": result
-                })
+                let frame = writer.build_pure(StreamEvent::ToolResult { id, result });
+                let _ = send_and_buffer!(frame);
+                continue;
             }
             StreamEvent::StepFinish { step_id: _, finish_reason: _ } => {
                 continue;
             }
             StreamEvent::RichCard { card_type, data } => {
-                json!({
-                    "type": sse_types::RICH_CARD,
-                    "cardType": card_type,
-                    "data": data
-                })
+                let frame = writer.build_rich_card(card_type, data);
+                let _ = send_and_buffer!(frame);
+                continue;
             }
             StreamEvent::File { url, media_type } => {
-                json!({
-                    "type": sse_types::FILE,
-                    "url": url,
-                    "mediaType": media_type
-                })
+                let frame = writer.build_pure(StreamEvent::File { url, media_type });
+                let _ = send_and_buffer!(frame);
+                continue;
             }
             // Retained for API compatibility — not currently emitted.
             StreamEvent::AgentSwitch { agent_name: new_agent } => {
-                current_responding_agent = new_agent;
+                writer.set_agent(new_agent);
                 continue; // Internal event — don't emit SSE
             }
             StreamEvent::ApprovalNeeded { approval_id, tool_name, tool_input, timeout_ms } => {
-                // T4: approval_id is ApprovalId(Uuid). Stringify here so the
-                // wire format stays `"approvalId": "<uuid>"` byte-identical
-                // to the pre-T4 protocol — frontend deserialization is
-                // unchanged.
-                let data = json!({
-                    "type": sse_types::APPROVAL_NEEDED,
-                    "approvalId": approval_id.to_string(),
-                    "toolName": tool_name,
-                    "toolInput": tool_input,
-                    "timeoutMs": timeout_ms,
-                }).to_string();
-                let _ = send_and_buffer!(data);
+                let frame = writer.build_pure(StreamEvent::ApprovalNeeded {
+                    approval_id,
+                    tool_name,
+                    tool_input,
+                    timeout_ms,
+                });
+                let _ = send_and_buffer!(frame);
                 continue;
             }
             StreamEvent::ApprovalResolved { approval_id, action, modified_input } => {
-                let data = json!({
-                    "type": sse_types::APPROVAL_RESOLVED,
-                    "approvalId": approval_id.to_string(),
-                    "action": action,
-                    "modifiedInput": modified_input,
-                }).to_string();
-                let _ = send_and_buffer!(data);
+                let frame = writer.build_pure(StreamEvent::ApprovalResolved {
+                    approval_id,
+                    action,
+                    modified_input,
+                });
+                let _ = send_and_buffer!(frame);
                 continue;
             }
             StreamEvent::Finish { .. } => {
                 // Close any still-open text block before Finish.
-                if let Some(text_id) = current_text_id.take() {
-                    let end_data = json!({"type": sse_types::TEXT_END, "id": text_id}).to_string();
-                    let _ = send_and_buffer!(end_data);
+                if let Some(end_frame) = writer.build_text_end_if_open() {
+                    let _ = send_and_buffer!(end_frame);
                 }
-                let finish_data = json!({"type": sse_types::FINISH, "agentName": current_responding_agent}).to_string();
-                let _ = send_and_buffer!(finish_data);
+                let finish_frame = writer.build_finish();
+                let _ = send_and_buffer!(finish_frame);
                 // Final flush of streaming message + mark complete
                 // CRITICAL ORDERING: upsert → read_streaming_content → set_content → finalize (DELETE)
                 if let Some(sid) = session_uuid {
@@ -450,7 +400,6 @@ pub(super) async fn run_converter(
                 tools_flushed_count = 0;
                 cached_tools_json = None;
                 streaming_msg_id = uuid::Uuid::new_v4();
-                text_id_counter = 0;
                 // Reset guard for next turn to prevent streaming row leak
                 streaming_guard = StreamingMessageGuard::new(chat_db.clone(), streaming_msg_id);
                 if let Some(sid) = session_uuid {
@@ -465,44 +414,24 @@ pub(super) async fn run_converter(
                 cache_creation_tokens,
                 reasoning_tokens,
             } => {
-                // agentName: tag with the currently-responding agent so the UI
-                // can route this usage to the correct agent's tokenUsage state.
-                // Without it, in a multi-agent session a usage event from agent
-                // B fired while A is mid-stream would overwrite A's state.
-                let mut payload = serde_json::json!({
-                    "type": sse_types::USAGE,
-                    "inputTokens": input_tokens,
-                    "outputTokens": output_tokens,
-                    "agentName": current_responding_agent.clone(),
-                });
-                // Extended fields — subsets of input/output (not additive). Only emit
-                // when present so older clients see no change in payload size for
-                // providers that don't report them.
-                if let Some(v) = cache_read_tokens {
-                    payload["cacheReadTokens"] = serde_json::Value::from(v);
-                }
-                if let Some(v) = cache_creation_tokens {
-                    payload["cacheCreationTokens"] = serde_json::Value::from(v);
-                }
-                if let Some(v) = reasoning_tokens {
-                    payload["reasoningTokens"] = serde_json::Value::from(v);
-                }
-                let data = payload.to_string();
-                let _ = send_and_buffer!(data);
+                let frame = writer.build_usage(
+                    input_tokens,
+                    output_tokens,
+                    cache_read_tokens,
+                    cache_creation_tokens,
+                    reasoning_tokens,
+                );
+                let _ = send_and_buffer!(frame);
                 continue;
             }
             StreamEvent::Reconnecting { attempt, delay_ms } => {
-                let data = serde_json::json!({
-                    "type": sse_types::RECONNECTING,
-                    "attempt": attempt,
-                    "delay_ms": delay_ms,
-                }).to_string();
-                let _ = send_and_buffer!(data);
+                let frame = writer.build_pure(StreamEvent::Reconnecting { attempt, delay_ms });
+                let _ = send_and_buffer!(frame);
                 continue;
             }
             StreamEvent::Error(ref text) => {
-                let err_data = json!({"type": sse_types::ERROR, "errorText": text}).to_string();
-                let _ = send_and_buffer!(err_data);
+                let err_frame = writer.build_error(text.clone());
+                let _ = send_and_buffer!(err_frame);
                 if let Some(ref sid) = session_id_str {
                     registry.mark_error(sid, text).await;
                 }
@@ -530,10 +459,7 @@ pub(super) async fn run_converter(
                 finished_sent = true;
                 break;
             }
-        };
-
-        let json_str = data.to_string();
-        let _ = send_and_buffer!(json_str);
+        }
     }
 
     // Only send [DONE] and mark_finished if the Finish branch didn't already do it
@@ -563,11 +489,10 @@ pub(super) async fn run_converter(
             registry.mark_finished(sid).await;
         }
         // Flush any remaining text-end (if stream ended without Finish event)
-        if let Some(text_id) = current_text_id {
-            let end_data = json!({"type": sse_types::TEXT_END, "id": text_id});
+        if let Some(end_frame) = writer.build_text_end_if_open() {
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(5),
-                sse_tx.send(Ok(Event::default().data(end_data.to_string())))
+                sse_tx.send(Ok(Event::default().data(end_frame)))
             ).await;
         }
         // [DONE] is critical — use timeout to avoid blocking if client gone

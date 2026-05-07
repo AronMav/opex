@@ -77,29 +77,6 @@ pub(crate) fn request_limiter_opt() -> Option<Arc<RequestRateLimiter>> {
     REQ_LIMITER.get().cloned()
 }
 
-/// SSE event type constants for Vercel AI SDK v3 compatibility.
-mod sse_types {
-    pub const DATA_SESSION_ID: &str = "data-session-id";
-    pub const START: &str = "start";
-    pub const TEXT_START: &str = "text-start";
-    pub const TEXT_DELTA: &str = "text-delta";
-    pub const TEXT_END: &str = "text-end";
-    pub const TOOL_INPUT_START: &str = "tool-input-start";
-    pub const TOOL_INPUT_DELTA: &str = "tool-input-delta";
-    pub const TOOL_INPUT_AVAILABLE: &str = "tool-input-available";
-    pub const TOOL_OUTPUT_AVAILABLE: &str = "tool-output-available";
-    pub const RICH_CARD: &str = "rich-card";
-    pub const FILE: &str = "file";
-    pub const SYNC: &str = "sync";
-    pub const FINISH: &str = "finish";
-    pub const ERROR: &str = "error";
-    pub const APPROVAL_NEEDED: &str = "tool-approval-needed";
-    pub const APPROVAL_RESOLVED: &str = "tool-approval-resolved";
-    pub const RECONNECTING: &str = "reconnecting";
-    pub const USAGE: &str = "usage";
-    pub const STEP_START: &str = "step-start";
-}
-
 /// Public OpenAI-format message — used by gateway AND referenced from `engine::handle_openai`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OpenAiMessage {
