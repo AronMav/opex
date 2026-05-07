@@ -344,7 +344,7 @@ unchanged. The contract gains compile-time guarantees:
 Kind-by-kind migration in commits:
   * `ApprovalId(Uuid)` — see commit `832c944c`
   * `MessageId(Uuid)` — see commit `2b9cd1a8`
-  * `ToolCallId(String)` — see commit <T6-sha>
+  * `ToolCallId(String)` — see commit `674d4069`
   * `ParallelBatchId(Uuid)` — new in this amendment, see commit `79962516`
 
 `IterationId` (T2) is an explicit struct that bundles `index: u32` plus
