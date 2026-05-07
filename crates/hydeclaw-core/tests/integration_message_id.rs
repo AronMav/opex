@@ -29,12 +29,17 @@ async fn test_message_id_roundtrips_through_messages_table() {
         let msg_id = MessageId::new();
 
         // Create session row first (FK dependency for messages.session_id).
-        sqlx::query("INSERT INTO sessions (id, agent_id) VALUES ($1, $2)")
-            .bind(session_id)
-            .bind("Arty")
-            .execute(pool)
-            .await
-            .expect("session insert must succeed");
+        // user_id + channel are NOT NULL per migration 001 — provide minimal
+        // synthetic values for the test fixture.
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel) \
+             VALUES ($1, $2, 'test-user', 'test')",
+        )
+        .bind(session_id)
+        .bind("Arty")
+        .execute(pool)
+        .await
+        .expect("session insert must succeed");
 
         // Insert a message row binding MessageId directly via sqlx::Type.
         sqlx::query(
