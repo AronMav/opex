@@ -355,8 +355,10 @@ pub(crate) fn build_provider_clients(timeouts: &TimeoutsConfig) -> (reqwest::Cli
 ///   errors caused by history truncation cutting off the assistant message while keeping the
 ///   tool result.
 pub(super) fn strip_orphaned_tool_messages(messages: &[Message]) -> Vec<Message> {
+    use hydeclaw_types::ids::ToolCallId;
+
     // Pass 1: collect all tool_call_ids that have a saved tool result.
-    let mut result_ids = std::collections::HashSet::<String>::new();
+    let mut result_ids = std::collections::HashSet::<ToolCallId>::new();
     for msg in messages {
         if msg.role == MessageRole::Tool
             && let Some(ref id) = msg.tool_call_id {
@@ -366,7 +368,7 @@ pub(super) fn strip_orphaned_tool_messages(messages: &[Message]) -> Vec<Message>
 
     // Pass 2: rebuild messages, skipping incomplete assistant+tool_calls groups
     // (where some tool results are missing — e.g. process crashed after saving assistant msg).
-    let mut valid_call_ids = std::collections::HashSet::<String>::new();
+    let mut valid_call_ids = std::collections::HashSet::<ToolCallId>::new();
     let mut result = Vec::with_capacity(messages.len());
 
     for msg in messages {
@@ -389,12 +391,15 @@ pub(super) fn strip_orphaned_tool_messages(messages: &[Message]) -> Vec<Message>
                 result.push(msg.clone());
             }
             MessageRole::Tool => {
-                let id = msg.tool_call_id.as_deref().unwrap_or("");
-                if valid_call_ids.contains(id) {
+                let id_str = msg.tool_call_id.as_ref().map(|id| id.as_str()).unwrap_or("");
+                let in_valid = msg.tool_call_id
+                    .as_ref()
+                    .is_some_and(|id| valid_call_ids.contains(id));
+                if in_valid {
                     result.push(msg.clone());
                 } else {
                     tracing::warn!(
-                        tool_call_id = id,
+                        tool_call_id = id_str,
                         "dropping orphaned tool message (no preceding tool_call in context)"
                     );
                 }
@@ -437,7 +442,7 @@ pub(super) fn messages_to_openai_format(messages: &[Message], include_reasoning:
                             .iter()
                             .map(|tc| {
                                 serde_json::json!({
-                                    "id": tc.id,
+                                    "id": tc.id.as_str(),
                                     "type": "function",
                                     "function": {
                                         "name": tc.name,
@@ -476,7 +481,7 @@ pub(super) fn messages_to_openai_format(messages: &[Message], include_reasoning:
             if let Some(ref tool_call_id) = msg.tool_call_id {
                 m.insert(
                     "tool_call_id".to_string(),
-                    serde_json::Value::String(tool_call_id.clone()),
+                    serde_json::Value::String(tool_call_id.as_str().to_string()),
                 );
             }
 
@@ -533,7 +538,7 @@ mod tests {
         let tool_calls = calls
             .into_iter()
             .map(|(id, name)| ToolCall {
-                id: id.to_string(),
+                id: id.into(),
                 name: name.to_string(),
                 arguments: serde_json::json!({}),
             })
@@ -553,7 +558,7 @@ mod tests {
             role: MessageRole::Tool,
             content: content.to_string(),
             tool_calls: None,
-            tool_call_id: Some(call_id.to_string()),
+            tool_call_id: Some(call_id.into()),
             thinking_blocks: vec![],
             db_id: None,
         }
@@ -648,7 +653,7 @@ mod tests {
         let result = parse_anthropic_response(resp, "claude-3");
         assert_eq!(result.content, "");
         assert_eq!(result.tool_calls.len(), 1);
-        assert_eq!(result.tool_calls[0].id, "call-1");
+        assert_eq!(result.tool_calls[0].id.as_str(), "call-1");
         assert_eq!(result.tool_calls[0].name, "search");
         assert_eq!(result.tool_calls[0].arguments, serde_json::json!({"q": "rust"}));
     }
@@ -720,8 +725,8 @@ mod tests {
         };
         let result = parse_anthropic_response(resp, "m");
         assert_eq!(result.tool_calls.len(), 2);
-        assert_eq!(result.tool_calls[0].id, "c1");
-        assert_eq!(result.tool_calls[1].id, "c2");
+        assert_eq!(result.tool_calls[0].id.as_str(), "c1");
+        assert_eq!(result.tool_calls[1].id.as_str(), "c2");
     }
 
     // ── strip_orphaned_tool_messages tests ───────────────────────────────────

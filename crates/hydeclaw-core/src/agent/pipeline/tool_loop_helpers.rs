@@ -102,7 +102,7 @@ mod tests {
 
     fn mk_tc(id: &str, name: &str) -> ToolCall {
         ToolCall {
-            id: id.to_string(),
+            id: id.into(),
             name: name.to_string(),
             arguments: serde_json::Value::Null,
         }

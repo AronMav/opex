@@ -726,6 +726,8 @@ pub async fn execute<S: EventSink>(
                 }))
                 .await;
         }
+        // T6: above takes ToolCallId via ToolCall.id (newtype). No conversion
+        // needed — tc.id is already typed.
 
         // 10. Execute tool batch via ToolExecutor (loop detection inside execute_batch)
         //
@@ -788,9 +790,10 @@ pub async fn execute<S: EventSink>(
                         db_result: _, // already persisted in execute_batch
                     } = extract_tool_result_events(tool_result, sink).await;
 
+                    let tc_id_typed = hydeclaw_types::ids::ToolCallId::new(tc_id.clone());
                     let _ = sink
                         .emit(PipelineEvent::Stream(StreamEvent::ToolResult {
-                            id: tc_id.clone(),
+                            id: tc_id_typed.clone(),
                             result: display_result.clone(),
                         }))
                         .await;
@@ -800,7 +803,7 @@ pub async fn execute<S: EventSink>(
                         role: MessageRole::Tool,
                         content: display_result,
                         tool_calls: None,
-                        tool_call_id: Some(tc_id.clone()),
+                        tool_call_id: Some(tc_id_typed),
                         thinking_blocks: vec![],
             db_id: None,
 
@@ -1311,7 +1314,7 @@ mod tests {
             done_rx.await.unwrap();
             drop(chunk_tx);
             Ok::<LlmResponse, anyhow::Error>(mk_response(vec![ToolCall {
-                id: "tc_1".to_string(),
+                id: "tc_1".into(),
                 name: "mock_tool".to_string(),
                 arguments: serde_json::Value::Null,
             }]))

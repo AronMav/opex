@@ -342,10 +342,10 @@ unchanged. The contract gains compile-time guarantees:
     expected is a compile error.
 
 Kind-by-kind migration in commits:
-  * `ApprovalId(Uuid)` — see commit <T4-sha>
-  * `MessageId(Uuid)` — see commit <T5-sha>
+  * `ApprovalId(Uuid)` — see commit `832c944c`
+  * `MessageId(Uuid)` — see commit `2b9cd1a8`
   * `ToolCallId(String)` — see commit <T6-sha>
-  * `ParallelBatchId(Uuid)` — new in this amendment, see commit <T3-sha>
+  * `ParallelBatchId(Uuid)` — new in this amendment, see commit `79962516`
 
 `IterationId` (T2) is an explicit struct that bundles `index: u32` plus
 `MessageId` — replaces the implicit combo threaded today through

@@ -189,7 +189,9 @@ pub async fn handle_openai(
                 role: MessageRole::Tool,
                 content: batch.result.clone(),
                 tool_calls: None,
-                tool_call_id: Some(batch.tool_call_id.clone()),
+                tool_call_id: Some(hydeclaw_types::ids::ToolCallId::new(
+                    batch.tool_call_id.clone(),
+                )),
                 thinking_blocks: vec![],
                 db_id: None,
             });

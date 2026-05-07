@@ -249,12 +249,18 @@ mod tests {
                 },
             },
             StreamEvent::ToolCallStart {
-                id: "t1".into(),
+                id: hydeclaw_types::ids::ToolCallId::from("t1"),
                 name: "tool".into(),
                 parallel_batch_id: None,
             },
-            StreamEvent::ToolCallArgs { id: "t1".into(), args_text: "{}".into() },
-            StreamEvent::ToolResult { id: "t1".into(), result: "ok".into() },
+            StreamEvent::ToolCallArgs {
+                id: hydeclaw_types::ids::ToolCallId::from("t1"),
+                args_text: "{}".into(),
+            },
+            StreamEvent::ToolResult {
+                id: hydeclaw_types::ids::ToolCallId::from("t1"),
+                result: "ok".into(),
+            },
             StreamEvent::StepFinish { step_id: "st1".into(), finish_reason: "stop".into() },
             StreamEvent::RichCard { card_type: "table".into(), data: serde_json::json!({}) },
             StreamEvent::File { url: "u".into(), media_type: "image/png".into() },

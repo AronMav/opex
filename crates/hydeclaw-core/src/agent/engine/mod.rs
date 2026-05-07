@@ -121,7 +121,10 @@ pub(crate) fn row_to_message(row: &crate::db::sessions::MessageRow) -> Message {
         },
         content: row.content.clone(),
         tool_calls,
-        tool_call_id: row.tool_call_id.clone(),
+        tool_call_id: row
+            .tool_call_id
+            .clone()
+            .map(hydeclaw_types::ids::ToolCallId::from),
         thinking_blocks,
         db_id: Some(hydeclaw_types::ids::MessageId::from(row.id)),
     }

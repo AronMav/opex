@@ -319,10 +319,11 @@ pub(super) async fn run_converter(
                 continue;
             }
             StreamEvent::ToolCallStart { id, name, parallel_batch_id } => {
-                tool_name_map.insert(id.clone(), name.clone());
+                let id_str = id.as_str().to_string();
+                tool_name_map.insert(id_str.clone(), name.clone());
                 let mut payload = json!({
                     "type": sse_types::TOOL_INPUT_START,
-                    "toolCallId": id,
+                    "toolCallId": id_str,
                     "toolName": name,
                     "agentName": current_responding_agent,
                 });
@@ -334,31 +335,33 @@ pub(super) async fn run_converter(
                 payload
             }
             StreamEvent::ToolCallArgs { id, args_text } => {
+                let id_str = id.as_str();
                 let delta_data = json!({
                     "type": sse_types::TOOL_INPUT_DELTA,
-                    "toolCallId": id,
+                    "toolCallId": id_str,
                     "inputTextDelta": args_text
                 }).to_string();
                 let _ = send_and_buffer!(delta_data);
 
                 let input: serde_json::Value = serde_json::from_str(&args_text)
                     .unwrap_or(serde_json::Value::Object(Default::default()));
-                let tool_name = tool_name_map.get(&id).cloned().unwrap_or_default();
+                let tool_name = tool_name_map.get(id_str).cloned().unwrap_or_default();
                 json!({
                     "type": sse_types::TOOL_INPUT_AVAILABLE,
-                    "toolCallId": id,
+                    "toolCallId": id_str,
                     "toolName": tool_name,
                     "input": input
                 })
             }
             StreamEvent::ToolResult { ref id, ref result } => {
                 // Accumulate tool calls in-memory (single DB write at finish)
-                let tname = tool_name_map.get(id).cloned().unwrap_or_default();
-                accumulated_tools.push(json!({"toolCallId": id, "toolName": tname, "output": result}));
+                let id_str = id.as_str();
+                let tname = tool_name_map.get(id_str).cloned().unwrap_or_default();
+                accumulated_tools.push(json!({"toolCallId": id_str, "toolName": tname, "output": result}));
                 cached_tools_json = None; // Invalidate cache when new tool arrives
                 json!({
                     "type": sse_types::TOOL_OUTPUT_AVAILABLE,
-                    "toolCallId": id,
+                    "toolCallId": id_str,
                     "output": result
                 })
             }

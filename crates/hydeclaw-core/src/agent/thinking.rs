@@ -418,7 +418,7 @@ mod tests {
             role: MessageRole::Tool,
             content: content.to_string(),
             tool_calls: None,
-            tool_call_id: Some("tc1".to_string()),
+            tool_call_id: Some("tc1".into()),
             thinking_blocks: vec![],
             db_id: None,
         }

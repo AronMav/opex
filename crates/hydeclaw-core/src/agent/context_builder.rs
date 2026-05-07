@@ -469,7 +469,7 @@ impl ContextBuilder for DefaultContextBuilder {
                 .iter()
                 .any(|m| m.role == hydeclaw_types::MessageRole::Tool);
             if !has_results {
-                let all_call_ids: Vec<String> = messages[last_idx]
+                let all_call_ids: Vec<hydeclaw_types::ids::ToolCallId> = messages[last_idx]
                     .tool_calls
                     .as_ref()
                     .map(|tcs| tcs.iter().map(|tc| tc.id.clone()).collect())
@@ -478,9 +478,9 @@ impl ContextBuilder for DefaultContextBuilder {
                 let existing_ids: std::collections::HashSet<&str> = messages[last_idx + 1..]
                     .iter()
                     .filter(|m| m.role == hydeclaw_types::MessageRole::Tool)
-                    .filter_map(|m| m.tool_call_id.as_deref())
+                    .filter_map(|m| m.tool_call_id.as_ref().map(|id| id.as_str()))
                     .collect();
-                let missing_ids: Vec<String> = all_call_ids
+                let missing_ids: Vec<hydeclaw_types::ids::ToolCallId> = all_call_ids
                     .into_iter()
                     .filter(|id| !existing_ids.contains(id.as_str()))
                     .collect();
@@ -492,8 +492,14 @@ impl ContextBuilder for DefaultContextBuilder {
                         "dangling tool calls detected — inserting synthetic results"
                     );
 
+                    // Persist via the DB layer using owned String form — the DB
+                    // layer keeps Option<String> at the row boundary.
+                    let missing_ids_str: Vec<String> = missing_ids
+                        .iter()
+                        .map(|id| id.as_str().to_string())
+                        .collect();
                     if let Err(e) = deps
-                        .session_insert_missing_tool_results(session_id, &missing_ids)
+                        .session_insert_missing_tool_results(session_id, &missing_ids_str)
                         .await
                     {
                         tracing::warn!(error = %e, "failed to insert synthetic tool results");

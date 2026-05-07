@@ -253,7 +253,7 @@ impl AnthropicProvider {
                             "role": "user",
                             "content": [{
                                 "type": "tool_result",
-                                "tool_use_id": msg.tool_call_id.as_deref().unwrap_or(""),
+                                "tool_use_id": msg.tool_call_id.as_ref().map(|id| id.as_str()).unwrap_or(""),
                                 "content": msg.content,
                             }]
                         })
@@ -415,7 +415,7 @@ pub(super) fn parse_anthropic_response(api_resp: AnthropicResponse, model: &str)
             }
             AnthropicContentBlock::ToolUse { id, name, input } => {
                 tool_calls.push(hydeclaw_types::ToolCall {
-                    id,
+                    id: hydeclaw_types::ids::ToolCallId::from(id),
                     name,
                     arguments: input,
                 });
@@ -993,7 +993,7 @@ mod tests {
             role: MessageRole::Assistant,
             content: String::new(),
             tool_calls: Some(vec![ToolCall {
-                id: "call_1".to_string(),
+                id: "call_1".into(),
                 name: "my_tool".to_string(),
                 arguments: serde_json::json!({"key": "value"}),
             }]),

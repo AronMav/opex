@@ -163,7 +163,7 @@ mod tests {
         raw_tx.send(StreamEvent::TextDelta("def".into())).await.unwrap();
         raw_tx
             .send(StreamEvent::ToolCallStart {
-                id: "t1".into(),
+                id: hydeclaw_types::ids::ToolCallId::from("t1"),
                 name: "tool".into(),
                 parallel_batch_id: None,
             })

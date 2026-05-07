@@ -61,7 +61,7 @@ impl MockTurn {
         Self {
             content: String::new(),
             tool_calls: vec![ToolCall {
-                id: id.into(),
+                id: hydeclaw_types::ids::ToolCallId::from(id.into()),
                 name: name.into(),
                 arguments,
             }],
