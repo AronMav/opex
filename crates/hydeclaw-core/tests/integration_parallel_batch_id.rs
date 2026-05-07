@@ -15,7 +15,7 @@
 
 use sqlx::PgPool;
 
-#[sqlx::test]
+#[sqlx::test(migrations = "../../migrations")]
 async fn test_migration_047_creates_parallel_batch_id_column(pool: PgPool) {
     // Verify the column exists and has expected type
     let result: (String,) = sqlx::query_as(
@@ -25,7 +25,7 @@ async fn test_migration_047_creates_parallel_batch_id_column(pool: PgPool) {
     assert_eq!(result.0, "uuid", "parallel_batch_id must be UUID type");
 }
 
-#[sqlx::test]
+#[sqlx::test(migrations = "../../migrations")]
 async fn test_migration_047_creates_partial_index(pool: PgPool) {
     // Verify the partial index exists
     let count: (i64,) = sqlx::query_as(
