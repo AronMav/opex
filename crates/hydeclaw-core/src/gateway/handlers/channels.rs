@@ -65,8 +65,13 @@ pub(crate) struct ChannelCreateBody {
 
 pub(crate) async fn api_channels_list(
     State(infra): State<InfraServices>,
+    State(auth): State<AuthServices>,
     Path(agent_name): Path<String>,
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
+    // Mirror api_list_all_channels: opt-in `?reveal=true` injects vault
+    // credentials; default response uses `mask_config` (full redaction).
+    let reveal = query.get("reveal").is_some_and(|v| v == "true");
     let rows: Result<Vec<AgentChannelRow>, _> = sqlx::query_as(
         "SELECT id, agent_name, channel_type, display_name, config, status, error_msg
          FROM agent_channels WHERE agent_name = $1 ORDER BY created_at"
@@ -77,8 +82,31 @@ pub(crate) async fn api_channels_list(
 
     match rows {
         Ok(rows) => {
-            let items: Vec<ChannelRowDto> = rows.iter().map(to_channel_row_dto).collect();
-            Json(json!(items)).into_response()
+            if reveal {
+                let mut items = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let config = match auth.secrets.get_scoped(
+                        "CHANNEL_CREDENTIALS",
+                        &row.id.to_string(),
+                    ).await {
+                        Some(creds_json) => inject_credentials(row.config.clone(), &creds_json),
+                        None => row.config.clone(),
+                    };
+                    items.push(json!({
+                        "id": row.id.to_string(),
+                        "agent_name": row.agent_name,
+                        "channel_type": row.channel_type,
+                        "display_name": row.display_name,
+                        "config": config,
+                        "status": row.status,
+                        "error_msg": row.error_msg,
+                    }));
+                }
+                Json(json!(items)).into_response()
+            } else {
+                let items: Vec<ChannelRowDto> = rows.iter().map(to_channel_row_dto).collect();
+                Json(json!(items)).into_response()
+            }
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
     }
@@ -442,19 +470,20 @@ pub(crate) async fn api_channels_active(
 }
 
 /// Mask sensitive fields in channel config for API responses.
+/// Replace every credential field in a channel config with a fixed redaction
+/// marker. Previously this returned `****{last4}`, which leaked the trailing 4
+/// characters of bot tokens through every list/detail endpoint that does not
+/// accept `?reveal=true`. The suffix gives an attacker a head-start on
+/// guessing the rest (especially when combined with the known Telegram bot
+/// token format `<digits>:<base64>`). We now return `"***"` unconditionally.
 fn mask_config(cfg: &Value) -> Value {
     match cfg {
         Value::Object(map) => {
             let mut masked = map.clone();
             for key in CREDENTIAL_KEYS {
-                if let Some(val) = masked.get(*key)
-                    && let Some(s) = val.as_str() {
-                        if s.len() > 4 {
-                            masked.insert((*key).to_string(), Value::String(format!("****{}", &s[s.floor_char_boundary(s.len().saturating_sub(4))..])));
-                        } else {
-                            masked.insert((*key).to_string(), Value::String("****".to_string()));
-                        }
-                    }
+                if masked.get(*key).and_then(|v| v.as_str()).is_some() {
+                    masked.insert((*key).to_string(), Value::String("***".to_string()));
+                }
             }
             Value::Object(masked)
         }

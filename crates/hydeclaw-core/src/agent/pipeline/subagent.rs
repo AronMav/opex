@@ -9,9 +9,19 @@ use crate::config::DelegationConfig;
 
 /// Tools denied to subagents by default (prevent recursive spawning, destructive operations, and dangerous ops).
 /// workspace_write and workspace_edit are allowed so subagents can write shared state files (SUB-01).
+///
+/// `code_exec` is included even though Docker provides a sandbox, because:
+///   1. parents are the only callers expected to run arbitrary code,
+///   2. Setup wizard's auto-deny for non-base agents already lists code_exec
+///      — subagents inherit that intent: dangerous-by-default, opt-in via
+///      `[agent.delegation] blocked_tools_override = []` if needed.
 pub const SUBAGENT_DENIED_TOOLS: &[&str] = &[
     "workspace_delete",
-    "workspace_rename", "cron", "secret_set", "process",
+    "workspace_rename",
+    "cron",
+    "secret_set",
+    "process",
+    "code_exec",
 ];
 
 /// Compute effective deny list for subagent tool filtering, given a delegation config.
