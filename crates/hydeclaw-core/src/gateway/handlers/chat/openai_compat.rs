@@ -36,6 +36,28 @@ pub(crate) struct ChatCompletionRequest {
 }
 
 #[derive(Debug, Serialize)]
+struct ChatCompletionChunk {
+    id: String,
+    object: String,
+    created: i64,
+    model: String,
+    choices: Vec<ChatChunkChoice>,
+}
+
+#[derive(Debug, Serialize)]
+struct ChatChunkChoice {
+    index: u32,
+    delta: ChatChunkDelta,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Default, Serialize)]
+struct ChatChunkDelta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 struct ChatCompletionResponse {
     id: String,
     object: String,
@@ -115,25 +137,39 @@ pub(crate) async fn chat_completions(
             });
 
             while let Some(chunk) = chunk_rx.recv().await {
-                let data = json!({
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model_name,
-                    "choices": [{"index": 0, "delta": {"content": chunk}, "finish_reason": null}]
-                });
-                sse_tx.try_send(Ok(Event::default().data(data.to_string()))).ok();
+                let payload = ChatCompletionChunk {
+                    id: completion_id.clone(),
+                    object: "chat.completion.chunk".to_string(),
+                    created,
+                    model: model_name.clone(),
+                    choices: vec![ChatChunkChoice {
+                        index: 0,
+                        delta: ChatChunkDelta {
+                            content: Some(chunk),
+                        },
+                        finish_reason: None,
+                    }],
+                };
+                let data = serde_json::to_string(&payload)
+                    .expect("ChatCompletionChunk serialization is infallible");
+                sse_tx.try_send(Ok(Event::default().data(data))).ok();
             }
 
             // Final stop chunk
-            let data = json!({
-                "id": completion_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model_name,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
-            });
-            sse_tx.try_send(Ok(Event::default().data(data.to_string()))).ok();
+            let payload = ChatCompletionChunk {
+                id: completion_id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created,
+                model: model_name.clone(),
+                choices: vec![ChatChunkChoice {
+                    index: 0,
+                    delta: ChatChunkDelta::default(),
+                    finish_reason: Some("stop".to_string()),
+                }],
+            };
+            let data = serde_json::to_string(&payload)
+                .expect("ChatCompletionChunk serialization is infallible");
+            sse_tx.try_send(Ok(Event::default().data(data))).ok();
             sse_tx.try_send(Ok(Event::default().data("[DONE]"))).ok();
 
             if let Ok(Err(e)) = handle.await {
@@ -181,6 +217,49 @@ pub(crate) async fn chat_completions(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_text_delta_serializes_byte_equal() {
+        let chunk = ChatCompletionChunk {
+            id: "chatcmpl-test".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 1700000000,
+            model: "Hyde".to_string(),
+            choices: vec![ChatChunkChoice {
+                index: 0,
+                delta: ChatChunkDelta {
+                    content: Some("hello".to_string()),
+                },
+                finish_reason: None,
+            }],
+        };
+        let actual = serde_json::to_string(&chunk).unwrap();
+        let expected = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1700000000,"model":"Hyde","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}"#;
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn chunk_final_stop_serializes_byte_equal() {
+        let chunk = ChatCompletionChunk {
+            id: "chatcmpl-test".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 1700000000,
+            model: "Hyde".to_string(),
+            choices: vec![ChatChunkChoice {
+                index: 0,
+                delta: ChatChunkDelta::default(),
+                finish_reason: Some("stop".to_string()),
+            }],
+        };
+        let actual = serde_json::to_string(&chunk).unwrap();
+        let expected = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1700000000,"model":"Hyde","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#;
+        assert_eq!(actual, expected);
     }
 }
 
