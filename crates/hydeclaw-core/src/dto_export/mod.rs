@@ -101,3 +101,8 @@ mod backup_dto_register {
 #[cfg(feature = "ts-gen")]
 pub mod channels_ts;
 
+/// Phase E: SSE wire-protocol types — registered for dest="ui-sse".
+/// Imports types from hydeclaw-types::sse and registers each via register_ts_dto!.
+#[cfg(feature = "ts-gen")]
+pub mod sse_ts;
+

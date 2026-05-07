@@ -1,5 +1,6 @@
 pub mod channels;
 pub mod ids;
+pub mod sse;
 
 pub use channels::*;
 
