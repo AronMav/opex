@@ -79,6 +79,7 @@ pub enum StepStatus {
 // ── Media attachments ──
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum MediaType {
     Image,
@@ -88,6 +89,7 @@ pub enum MediaType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 pub struct MediaAttachment {
     pub url: String,
     pub media_type: MediaType,
@@ -95,7 +97,14 @@ pub struct MediaAttachment {
     pub file_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    // ts-rs v12 renders bare `u64` as `number`, but `Option<u64>` as
+    // `bigint | null`. Channel adapter drivers (discord/slack/telegram) source
+    // file size as a JS `number`, so we override the TS surface here to
+    // `number | null` for adapter compatibility while keeping Rust-side u64
+    // capacity. JS Number.MAX_SAFE_INTEGER ≈ 9 PB — safe for file sizes;
+    // sources >9 PB would need `Option<String>` with a custom serde adapter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts-gen", ts(type = "number | null"))]
     pub file_size: Option<u64>,
 }
 
@@ -214,6 +223,7 @@ pub struct McpCallback {
 
 /// Messages from channel adapter to core.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[serde(tag = "type")]
 pub enum ChannelInbound {
     /// New message from a channel user.
@@ -227,6 +237,7 @@ pub enum ChannelInbound {
     ActionResult {
         action_id: String,
         success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
     /// Check if a user is allowed to interact with the agent.
@@ -240,6 +251,7 @@ pub enum ChannelInbound {
     PairingCreate {
         request_id: String,
         user_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         display_name: Option<String>,
     },
     /// Approve a pending pairing by code (owner command).
@@ -263,7 +275,7 @@ pub enum ChannelInbound {
         adapter_type: String,
         version: String,
         /// Channel-specific formatting instructions for the LLM system prompt.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         formatting_prompt: Option<String>,
     },
     /// Cancel an in-flight request (e.g. /stop command).
@@ -277,17 +289,20 @@ pub enum ChannelInbound {
 /// The `context` field is opaque to core — set by the adapter (e.g. `chat_id`, `message_id`)
 /// and echoed back unchanged in replies/actions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 pub struct IncomingMessageDto {
     pub user_id: String,
     /// Optional display name for the user (shown in pairing notifications, etc.).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     /// Media attachments (photos, audio, video, documents).
     #[serde(default)]
     pub attachments: Vec<MediaAttachment>,
     /// Opaque context from the adapter. Core echoes it back with Done/Error/Action responses.
     #[serde(default)]
+    #[cfg_attr(feature = "ts-gen", ts(type = "unknown"))]
     pub context: serde_json::Value,
     pub timestamp: DateTime<Utc>,
 }
@@ -314,6 +329,7 @@ impl IncomingMessageDto {
 
 /// Messages from core to channel adapter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[serde(tag = "type")]
 pub enum ChannelOutbound {
     /// Streaming text chunk for a request.
@@ -327,6 +343,7 @@ pub enum ChannelOutbound {
     Phase {
         request_id: String,
         phase: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         tool_name: Option<String>,
     },
     /// Final response complete.
@@ -367,6 +384,7 @@ pub enum ChannelOutbound {
     PairingResult {
         request_id: String,
         success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
     /// Pong response to keepalive.
@@ -385,7 +403,7 @@ pub enum ChannelOutbound {
         /// Agent language code (e.g., "ru", "en").
         language: String,
         /// Owner user ID string (for showing pairing UI to the right person).
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         owner_id: Option<String>,
         /// Typing indicator mode: "instant", "thinking", "message", "never".
         #[serde(default = "default_typing_mode")]
@@ -397,13 +415,16 @@ pub enum ChannelOutbound {
 /// Channel-agnostic: `action` is a string name, `params` and `context` are opaque JSON.
 /// The adapter interprets `action`/`params` and uses `context` to know where to send.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 pub struct ChannelActionDto {
     /// Action name: "react", "pin", "unpin", "edit", "delete", "reply",
     /// "`send_message`", "`send_voice`", etc.
     pub action: String,
     /// Action-specific parameters (e.g. {"emoji": "👍"}, {"text": "..."}).
+    #[cfg_attr(feature = "ts-gen", ts(type = "unknown"))]
     pub params: serde_json::Value,
     /// Opaque context echoed from the original message (e.g. {"`chat_id"`: 123, "`message_id"`: 42}).
+    #[cfg_attr(feature = "ts-gen", ts(type = "unknown"))]
     pub context: serde_json::Value,
 }
 

@@ -44,11 +44,12 @@ fn main() {
     // ui count: tightened to current production count (34, verified via
     //   `grep -rn "register_ts_dto!" crates/hydeclaw-core/src --include="*.rs"
     //     | grep -v "macro_rules\|stringify\|#!\[\|//"`).
-    // channels count: 0 temporarily (tightened in T3 commit when channel
-    //   types are registered).
+    // channels count: 6 — MediaType, MediaAttachment, IncomingMessageDto,
+    //   ChannelActionDto, ChannelInbound, ChannelOutbound (registered via
+    //   crates/hydeclaw-core/src/dto_export/channels_ts.rs).
     let dest_paths: &[(&str, &str, usize)] = &[
         ("ui",       "ui/src/types/api.generated.ts",         34),
-        ("channels", "channels/src/types.generated.ts",        0),  // T3 will tighten
+        ("channels", "channels/src/types.generated.ts",        6),
     ];
 
     let header = "// @generated — do not edit by hand.\n\
