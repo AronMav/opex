@@ -165,5 +165,29 @@ jobs:
 
       - name: Check no drift
         run: |
-          git diff --exit-code ui/src/types/api.generated.ts \
-            || (echo "::error::api.generated.ts is out of date. Run 'make gen-types' locally and commit the result." && exit 1)
+          git diff --exit-code \
+            ui/src/types/api.generated.ts \
+            channels/src/types.generated.ts \
+            || (echo "::error::Generated TS types are out of date. Run 'make gen-types' locally and commit the result." && exit 1)
+
+  channels-fixtures-drift:
+    name: Channels round-trip fixtures drift check
+    runs-on: ubuntu-latest
+    needs: [rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v2
+          cache-on-failure: true
+
+      - name: Generate channel WS fixtures
+        run: cargo test -p hydeclaw-types --test channels_wire
+
+      - name: Check no fixture drift
+        run: |
+          git diff --exit-code channels/src/__tests__/fixtures/ \
+            || (echo "::error::Channel WS fixtures drifted. Run 'cargo test -p hydeclaw-types --test channels_wire' locally and commit the regenerated fixtures." && exit 1)
