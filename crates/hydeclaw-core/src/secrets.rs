@@ -73,8 +73,13 @@ impl SecretsManager {
     ///
     /// `master_key_hex` must be exactly 64 hex characters (32 bytes).
     pub fn new(master_key_hex: &str, db: PgPool) -> Result<Self> {
-        let key_bytes =
-            hex::decode(master_key_hex).context("master key is not valid hex")?;
+        // Wrap the heap allocation in Zeroizing so hex-decoded bytes are wiped
+        // on drop. Without this the raw 32-byte master key persists in heap
+        // until the allocator overwrites the slot — exposing it to coredumps,
+        // /proc/<pid>/mem reads, and live-migration snapshots.
+        let key_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(
+            hex::decode(master_key_hex).context("master key is not valid hex")?,
+        );
         if key_bytes.len() != 32 {
             anyhow::bail!(
                 "master key must be 32 bytes (64 hex chars), got {}",

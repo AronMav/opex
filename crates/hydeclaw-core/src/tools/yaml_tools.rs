@@ -26,7 +26,19 @@ async fn resolve_env(key: &str, resolver: Option<&dyn EnvResolver>) -> Result<St
     std::env::var(key).with_context(|| format!("env var '{key}' not set"))
 }
 use std::path::Path;
+use std::sync::LazyLock;
 use tokio::fs;
+
+/// Singleton SSRF-safe HTTP client used to fetch LLM-supplied URLs (e.g.
+/// `file_url` parameters in multipart YAML tools). The regular per-engine
+/// `http_client` does NOT block private IPs and must never be used for
+/// user-controlled URLs. 60s timeout matches the multipart-fetch budget.
+fn ssrf_multipart_client() -> &'static reqwest::Client {
+    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(60))
+    });
+    &CLIENT
+}
 
 use hydeclaw_types::ToolDefinition;
 
@@ -768,6 +780,25 @@ impl YamlToolDef {
                     .header("Content-Type", "application/json")
                     .body(gql_body.to_string());
             } else if let Some(ref template) = self.body_template {
+                // `render_body_template` JSON-escapes substitutions (\, ", \n,
+                // \r, \t) but leaves `&`, `=`, `?` untouched. That is correct
+                // for application/json but unsafe for x-www-form-urlencoded /
+                // text/plain — a parameter value like `value&admin=1` would
+                // inject extra form fields. Refuse the combination so a
+                // future YAML tool config cannot be silently exploited.
+                let ct = self.content_type.to_ascii_lowercase();
+                if !(ct.starts_with("application/json")
+                    || ct.starts_with("application/vnd.api+json")
+                    || ct.starts_with("application/ld+json"))
+                {
+                    anyhow::bail!(
+                        "tool '{}': body_template requires a JSON content_type \
+                         (got '{}'); use body params or a JSON content_type to avoid \
+                         template-injection across delimiter characters",
+                        self.name,
+                        self.content_type
+                    );
+                }
                 let body = render_body_template(template, &params_map, env_resolver).await;
                 builder = builder
                     .header("Content-Type", &self.content_type)
@@ -781,8 +812,18 @@ impl YamlToolDef {
                             other => other.to_string(),
                         };
                         if name == "file" || name.ends_with("_url") {
-                            // Download URL content and attach as file
-                            let bytes = http_client.get(&val_str).send().await
+                            // The URL here is LLM-controlled. Use the SSRF-safe
+                            // client with private-IP DNS filtering and reject
+                            // schemes outside http(s); the regular http_client
+                            // would otherwise let an agent fetch
+                            // http://169.254.169.254/... or any internal
+                            // service.
+                            crate::net::ssrf::validate_url_scheme(&val_str)
+                                .map_err(|e| anyhow::anyhow!(
+                                    "rejected file URL '{val_str}' for multipart upload: {e}"
+                                ))?;
+                            let ssrf_client = ssrf_multipart_client();
+                            let bytes = ssrf_client.get(&val_str).send().await
                                 .context("failed to download file for multipart")?
                                 .bytes().await.context("failed to read file bytes")?;
                             let filename = body_params.get("file_name")
