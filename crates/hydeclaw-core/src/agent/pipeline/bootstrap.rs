@@ -123,7 +123,7 @@ pub async fn bootstrap<S: EventSink>(
             // concurrent SSE handlers to race on the same session (both write
             // WAL "running", both persist assistant messages).
             tracing::error!(session_id = %session_id, error = %e, "claim_session_with_retry failed; aborting bootstrap");
-            return Err(e.into());
+            return Err(e);
         }
     }
 
