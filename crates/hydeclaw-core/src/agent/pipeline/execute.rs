@@ -1,10 +1,11 @@
 //! Main LLM+tools loop. Transport-agnostic via EventSink.
 //!
-//! See docs/superpowers/specs/2026-04-20-execution-pipeline-unification-design.md §3, §5.
+//! See docs/superpowers/specs/2026-04-20-execution-pipeline-unification-design.md §3, §5
+//! and docs/architecture/2026-05-06-llm-loop-unification-plan.md (Phase 66).
 //!
 //! # Scope
 //!
-//! This module implements the **safe subset** of the tool loop:
+//! This module implements the unified tool loop used by ALL transports:
 //! - Happy path: N LLM calls with tool-call iterations
 //! - Cancellation check at top of each iteration
 //! - Sink closed → Interrupted
@@ -12,18 +13,30 @@
 //! - LoopDetector trip (after max nudges) → Failed
 //! - Turn limit reached → Done with finish_reason = "turn_limit"
 //!
-//! # Explicitly omitted (deferred to Phase 66)
+//! # Behaviour layers (Phase 66 — completed 2026-05-06)
 //!
-//! - Fallback provider switching on consecutive_failures (`using_fallback` path).
-//!   The thin adapters in `engine/run.rs` use a single provider per session entry.
-//! - SessionCorruption recovery (messages reset + retry). Pipeline path treats it
-//!   as a regular LLM error → `ExecuteStatus::Failed`.
-//! - Empty-response auto-retry (`empty_retry_count` path).
-//! - Auto-continue detection (`looks_incomplete` / nudge path).
-//! - WAL warm-up replay into LoopDetector (bootstrap owns that; execute receives
-//!   the already-warmed detector via `BootstrapOutcome::loop_detector`).
-//! - Thinking-block stripping from `IncomingMessage` directives. Content is passed
-//!   to DB as-is; callers that need stripping should do it in finalize.
+//! Five opt-in policies activated through [`BehaviourLayers`]:
+//!
+//! - [`FallbackPolicy`](super::behaviour::FallbackPolicy) — fallback provider
+//!   switching on consecutive failures (consumed at line ~362).
+//! - [`SessionRecoveryPolicy`](super::behaviour::SessionRecoveryPolicy) — message
+//!   reset + retry on SessionCorruption (consumed at line ~331).
+//! - [`AutoContinuePolicy`](super::behaviour::AutoContinuePolicy) — empty-response
+//!   retry + nudge with `AUTO_CONTINUE_NUDGE` (consumed at line ~501).
+//! - [`ToolPolicyOverride`](super::behaviour::ToolPolicyOverride) — applied at the
+//!   bootstrap boundary in `engine/run.rs` (per-session policy override).
+//! - [`ForcedFinalCallPolicy`](super::behaviour::ForcedFinalCallPolicy) — extra
+//!   LLM call on loop break / turn limit to coerce a final response (consumed at
+//!   lines ~852, ~909).
+//!
+//! SSE callers pass [`BehaviourLayers::none()`] for byte-identical legacy
+//! semantics. Cron / RPC callers (`handle_isolated_via_pipeline` in
+//! `engine/run.rs`) pass [`BehaviourLayers::for_cron`] to enable the cron-only
+//! features above.
+//!
+//! WAL warm-up replay is owned by bootstrap; execute receives the
+//! already-warmed detector via [`BootstrapOutcome::loop_detector`].
+//! Thinking-block stripping is owned by finalize.
 
 use crate::agent::engine::AgentEngine;
 use crate::agent::pipeline::behaviour::{BehaviourLayers, LayerRuntimeState};
@@ -66,9 +79,10 @@ pub enum ExecuteStatus {
 
 /// Run the LLM+tools loop and stream results into `sink`.
 ///
-/// Implements the safe subset of the `handle_sse` tool loop (see module doc).
-/// Callers that need the full feature set (fallback provider, auto-continue,
-/// session corruption recovery) should use `handle_sse` directly until Phase 66.
+/// All transports route through this function (Phase 66 unified path —
+/// completed 2026-05-06). Callers configure cron-style behaviours via the
+/// `layers` argument; SSE callers pass `BehaviourLayers::none()`.
+/// See module doc for the full layer catalogue.
 #[tracing::instrument(
     name = "pipeline.execute",
     skip_all,
