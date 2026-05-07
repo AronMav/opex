@@ -127,7 +127,7 @@ where
                 tool_calls: m.tool_calls.and_then(|tc| {
                     serde_json::from_value::<Vec<hydeclaw_types::ToolCall>>(tc).ok()
                 }),
-                tool_call_id: m.tool_call_id,
+                tool_call_id: m.tool_call_id.map(hydeclaw_types::ids::ToolCallId::from),
                 thinking_blocks: vec![],
             db_id: None,
             }).collect();
@@ -184,7 +184,7 @@ where
                             .bind(role)
                             .bind(&m.content)
                             .bind(tc_json.as_ref())
-                            .bind(m.tool_call_id.as_deref())
+                            .bind(m.tool_call_id.as_ref().map(|id| id.as_str()))
                             .execute(&mut *tx)
                             .await?;
                         }

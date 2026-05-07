@@ -53,19 +53,19 @@ fn rewrite_one(
 
     if !crate::agent::dispatcher::is_valid_tool_name(inner_name) {
         return RewriteResult::Denied {
-            id: tc.id.clone(),
+            id: tc.id.as_str().to_string(),
             reason: format!("invalid tool name '{inner_name}'"),
         };
     }
     if inner_name == "tool_use" {
         return RewriteResult::Denied {
-            id: tc.id.clone(),
+            id: tc.id.as_str().to_string(),
             reason: "tool_use cannot dispatch to itself".to_string(),
         };
     }
     if !known_tools.contains(inner_name) {
         return RewriteResult::Denied {
-            id: tc.id.clone(),
+            id: tc.id.as_str().to_string(),
             reason: format!("tool '{inner_name}' not found"),
         };
     }
@@ -74,7 +74,7 @@ fn rewrite_one(
         && p.deny.iter().any(|d| d == inner_name)
     {
         return RewriteResult::Denied {
-            id: tc.id.clone(),
+            id: tc.id.as_str().to_string(),
             reason: format!("tool '{inner_name}' is denied by agent policy"),
         };
     }
@@ -98,7 +98,7 @@ mod tests {
 
     fn tc(name: &str, args: Value) -> ToolCall {
         ToolCall {
-            id: format!("call_{name}"),
+            id: hydeclaw_types::ids::ToolCallId::new(format!("call_{name}")),
             name: name.to_string(),
             arguments: args,
         }
@@ -133,7 +133,7 @@ mod tests {
         match &r[0] {
             RewriteResult::Direct(t) => {
                 assert_eq!(t.name, "cron");
-                assert_eq!(t.id, "call_tool_use", "tc.id must be preserved");
+                assert_eq!(t.id.as_str(), "call_tool_use", "tc.id must be preserved");
                 assert_eq!(t.arguments["action"], "list");
             }
             _ => panic!("expected Direct"),
@@ -188,8 +188,8 @@ mod tests {
             tc("tool_use", json!({"action": "call", "name": "unknown", "arguments": {}})),
         ];
         let r = rewrite_tool_use_calls(&calls, None, &known(&["cron"]));
-        match &r[0] { RewriteResult::Direct(t) => assert_eq!(t.id, "call_tool_use"), _ => panic!() }
-        match &r[1] { RewriteResult::Direct(t) => assert_eq!(t.id, "call_tool_use"), _ => panic!() }
+        match &r[0] { RewriteResult::Direct(t) => assert_eq!(t.id.as_str(), "call_tool_use"), _ => panic!() }
+        match &r[1] { RewriteResult::Direct(t) => assert_eq!(t.id.as_str(), "call_tool_use"), _ => panic!() }
         match &r[2] { RewriteResult::Denied { id, .. } => assert_eq!(id, "call_tool_use"), _ => panic!() }
     }
 }

@@ -43,13 +43,23 @@ pub enum StreamEvent {
     /// initially; analytics queries `messages.parallel_batch_id` (m047)
     /// to group tools that ran in the same batch. See spec
     /// `docs/superpowers/specs/2026-05-07-s2-identity-first-stream-objects-design.md` (T3).
+    ///
+    /// T6: `id` is `ToolCallId` (newtype over `String`). Wire format on the
+    /// SSE side is unchanged — `sse_converter.rs` calls `.as_str()` to
+    /// produce the legacy `"toolCallId": "<provider-supplied id>"` field.
     ToolCallStart {
-        id: String, // (will become ToolCallId in T6)
+        id: hydeclaw_types::ids::ToolCallId,
         name: String,
         parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
     },
-    ToolCallArgs { id: String, args_text: String },
-    ToolResult { id: String, result: String },
+    ToolCallArgs {
+        id: hydeclaw_types::ids::ToolCallId,
+        args_text: String,
+    },
+    ToolResult {
+        id: hydeclaw_types::ids::ToolCallId,
+        result: String,
+    },
     StepFinish { step_id: String, finish_reason: String },
     /// Rich card embedded inline in the message stream (tables, metrics, etc.).
     RichCard {

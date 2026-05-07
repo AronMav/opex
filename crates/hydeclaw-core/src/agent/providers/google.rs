@@ -121,7 +121,7 @@ pub(super) fn messages_to_gemini_format(messages: &[Message]) -> (Option<String>
                     "role": role,
                     "parts": [{
                         "functionResponse": {
-                            "name": msg.tool_call_id.as_deref().unwrap_or("unknown"),
+                            "name": msg.tool_call_id.as_ref().map(|id| id.as_str()).unwrap_or("unknown"),
                             "response": {
                                 "result": msg.content,
                             }
@@ -303,7 +303,7 @@ impl LlmProvider for GoogleProvider {
                             }
                             if let Some(fc) = part.function_call {
                                 tool_calls.push(hydeclaw_types::ToolCall {
-                                    id: format!("call_{i}"),
+                                    id: hydeclaw_types::ids::ToolCallId::new(format!("call_{i}")),
                                     name: fc.name,
                                     arguments: fc.args.unwrap_or(serde_json::Value::Object(Default::default())),
                                 });

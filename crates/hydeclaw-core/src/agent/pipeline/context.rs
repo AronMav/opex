@@ -318,7 +318,7 @@ where
         .bind(role)
         .bind(&msg.content)
         .bind(tc_json.as_ref())
-        .bind(msg.tool_call_id.as_deref())
+        .bind(msg.tool_call_id.as_ref().map(|id| id.as_str()))
         .bind(if role == "assistant" {
             Some(agent_name)
         } else {

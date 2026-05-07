@@ -1,7 +1,7 @@
 pub mod ids;
 
 use chrono::{DateTime, Utc};
-use ids::MessageId;
+use ids::{MessageId, ToolCallId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -15,8 +15,12 @@ pub struct Message {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// S2 T6: migrated from `Option<String>` to `Option<ToolCallId>` (newtype).
+    /// `ToolCallId` is `#[serde(transparent)]` over `String` — wire format is
+    /// identical to pre-T6. The newtype is purely compile-time type-tagging
+    /// (caller can't pass a `MessageId` where a `ToolCallId` is expected).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
+    pub tool_call_id: Option<ToolCallId>,
     /// Thinking blocks (Anthropic only). Stored separately from content.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub thinking_blocks: Vec<ThinkingBlock>,
@@ -42,7 +46,9 @@ pub enum MessageRole {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
-    pub id: String,
+    /// S2 T6: migrated from `String` to `ToolCallId` (newtype). Wire format
+    /// is identical (`#[serde(transparent)]` over `String`). Type-tag only.
+    pub id: ToolCallId,
     pub name: String,
     pub arguments: serde_json::Value,
 }
@@ -797,7 +803,7 @@ mod tests {
         };
         let json = serde_json::to_string(&tc).unwrap();
         let back: ToolCall = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.id, "call-abc123");
+        assert_eq!(back.id.as_str(), "call-abc123");
         assert_eq!(back.name, "get_weather");
         assert_eq!(back.arguments["city"], "Samara");
         assert_eq!(back.arguments["units"], "metric");
@@ -863,7 +869,7 @@ mod tests {
         assert!(v.get("tool_call_id").is_some());
         assert!(!v.as_object().unwrap().contains_key("tool_calls"));
         let back: Message = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.tool_call_id, Some("tc-1".into()));
+        assert_eq!(back.tool_call_id, Some(ToolCallId::from("tc-1")));
     }
 
     // ── 7. LlmResponse with optional fields ──

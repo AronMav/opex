@@ -316,7 +316,11 @@ pub fn prune_old_tool_results(messages: &[Message], protect_tail: usize) -> Vec<
         if msg.role != MessageRole::Tool { continue; }
         if msg.content.len() <= 200 { continue; }
         if msg.content.starts_with('[') { continue; }
-        let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
+        let tool_call_id = msg
+            .tool_call_id
+            .as_ref()
+            .map(|id| id.as_str())
+            .unwrap_or("");
         let char_count = msg.content.len();
         msg.content = format!("[tool result {tool_call_id}] ({char_count} chars — pruned)");
     }
@@ -382,16 +386,17 @@ pub fn find_tail_start_by_tokens(messages: &[Message], head_end: usize, tail_bud
 
 /// Phase 5: fix orphaned tool_call / tool_result pairs after compression.
 pub fn sanitize_tool_pairs(messages: Vec<Message>) -> Vec<Message> {
+    use hydeclaw_types::ids::ToolCallId;
     use std::collections::HashSet;
 
-    let surviving_call_ids: HashSet<String> = messages
+    let surviving_call_ids: HashSet<ToolCallId> = messages
         .iter()
         .filter(|m| m.role == MessageRole::Assistant)
         .flat_map(|m| m.tool_calls.iter().flatten())
         .map(|tc| tc.id.clone())
         .collect();
 
-    let result_call_ids: HashSet<String> = messages
+    let result_call_ids: HashSet<ToolCallId> = messages
         .iter()
         .filter(|m| m.role == MessageRole::Tool)
         .filter_map(|m| m.tool_call_id.clone())
@@ -413,7 +418,7 @@ pub fn sanitize_tool_pairs(messages: Vec<Message>) -> Vec<Message> {
         .collect();
 
     // 2. Insert stubs for orphaned calls
-    let missing_ids: HashSet<String> = surviving_call_ids
+    let missing_ids: HashSet<ToolCallId> = surviving_call_ids
         .difference(&result_call_ids)
         .cloned()
         .collect();
@@ -425,7 +430,7 @@ pub fn sanitize_tool_pairs(messages: Vec<Message>) -> Vec<Message> {
     let mut patched: Vec<Message> = Vec::with_capacity(messages.len() + missing_ids.len());
     for msg in messages {
         if msg.role == MessageRole::Assistant {
-            let needs_stubs: Vec<String> = msg
+            let needs_stubs: Vec<ToolCallId> = msg
                 .tool_calls
                 .iter()
                 .flatten()
@@ -991,7 +996,7 @@ mod tests {
     #[test]
     fn estimate_tokens_with_tool_calls() {
         let tool_call = ToolCall {
-            id: "call_1".to_string(),
+            id: "call_1".into(),
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "Moscow"}),
         };
@@ -1286,7 +1291,7 @@ mod tests {
                 role: MessageRole::Assistant,
                 content: "".into(),
                 tool_calls: Some(vec![ToolCall {
-                    id: "tc_1".into(),
+                    id: hydeclaw_types::ids::ToolCallId::from("tc_1"),
                     name: "workspace_read".into(),
                     arguments: serde_json::json!({}),
                 }]),
@@ -1301,7 +1306,10 @@ mod tests {
         let sanitized = sanitize_tool_pairs(msgs);
         assert_eq!(sanitized.len(), 3);
         assert_eq!(sanitized[1].role, MessageRole::Tool);
-        assert_eq!(sanitized[1].tool_call_id.as_deref(), Some("tc_1"));
+        assert_eq!(
+            sanitized[1].tool_call_id.as_ref().map(|id| id.as_str()),
+            Some("tc_1")
+        );
         assert!(sanitized[1].content.contains("earlier conversation"));
     }
 

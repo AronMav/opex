@@ -269,10 +269,11 @@ pub async fn execute_tool_calls_partitioned(
     let direct_calls: Vec<ToolCall> = direct_pending.iter().map(|(tc, _)| tc.clone()).collect();
     // Maps tool_call_id → "originated as tool_use(action=call)?" — consumed by
     // Task 13 promotion logic at each `record_execution` site below.
-    let via_dispatcher_map: std::collections::HashMap<String, bool> = direct_pending
-        .iter()
-        .map(|(tc, via)| (tc.id.clone(), *via))
-        .collect();
+    let via_dispatcher_map: std::collections::HashMap<hydeclaw_types::ids::ToolCallId, bool> =
+        direct_pending
+            .iter()
+            .map(|(tc, via)| (tc.id.clone(), *via))
+            .collect();
 
     // T3: ParallelBatchId is provided by the caller (`execute.rs`) and
     // threaded into `messages.parallel_batch_id` for tools in the parallel
@@ -577,7 +578,7 @@ pub async fn execute_tool_calls_partitioned(
                     new_id,
                     session_id,
                     pctx.agent_name,
-                    &tool_calls[i].id,
+                    tool_calls[i].id.as_str(),
                     &result,
                     parent_for_this,
                     active_batch_id,
@@ -724,7 +725,7 @@ pub async fn execute_tool_calls_partitioned(
                 new_id,
                 session_id,
                 pctx.agent_name,
-                &tool_calls[i].id,
+                tool_calls[i].id.as_str(),
                 &res,
                 chain_parent,
                 None,
@@ -759,6 +760,8 @@ fn assemble_ordered(
     persisted_ids: &[Option<Uuid>],
     denied: &[(String, String)],
 ) -> Vec<ToolBatchResult> {
+    // Keyed by string so we can mix dispatcher-denied ids (`String`) with
+    // dispatched ToolCallId values without unifying the key type.
     let mut by_id: std::collections::HashMap<String, ToolBatchResult> =
         std::collections::HashMap::with_capacity(original_calls.len());
 
@@ -775,9 +778,9 @@ fn assemble_ordered(
 
     for (j, tc) in dispatched_calls.iter().enumerate() {
         by_id.insert(
-            tc.id.clone(),
+            tc.id.as_str().to_string(),
             ToolBatchResult {
-                tool_call_id: tc.id.clone(),
+                tool_call_id: tc.id.as_str().to_string(),
                 result: results[j].take().unwrap_or_default(),
                 tool_msg_id: persisted_ids[j],
             },
@@ -786,7 +789,7 @@ fn assemble_ordered(
 
     original_calls
         .iter()
-        .filter_map(|tc| by_id.remove(&tc.id))
+        .filter_map(|tc| by_id.remove(tc.id.as_str()))
         .collect()
 }
 
@@ -1128,7 +1131,7 @@ mod loop_key_tests {
 
     fn make_tc(name: &str, args: serde_json::Value) -> hydeclaw_types::ToolCall {
         hydeclaw_types::ToolCall {
-            id: "test".to_string(),
+            id: "test".into(),
             name: name.to_string(),
             arguments: args,
         }

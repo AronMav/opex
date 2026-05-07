@@ -371,7 +371,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     }
                 };
                 hydeclaw_types::ToolCall {
-                    id: tc.id,
+                    id: hydeclaw_types::ids::ToolCallId::from(tc.id),
                     name: tool_name,
                     arguments,
                 }
@@ -718,7 +718,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
                         serde_json::Value::Object(Default::default())
                     }
                 };
-                hydeclaw_types::ToolCall { id, name, arguments }
+                hydeclaw_types::ToolCall {
+                    id: hydeclaw_types::ids::ToolCallId::from(id),
+                    name,
+                    arguments,
+                }
             })
             .collect();
 
@@ -1052,7 +1056,10 @@ fn parse_xml_invoke_blocks(block: &str, out: &mut Vec<hydeclaw_types::ToolCall>)
         parse_xml_parameters(invoke_body, &mut args);
 
         out.push(hydeclaw_types::ToolCall {
-            id: format!("xml-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
+            id: hydeclaw_types::ids::ToolCallId::new(format!(
+                "xml-{}",
+                &uuid::Uuid::new_v4().simple().to_string()[..8]
+            )),
             name,
             arguments: serde_json::Value::Object(args),
         });

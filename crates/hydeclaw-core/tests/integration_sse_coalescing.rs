@@ -159,7 +159,7 @@ async fn nontext_events_are_never_dropped_under_mixed_burst() {
             if i % 100 == 0 {
                 raw_tx
                     .send(StreamEvent::ToolCallStart {
-                        id: format!("tc{i}"),
+                        id: hydeclaw_types::ids::ToolCallId::new(format!("tc{i}")),
                         name: "tool".into(),
                         parallel_batch_id: None,
                     })
