@@ -128,31 +128,57 @@ async fn is_idempotent_for_already_terminal_sessions(pool: PgPool) {
 }
 
 #[sqlx::test(migrations = "../../migrations")]
-async fn set_session_run_status_still_overwrites_non_done(pool: PgPool) {
-    // Regression guard: the unconditional `set_session_run_status` helper
-    // must still work for the happy-path `handle_with_status` flow. It
-    // overwrites anything except `'done'`. We keep this coverage here so
-    // the two helpers' semantics stay clearly distinguishable.
+async fn set_session_run_status_only_advances_from_running_or_null(pool: PgPool) {
+    // Regression guard for the SQL-level FSM: `set_session_run_status` only
+    // permits transitions FROM `'running'` or NULL. Terminal→terminal jumps
+    // (`interrupted → failed`, `failed → done`, etc.) are blocked at the
+    // WHERE clause and silently no-op (rows_affected = 0). The previous
+    // `IS DISTINCT FROM 'done'` predicate let those terminal jumps through
+    // — see audit 2026-05-08, fix(group-c).
     let sid = Uuid::new_v4();
     seed_session(&pool, sid, "running").await;
 
+    // running → interrupted is allowed.
     set_session_run_status(&pool, sid, "interrupted")
         .await
         .expect("interrupted");
     assert_eq!(current_status(&pool, sid).await.as_deref(), Some("interrupted"));
 
-    // Unconditional helper DOES overwrite interrupted (old behavior preserved).
+    // interrupted → failed must NOT advance: the helper documents
+    // "Only allows transitions from 'running' or NULL".
     set_session_run_status(&pool, sid, "failed")
         .await
-        .expect("failed");
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("failed"));
+        .expect("attempted overwrite");
+    assert_eq!(
+        current_status(&pool, sid).await.as_deref(),
+        Some("interrupted"),
+        "terminal→terminal transition must be blocked",
+    );
 
-    // But stops at `'done'`.
+    // done is also a terminal that the helper must refuse to overwrite,
+    // even from another terminal state.
     set_session_run_status(&pool, sid, "done")
         .await
+        .expect("attempted overwrite");
+    assert_eq!(
+        current_status(&pool, sid).await.as_deref(),
+        Some("interrupted"),
+        "terminal→done must also be blocked",
+    );
+
+    // From a fresh `running` row we may transition to `done`.
+    let sid2 = Uuid::new_v4();
+    seed_session(&pool, sid2, "running").await;
+    set_session_run_status(&pool, sid2, "done")
+        .await
         .expect("done");
-    set_session_run_status(&pool, sid, "running")
+    assert_eq!(current_status(&pool, sid2).await.as_deref(), Some("done"));
+
+    // And once `done`, no further transition is permitted (this was already
+    // covered by `IS DISTINCT FROM 'done'`; preserved here as belt-and-
+    // suspenders).
+    set_session_run_status(&pool, sid2, "running")
         .await
         .expect("attempt overwrite done");
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("done"));
+    assert_eq!(current_status(&pool, sid2).await.as_deref(), Some("done"));
 }

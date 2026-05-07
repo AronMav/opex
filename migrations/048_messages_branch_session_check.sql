@@ -24,6 +24,11 @@ BEGIN
     IF NEW.parent_message_id IS NOT NULL THEN
         SELECT session_id INTO parent_session
             FROM messages WHERE id = NEW.parent_message_id;
+        -- parent_session IS NULL means the referenced row no longer exists
+        -- (the FK has ON DELETE SET NULL, so a deleted parent will already
+        -- have nulled out NEW.parent_message_id by the time we get here on
+        -- subsequent updates; this branch is a safety net for INSERTs that
+        -- raced a parent delete and is intentionally permissive).
         IF parent_session IS NOT NULL AND parent_session <> NEW.session_id THEN
             RAISE EXCEPTION
                 'parent_message_id % belongs to session %, not the inserted row''s session %',
