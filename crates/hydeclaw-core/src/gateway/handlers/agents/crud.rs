@@ -7,7 +7,6 @@ use serde_json::{json, Value};
 use std::fs::canonicalize;
 use std::path::PathBuf;
 use std::str::FromStr;
-use uuid::Uuid;
 
 use crate::gateway::clusters::{AgentCore, AuthServices, InfraServices, ChannelBus, ConfigServices, StatusMonitor};
 use crate::config::AgentConfig;
@@ -938,7 +937,7 @@ pub(crate) async fn api_list_approvals(
 pub(crate) async fn api_resolve_approval(
     State(infra): State<InfraServices>,
     State(agents_core): State<AgentCore>,
-    Path(id): Path<Uuid>,
+    Path(id): Path<hydeclaw_types::ids::ApprovalId>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let status = body.get("status").and_then(|v| v.as_str()).unwrap_or("");

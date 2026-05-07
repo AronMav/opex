@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
+use hydeclaw_types::ids::ApprovalId;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -27,8 +28,11 @@ use super::engine::{ApprovalResult, StreamEvent};
 /// `RwLock`. Guards returned by `get()` / `get_mut()` are RAII and MUST NOT be
 /// held across `.await`; the module-level `await_holding_lock` deny lint
 /// enforces this at compile time.
+///
+/// T4: key was `Uuid`, now `ApprovalId` — wire format unchanged because the
+/// newtype is `#[serde(transparent)]`. Hash/Eq/Copy come through `impl_id_newtype!`.
 pub(crate) type ApprovalWaitersMap =
-    Arc<DashMap<Uuid, (tokio::sync::oneshot::Sender<ApprovalResult>, Instant)>>;
+    Arc<DashMap<ApprovalId, (tokio::sync::oneshot::Sender<ApprovalResult>, Instant)>>;
 
 /// Outcome of `request_approval`: tells the caller how to proceed.
 #[derive(Debug)]
@@ -212,7 +216,7 @@ impl ApprovalManager {
             // the EngineEventSender "non-text never dropped" contract.
             if let Err(e) = tx
                 .send_async(StreamEvent::ApprovalNeeded {
-                    approval_id: approval_id.to_string(),
+                    approval_id,
                     tool_name: tool_name.to_string(),
                     tool_input: clean_input,
                     timeout_ms: timeout_secs * 1000,
@@ -304,7 +308,7 @@ impl ApprovalManager {
                 if let Some(tx) = sse_event_tx.lock().await.as_ref()
                     && let Err(e) = tx
                         .send_async(StreamEvent::ApprovalResolved {
-                            approval_id: approval_id.to_string(),
+                            approval_id,
                             action: "timeout_rejected".to_string(),
                             modified_input: None,
                         })

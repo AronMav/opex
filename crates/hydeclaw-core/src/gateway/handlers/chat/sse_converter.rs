@@ -383,9 +383,13 @@ pub(super) async fn run_converter(
                 continue; // Internal event — don't emit SSE
             }
             StreamEvent::ApprovalNeeded { approval_id, tool_name, tool_input, timeout_ms } => {
+                // T4: approval_id is ApprovalId(Uuid). Stringify here so the
+                // wire format stays `"approvalId": "<uuid>"` byte-identical
+                // to the pre-T4 protocol — frontend deserialization is
+                // unchanged.
                 let data = json!({
                     "type": sse_types::APPROVAL_NEEDED,
-                    "approvalId": approval_id,
+                    "approvalId": approval_id.to_string(),
                     "toolName": tool_name,
                     "toolInput": tool_input,
                     "timeoutMs": timeout_ms,
@@ -396,7 +400,7 @@ pub(super) async fn run_converter(
             StreamEvent::ApprovalResolved { approval_id, action, modified_input } => {
                 let data = json!({
                     "type": sse_types::APPROVAL_RESOLVED,
-                    "approvalId": approval_id,
+                    "approvalId": approval_id.to_string(),
                     "action": action,
                     "modifiedInput": modified_input,
                 }).to_string();

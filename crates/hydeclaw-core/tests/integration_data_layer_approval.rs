@@ -12,6 +12,7 @@ mod support;
 use std::time::Duration;
 
 use hydeclaw_core::db::approvals::{create_approval, resolve_approval_strict, ApprovalError};
+use hydeclaw_types::ids::ApprovalId;
 use serde_json::json;
 use support::TestHarness;
 use tokio::time::timeout;
@@ -23,7 +24,7 @@ async fn strict_first_resolve_succeeds_second_is_already_resolved() {
         let harness = TestHarness::new().await.expect("PG");
         let pool = harness.pool();
 
-        let approval_id: Uuid = create_approval(
+        let approval_id: ApprovalId = create_approval(
             pool,
             "char-agent",
             None,
@@ -60,7 +61,7 @@ async fn strict_missing_row_returns_not_found() {
     timeout(Duration::from_secs(60), async {
         let harness = TestHarness::new().await.expect("PG");
         let pool = harness.pool();
-        let random_id = Uuid::new_v4();
+        let random_id = ApprovalId::from(Uuid::new_v4());
         let res = resolve_approval_strict(pool, random_id, "approved", "x").await;
         match res {
             Err(ApprovalError::NotFound { id }) => assert_eq!(id, random_id),
@@ -77,7 +78,7 @@ async fn strict_already_resolved_error_message_includes_status() {
         let harness = TestHarness::new().await.expect("PG");
         let pool = harness.pool();
 
-        let approval_id: Uuid = create_approval(
+        let approval_id: ApprovalId = create_approval(
             pool,
             "char-agent",
             None,

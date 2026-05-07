@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use hydeclaw_types::ids::ApprovalId;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
@@ -13,16 +14,16 @@ use uuid::Uuid;
 #[derive(Debug, thiserror::Error)]
 pub enum ApprovalError {
     #[error("approval {id} not found")]
-    NotFound { id: Uuid },
+    NotFound { id: ApprovalId },
     #[error("approval {id} already resolved (status={status})")]
-    AlreadyResolved { id: Uuid, status: String },
+    AlreadyResolved { id: ApprovalId, status: String },
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
 
 #[derive(Debug, FromRow, Clone)]
 pub struct PendingApproval {
-    pub id: Uuid,
+    pub id: ApprovalId,
     pub agent_id: String,
     pub session_id: Option<Uuid>,
     pub tool_name: String,
@@ -35,6 +36,10 @@ pub struct PendingApproval {
 }
 
 /// Create a new pending approval request.
+///
+/// Returns the [`ApprovalId`] newtype around the DB-allocated UUID. T4 of the
+/// S2 identity-first migration: prior to T4 this returned a bare `Uuid`; the
+/// wire format is unchanged because `ApprovalId` is `#[serde(transparent)]`.
 pub async fn create_approval(
     db: &PgPool,
     agent_id: &str,
@@ -42,8 +47,8 @@ pub async fn create_approval(
     tool_name: &str,
     tool_args: &serde_json::Value,
     context: &serde_json::Value,
-) -> Result<Uuid> {
-    let row = sqlx::query_scalar::<_, Uuid>(
+) -> Result<ApprovalId> {
+    let id: ApprovalId = sqlx::query_scalar::<_, ApprovalId>(
         "INSERT INTO pending_approvals (agent_id, session_id, tool_name, tool_args, context) \
          VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
@@ -55,7 +60,7 @@ pub async fn create_approval(
     .fetch_one(db)
     .await?;
 
-    Ok(row)
+    Ok(id)
 }
 
 /// Phase 63 DATA-04: transactionally resolve an approval with row-level locking.
@@ -77,7 +82,7 @@ pub async fn create_approval(
 /// `integration_approval_race.rs`.
 pub async fn resolve_approval_strict(
     db: &PgPool,
-    id: Uuid,
+    id: ApprovalId,
     status: &str,
     resolved_by: &str,
 ) -> std::result::Result<(), ApprovalError> {
@@ -118,7 +123,7 @@ pub async fn resolve_approval_strict(
 }
 
 /// Get a specific approval by ID.
-pub async fn get_approval(db: &PgPool, id: Uuid) -> Result<Option<PendingApproval>> {
+pub async fn get_approval(db: &PgPool, id: ApprovalId) -> Result<Option<PendingApproval>> {
     let row = sqlx::query_as::<_, PendingApproval>(
         "SELECT * FROM pending_approvals WHERE id = $1",
     )

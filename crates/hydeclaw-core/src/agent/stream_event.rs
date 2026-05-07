@@ -62,15 +62,19 @@ pub enum StreamEvent {
         continuation: bool,
     },
     /// Approval needed: a tool call is waiting for human approval.
+    ///
+    /// `approval_id` is `ApprovalId` (Uuid newtype) post-T4. Wire format on
+    /// the SSE side is unchanged — `sse_converter.rs` calls `.to_string()`
+    /// to produce the legacy `"approvalId": "<uuid>"` field.
     ApprovalNeeded {
-        approval_id: String,
+        approval_id: hydeclaw_types::ids::ApprovalId,
         tool_name: String,
         tool_input: serde_json::Value,
         timeout_ms: u64,
     },
     /// Approval resolved: a pending approval was approved, rejected, or timed out.
     ApprovalResolved {
-        approval_id: String,
+        approval_id: hydeclaw_types::ids::ApprovalId,
         action: String, // "approved" | "rejected" | "timeout_rejected"
         modified_input: Option<serde_json::Value>,
     },
