@@ -262,14 +262,23 @@ pub(super) async fn run_converter(
             StreamEvent::MessageStart { message_id } => {
                 json!({"type": sse_types::START, "messageId": message_id, "agentName": current_responding_agent})
             }
-            StreamEvent::StepStart { step_id, message_id } => {
+            StreamEvent::StepStart { iteration } => {
                 // Boundary between LLM tool-loop iterations. `messageId`
                 // is the pre-allocated DB row UUID for the iteration —
                 // frontend opens a fresh live ChatMessage with this id so
                 // it matches the eventual DB row. Open text block was
                 // already closed by the non-TextDelta guard at the top
                 // of the loop.
-                json!({"type": sse_types::STEP_START, "stepId": step_id, "messageId": message_id, "agentName": current_responding_agent})
+                //
+                // CRITICAL: stepId wire format is `step_{N}` for backward
+                // compat with pre-S2 code (verified at execute.rs — the
+                // pre-S2 producer literally did `format!("step_{}", iteration)`).
+                json!({
+                    "type": sse_types::STEP_START,
+                    "stepId": format!("step_{}", iteration.index),
+                    "messageId": iteration.message_id.to_string(),
+                    "agentName": current_responding_agent
+                })
             }
             StreamEvent::TextDelta(ref text) => {
                 if session_uuid.is_none() && accumulated_text.is_empty() {

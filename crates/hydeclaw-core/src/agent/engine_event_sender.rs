@@ -242,7 +242,12 @@ mod tests {
         let cases = vec![
             StreamEvent::SessionId { session_id: "s1".into(), context_limit: 128_000 },
             StreamEvent::MessageStart { message_id: "m1".into() },
-            StreamEvent::StepStart { step_id: "st1".into(), message_id: String::new() },
+            StreamEvent::StepStart {
+                iteration: hydeclaw_types::ids::IterationId {
+                    index: 0,
+                    message_id: hydeclaw_types::ids::MessageId::from(uuid::Uuid::nil()),
+                },
+            },
             StreamEvent::ToolCallStart { id: "t1".into(), name: "tool".into() },
             StreamEvent::ToolCallArgs { id: "t1".into(), args_text: "{}".into() },
             StreamEvent::ToolResult { id: "t1".into(), result: "ok".into() },
