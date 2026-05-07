@@ -13,6 +13,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use tokio::sync::broadcast;
 use tokio_util::task::TaskTracker;
+use uuid::Uuid;
 
 use crate::agent::channel_actions::{ChannelAction, ChannelActionRouter};
 use crate::agent::engine::SecretsEnvResolver;
@@ -233,6 +234,18 @@ pub struct BackgroundMediaTask {
     pub(crate) tool_headers:   Vec<(String, String)>,
     pub(crate) context:        serde_json::Value,
     pub(crate) agent_name:     String,
+    /// Pre-allocated `messages` row id for the persisted tool result. When
+    /// `Some(_)`, `deliver_to_channel` (after a successful Telegram send)
+    /// prepends a `__file__:{json}\n` marker to that row's `content` so the
+    /// UI inline parser renders the channel-delivered media when the session
+    /// is reloaded in the web UI. `None` for off-the-record paths (subagent /
+    /// openai_compat / cron) — the channel send still happens, the DB
+    /// prepend is just skipped.
+    ///
+    /// Sourced from `_context.tool_message_id`, which is stamped by the
+    /// sequential dispatch branch in `pipeline::parallel` (gated on
+    /// `persist_ctx.is_some()`).
+    pub(crate) tool_message_id: Option<Uuid>,
 }
 
 impl BackgroundMediaTask {
@@ -258,6 +271,25 @@ impl BackgroundMediaTask {
         }
 
         let context = args.get("_context").cloned().unwrap_or(serde_json::Value::Null);
+
+        // Resolve the persisted tool-message row id from `_context`. The
+        // sequential dispatch branch in `pipeline::parallel` stamps this when
+        // `persist_ctx.is_some()`. Absent / unparseable ⇒ None (legitimate
+        // non-persisting path — subagent / openai_compat / cron).
+        let tool_message_id = context
+            .get("tool_message_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| match Uuid::parse_str(s) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::debug!(
+                        error = %e,
+                        raw = %s,
+                        "background media: _context.tool_message_id present but not a UUID; treating as absent"
+                    );
+                    None
+                }
+            });
 
         // Background media bypasses the SSE deadline, but the YAML tool's own
         // per-tool timeout (default 60s) wraps `builder.send()`. Toolgate
@@ -300,6 +332,7 @@ impl BackgroundMediaTask {
             tool_headers,
             context,
             agent_name:     ctx.cfg.agent.name.clone(),
+            tool_message_id,
         }
     }
 
@@ -360,23 +393,43 @@ impl BackgroundMediaTask {
     }
 
     /// Send media bytes to the channel adapter (Telegram / Discord / ...).
+    ///
+    /// On a successful channel send, ALSO save the bytes to `workspace/uploads/`,
+    /// prepend a `__file__:{url, mediaType}\n` marker to the persisted tool
+    /// message row (via [`prepend_message_content`]), and emit a
+    /// `<kind>_ready` notification on `ui_event_tx` so live UI viewers receive
+    /// a bell ping. All three additions are best-effort: failures are logged
+    /// at `warn!` level and do NOT regress the channel-delivery promise (the
+    /// user already received the bytes in Telegram / Discord).
+    ///
+    /// On any non-success channel-send arm, NOTHING after the send is
+    /// attempted — the user already saw the channel error and a bell ping
+    /// would be a lie since there's no URL to point at.
+    ///
+    /// [`prepend_message_content`]: crate::db::sessions::prepend_message_content
     async fn deliver_to_channel(self, bytes: Vec<u8>) {
-        // Destructure to avoid partial-move borrow issues when router is consumed.
-        let BackgroundMediaTask {
-            ca,
-            kind,
-            context,
-            agent_name,
-            channel_router,
-            ..
-        } = self;
+        // Hold onto everything we need post-send BEFORE destructuring the
+        // router out for ownership. Using individual `let` bindings (rather
+        // than a struct destructure) keeps the post-send save/update/notify
+        // path readable without having to thread fields through a helper.
+        let kind = self.kind;
+        let agent_name = self.agent_name.clone();
+        let action = self.ca.action.clone();
+        let context = self.context.clone();
+        let workspace_dir = self.workspace_dir.clone();
+        let upload_key = self.upload_key;
+        let ttl_secs = self.ttl_secs;
+        let db = self.db.clone();
+        let ui_event_tx = self.ui_event_tx.clone();
+        let tool_message_id = self.tool_message_id;
+        let channel_router = self.channel_router;
 
         let router = match channel_router {
             Some(r) => r,
             None => {
                 tracing::warn!(
                     agent = %agent_name,
-                    action = %ca.action,
+                    action = %action,
                     "background media: chat_id present but channel_router is None — dropping"
                 );
                 return;
@@ -389,7 +442,7 @@ impl BackgroundMediaTask {
 
         if router
             .send(ChannelAction {
-                name: ca.action.clone(),
+                name: action.clone(),
                 params: serde_json::json!({ param_key: payload_b64 }),
                 context: context.clone(),
                 reply: reply_tx,
@@ -400,7 +453,7 @@ impl BackgroundMediaTask {
         {
             tracing::warn!(
                 agent = %agent_name,
-                action = %ca.action,
+                action = %action,
                 "background media: channel router closed before send"
             );
             return;
@@ -408,11 +461,26 @@ impl BackgroundMediaTask {
 
         match tokio::time::timeout(std::time::Duration::from_secs(60), reply_rx).await {
             Ok(Ok(Ok(()))) => {
-                tracing::info!(agent = %agent_name, action = %ca.action, "background media: delivered");
+                tracing::info!(agent = %agent_name, action = %action, "background media: delivered");
+                // Channel send succeeded — now mirror the same media into the
+                // session's web-UI representation. Failures here do NOT regress
+                // the channel-delivery success.
+                persist_channel_media_inline(
+                    &workspace_dir,
+                    &bytes,
+                    kind,
+                    &upload_key,
+                    ttl_secs,
+                    &db,
+                    tool_message_id,
+                    ui_event_tx.as_ref(),
+                    &agent_name,
+                )
+                .await;
             }
             Ok(Ok(Err(e))) => {
                 tracing::warn!(
-                    agent = %agent_name, action = %ca.action, error = %e,
+                    agent = %agent_name, action = %action, error = %e,
                     "background media: delivery failed"
                 );
                 send_error_to_channel(
@@ -424,13 +492,13 @@ impl BackgroundMediaTask {
             }
             Ok(Err(_)) => {
                 tracing::warn!(
-                    agent = %agent_name, action = %ca.action,
+                    agent = %agent_name, action = %action,
                     "background media: reply dropped"
                 );
             }
             Err(_) => {
                 tracing::warn!(
-                    agent = %agent_name, action = %ca.action,
+                    agent = %agent_name, action = %action,
                     "background media: delivery timed out (60s)"
                 );
                 send_error_to_channel(
@@ -520,6 +588,94 @@ impl BackgroundMediaTask {
         // UI error path is intentionally absent here: generation errors arrive
         // before any bytes exist, and notify() requires DB access. deliver_to_ui()
         // owns the UI error path and calls notify() locally (Voice only).
+    }
+}
+
+/// After a successful channel send, mirror the same media into the session's
+/// web-UI representation:
+///
+/// 1. Save the bytes to `workspace/uploads/` so the UI has a stable URL.
+/// 2. Prepend `__file__:{url, mediaType}\n` to the persisted tool message row
+///    (only when `tool_message_id` is `Some(_)`) so reloading the session in
+///    the web UI renders the media inline. The `chat-history.ts:196` parser
+///    keys off `FILE_PREFIX`.
+/// 3. Emit a `<kind>_ready` notification so live UI viewers see the bell
+///    ping without needing to reload.
+///
+/// All three steps are best-effort and cascade independently:
+/// - If save fails, neither prepend nor notify fires (no URL ⇒ both would lie).
+/// - If prepend fails, notify still fires (user can find the media via bell).
+/// - If notify fails (broadcast closed, DB unreachable), it's logged-and-skipped.
+///
+/// In every error arm, the channel delivery already happened — failure here
+/// must NOT abort the caller, only log a `warn!`.
+#[allow(clippy::too_many_arguments)]
+async fn persist_channel_media_inline(
+    workspace_dir: &str,
+    bytes: &[u8],
+    kind: MediaKind,
+    upload_key: &[u8; 32],
+    ttl_secs: u64,
+    db: &sqlx::PgPool,
+    tool_message_id: Option<Uuid>,
+    ui_event_tx: Option<&broadcast::Sender<String>>,
+    agent_name: &str,
+) {
+    use crate::agent::pipeline::handlers::save_binary_to_uploads;
+    use crate::gateway::notify;
+
+    let (url, media_type) = match save_binary_to_uploads(
+        workspace_dir,
+        bytes,
+        kind.upload_hint(),
+        upload_key,
+        ttl_secs,
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::warn!(
+                agent = %agent_name, kind = ?kind, error = %e,
+                "background media: post-channel save_to_uploads failed; skipping inline mirror"
+            );
+            return;
+        }
+    };
+
+    if let Some(id) = tool_message_id {
+        let marker_json = serde_json::json!({"url": &url, "mediaType": &media_type}).to_string();
+        let prefix = format!("{}{marker_json}\n", crate::agent::engine::FILE_PREFIX);
+        if let Err(e) = crate::db::sessions::prepend_message_content(db, id, &prefix).await {
+            // Don't return — the bell ping is still useful even if the inline
+            // marker didn't land on the persisted row.
+            tracing::warn!(
+                agent = %agent_name, kind = ?kind, msg_id = %id, error = %e,
+                "background media: prepend_message_content failed; bell ping will still fire"
+            );
+        }
+    } else {
+        tracing::debug!(
+            agent = %agent_name, kind = ?kind,
+            "background media: tool_message_id absent; skipping inline DB prepend"
+        );
+    }
+
+    if let Some(tx) = ui_event_tx
+        && let Err(e) = notify(
+            db,
+            tx,
+            kind.notification_ready_event(),
+            kind.notification_ready_title(),
+            &format!("Подготовлено агентом {agent_name}"),
+            serde_json::json!({"url": url, "mediaType": media_type}),
+        )
+        .await
+    {
+        tracing::warn!(
+            agent = %agent_name, kind = ?kind, error = %e,
+            "background media: notify failed; channel delivery already succeeded"
+        );
     }
 }
 
@@ -857,6 +1013,7 @@ mod tests {
             tool_headers:   vec![],
             context:        context.clone(),
             agent_name:     "Arty".into(),
+            tool_message_id: None,
         }
     }
 
@@ -1048,6 +1205,7 @@ mod tests {
             tool_headers:   vec![],
             context:        context.clone(),
             agent_name:     "Arty".into(),
+            tool_message_id: None,
         }
     }
 
@@ -1157,5 +1315,420 @@ mod tests {
         let task = make_task(&server.uri(), "send_photo", None, context);
 
         task.run().await;
+    }
+
+    // ── deliver_to_channel save+update+notify (QUICK-260508-0dj) ────────────
+    //
+    // These tests cover the post-channel-send mirror introduced for
+    // Task 2: when a Telegram-paired session calls a YAML channel-action
+    // tool, the bytes that successfully reach the channel must ALSO be
+    // saved to uploads, the persisted tool message row prepended with a
+    // `__file__:{json}\n` marker, and a `<kind>_ready` notify emitted —
+    // all best-effort, none allowed to regress the channel-delivery promise.
+
+    /// Variant of `make_task_with_db` that lets the test pin a specific
+    /// `tool_message_id` and a real `ChannelActionRouter` so we can drive the
+    /// channel-send path to success / failure.
+    fn make_task_with_db_router_msg_id(
+        server_url: &str,
+        action: &str,
+        db: sqlx::PgPool,
+        router: Option<ChannelActionRouter>,
+        ctx_json: serde_json::Value,
+        tool_message_id: Option<Uuid>,
+    ) -> (BackgroundMediaTask, broadcast::Receiver<String>) {
+        let (ui_tx, ui_rx) = broadcast::channel(8);
+        let ca = ChannelActionConfig {
+            action: action.to_string(),
+            data_field: "_binary".into(),
+        };
+        let kind = MediaKind::from_action(&ca.action);
+        let task = BackgroundMediaTask {
+            tool:           make_tool(&format!("{server_url}/v1/audio/speech")),
+            args:           serde_json::json!({ "input": "test", "_context": ctx_json }),
+            ca,
+            kind,
+            http_client:    reqwest::Client::new(),
+            resolver:       None,
+            oauth_ctx:      None,
+            channel_router: router,
+            ui_event_tx:    Some(ui_tx),
+            bg_tasks:       Arc::new(TaskTracker::new()),
+            workspace_dir:  std::env::temp_dir().to_string_lossy().into_owned(),
+            db,
+            upload_key:     [0u8; 32],
+            ttl_secs:       3600,
+            tool_headers:   vec![],
+            context:        ctx_json.clone(),
+            agent_name:     "Arty".into(),
+            tool_message_id,
+        };
+        (task, ui_rx)
+    }
+
+    /// Insert a tool message row that the prepend can target. Returns the
+    /// row id so the test can assert on its `content` afterwards.
+    async fn insert_tool_row(pool: &sqlx::PgPool, original: &str) -> Uuid {
+        let session_id = crate::db::sessions::create_new_session(
+            pool,
+            "Arty",
+            "test-user",
+            "telegram",
+        )
+        .await
+        .expect("create_new_session");
+        let row_id = Uuid::new_v4();
+        crate::db::sessions::save_message_ex_with_id(
+            pool,
+            row_id,
+            session_id,
+            "tool",
+            original,
+            None,
+            Some("call_xyz"),
+            Some("Arty"),
+            None,
+            None,
+        )
+        .await
+        .expect("save_message_ex_with_id");
+        row_id
+    }
+
+    async fn fetch_content(pool: &sqlx::PgPool, id: Uuid) -> String {
+        sqlx::query_scalar("SELECT content FROM messages WHERE id = $1")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("messages row exists")
+    }
+
+    #[tokio::test]
+    async fn deliver_to_channel_with_msg_id_none_does_not_save_or_notify() {
+        // Regression guard for the subagent / openai_compat / cron path:
+        // when `tool_message_id` is None, the post-channel-send mirror still
+        // runs (save + notify), but the DB prepend is skipped because there
+        // is no row to target. Channel send must still happen unchanged.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNGfake"))
+            .mount(&server)
+            .await;
+
+        let router = ChannelActionRouter::new();
+        let (_conn_id, mut rx) = router.subscribe("telegram").await;
+        let ctx_json = serde_json::json!({"chat_id": 42, "channel": "telegram"});
+        let (task, _ui_rx) = make_task_with_db_router_msg_id(
+            &server.uri(),
+            "send_photo",
+            fake_db(),
+            Some(router),
+            ctx_json,
+            None, // ← off-the-record path
+        );
+
+        let run = tokio::spawn(task.run());
+        let action = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                loop {
+                    if let Ok(a) = rx.try_recv() {
+                        return a;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            },
+        )
+        .await
+        .expect("send_photo must arrive");
+        assert_eq!(action.name, "send_photo");
+        let _ = action.reply.send(Ok(()));
+        run.await.expect("task completes");
+        // No DB to assert on — the fake_db() pool would never connect anyway.
+        // The point of this test is "no panic" + "channel still sent".
+    }
+
+    #[tokio::test]
+    async fn deliver_to_channel_send_failure_skips_persist_and_notify() {
+        // When the channel send fails (router replies Err), we MUST NOT
+        // attempt save / DB prepend / notify — the user already saw the
+        // channel error via the existing send_error_to_channel path, so
+        // any extra notification would be double-noise.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNGfake"))
+            .mount(&server)
+            .await;
+
+        let router = ChannelActionRouter::new();
+        let (_conn_id, mut rx) = router.subscribe("telegram").await;
+        let ctx_json = serde_json::json!({"chat_id": 42, "channel": "telegram"});
+        let (task, mut ui_rx) = make_task_with_db_router_msg_id(
+            &server.uri(),
+            "send_photo",
+            fake_db(),
+            Some(router),
+            ctx_json,
+            Some(Uuid::new_v4()), // would-be target row
+        );
+
+        let run = tokio::spawn(task.run());
+
+        // 1) The send_photo action arrives — reply with Err to trigger the
+        //    failure arm.
+        let send_action = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                loop {
+                    if let Ok(a) = rx.try_recv() {
+                        return a;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            },
+        )
+        .await
+        .expect("send_photo must arrive");
+        assert_eq!(send_action.name, "send_photo");
+        let _ = send_action.reply.send(Err("channel adapter error".into()));
+
+        // 2) On the failure arm, the existing path emits a send_message
+        //    error — drain it so the test isolates that no notify follows.
+        let _err_action = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            async {
+                loop {
+                    if let Ok(a) = rx.try_recv() {
+                        return a;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            },
+        )
+        .await
+        .ok();
+
+        run.await.expect("task completes");
+
+        // 3) ui_event_tx received NO `<kind>_ready` notification.
+        //    The broadcast channel is empty (or only has unrelated traffic).
+        //    Use try_recv to check — Lagged/Closed/Empty all mean "no notify".
+        match ui_rx.try_recv() {
+            Err(broadcast::error::TryRecvError::Empty)
+            | Err(broadcast::error::TryRecvError::Closed) => {}
+            Ok(payload) => panic!(
+                "no UI notification expected on channel-send failure, got: {payload}"
+            ),
+            Err(broadcast::error::TryRecvError::Lagged(_)) => panic!(
+                "no UI notification expected on channel-send failure (lagged)"
+            ),
+        }
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deliver_to_channel_happy_path_prepends_file_marker(pool: sqlx::PgPool) {
+        // Full happy path: channel send succeeds → save_binary_to_uploads
+        // succeeds → prepend_message_content lands a `__file__:{...}\n`
+        // marker on the persisted tool row. The original content is
+        // preserved at the tail.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNG\r\n\x1a\nfake"))
+            .mount(&server)
+            .await;
+
+        let original = "[SYSTEM] Image dispatched in background; the user will receive a photo message. Do NOT mention image, picture, or generation.";
+        let row_id = insert_tool_row(&pool, original).await;
+
+        let router = ChannelActionRouter::new();
+        let (_conn_id, mut rx) = router.subscribe("telegram").await;
+        let ctx_json = serde_json::json!({"chat_id": 42, "channel": "telegram"});
+        let (task, _ui_rx) = make_task_with_db_router_msg_id(
+            &server.uri(),
+            "send_photo",
+            pool.clone(),
+            Some(router),
+            ctx_json,
+            Some(row_id),
+        );
+
+        let run = tokio::spawn(task.run());
+        let action = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                loop {
+                    if let Ok(a) = rx.try_recv() {
+                        return a;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            },
+        )
+        .await
+        .expect("send_photo must arrive");
+        assert_eq!(action.name, "send_photo");
+        let _ = action.reply.send(Ok(()));
+        run.await.expect("task completes");
+
+        let content = fetch_content(&pool, row_id).await;
+        assert!(
+            content.starts_with(crate::agent::engine::FILE_PREFIX),
+            "prepended content must start with FILE_PREFIX; got: {content}"
+        );
+        assert!(
+            content.ends_with(original),
+            "original content must be preserved at tail; got: {content}"
+        );
+        // Marker JSON must contain a /uploads/ URL and a media-type.
+        let prefix_len = content.find('\n').expect("marker line is newline-terminated");
+        let marker = &content[crate::agent::engine::FILE_PREFIX.len()..prefix_len];
+        let parsed: serde_json::Value =
+            serde_json::from_str(marker).expect("marker must parse as JSON");
+        assert!(
+            parsed.get("url").and_then(|v| v.as_str()).is_some_and(|s| s.starts_with("/uploads/")),
+            "url must point at /uploads/, got: {parsed}"
+        );
+        assert!(
+            parsed.get("mediaType").is_some(),
+            "mediaType must be present, got: {parsed}"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deliver_to_channel_happy_path_emits_image_ready_notify(pool: sqlx::PgPool) {
+        // Same scenario as the prepend test — assert the bell ping side:
+        // a `<kind>_ready` notification row lands in the DB and the
+        // broadcast event fires on `ui_event_tx`.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNGfake"))
+            .mount(&server)
+            .await;
+
+        let row_id = insert_tool_row(&pool, "[SYSTEM] Image dispatched.").await;
+        let router = ChannelActionRouter::new();
+        let (_conn_id, mut rx) = router.subscribe("telegram").await;
+        let ctx_json = serde_json::json!({"chat_id": 42, "channel": "telegram"});
+        let (task, mut ui_rx) = make_task_with_db_router_msg_id(
+            &server.uri(),
+            "send_photo",
+            pool.clone(),
+            Some(router),
+            ctx_json,
+            Some(row_id),
+        );
+
+        let run = tokio::spawn(task.run());
+        let action = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                loop {
+                    if let Ok(a) = rx.try_recv() {
+                        return a;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            },
+        )
+        .await
+        .expect("send_photo must arrive");
+        let _ = action.reply.send(Ok(()));
+        run.await.expect("task completes");
+
+        // 1) DB row created via notify() ⇒ `notifications` has an `image_ready`.
+        assert_notification_inserted(&pool, "image_ready", "Изображение готово").await;
+
+        // 2) UI broadcast fired — payload is JSON with type=notification.
+        let payload = ui_rx
+            .try_recv()
+            .expect("ui_event_tx must receive the notification broadcast");
+        let v: serde_json::Value =
+            serde_json::from_str(&payload).expect("broadcast must be valid JSON");
+        assert_eq!(
+            v.get("type").and_then(|x| x.as_str()),
+            Some("notification"),
+            "broadcast envelope must be `type=notification`, got: {v}"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn deliver_to_channel_save_failure_keeps_channel_send(pool: sqlx::PgPool) {
+        // save_binary_to_uploads failure: channel delivery already happened
+        // (the user has the bytes), so we MUST NOT abort. The DB prepend
+        // never fires (no URL), notify never fires (the bell would be a lie),
+        // but the channel send is preserved and the persisted row is
+        // unchanged.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/speech"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNGfake"))
+            .mount(&server)
+            .await;
+
+        let original = "[SYSTEM] Image dispatched.";
+        let row_id = insert_tool_row(&pool, original).await;
+        let router = ChannelActionRouter::new();
+        let (_conn_id, mut rx) = router.subscribe("telegram").await;
+        let ctx_json = serde_json::json!({"chat_id": 42, "channel": "telegram"});
+        let (mut task, mut ui_rx) = make_task_with_db_router_msg_id(
+            &server.uri(),
+            "send_photo",
+            pool.clone(),
+            Some(router),
+            ctx_json,
+            Some(row_id),
+        );
+        // NUL byte invalidates the path on every OS — save_binary_to_uploads
+        // fails synchronously without writing anything.
+        task.workspace_dir = "\0invalid-path".into();
+
+        let run = tokio::spawn(task.run());
+        let action = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                loop {
+                    if let Ok(a) = rx.try_recv() {
+                        return a;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            },
+        )
+        .await
+        .expect("send_photo must arrive (channel send must NOT be aborted by upcoming save failure)");
+        assert_eq!(action.name, "send_photo");
+        let _ = action.reply.send(Ok(()));
+        run.await.expect("task completes");
+
+        // 1) Persisted row content is UNCHANGED — no `__file__:` marker
+        //    because save failed before prepend could run.
+        let content = fetch_content(&pool, row_id).await;
+        assert_eq!(
+            content, original,
+            "save failure must leave the tool row content intact; got: {content}"
+        );
+
+        // 2) No UI notification fired (the bell would point at no URL).
+        match ui_rx.try_recv() {
+            Err(broadcast::error::TryRecvError::Empty)
+            | Err(broadcast::error::TryRecvError::Closed) => {}
+            Ok(payload) => panic!(
+                "save failure must not emit a notify, got: {payload}"
+            ),
+            Err(broadcast::error::TryRecvError::Lagged(_)) => panic!(
+                "save failure must not emit a notify (lagged)"
+            ),
+        }
+
+        // 3) `notifications` table has 0 rows for this run.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notifications")
+            .fetch_one(&pool)
+            .await
+            .expect("notifications count");
+        assert_eq!(count, 0, "no notification row must be inserted on save failure");
     }
 }
