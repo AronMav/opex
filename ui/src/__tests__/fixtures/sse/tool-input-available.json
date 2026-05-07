@@ -1,0 +1,8 @@
+{
+  "type": "tool-input-available",
+  "toolCallId": "tc-abc-1",
+  "toolName": "code_exec",
+  "input": {
+    "cmd": "ls"
+  }
+}

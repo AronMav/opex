@@ -1,0 +1,5 @@
+{
+  "type": "tool-input-delta",
+  "toolCallId": "tc-abc-1",
+  "inputTextDelta": "{\"cmd\": \"ls\"}"
+}

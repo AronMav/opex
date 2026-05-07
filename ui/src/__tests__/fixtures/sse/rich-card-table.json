@@ -1,0 +1,21 @@
+{
+  "type": "rich-card",
+  "cardType": "table",
+  "data": {
+    "title": "Users",
+    "columns": [
+      "id",
+      "name"
+    ],
+    "rows": [
+      [
+        1,
+        "Alice"
+      ],
+      [
+        2,
+        "Bob"
+      ]
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "type": "data-session-id",
+  "data": {
+    "sessionId": "sess-abc-123",
+    "contextLimit": 8000
+  },
+  "transient": true
+}
