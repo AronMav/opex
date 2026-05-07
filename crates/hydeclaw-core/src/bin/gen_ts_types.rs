@@ -50,6 +50,7 @@ fn main() {
     let dest_paths: &[(&str, &str, usize)] = &[
         ("ui",       "ui/src/types/api.generated.ts",         34),
         ("channels", "channels/src/types.generated.ts",        6),
+        ("ui-sse",   "ui/src/types/sse.generated.ts",          8),
     ];
 
     let header = "// @generated — do not edit by hand.\n\
