@@ -1,3 +1,4 @@
+pub mod approvals;
 pub mod channels;
 pub mod ids;
 pub mod sse;

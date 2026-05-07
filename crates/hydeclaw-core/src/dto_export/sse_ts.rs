@@ -10,6 +10,8 @@
 //! See docs/superpowers/specs/2026-05-07-s6.5-sse-codegen-design.md.
 
 #[allow(unused_imports)]
+use hydeclaw_types::approvals::ApprovalAction;
+#[allow(unused_imports)]
 use hydeclaw_types::sse::{
     DataSessionIdPayload, MetricCard, MetricTrend, RichCardData, SseEvent,
     SyncStatus, TableCard, UsagePayload,
@@ -23,3 +25,4 @@ crate::register_ts_dto!(MetricCard,           dest = "ui-sse");
 crate::register_ts_dto!(MetricTrend,          dest = "ui-sse");
 crate::register_ts_dto!(SyncStatus,           dest = "ui-sse");
 crate::register_ts_dto!(UsagePayload,         dest = "ui-sse");
+crate::register_ts_dto!(ApprovalAction,       dest = "ui-sse");

@@ -2,6 +2,7 @@
 //! Extracted from engine.rs as a free function taking &CommandContext.
 
 use super::CommandContext;
+use hydeclaw_types::approvals::ApprovalAction;
 use hydeclaw_types::ids::ApprovalId;
 use crate::agent::engine::{ApprovalResult, StreamEvent};
 
@@ -60,12 +61,12 @@ pub async fn resolve_approval(
     // ApprovalResolved is non-text and MUST be delivered (the client is
     // actively waiting on this event); use send_async to honor the
     // EngineEventSender "non-text never dropped" contract.
-    let action_str = if approved { "approved" } else { "rejected" };
+    let action = if approved { ApprovalAction::Approved } else { ApprovalAction::Rejected };
     if let Some(tx) = ctx.tex.sse_event_tx.lock().await.as_ref()
         && let Err(e) = tx
             .send_async(StreamEvent::ApprovalResolved {
                 approval_id,
-                action: action_str.to_string(),
+                action,
                 modified_input: modified_input.clone(),
             })
             .await
