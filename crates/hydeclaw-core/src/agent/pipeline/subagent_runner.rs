@@ -226,10 +226,19 @@ pub async fn run_subagent_with_session(
         let subagent_context = serde_json::json!({ "subagent_depth": ctx.subagent_depth });
         // Subagent runner does not persist tool messages to the DB
         // (subagent context is in-memory only) — pass `None`.
+        // T3: subagent context is in-memory only, so parallel_batch_id has no
+        // observable effect; allocate when ≥2 tool calls for consistency.
+        let parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId> =
+            if response.tool_calls.len() >= 2 {
+                Some(hydeclaw_types::ids::ParallelBatchId::new())
+            } else {
+                None
+            };
         let outcome = executor.execute_tool_calls_partitioned(
             &response.tool_calls, &subagent_context, effective_session_id, crate::agent::channel_kind::channel::INTER_AGENT,
             messages.iter().map(|m| m.content.len()).sum(),
             &mut detector, loop_config.detect_loops, None,
+            parallel_batch_id,
         ).await;
         for batch in &outcome.results {
             messages.push(Message {

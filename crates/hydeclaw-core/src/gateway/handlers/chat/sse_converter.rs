@@ -316,14 +316,20 @@ pub(super) async fn run_converter(
                     }
                 continue;
             }
-            StreamEvent::ToolCallStart { id, name } => {
+            StreamEvent::ToolCallStart { id, name, parallel_batch_id } => {
                 tool_name_map.insert(id.clone(), name.clone());
-                json!({
+                let mut payload = json!({
                     "type": sse_types::TOOL_INPUT_START,
                     "toolCallId": id,
                     "toolName": name,
                     "agentName": current_responding_agent,
-                })
+                });
+                // T3: emit parallelBatchId only when present so single-tool
+                // turns stay byte-identical to the pre-T3 wire format.
+                if let Some(batch) = parallel_batch_id {
+                    payload["parallelBatchId"] = json!(batch.to_string());
+                }
+                payload
             }
             StreamEvent::ToolCallArgs { id, args_text } => {
                 let delta_data = json!({

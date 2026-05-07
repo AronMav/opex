@@ -248,7 +248,11 @@ mod tests {
                     message_id: hydeclaw_types::ids::MessageId::from(uuid::Uuid::nil()),
                 },
             },
-            StreamEvent::ToolCallStart { id: "t1".into(), name: "tool".into() },
+            StreamEvent::ToolCallStart {
+                id: "t1".into(),
+                name: "tool".into(),
+                parallel_batch_id: None,
+            },
             StreamEvent::ToolCallArgs { id: "t1".into(), args_text: "{}".into() },
             StreamEvent::ToolResult { id: "t1".into(), result: "ok".into() },
             StreamEvent::StepFinish { step_id: "st1".into(), finish_reason: "stop".into() },

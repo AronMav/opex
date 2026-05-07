@@ -169,10 +169,20 @@ pub async fn handle_openai(
 
         // OpenAI-compat path uses Uuid::nil() session_id and does NO DB
         // persistence — pass `None` for `persist_ctx`.
+        // T3: openai_compat doesn't persist tool rows, so parallel_batch_id
+        // is harmless; pre-allocate when ≥2 tool calls so the SSE-equivalent
+        // path (none here) would still see consistent semantics.
+        let parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId> =
+            if response.tool_calls.len() >= 2 {
+                Some(hydeclaw_types::ids::ParallelBatchId::new())
+            } else {
+                None
+            };
         let outcome = executor.execute_tool_calls_partitioned(
             &response.tool_calls, &serde_json::Value::Null, uuid::Uuid::nil(), crate::agent::channel_kind::channel::INTER_AGENT,
             messages.iter().map(|m| m.content.len()).sum(),
             &mut detector, loop_config.detect_loops, None,
+            parallel_batch_id,
         ).await;
         for batch in &outcome.results {
             messages.push(Message {
