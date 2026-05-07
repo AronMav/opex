@@ -129,6 +129,12 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      - name: TypeScript strict check
+        # tsc --noEmit gates merges on type-correctness. `bun test`
+        # uses the Bun TS runtime which is more permissive than tsc, so
+        # this is the only place strict types are enforced.
+        run: npx tsc --noEmit
+
       - name: Test
         # Bun test runner — covers driver factories, formatting prompts,
         # session loop helpers. No external services required.
