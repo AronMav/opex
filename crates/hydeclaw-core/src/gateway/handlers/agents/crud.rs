@@ -672,13 +672,21 @@ pub(crate) async fn api_update_agent(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
     };
 
-    // Write new TOML (to new path if renaming)
     let target_path = agent_config_path(&new_name);
-    if let Err(e) = std::fs::write(&target_path, &toml_str) {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
-    }
+    // For non-rename updates, target_path == path, so writing now is safe:
+    // even if the DB step (none in this branch) failed, the file is the only
+    // state being changed. For renames we DEFER the file write until after
+    // the DB transaction commits — otherwise a transaction rollback (or a
+    // crash mid-rename) leaves a new TOML on disk while every `agent_id` in
+    // the DB still references the old name, and the next startup loads two
+    // agents with desynced state.
+    if !is_rename
+        && let Err(e) = std::fs::write(&target_path, &toml_str) {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
+        }
 
-    // If renaming, update DB references first, then remove old TOML
+    // If renaming, update DB references first, then write the new TOML, then
+    // remove the old one.
     if is_rename {
         // Update agent_id in all DB tables (within a transaction for consistency).
         // Table catalogue + UPDATE loop live in `rename_agent_id_in_tables`;
@@ -722,7 +730,18 @@ pub(crate) async fn api_update_agent(
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("transaction commit failed: {}", e)}))).into_response();
         }
 
-        // Only delete old TOML after DB commit succeeds
+        // Now that the DB transaction is durable, write the new TOML and
+        // remove the old one. If the new write fails after commit, the DB
+        // already references new_name; we log loudly but cannot easily roll
+        // back. (Pre-tx file write, by contrast, leaves orphaned configs on
+        // any DB failure — a much more common path.)
+        if let Err(e) = std::fs::write(&target_path, &toml_str) {
+            tracing::error!(
+                old_name = %name, new_name = %new_name, error = %e,
+                "rename DB committed but new TOML write failed — DB is the source of truth, restore the file from existing_cfg",
+            );
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename committed in DB but new TOML write failed: {}", e)}))).into_response();
+        }
         let _ = std::fs::remove_file(&path);
 
         // Rename workspace directory

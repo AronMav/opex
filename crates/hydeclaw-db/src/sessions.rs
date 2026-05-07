@@ -521,6 +521,33 @@ pub async fn update_message_step_id(
     Ok(())
 }
 
+/// Prepend `prefix` to an existing message row's `content` column.
+///
+/// Used by `BackgroundMediaTask::deliver_to_channel` to prepend a
+/// `__file__:{json}\n` marker so the UI inline parser
+/// (`chat-history.ts:196`) renders the channel-delivered media as an inline
+/// image / audio / video element when the session is reloaded in the web UI.
+///
+/// **Idempotency:** safe against retries ONLY when the prefix is the same on
+/// every call. Callers MUST NOT call this twice with different prefixes for
+/// the same row, or the content will be doubly-prefixed.
+///
+/// **No-op on missing row:** matches the [`update_message_step_id`] contract.
+/// The persist insert spawns detached, so this prepend may fire while the
+/// insert is still pending — a 0-row UPDATE is not an error.
+pub async fn prepend_message_content(
+    db: &PgPool,
+    id: Uuid,
+    prefix: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE messages SET content = $1 || content WHERE id = $2")
+        .bind(prefix)
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 
 
 /// Load messages for a session. If `limit` is `Some`, returns at most that many rows.
@@ -662,10 +689,14 @@ pub async fn get_session_run_status(db: &PgPool, session_id: Uuid) -> Result<Opt
 /// SQL level. `claim_session_running` keeps its own looser guard because it
 /// must allow soft-terminal → running re-entry.
 pub async fn set_session_run_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<()> {
+    // Match the doc-comment semantics in SQL: only `running` or NULL may
+    // transition. Previously the WHERE was `IS DISTINCT FROM 'done'`, which
+    // also permitted `failed → done`, `interrupted → failed`, etc. — those
+    // are exactly the terminal→terminal jumps we want to block.
     sqlx::query(
         "UPDATE sessions SET run_status = $1 \
          WHERE id = $2 \
-           AND run_status IS DISTINCT FROM 'done'"
+           AND (run_status IS NULL OR run_status = 'running')"
     )
         .bind(status)
         .bind(session_id)
