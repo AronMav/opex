@@ -505,17 +505,25 @@ pub(crate) async fn api_regenerate_webhook_secret(
 ) -> impl IntoResponse {
     use rand::Rng;
     let new_secret = hex::encode(rand::rng().random::<[u8; 32]>());
-    let result = sqlx::query("UPDATE webhooks SET secret = $1 WHERE id = $2")
+    // RETURNING name so we can drop the throttle cache entry — otherwise an
+    // in-flight requester that just locked the webhook out under the OLD
+    // secret would stay locked even after rotation, and stale entries from
+    // pre-rotation lockouts could shadow legitimate retries with the new
+    // secret.
+    let result: Result<Option<(String,)>, _> = sqlx::query_as(
+        "UPDATE webhooks SET secret = $1 WHERE id = $2 RETURNING name",
+    )
         .bind(&new_secret)
         .bind(id)
-        .execute(&state.db)
+        .fetch_optional(&state.db)
         .await;
     match result {
-        Ok(r) if r.rows_affected() > 0 => {
-            tracing::info!(webhook_id = %id, "webhook secret regenerated");
+        Ok(Some((name,))) => {
+            webhook_auth_success(&name);
+            tracing::info!(webhook_id = %id, webhook_name = %name, "webhook secret regenerated");
             Json(json!({"ok": true, "secret": new_secret})).into_response()
         }
-        Ok(_) => (StatusCode::NOT_FOUND, Json(json!({"error": "webhook not found"}))).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"error": "webhook not found"}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
     }
 }

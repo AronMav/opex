@@ -28,7 +28,14 @@ use zeroize::Zeroizing;
 pub struct SecretsManager {
     cipher: Arc<ChaCha20Poly1305>,
     db: PgPool,
-    cache: Arc<RwLock<HashMap<(String, String), String>>>,
+    /// Plaintext-secret cache. Values are wrapped in `Zeroizing` so the
+    /// underlying buffer is wiped when a cache entry is removed, replaced, or
+    /// the whole map is dropped. Doesn't protect cloned `String` returns to
+    /// callers — those flow through application code as plain `String` — but
+    /// it removes the always-on plaintext residue inside the manager itself
+    /// (relevant for coredump / live-memory snapshots where we want the
+    /// cache's working set to disappear after rotation/delete).
+    cache: Arc<RwLock<HashMap<(String, String), Zeroizing<String>>>>,
     /// Phase 64 SEC-03: retained for HKDF-based key derivation (e.g. upload HMAC).
     /// NEVER exposed publicly — every accessor MUST return a DERIVED key and the
     /// raw bytes must not leave this module. Adding a `pub fn master_key_bytes()`
@@ -148,7 +155,7 @@ impl SecretsManager {
             match self.cipher.decrypt(nonce, encrypted.as_ref()) {
                 Ok(plaintext) => match String::from_utf8(plaintext) {
                     Ok(value) => {
-                        cache.insert((name, scope), value);
+                        cache.insert((name, scope), Zeroizing::new(value));
                         count += 1;
                     }
                     Err(e) => {
@@ -167,7 +174,7 @@ impl SecretsManager {
     pub async fn get(&self, name: &str) -> Option<String> {
         let cache = self.cache.read().await;
         if let Some(val) = cache.get(&(name.to_string(), String::new())) {
-            return Some(val.clone());
+            return Some(val.as_str().to_string());
         }
         drop(cache);
         std::env::var(name).ok()
@@ -181,13 +188,13 @@ impl SecretsManager {
         let cache = self.cache.read().await;
         if !scope.is_empty()
             && let Some(val) = cache.get(&(name.to_string(), scope.to_string())) {
-            return Some(val.clone());
+            return Some(val.as_str().to_string());
         }
         if let Some(val) = cache.get(&(name.to_string(), String::new())) {
             if !scope.is_empty() {
                 tracing::debug!(secret = %name, scope = %scope, "scoped secret not found, using global fallback");
             }
-            return Some(val.clone());
+            return Some(val.as_str().to_string());
         }
         drop(cache);
         if let Ok(val) = std::env::var(name) {
@@ -201,7 +208,9 @@ impl SecretsManager {
 
     /// Get a global secret value from cache only (no env fallback).
     pub async fn get_strict(&self, name: &str) -> Option<String> {
-        self.cache.read().await.get(&(name.to_string(), String::new())).cloned()
+        self.cache.read().await
+            .get(&(name.to_string(), String::new()))
+            .map(|v| v.as_str().to_string())
     }
 
     /// Export all secrets as raw encrypted blobs (for backup).
@@ -214,7 +223,7 @@ impl SecretsManager {
             .map(|((name, scope), value)| PlaintextSecret {
                 name: name.clone(),
                 scope: scope.clone(),
-                value: value.clone(),
+                value: value.as_str().to_string(),
             })
             .collect())
     }
@@ -289,7 +298,7 @@ impl SecretsManager {
         .execute(&self.db)
         .await
         .context("failed to store secret in DB")?;
-        cache.insert((name.to_string(), scope.to_string()), value.to_string());
+        cache.insert((name.to_string(), scope.to_string()), Zeroizing::new(value.to_string()));
         drop(cache);
 
         if scope.is_empty() {
