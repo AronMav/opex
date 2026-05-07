@@ -123,7 +123,7 @@ pub(crate) fn row_to_message(row: &crate::db::sessions::MessageRow) -> Message {
         tool_calls,
         tool_call_id: row.tool_call_id.clone(),
         thinking_blocks,
-        db_id: Some(row.id),
+        db_id: Some(hydeclaw_types::ids::MessageId::from(row.id)),
     }
 }
 

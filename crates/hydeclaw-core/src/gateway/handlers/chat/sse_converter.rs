@@ -260,7 +260,9 @@ pub(super) async fn run_converter(
                 json!({"type": sse_types::DATA_SESSION_ID, "data": {"sessionId": sid, "contextLimit": context_limit}, "transient": true})
             }
             StreamEvent::MessageStart { message_id } => {
-                json!({"type": sse_types::START, "messageId": message_id, "agentName": current_responding_agent})
+                // S2 T5: `message_id` is `MessageId` (Uuid newtype). Wire format
+                // preserved via `.to_string()` (delegates to inner Uuid Display).
+                json!({"type": sse_types::START, "messageId": message_id.to_string(), "agentName": current_responding_agent})
             }
             StreamEvent::StepStart { iteration } => {
                 // Boundary between LLM tool-loop iterations. `messageId`

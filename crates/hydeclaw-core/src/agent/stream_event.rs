@@ -20,7 +20,11 @@ pub enum StreamEvent {
     /// Session ID resolved/created by `build_context` — emitted first so the UI can track it.
     /// `context_limit` is the resolved token budget for this model (from /api/show or heuristic).
     SessionId { session_id: String, context_limit: u32 },
-    MessageStart { message_id: String },
+    /// First-iteration legacy event — pre-allocated assistant message id.
+    /// `message_id` is `MessageId` (Uuid newtype) post-T5. Wire format is
+    /// unchanged: `sse_converter.rs` calls `.to_string()` to produce the
+    /// legacy `"messageId": "<uuid>"` field.
+    MessageStart { message_id: hydeclaw_types::ids::MessageId },
     /// `iteration` carries the (index, message_id) pair: `index` is the
     /// 0-based tool-loop iteration number; `message_id` is the pre-allocated
     /// UUID for the assistant DB row this iteration will produce. Frontend

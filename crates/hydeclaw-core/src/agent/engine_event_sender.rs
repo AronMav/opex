@@ -241,7 +241,7 @@ mod tests {
 
         let cases = vec![
             StreamEvent::SessionId { session_id: "s1".into(), context_limit: 128_000 },
-            StreamEvent::MessageStart { message_id: "m1".into() },
+            StreamEvent::MessageStart { message_id: hydeclaw_types::ids::MessageId::from(uuid::Uuid::nil()) },
             StreamEvent::StepStart {
                 iteration: hydeclaw_types::ids::IterationId {
                     index: 0,
