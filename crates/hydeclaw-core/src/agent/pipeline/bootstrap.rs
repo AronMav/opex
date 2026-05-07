@@ -119,7 +119,11 @@ pub async fn bootstrap<S: EventSink>(
             anyhow::bail!("session {} not claimable after retry; bootstrap aborted", session_id);
         }
         Err(e) => {
-            tracing::warn!(session_id = %session_id, error = %e, "claim_session_with_retry failed");
+            // Must propagate: continuing without a successful claim allows two
+            // concurrent SSE handlers to race on the same session (both write
+            // WAL "running", both persist assistant messages).
+            tracing::error!(session_id = %session_id, error = %e, "claim_session_with_retry failed; aborting bootstrap");
+            return Err(e.into());
         }
     }
 
