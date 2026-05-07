@@ -8,6 +8,7 @@ use crate::memory::EmbeddingService;
 use crate::tools::semantic_cache::SemanticCache;
 use crate::tools::yaml_tools::YamlToolDef;
 use hydeclaw_types::ToolCall;
+use hydeclaw_types::ids::ParallelBatchId;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -211,6 +212,7 @@ pub async fn execute_tool_calls_partitioned(
     session_tool_state: Option<Arc<crate::agent::dispatcher::SessionToolState>>,
     promotion_max: u32,
     mcp: Option<&crate::mcp::McpRegistry>,
+    parallel_batch_id: Option<ParallelBatchId>,
 ) -> BatchOutcome {
     // ── Dispatcher rewrite (Task 11) ─────────────────────────────────────────
     //
@@ -271,6 +273,12 @@ pub async fn execute_tool_calls_partitioned(
         .iter()
         .map(|(tc, via)| (tc.id.clone(), *via))
         .collect();
+
+    // T3: ParallelBatchId is provided by the caller (`execute.rs`) and
+    // threaded into `messages.parallel_batch_id` for tools in the parallel
+    // join_all. See spec
+    // `docs/superpowers/specs/2026-05-07-s2-identity-first-stream-objects-design.md`
+    // (T3) for NULL semantics.
 
     // Hold onto the original input slice — the final BatchOutcome.results must
     // be ordered by the original `tool_calls` input (denied + dispatched, by
@@ -360,6 +368,15 @@ pub async fn execute_tool_calls_partitioned(
     };
 
     // 4a. Parallel batch
+    //
+    // T3: stamp every tool in this join_all with the caller-supplied
+    // `parallel_batch_id` IF parallel_indices has ≥2 tools. Single-parallel
+    // batches stay None on the persisted row (a batch of one is not a batch).
+    let active_batch_id: Option<ParallelBatchId> = if parallel_indices.len() >= 2 {
+        parallel_batch_id
+    } else {
+        None
+    };
     if !parallel_indices.is_empty() {
         for &i in &parallel_indices {
             let _ = crate::db::session_wal::log_event(
@@ -563,6 +580,7 @@ pub async fn execute_tool_calls_partitioned(
                     &tool_calls[i].id,
                     &result,
                     parent_for_this,
+                    active_batch_id,
                 );
             }
         }
@@ -696,6 +714,8 @@ pub async fn execute_tool_calls_partitioned(
 
         // Durable persist for this sequential tool. Detached so it survives
         // parent-task cancellation between here and `execute()` returning.
+        // T3: sequential tools are by definition not part of a parallel
+        // batch — pass `None` for parallel_batch_id.
         if let Some(pctx) = persist_ctx {
             let new_id = Uuid::new_v4();
             persisted_ids[i] = Some(new_id);
@@ -707,6 +727,7 @@ pub async fn execute_tool_calls_partitioned(
                 &tool_calls[i].id,
                 &res,
                 chain_parent,
+                None,
             );
             chain_parent = Some(new_id);
         }
@@ -803,7 +824,11 @@ fn spawn_persist_message_row(
     thinking_blocks_json: Option<&serde_json::Value>,
     tool_call_id: Option<&str>,
     parent_id: Option<Uuid>,
+    parallel_batch_id: Option<ParallelBatchId>,
 ) {
+    // Clone db once for the parallel_batch_id UPDATE branch below — the main
+    // INSERT branch consumes its own owned `db` clone via `async move`.
+    let db_for_batch = db.clone();
     let db = db.clone();
     let agent_name = agent_name.to_string();
     let content = content.to_string();
@@ -866,11 +891,54 @@ fn spawn_persist_message_row(
             );
         }
     });
+
+    // T3: separately UPDATE parallel_batch_id when present. Mirrors the
+    // step_id pattern (own detached spawn, tiny lead-in sleep, retry on
+    // transient errors, non-fatal on final failure). Kept off the main INSERT
+    // signature so legacy callers (finalize, bootstrap) don't need to change.
+    if let Some(batch) = parallel_batch_id {
+        let db_clone = db_for_batch;
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            for attempt in 0..3u32 {
+                let res = sqlx::query(
+                    "UPDATE messages SET parallel_batch_id = $1 WHERE id = $2",
+                )
+                .bind(batch.as_uuid())
+                .bind(id)
+                .execute(&db_clone)
+                .await;
+                match res {
+                    Ok(_) => return,
+                    Err(_) if attempt < 2 => {
+                        tokio::time::sleep(
+                            std::time::Duration::from_millis(50 * (1 << attempt)),
+                        )
+                        .await;
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            error = %e,
+                            msg_id = %id,
+                            "parallel_batch_id update failed (non-fatal)"
+                        );
+                        return;
+                    }
+                }
+            }
+        });
+    }
 }
 
 /// Spawn a fire-and-forget tokio task that persists a single tool result row
 /// to the `messages` table. Thin wrapper over [`spawn_persist_message_row`]
 /// fixing `role = "tool"` and `tool_calls_json = thinking_blocks_json = None`.
+///
+/// `parallel_batch_id` — `Some(_)` when this tool ran in a parallel batch
+/// (≥2 concurrent tools in one turn); `None` for sequential / single-tool
+/// turns. Stored in `messages.parallel_batch_id` (m047) via a follow-up
+/// UPDATE inside `spawn_persist_message_row`.
+#[allow(clippy::too_many_arguments)]
 fn spawn_persist_tool_message(
     db: &sqlx::PgPool,
     id: Uuid,
@@ -879,6 +947,7 @@ fn spawn_persist_tool_message(
     tool_call_id: &str,
     content: &str,
     parent_id: Option<Uuid>,
+    parallel_batch_id: Option<ParallelBatchId>,
 ) {
     spawn_persist_message_row(
         db,
@@ -891,6 +960,7 @@ fn spawn_persist_tool_message(
         None,
         Some(tool_call_id),
         parent_id,
+        parallel_batch_id,
     );
 }
 
@@ -934,6 +1004,7 @@ pub(crate) fn spawn_persist_assistant_message(
         thinking_blocks_json,
         None,
         parent_id,
+        None, // assistant rows are never part of a parallel tool batch
     );
     if let Some(step) = step_id {
         let db_clone = db.clone();

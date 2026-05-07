@@ -161,6 +161,7 @@ async fn nontext_events_are_never_dropped_under_mixed_burst() {
                     .send(StreamEvent::ToolCallStart {
                         id: format!("tc{i}"),
                         name: "tool".into(),
+                        parallel_batch_id: None,
                     })
                     .await
                     .expect("toolcall");

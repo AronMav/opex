@@ -696,11 +696,26 @@ pub async fn execute<S: EventSink>(
         last_msg_id = iter_msg_id;
 
         // 9. Emit ToolCallStart + ToolCallArgs for each tool (UI feedback)
+        //
+        // T3: allocate one ParallelBatchId per turn IF this turn has ≥2 tool
+        // calls (the threshold the spec calls out). Stamped onto every
+        // ToolCallStart SSE event AND threaded into `execute_batch` so the
+        // persistence layer can attach it to `messages.parallel_batch_id`
+        // for tools that actually run in the parallel `join_all`. Single
+        // tool turns leave it None — wire format stays byte-identical to
+        // pre-T3.
+        let parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId> =
+            if response.tool_calls.len() >= 2 {
+                Some(hydeclaw_types::ids::ParallelBatchId::new())
+            } else {
+                None
+            };
         for tc in &response.tool_calls {
             let _ = sink
                 .emit(PipelineEvent::Stream(StreamEvent::ToolCallStart {
                     id: tc.id.clone(),
                     name: tc.name.clone(),
+                    parallel_batch_id,
                 }))
                 .await;
             let args_text = serde_json::to_string(&tc.arguments).unwrap_or_default();
@@ -754,6 +769,7 @@ pub async fn execute<S: EventSink>(
                 &mut loop_detector,
                 loop_config.detect_loops,
                 Some(&persist_ctx),
+                parallel_batch_id,
             )
             .await;
         // Always emit ToolResult for completed tools, even if a loop break

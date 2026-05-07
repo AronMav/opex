@@ -38,6 +38,7 @@ pub trait ToolExecutor: Send + Sync {
         detector: &mut LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
+        parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
     ) -> crate::agent::pipeline::parallel::BatchOutcome;
 }
 
@@ -60,6 +61,7 @@ pub(crate) trait ToolExecutorDeps: Send + Sync {
         detector: &mut LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
+        parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
     ) -> crate::agent::pipeline::parallel::BatchOutcome;
 }
 
@@ -196,6 +198,7 @@ impl ToolExecutor for DefaultToolExecutor {
         detector: &mut LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
+        parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
     ) -> crate::agent::pipeline::parallel::BatchOutcome {
         // Weak upgrade is structurally safe: active requests hold a strong Arc<AgentEngine>
         // from the spawned task in chat.rs, so the engine cannot be dropped mid-request.
@@ -212,6 +215,7 @@ impl ToolExecutor for DefaultToolExecutor {
                 detector,
                 detect_loops,
                 persist_ctx,
+                parallel_batch_id,
             )
             .await
     }

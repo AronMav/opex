@@ -33,7 +33,17 @@ pub enum StreamEvent {
     /// `sse_converter.rs`, NOT via Serde derive.
     StepStart { iteration: hydeclaw_types::ids::IterationId },
     TextDelta(String),
-    ToolCallStart { id: String, name: String },
+    /// `parallel_batch_id` — `Some(id)` when this tool call belongs to a
+    /// parallel batch (≥2 tool calls executed concurrently in one turn);
+    /// `None` for sequential / single-tool turns. Frontend ignores it
+    /// initially; analytics queries `messages.parallel_batch_id` (m047)
+    /// to group tools that ran in the same batch. See spec
+    /// `docs/superpowers/specs/2026-05-07-s2-identity-first-stream-objects-design.md` (T3).
+    ToolCallStart {
+        id: String, // (will become ToolCallId in T6)
+        name: String,
+        parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
+    },
     ToolCallArgs { id: String, args_text: String },
     ToolResult { id: String, result: String },
     StepFinish { step_id: String, finish_reason: String },

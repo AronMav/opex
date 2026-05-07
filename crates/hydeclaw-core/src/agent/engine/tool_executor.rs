@@ -94,6 +94,7 @@ impl AgentEngine {
         detector: &mut LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
+        parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
     ) -> crate::agent::pipeline::parallel::BatchOutcome {
         // Load YAML tools (cached for 30s)
         let yaml_tools: std::sync::Arc<std::collections::HashMap<String, crate::tools::yaml_tools::YamlToolDef>> = {
@@ -155,6 +156,7 @@ impl AgentEngine {
             session_tool_state,
             promotion_max,
             self.mcp().as_deref(),
+            parallel_batch_id,
         )
         .await
     }
@@ -193,6 +195,7 @@ impl crate::agent::tool_executor::ToolExecutorDeps for AgentEngine {
         detector: &mut crate::agent::tool_loop::LoopDetector,
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
+        parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
     ) -> crate::agent::pipeline::parallel::BatchOutcome {
         self.execute_tool_calls_partitioned(
             tool_calls,
@@ -203,6 +206,7 @@ impl crate::agent::tool_executor::ToolExecutorDeps for AgentEngine {
             detector,
             detect_loops,
             persist_ctx,
+            parallel_batch_id,
         )
         .await
     }

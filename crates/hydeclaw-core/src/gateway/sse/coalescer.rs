@@ -162,7 +162,11 @@ mod tests {
         raw_tx.send(StreamEvent::TextDelta("abc".into())).await.unwrap();
         raw_tx.send(StreamEvent::TextDelta("def".into())).await.unwrap();
         raw_tx
-            .send(StreamEvent::ToolCallStart { id: "t1".into(), name: "tool".into() })
+            .send(StreamEvent::ToolCallStart {
+                id: "t1".into(),
+                name: "tool".into(),
+                parallel_batch_id: None,
+            })
             .await
             .unwrap();
         drop(raw_tx);
