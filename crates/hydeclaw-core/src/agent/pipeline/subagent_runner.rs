@@ -143,9 +143,29 @@ pub async fn run_subagent_with_session(
         }
     };
     if !dispatch_for_subagent {
-        available_tools.extend(yaml_tools.into_iter().map(|t| t.to_tool_definition()));
+        // Subagent-specific deny list: SUBAGENT_DENIED_TOOLS plus the
+        // parent's `delegation.blocked_tools_extra` (or
+        // `blocked_tools_override` if non-empty). `internal_tool_definitions_for_subagent`
+        // already applies this to system tools; we MUST also apply it to
+        // YAML and MCP tools here, otherwise a subagent can pull a YAML
+        // tool whose name collides with the parent's deny entry (e.g. a
+        // user-defined `cron` YAML wrapper bypassing SUBAGENT_DENIED_TOOLS).
+        let denied_for_subagent = crate::agent::pipeline::subagent::compute_denied_tools(
+            &executor.cfg().agent.delegation,
+        );
+        let denied_set: std::collections::HashSet<&str> =
+            denied_for_subagent.iter().map(String::as_str).collect();
+        available_tools.extend(
+            yaml_tools
+                .into_iter()
+                .filter(|t| !denied_set.contains(t.name.as_str()))
+                .map(|t| t.to_tool_definition()),
+        );
         if let Some(mcp) = &ctx.tex.mcp {
-            available_tools.extend(mcp.all_tool_definitions().await);
+            let mcp_defs = mcp.all_tool_definitions().await;
+            available_tools.extend(
+                mcp_defs.into_iter().filter(|t| !denied_set.contains(t.name.as_str())),
+            );
         }
     }
     available_tools = executor.filter_tools_by_policy(available_tools);

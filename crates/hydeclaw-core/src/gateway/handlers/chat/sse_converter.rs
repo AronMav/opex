@@ -466,7 +466,15 @@ pub(super) async fn run_converter(
     if !finished_sent {
         // Finalize streaming message on unexpected exit
         // CRITICAL ORDERING: upsert → read_streaming_content → set_content → finalize (DELETE)
-        if let Some(sid) = session_uuid {
+        //
+        // Skip the upsert/finalize chain when the previous turn ended via
+        // `StreamEvent::Finish` and nothing accumulated since: the Finish
+        // branch already finalized that row, and a new `streaming_msg_id`
+        // was allocated eagerly for the (now non-existent) next turn —
+        // upserting against it would insert a phantom empty
+        // `streaming_messages` row that has to be cleaned up later.
+        let has_pending_state = !accumulated_text.is_empty() || !accumulated_tools.is_empty();
+        if has_pending_state && let Some(sid) = session_uuid {
             let tools_json = build_tools_json(&accumulated_tools, &mut tools_flushed_count, &mut cached_tools_json);
             // Step 1: Flush remaining text delta (APPEND mode)
             if let Err(e) = upsert_streaming_append(&chat_db, streaming_msg_id, sid, &agent_name, &accumulated_text, tools_json.as_ref()).await {
