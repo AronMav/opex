@@ -173,7 +173,7 @@ async function runSession(
         if (!handshakeComplete && msg.type === "config") {
           handshakeComplete = true;
           clearTimeout(handshakeTimer);
-          bridge.setOwnerId(msg.owner_id);
+          bridge.setOwnerId(msg.owner_id ?? undefined);
 
           driver = createDriver(
             bridge,

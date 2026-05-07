@@ -4,6 +4,7 @@
  */
 
 import type { BridgeHandle } from "../bridge";
+import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto } from "../types";
 import { getStrings } from "../localization";
 import { splitText, parseDirectives, parseUserCommand } from "./common";
@@ -17,7 +18,7 @@ export function createMatrixDriver(
   channelConfig: Record<string, unknown> | undefined,
   language: string,
   _typingMode: string,
-): { start: () => Promise<void>; stop: () => Promise<void> } {
+): ChannelDriver {
   const strings = getStrings(language);
   const homeserver = (channelConfig?.homeserver as string) ?? "https://matrix.org";
   const botUserId = (channelConfig?.user_id as string) ?? "";
@@ -212,19 +213,21 @@ export function createMatrixDriver(
       running = false;
     },
     onAction: async (action: import("../bridge").OutboundAction) => {
-      const roomId = action.action.context.room_id as string;
+      const context = action.action.context as Record<string, unknown>;
+      const params = action.action.params as Record<string, unknown>;
+      const roomId = context.room_id as string;
       switch (action.action.action) {
         case "send_message":
           await matrixApi("PUT", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${Date.now()}`, {
             msgtype: "m.text",
-            body: action.action.params.text as string,
+            body: params.text as string,
           });
           break;
         case "react": {
-          const eventId = action.action.context.event_id as string;
+          const eventId = context.event_id as string;
           if (eventId) {
             await matrixApi("PUT", `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.reaction/${Date.now()}`, {
-              "m.relates_to": { rel_type: "m.annotation", event_id: eventId, key: action.action.params.emoji as string },
+              "m.relates_to": { rel_type: "m.annotation", event_id: eventId, key: params.emoji as string },
             });
           }
           break;

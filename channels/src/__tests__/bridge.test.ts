@@ -71,7 +71,7 @@ describe("BridgeHandle", () => {
 
     onPhase((phase, toolName) => phases.push({ phase, toolName }));
 
-    bridge.handleOutbound({ type: "phase", request_id: requestId, phase: "thinking" });
+    bridge.handleOutbound({ type: "phase", request_id: requestId, phase: "thinking", tool_name: null });
     bridge.handleOutbound({
       type: "phase",
       request_id: requestId,
@@ -178,6 +178,7 @@ describe("BridgeHandle", () => {
       type: "pairing_result",
       request_id: parsed.request_id,
       success: true,
+      error: null,
     });
 
     const result = await promise;
@@ -285,7 +286,7 @@ describe("BridgeHandle", () => {
     expect(result).not.toBeNull();
     expect(result!.actionId).toBe("a1");
     expect(result!.action.action).toBe("react");
-    expect(result!.action.params.emoji).toBe("👍");
+    expect((result!.action.params as Record<string, unknown>).emoji).toBe("👍");
   });
 
   // ── owner_id ────────────────────────────────────────────────────────

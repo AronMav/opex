@@ -8,6 +8,7 @@
  */
 
 import type { BridgeHandle } from "../bridge";
+import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto, MediaAttachment } from "../types";
 import { getStrings } from "../localization";
 import { splitText, parseDirectives, parseUserCommand, commonMarkToWhatsApp } from "./common";
@@ -21,7 +22,7 @@ export function createWhatsAppDriver(
   channelConfig: Record<string, unknown> | undefined,
   language: string,
   _typingMode: string,
-): { start: () => Promise<void>; stop: () => Promise<void> } {
+): ChannelDriver {
   const strings = getStrings(language);
   const accessToken = credential;
   const phoneNumberId = (channelConfig?.phone_number_id as string) ?? "";
@@ -219,12 +220,14 @@ export function createWhatsAppDriver(
       server?.stop();
     },
     onAction: async (action: import("../bridge").OutboundAction) => {
-      const waId = action.action.context.wa_id as string;
+      const context = action.action.context as Record<string, unknown>;
+      const params = action.action.params as Record<string, unknown>;
+      const waId = context.wa_id as string;
       if (action.action.action === "send_message" || action.action.action === "reply") {
-        await sendTextMessage(waId, commonMarkToWhatsApp(action.action.params.text as string));
+        await sendTextMessage(waId, commonMarkToWhatsApp(params.text as string));
       } else if (action.action.action === "react") {
-        const messageId = action.action.context.message_id as string;
-        if (messageId) await sendReaction(waId, messageId, action.action.params.emoji as string);
+        const messageId = context.message_id as string;
+        if (messageId) await sendReaction(waId, messageId, params.emoji as string);
       }
     },
   };

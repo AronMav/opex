@@ -5,6 +5,7 @@
 
 import { App } from "@slack/bolt";
 import type { BridgeHandle, OutboundAction } from "../bridge";
+import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto, MediaAttachment } from "../types";
 import { getStrings, type Strings } from "../localization";
 import {
@@ -27,7 +28,7 @@ export function createSlackDriver(
   channelConfig: Record<string, unknown> | undefined,
   language: string,
   _typingMode: string,
-): { start: () => Promise<void>; stop: () => Promise<void> } {
+): ChannelDriver {
   const strings = getStrings(language);
   const appToken = (channelConfig?.app_token as string) ?? "";
   const botToken = credential;
@@ -210,21 +211,23 @@ export function createSlackDriver(
       await app.stop();
     },
     onAction: async (action: OutboundAction) => {
-      const channelId = action.action.context.channel as string;
-      const ts = action.action.context.ts as string | undefined;
-      const threadTs = action.action.context.thread_ts as string | undefined;
+      const context = action.action.context as Record<string, unknown>;
+      const params = action.action.params as Record<string, unknown>;
+      const channelId = context.channel as string;
+      const ts = context.ts as string | undefined;
+      const threadTs = context.thread_ts as string | undefined;
 
       switch (action.action.action) {
         case "react":
           if (ts) {
-            const shortcode = emojiToSlackShortcode(action.action.params.emoji as string);
+            const shortcode = emojiToSlackShortcode(params.emoji as string);
             await app.client.reactions.add({ channel: channelId, name: shortcode, timestamp: ts });
           }
           break;
         case "send_message":
           await app.client.chat.postMessage({
             channel: channelId,
-            text: commonMarkToSlack(action.action.params.text as string),
+            text: commonMarkToSlack(params.text as string),
             thread_ts: threadTs,
           });
           break;
@@ -233,7 +236,7 @@ export function createSlackDriver(
             await app.client.chat.update({
               channel: channelId,
               ts,
-              text: commonMarkToSlack(action.action.params.text as string),
+              text: commonMarkToSlack(params.text as string),
             });
           }
           break;

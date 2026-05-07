@@ -5,6 +5,7 @@
 
 import { connect, type Socket } from "net";
 import type { BridgeHandle } from "../bridge";
+import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto } from "../types";
 import { getStrings } from "../localization";
 import { splitText, parseDirectives, parseUserCommand, commonMarkToIrc } from "./common";
@@ -17,7 +18,7 @@ export function createIrcDriver(
   channelConfig: Record<string, unknown> | undefined,
   language: string,
   _typingMode: string,
-): { start: () => Promise<void>; stop: () => Promise<void> } {
+): ChannelDriver {
   const strings = getStrings(language);
   const server = (channelConfig?.server as string) ?? "irc.libera.chat";
   const port = (channelConfig?.port as number) ?? 6667;
@@ -164,9 +165,11 @@ export function createIrcDriver(
       }
     },
     onAction: async (action: import("../bridge").OutboundAction) => {
-      const target = action.action.context.channel as string;
+      const context = action.action.context as Record<string, unknown>;
+      const params = action.action.params as Record<string, unknown>;
+      const target = context.channel as string;
       if (action.action.action === "send_message" || action.action.action === "reply") {
-        const text = commonMarkToIrc(action.action.params.text as string);
+        const text = commonMarkToIrc(params.text as string);
         for (const part of splitText(text, 450)) {
           sendRaw(`PRIVMSG ${target} :${part}`);
         }
