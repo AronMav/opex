@@ -327,3 +327,26 @@ frontend state → DOM render. No content-based dedup heuristics required.
     * `Makefile` targets: `build-arm64-otel`, `deploy-binary-otel`,
       `jaeger-up`, `jaeger-down`, `deploy-jaeger`
     * Operational runbook: [observability-setup.md](./observability-setup.md)
+
+## 2026-05-07 Amendment — Strong-typed Uuid newtypes (S2)
+
+The 2026-05-05 contract used `Option<String>` for all ID fields. This
+amendment escalates to typed wrappers: each ID kind becomes a distinct
+newtype around `Uuid` (or `String` where provider-supplied) with
+`Serialize`/`Deserialize`/`sqlx::Type` impls.
+
+The change is internal to Rust. Wire format (SSE JSON, DB schema) is
+unchanged. The contract gains compile-time guarantees:
+  * **Boundary parsing**: malformed UUIDs rejected at SSE/DB deserialization
+  * **Type-mismatch protection**: passing one ID type where another is
+    expected is a compile error.
+
+Kind-by-kind migration in commits:
+  * `ApprovalId(Uuid)` — see commit <T4-sha>
+  * `MessageId(Uuid)` — see commit <T5-sha>
+  * `ToolCallId(String)` — see commit <T6-sha>
+  * `ParallelBatchId(Uuid)` — new in this amendment, see commit <T3-sha>
+
+`IterationId` (T2) is an explicit struct that bundles `index: u32` plus
+`MessageId` — replaces the implicit combo threaded today through
+`StepStart` event payload.
