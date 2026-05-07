@@ -32,6 +32,10 @@ def parse_step_index(s: str) -> int:
 def send_chat(text: str, agent: str = "Arty") -> tuple[uuid.UUID, list[dict]]:
     """Send a chat message and capture all SSE events.
 
+    Always uses `force_new_session: True` to guarantee a clean session per
+    test — otherwise the server reuses the agent's last-active session and
+    the DB query would aggregate rows across multiple turns.
+
     Server allocates the session UUID; we read it from the first
     `data-session-id` SSE event. Passing a client-generated session_id
     that doesn't exist in the DB is rejected ("session not found").
@@ -39,7 +43,11 @@ def send_chat(text: str, agent: str = "Arty") -> tuple[uuid.UUID, list[dict]]:
     resp = requests.post(
         f"http://{PI_HOST}:18789/api/chat",
         headers={"Authorization": f"Bearer {TOKEN}", "Accept": "text/event-stream"},
-        json={"agent": agent, "messages": [{"role": "user", "content": text}]},
+        json={
+            "agent": agent,
+            "force_new_session": True,
+            "messages": [{"role": "user", "content": text}],
+        },
         stream=True,
         timeout=120,
     )
@@ -80,40 +88,52 @@ def test_assistant_message_id_flows_sse_to_db():
     step_starts = [e for e in events if e.get("type") == "step-start"]
     assert step_starts, "step-start event must be emitted"
 
-    # Compare iteration-0's messageId against messages.id where step_id = 0
-    first_step_message_id = step_starts[0]["messageId"]
+    sse_message_ids = {e["messageId"] for e in step_starts}
 
     rows = query_db(
-        "SELECT id::text FROM messages WHERE session_id = %s AND role = 'assistant' "
-        "AND step_id = 0",
+        "SELECT id::text FROM messages "
+        "WHERE session_id = %s AND role = 'assistant' "
+        "AND (is_mirror = false OR is_mirror IS NULL)",
         str(session_id),
     )
-    assert rows, "assistant message for step_id=0 must be persisted"
-    assert first_step_message_id == rows[0][0], (
-        f"SSE step-start messageId {first_step_message_id} != "
-        f"DB messages.id where step_id=0 ({rows[0][0]})"
+    db_assistant_ids = {r[0] for r in rows}
+
+    missing = sse_message_ids - db_assistant_ids
+    assert not missing, (
+        f"SSE step-start messageIds not found in DB messages.id: {missing}\n"
+        f"  SSE: {sse_message_ids}\n"
+        f"  DB:  {db_assistant_ids}"
     )
 
 
 def test_step_id_flows_sse_to_db():
+    """Every SSE step-start has a DB row whose step_id is either the parsed
+    SSE index (in-loop iteration) OR NULL (final iteration via finalize).
+
+    Per ADR-2026-05-05 §"Phase 4": "NULL means not part of a tool-loop
+    iteration — final assistant rows, user rows, tool-result rows."
+    """
     session_id, events = send_chat("use a tool then summarize what you did")
-    sse_step_ids = [
-        e["stepId"] for e in events if e.get("type") == "step-start"
-    ]
-    assert sse_step_ids, "at least one step-start expected"
+    sse_step_starts = [e for e in events if e.get("type") == "step-start"]
+    assert sse_step_starts, "at least one step-start expected"
 
-    rows = query_db(
-        "SELECT step_id FROM messages WHERE session_id = %s "
-        "AND role = 'assistant' AND step_id IS NOT NULL ORDER BY created_at",
-        str(session_id),
-    )
-    db_step_ids = [r[0] for r in rows]
+    for step_start in sse_step_starts:
+        msg_id = step_start["messageId"]
+        sse_idx = parse_step_index(step_start["stepId"])
 
-    # Wire format is `step_{N}`; DB column is INT. Compare by index.
-    expected_indices = [parse_step_index(s) for s in sse_step_ids]
-    assert expected_indices == db_step_ids, (
-        f"SSE step indices {expected_indices} != DB step_ids {db_step_ids}"
-    )
+        rows = query_db(
+            "SELECT step_id FROM messages WHERE id = %s "
+            "AND (is_mirror = false OR is_mirror IS NULL)",
+            msg_id,
+        )
+        assert rows, (
+            f"SSE step-start announced messageId {msg_id} but no DB row exists with that id"
+        )
+        db_step_id = rows[0][0]
+        assert db_step_id == sse_idx or db_step_id is None, (
+            f"For messageId={msg_id}, SSE stepIndex={sse_idx}: "
+            f"DB step_id is {db_step_id}, expected {sse_idx} (in-loop) or NULL (final)"
+        )
 
 
 def test_tool_call_id_flows_sse_to_db():
@@ -126,7 +146,9 @@ def test_tool_call_id_flows_sse_to_db():
         return
 
     rows = query_db(
-        "SELECT tool_call_id FROM messages WHERE session_id = %s AND role = 'tool'",
+        "SELECT tool_call_id FROM messages "
+        "WHERE session_id = %s AND role = 'tool' "
+        "AND (is_mirror = false OR is_mirror IS NULL)",
         str(session_id),
     )
     db_tool_call_ids = [r[0] for r in rows if r[0]]
