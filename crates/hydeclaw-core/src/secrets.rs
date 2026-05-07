@@ -24,18 +24,21 @@ use zeroize::Zeroizing;
 ///   - scope = "`AgentName`" means per-agent (isolated to that agent)
 ///
 /// Falls back to environment variables for migration convenience.
+/// Cache key: `(name, scope)`.
+type SecretKey = (String, String);
+/// Cache map: plaintext secret values wrapped in `Zeroizing` so the underlying
+/// buffer is wiped on remove/replace/drop. Doesn't protect cloned `String`
+/// returns to callers — those flow through application code as plain `String` —
+/// but it removes the always-on plaintext residue inside the manager itself
+/// (relevant for coredump / live-memory snapshots where we want the cache's
+/// working set to disappear after rotation/delete).
+type SecretCache = Arc<RwLock<HashMap<SecretKey, Zeroizing<String>>>>;
+
 #[derive(Clone)]
 pub struct SecretsManager {
     cipher: Arc<ChaCha20Poly1305>,
     db: PgPool,
-    /// Plaintext-secret cache. Values are wrapped in `Zeroizing` so the
-    /// underlying buffer is wiped when a cache entry is removed, replaced, or
-    /// the whole map is dropped. Doesn't protect cloned `String` returns to
-    /// callers — those flow through application code as plain `String` — but
-    /// it removes the always-on plaintext residue inside the manager itself
-    /// (relevant for coredump / live-memory snapshots where we want the
-    /// cache's working set to disappear after rotation/delete).
-    cache: Arc<RwLock<HashMap<(String, String), Zeroizing<String>>>>,
+    cache: SecretCache,
     /// Phase 64 SEC-03: retained for HKDF-based key derivation (e.g. upload HMAC).
     /// NEVER exposed publicly — every accessor MUST return a DERIVED key and the
     /// raw bytes must not leave this module. Adding a `pub fn master_key_bytes()`
