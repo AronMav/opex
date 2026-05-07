@@ -1,0 +1,13 @@
+{
+  "type": "action",
+  "action_id": "action-xyz-789",
+  "action": {
+    "action": "send_photo",
+    "params": {
+      "url": "https://example.com/x.jpg"
+    },
+    "context": {
+      "chat_id": "12345"
+    }
+  }
+}
