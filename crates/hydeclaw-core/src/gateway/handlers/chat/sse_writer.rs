@@ -91,26 +91,20 @@ impl From<StreamEvent> for SseEvent {
 
 // ── SseStreamWriter ─────────────────────────────────────────────────────
 
-/// Owns contextual state for SSE wire emission.
-///
-/// `dead_code` allowance: T4 introduces the writer in isolation; T5 will
-/// wire `sse_converter.rs` to use it. Until then, the struct and several
-/// builder methods have no production call sites — only tests exercise
-/// them. Remove the allowance once T5 lands.
-#[allow(dead_code)]
+/// Owns contextual state for SSE wire emission. Constructed once per
+/// stream by `sse_converter::run_converter`; methods produce SSE wire
+/// frame Strings that are forwarded through the `send_and_buffer!`
+/// macro to the engine event sender + StreamRegistry buffer.
 pub struct SseStreamWriter {
-    seq: u64,
     text_id_counter: u32,
     current_text_id: Option<String>,
     tool_name_map: HashMap<String, String>,
     current_agent: String,
 }
 
-#[allow(dead_code)]
 impl SseStreamWriter {
     pub fn new(initial_agent: String) -> Self {
         Self {
-            seq: 0,
             text_id_counter: 0,
             current_text_id: None,
             tool_name_map: HashMap::new(),
@@ -281,13 +275,16 @@ impl SseStreamWriter {
         self.frame(&SseEvent::from(ev))
     }
 
-    /// Frame a single SseEvent into the SSE wire format
-    /// (`id: <seq>\ndata: <json>\n\n`). All `build_*` methods route
-    /// through this for consistent seq counter bumping.
-    fn frame(&mut self, ev: &SseEvent) -> String {
-        self.seq += 1;
-        let json = serde_json::to_string(ev).expect("SseEvent must serialize");
-        format!("id: {}\ndata: {}\n\n", self.seq, json)
+    /// Serialize an SseEvent to JSON. The caller (`send_and_buffer!` macro
+    /// in `sse_converter.rs`) wraps this string in `axum::response::sse::Event::data(...)`
+    /// which adds the `id: <seq>\ndata: <json>\n\n` framing. Returning the
+    /// raw JSON here avoids double-wrapping by axum.
+    ///
+    /// `&self` (immutable) since we no longer track a seq counter — the SSE
+    /// event-id sequencing is handled by `StreamRegistry::push_event` in the
+    /// macro, and axum writes it as the `id:` line. Made `&self` for clarity.
+    fn frame(&self, ev: &SseEvent) -> String {
+        serde_json::to_string(ev).expect("SseEvent must serialize")
     }
 }
 
@@ -296,12 +293,6 @@ mod tests {
     use super::*;
     use hydeclaw_types::ids::{ApprovalId, MessageId, ParallelBatchId, ToolCallId};
     use uuid::Uuid;
-
-    fn extract_data(frame: &str) -> &str {
-        // SSE frame: "id: N\ndata: <json>\n\n"
-        let line = frame.lines().find(|l| l.starts_with("data: ")).unwrap();
-        &line[6..]
-    }
 
     #[test]
     fn from_tool_result_byte_equal_to_old_json() {
@@ -392,8 +383,7 @@ mod tests {
     #[test]
     fn writer_session_id_with_context_limit() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
-        let frame = w.build_session_id("sess-1".to_string(), Some(8000));
-        let json = extract_data(&frame);
+        let json = w.build_session_id("sess-1".to_string(), Some(8000));
         assert!(json.contains(r#""type":"data-session-id""#));
         assert!(json.contains(r#""sessionId":"sess-1""#));
         assert!(json.contains(r#""contextLimit":8000"#));
@@ -403,8 +393,7 @@ mod tests {
     #[test]
     fn writer_session_id_without_context_limit() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
-        let frame = w.build_session_id("sess-1".to_string(), None);
-        let json = extract_data(&frame);
+        let json = w.build_session_id("sess-1".to_string(), None);
         // context_limit is Option, skip_serializing_if = is_none.
         assert!(!json.contains("contextLimit"));
     }
@@ -413,8 +402,7 @@ mod tests {
     fn writer_start_includes_agent_name_and_message_id() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
         let mid = MessageId::from(Uuid::nil());
-        let frame = w.build_start(mid);
-        let json = extract_data(&frame);
+        let json = w.build_start(mid);
         assert!(json.contains(r#""type":"start""#));
         assert!(json.contains(r#""messageId":"00000000-0000-0000-0000-000000000000""#));
         assert!(json.contains(r#""agentName":"Hyde""#));
@@ -427,8 +415,7 @@ mod tests {
             index: 3,
             message_id: MessageId::from(Uuid::nil()),
         };
-        let frame = w.build_step_start(iter);
-        let json = extract_data(&frame);
+        let json = w.build_step_start(iter);
         assert!(json.contains(r#""stepId":"step_3""#));
         assert!(json.contains(r#""agentName":"Hyde""#));
     }
@@ -436,25 +423,22 @@ mod tests {
     #[test]
     fn writer_text_delta_emits_start_then_delta_on_first_call() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
-        let (start_frame, delta_frame) = w.build_text_delta("hello".to_string());
-        let start = start_frame.expect("first delta opens a block");
-        let s_json = extract_data(&start);
+        let (start_json, delta_json) = w.build_text_delta("hello".to_string());
+        let s_json = start_json.expect("first delta opens a block");
         assert!(s_json.contains(r#""type":"text-start""#));
         assert!(s_json.contains(r#""id":"text-1""#));
-        let d_json = extract_data(&delta_frame);
-        assert!(d_json.contains(r#""type":"text-delta""#));
-        assert!(d_json.contains(r#""id":"text-1""#));
-        assert!(d_json.contains(r#""delta":"hello""#));
+        assert!(delta_json.contains(r#""type":"text-delta""#));
+        assert!(delta_json.contains(r#""id":"text-1""#));
+        assert!(delta_json.contains(r#""delta":"hello""#));
     }
 
     #[test]
     fn writer_text_delta_subsequent_calls_reuse_block_id() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
         let _ = w.build_text_delta("first".to_string());
-        let (start_frame, delta_frame) = w.build_text_delta(" second".to_string());
-        assert!(start_frame.is_none(), "second delta does not open new block");
-        let d_json = extract_data(&delta_frame);
-        assert!(d_json.contains(r#""id":"text-1""#));
+        let (start_json, delta_json) = w.build_text_delta(" second".to_string());
+        assert!(start_json.is_none(), "second delta does not open new block");
+        assert!(delta_json.contains(r#""id":"text-1""#));
     }
 
     #[test]
@@ -462,8 +446,7 @@ mod tests {
         let mut w = SseStreamWriter::new("Hyde".to_string());
         assert!(w.build_text_end_if_open().is_none());
         let _ = w.build_text_delta("x".to_string());
-        let end = w.build_text_end_if_open().expect("block was open");
-        let e_json = extract_data(&end);
+        let e_json = w.build_text_end_if_open().expect("block was open");
         assert!(e_json.contains(r#""type":"text-end""#));
         assert!(e_json.contains(r#""id":"text-1""#));
         // Block now closed:
@@ -476,9 +459,8 @@ mod tests {
         let id = ToolCallId::from("tc-1".to_string());
         let _ = w.build_tool_input_start(id.clone(), "code_exec".to_string(), None);
         // Synthetic tool-input-available looks up tool_name via map:
-        let avail =
+        let a_json =
             w.build_tool_input_available(id, serde_json::json!({"cmd": "ls"}));
-        let a_json = extract_data(&avail);
         assert!(a_json.contains(r#""toolName":"code_exec""#));
     }
 
@@ -487,12 +469,11 @@ mod tests {
         let mut w = SseStreamWriter::new("Hyde".to_string());
         let id = ToolCallId::from("tc-1".to_string());
         let batch = ParallelBatchId::from(Uuid::nil());
-        let frame = w.build_tool_input_start(
+        let json = w.build_tool_input_start(
             id,
             "code_exec".to_string(),
             Some(batch),
         );
-        let json = extract_data(&frame);
         assert!(json.contains(r#""parallelBatchId":"00000000-0000-0000-0000-000000000000""#));
     }
 
@@ -500,8 +481,7 @@ mod tests {
     fn writer_tool_input_start_without_parallel_batch_id_omits_field() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
         let id = ToolCallId::from("tc-1".to_string());
-        let frame = w.build_tool_input_start(id, "code_exec".to_string(), None);
-        let json = extract_data(&frame);
+        let json = w.build_tool_input_start(id, "code_exec".to_string(), None);
         assert!(!json.contains("parallelBatchId"));
     }
 
@@ -509,22 +489,19 @@ mod tests {
     fn writer_finish_includes_agent_and_resets_text_state() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
         let _ = w.build_text_delta("x".to_string()); // opens text block
-        let frame = w.build_finish();
-        let json = extract_data(&frame);
+        let json = w.build_finish();
         assert!(json.contains(r#""type":"finish""#));
         assert!(json.contains(r#""agentName":"Hyde""#));
         // After finish, text counter resets so next stream starts at text-1:
-        let (start_frame, _) = w.build_text_delta("y".to_string());
-        let start = start_frame.unwrap();
-        let s_json = extract_data(&start);
+        let (start_json, _) = w.build_text_delta("y".to_string());
+        let s_json = start_json.unwrap();
         assert!(s_json.contains(r#""id":"text-1""#));
     }
 
     #[test]
     fn writer_usage_includes_agent_and_omits_none_extended_fields() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
-        let frame = w.build_usage(100, 50, None, None, None);
-        let json = extract_data(&frame);
+        let json = w.build_usage(100, 50, None, None, None);
         assert!(json.contains(r#""agentName":"Hyde""#));
         assert!(!json.contains("cacheReadTokens"));
         assert!(!json.contains("cacheCreationTokens"));
@@ -534,8 +511,7 @@ mod tests {
     #[test]
     fn writer_usage_emits_extended_fields_when_present() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
-        let frame = w.build_usage(100, 50, Some(20), Some(5), Some(3));
-        let json = extract_data(&frame);
+        let json = w.build_usage(100, 50, Some(20), Some(5), Some(3));
         assert!(json.contains(r#""cacheReadTokens":20"#));
         assert!(json.contains(r#""cacheCreationTokens":5"#));
         assert!(json.contains(r#""reasoningTokens":3"#));
@@ -544,11 +520,10 @@ mod tests {
     #[test]
     fn writer_rich_card_known_table_routes_correctly() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
-        let frame = w.build_rich_card(
+        let json = w.build_rich_card(
             "table".to_string(),
             serde_json::json!({"columns": ["a"], "rows": []}),
         );
-        let json = extract_data(&frame);
         assert!(json.contains(r#""type":"rich-card""#));
         assert!(json.contains(r#""cardType":"table""#));
     }
@@ -556,20 +531,25 @@ mod tests {
     #[test]
     fn writer_rich_card_unknown_falls_back_to_other() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
-        let frame = w.build_rich_card(
+        let json = w.build_rich_card(
             "future_card".to_string(),
             serde_json::json!({"foo": 1}),
         );
-        let json = extract_data(&frame);
         assert!(json.contains(r#""cardType":"future_card""#));
     }
 
     #[test]
-    fn writer_seq_increments_per_frame() {
+    fn writer_frame_returns_raw_json_no_sse_wire_prefix() {
+        // Guards against re-introducing the double-wrapping bug:
+        // frame() must return ONLY JSON. axum::Event::data(...) adds
+        // the `id:`/`data:` framing in the converter macro.
         let mut w = SseStreamWriter::new("Hyde".to_string());
         let f1 = w.build_session_id("s1".to_string(), None);
         let f2 = w.build_start(MessageId::from(Uuid::nil()));
-        assert!(f1.starts_with("id: 1\n"));
-        assert!(f2.starts_with("id: 2\n"));
+        assert!(f1.starts_with('{'), "frame must be raw JSON, got: {f1}");
+        assert!(f2.starts_with('{'), "frame must be raw JSON, got: {f2}");
+        assert!(!f1.contains("\ndata:"));
+        assert!(!f2.contains("\ndata:"));
+        assert_ne!(f1, f2);
     }
 }

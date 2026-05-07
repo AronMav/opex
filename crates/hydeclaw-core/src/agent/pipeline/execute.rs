@@ -190,7 +190,7 @@ pub async fn execute<S: EventSink>(
         };
 
         // For the very first iteration emit a legacy `MessageStart` event so
-        // existing frontend code paths that bind on it (sse_types::START)
+        // existing frontend code paths that bind on the SSE `start` discriminator
         // continue to work. Subsequent iterations rely on the per-step
         // message_id field below.
         if iteration == 0 {

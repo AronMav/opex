@@ -17,8 +17,8 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
+use hydeclaw_types::sse::{SseEvent, SyncStatus};
 
-use super::super::super::sse_types;
 use crate::gateway::clusters::ChannelBus;
 
 pub(crate) async fn api_chat_resume_stream(
@@ -44,9 +44,9 @@ pub(crate) async fn api_chat_resume_stream(
                 && let Ok(Some(job)) = crate::gateway::stream_jobs::get_active_job(
                     bus.stream_registry.db(), sid
                 ).await {
-                    let sync_status = match job.status.as_str() {
-                        "finished" => "finished",
-                        "error" => "error",
+                    let status = match job.status.as_str() {
+                        "finished" => SyncStatus::Finished,
+                        "error" => SyncStatus::Error,
                         "running" => {
                             // Running in DB but not in memory = Core restarted mid-stream
                             if let Err(e) = crate::gateway::stream_jobs::error_job(
@@ -54,18 +54,24 @@ pub(crate) async fn api_chat_resume_stream(
                             ).await {
                                 tracing::warn!(error = %e, "failed to mark stream job as error on resume");
                             }
-                            "interrupted"
+                            SyncStatus::Interrupted
                         }
-                        _ => "error",
+                        _ => SyncStatus::Error,
                     };
-                    let sync = serde_json::json!({
-                        "type": sse_types::SYNC,
-                        "content": job.aggregated_text,
-                        "toolCalls": job.tool_calls,
-                        "status": sync_status,
-                        "error": job.error_text,
-                    });
-                    let sync_str = sync.to_string();
+                    // `StreamJob.tool_calls` is a `serde_json::Value`; coerce
+                    // to `Vec<Value>` for the typed payload (any non-array
+                    // shape — null, {}, etc. — falls back to empty Vec).
+                    let tool_calls: Vec<serde_json::Value> = serde_json::from_value(
+                        job.tool_calls.clone()
+                    ).unwrap_or_default();
+                    let sync_event = SseEvent::Sync {
+                        content: job.aggregated_text.clone(),
+                        tool_calls,
+                        status,
+                        error: job.error_text.clone(),
+                    };
+                    let sync_str = serde_json::to_string(&sync_event)
+                        .expect("SseEvent::Sync must serialize");
                     let sse_stream = async_stream::stream! {
                         yield Ok::<_, std::convert::Infallible>(Event::default().data(sync_str));
                         yield Ok(Event::default().data("[DONE]"));
