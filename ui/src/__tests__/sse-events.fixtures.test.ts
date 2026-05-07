@@ -136,10 +136,103 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     expect(parsed.error).toBe("stream lost: core restarted");
   });
 
-  test("all fixtures have a `type` discriminator that round-trips", () => {
-    const files = readdirSync(FIXTURES).filter((f) => f.endsWith(".json"));
-    expect(files.length).toBeGreaterThanOrEqual(20);
-    for (const f of files) {
+  test("start fixture has messageId + agentName", () => {
+    const raw = readFileSync(join(FIXTURES, "start.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "start") throw new Error("unreachable");
+    expect(parsed.messageId).toBeDefined();
+    expect(parsed.agentName).toBe("Hyde");
+  });
+
+  test("step-start fixture has stepId + messageId + agentName", () => {
+    const raw = readFileSync(join(FIXTURES, "step-start.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "step-start") throw new Error("unreachable");
+    expect(parsed.stepId).toBe("step_2");
+    expect(parsed.agentName).toBe("Hyde");
+  });
+
+  test("text-start fixture has id + agentName", () => {
+    const raw = readFileSync(join(FIXTURES, "text-start.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "text-start") throw new Error("unreachable");
+    expect(parsed.id).toBe("text-1");
+    expect(parsed.agentName).toBe("Hyde");
+  });
+
+  test("text-end fixture has id", () => {
+    const raw = readFileSync(join(FIXTURES, "text-end.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "text-end") throw new Error("unreachable");
+    expect(parsed.id).toBe("text-1");
+  });
+
+  test("file fixture has url + mediaType (required)", () => {
+    const raw = readFileSync(join(FIXTURES, "file.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "file") throw new Error("unreachable");
+    expect(parsed.url).toBe("/uploads/x.png");
+    expect(parsed.mediaType).toBe("image/png");
+  });
+
+  test("tool-input-delta fixture has toolCallId + inputTextDelta", () => {
+    const raw = readFileSync(join(FIXTURES, "tool-input-delta.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "tool-input-delta") throw new Error("unreachable");
+    expect(parsed.toolCallId).toBe("tc-abc-1");
+    expect(parsed.inputTextDelta).toBe('{"cmd": "ls"}');
+  });
+
+  test("finish fixture has agentName", () => {
+    const raw = readFileSync(join(FIXTURES, "finish.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "finish") throw new Error("unreachable");
+    expect(parsed.agentName).toBe("Hyde");
+  });
+
+  test("error fixture has errorText", () => {
+    const raw = readFileSync(join(FIXTURES, "error.json"), "utf-8");
+    const parsed = JSON.parse(raw) as SseEvent;
+    if (parsed.type !== "error") throw new Error("unreachable");
+    expect(parsed.errorText).toBe("Provider timeout");
+  });
+
+  test("all 26 fixtures present and round-trip cleanly", () => {
+    const expected = new Set([
+      "data-session-id.json",
+      "start.json",
+      "step-start.json",
+      "text-start.json",
+      "text-delta.json",
+      "text-end.json",
+      "tool-input-start.json",
+      "tool-input-delta.json",
+      "tool-input-available.json",
+      "tool-output-available.json",
+      "file.json",
+      "rich-card-table.json",
+      "rich-card-metric.json",
+      "rich-card-metric-up.json",
+      "rich-card-metric-flat.json",
+      "rich-card-other.json",
+      "tool-approval-needed.json",
+      "tool-approval-resolved.json",
+      "finish.json",
+      "error.json",
+      "reconnecting.json",
+      "sync-finished.json",
+      "sync-interrupted.json",
+      "sync-error.json",
+      "sync-running.json",
+      "usage.json",
+    ]);
+    const actual = new Set(
+      readdirSync(FIXTURES).filter((f) => f.endsWith(".json"))
+    );
+    expect(actual).toEqual(expected);
+
+    // Round-trip stability for every fixture:
+    for (const f of actual) {
       const raw = readFileSync(join(FIXTURES, f), "utf-8");
       const parsed = JSON.parse(raw) as SseEvent;
       expect(typeof parsed.type).toBe("string");

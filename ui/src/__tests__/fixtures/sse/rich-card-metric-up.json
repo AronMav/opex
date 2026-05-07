@@ -1,0 +1,10 @@
+{
+  "type": "rich-card",
+  "cardType": "metric",
+  "data": {
+    "title": "Throughput",
+    "value": "1.2k req/s",
+    "label": "p99",
+    "trend": "up"
+  }
+}

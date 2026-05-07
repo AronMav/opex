@@ -1,0 +1,10 @@
+{
+  "type": "rich-card",
+  "cardType": "metric",
+  "data": {
+    "title": "Memory",
+    "value": "512 MB",
+    "label": "RSS",
+    "trend": "flat"
+  }
+}
