@@ -140,6 +140,12 @@ jobs:
         # artifact.)
         run: bun test
 
+  identity-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-no-content-dedup.sh
+
   types-drift:
     name: API types drift check
     runs-on: ubuntu-latest
