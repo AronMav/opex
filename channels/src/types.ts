@@ -15,13 +15,3 @@ export type {
   MediaAttachment,
   MediaType,
 } from "./types.generated";
-
-// TEMP — deleted in T4.5 commit (zero consumers verified via grep).
-export const PHASES = {
-  THINKING: "thinking",
-  CALLING_TOOL: "calling_tool",
-  COMPOSING: "composing",
-} as const;
-
-export const CHANNEL_TYPES = ["telegram", "discord", "matrix", "irc", "slack", "whatsapp"] as const;
-export type ChannelType = (typeof CHANNEL_TYPES)[number];
