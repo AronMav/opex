@@ -1213,6 +1213,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sqlx",
  "ts-rs",
  "uuid",
 ]

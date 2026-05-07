@@ -13,7 +13,7 @@ serde_json     = { workspace = true }
 thiserror      = { workspace = true }
 tracing        = { workspace = true }
 tokio          = { workspace = true }
-hydeclaw-types = { path = "../hydeclaw-types" }
+hydeclaw-types = { path = "../hydeclaw-types", features = ["sqlx"] }
 
 # TypeScript codegen (optional, behind `ts-gen` feature)
 ts-rs = { version = "12", optional = true, features = ["chrono-impl", "serde-json-impl", "uuid-impl"] }

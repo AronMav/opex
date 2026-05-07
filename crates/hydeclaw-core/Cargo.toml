@@ -104,7 +104,7 @@ hkdf = "0.12"
 zeroize = { version = "1", features = ["derive"] }
 
 # Internal
-hydeclaw-types = { workspace = true }
+hydeclaw-types = { workspace = true, features = ["sqlx"] }
 hydeclaw-db           = { path = "../hydeclaw-db" }
 hydeclaw-gateway-util = { path = "../hydeclaw-gateway-util" }
 
