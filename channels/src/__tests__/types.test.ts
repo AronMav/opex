@@ -19,7 +19,7 @@ describe("ChannelInbound serialization", () => {
     expect(parsed.type).toBe("message");
     expect(parsed.request_id).toBe("req-1");
     expect(parsed.msg.user_id).toBe("123");
-    expect(parsed.msg.context.chat_id).toBe(456);
+    expect((parsed.msg.context as Record<string, unknown>).chat_id).toBe(456);
   });
 
   test("serializes ping", () => {
@@ -131,7 +131,7 @@ describe("ChannelOutbound deserialization", () => {
     expect(msg.type).toBe("action");
     if (msg.type === "action") {
       expect(msg.action.action).toBe("react");
-      expect(msg.action.params.emoji).toBe("👍");
+      expect((msg.action.params as Record<string, unknown>).emoji).toBe("👍");
     }
   });
 

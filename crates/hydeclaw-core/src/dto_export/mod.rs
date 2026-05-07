@@ -96,3 +96,8 @@ mod backup_dto_register {
     crate::register_ts_dto!(BackupEntryDto);
 }
 
+/// Phase D: Channel WS protocol types — registered for dest="channels".
+/// Imports types from hydeclaw-types and registers each via register_ts_dto!.
+#[cfg(feature = "ts-gen")]
+pub mod channels_ts;
+
