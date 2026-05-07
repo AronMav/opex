@@ -263,7 +263,7 @@ mod tests {
     async fn channel_status_sink_drops_tool_events() {
         let (ch, mut ch_rx) = tokio::sync::mpsc::channel(8);
         let mut sink = ChannelStatusSink::new(None, Some(ch));
-        sink.emit(StreamEvent::MessageStart { message_id: "m".into() }.into()).await.unwrap();
+        sink.emit(StreamEvent::MessageStart { message_id: hydeclaw_types::ids::MessageId::from(uuid::Uuid::nil()) }.into()).await.unwrap();
         drop(sink);
         assert!(ch_rx.recv().await.is_none());
     }
@@ -273,7 +273,7 @@ mod tests {
         let (ch, mut ch_rx) = tokio::sync::mpsc::channel(8);
         let mut sink = ChunkSink::new(ch);
         sink.emit(StreamEvent::TextDelta("abc".into()).into()).await.unwrap();
-        sink.emit(StreamEvent::MessageStart { message_id: "m".into() }.into()).await.unwrap();
+        sink.emit(StreamEvent::MessageStart { message_id: hydeclaw_types::ids::MessageId::from(uuid::Uuid::nil()) }.into()).await.unwrap();
         assert_eq!(ch_rx.recv().await, Some("abc".into()));
         drop(sink);
         assert!(ch_rx.recv().await.is_none());

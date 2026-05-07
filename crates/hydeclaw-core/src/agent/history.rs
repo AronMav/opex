@@ -723,12 +723,19 @@ pub async fn compress_messages(
     }
 
     // Collect DB IDs from the middle range before they're dropped.
+    // S2 T5: `Message.db_id` is now `Option<MessageId>`. Convert to bare
+    // `Uuid` for the DB layer (which still takes `&[Uuid]` / `Option<Uuid>`
+    // — those are persistence-plumbing helpers, not identity surfaces).
     let compressed_ids: Vec<uuid::Uuid> = pruned[head_end..tail_start]
         .iter()
-        .filter_map(|m| m.db_id)
+        .filter_map(|m| m.db_id.map(|id| id.as_uuid()))
         .collect();
-    let first_compressed_id = pruned[head_end..tail_start].first().and_then(|m| m.db_id);
-    let first_live_id = pruned.get(tail_start).and_then(|m| m.db_id);
+    let first_compressed_id = pruned[head_end..tail_start]
+        .first()
+        .and_then(|m| m.db_id.map(|id| id.as_uuid()));
+    let first_live_id = pruned
+        .get(tail_start)
+        .and_then(|m| m.db_id.map(|id| id.as_uuid()));
     let segment_index = compressor.compression_count;
 
     let turns_to_summarize: Vec<Message> = pruned[head_end..tail_start].to_vec();

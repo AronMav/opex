@@ -182,7 +182,7 @@ pub async fn execute<S: EventSink>(
         if iteration == 0 {
             match sink
                 .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
-                    message_id: iter_msg_id.to_string(),
+                    message_id: hydeclaw_types::ids::MessageId::from(iter_msg_id),
                 }))
                 .await
             {

@@ -117,10 +117,10 @@ impl AgentEngine {
 
         // Slash-command early exit
         if let Some(text) = command_output.take() {
-            let slash_msg_id = Uuid::new_v4();
+            let slash_msg_id = hydeclaw_types::ids::MessageId::new();
             let _ = s
                 .emit(PipelineEvent::Stream(StreamEvent::MessageStart {
-                    message_id: slash_msg_id.to_string(),
+                    message_id: slash_msg_id,
                 }))
                 .await;
             let _ = s
@@ -139,7 +139,7 @@ impl AgentEngine {
                 boot_for_execute.messages.len(),
                 Some(user_message_id),
                 compressor,
-                slash_msg_id, // same UUID as MessageStart so DB row ID matches SSE event
+                slash_msg_id.as_uuid(), // same UUID as MessageStart so DB row ID matches SSE event
             );
             finalize::finalize(
                 fin_ctx,

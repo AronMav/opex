@@ -1,6 +1,7 @@
 pub mod ids;
 
 use chrono::{DateTime, Utc};
+use ids::MessageId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -21,8 +22,13 @@ pub struct Message {
     pub thinking_blocks: Vec<ThinkingBlock>,
     /// DB primary key — populated when loaded from DB, None for synthetic messages.
     /// Not serialized; used only for in-session compression tracking.
+    ///
+    /// S2 T5: migrated from `Option<Uuid>` to `Option<MessageId>` (newtype).
+    /// `MessageId` is `#[serde(transparent)]` over `Uuid`, but the field is
+    /// `#[serde(skip)]` anyway — the type change is purely compile-time
+    /// type-tagging.
     #[serde(skip, default)]
-    pub db_id: Option<Uuid>,
+    pub db_id: Option<MessageId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
