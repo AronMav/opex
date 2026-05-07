@@ -155,14 +155,12 @@ impl LoopDetector {
 
     pub fn tool_counts(&self) -> &HashMap<String, usize> { &self.tool_counts }
     pub fn iteration_count(&self) -> usize { self.tool_counts.values().sum() }
-    pub fn reset(&mut self) {
-        self.recent.clear();
-        self.recent_names.clear();
-        self.consecutive = 0;
-        self.last_hash = None;
-        self.consecutive_errors = 0;
-        self.last_error_tool = None;
-    }
+
+    // NOTE: there is intentionally no `reset()` method. Loop nudges must NOT
+    // clear the detector's history — see regression test
+    // `loop_detector_persists_history_across_nudge` and
+    // `pipeline/tool_loop_helpers.rs::apply_loop_nudge`. If you need to "reset"
+    // because of a true session boundary, construct a new `LoopDetector`.
 }
 
 impl From<&crate::config::ToolLoopSettings> for ToolLoopConfig {

@@ -77,7 +77,11 @@ pub fn apply_loop_nudge(
             db_id: None,
         });
         *loop_nudge_count += 1;
-        detector.reset();
+        // Do NOT call detector.reset() here. The regression test
+        // `loop_detector_persists_history_across_nudge` (tool_loop.rs) requires
+        // the detector to retain history across nudges; resetting allows
+        // max_nudges × break_threshold iterations of the same pattern.
+        let _ = detector;
         tracing::warn!(
             agent = %agent_name,
             nudge_count = *loop_nudge_count,

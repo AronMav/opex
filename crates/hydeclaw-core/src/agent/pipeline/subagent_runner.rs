@@ -270,7 +270,10 @@ pub async fn run_subagent_with_session(
                     db_id: None,
                 });
                 loop_nudge_count += 1;
-                detector.reset();
+                // Do NOT reset the detector — the regression test
+                // `loop_detector_persists_history_across_nudge` requires history
+                // to persist across nudges, otherwise an agent can perform
+                // max_loop_nudges × break_threshold identical iterations.
                 tracing::warn!(
                     nudge_count = loop_nudge_count,
                     reason = ?reason,
