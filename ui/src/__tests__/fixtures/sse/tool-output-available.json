@@ -1,0 +1,5 @@
+{
+  "type": "tool-output-available",
+  "toolCallId": "tc-abc-1",
+  "output": "file1.txt\nfile2.txt"
+}

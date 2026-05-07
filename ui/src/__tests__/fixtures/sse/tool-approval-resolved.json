@@ -1,0 +1,8 @@
+{
+  "type": "tool-approval-resolved",
+  "approvalId": "00000000-0000-0000-0000-000000000000",
+  "action": "approved",
+  "modifiedInput": {
+    "path": "/y.txt"
+  }
+}

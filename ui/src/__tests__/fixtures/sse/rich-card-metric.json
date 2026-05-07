@@ -1,0 +1,10 @@
+{
+  "type": "rich-card",
+  "cardType": "metric",
+  "data": {
+    "title": "Latency",
+    "value": "42 ms",
+    "label": "p50",
+    "trend": "down"
+  }
+}

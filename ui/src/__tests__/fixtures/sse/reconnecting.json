@@ -1,0 +1,5 @@
+{
+  "type": "reconnecting",
+  "attempt": 2,
+  "delay_ms": 1500
+}

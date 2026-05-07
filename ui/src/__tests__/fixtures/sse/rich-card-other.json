@@ -1,0 +1,14 @@
+{
+  "type": "rich-card",
+  "cardType": "other",
+  "data": {
+    "cardType": "experimental_chart",
+    "data": {
+      "bar": [
+        2,
+        3
+      ],
+      "foo": 1
+    }
+  }
+}

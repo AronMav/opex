@@ -1,0 +1,7 @@
+{
+  "type": "sync",
+  "content": "Partial response before interruption.",
+  "toolCalls": [],
+  "status": "interrupted",
+  "error": "stream lost: core restarted"
+}
