@@ -1,5 +1,11 @@
 import { describe, test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ChannelInbound, ChannelOutbound } from "../types";
+
+const __filename_for_fixtures = fileURLToPath(import.meta.url);
+const FIXTURES = join(dirname(__filename_for_fixtures), "fixtures");
 
 describe("ChannelInbound serialization", () => {
   test("serializes message", () => {
@@ -158,5 +164,55 @@ describe("ChannelOutbound deserialization", () => {
     const json = '{"type":"future_type","data":123}';
     const msg = JSON.parse(json);
     expect(msg.type).toBe("future_type");
+  });
+});
+
+describe("S6 Rust → TS round-trip via fixtures", () => {
+  test("ChannelInbound::Message fixture parses and matches TS shape", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_message.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+
+    // Discriminator narrowing
+    expect(parsed.type).toBe("message");
+    if (parsed.type !== "message") throw new Error("unreachable");
+
+    // Field-level shape assertions
+    expect(parsed.request_id).toBe("req-abc-123");
+    expect(parsed.msg.user_id).toBe("user-42");
+    expect(parsed.msg.display_name).toBe("Alice");
+    expect(parsed.msg.text).toBe("Hello, world");
+    expect(parsed.msg.attachments).toHaveLength(1);
+    expect(parsed.msg.attachments[0].media_type).toBe("image");
+    expect(parsed.msg.attachments[0].mime_type).toBe("image/png");
+    expect(parsed.msg.attachments[0].file_name).toBe("image.png");
+    expect(parsed.msg.attachments[0].file_size).toBe(12345);
+    expect(parsed.msg.timestamp).toBe("2026-05-07T15:30:00Z");
+
+    // Context is `unknown` per S6 design — narrow to access
+    const ctx = parsed.msg.context as Record<string, unknown>;
+    expect(ctx.chat_id).toBe("12345");
+
+    // Re-serialize and verify structure stable
+    const reSerialized = JSON.stringify(parsed);
+    const reParsed = JSON.parse(reSerialized);
+    expect(reParsed).toEqual(parsed);
+  });
+
+  test("ChannelOutbound::Action fixture parses and matches TS shape", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_action.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+
+    expect(parsed.type).toBe("action");
+    if (parsed.type !== "action") throw new Error("unreachable");
+
+    expect(parsed.action_id).toBe("action-xyz-789");
+    expect(parsed.action.action).toBe("send_photo");
+
+    // params/context are `unknown` per S6 design — narrow to access
+    const params = parsed.action.params as Record<string, unknown>;
+    expect(params.url).toBe("https://example.com/x.jpg");
+
+    const ctx = parsed.action.context as Record<string, unknown>;
+    expect(ctx.chat_id).toBe("12345");
   });
 });
