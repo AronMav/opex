@@ -1,50 +1,44 @@
-// Discriminated union of all SSE events from the backend.
-// Keep in sync with enum StreamEvent in crates/hydeclaw-core/src/agent/engine.rs.
+// ui/src/stores/sse-events.ts
+//
+// Hand-coded thin wrapper. Re-exports types from auto-generated
+// sse.generated.ts. Single source of truth: crates/hydeclaw-types/src/sse.rs
+// (registered for codegen in crates/hydeclaw-core/src/dto_export/sse_ts.rs).
 
-export interface AgentTurnCard {
-  agentName: string;
-  reason: string;
-}
+export type {
+  SseEvent,
+  RichCardData,
+  TableCard,
+  MetricCard,
+  MetricTrend,
+  DataSessionIdPayload,
+  SyncStatus,
+  UsagePayload,
+} from "@/types/sse.generated";
 
-export type SseEvent =
-  | { type: "data-session-id"; data: { sessionId: string; contextLimit?: number } }
-  | { type: "start"; messageId?: string; agentName?: string }
-  | { type: "text-start"; id?: string; agentName?: string }
-  | { type: "text-delta"; delta: string }
-  | { type: "text-end" }
-  | { type: "tool-input-start"; toolCallId: string; toolName: string; agentName?: string }
-  | { type: "tool-input-delta"; toolCallId: string; inputTextDelta: string }
-  | { type: "tool-input-available"; toolCallId: string; input: unknown }
-  | { type: "tool-output-available"; toolCallId: string; output: unknown }
-  | { type: "file"; url: string; mediaType?: string }
-  | { type: "rich-card"; cardType: string; data: Record<string, unknown> }
-  | { type: "sync"; content: string; toolCalls: unknown[]; status: string; error?: string }
-  | { type: "step-start"; stepId: string; messageId?: string }
-  | { type: "step-finish"; stepId: string; finishReason: string }
-  | { type: "tool-approval-needed"; approvalId: string; toolName: string; toolInput: Record<string, unknown>; timeoutMs: number }
-  | { type: "tool-approval-resolved"; approvalId: string; action: "approved" | "rejected" | "timeout_rejected"; modifiedInput?: Record<string, unknown> }
-  | { type: "finish"; agentName?: string }
-  | { type: "error"; errorText: string }
-  | { type: "reconnecting"; attempt: number; delay_ms: number }
-  | {
-      type: "usage";
-      inputTokens: number;
-      outputTokens: number;
-      // agentName: which agent emitted this usage. Used by stream-processor to
-      // route to the right agent's tokenUsage state in multi-agent sessions.
-      // Optional for forward-compat with older backends — stream-processor
-      // falls back to the session's currentAgent if absent.
-      agentName?: string;
-      // Extended fields — subsets of input/output (NOT additive).
-      // Only present for providers that report them.
-      cacheReadTokens?: number;
-      cacheCreationTokens?: number;
-      reasoningTokens?: number;
-    };
+import type { SseEvent } from "@/types/sse.generated";
+
+// Recognized values for `tool-approval-resolved.action`. Use these to
+// narrow the wire `string` field statically. Tightening the wire type
+// to a Rust enum is a separate work item (S6.5 spec §5 schema note).
+export const RECOGNIZED_APPROVAL_ACTIONS = [
+  "approved",
+  "rejected",
+  "timeout_rejected",
+] as const;
+export type ApprovalAction = (typeof RECOGNIZED_APPROVAL_ACTIONS)[number];
+
+// NOTE: `reconnecting` event is server-AND-client emitted with the same
+// shape (server: LLM-retry; client: SSE-reconnect). Both go through the
+// generated SseEvent type — no separate ClientSseEvent type needed.
 
 /**
  * Parse and validate a single SSE data payload.
- * Returns null for invalid JSON, missing type, or unknown event type.
+ * Returns null for invalid JSON or missing `type` field.
+ *
+ * Codegen guarantees server output shape, so per-variant runtime
+ * validation is no longer needed. If a Pi regression surfaces during
+ * deploy, switch back to per-variant validation by re-extracting from
+ * git history (pre-S6.5 sse-events.ts).
  */
 export function parseSseEvent(raw: string): SseEvent | null {
   let obj: unknown;
@@ -55,107 +49,8 @@ export function parseSseEvent(raw: string): SseEvent | null {
   }
   if (!obj || typeof obj !== "object") return null;
   const e = obj as Record<string, unknown>;
-  const type = e.type;
-  if (typeof type !== "string") return null;
-
-  switch (type) {
-    case "data-session-id": {
-      const data = e.data as Record<string, unknown> | undefined;
-      if (!data || typeof data.sessionId !== "string") return null;
-      return {
-        type,
-        data: {
-          sessionId: data.sessionId,
-          contextLimit: typeof data.contextLimit === "number" ? data.contextLimit : undefined,
-        },
-      };
-    }
-    case "start":
-      return { type, messageId: typeof e.messageId === "string" ? e.messageId : undefined, agentName: typeof e.agentName === "string" ? e.agentName : undefined };
-    case "text-start":
-      return { type, id: typeof e.id === "string" ? e.id : undefined, agentName: typeof e.agentName === "string" ? e.agentName : undefined };
-    case "text-delta":
-      return { type, delta: typeof e.delta === "string" ? e.delta : "" };
-    case "text-end":
-      return { type };
-    case "tool-input-start":
-      if (typeof e.toolCallId !== "string" || typeof e.toolName !== "string") return null;
-      return { type, toolCallId: e.toolCallId, toolName: e.toolName, agentName: typeof e.agentName === "string" ? e.agentName : undefined };
-    case "tool-input-delta":
-      if (typeof e.toolCallId !== "string") return null;
-      return { type, toolCallId: e.toolCallId, inputTextDelta: typeof e.inputTextDelta === "string" ? e.inputTextDelta : "" };
-    case "tool-input-available":
-      if (typeof e.toolCallId !== "string") return null;
-      return { type, toolCallId: e.toolCallId, input: e.input ?? {} };
-    case "tool-output-available":
-      if (typeof e.toolCallId !== "string") return null;
-      return { type, toolCallId: e.toolCallId, output: e.output };
-    case "file":
-      if (typeof e.url !== "string") return null;
-      return { type, url: e.url, mediaType: typeof e.mediaType === "string" ? e.mediaType : undefined };
-    case "rich-card":
-      return { type, cardType: typeof e.cardType === "string" ? e.cardType : "unknown", data: (e.data as Record<string, unknown>) ?? {} };
-    case "sync":
-      return {
-        type,
-        content: typeof e.content === "string" ? e.content : "",
-        toolCalls: Array.isArray(e.toolCalls) ? e.toolCalls : [],
-        status: typeof e.status === "string" ? e.status : "unknown",
-        error: typeof e.error === "string" ? e.error : undefined,
-      };
-    case "step-start":
-      if (typeof e.stepId !== "string") return null;
-      return { type, stepId: e.stepId, messageId: typeof e.messageId === "string" ? e.messageId : undefined };
-    case "step-finish":
-      if (typeof e.stepId !== "string") return null;
-      return { type, stepId: e.stepId, finishReason: typeof e.finishReason === "string" ? e.finishReason : "unknown" };
-    case "finish":
-      return {
-        type,
-        agentName: typeof e.agentName === "string" ? e.agentName : undefined,
-      };
-    case "error":
-      return { type, errorText: typeof e.errorText === "string" ? e.errorText : "Unknown error" };
-    case "reconnecting":
-      return {
-        type,
-        attempt: typeof e.attempt === "number" ? e.attempt : 1,
-        delay_ms: typeof e.delay_ms === "number" ? e.delay_ms : 2000,
-      };
-    case "usage":
-      return {
-        type,
-        inputTokens: typeof e.inputTokens === "number" ? e.inputTokens : 0,
-        outputTokens: typeof e.outputTokens === "number" ? e.outputTokens : 0,
-        agentName: typeof e.agentName === "string" ? e.agentName : undefined,
-        cacheReadTokens: typeof e.cacheReadTokens === "number" ? e.cacheReadTokens : undefined,
-        cacheCreationTokens: typeof e.cacheCreationTokens === "number" ? e.cacheCreationTokens : undefined,
-        reasoningTokens: typeof e.reasoningTokens === "number" ? e.reasoningTokens : undefined,
-      };
-    case "tool-approval-needed": {
-      if (typeof e.approvalId !== "string" || typeof e.toolName !== "string") return null;
-      return {
-        type,
-        approvalId: e.approvalId,
-        toolName: e.toolName,
-        toolInput: (e.toolInput as Record<string, unknown>) ?? {},
-        timeoutMs: typeof e.timeoutMs === "number" ? e.timeoutMs : 300000,
-      };
-    }
-    case "tool-approval-resolved": {
-      if (typeof e.approvalId !== "string") return null;
-      const action = e.action as string;
-      if (action !== "approved" && action !== "rejected" && action !== "timeout_rejected") return null;
-      return {
-        type,
-        approvalId: e.approvalId,
-        action,
-        modifiedInput: e.modifiedInput != null ? (e.modifiedInput as Record<string, unknown>) : undefined,
-      };
-    }
-    default:
-      return null;
-  }
+  if (typeof e.type !== "string") return null;
+  return obj as SseEvent;
 }
 
 /**
@@ -185,9 +80,9 @@ export function extractSseEventId(line: string): string | null {
   return null;
 }
 
-import { parseContentParts as parseParts } from "@/lib/message-parser";
+import { parseContentParts as parseParts, type ParsedContentPart } from "@/lib/message-parser";
 
 /** Extract <think> blocks into reasoning parts and clean text parts from raw content */
-export function parseContentParts(raw: string): any[] {
+export function parseContentParts(raw: string): ParsedContentPart[] {
   return parseParts(raw);
 }

@@ -1,6 +1,7 @@
 // ── usage-event-flow.test.ts ─────────────────────────────────────────────────
 // Phase 2 todo #8 — coverage for the usage SSE event flow:
-//   1. parseSseEvent (both layers: stores/sse-events.ts + stores/stream/sse-parser.ts)
+//   1. parseSseEvent (single source: stores/sse-events.ts; the duplicate in
+//      stores/stream/sse-parser.ts was deleted in S6.5 cleanup)
 //   2. processSSEStream `case "usage":` → AgentState writes
 // PR #23 added these paths with zero tests; failures these tests would catch:
 //   - Backend rename camelCase → snake_case
@@ -8,8 +9,7 @@
 //   - 0 vs absent distinction (some providers emit 0 for "no cache")
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { parseSseEvent as parseSseEventEvents } from "@/stores/sse-events";
-import { parseSseEvent as parseSseEventStream } from "@/stores/stream/sse-parser";
+import { parseSseEvent } from "@/stores/sse-events";
 import { useChatStore } from "@/stores/chat-store";
 
 // Mock react-query (used inside chat-store for cache invalidation).
@@ -47,18 +47,20 @@ function mockFetch(events: object[]) {
   );
 }
 
-// ── Parser tests (both layers) ───────────────────────────────────────────────
+// ── Parser tests ─────────────────────────────────────────────────────────────
+// NOTE (S6.5): the parser is now a thin pass-through — codegen guarantees the
+// shape from the Rust source of truth. Per-variant defaulting (e.g. inputTokens
+// → 0 on absence) was removed; field-defaulting now happens in the
+// stream-processor consumer (see "processSSEStream" tests below).
 
-describe.each([
-  ["stores/sse-events.ts", parseSseEventEvents],
-  ["stores/stream/sse-parser.ts", parseSseEventStream],
-])("parseSseEvent (%s) — usage event", (_label, parseSseEvent) => {
+describe("parseSseEvent — usage event", () => {
   it("parses full payload with all extended fields", () => {
     const e = parseSseEvent(
       JSON.stringify({
         type: "usage",
         inputTokens: 12500,
         outputTokens: 1800,
+        agentName: "TestAgent",
         cacheReadTokens: 8200,
         cacheCreationTokens: 1200,
         reasoningTokens: 600,
@@ -68,23 +70,10 @@ describe.each([
       type: "usage",
       inputTokens: 12500,
       outputTokens: 1800,
+      agentName: "TestAgent",
       cacheReadTokens: 8200,
       cacheCreationTokens: 1200,
       reasoningTokens: 600,
-    });
-  });
-
-  it("returns extended fields as undefined when SSE omits them", () => {
-    const e = parseSseEvent(
-      JSON.stringify({ type: "usage", inputTokens: 100, outputTokens: 50 }),
-    );
-    expect(e).toEqual({
-      type: "usage",
-      inputTokens: 100,
-      outputTokens: 50,
-      cacheReadTokens: undefined,
-      cacheCreationTokens: undefined,
-      reasoningTokens: undefined,
     });
   });
 
@@ -94,40 +83,15 @@ describe.each([
         type: "usage",
         inputTokens: 100,
         outputTokens: 50,
+        agentName: "TestAgent",
         cacheCreationTokens: 0,
       }),
     );
     // Numeric zero must be preserved (not coerced to undefined / null).
     expect(e?.type === "usage" && e.cacheCreationTokens).toBe(0);
-    // Untouched fields stay undefined.
-    expect(e?.type === "usage" && e.cacheReadTokens).toBeUndefined();
-    expect(e?.type === "usage" && e.reasoningTokens).toBeUndefined();
-  });
-
-  it("rejects non-numeric extended fields (defends against snake_case rename)", () => {
-    // If the backend ever renames cacheReadTokens → cache_read_tokens, the
-    // strongly-typed field will be undefined here. This pins the wire format.
-    const e = parseSseEvent(
-      JSON.stringify({
-        type: "usage",
-        inputTokens: 100,
-        outputTokens: 50,
-        cache_read_tokens: 7777, // wrong shape — should NOT populate cacheReadTokens
-      }),
-    );
-    expect(e?.type === "usage" && e.cacheReadTokens).toBeUndefined();
-  });
-
-  it("defaults missing inputTokens/outputTokens to 0 (no NaN)", () => {
-    const e = parseSseEvent(JSON.stringify({ type: "usage" }));
-    expect(e).toEqual({
-      type: "usage",
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheReadTokens: undefined,
-      cacheCreationTokens: undefined,
-      reasoningTokens: undefined,
-    });
+    // Untouched fields are absent on the parsed object (not present in JSON).
+    expect(e?.type === "usage" && (e as { cacheReadTokens?: number }).cacheReadTokens).toBeUndefined();
+    expect(e?.type === "usage" && (e as { reasoningTokens?: number }).reasoningTokens).toBeUndefined();
   });
 });
 
