@@ -2,9 +2,13 @@
 // Pure SSE event dispatcher. All buffer mutations go through session.buffer.*.
 // All store writes go through session.commit() or session.write().
 
-import { parseSSELines, parseSseEvent } from "./sse-parser";
 import { sseLog } from "./sse-debug";
-import { parseContentParts } from "@/stores/sse-events";
+import {
+  parseContentParts,
+  parseSSELines,
+  parseSseEvent,
+  RECOGNIZED_APPROVAL_ACTIONS,
+} from "@/stores/sse-events";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
 import { useChatStore } from "@/stores/chat-store";
@@ -261,7 +265,7 @@ export async function processSSEStream(
               type: "approval",
               approvalId: event.approvalId,
               toolName: event.toolName,
-              toolInput: event.toolInput,
+              toolInput: (event.toolInput ?? {}) as Record<string, unknown>,
               timeoutMs: event.timeoutMs,
               receivedAt: Date.now(),
               status: "pending",
@@ -277,10 +281,14 @@ export async function processSSEStream(
             );
             if (idx >= 0) {
               const existing = session.buffer.parts[idx] as ApprovalPart;
+              // event.action is wire `string` — narrow against recognized values.
+              const action = (RECOGNIZED_APPROVAL_ACTIONS as readonly string[]).includes(event.action)
+                ? (event.action as ApprovalPart["status"])
+                : existing.status;
               session.buffer.parts[idx] = {
                 ...existing,
-                status: event.action,
-                modifiedInput: event.modifiedInput,
+                status: action,
+                modifiedInput: (event.modifiedInput ?? undefined) as Record<string, unknown> | undefined,
               };
             }
             session.scheduleCommit();
@@ -315,8 +323,9 @@ export async function processSSEStream(
             sseLog(agent, "step-start-new-message", { id: event.messageId });
             break;
           }
-          case "step-finish":
-            break;
+          // Note: `step-finish` was removed from SseEvent in S6.5 — the
+          // server-side StreamEvent::StepFinish is `continue`-skipped and never
+          // reaches the wire, so no client-side handling is needed.
 
           case "file": {
             session.buffer.flushText();
@@ -348,10 +357,12 @@ export async function processSSEStream(
             // job) must surface as an error so the user sees the banner. The
             // previous mapping silently classified it as "streaming", which
             // left the chat looking healthy while the run was actually dead.
-            const isErrorLike = syncStatus === "error" || syncStatus === "interrupted" || syncStatus === "failed";
+            // Wire-level SyncStatus = "finished" | "error" | "interrupted" | "running"
+            // (legacy "done"/"failed" were renamed in S6.5 — see resume.rs:47-59).
+            const isErrorLike = syncStatus === "error" || syncStatus === "interrupted";
             const phase: ConnectionPhase =
               isErrorLike ? "error" :
-              (syncStatus === "done" || syncStatus === "finished") ? "idle" : "streaming";
+              syncStatus === "finished" ? "idle" : "streaming";
             const errorText = isErrorLike ? (event.error ?? null) : null;
 
             // Single writeDraft — message + connectionPhase + error fields are atomic (fixes bugs b and c)
@@ -392,7 +403,7 @@ export async function processSSEStream(
                   sseLog(agent, "sync-noop", { localLen: localTextLen, syncLen: syncTextLen });
                 }
                 if (existingMsg.status !== "complete") {
-                  existingMsg.status = (syncStatus === "done" || syncStatus === "finished") ? "complete" : "streaming";
+                  existingMsg.status = syncStatus === "finished" ? "complete" : "streaming";
                 }
               } else {
                 liveMessages.push({
@@ -401,7 +412,7 @@ export async function processSSEStream(
                   parts: syncParts,
                   createdAt: session.buffer.assistantCreatedAt,
                   agentId: session.buffer.currentRespondingAgent ?? undefined,
-                  status: (syncStatus === "done" || syncStatus === "finished") ? "complete" : "streaming",
+                  status: syncStatus === "finished" ? "complete" : "streaming",
                 });
               }
 

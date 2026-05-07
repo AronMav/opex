@@ -1,10 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { parseSseEvent, parseSSELines } from "../sse-parser";
+import { parseSseEvent, parseSSELines } from "@/stores/sse-events";
 
-describe("parseSseEvent", () => {
+// NOTE (S6.5): the old per-variant `sse-parser.ts` was deleted in favour of
+// the simplified parser in `@/stores/sse-events`. The new parser only checks
+// JSON validity + presence of a `type` field — wire-shape correctness is
+// guaranteed by the codegen contract (Rust → ts-rs → SseEvent). Per-variant
+// validation tests that asserted "returns null when required field missing"
+// are obsolete and have been removed; round-trip fixture tests in T7 cover
+// the actual contract.
+
+describe("parseSseEvent (simplified S6.5 parser)", () => {
   it("parses data-session-id events", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "data-session-id", data: { sessionId: "abc" } }));
-    expect(event).toEqual({ type: "data-session-id", data: { sessionId: "abc" } });
+    const event = parseSseEvent(
+      JSON.stringify({ type: "data-session-id", data: { sessionId: "abc", contextLimit: null }, transient: false }),
+    );
+    expect(event).toEqual({
+      type: "data-session-id",
+      data: { sessionId: "abc", contextLimit: null },
+      transient: false,
+    });
   });
 
   it("returns null for unparseable JSON", () => {
@@ -17,7 +31,7 @@ describe("parseSseEvent", () => {
   });
 
   it("parses text-start events", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "text-start", id: "t1" }));
+    const event = parseSseEvent(JSON.stringify({ type: "text-start", id: "t1", agentName: "A" }));
     expect(event?.type).toBe("text-start");
   });
 
@@ -27,21 +41,13 @@ describe("parseSseEvent", () => {
   });
 
   it("parses finish events", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "finish" }));
+    const event = parseSseEvent(JSON.stringify({ type: "finish", agentName: "A" }));
     expect(event?.type).toBe("finish");
   });
 
   it("parses error events", () => {
     const event = parseSseEvent(JSON.stringify({ type: "error", errorText: "boom" }));
     expect(event?.type).toBe("error");
-  });
-
-  it("returns null for data-session-id missing sessionId", () => {
-    expect(parseSseEvent(JSON.stringify({ type: "data-session-id", data: {} }))).toBeNull();
-  });
-
-  it("returns null for unknown event type", () => {
-    expect(parseSseEvent(JSON.stringify({ type: "unknown-future-event" }))).toBeNull();
   });
 
   it("returns null for missing type field", () => {
@@ -55,7 +61,15 @@ describe("parseSseEvent", () => {
   });
 
   it("parses tool-input-start events", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "tool-input-start", toolCallId: "tc1", toolName: "search" }));
+    const event = parseSseEvent(
+      JSON.stringify({
+        type: "tool-input-start",
+        toolCallId: "tc1",
+        toolName: "search",
+        agentName: "A",
+        parallelBatchId: null,
+      }),
+    );
     expect(event?.type).toBe("tool-input-start");
     if (event?.type === "tool-input-start") {
       expect(event.toolCallId).toBe("tc1");
@@ -63,33 +77,41 @@ describe("parseSseEvent", () => {
     }
   });
 
-  it("returns null for tool-input-start missing required fields", () => {
-    expect(parseSseEvent(JSON.stringify({ type: "tool-input-start" }))).toBeNull();
-  });
-
   it("parses tool-output-available events", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "tool-output-available", toolCallId: "tc1", output: "result" }));
+    const event = parseSseEvent(
+      JSON.stringify({ type: "tool-output-available", toolCallId: "tc1", output: "result" }),
+    );
     expect(event?.type).toBe("tool-output-available");
   });
 
-  it("parses sync events with defaults for missing fields", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "sync" }));
+  it("parses sync events with all fields", () => {
+    const event = parseSseEvent(
+      JSON.stringify({
+        type: "sync",
+        content: "",
+        toolCalls: [],
+        status: "running",
+        error: null,
+      }),
+    );
     expect(event?.type).toBe("sync");
     if (event?.type === "sync") {
       expect(event.content).toBe("");
       expect(event.toolCalls).toEqual([]);
-      expect(event.status).toBe("unknown");
+      expect(event.status).toBe("running");
     }
   });
 
   it("parses tool-approval-needed events", () => {
-    const event = parseSseEvent(JSON.stringify({
-      type: "tool-approval-needed",
-      approvalId: "a1",
-      toolName: "workspace_write",
-      toolInput: { path: "/foo" },
-      timeoutMs: 60000,
-    }));
+    const event = parseSseEvent(
+      JSON.stringify({
+        type: "tool-approval-needed",
+        approvalId: "a1",
+        toolName: "workspace_write",
+        toolInput: { path: "/foo" },
+        timeoutMs: 60000,
+      }),
+    );
     expect(event?.type).toBe("tool-approval-needed");
     if (event?.type === "tool-approval-needed") {
       expect(event.approvalId).toBe("a1");
@@ -98,11 +120,14 @@ describe("parseSseEvent", () => {
   });
 
   it("parses tool-approval-resolved events", () => {
-    const event = parseSseEvent(JSON.stringify({
-      type: "tool-approval-resolved",
-      approvalId: "a1",
-      action: "approved",
-    }));
+    const event = parseSseEvent(
+      JSON.stringify({
+        type: "tool-approval-resolved",
+        approvalId: "a1",
+        action: "approved",
+        modifiedInput: null,
+      }),
+    );
     expect(event?.type).toBe("tool-approval-resolved");
     if (event?.type === "tool-approval-resolved") {
       expect(event.action).toBe("approved");
@@ -112,11 +137,6 @@ describe("parseSseEvent", () => {
   it("parses reconnecting events with attempt and delay_ms", () => {
     const event = parseSseEvent(JSON.stringify({ type: "reconnecting", attempt: 2, delay_ms: 4000 }));
     expect(event).toEqual({ type: "reconnecting", attempt: 2, delay_ms: 4000 });
-  });
-
-  it("parses reconnecting events with defaults for missing fields", () => {
-    const event = parseSseEvent(JSON.stringify({ type: "reconnecting" }));
-    expect(event).toEqual({ type: "reconnecting", attempt: 1, delay_ms: 2000 });
   });
 });
 
