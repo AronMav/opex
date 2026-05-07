@@ -182,29 +182,35 @@ async fn channel_ws_loop(
                 );
                 let payload =
                     serde_json::json!({"action": &name, "params": &params, "context": &context});
+                // AUDIT-FF-006 (post-2026-05-08): the previous code spawned
+                // enqueue_action and the (action_id → qid) insertion as a
+                // detached task, then immediately sent the outbound frame and
+                // started a 5-attempt poll for mark_sent. If the adapter's
+                // ActionResult raced ahead of that detached enqueue (slow DB,
+                // burst), the reader's `outbound_ids.remove(action_id)` saw
+                // nothing and never called `mark_acked`; the queue row leaked
+                // and the next reconnect replayed an already-delivered
+                // action. Insert (action_id → qid) BEFORE sending the wire
+                // frame so the reader's ack path always observes it.
+                let queue_id = match crate::db::outbound::enqueue_action(
+                    &action_db, &action_agent, &channel_type, &name, &payload,
+                )
+                .await
                 {
-                    let db = action_db.clone();
-                    let aid = action_id.clone();
-                    let oids = action_oids.clone();
-                    let agent = action_agent.clone();
-                    let act = name.clone();
-                    let ch = channel_type.clone();
-                    // AUDIT-FF-006: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
-                    tokio::spawn(async move {
-                        if let Ok(qid) = crate::db::outbound::enqueue_action(
-                            &db, &agent, &ch, &act, &payload,
-                        )
-                        .await
-                        {
-                            let mut g = oids.lock().await;
-                            if g.len() > 1000 {
-                                g.clear();
-                                tracing::warn!("outbound_ids overflow, cleared");
-                            }
-                            g.insert(aid, qid);
+                    Ok(qid) => {
+                        let mut g = action_oids.lock().await;
+                        if g.len() > 1000 {
+                            g.clear();
+                            tracing::warn!("outbound_ids overflow, cleared");
                         }
-                    });
-                }
+                        g.insert(action_id.clone(), qid);
+                        Some(qid)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, action_id = %action_id, "enqueue_action failed; continuing without queue tracking");
+                        None
+                    }
+                };
                 let track_pending = {
                     let mut pa = action_pending.lock().await;
                     if pa.len() >= MAX_PENDING_ACTIONS {
@@ -239,22 +245,14 @@ async fn channel_ws_loop(
                 }
                 action_status.polling_diagnostics.record_outbound();
 
-                {
+                // AUDIT-FF-007: mark_sent now uses the queue_id captured
+                // synchronously above. No polling required.
+                if let Some(qid) = queue_id {
                     let db = action_db.clone();
-                    let oids = action_oids.clone();
-                    let aid = action_id;
-                    // AUDIT-FF-007: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                     tokio::spawn(async move {
-                        for _ in 0..5 {
-                            if let Some(qid) = oids.lock().await.get(&aid).copied() {
-                                if let Err(e) = crate::db::outbound::mark_sent(&db, qid).await {
-                                    tracing::warn!(queue_id = %qid, error = %e, "outbound mark_sent failed");
-                                }
-                                return;
-                            }
-                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        if let Err(e) = crate::db::outbound::mark_sent(&db, qid).await {
+                            tracing::warn!(queue_id = %qid, error = %e, "outbound mark_sent failed");
                         }
-                        tracing::debug!(action_id = %aid, "mark_sent: enqueue not found after retries");
                     });
                 }
             }
@@ -276,11 +274,15 @@ async fn channel_ws_loop(
     )
     .await;
 
-    // Tear down: drop sender → writer drains and exits. Action forwarder
-    // ends naturally when channel_action_rx is dropped.
+    // Tear down: stop action_forwarder FIRST so its clone of `out_tx` is
+    // released. Otherwise, on an unclean shutdown where channel_action_rx is
+    // still open (e.g. WS error before engine drops its end), the writer
+    // would wait forever for all senders to drop while action_forwarder
+    // sits idle on `rx.recv().await` holding a clone alive.
+    action_forwarder.abort();
+    let _ = action_forwarder.await; // ensure the clone is actually dropped
     drop(out_tx);
     let _ = writer_handle.await;
-    action_forwarder.abort();
 
     // Abort any remaining in-flight tasks.
     {
