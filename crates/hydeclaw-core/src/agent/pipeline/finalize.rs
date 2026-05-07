@@ -1045,4 +1045,67 @@ mod tests {
             crate::db::sessions::update_message_step_id(&pool, uuid::Uuid::new_v4(), 5).await;
         assert!(result.is_ok());
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn prepend_message_content_prefixes_existing_row(pool: PgPool) {
+        // QUICK-260508-0dj: prepend_message_content writes the prefix at the
+        // head of the existing content and preserves the tail verbatim.
+        // BackgroundMediaTask::deliver_to_channel relies on this so the UI
+        // inline parser sees `__file__:{json}\n[SYSTEM] ... dispatched ...`.
+        let session_id =
+            crate::db::sessions::create_new_session(&pool, "test-agent", "test-user", "test-channel")
+                .await
+                .unwrap();
+        let row_id = uuid::Uuid::new_v4();
+        let original = "[SYSTEM] Image dispatched in background; the user will receive a photo message.";
+        crate::db::sessions::save_message_ex_with_id(
+            &pool,
+            row_id,
+            session_id,
+            "tool",
+            original,
+            None,
+            Some("call_xyz"),
+            Some("test-agent"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let prefix = "__file__:{\"url\":\"/uploads/abc.png\",\"mediaType\":\"image/png\"}\n";
+        crate::db::sessions::prepend_message_content(&pool, row_id, prefix)
+            .await
+            .unwrap();
+
+        let after: String =
+            sqlx::query_scalar("SELECT content FROM messages WHERE id = $1")
+                .bind(row_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            after.starts_with(prefix),
+            "prepended content must start with prefix; got: {after}"
+        );
+        assert!(
+            after.ends_with(original),
+            "original content must be preserved at tail; got: {after}"
+        );
+        assert_eq!(after.len(), prefix.len() + original.len());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn prepend_message_content_silent_on_missing_row(pool: PgPool) {
+        // No-op contract mirrors update_message_step_id_silent_on_missing_row:
+        // the persist insert spawns detached and the prepend may race ahead,
+        // so a 0-row UPDATE must not error.
+        let result = crate::db::sessions::prepend_message_content(
+            &pool,
+            uuid::Uuid::new_v4(),
+            "__file__:{}\n",
+        )
+        .await;
+        assert!(result.is_ok(), "prepend on missing row must be Ok, got: {result:?}");
+    }
 }

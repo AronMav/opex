@@ -300,7 +300,7 @@ pub async fn execute_tool_calls_partitioned(
     let mut chain_parent: Option<Uuid> = persist_ctx.and_then(|p| p.initial_parent);
 
     // 1. Enrich args
-    let enriched: Vec<Value> = tool_calls
+    let mut enriched: Vec<Value> = tool_calls
         .iter()
         .map(|tc| enrich_tool_args(&tc.arguments, context, session_id, channel))
         .collect();
@@ -588,6 +588,14 @@ pub async fn execute_tool_calls_partitioned(
     }
 
     // 4b. Sequential
+    //
+    // Parallel branch intentionally does NOT inject `tool_message_id` into
+    // `enriched[i]._context` — YAML channel-action tools are partitioned to
+    // sequential by line ~339 (`tool.parallel && tool.channel_action.is_none()`),
+    // so the parallel path never reaches a YAML tool that would consume
+    // `_context.tool_message_id`. Threading the id through the parallel branch
+    // would require restructuring `parallel_persist_meta` for zero behaviour
+    // change.
     for &i in &sequential_indices {
         let seq_key = loop_detector_key(&tool_calls[i]);
         if detect_loops
@@ -613,6 +621,25 @@ pub async fn execute_tool_calls_partitioned(
             Some(&start_payload(&tool_calls[i])),
         )
         .await;
+        // Pre-generate the persisted message-row id BEFORE dispatch so
+        // `_context.tool_message_id` can be threaded into the YAML
+        // channel-action tools (e.g. TTS / generate_image). The same id is
+        // reused by `spawn_persist_tool_message` after dispatch returns, so
+        // the chain stays deterministic. Gated on `persist_ctx.is_some()` —
+        // off-the-record paths (subagent / openai_compat) keep the id
+        // absent so no UUID leaks into their `_context`.
+        if persist_ctx.is_some() {
+            let new_id = Uuid::new_v4();
+            persisted_ids[i] = Some(new_id);
+            if let Some(obj) = enriched[i].as_object_mut()
+                && let Some(ctx) = obj.get_mut("_context").and_then(|v| v.as_object_mut())
+            {
+                ctx.insert(
+                    "tool_message_id".to_string(),
+                    serde_json::json!(new_id.to_string()),
+                );
+            }
+        }
         // See note on the parallel branch: the `agent` tool owns its own
         // longer sync timeouts. The outer wrapper here is a defense-in-depth
         // safety net — strictly larger than every inner cap so the inner
@@ -717,9 +744,14 @@ pub async fn execute_tool_calls_partitioned(
         // parent-task cancellation between here and `execute()` returning.
         // T3: sequential tools are by definition not part of a parallel
         // batch — pass `None` for parallel_batch_id.
+        //
+        // The row id was pre-generated above (before dispatch) so the YAML
+        // channel-action path could thread it into `_context.tool_message_id`.
+        // Reuse it here — `Uuid::new_v4()` is NOT called twice.
         if let Some(pctx) = persist_ctx {
-            let new_id = Uuid::new_v4();
-            persisted_ids[i] = Some(new_id);
+            let new_id = persisted_ids[i].expect(
+                "persisted_ids[i] was set above when persist_ctx is Some — invariant",
+            );
             spawn_persist_tool_message(
                 db,
                 new_id,
@@ -1122,6 +1154,222 @@ mod tests {
             tool_msg_id: Some(uuid::Uuid::nil()),
         };
         assert!(with_id.tool_msg_id.is_some());
+    }
+}
+
+#[cfg(test)]
+mod sequential_enrichment_tests {
+    //! Verify the QUICK-260508-0dj timing fix: the sequential dispatch branch
+    //! of `execute_tool_calls_partitioned` MUST stamp `_context.tool_message_id`
+    //! into the enriched arguments BEFORE calling `executor.execute_tool_call`,
+    //! when (and only when) `persist_ctx = Some(_)`. The id used for the stamp
+    //! is the same UUID that subsequently lands in `persisted_ids[i]` and gets
+    //! handed to `spawn_persist_tool_message`, so the YAML channel-action path
+    //! can resolve back to the persisted row.
+    use super::*;
+    use crate::memory::EmbeddingService;
+    use crate::memory::embedding::FakeEmbedder;
+    use hydeclaw_types::ToolCall;
+    use hydeclaw_types::ids::ToolCallId;
+    use std::sync::Mutex;
+
+    /// Captures the enriched arguments handed to each `execute_tool_call`
+    /// invocation so the test can assert on `_context.tool_message_id`.
+    struct CapturingExecutor {
+        captured: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+
+    impl ToolExecutor for CapturingExecutor {
+        fn execute_tool_call<'a>(
+            &'a self,
+            _name: &'a str,
+            arguments: &'a serde_json::Value,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>> {
+            let captured = self.captured.clone();
+            let args = arguments.clone();
+            Box::pin(async move {
+                captured.lock().expect("poisoned").push(args);
+                "ok".to_string()
+            })
+        }
+
+        fn needs_approval(&self, _tool_name: &str) -> bool {
+            false
+        }
+    }
+
+    /// Lazy PgPool that never connects. The sequential branch issues
+    /// `crate::db::session_wal::log_event(...)` and `spawn_persist_tool_message`,
+    /// both of which swallow DB errors (the former via `let _ = ...`, the
+    /// latter via detached `tokio::spawn`). Safe for unit-test shape checks.
+    ///
+    /// `acquire_timeout` is shrunk to 100ms so the WAL-event call doesn't
+    /// stall the test for the default 30s pool acquire timeout.
+    fn fake_db() -> sqlx::PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_millis(100))
+            .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/invalid")
+            .expect("lazy connect cannot fail")
+    }
+
+    fn make_yaml_channel_tool() -> (String, crate::tools::yaml_tools::YamlToolDef) {
+        // Force sequential partitioning: a YAML tool with `parallel = true`
+        // and a `channel_action` is routed to the sequential branch by line
+        // ~339 of `execute_tool_calls_partitioned`. Mirrors the production
+        // tts.yaml / generate_image.yaml shape.
+        let tool: crate::tools::yaml_tools::YamlToolDef = serde_yaml::from_str(
+            "name: tts_capture\n\
+             description: capture-only TTS-style YAML tool\n\
+             endpoint: \"http://127.0.0.1:1\"\n\
+             method: POST\n\
+             timeout: 5\n\
+             parallel: true\n\
+             channel_action:\n  action: send_voice\n  data_field: _binary\n",
+        )
+        .expect("valid yaml");
+        ("tts_capture".to_string(), tool)
+    }
+
+    fn make_tool_call(name: &str, id: &str) -> ToolCall {
+        ToolCall {
+            id: ToolCallId::from(id.to_string()),
+            name: name.to_string(),
+            arguments: serde_json::json!({"input": "hello"}),
+        }
+    }
+
+    #[tokio::test]
+    async fn sequential_branch_stamps_tool_message_id_when_persist_ctx_some() {
+        // Happy path: a YAML channel-action tool dispatched through the
+        // sequential branch with `persist_ctx = Some(_)` MUST receive an
+        // `_context.tool_message_id` that parses as a UUID, and that UUID
+        // MUST match `persisted_ids[i]` returned in `BatchOutcome.results`.
+        let (tool_name, tool_def) = make_yaml_channel_tool();
+        let mut yaml_tools = HashMap::new();
+        yaml_tools.insert(tool_name.clone(), tool_def);
+
+        let captured: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let executor = CapturingExecutor { captured: captured.clone() };
+
+        let calls = vec![make_tool_call(&tool_name, "call_001")];
+        let context = serde_json::json!({"chat_id": 42, "channel": "telegram"});
+        let session_id = uuid::Uuid::new_v4();
+
+        let db = fake_db();
+        let embedder: Arc<dyn EmbeddingService> = Arc::new(FakeEmbedder { available: false });
+        let cfg = crate::agent::tool_loop::ToolLoopConfig::default();
+        let mut detector = LoopDetector::new(&cfg);
+
+        let pctx = ToolPersistCtx {
+            agent_name: "test-agent",
+            initial_parent: None,
+        };
+
+        let outcome = execute_tool_calls_partitioned(
+            &calls,
+            &context,
+            session_id,
+            "telegram",
+            "test-model",
+            10_000,
+            &mut detector,
+            false,
+            &db,
+            &embedder,
+            &yaml_tools,
+            &executor,
+            Some(&pctx),
+            None,
+            None,
+            0,
+            None,
+            None,
+        )
+        .await;
+
+        let captured = captured.lock().expect("poisoned");
+        assert_eq!(captured.len(), 1, "executor must be called exactly once");
+        let stamped_id = captured[0]
+            .get("_context")
+            .and_then(|c| c.get("tool_message_id"))
+            .and_then(|v| v.as_str())
+            .map(uuid::Uuid::parse_str)
+            .transpose()
+            .expect("tool_message_id must parse as UUID")
+            .expect("tool_message_id must be present in _context");
+
+        assert_eq!(outcome.results.len(), 1);
+        let persisted_id = outcome.results[0]
+            .tool_msg_id
+            .expect("persisted id must be Some when persist_ctx is Some");
+        assert_eq!(
+            stamped_id, persisted_id,
+            "stamped _context.tool_message_id MUST equal persisted_ids[0] — \
+             that's the whole reason for hoisting the UUID generation"
+        );
+    }
+
+    #[tokio::test]
+    async fn sequential_branch_omits_tool_message_id_when_persist_ctx_none() {
+        // Regression guard: when `persist_ctx = None` (subagent / openai_compat
+        // path), the sequential branch must NOT stamp `_context.tool_message_id`
+        // — leaking a UUID into off-the-record paths could confuse YAML tools
+        // that key off it.
+        let (tool_name, tool_def) = make_yaml_channel_tool();
+        let mut yaml_tools = HashMap::new();
+        yaml_tools.insert(tool_name.clone(), tool_def);
+
+        let captured: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let executor = CapturingExecutor { captured: captured.clone() };
+
+        let calls = vec![make_tool_call(&tool_name, "call_002")];
+        let context = serde_json::json!({"chat_id": 99, "channel": "telegram"});
+        let session_id = uuid::Uuid::new_v4();
+
+        let db = fake_db();
+        let embedder: Arc<dyn EmbeddingService> = Arc::new(FakeEmbedder { available: false });
+        let cfg = crate::agent::tool_loop::ToolLoopConfig::default();
+        let mut detector = LoopDetector::new(&cfg);
+
+        let outcome = execute_tool_calls_partitioned(
+            &calls,
+            &context,
+            session_id,
+            "telegram",
+            "test-model",
+            10_000,
+            &mut detector,
+            false,
+            &db,
+            &embedder,
+            &yaml_tools,
+            &executor,
+            None, // persist_ctx = None — subagent/openai_compat path
+            None,
+            None,
+            0,
+            None,
+            None,
+        )
+        .await;
+
+        let captured = captured.lock().expect("poisoned");
+        assert_eq!(captured.len(), 1, "executor must be called exactly once");
+        assert!(
+            captured[0]
+                .get("_context")
+                .and_then(|c| c.get("tool_message_id"))
+                .is_none(),
+            "_context.tool_message_id MUST be absent when persist_ctx is None; got: {}",
+            captured[0]
+        );
+
+        // Sanity: persisted_ids stays None too — no UUID was generated at all.
+        assert!(
+            outcome.results[0].tool_msg_id.is_none(),
+            "tool_msg_id must be None on the off-the-record path"
+        );
     }
 }
 
