@@ -613,7 +613,6 @@ function sseEventBrief(event: { type: string } & Record<string, unknown>): Recor
     case "text-end":
       return { id: event.id };
     case "step-start":
-    case "step-finish":
       return { stepId: event.stepId };
     case "start":
       return { messageId: event.messageId };

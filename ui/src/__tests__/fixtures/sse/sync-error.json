@@ -1,0 +1,7 @@
+{
+  "type": "sync",
+  "content": "Error occurred mid-stream.",
+  "toolCalls": [],
+  "status": "error",
+  "error": "LLM provider returned 500"
+}

@@ -255,3 +255,47 @@ fn sse_usage_fixture() {
     });
     write_fixture("usage", &ev);
 }
+
+#[test]
+fn sse_sync_error_fixture() {
+    let ev = SseEvent::Sync {
+        content: "Error occurred mid-stream.".to_string(),
+        tool_calls: vec![],
+        status: SyncStatus::Error,
+        error: Some("LLM provider returned 500".to_string()),
+    };
+    write_fixture("sync-error", &ev);
+}
+
+#[test]
+fn sse_sync_running_fixture() {
+    let ev = SseEvent::Sync {
+        content: "Stream still running.".to_string(),
+        tool_calls: vec![],
+        status: SyncStatus::Running,
+        error: None,
+    };
+    write_fixture("sync-running", &ev);
+}
+
+#[test]
+fn sse_rich_card_metric_trend_up_fixture() {
+    let ev = SseEvent::RichCard(RichCardData::Metric(MetricCard {
+        title: Some("Throughput".to_string()),
+        value: Some("1.2k req/s".to_string()),
+        label: Some("p99".to_string()),
+        trend: Some(MetricTrend::Up),
+    }));
+    write_fixture("rich-card-metric-up", &ev);
+}
+
+#[test]
+fn sse_rich_card_metric_trend_flat_fixture() {
+    let ev = SseEvent::RichCard(RichCardData::Metric(MetricCard {
+        title: Some("Memory".to_string()),
+        value: Some("512 MB".to_string()),
+        label: Some("RSS".to_string()),
+        trend: Some(MetricTrend::Flat),
+    }));
+    write_fixture("rich-card-metric-flat", &ev);
+}

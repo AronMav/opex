@@ -381,6 +381,91 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "requires SseStreamWriter context")]
+    fn from_session_id_panics_use_writer_instead() {
+        let _ = SseEvent::from(StreamEvent::SessionId {
+            session_id: "s1".to_string(),
+            context_limit: 8000,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "requires SseStreamWriter context")]
+    fn from_message_start_panics_use_writer_instead() {
+        let _ = SseEvent::from(StreamEvent::MessageStart {
+            message_id: MessageId::from(Uuid::nil()),
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "requires SseStreamWriter context")]
+    fn from_step_start_panics_use_writer_instead() {
+        let _ = SseEvent::from(StreamEvent::StepStart {
+            iteration: hydeclaw_types::ids::IterationId {
+                index: 0,
+                message_id: MessageId::from(Uuid::nil()),
+            },
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "requires SseStreamWriter context")]
+    fn from_tool_call_start_panics_use_writer_instead() {
+        let _ = SseEvent::from(StreamEvent::ToolCallStart {
+            id: ToolCallId::from("tc1".to_string()),
+            name: "code_exec".to_string(),
+            parallel_batch_id: None,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "requires SseStreamWriter context")]
+    fn from_usage_panics_use_writer_instead() {
+        let _ = SseEvent::from(StreamEvent::Usage {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            reasoning_tokens: None,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "requires SseStreamWriter context")]
+    fn from_finish_panics_use_writer_instead() {
+        let _ = SseEvent::from(StreamEvent::Finish {
+            finish_reason: "stop".to_string(),
+            continuation: false,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "requires SseStreamWriter context")]
+    fn from_rich_card_panics_use_writer_instead() {
+        let _ = SseEvent::from(StreamEvent::RichCard {
+            card_type: "table".to_string(),
+            data: serde_json::json!({}),
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "caller must skip")]
+    fn from_step_finish_panics_caller_must_skip() {
+        let _ = SseEvent::from(StreamEvent::StepFinish {
+            step_id: "step_0".to_string(),
+            finish_reason: "tool_use".to_string(),
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "caller must skip")]
+    fn from_agent_switch_panics_caller_must_skip() {
+        let _ = SseEvent::from(StreamEvent::AgentSwitch {
+            agent_name: "Hyde".to_string(),
+        });
+    }
+
+    #[test]
     fn writer_session_id_with_context_limit() {
         let mut w = SseStreamWriter::new("Hyde".to_string());
         let json = w.build_session_id("sess-1".to_string(), Some(8000));
