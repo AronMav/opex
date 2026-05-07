@@ -7,7 +7,7 @@
 //! preserved byte-identically via `pub use self::approval_flow::ApprovalResult`
 //! in `engine/mod.rs`.
 
-use uuid::Uuid;
+use hydeclaw_types::ids::ApprovalId;
 
 use super::AgentEngine;
 
@@ -28,7 +28,7 @@ impl AgentEngine {
     /// Resolve a pending approval (called from API/callback handler).
     pub async fn resolve_approval(
         &self,
-        approval_id: Uuid,
+        approval_id: ApprovalId,
         approved: bool,
         resolved_by: &str,
         modified_input: Option<serde_json::Value>,

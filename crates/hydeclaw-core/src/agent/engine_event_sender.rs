@@ -260,13 +260,13 @@ mod tests {
             StreamEvent::File { url: "u".into(), media_type: "image/png".into() },
             StreamEvent::AgentSwitch { agent_name: "a".into() },
             StreamEvent::ApprovalNeeded {
-                approval_id: "a1".into(),
+                approval_id: hydeclaw_types::ids::ApprovalId::from(uuid::Uuid::nil()),
                 tool_name: "tool".into(),
                 tool_input: serde_json::json!({}),
                 timeout_ms: 1000,
             },
             StreamEvent::ApprovalResolved {
-                approval_id: "a1".into(),
+                approval_id: hydeclaw_types::ids::ApprovalId::from(uuid::Uuid::nil()),
                 action: "approved".into(),
                 modified_input: None,
             },

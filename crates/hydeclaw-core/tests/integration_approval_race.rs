@@ -22,10 +22,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hydeclaw_core::db::approvals::{create_approval, resolve_approval_strict, ApprovalError};
+use hydeclaw_types::ids::ApprovalId;
 use serde_json::json;
 use support::TestHarness;
 use tokio::time::timeout;
-use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_test_03_approval_race_exactly_once_db_layer() {
@@ -36,7 +36,7 @@ async fn test_test_03_approval_race_exactly_once_db_layer() {
         let pool = harness.pool().clone();
 
         // 1. Create a single approval row to race on.
-        let approval_id: Uuid = create_approval(
+        let approval_id: ApprovalId = create_approval(
             &pool,
             "char-test-agent",
             None,
@@ -127,7 +127,7 @@ async fn test_test_03_approval_race_sensitivity_double_resolve_loses_second() {
         let harness = TestHarness::new().await.expect("ephemeral PG");
         let pool = harness.pool().clone();
 
-        let approval_id: Uuid = create_approval(
+        let approval_id: ApprovalId = create_approval(
             &pool,
             "char-test-agent",
             None,
@@ -169,7 +169,7 @@ async fn strict_race_exactly_one_ok_rest_already_resolved() {
         let harness = TestHarness::new().await.expect("PG");
         let pool = harness.pool().clone();
 
-        let approval_id: Uuid = create_approval(
+        let approval_id: ApprovalId = create_approval(
             &pool,
             "char-test-agent",
             None,

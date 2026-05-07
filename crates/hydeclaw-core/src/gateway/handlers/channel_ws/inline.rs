@@ -204,13 +204,14 @@ pub(super) async fn handle_approval_callback(
         return true;
     }
 
-    let approval_id = match uuid::Uuid::parse_str(approval_id_str) {
-        Ok(id) => id,
-        Err(_) => {
-            // Malformed UUID — consume callback but don't error noisily.
-            return true;
-        }
-    };
+    let approval_id: hydeclaw_types::ids::ApprovalId =
+        match approval_id_str.parse() {
+            Ok(id) => id,
+            Err(_) => {
+                // Malformed UUID — consume callback but don't error noisily.
+                return true;
+            }
+        };
 
     let status = if approved { "approved" } else { "rejected" };
     match engine.resolve_approval(approval_id, approved, &user_id, None).await {

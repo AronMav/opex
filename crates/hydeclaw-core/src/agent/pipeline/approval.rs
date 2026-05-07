@@ -2,13 +2,13 @@
 //! Extracted from engine.rs as a free function taking &CommandContext.
 
 use super::CommandContext;
-use uuid::Uuid;
+use hydeclaw_types::ids::ApprovalId;
 use crate::agent::engine::{ApprovalResult, StreamEvent};
 
 /// Resolve a pending approval (called from API/callback handler).
 pub async fn resolve_approval(
     ctx: &CommandContext<'_>,
-    approval_id: Uuid,
+    approval_id: ApprovalId,
     approved: bool,
     resolved_by: &str,
     modified_input: Option<serde_json::Value>,
@@ -64,7 +64,7 @@ pub async fn resolve_approval(
     if let Some(tx) = ctx.tex.sse_event_tx.lock().await.as_ref()
         && let Err(e) = tx
             .send_async(StreamEvent::ApprovalResolved {
-                approval_id: approval_id.to_string(),
+                approval_id,
                 action: action_str.to_string(),
                 modified_input: modified_input.clone(),
             })
