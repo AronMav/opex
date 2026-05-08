@@ -55,10 +55,15 @@ export function createIrcDriver(
     // Owner commands (audit 2026-05-08, group DD): without this branch the
     // bot has no way to bootstrap pairing requests over IRC — every fresh
     // user gets a code, but the owner cannot /approve it.
+    //
+    // 6th pass: owner-command replies are ALWAYS sent privately to the
+    // owner's nick (`from`) instead of `replyTo`. If the owner runs
+    // `/users` in a public channel like `#help`, replyTo would be `#help`
+    // and the approved-user list would leak to every channel member.
     if (isOwner && isOwnerCommand(text)) {
       const reply = await runOwnerCommand(text, bridge, strings);
       if (reply) {
-        sendPrivmsg(replyTo, reply);
+        sendPrivmsg(from, reply);
       }
       return;
     }

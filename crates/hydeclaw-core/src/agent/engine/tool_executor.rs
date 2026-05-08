@@ -52,9 +52,23 @@ impl AgentEngine {
         allowed_tools: Option<&[String]>,
         subagent_is_base: bool,
     ) -> Vec<hydeclaw_types::ToolDefinition> {
-        let denied = crate::agent::pipeline::subagent::compute_denied_tools(
+        // Audit 2026-05-08 (6th pass): visibility list MUST match the runtime
+        // gate. Previously this used `compute_denied_tools` which honours
+        // `blocked_tools_override`, so a subagent author setting
+        // `blocked_tools_override = ["x"]` would *see* every other denied
+        // tool (cron, secret_set, code_exec, …) in its catalogue and could
+        // call them DIRECTLY (not via tool_use). Direct calls bypass the
+        // dispatcher rewrite gate, so this was a real exploit path, not just
+        // an informational leak. Switching to `runtime_subagent_denylist`
+        // anchors visibility to SUBAGENT_DENIED_TOOLS too.
+        let mut denied = crate::agent::pipeline::subagent::runtime_subagent_denylist(
             &self.cfg().agent.delegation,
         );
+        // Mirror the base-subagent carve-out applied in `subagent_runner` so
+        // base subagents see `code_exec` in their catalogue.
+        if subagent_is_base {
+            denied.retain(|t| t != "code_exec");
+        }
 
         let dispatch_for_subagent = dispatch_for_subagent_decision(
             subagent_is_base,

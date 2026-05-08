@@ -30,6 +30,16 @@ pub const SUBAGENT_DENIED_TOOLS: &[&str] = &[
 /// - If `blocked_tools_override` is non-empty: use it as the complete deny list
 ///   (replaces SUBAGENT_DENIED_TOOLS)
 /// - Otherwise: SUBAGENT_DENIED_TOOLS + blocked_tools_extra (deduplicated)
+///
+/// **Deprecated for runtime use.** Audit 2026-05-08 (6th pass) found that
+/// honouring `blocked_tools_override` in any runtime path (visibility list,
+/// dispatcher rewrite) lets a subagent author weaken SUBAGENT_DENIED_TOOLS.
+/// All runtime call sites now use `runtime_subagent_denylist` instead. This
+/// function is retained only because its `blocked_tools_override` semantics
+/// are tested in this module — if a future caller wants the
+/// "override-respecting" semantics for an operator-facing view (not runtime),
+/// they can still use it explicitly.
+#[allow(dead_code)]
 pub fn compute_denied_tools(cfg: &DelegationConfig) -> Vec<String> {
     if !cfg.blocked_tools_override.is_empty() {
         return cfg.blocked_tools_override.clone();
