@@ -223,8 +223,37 @@ pub async fn write_skill(
     let skills_dir = Path::new(workspace_dir).join("skills");
     fs::create_dir_all(&skills_dir).await?;
 
-    let safe_name = name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-");
+    // Audit 2026-05-08 path-traversal hardening: collapse '.' to '-' as well,
+    // and verify the resulting filename canonicalises inside skills_dir.
+    let safe_name: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' | '.' => '-',
+            other => other,
+        })
+        .collect();
+    let safe_name = safe_name.trim_matches('-').to_string();
+    if safe_name.is_empty() {
+        anyhow::bail!(
+            "skill name must contain at least one valid character: '{}'",
+            name
+        );
+    }
     let path = skills_dir.join(format!("{safe_name}.md"));
+
+    // Defence-in-depth: confirm the parent directory canonicalises to a
+    // location inside skills_dir.
+    let canonical_dir = std::fs::canonicalize(&skills_dir)
+        .map_err(|e| anyhow::anyhow!("cannot canonicalise skills dir: {e}"))?;
+    let canonical_parent = std::fs::canonicalize(path.parent().unwrap_or(&skills_dir))
+        .map_err(|e| anyhow::anyhow!("cannot canonicalise skill parent: {e}"))?;
+    if !canonical_parent.starts_with(&canonical_dir) {
+        anyhow::bail!(
+            "skill path '{}' resolves outside skills dir '{}'",
+            path.display(),
+            canonical_dir.display(),
+        );
+    }
 
     let triggers_yaml = frontmatter
         .triggers

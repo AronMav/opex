@@ -24,9 +24,40 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 /// Sanitize a skill name to a safe filename stem (same logic as `write_skill`).
+///
+/// Audit 2026-05-08 path-traversal hardening:
+/// - The previous version stripped `/`, `\`, etc. but kept `.`, so a name like
+///   `"../agents/Main/SOUL"` survived sanitisation as
+///   `"..-agents-Main-SOUL"`… *or rather*, `/` was rewritten so that case was
+///   actually safe; but `../skills/x` (with the slash already replaced) was
+///   not the only attack: the runtime later joins `skills_dir + sanitised`
+///   and any leading `.` made the join nondescript. We now also collapse
+///   `.` to `-` so the resulting filename can never start with `..` or `.`,
+///   and refuse empty / all-separator inputs at the filesystem layer.
+/// - Callers that go on to write/read the file must additionally `canonicalize`
+///   the joined path and confirm it stays inside `skills_dir` — see
+///   `assert_inside_skills_dir`.
 pub(crate) fn skill_safe_name(name: &str) -> String {
-    name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', ' '], "-")
+    let replaced: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | ' ' | '.' => '-',
+            other => other,
+        })
+        .collect();
+    let trimmed = replaced.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        // Stable sentinel — `find_skill_path` will fall through to the
+        // frontmatter scan or return None; `write_skill` should reject this
+        // upstream via `assert_inside_skills_dir`.
+        return "_unnamed".to_string();
+    }
+    trimmed
 }
+
+// `skill_safe_name` is the only sanitiser the gateway layer needs — the
+// filesystem-touching writes happen inside `crate::skills::write_skill`,
+// which performs its own canonical-path check (audit 2026-05-08).
 
 /// Resolve the actual .md file path for a skill name.
 /// Tries sanitized-name first, then scans all .md files for matching frontmatter name.
