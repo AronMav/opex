@@ -19,42 +19,6 @@ pub fn is_valid_tool_name(name: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'-')
 }
 
-/// Source of truth for "is this a tool the dispatcher can route to?".
-/// Checks system tools, visible YAML tools, and visible MCP tools.
-// allow(dead_code): consumed by tool_handlers/tool_use.rs.
-#[allow(dead_code)]
-pub async fn is_known_tool(
-    name: &str,
-    is_base_agent: bool,
-    workspace_dir: &str,
-    mcp: Option<&crate::mcp::McpRegistry>,
-) -> bool {
-    // 1. System tools.
-    let system_names = crate::agent::pipeline::tool_defs::all_system_tool_names();
-    if system_names.contains(&name) {
-        return true;
-    }
-
-    // 2. YAML tools (visible to this agent).
-    let yaml = crate::tools::yaml_tools::load_yaml_tools(workspace_dir, false).await;
-    if yaml
-        .iter()
-        .any(|t| t.name == name && (!t.required_base || is_base_agent))
-    {
-        return true;
-    }
-
-    // 3. MCP tools.
-    if let Some(reg) = mcp {
-        let defs = reg.all_tool_definitions().await;
-        if defs.iter().any(|d| d.name == name) {
-            return true;
-        }
-    }
-
-    false
-}
-
 /// Build the list of extension tools visible to an agent for search/describe.
 ///
 /// Filters in order: deny-list, required_base for non-base, drop static core,
