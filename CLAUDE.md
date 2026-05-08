@@ -109,9 +109,13 @@ Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/p
 - `max_depth = 1` (default) — subagents CANNOT recursively spawn further
   subagents
 - `blocked_tools_extra = [...]` — extends the built-in deny-list
-  (`SUBAGENT_DENIED_TOOLS`)
-- `blocked_tools_override = [...]` — if non-empty, replaces the built-in
-  deny-list entirely (use with caution)
+  (`SUBAGENT_DENIED_TOOLS`) at runtime AND in the visibility list
+- `blocked_tools_override = [...]` — **NOT honoured at runtime** (audit
+  2026-05-08, groups T+FF). The built-in `SUBAGENT_DENIED_TOOLS` cannot be
+  weakened by subagents. The setting is retained on disk but ignored by
+  `runtime_subagent_denylist` (used by both the subagent runner and the
+  visibility list). See `docs/ARCHITECTURE.md` §DelegationConfig for the
+  rationale.
 
 ### Gateway (`src/gateway/`)
 

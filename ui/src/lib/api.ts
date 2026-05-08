@@ -150,6 +150,15 @@ export async function decideApproval(
   }
 }
 
-export async function inviteAgent(sessionId: string, agentName: string): Promise<{ participants: string[] }> {
-  return apiPost<{ participants: string[] }>(`/api/sessions/${sessionId}/invite`, { agent_name: agentName });
+export async function inviteAgent(
+  sessionId: string,
+  ownerAgent: string,
+  agentName: string,
+): Promise<{ participants: string[] }> {
+  // Audit 2026-05-08 (7th pass): backend now requires ?agent=<owner> on invite.
+  // Without it the call returns 400.
+  return apiPost<{ participants: string[] }>(
+    `/api/sessions/${sessionId}/invite?agent=${encodeURIComponent(ownerAgent)}`,
+    { agent_name: agentName },
+  );
 }

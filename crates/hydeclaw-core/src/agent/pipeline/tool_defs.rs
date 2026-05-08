@@ -999,7 +999,9 @@ pub fn build_sandbox_tool_definitions() -> Vec<ToolDefinition> {
 /// Filter tool definitions for subagent use: exclude denied tools, optionally filter by whitelist.
 ///
 /// `denied_tools` is owned-strings (typically the output of
-/// `subagent::compute_denied_tools(&DelegationConfig)`).
+/// `subagent::runtime_subagent_denylist(&DelegationConfig)` — anchored to
+/// `SUBAGENT_DENIED_TOOLS`, ignoring `blocked_tools_override`; see audit
+/// 2026-05-08 group FF for the rationale).
 pub fn filter_for_subagent(
     all_tools: Vec<ToolDefinition>,
     denied_tools: &[String],

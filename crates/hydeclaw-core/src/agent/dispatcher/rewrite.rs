@@ -82,10 +82,12 @@ fn rewrite_one(
     }
 
     // Audit 2026-05-08: subagent isolation gate — `extra_deny` carries the
-    // parent's `compute_denied_tools(&parent.delegation)` when this engine is
-    // running as a subagent. Without this, a subagent with the dispatcher
-    // enabled could promote/execute a tool from SUBAGENT_DENIED_TOOLS even
-    // though the visibility-filtered tool list correctly hid it.
+    // result of `runtime_subagent_denylist(&subagent.delegation)` when this
+    // engine is running as a subagent (the value is computed by
+    // `subagent_runner.rs` and threaded through). Without this gate, a
+    // subagent with the dispatcher enabled could promote/execute a tool
+    // from SUBAGENT_DENIED_TOOLS even though the visibility-filtered tool
+    // list correctly hid it.
     if extra_deny.iter().any(|d| d == inner_name) {
         return RewriteResult::Denied {
             id: tc.id.as_str().to_string(),

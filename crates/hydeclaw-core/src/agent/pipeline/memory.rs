@@ -192,15 +192,14 @@ pub async fn handle_memory_reindex(
         }
     }
 
-    // Clear existing memory synchronously (fast DB operation)
-    if clear_existing {
-        match memory_store.wipe_agent_memory(agent_name).await {
-            Ok(deleted) => tracing::info!(deleted, agent = %agent_name, "cleared memory before reindex"),
-            Err(e) => return format!("Failed to clear memory: {}", e),
-        }
-    }
-
-    // Create reindex task for memory-worker
+    // Audit 2026-05-08 (7th pass): we used to wipe agent memory in Core
+    // BEFORE enqueuing the worker task. If the enqueue then failed (DB
+    // hiccup, network), the agent ended up with empty memory and no
+    // pending task to refill it. Now we enqueue first and let the worker
+    // do the wipe atomically inside its own retry-capable transaction
+    // (via the trailing DELETE gated on `created_at < reindex_started`,
+    // see crates/hydeclaw-memory-worker/src/handlers/reindex.rs). The Core
+    // never deletes on its own anymore.
     let task_id = match memory_store.enqueue_reindex_task(serde_json::json!({
         "clear_existing": clear_existing,
         "include_sessions": include_sessions,

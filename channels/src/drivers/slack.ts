@@ -64,10 +64,15 @@ export function createSlackDriver(
     // Owner commands (audit 2026-05-08, group DD): /approve, /reject, /users,
     // /revoke. Without this branch the owner could not bootstrap pairing
     // requests over Slack.
+    //
+    // 7th pass: owner-command replies always go via DM
+    // (`client.chat.postMessage({channel: userId, ...})`), never `say()` —
+    // running `/users` in a public channel would otherwise leak the entire
+    // approved-user list into that channel's thread.
     if (isOwner && isOwnerCommand(text)) {
       const reply = await runOwnerCommand(text, bridge, strings);
       if (reply) {
-        await say({ text: reply, thread_ts: threadTs });
+        await client.chat.postMessage({ channel: userId, text: reply }).catch(() => {});
       }
       return;
     }
