@@ -74,53 +74,6 @@ pub async fn create_task(
     Ok(row.get("id"))
 }
 
-/// Update task status.
-#[allow(dead_code)] // Used by execute_task pipeline
-pub async fn update_task_status(
-    db: &PgPool,
-    task_id: Uuid,
-    status: &str,
-    result: Option<&str>,
-    error: Option<&str>,
-) -> Result<()> {
-    sqlx::query(
-        "UPDATE tasks SET status = $1, result = $2, error = $3, updated_at = now() WHERE id = $4",
-    )
-    .bind(status)
-    .bind(result)
-    .bind(error)
-    .bind(task_id)
-    .execute(db)
-    .await?;
-
-    Ok(())
-}
-
-/// Create a task step.
-#[allow(dead_code)] // Used by execute_task pipeline
-pub async fn create_step(
-    db: &PgPool,
-    task_id: Uuid,
-    step_order: i32,
-    mcp_name: &str,
-    action: &str,
-    params: Option<&serde_json::Value>,
-) -> Result<Uuid> {
-    let row = sqlx::query(
-        "INSERT INTO task_steps (task_id, step_order, mcp_name, action, params) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING id",
-    )
-    .bind(task_id)
-    .bind(step_order)
-    .bind(mcp_name)
-    .bind(action)
-    .bind(params)
-    .fetch_one(db)
-    .await?;
-
-    Ok(row.get("id"))
-}
-
 /// Update step status.
 pub async fn update_step_status(
     db: &PgPool,
@@ -208,17 +161,6 @@ pub async fn load_task_steps(
     Ok(rows)
 }
 
-/// Set task plan (JSON steps determined by agent).
-#[allow(dead_code)] // Used by execute_task pipeline
-pub async fn set_task_plan(db: &PgPool, task_id: Uuid, plan: &serde_json::Value) -> Result<()> {
-    sqlx::query("UPDATE tasks SET plan = $1, status = 'planning', updated_at = now() WHERE id = $2")
-        .bind(plan)
-        .bind(task_id)
-        .execute(db)
-        .await?;
-    Ok(())
-}
-
 #[derive(Debug, sqlx::FromRow)]
 #[allow(dead_code)] // Fields read via FromRow derive
 pub struct TaskStepRow {
@@ -232,45 +174,3 @@ pub struct TaskStepRow {
     pub output: Option<serde_json::Value>,
 }
 
-/// Execute a multi-step task: run steps sequentially, calling skills via MCP.
-#[allow(dead_code)] // Will be called from agent engine when task execution is triggered
-pub async fn execute_task(
-    db: &PgPool,
-    task_id: Uuid,
-    skills: &crate::mcp::McpRegistry,
-) -> Result<String> {
-    update_task_status(db, task_id, "running", None, None).await?;
-
-    let steps = load_task_steps(db, task_id).await?;
-    let mut last_output = String::new();
-
-    for step in &steps {
-        if step.status == "completed" {
-            // Already done (e.g., from a retry)
-            if let Some(ref out) = step.output {
-                last_output = serde_json::to_string(out).unwrap_or_default();
-            }
-            continue;
-        }
-
-        update_step_status(db, step.id, "running", None).await?;
-
-        let args = step.params.clone().unwrap_or(serde_json::json!({}));
-        match skills.call_tool(&step.mcp_name, &step.action, &args).await {
-            Ok(result) => {
-                let output = serde_json::json!({"result": result});
-                update_step_status(db, step.id, "completed", Some(&output)).await?;
-                last_output = result;
-            }
-            Err(e) => {
-                let error = serde_json::json!({"error": e.to_string()});
-                update_step_status(db, step.id, "failed", Some(&error)).await?;
-                update_task_status(db, task_id, "failed", None, Some(&e.to_string())).await?;
-                return Err(e);
-            }
-        }
-    }
-
-    update_task_status(db, task_id, "completed", Some(&last_output), None).await?;
-    Ok(last_output)
-}
