@@ -39,6 +39,9 @@ pub trait ToolExecutor: Send + Sync {
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
         parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
+        // `extra_deny`: parent's `compute_denied_tools` list when running as
+        // a subagent. Empty slice for top-level / non-subagent calls.
+        extra_deny: &[String],
     ) -> crate::agent::pipeline::parallel::BatchOutcome;
 }
 
@@ -62,6 +65,9 @@ pub(crate) trait ToolExecutorDeps: Send + Sync {
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
         parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
+        // `extra_deny`: parent's compute_denied_tools list. Empty slice for
+        // top-level / non-subagent calls.
+        extra_deny: &[String],
     ) -> crate::agent::pipeline::parallel::BatchOutcome;
 }
 
@@ -199,6 +205,7 @@ impl ToolExecutor for DefaultToolExecutor {
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
         parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
+        extra_deny: &[String],
     ) -> crate::agent::pipeline::parallel::BatchOutcome {
         // Weak upgrade is structurally safe: active requests hold a strong Arc<AgentEngine>
         // from the spawned task in chat.rs, so the engine cannot be dropped mid-request.
@@ -216,6 +223,7 @@ impl ToolExecutor for DefaultToolExecutor {
                 detect_loops,
                 persist_ctx,
                 parallel_batch_id,
+                extra_deny,
             )
             .await
     }

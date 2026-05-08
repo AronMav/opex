@@ -28,8 +28,9 @@ pub fn rewrite_tool_use_calls(
     calls: &[ToolCall],
     policy: Option<&AgentToolPolicy>,
     known_tools: &std::collections::HashSet<String>,
+    extra_deny: &[String],
 ) -> Vec<RewriteResult> {
-    calls.iter().map(|tc| rewrite_one(tc, policy, known_tools)).collect()
+    calls.iter().map(|tc| rewrite_one(tc, policy, known_tools, extra_deny)).collect()
 }
 
 // allow(dead_code): consumed by Task 11 (pipeline/parallel.rs).
@@ -38,6 +39,7 @@ fn rewrite_one(
     tc: &ToolCall,
     policy: Option<&AgentToolPolicy>,
     known_tools: &std::collections::HashSet<String>,
+    extra_deny: &[String],
 ) -> RewriteResult {
     if tc.name != "tool_use" {
         return RewriteResult::Direct(tc.clone());
@@ -79,6 +81,18 @@ fn rewrite_one(
         };
     }
 
+    // Audit 2026-05-08: subagent isolation gate — `extra_deny` carries the
+    // parent's `compute_denied_tools(&parent.delegation)` when this engine is
+    // running as a subagent. Without this, a subagent with the dispatcher
+    // enabled could promote/execute a tool from SUBAGENT_DENIED_TOOLS even
+    // though the visibility-filtered tool list correctly hid it.
+    if extra_deny.iter().any(|d| d == inner_name) {
+        return RewriteResult::Denied {
+            id: tc.id.as_str().to_string(),
+            reason: format!("tool '{inner_name}' is denied for subagents"),
+        };
+    }
+
     RewriteResult::Direct(ToolCall {
         id: tc.id.clone(),
         name: inner_name.to_string(),
@@ -107,7 +121,7 @@ mod tests {
     #[test]
     fn passes_non_tool_use_calls_through() {
         let calls = vec![tc("workspace_read", json!({"filename": "x.md"}))];
-        let r = rewrite_tool_use_calls(&calls, None, &known(&["workspace_read"]));
+        let r = rewrite_tool_use_calls(&calls, None, &known(&["workspace_read"]), &[]);
         assert_eq!(r.len(), 1);
         assert!(matches!(&r[0], RewriteResult::Direct(t) if t.name == "workspace_read"));
     }
@@ -118,7 +132,7 @@ mod tests {
             tc("tool_use", json!({"action": "search", "query": "cron"})),
             tc("tool_use", json!({"action": "describe", "name": "cron"})),
         ];
-        let r = rewrite_tool_use_calls(&calls, None, &known(&[]));
+        let r = rewrite_tool_use_calls(&calls, None, &known(&[]), &[]);
         assert!(r.iter().all(|x| matches!(x, RewriteResult::Direct(t) if t.name == "tool_use")));
     }
 
@@ -129,7 +143,7 @@ mod tests {
             "name": "cron",
             "arguments": {"action": "list"}
         }))];
-        let r = rewrite_tool_use_calls(&calls, None, &known(&["cron"]));
+        let r = rewrite_tool_use_calls(&calls, None, &known(&["cron"]), &[]);
         match &r[0] {
             RewriteResult::Direct(t) => {
                 assert_eq!(t.name, "cron");
@@ -145,7 +159,7 @@ mod tests {
         let calls = vec![tc("tool_use", json!({
             "action": "call", "name": "tool_use", "arguments": {}
         }))];
-        let r = rewrite_tool_use_calls(&calls, None, &known(&["tool_use"]));
+        let r = rewrite_tool_use_calls(&calls, None, &known(&["tool_use"]), &[]);
         assert!(matches!(&r[0], RewriteResult::Denied { reason, .. } if reason.contains("itself")));
     }
 
@@ -154,7 +168,7 @@ mod tests {
         let calls = vec![tc("tool_use", json!({
             "action": "call", "name": "nonexistent", "arguments": {}
         }))];
-        let r = rewrite_tool_use_calls(&calls, None, &known(&[]));
+        let r = rewrite_tool_use_calls(&calls, None, &known(&[]), &[]);
         assert!(matches!(&r[0], RewriteResult::Denied { reason, .. } if reason.contains("not found")));
     }
 
@@ -163,7 +177,7 @@ mod tests {
         let calls = vec![tc("tool_use", json!({
             "action": "call", "name": "../etc/passwd", "arguments": {}
         }))];
-        let r = rewrite_tool_use_calls(&calls, None, &known(&[]));
+        let r = rewrite_tool_use_calls(&calls, None, &known(&[]), &[]);
         assert!(matches!(&r[0], RewriteResult::Denied { reason, .. } if reason.contains("invalid")));
     }
 
@@ -176,8 +190,21 @@ mod tests {
         let calls = vec![tc("tool_use", json!({
             "action": "call", "name": "process", "arguments": {}
         }))];
-        let r = rewrite_tool_use_calls(&calls, Some(&policy), &known(&["process"]));
+        let r = rewrite_tool_use_calls(&calls, Some(&policy), &known(&["process"]), &[]);
         assert!(matches!(&r[0], RewriteResult::Denied { reason, .. } if reason.contains("denied by agent policy")));
+    }
+
+    #[test]
+    fn enforces_subagent_extra_deny() {
+        // Audit 2026-05-08: when extra_deny carries the parent's
+        // SUBAGENT_DENIED_TOOLS list, the dispatcher must refuse the inner
+        // call even if the subagent's own tool_policy.deny is empty.
+        let calls = vec![tc("tool_use", json!({
+            "action": "call", "name": "code_exec", "arguments": {}
+        }))];
+        let extra_deny = vec!["code_exec".to_string(), "cron".to_string()];
+        let r = rewrite_tool_use_calls(&calls, None, &known(&["code_exec"]), &extra_deny);
+        assert!(matches!(&r[0], RewriteResult::Denied { reason, .. } if reason.contains("denied for subagents")));
     }
 
     #[test]
@@ -187,7 +214,7 @@ mod tests {
             tc("tool_use", json!({"action": "call", "name": "cron", "arguments": {}})),
             tc("tool_use", json!({"action": "call", "name": "unknown", "arguments": {}})),
         ];
-        let r = rewrite_tool_use_calls(&calls, None, &known(&["cron"]));
+        let r = rewrite_tool_use_calls(&calls, None, &known(&["cron"]), &[]);
         match &r[0] { RewriteResult::Direct(t) => assert_eq!(t.id.as_str(), "call_tool_use"), _ => panic!() }
         match &r[1] { RewriteResult::Direct(t) => assert_eq!(t.id.as_str(), "call_tool_use"), _ => panic!() }
         match &r[2] { RewriteResult::Denied { id, .. } => assert_eq!(id, "call_tool_use"), _ => panic!() }

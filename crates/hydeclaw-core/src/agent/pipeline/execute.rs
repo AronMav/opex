@@ -786,6 +786,7 @@ pub async fn execute<S: EventSink>(
                 loop_config.detect_loops,
                 Some(&persist_ctx),
                 parallel_batch_id,
+                &[], // top-level (handle_sse / handle_with_status), not a subagent
             )
             .await;
         // Always emit ToolResult for completed tools, even if a loop break

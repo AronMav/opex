@@ -209,6 +209,11 @@ pub async fn execute_tool_calls_partitioned(
     executor: &(dyn ToolExecutor + '_),
     persist_ctx: Option<&ToolPersistCtx<'_>>,
     policy: Option<&crate::config::AgentToolPolicy>,
+    // `extra_deny`: subagent isolation list applied at dispatcher rewrite.
+    // Subagent callers pass parent's compute_denied_tools(&parent.delegation)
+    // so tool_use(action=call, name=X) cannot reach a tool blocked at the
+    // delegation layer. Non-subagent callers pass &[].
+    extra_deny: &[String],
     session_tool_state: Option<Arc<crate::agent::dispatcher::SessionToolState>>,
     promotion_max: u32,
     mcp: Option<&crate::mcp::McpRegistry>,
@@ -248,7 +253,7 @@ pub async fn execute_tool_calls_partitioned(
     };
 
     let rewritten = crate::agent::dispatcher::rewrite_tool_use_calls(
-        tool_calls, policy, &known_tools,
+        tool_calls, policy, &known_tools, extra_deny,
     );
 
     let mut direct_pending: Vec<(ToolCall, bool)> = Vec::with_capacity(rewritten.len());
@@ -1281,6 +1286,7 @@ mod sequential_enrichment_tests {
             &executor,
             Some(&pctx),
             None,
+            &[], // extra_deny: no subagent isolation in this test
             None,
             0,
             None,
@@ -1347,6 +1353,7 @@ mod sequential_enrichment_tests {
             &executor,
             None, // persist_ctx = None — subagent/openai_compat path
             None,
+            &[], // extra_deny: empty in this test
             None,
             0,
             None,

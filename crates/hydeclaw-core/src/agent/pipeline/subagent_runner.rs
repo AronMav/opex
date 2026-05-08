@@ -142,17 +142,18 @@ pub async fn run_subagent_with_session(
             loaded
         }
     };
+    // Subagent-specific deny list: SUBAGENT_DENIED_TOOLS plus the agent's
+    // `delegation.blocked_tools_extra` (or `blocked_tools_override` if
+    // non-empty). Computed once and used for two things:
+    //   1. visibility-filter YAML/MCP tools so the LLM doesn't see them in
+    //      the non-dispatcher path,
+    //   2. runtime-gate at the dispatcher rewrite step (`extra_deny`) so a
+    //      subagent that DOES have the dispatcher cannot reach a denied tool
+    //      via `tool_use(action=call, name=X)` (audit 2026-05-08).
+    let denied_for_subagent = crate::agent::pipeline::subagent::compute_denied_tools(
+        &executor.cfg().agent.delegation,
+    );
     if !dispatch_for_subagent {
-        // Subagent-specific deny list: SUBAGENT_DENIED_TOOLS plus the
-        // parent's `delegation.blocked_tools_extra` (or
-        // `blocked_tools_override` if non-empty). `internal_tool_definitions_for_subagent`
-        // already applies this to system tools; we MUST also apply it to
-        // YAML and MCP tools here, otherwise a subagent can pull a YAML
-        // tool whose name collides with the parent's deny entry (e.g. a
-        // user-defined `cron` YAML wrapper bypassing SUBAGENT_DENIED_TOOLS).
-        let denied_for_subagent = crate::agent::pipeline::subagent::compute_denied_tools(
-            &executor.cfg().agent.delegation,
-        );
         let denied_set: std::collections::HashSet<&str> =
             denied_for_subagent.iter().map(String::as_str).collect();
         available_tools.extend(
@@ -259,6 +260,7 @@ pub async fn run_subagent_with_session(
             messages.iter().map(|m| m.content.len()).sum(),
             &mut detector, loop_config.detect_loops, None,
             parallel_batch_id,
+            &denied_for_subagent,
         ).await;
         for batch in &outcome.results {
             messages.push(Message {
