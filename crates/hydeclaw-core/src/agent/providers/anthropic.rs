@@ -287,13 +287,45 @@ impl AnthropicProvider {
 
         if let Some(ref sys) = system_text {
             if self.prompt_cache {
-                // Anthropic cache_control requires system as array of content blocks
-                body["system"] = serde_json::json!([{
-                    "type": "text",
-                    "text": sys,
-                    "cache_control": {"type": "ephemeral"}
-                }]);
+                // CACHE-02: when CLAUDE.md is provided alongside the system
+                // prompt, emit it as a SECOND content block with its own
+                // cache_control. Empty/whitespace claude_md is treated as
+                // absent (defensive — context_builder filters empties via
+                // load_claude_md, but the provider should not rely on it).
+                let claude_md_present = opts
+                    .claude_md_content
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+
+                if claude_md_present {
+                    let claude_md = opts.claude_md_content.as_deref().unwrap();
+                    body["system"] = serde_json::json!([
+                        {
+                            "type": "text",
+                            "text": sys,
+                            "cache_control": {"type": "ephemeral"}
+                        },
+                        {
+                            "type": "text",
+                            "text": claude_md,
+                            "cache_control": {"type": "ephemeral"}
+                        }
+                    ]);
+                } else {
+                    // Plan-01 single-block path (no CLAUDE.md / non-base agent).
+                    body["system"] = serde_json::json!([{
+                        "type": "text",
+                        "text": sys,
+                        "cache_control": {"type": "ephemeral"}
+                    }]);
+                }
             } else {
+                // No caching → plain string. CLAUDE.md is intentionally
+                // dropped from this path; the non-cache call sites
+                // (openai_compat, subagent_runner) call
+                // `load_workspace_prompt` which already inlines CLAUDE.md
+                // into the monolithic prompt.
                 body["system"] = serde_json::Value::String(sys.clone());
             }
         }
@@ -1308,6 +1340,139 @@ mod tests {
         for (i, t) in body["tools"].as_array().unwrap().iter().enumerate() {
             assert!(t.get("cache_control").is_none(), "tool index {i} must have no cache_control when prompt_cache=false");
         }
+    }
+
+    // ── CACHE-02: third breakpoint — CLAUDE.md as second system content block ──
+
+    #[tokio::test]
+    async fn cache_third_breakpoint_emits_two_block_system_when_claude_md_present() {
+        use hydeclaw_types::{Message, MessageRole};
+
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let mut provider = AnthropicProvider::for_tests(
+            "claude-sonnet-4-6".to_string(),
+            0.7,
+            Some(8192),
+            secrets,
+        );
+        provider.prompt_cache = true;
+
+        let messages = vec![Message {
+            role: MessageRole::System,
+            content: "you are helpful".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let opts = CallOptions {
+            thinking_level: 0,
+            claude_md_content: Some("# Project Rules\n- rustls only".to_string()),
+        };
+
+        let (_, body) = provider.build_request_body(&messages, &[], opts);
+
+        let system = body["system"].as_array().expect("system must be an array when CLAUDE.md is present");
+        assert_eq!(system.len(), 2, "must have exactly 2 content blocks: system + claude_md");
+        assert_eq!(system[0]["text"], "you are helpful");
+        assert_eq!(system[0]["type"], "text");
+        assert!(system[0].get("cache_control").is_some(), "block 0 (system) must have cache_control");
+        assert!(system[1]["text"].as_str().unwrap().contains("Project Rules"));
+        assert_eq!(system[1]["type"], "text");
+        assert!(system[1].get("cache_control").is_some(), "block 1 (claude_md) must have cache_control");
+    }
+
+    #[tokio::test]
+    async fn cache_third_breakpoint_falls_back_to_single_block_when_claude_md_absent() {
+        use hydeclaw_types::{Message, MessageRole};
+
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let mut provider = AnthropicProvider::for_tests(
+            "claude-sonnet-4-6".to_string(),
+            0.7,
+            Some(8192),
+            secrets,
+        );
+        provider.prompt_cache = true;
+
+        let messages = vec![Message {
+            role: MessageRole::System,
+            content: "you are helpful".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let opts = CallOptions {
+            thinking_level: 0,
+            claude_md_content: None,
+        };
+
+        let (_, body) = provider.build_request_body(&messages, &[], opts);
+        let system = body["system"].as_array().expect("system must be a single-block array (Plan 01)");
+        assert_eq!(system.len(), 1);
+        assert!(system[0].get("cache_control").is_some());
+    }
+
+    #[tokio::test]
+    async fn cache_third_breakpoint_treats_whitespace_only_claude_md_as_absent() {
+        use hydeclaw_types::{Message, MessageRole};
+
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let mut provider = AnthropicProvider::for_tests(
+            "claude-sonnet-4-6".to_string(),
+            0.7,
+            Some(8192),
+            secrets,
+        );
+        provider.prompt_cache = true;
+
+        let messages = vec![Message {
+            role: MessageRole::System,
+            content: "system".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let opts = CallOptions {
+            thinking_level: 0,
+            claude_md_content: Some("   \n\t  \n".to_string()),
+        };
+
+        let (_, body) = provider.build_request_body(&messages, &[], opts);
+        let system = body["system"].as_array().expect("must still be an array");
+        assert_eq!(system.len(), 1, "whitespace-only claude_md must be treated as absent");
+    }
+
+    #[tokio::test]
+    async fn cache_third_breakpoint_disabled_when_prompt_cache_false() {
+        use hydeclaw_types::{Message, MessageRole};
+
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let provider = AnthropicProvider::for_tests(
+            "claude-sonnet-4-6".to_string(),
+            0.7,
+            Some(8192),
+            secrets,
+        );
+        // for_tests default: prompt_cache=false
+
+        let messages = vec![Message {
+            role: MessageRole::System,
+            content: "system".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let opts = CallOptions {
+            thinking_level: 0,
+            claude_md_content: Some("would be ignored".to_string()),
+        };
+
+        let (_, body) = provider.build_request_body(&messages, &[], opts);
+        assert!(body["system"].is_string(), "system must be a plain string when prompt_cache=false");
     }
 }
 
