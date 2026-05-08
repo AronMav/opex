@@ -106,9 +106,25 @@ pub async fn canvas_resolve_url(
 }
 
 /// Get a URL that browser-renderer can navigate to for the current canvas content.
+///
+/// For `content_type = "url"`, the URL is LLM-controlled. Audit 2026-05-08
+/// found that `canvas_run_js` and `canvas_snapshot` passed this URL straight
+/// to browser-renderer, which would happily fetch internal services
+/// (gateway API, postgres on 5434, toolgate, etc.). We now run the same
+/// SSRF pre-check used by YAML tools — `validate_url_scheme` rejects
+/// non-http(s) schemes, internal-blocklist authorities, and numeric private
+/// IPs; the browser-renderer's HTTP client also runs through the
+/// `SsrfSafeResolver` for DNS-level filtering.
 pub fn canvas_content_url(state: &CanvasContent) -> Result<String, String> {
     match state.content_type.as_str() {
-        "url" => Ok(state.content.clone()),
+        "url" => {
+            crate::net::ssrf::validate_url_scheme(&state.content)
+                .map_err(|e| format!(
+                    "Error: canvas URL '{}' rejected as unsafe: {e}",
+                    state.content,
+                ))?;
+            Ok(state.content.clone())
+        }
         "html" => {
             use base64::Engine;
             Ok(format!(
