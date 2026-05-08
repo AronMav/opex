@@ -44,6 +44,31 @@ pub fn compute_denied_tools(cfg: &DelegationConfig) -> Vec<String> {
     denied
 }
 
+/// Strict subagent runtime deny list — always SUBAGENT_DENIED_TOOLS, regardless
+/// of what the subagent's own `[agent.delegation]` config says.
+///
+/// Audit 2026-05-08 (4th pass) found that the runner reached for the
+/// SUBAGENT'S OWN `compute_denied_tools(&executor.cfg().agent.delegation)`,
+/// which let a subagent author set `blocked_tools_override = ["x"]` to
+/// effectively grant themselves every dangerous tool (cron, secret_set,
+/// process, code_exec, …) — `blocked_tools_override` was meant for the
+/// SPAWNING parent to apply restrictions, not for the subagent to weaken
+/// its own. Until parent's delegation is plumbed through the spawn chain
+/// (live agents in `session_agent_pool` only carry the subagent's engine
+/// today), the runner-side deny list is hard-anchored to SUBAGENT_DENIED_TOOLS.
+///
+/// The subagent is still allowed to add its own additional restrictions via
+/// `blocked_tools_extra` (more, never fewer).
+pub fn runtime_subagent_denylist(cfg: &DelegationConfig) -> Vec<String> {
+    let mut denied: Vec<String> = SUBAGENT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect();
+    for extra in &cfg.blocked_tools_extra {
+        if !denied.contains(extra) {
+            denied.push(extra.clone());
+        }
+    }
+    denied
+}
+
 /// Parse a duration string like "2m", "30s" for subagent timeout.
 /// Defaults to 2m (120s) on invalid input — matches the config default.
 pub(crate) fn parse_subagent_timeout(s: &str) -> std::time::Duration {
