@@ -476,7 +476,7 @@ impl LlmProvider for RoutingProvider {
             tracing::debug!(provider = %primary_display, "primary on cooldown, skipping");
             pending_reason = Some("cooldown");
         } else {
-            match primary.provider.chat(messages, tools, opts).await {
+            match primary.provider.chat(messages, tools, opts.clone()).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => match self.handle_provider_error(&e, &primary_key, primary_cooldown) {
                     None => {
@@ -515,7 +515,7 @@ impl LlmProvider for RoutingProvider {
                     Self::record_failover(&last_failed_key, &fb.key, reason);
                 }
                 tracing::info!(provider = %fb.provider.name(), "trying fallback provider");
-                match fb.provider.chat(messages, tools, opts).await {
+                match fb.provider.chat(messages, tools, opts.clone()).await {
                     Ok(mut resp) => {
                         let reason = if primary_skipped { "cooldown" } else { "primary_failed" };
                         resp.fallback_notice = Some(format!("↪️ {} → {} ({})", primary_display, fb.provider.name(), reason));
@@ -570,7 +570,7 @@ impl LlmProvider for RoutingProvider {
                 })
             };
 
-            match primary.provider.chat_stream(messages, tools, tracking_tx, opts).await {
+            match primary.provider.chat_stream(messages, tools, tracking_tx, opts.clone()).await {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
                     // tracking_tx is now consumed/dropped by the call above.
@@ -626,7 +626,7 @@ impl LlmProvider for RoutingProvider {
                     Self::record_failover(&last_failed_key, &fb.key, reason);
                 }
                 tracing::info!(provider = %fb.provider.name(), "trying streaming fallback provider");
-                match fb.provider.chat_stream(messages, tools, chunk_tx.clone(), opts).await {
+                match fb.provider.chat_stream(messages, tools, chunk_tx.clone(), opts.clone()).await {
                     Ok(mut resp) => {
                         let reason = if primary_skipped { "cooldown" } else { "primary_failed" };
                         resp.fallback_notice = Some(format!("↪️ {} → {} ({})", primary_display, fb.provider.name(), reason));

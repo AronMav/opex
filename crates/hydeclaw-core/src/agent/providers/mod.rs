@@ -152,12 +152,23 @@ impl LlmProvider for UnconfiguredProvider {
 
 /// Per-call LLM options. Passed through the entire call chain from execute.rs
 /// to the provider. All providers except AnthropicProvider ignore this.
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct CallOptions {
     /// Thinking level set by /think command.
     /// 0 = off. For adaptive models (Opus 4.6+): 1–2 = low, 3 = medium, 4+ = high effort.
     /// For manual models (Sonnet 3.7, Haiku 4.5, etc.): 1→1024, 2→4096, 3→10000, 4→20000, 5+→32000 budget_tokens.
     pub thinking_level: u8,
+    /// Optional CLAUDE.md content for the system agent.
+    ///
+    /// When `Some(text)` AND the provider supports prompt caching AND
+    /// `prompt_cache` is enabled, this text is emitted as a SEPARATE
+    /// content block in the request's `system` field with its own
+    /// `cache_control: ephemeral` breakpoint — the third stable cache
+    /// segment (after system prompt and tool definitions).
+    ///
+    /// `None` for non-base agents and for agents without prompt caching.
+    /// Non-Anthropic providers ignore this field (CACHE-04). See CACHE-02.
+    pub claude_md_content: Option<String>,
 }
 
 /// Pluggable LLM provider trait.
