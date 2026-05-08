@@ -304,7 +304,10 @@ pub async fn execute<S: EventSink>(
         let run_max = live_provider.run_max_duration_secs();
         let call_opts = crate::agent::providers::CallOptions {
             thinking_level: engine.state().thinking_level.load(std::sync::atomic::Ordering::Relaxed),
-            claude_md_content: None, // CACHE-02: will be wired in Task 3b
+            // CACHE-02: thread CLAUDE.md (loaded once during bootstrap) into
+            // every LLM call. Anthropic uses it as a third cache breakpoint;
+            // other providers ignore the field (CACHE-04).
+            claude_md_content: claude_md_content.clone(),
         };
         let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
             live_provider,
@@ -877,7 +880,16 @@ pub async fn execute<S: EventSink>(
                     .chat(
                         &messages,
                         &[],
-                        crate::agent::providers::CallOptions::default(),
+                        crate::agent::providers::CallOptions {
+                            // CACHE-02: forced-final-call (loop-broken path) is on
+                            // the SAME engine.cfg().provider. For Anthropic agents
+                            // with prompt_cache, omitting claude_md_content here
+                            // would silently invalidate the third breakpoint on
+                            // this code path (cost regression on loop-break
+                            // sessions). Reuse the bootstrap-bound value.
+                            claude_md_content: claude_md_content.clone(),
+                            ..Default::default()
+                        },
                     )
                     .await
                 {
@@ -934,7 +946,14 @@ pub async fn execute<S: EventSink>(
             .chat(
                 &messages,
                 &[],
-                crate::agent::providers::CallOptions::default(),
+                crate::agent::providers::CallOptions {
+                    // CACHE-02: same rationale as the loop-break forced-final
+                    // path — the third breakpoint must be present on every
+                    // call to engine.cfg().provider so cache hits cover this
+                    // code path too.
+                    claude_md_content: claude_md_content.clone(),
+                    ..Default::default()
+                },
             )
             .await
         {
