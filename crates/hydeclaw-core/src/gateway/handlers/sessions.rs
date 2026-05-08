@@ -547,6 +547,17 @@ pub(crate) async fn api_invite_to_session(
         return resp;
     }
 
+    // Audit 2026-05-08 (7th pass): refuse self-invite. The session owner is
+    // the implicit primary participant; explicitly inviting them would
+    // duplicate the entry in `sessions.participants` since `add_participant`
+    // uses `array_append`, not `array(SELECT DISTINCT …)`.
+    if req.agent_name == agent {
+        return ApiError::BadRequest(
+            "cannot invite the session owner — already a participant".into(),
+        )
+        .into_response();
+    }
+
     // Validate target agent exists
     let agent_exists = {
         let map = agents.map.read().await;

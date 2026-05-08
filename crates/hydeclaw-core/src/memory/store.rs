@@ -435,6 +435,14 @@ impl MemoryStore {
 
     /// Wipe all memory for an agent.
     /// Returns the number of memory chunks deleted.
+    ///
+    /// Audit 2026-05-08 (7th pass): no longer called by the reindex flow —
+    /// the memory-worker handles `clear_existing` atomically (see
+    /// `reindex.rs`'s trailing DELETE gated on `created_at < reindex_started`),
+    /// removing the prior race where Core wiped first and an enqueue
+    /// failure left the agent empty. Retained for admin / future
+    /// agent-deletion paths.
+    #[allow(dead_code)]
     pub async fn wipe_agent_memory(&self, agent_id: &str) -> Result<u64> {
         crate::db::memory_queries::wipe_agent_memory(&self.db, agent_id).await
     }

@@ -93,15 +93,31 @@ fn default_limit() -> i64 {
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 /// `GET /api/sessions/failures?agent=&limit=20&offset=0`
+///
+/// Audit 2026-05-08 (7th pass): `?agent=` is now MANDATORY. Without the
+/// filter the endpoint returned the full failure log across every agent,
+/// including diagnostic detail (error_message, last_tool_output, llm_model,
+/// context). With every other session-read endpoint gated on `?agent=`,
+/// leaving the bulk-list open was inconsistent and let a token-holder
+/// enumerate every agent's failures.
 pub(crate) async fn api_list_failures(
     State(infra): State<InfraServices>,
     Query(q): Query<ListFailuresQuery>,
 ) -> impl IntoResponse {
     let limit = q.limit.clamp(1, 100);
     let offset = q.offset.max(0);
-    let agent = q.agent.as_deref().filter(|s| !s.is_empty());
+    let agent = match q.agent.as_deref().filter(|s| !s.is_empty()) {
+        Some(a) => a,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "agent parameter required"})),
+            )
+                .into_response();
+        }
+    };
 
-    let failures = match session_failures::list_session_failures(&infra.db, agent, limit, offset).await {
+    let failures = match session_failures::list_session_failures(&infra.db, Some(agent), limit, offset).await {
         Ok(v) => v,
         Err(e) => {
             return (
@@ -111,7 +127,7 @@ pub(crate) async fn api_list_failures(
                 .into_response();
         }
     };
-    let total = match session_failures::count_session_failures(&infra.db, agent).await {
+    let total = match session_failures::count_session_failures(&infra.db, Some(agent)).await {
         Ok(n) => n,
         Err(e) => {
             return (

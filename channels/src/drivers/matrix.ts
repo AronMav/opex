@@ -111,10 +111,31 @@ export function createMatrixDriver(
     }
 
     // Owner commands (audit 2026-05-08, group DD).
+    //
+    // 7th pass: owner-command replies are gated to rooms with ≤ 2 joined
+    // members (i.e. DM with the bot). Running `/users` in a public room
+    // would otherwise leak the full approved-user list to every member.
+    // For safety we ping the joined-members count first; on any error we
+    // refuse to reply (fail-closed).
     if (isOwner && isOwnerCommand(text)) {
       const reply = await runOwnerCommand(text, bridge, strings);
       if (reply) {
-        await sendMessage(roomId, reply, eventId).catch(() => {});
+        let isDm = false;
+        try {
+          const encoded = encodeURIComponent(roomId);
+          const members = await matrixApi(
+            "GET",
+            `/_matrix/client/v3/rooms/${encoded}/joined_members`,
+          );
+          isDm = Object.keys(members.joined ?? {}).length <= 2;
+        } catch {
+          isDm = false;
+        }
+        if (isDm) {
+          await sendMessage(roomId, reply, eventId).catch(() => {});
+        }
+        // In a multi-user room we silently refuse rather than DM the owner —
+        // creating an ad-hoc DM room is an architectural change for later.
       }
       return;
     }

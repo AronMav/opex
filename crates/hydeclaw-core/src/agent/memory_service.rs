@@ -72,6 +72,11 @@ pub trait MemoryService: Send + Sync {
 
     /// Wipe all memory for an agent: deletes all memory chunks for the given agent.
     /// Returns the number of memory chunks deleted.
+    ///
+    /// Audit 2026-05-08 (7th pass): not called from the reindex flow
+    /// anymore — memory-worker handles `clear_existing` atomically.
+    /// Retained for admin / agent-deletion paths.
+    #[allow(dead_code)]
     async fn wipe_agent_memory(&self, agent_id: &str) -> Result<u64>;
 
     /// Insert a reindex task into the memory worker queue.

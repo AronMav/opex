@@ -280,24 +280,31 @@ async function handleOwnerCommand(
   strings: Strings,
   msg: DMessage,
 ): Promise<void> {
+  // Audit 2026-05-08 (7th pass): owner-command replies always go to the
+  // owner's DM (`msg.author.send(...)`), never via `msg.reply()` — running
+  // `/users` in a public guild channel would otherwise leak the entire
+  // approved-user list into that channel.
+  const sendOwner = async (out: string) => {
+    await msg.author.send(out).catch(() => {});
+  };
   const trimmed = text.trim();
 
   if (trimmed.startsWith("/approve ")) {
     const code = trimmed.slice("/approve ".length).trim();
     const result = await bridge.approvePairing(code);
-    await msg.reply(result.success ? strings.userApproved(code) : strings.codeNotFound).catch(() => {});
+    await sendOwner(result.success ? strings.userApproved(code) : strings.codeNotFound);
     return;
   }
   if (trimmed.startsWith("/reject ")) {
     const code = trimmed.slice("/reject ".length).trim();
     bridge.rejectPairing(code);
-    await msg.reply(strings.requestRejected).catch(() => {});
+    await sendOwner(strings.requestRejected);
     return;
   }
   if (trimmed === "/users") {
     const users = await bridge.listUsers();
     if (users.length === 0) {
-      await msg.reply(strings.noApprovedUsers).catch(() => {});
+      await sendOwner(strings.noApprovedUsers);
       return;
     }
     let out = strings.approvedUsersHeader;
@@ -307,12 +314,12 @@ async function handleOwnerCommand(
       out += strings.userListItem(label, uid, u.approved_at ?? "?");
     }
     out += strings.revokeHint;
-    await msg.reply(out).catch(() => {});
+    await sendOwner(out);
     return;
   }
   if (trimmed.startsWith("/revoke ")) {
     const targetId = trimmed.slice("/revoke ".length).trim();
     const success = await bridge.revokeUser(targetId);
-    await msg.reply(success ? strings.userRevoked(targetId) : strings.userNotFound).catch(() => {});
+    await sendOwner(success ? strings.userRevoked(targetId) : strings.userNotFound);
   }
 }

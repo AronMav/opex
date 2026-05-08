@@ -68,6 +68,11 @@ export const qk = {
   approvals: ["approvals"] as const,
   backups: ["backups"] as const,
   sessions: (agent: string) => ["sessions", "list", agent] as const,
+  // Audit 2026-05-08 (7th pass): kept as 3-element prefix so existing
+  // `invalidateQueries({queryKey: qk.sessionMessages(id)})` calls invalidate
+  // every per-agent cache entry via React Query's default prefix matching.
+  // The actual `queryKey` used by `useSessionMessages`/`useSessionChain`
+  // appends `agent` (4th element) to prevent cross-agent cache collisions.
   sessionMessages: (id: string) => ["sessions", id, "messages"] as const,
   sessionChain: (id: string) => ["sessions", id, "chain"] as const,
   providers: ["providers"] as const,
@@ -545,7 +550,10 @@ export function useSetProviderActive() {
 
 export function useSessionMessages(sessionId: string | null, engineRunning = false, agent?: string) {
   return useQuery({
-    queryKey: qk.sessionMessages(sessionId!),
+    // Keep prefix `["sessions", id, "messages"]` (so existing
+    // invalidations match) and append agent so two agents' caches don't
+    // collide. Empty-string fallback when agent is absent.
+    queryKey: [...qk.sessionMessages(sessionId!), agent ?? ""] as const,
     queryFn: () => {
       // Audit 2026-05-08: backend requires ?agent= for owner check.
       const params = new URLSearchParams({ limit: "100" });
@@ -568,7 +576,7 @@ export function useSessionMessages(sessionId: string | null, engineRunning = fal
 
 export function useSessionChain(sessionId: string | null, agent?: string) {
   return useQuery({
-    queryKey: qk.sessionChain(sessionId!),
+    queryKey: [...qk.sessionChain(sessionId!), agent ?? ""] as const,
     queryFn: () => {
       // Audit 2026-05-08: backend requires ?agent= for owner check.
       const params = new URLSearchParams();
