@@ -378,6 +378,7 @@ pub(crate) async fn api_delete_session(
                     tracing::info!(session_id = %id, count = pool.len(), "killing session agent pool on delete");
                     pool.kill_all();
                 }
+            agents.session_tool_state.remove(&id);
             Json(json!({"ok": true})).into_response()
         }
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
@@ -468,6 +469,7 @@ pub(crate) async fn api_delete_all_sessions(
                 let mut pools = agents.session_pools.write().await;
                 pools.retain(|sid, _| !session_ids.contains(sid));
             }
+            agents.session_tool_state.retain(|sid, _| !session_ids.contains(sid));
             let filter = q.agent.as_deref().or(q.channel.as_deref()).unwrap_or("?");
             tracing::info!(filter = %filter, deleted = r.rows_affected(), "sessions deleted via API");
             Json(json!({"ok": true, "deleted": r.rows_affected()})).into_response()
@@ -1191,6 +1193,45 @@ mod tests {
         let md = format_session_as_markdown(&data);
         assert!(md.contains("2026-04-27T10:05"), "truncated prefix must be present");
         assert!(!md.contains("2026-04-27T10:05:00.000Z"), "full timestamp must not appear — truncated to 16 chars");
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn session_tool_state_removed_after_session_delete() {
+        let tool_state: crate::agent::dispatcher::SessionToolStateMap =
+            Arc::new(dashmap::DashMap::new());
+        let session_id = Uuid::new_v4();
+
+        let state = crate::agent::dispatcher::SessionToolState::new();
+        state.set_describe("tool".into(), "schema".into()).await;
+        tool_state.insert(session_id, state);
+        assert!(tool_state.contains_key(&session_id));
+
+        tool_state.remove(&session_id);
+
+        assert!(!tool_state.contains_key(&session_id));
+    }
+
+    #[tokio::test]
+    async fn session_tool_state_retained_for_surviving_sessions() {
+        let tool_state: crate::agent::dispatcher::SessionToolStateMap =
+            Arc::new(dashmap::DashMap::new());
+        let keep_id = Uuid::new_v4();
+        let delete_id = Uuid::new_v4();
+
+        tool_state.insert(keep_id, crate::agent::dispatcher::SessionToolState::new());
+        tool_state.insert(delete_id, crate::agent::dispatcher::SessionToolState::new());
+
+        let deleted = vec![delete_id];
+        tool_state.retain(|sid, _| !deleted.contains(sid));
+
+        assert!(tool_state.contains_key(&keep_id));
+        assert!(!tool_state.contains_key(&delete_id));
     }
 }
 
