@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v0.29.0
 milestone_name: Harness Quality
-status: executing
-last_updated: "2026-05-08T16:10:15.336Z"
+status: verifying
+last_updated: "2026-05-08T16:36:29.227Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # GSD State
@@ -18,7 +18,7 @@ progress:
 
 Phase: 68 (prompt-caching) — EXECUTING
 Plan: 3 of 3
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-05-08
 
 ## Project Reference
@@ -52,6 +52,8 @@ Phase 67: [░░░░░] Not started
 - [Phase 68]: CACHE-03 dashboard metrics: single-pass FILTER aggregate avoids two SQL round-trips; Default derive on DashboardSnapshot forward-proofs test fixtures; unwrap_or_default() on cache_metrics degrades to zeros not 500
 - [Phase 68-01]: Stable-tool breakpoint uses all_system_tool_names() reverse-scan — O(1) after first call, no DB dependency, fixes Pitfall 1.2
 - [Phase 68-01]: routing.rs prompt_cache: None intentionally untouched — Phase 70 ROUTE-02 will thread agent.prompt_cache there
+- [Phase 68-02]: Copy removed from CallOptions since Option<String> is not Copy; all loop sites use .clone()
+- [Phase 68-02]: CLAUDE.md is third cache breakpoint: base agents with prompt_cache=true get 2-block system array [system_prompt, claude_md] each with cache_control: ephemeral
 
 ### Key Pitfalls to Watch
 

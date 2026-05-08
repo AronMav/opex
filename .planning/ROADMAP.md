@@ -48,7 +48,7 @@ See `.planning/milestones/v0.19.0-ROADMAP.md` for full phase details and `.plann
 ### 🚧 v0.29.0 Harness Quality (Phases 67–72)
 
 - [x] **Phase 67: Rate Limiter DashMap Swap** — REF-03 carry-over: swap `Arc<Mutex<HashMap>>` for DashMap 6 in hydeclaw-gateway-util rate limiter; validates guard scoping patterns for the rest of the milestone (completed 2026-05-08)
-- [ ] **Phase 68: Prompt Caching** — CACHE-01..04: cache_control breakpoints on system message and stable tool tail in AnthropicProvider; cache metrics in usage_log and /api/health/dashboard; provider-type guard
+- [x] **Phase 68: Prompt Caching** — CACHE-01..04: cache_control breakpoints on system message and stable tool tail in AnthropicProvider; cache metrics in usage_log and /api/health/dashboard; provider-type guard (completed 2026-05-08)
 - [ ] **Phase 69: Auto-Compaction** — COMP-01..04: threshold default raised to 0.85, token counting fixed for cache-aware sessions (input + cache_read + cache_creation), context window corrected to 1M for new Claude models, custom compaction prompt support
 - [ ] **Phase 70: Model Routing** — ROUTE-01..02: min_input_tokens and min_tool_count complexity conditions in RoutingProvider, per-route-target cache context isolation, routing decisions logged to session_events
 - [ ] **Phase 71: Tool defer_loading** — DEFER-01..02: defer_loading field in YamlToolDef, stub-only LLM registration, lazy schema load on first dispatch, per-pipeline-invocation loaded-tools state
@@ -94,12 +94,12 @@ Plans:
 3. `cache_read_input_tokens` and `cache_creation_input_tokens` appear in the `usage_log` table and are visible in `/api/health/dashboard`
 4. The CLAUDE.md of the system agent is registered as a third cache breakpoint (after system prompt, after stable tool definitions)
 
-**Plans:** 2/3 plans executed
+**Plans:** 3/3 plans complete
 
 Plans:
 
 - [x] 68-01-PLAN.md — Wave 1: AgentSettings.prompt_cache field + factory wiring + tool breakpoint fix (last system tool, not YAML) + non-Anthropic ignore test (CACHE-01, CACHE-04)
-- [ ] 68-02-PLAN.md — Wave 2: CLAUDE.md as third cache breakpoint via CallOptions.claude_md_content + workspace loader split + context_builder integration (CACHE-02)
+- [x] 68-02-PLAN.md — Wave 2: CLAUDE.md as third cache breakpoint via CallOptions.claude_md_content + workspace loader split + context_builder integration (CACHE-02)
 - [x] 68-03-PLAN.md — Wave 1: hydeclaw-db cache_metrics() query + DashboardSnapshot extension + /api/health/dashboard 4-field emission (CACHE-03)
 
 **Key constraint**: Cache breakpoint must be placed on the last stable (system) tool, not the last tool overall — YAML tools vary between turns and would cause every request to be a cache write with zero reads (Pitfall 1.2).
@@ -190,7 +190,7 @@ Plans:
 | 65. Observability | v0.19.0 | Complete | 2026-04-17 |
 | 66. Refactoring | v0.19.0 | Complete | 2026-04-17 |
 | 67. Rate Limiter DashMap Swap | 1/1 | Complete    | 2026-05-08 |
-| 68. Prompt Caching | 2/3 | In Progress|  |
+| 68. Prompt Caching | 3/3 | Complete   | 2026-05-08 |
 | 69. Auto-Compaction | v0.29.0 | Not started | - |
 | 70. Model Routing | v0.29.0 | Not started | - |
 | 71. Tool defer_loading | v0.29.0 | Not started | - |
