@@ -1,15 +1,11 @@
-//! REF-01 Task 6: trait impls that wire `AgentEngine` into the tool pipeline.
+//! Trait impls that wire `AgentEngine` into the tool pipeline.
 //!
-//! Owns:
 //! - `impl ToolExecutorDeps for AgentEngine`
 //! - `impl pipeline::parallel::ToolExecutor for AgentEngine`
 //! - `impl pipeline::llm_call::Compactor for AgentEngine`
 //! - inherent methods: `tool_groups`, `internal_tool_definitions[_for_subagent]`,
 //!   `execute_tool_calls_partitioned`
-//! - the top-level `all_system_tool_names()` accessor (re-exported from
-//!   `engine/mod.rs` via `pub use`)
-//!
-//! Extracted from `engine/mod.rs` as part of plan 66-02.
+//! - `all_system_tool_names()` (re-exported from `engine/mod.rs`)
 
 use hydeclaw_types::{Message, ToolDefinition};
 use uuid::Uuid;

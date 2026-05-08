@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(summary, "first question\n---\nsecond question");
     }
 
-    // ── Task 5: multi-verdict + force gate ───────────────────────────────────
+    // ── multi-verdict + force gate ───────────────────────────────────────────
 
     #[test]
     fn multi_verdict_all_three_parsed() {

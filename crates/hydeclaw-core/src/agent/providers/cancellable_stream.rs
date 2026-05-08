@@ -66,8 +66,8 @@ use super::timeouts::TimeoutsConfig;
 ///
 /// Implementation detail: a background producer task drains `inner` into an
 /// internal mpsc channel so that the inactivity timer fires even when no
-/// consumer is actively polling the returned stream. Task 10 extends this
-/// with max-duration and further decouples the producer from the caller.
+/// consumer is actively polling the returned stream; the inactivity timer
+/// fires regardless, and max-duration cancellation is applied separately.
 pub fn stream_with_cancellation<S>(
     mut inner: S,
     cancel: CancellationToken,

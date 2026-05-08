@@ -23,7 +23,7 @@ New install? Run `./setup.sh` — it handles everything.
 ## Install
 
 ```bash
-tar xzf hydeclaw-v0.4.0.tar.gz
+tar xzf hydeclaw-v<VERSION>.tar.gz
 cd hydeclaw
 ./setup.sh
 ```
@@ -186,7 +186,7 @@ hydeclaw/
 ## Updating
 
 ```bash
-~/hydeclaw/update.sh hydeclaw-v0.4.0.tar.gz
+~/hydeclaw/update.sh hydeclaw-v<VERSION>.tar.gz
 ```
 
 Preserves `.env`, `config/`, `workspace/`, and the database. Run `GET /api/doctor` after to verify.

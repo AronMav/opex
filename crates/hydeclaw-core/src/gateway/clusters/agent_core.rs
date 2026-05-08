@@ -73,7 +73,7 @@ impl AgentCore {
         let mut total: u64 = 0;
         for handle in map.values() {
             let tex = handle.engine.tex();
-            // Phase 66 REF-02: DashMap::len() is sync — no `.await` needed.
+            // DashMap::len() is sync — no `.await` needed.
             total += tex.approval_waiters.len() as u64;
         }
         total

@@ -16,24 +16,10 @@ use tokio::sync::Mutex;
 // path consumed by `gateway/mod.rs`.
 pub use super::rate_limiter::{AuthRateLimiter, RequestRateLimiter};
 
-// ── Phase 66 REF-06 — rate-limiter size accessor ─────────────────────────
-//
-// The auth + request rate limiters are now stored in `gateway::mod.rs` as
-// `OnceLock<Arc<T>>` statics (replacing the Phase 65 `OnceLock<&'static T>`
-// backed by `Box::leak`). The `/api/health/dashboard` handler consumes this
-// public async helper via `crate::gateway::middleware::rate_limiter_sizes()`;
-// internally it delegates to the mod.rs accessors (`auth_limiter()`,
-// `request_limiter()`) which lazily return a cheap `Arc::clone`.
-//
-// The Phase 65-04 `install_rate_limiter_handles` shim is retired — the
-// dashboard reads sizes directly from the Arc-owned instances held in
-// `gateway::mod.rs` state.
-
-/// Phase 66 REF-06: snapshot both rate-limiter map sizes for
-/// `/api/health/dashboard`. Returns `(0, 0)` before the router has
-/// constructed the limiters (only happens during early startup / tests
-/// that do not construct a gateway). Each call takes the limiter's async
-/// lock briefly — the background sweeper (Phase 62 RES-04) keeps the maps
+/// Snapshot both rate-limiter map sizes for `/api/health/dashboard`.
+/// Returns `(0, 0)` before the router has constructed the limiters
+/// (early startup or tests that skip the gateway). Each call takes the
+/// limiter's async lock briefly — the background sweeper keeps the maps
 /// bounded, so this is an O(1)-wall-clock read in practice.
 pub async fn rate_limiter_sizes() -> (u64, u64) {
     let auth_size = match super::auth_limiter_opt() {

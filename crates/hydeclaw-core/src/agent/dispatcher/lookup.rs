@@ -4,7 +4,7 @@ use hydeclaw_types::ToolDefinition;
 
 /// Validate that a tool name is safe for path/URL contexts and matches our
 /// naming convention. Identical to the validator used by /api/tools endpoints.
-// allow(dead_code): consumed by Task 7 (tool_handlers/tool_use.rs).
+// allow(dead_code): consumed by tool_handlers/tool_use.rs.
 #[allow(dead_code)]
 pub fn is_valid_tool_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 64 {
@@ -21,7 +21,7 @@ pub fn is_valid_tool_name(name: &str) -> bool {
 
 /// Source of truth for "is this a tool the dispatcher can route to?".
 /// Checks system tools, visible YAML tools, and visible MCP tools.
-// allow(dead_code): consumed by Task 7 (tool_handlers/tool_use.rs).
+// allow(dead_code): consumed by tool_handlers/tool_use.rs.
 #[allow(dead_code)]
 pub async fn is_known_tool(
     name: &str,
@@ -60,7 +60,7 @@ pub async fn is_known_tool(
 /// Filters in order: deny-list, required_base for non-base, drop static core,
 /// drop currently-promoted tools (they are in per-session core for this turn).
 /// Sorted alphabetically by name.
-// allow(dead_code): consumed by Task 7 (tool_handlers/tool_use.rs).
+// allow(dead_code): consumed by tool_handlers/tool_use.rs.
 #[allow(dead_code)]
 pub async fn build_extension_tool_list(
     is_base_agent: bool,
@@ -84,8 +84,7 @@ pub async fn build_extension_tool_list(
         if promoted.contains(*sys_name) {
             continue;
         }
-        // Placeholder description — caller (search handler in Task 7) fills
-        // these from the full internal_tool_definitions() list.
+        // Placeholder description — caller fills these from internal_tool_definitions().
         out.push(ToolDefinition {
             name: sys_name.to_string(),
             description: String::new(),
@@ -119,7 +118,7 @@ pub async fn build_extension_tool_list(
 
 /// Linear lookup. Used by describe handler. The list is < 100 entries in
 /// practice — no index is warranted.
-// allow(dead_code): consumed by Task 7 (tool_handlers/tool_use.rs).
+// allow(dead_code): consumed by tool_handlers/tool_use.rs.
 #[allow(dead_code)]
 pub async fn find_extension_tool(
     name: &str,

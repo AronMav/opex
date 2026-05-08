@@ -1,11 +1,4 @@
 // ── AgentConfig — immutable snapshot of agent configuration ─────────────────
-//
-// Phase 1 of the AgentEngine decomposition. This struct captures the 15
-// immutable fields that today live directly on `AgentEngine`.  It is created
-// once per engine instantiation and never mutated afterwards.
-//
-// Note: `tool_executor` and `context_builder` are NOT included here because
-// they have circular dependencies via OnceLock.  They stay on AgentEngine.
 
 use std::sync::Arc;
 
@@ -27,8 +20,7 @@ use crate::tools::ToolRegistry;
 /// Grouped into five concern areas: identity, LLM, data, tools, and infra.
 /// All fields are either `Clone`-cheap (`Arc`, `PgPool`) or small value types.
 ///
-/// All engine code now reads from this struct via `engine.cfg()`.
-/// Old fields on `AgentEngine` remain for external code (Step C removes them).
+/// All engine code reads from this struct via `engine.cfg()`.
 pub struct AgentConfig {
     // ── Identity ────────────────────────────────────────────────────────
     pub agent: AgentSettings,

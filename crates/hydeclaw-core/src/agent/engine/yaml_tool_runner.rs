@@ -1,15 +1,8 @@
-//! REF-01 Task 4: YAML-tool env/oauth resolver + per-engine caches.
+//! YAML-tool env/OAuth resolver and per-engine caches.
 //!
-//! Owns `SecretsEnvResolver` (impl `EnvResolver`), `make_resolver`,
-//! `make_oauth_context`, `invalidate_yaml_tools_cache`, `check_search_cache`,
-//! `store_search_cache`, `format_tool_error`, and the
-//! `search_cache_key` helper + `CACHEABLE_SEARCH_TOOLS` list.
-//!
-//! Extracted from `engine/mod.rs` as part of plan 66-02. External callers
-//! (`pipeline::context`, `pipeline::channel_actions`) reach
-//! `SecretsEnvResolver` via the `pub(crate) use` re-export in
-//! `engine/mod.rs`, so `crate::agent::engine::SecretsEnvResolver` keeps
-//! resolving unchanged.
+//! Owns `SecretsEnvResolver`, `make_resolver`, `make_oauth_context`,
+//! `invalidate_yaml_tools_cache`, `check_search_cache`, `store_search_cache`,
+//! `format_tool_error`, `search_cache_key`, `CACHEABLE_SEARCH_TOOLS`.
 
 use std::sync::Arc;
 

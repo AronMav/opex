@@ -9,11 +9,10 @@ use super::providers::LlmProvider;
 use crate::mcp::McpRegistry;
 
 
-// Extracted impl AgentEngine blocks (submodules of engine for full super:: access)
 pub(crate) use crate::agent::pipeline::subagent::parse_subagent_timeout;
 pub mod run;
 
-// ── REF-01 submodules (populated progressively across tasks 2–7) ────────────
+// ── Sub-modules ──────────────────────────────────────────────────────────────
 pub mod stream;
 pub mod approval_flow;
 pub mod yaml_tool_runner;
@@ -21,28 +20,13 @@ pub mod context_builder;
 pub mod tool_executor;
 pub mod loop_detector_integration;
 
-// REF-01 task 2: re-export stream submodule items so external callers keep
-// resolving `crate::agent::engine::{ProcessingPhase, StreamEvent}`.
+// Re-exports so external call-sites keep resolving without change.
 pub use self::stream::{ProcessingPhase, StreamEvent};
-
-// REF-01 task 3: re-export ApprovalResult so `super::engine::ApprovalResult`
-// keeps resolving for `approval_manager.rs` and external callers.
 pub use self::approval_flow::ApprovalResult;
-
-// REF-01 task 4: re-export SecretsEnvResolver so pipeline::context and
-// pipeline::channel_actions keep resolving via `crate::agent::engine::SecretsEnvResolver`.
 pub(crate) use self::yaml_tool_runner::SecretsEnvResolver;
-
-// REF-01 task 4: re-export CACHEABLE_SEARCH_TOOLS so engine_dispatch.rs (a
-// `#[path]`-included leaf of engine) keeps seeing it via `use super::*;`.
+// engine_dispatch.rs is #[path]-included and reaches this via `use super::*;`.
 pub(super) use self::yaml_tool_runner::CACHEABLE_SEARCH_TOOLS;
-
-// REF-01 task 6: re-export all_system_tool_names() so external callers using
-// `crate::agent::engine::all_system_tool_names()` still resolve.
 pub use self::tool_executor::all_system_tool_names;
-
-// ProcessingPhase / StreamEvent — moved to self::stream (REF-01 task 2),
-// re-exported above via `pub use self::stream::{ProcessingPhase, StreamEvent}`.
 
 /// A background process started by the `process_start` tool (base agents only).
 #[allow(dead_code)] // process_id/command/started_at are diagnostic metadata
@@ -55,11 +39,10 @@ pub struct BgProcess {
     pub started_at: std::time::Instant,
 }
 
-// Step C complete: 6 runtime fields removed — accessed via self.state().
 pub struct AgentEngine {
     /// Context builder — builds session/messages/tools for each LLM call.
     /// Initialized via `set_context_builder` after engine Arc creation.
-    /// Holds `Arc<dyn ContextBuilder>` for testability (`MockContextBuilder` in plan 02).
+    /// Holds `Arc<dyn ContextBuilder>` for testability.
     pub context_builder: OnceLock<Arc<dyn crate::agent::context_builder::ContextBuilder>>,
     /// Tool executor — owns tool-only state (sandbox, caches, subagent registry, etc.).
     /// Stored as concrete `Arc<DefaultToolExecutor>` for direct field access in engine methods.
@@ -70,7 +53,7 @@ pub struct AgentEngine {
     /// Immutable agent configuration snapshot — sole source for agent settings,
     /// DB pool, provider, tools, memory, etc.
     pub cfg: Option<Arc<crate::agent::agent_config::AgentConfig>>,
-    /// System tool registry — replaces the 28-arm match in execute_tool_call_inner.
+    /// System tool registry.
     pub(crate) tool_registry: std::sync::Arc<crate::agent::tool_registry::SystemToolRegistry>,
 }
 
@@ -93,12 +76,6 @@ pub(crate) const RICH_CARD_PREFIX: &str = "__rich_card__:";
 /// Format: `__file__:{"url":"...","mediaType":"image/png"}`
 pub(crate) const FILE_PREFIX: &str = "__file__:";
 
-// AUTO_CONTINUE_NUDGE moved to pipeline::behaviour (single source of truth).
-// CACHEABLE_SEARCH_TOOLS + search_cache_key() — moved to self::yaml_tool_runner (REF-01 task 4).
-
-// ApprovalResult — moved to self::approval_flow (REF-01 task 3), re-exported
-// above via `pub use self::approval_flow::ApprovalResult` so
-// `approval_manager.rs` keeps importing it via `super::engine::ApprovalResult`.
 
 use crate::agent::session_manager::SessionManager;
 
@@ -215,9 +192,8 @@ impl AgentEngine {
         let _ = self.tool_executor.set(executor);
     }
 
-    // ── Proxy accessors for fields migrated to DefaultToolExecutor ────────────
-    // Engine sub-modules (engine_*.rs) and providers_*.rs use these to access
-    // the migrated fields without direct struct field access.
+    // ── Proxy accessors into DefaultToolExecutor ──────────────────────────────
+    // Engine sub-modules and providers use these instead of direct struct field access.
 
     #[inline]
     pub(crate) fn tex(&self) -> &crate::agent::tool_executor::DefaultToolExecutor {
@@ -286,12 +262,6 @@ impl AgentEngine {
     pub(crate) fn sse_event_tx(&self) -> &Arc<tokio::sync::Mutex<Option<crate::agent::engine_event_sender::EngineEventSender>>> {
         &self.tex().sse_event_tx
     }
-
-    // invalidate_yaml_tools_cache / check_search_cache / store_search_cache
-    // — moved to self::yaml_tool_runner (REF-01 task 4).
-
-    // needs_approval() + resolve_approval() — moved to self::approval_flow (REF-01 task 3).
-
 
     /// Check if an enabled YAML tool exists in workspace/tools/ (shared tools).
     async fn has_tool(&self, name: &str) -> bool {

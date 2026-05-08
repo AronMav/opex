@@ -175,7 +175,6 @@ async fn update_rolling_summary(
         Err(_) => String::new(),
     };
 
-    // Build update prompt
     let new_facts_text = new_facts.iter()
         .map(|f| format!("- {}", f))
         .collect::<Vec<_>>()

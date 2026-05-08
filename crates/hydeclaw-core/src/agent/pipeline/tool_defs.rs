@@ -48,8 +48,7 @@ pub fn all_system_tool_names() -> &'static [&'static str] {
 /// Names of tools always preloaded in the LLM tools array when the
 /// dispatcher is enabled. Source of truth for `engine/context_builder.rs`
 /// partition logic. Spec: tool-dispatcher-design.md §"Core / extension partition".
-// allow(dead_code): consumed by Tasks 14-16 (engine/context_builder.rs) and
-// Task 19 (pipeline/subagent.rs); landed early as the source-of-truth constant.
+// allow(dead_code): consumed by engine/context_builder.rs and pipeline/subagent.rs.
 #[allow(dead_code)]
 pub fn static_core_tool_names() -> &'static [&'static str] {
     &[

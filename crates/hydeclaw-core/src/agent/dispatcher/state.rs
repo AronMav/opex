@@ -20,7 +20,7 @@ pub struct SessionToolState {
     /// Number of successful calls per extension tool name in this session.
     /// Incremented in `pipeline/parallel.rs` after every successful
     /// dispatcher-originated `Direct` execution; promotion fires once the
-    /// per-tool count reaches `PROMOTION_THRESHOLD` (Task 13).
+    /// per-tool count reaches `PROMOTION_THRESHOLD`.
     pub call_counts: RwLock<HashMap<String, u32>>,
     /// System extension tools promoted to per-session core after threshold.
     pub promoted: RwLock<HashSet<String>>,

@@ -44,9 +44,8 @@ impl CliLlmProvider {
         }
     }
 
-    /// Task 12 stub: build a `CliLlmProvider` from a `ProviderRow` + runtime CLI context.
-    /// Delegates to `::new(..)` so behavior is identical to the legacy
-    /// `create_provider_from_connection` code path.
+    /// Build a `CliLlmProvider` from a `ProviderRow` + runtime CLI context.
+    /// Delegates to `::new(..)` so behavior is identical to `create_provider_from_connection`.
     #[allow(dead_code)] // consumed by super::build_cli_provider
     pub(crate) async fn new_from_row(
         row: &crate::db::providers::ProviderRow,

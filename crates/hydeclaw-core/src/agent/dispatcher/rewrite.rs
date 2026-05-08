@@ -7,7 +7,7 @@ use hydeclaw_types::ToolCall;
 use serde_json::json;
 
 /// Outcome per tool call after rewrite.
-// allow(dead_code): consumed by Task 11 (pipeline/parallel.rs).
+// allow(dead_code): consumed by pipeline/parallel.rs.
 #[allow(dead_code)]
 pub enum RewriteResult {
     /// Either an unmodified original call or a successfully rewritten one.
@@ -22,7 +22,7 @@ pub enum RewriteResult {
 /// `known_tools` is a synchronous lookup set provided by the caller — it
 /// must contain every tool name reachable on this agent (system + visible
 /// YAML + visible MCP). The pipeline pre-builds it before this call.
-// allow(dead_code): consumed by Task 11 (pipeline/parallel.rs).
+// allow(dead_code): consumed by pipeline/parallel.rs.
 #[allow(dead_code)]
 pub fn rewrite_tool_use_calls(
     calls: &[ToolCall],
@@ -33,7 +33,7 @@ pub fn rewrite_tool_use_calls(
     calls.iter().map(|tc| rewrite_one(tc, policy, known_tools, extra_deny)).collect()
 }
 
-// allow(dead_code): consumed by Task 11 (pipeline/parallel.rs).
+// allow(dead_code): consumed by pipeline/parallel.rs.
 #[allow(dead_code)]
 fn rewrite_one(
     tc: &ToolCall,

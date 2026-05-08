@@ -219,19 +219,17 @@ pub async fn execute_tool_calls_partitioned(
     mcp: Option<&crate::mcp::McpRegistry>,
     parallel_batch_id: Option<ParallelBatchId>,
 ) -> BatchOutcome {
-    // ── Dispatcher rewrite (Task 11) ─────────────────────────────────────────
+    // ── Dispatcher rewrite ───────────────────────────────────────────────────
     //
     // For every `tool_use(action="call", name=X, arguments=Y)` call, rewrite
     // to a synthetic ToolCall { name: X, arguments: Y } so dispatch below sees
     // the underlying tool. Runtime deny-gate runs inside `rewrite_tool_use_calls`
-    // (Task 10) — a denied call is replaced with a synthesized tool result and
-    // never reaches dispatch.
+    // — a denied call is replaced with a synthesized tool result and never reaches dispatch.
     //
-    // `via_dispatcher_map` records which rewritten calls came in as `tool_use`
-    // — Task 13 consumes this map to bump per-session call counts and elect
-    // tools for auto-promotion (driven by `promotion_max`). Promotion is
-    // gated to system extension tools only (Variant A — YAML/MCP never
-    // auto-promote).
+    // `via_dispatcher_map` records which rewritten calls came in as `tool_use` —
+    // used below to bump per-session call counts and elect tools for auto-promotion
+    // (driven by `promotion_max`). Promotion is gated to system extension tools only
+    // (YAML/MCP never auto-promote).
 
     let known_tools: std::collections::HashSet<String> = {
         let mut s = std::collections::HashSet::new();
@@ -272,8 +270,8 @@ pub async fn execute_tool_calls_partitioned(
     }
 
     let direct_calls: Vec<ToolCall> = direct_pending.iter().map(|(tc, _)| tc.clone()).collect();
-    // Maps tool_call_id → "originated as tool_use(action=call)?" — consumed by
-    // Task 13 promotion logic at each `record_execution` site below.
+    // Maps tool_call_id → "originated as tool_use(action=call)?" — used by
+    // promotion logic at each `record_execution` site below.
     let via_dispatcher_map: std::collections::HashMap<hydeclaw_types::ids::ToolCallId, bool> =
         direct_pending
             .iter()

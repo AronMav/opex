@@ -17,7 +17,7 @@ use uuid::Uuid;
 /// before forwarding `BootstrapOutcome` to `execute()` (avoids partial-move).
 pub struct BootstrapOutcome {
     pub session_id: Uuid,
-    /// Raw user text after PII redaction / URL enrichment (TODO: Task 10 inlines enrichment).
+    /// Raw user text after PII redaction / URL enrichment.
     pub enriched_text: String,
     pub messages: Vec<Message>,
     pub tools: Vec<hydeclaw_types::ToolDefinition>,

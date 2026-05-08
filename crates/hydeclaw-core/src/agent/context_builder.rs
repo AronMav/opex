@@ -1,8 +1,6 @@
 //! `ContextBuilder` trait, `ContextSnapshot` return type, and `DefaultContextBuilder` implementation.
 //!
-//! Extracted from `engine_context.rs` (`build_context` body) to decouple context building
-//! from the engine god object (CTX-01) and replace the fragile unnamed tuple with a
-//! self-documenting struct (CTX-02). Enables `MockContextBuilder` injection in tests (CTX-03).
+//! Decoupled from the engine for testability — `MockContextBuilder` can be injected in tests.
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;

@@ -1319,8 +1319,8 @@ mod tests {
 
     // ── deliver_to_channel save+update+notify (QUICK-260508-0dj) ────────────
     //
-    // These tests cover the post-channel-send mirror introduced for
-    // Task 2: when a Telegram-paired session calls a YAML channel-action
+    // These tests cover the post-channel-send mirror: when a Telegram-paired
+    // session calls a YAML channel-action
     // tool, the bytes that successfully reach the channel must ALSO be
     // saved to uploads, the persisted tool message row prepended with a
     // `__file__:{json}\n` marker, and a `<kind>_ready` notify emitted —

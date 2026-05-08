@@ -1,11 +1,5 @@
-//! REF-01 Task 3: `ApprovalResult` enum + `AgentEngine::needs_approval` +
-//! `AgentEngine::resolve_approval` — the engine-side approval glue consumed
-//! by `src/agent/approval_manager.rs` via `pub use` re-exports in
-//! `engine/mod.rs`.
-//!
-//! Extracted from `engine/mod.rs` as part of plan 66-02. Public API is
-//! preserved byte-identically via `pub use self::approval_flow::ApprovalResult`
-//! in `engine/mod.rs`.
+//! Engine-side approval glue: `ApprovalResult` + `AgentEngine::needs_approval` +
+//! `AgentEngine::resolve_approval`. Consumed by `approval_manager.rs`.
 
 use hydeclaw_types::ids::ApprovalId;
 

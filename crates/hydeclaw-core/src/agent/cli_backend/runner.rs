@@ -99,7 +99,6 @@ impl CliRunner {
         let existing_session = self.sessions.read().await.get(agent_name).cloned();
         let use_resume = existing_session.is_some() && !self.config.resume_args.is_empty();
 
-        // Build argv
         let (argv, use_stdin) = self.build_argv(
             resolved_model,
             prompt,
@@ -643,7 +642,6 @@ mod tests {
         // Insert a session manually
         runner.sessions.write().await.insert("agent-1".to_string(), "sess-abc".to_string());
 
-        // Set initial hash
         let invalidated1 = runner.check_and_invalidate_session("agent-1", 12345).await;
         assert!(!invalidated1, "first call should not invalidate (no previous hash)");
 

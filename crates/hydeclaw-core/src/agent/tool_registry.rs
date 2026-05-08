@@ -46,7 +46,7 @@ pub struct ToolDeps<'a> {
     pub tex:                 &'a DefaultToolExecutor,
     // Pre-computed (avoids async inside handlers)
     pub available_tools:     &'a HashSet<String>,
-    // ── Dispatcher fields (added in Task 8) ─────────────────────────────────
+    // ── Dispatcher fields ────────────────────────────────────────────────────
     /// Per-session dispatcher state for the current session, if known.
     /// Lifted via clone of the `Arc` from `cfg.session_tool_state` keyed by
     /// the session_id passed to `from_engine`.

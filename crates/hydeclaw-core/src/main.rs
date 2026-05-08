@@ -561,7 +561,6 @@ async fn main() -> Result<()> {
         audit_queue,
     }));
 
-    // Build running agent handles + access guards
     let agents_map: gateway::AgentMap = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
     let guards_map: gateway::AccessGuardMap = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
@@ -601,10 +600,8 @@ async fn main() -> Result<()> {
     // `/api/health/dashboard` handler (Plan 02) see the same counters.
     let metrics = Arc::new(crate::metrics::MetricsRegistry::new());
 
-    // LLM-timeout refactor Task 22: publish the shared registry to the
-    // process-wide OnceLock so `RoutingProvider::handle_provider_error`
-    // (which has no `AppState` in scope) can bump llm_timeout_total and
-    // llm_failover_total against the same Arc as the dashboard handler.
+    // Publish to the process-wide OnceLock so `RoutingProvider::handle_provider_error`
+    // (which has no `AppState` in scope) bumps the same counters as the dashboard.
     crate::metrics::install_global(metrics.clone());
 
     // Phase 65 Plan 02 OBS-02: when --features otel is on, wire OTel

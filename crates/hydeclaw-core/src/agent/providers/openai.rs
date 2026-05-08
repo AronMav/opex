@@ -145,8 +145,7 @@ impl OpenAiCompatibleProvider {
 
     /// Set dynamic base URL resolution from secrets (e.g. "`OLLAMA_URL`").
     /// On each LLM call, resolves the secret and appends `suffix` to form the full URL.
-    /// Kept for future secret-backed URL resolution; no longer called after Task 12
-    /// consolidated provider construction via `build_provider` + `ProviderRow.base_url`.
+    /// Dead code — kept as example for future secret-backed URL resolution.
     #[allow(dead_code)]
     pub fn with_base_url_env(mut self, env_name: &str, suffix: &str) -> Self {
         self.base_url_env = Some(env_name.to_string());
@@ -565,8 +564,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             let chunk_bytes = match chunk_result {
                 Ok(b) => b,
                 Err(e) => {
-                    // Bubble as anyhow wrapping typed Network variant — Task 17 routing
-                    // can downcast to LlmCallError and decide failover.
+                    // Wrap as anyhow so the routing layer can downcast to LlmCallError and decide failover.
                     return Err(anyhow::Error::new(LlmCallError::from(e)));
                 }
             };

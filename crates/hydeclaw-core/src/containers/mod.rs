@@ -154,7 +154,6 @@ impl ContainerManager {
                 Some(c) => c,
                 None => continue,
             };
-            // Check if container is running
             if let Ok(info) = self.docker.inspect_container(container_name, None::<bollard::container::InspectContainerOptions>).await {
                 let running = info.state.as_ref().and_then(|s| s.running).unwrap_or(false);
                 if running {
