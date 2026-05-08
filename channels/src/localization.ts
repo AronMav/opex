@@ -24,6 +24,7 @@ export interface Strings {
   approvalReject: string;
   approvalApproved: string;
   approvalRejected: string;
+  approvalForbidden: string;
   // Commands
   noActiveRequest: string;
   thinkModeOff: string;
@@ -62,6 +63,7 @@ const RU: Strings = {
   approvalReject: "❌ Отклонить",
   approvalApproved: "✅ Разрешено",
   approvalRejected: "❌ Отклонено",
+  approvalForbidden: "Только владелец может подтверждать действия.",
   noActiveRequest: "Нет активного запроса.",
   thinkModeOff: "🧠 Режим размышлений выключен.",
   thinkModeOn: "🧠 Режим размышлений включён для следующего сообщения.",
@@ -98,6 +100,7 @@ const EN: Strings = {
   approvalReject: "❌ Reject",
   approvalApproved: "✅ Approved",
   approvalRejected: "❌ Rejected",
+  approvalForbidden: "Only the owner can resolve approvals.",
   noActiveRequest: "No active request.",
   thinkModeOff: "🧠 Think mode off.",
   thinkModeOn: "🧠 Think mode on for next message.",

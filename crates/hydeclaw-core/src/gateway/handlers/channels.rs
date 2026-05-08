@@ -334,7 +334,14 @@ pub(crate) async fn api_channel_update(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("update display_name failed: {}", e)}))).into_response();
     }
     if let Some(ref new_cfg) = body.config {
-        // Store new credentials in vault if provided
+        // Store new credentials in vault if provided. Audit 2026-05-08: an
+        // empty string in any credential field now means "clear this
+        // credential" — previously the empty value was silently discarded
+        // and the vault kept the old token, making it impossible to rotate
+        // out a credential through the API.
+        let credential_present = new_cfg
+            .as_object()
+            .is_some_and(|m| CREDENTIAL_KEYS.iter().any(|k| m.contains_key(*k)));
         if let Some(creds_json) = extract_credentials(new_cfg) {
             let desc = format!("Channel credentials for agent {agent_name}");
             if let Err(e) = auth.secrets.set_scoped(
@@ -345,6 +352,15 @@ pub(crate) async fn api_channel_update(
             ).await {
                 tracing::error!(channel_id = %uuid, error = %e, "Failed to update channel credentials in vault");
                 return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "failed to update credentials"}))).into_response();
+            }
+        } else if credential_present {
+            // Caller explicitly sent a credential key with an empty/null
+            // value: drop the vault entry so subsequent reveal returns nothing.
+            if let Err(e) = auth.secrets.delete_scoped(
+                "CHANNEL_CREDENTIALS",
+                &uuid.to_string(),
+            ).await {
+                tracing::warn!(channel_id = %uuid, error = %e, "Failed to clear channel credentials in vault");
             }
         }
 
