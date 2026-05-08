@@ -134,7 +134,6 @@ impl AgentEngine {
         let session_tool_state = self.cfg().session_tool_state.as_ref().and_then(|m| {
             m.get(&session_id).map(|r| r.value().clone())
         });
-        let promotion_max = self.cfg().agent.tool_dispatcher.promotion_max;
         // Runtime deny-gate uses BOTH:
         //   1. the agent's own tool_policy.deny (passed as `policy`), and
         //   2. `extra_deny`, the parent's SUBAGENT_DENIED_TOOLS when this
@@ -161,7 +160,6 @@ impl AgentEngine {
             policy,
             extra_deny,
             session_tool_state,
-            promotion_max,
             self.mcp().as_deref(),
             parallel_batch_id,
         )
