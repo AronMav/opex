@@ -177,9 +177,14 @@ export default function BackupsPage() {
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
-    // For auth, fetch as blob and create object URL
+    // X-Confirm-Download required by backend (audit 2026-05-08): backup
+    // archives contain plaintext secrets, so the explicit header acts as
+    // defence-in-depth on top of the bearer token.
     fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Confirm-Download": "yes-i-am-sure",
+      },
     })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -210,7 +215,10 @@ export default function BackupsPage() {
 
       const token = getToken();
       const resp = await fetch(`/api/backup/${encodeURIComponent(restoreTarget)}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-Confirm-Download": "yes-i-am-sure",
+        },
       });
       if (!resp.ok) throw new Error(`Failed to download backup: HTTP ${resp.status}`);
       const blob = await resp.blob();

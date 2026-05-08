@@ -584,10 +584,15 @@ async fn main() -> Result<()> {
         let port = cfg.gateway.listen.rsplit(':').next().unwrap_or("18789");
         format!("http://localhost:{port}")
     });
+    // OAuth talks to provider token endpoints whose URLs are *currently*
+    // hard-coded in `oauth::PROVIDERS`, but the architecture is set up to
+    // allow custom providers in the future. Use the SSRF-safe client so that
+    // a future addition cannot accidentally point Core at a private-IP
+    // host (audit 2026-05-08, defence-in-depth).
     let oauth_manager = Arc::new(crate::oauth::OAuthManager::new(
         db_pool.clone(),
         secrets_manager.clone(),
-        reqwest::Client::new(),
+        crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(30)),
         public_url,
     ));
 
