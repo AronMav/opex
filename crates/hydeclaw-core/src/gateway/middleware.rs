@@ -230,16 +230,23 @@ pub(crate) async fn auth_middleware(
     // /api/media/upload    — toolgate media uploads
     // /api/vision/analyze  — vision proxy called by analyze_image YAML tool
     // /uploads/*           — static file serving
-    // /ws*                 — WebSocket (validated separately via ticket)
+    //
+    // /ws* is intentionally NOT free-passed here even on loopback. Audit
+    // 2026-05-08 found that any local process (toolgate, MCP container with
+    // host networking, RCE through a YAML tool) could connect as a channel
+    // adapter without a ticket. The TypeScript channel adapter already
+    // fetches a one-time ticket via POST /api/auth/ws-ticket, so requiring
+    // the ticket on loopback breaks nothing legitimate.
     if is_loopback(&client_ip) {
         const LOOPBACK_EXACT: &[&str] = &["/health", "/api/mcp/callback", "/api/channels/notify", "/api/media/upload", "/api/vision/analyze"];
-        const LOOPBACK_PREFIX: &[&str] = &["/uploads/", "/ws"];
+        const LOOPBACK_PREFIX: &[&str] = &["/uploads/"];
         let loopback_allowed = LOOPBACK_EXACT.contains(&path)
             || LOOPBACK_PREFIX.iter().any(|p| path.starts_with(p));
         if loopback_allowed {
             return next.run(req).await;
         }
         // All other loopback requests must still provide a valid auth token
+        // or (for /ws*) a valid one-time ticket.
     }
 
     let exempt_from_lockout = is_loopback(&client_ip);

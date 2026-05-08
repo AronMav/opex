@@ -1,7 +1,79 @@
+use dashmap::DashMap;
 use rand::Rng;
 use sqlx::PgPool;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 use crate::db::access;
+
+// ── Pairing brute-force protection ───────────────────────────────────────────
+//
+// Audit 2026-05-08: a pairing code is 6 digits (10^6 possibilities) and a
+// compromised loopback / channel adapter could enumerate it. Without a
+// counter, a malicious adapter doing 1000 req/s would exhaust the keyspace
+// in ~17 minutes — well inside the 5-minute pairing TTL when the attacker
+// has already created a code in another window.
+//
+// We track failed attempts per agent_id (the pairing namespace). After
+// `MAX_PAIRING_FAILURES` failures inside `PAIRING_FAILURE_WINDOW`, the
+// agent's pairing endpoint locks out for `PAIRING_LOCKOUT_DURATION`. A
+// successful approve clears the entry.
+
+const MAX_PAIRING_FAILURES: u32 = 10;
+const PAIRING_FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
+const PAIRING_LOCKOUT_DURATION: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Clone, Copy)]
+struct PairingAttempt {
+    fail_count: u32,
+    first_failure: Instant,
+    locked_until: Option<Instant>,
+}
+
+static PAIRING_ATTEMPTS: LazyLock<DashMap<String, PairingAttempt>> =
+    LazyLock::new(DashMap::new);
+
+/// Returns `Some(seconds_remaining)` if the agent's pairing is currently
+/// locked out due to recent failed attempts; `None` otherwise.
+fn pairing_lockout_remaining(agent_id: &str) -> Option<u64> {
+    let entry = PAIRING_ATTEMPTS.get(agent_id)?;
+    let locked_until = entry.locked_until?;
+    let now = Instant::now();
+    if now < locked_until {
+        Some(locked_until.duration_since(now).as_secs())
+    } else {
+        None
+    }
+}
+
+fn record_pairing_failure(agent_id: &str) {
+    let now = Instant::now();
+    let mut entry = PAIRING_ATTEMPTS
+        .entry(agent_id.to_string())
+        .or_insert(PairingAttempt {
+            fail_count: 0,
+            first_failure: now,
+            locked_until: None,
+        });
+    if now.duration_since(entry.first_failure) > PAIRING_FAILURE_WINDOW {
+        entry.fail_count = 0;
+        entry.first_failure = now;
+        entry.locked_until = None;
+    }
+    entry.fail_count += 1;
+    if entry.fail_count >= MAX_PAIRING_FAILURES {
+        entry.locked_until = Some(now + PAIRING_LOCKOUT_DURATION);
+        tracing::warn!(
+            agent_id = %agent_id,
+            fail_count = entry.fail_count,
+            "pairing locked out after repeated failures",
+        );
+    }
+}
+
+fn clear_pairing_failures(agent_id: &str) {
+    PAIRING_ATTEMPTS.remove(agent_id);
+}
 
 /// Manages access control for a channel bot.
 /// Pairing codes are stored in `PostgreSQL` (survive restarts).
@@ -57,17 +129,31 @@ impl AccessGuard {
 
     /// Try to approve a pairing by code.
     /// Returns (success, `user_display_info`).
+    ///
+    /// Rate-limited: after `MAX_PAIRING_FAILURES` failures in a rolling
+    /// window, the agent's pairing locks out for `PAIRING_LOCKOUT_DURATION`.
+    /// Successful approve resets the counter.
     pub async fn approve_pairing(&self, code: &str, approver_id: &str) -> (bool, String) {
-        match access::take_pairing_code(&self.db, &self.agent_id, code).await {
+        if let Some(remaining_secs) = pairing_lockout_remaining(&self.agent_id) {
+            tracing::warn!(
+                agent_id = %self.agent_id,
+                remaining_secs,
+                "pairing approve rejected: agent locked out",
+            );
+            return (false, format!("locked_out:{remaining_secs}"));
+        }
+
+        let result = match access::take_pairing_code(&self.db, &self.agent_id, code).await {
             Ok(Some((user_id, name, false))) => {
                 let display = name.clone().unwrap_or_else(|| user_id.clone());
                 if let Err(e) = access::add_allowed_user(
                     &self.db, &self.agent_id, &user_id, name.as_deref(), approver_id,
                 ).await {
                     tracing::error!(error = %e, "failed to add allowed user");
-                    return (false, display);
+                    (false, display)
+                } else {
+                    (true, display)
                 }
-                (true, display)
             }
             Ok(Some((_, _, true))) => (false, "expired".to_string()),
             Ok(None) => (false, "not_found".to_string()),
@@ -75,7 +161,14 @@ impl AccessGuard {
                 tracing::error!(error = %e, "failed to take pairing code from DB");
                 (false, "db_error".to_string())
             }
+        };
+
+        if result.0 {
+            clear_pairing_failures(&self.agent_id);
+        } else {
+            record_pairing_failure(&self.agent_id);
         }
+        result
     }
 
     /// Reject a pending pairing by code.
