@@ -9,6 +9,7 @@ import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto } from "../types";
 import { getStrings } from "../localization";
 import { splitText, parseDirectives, parseUserCommand, commonMarkToIrc } from "./common";
+import { isOwnerCommand, runOwnerCommand } from "../owner-commands";
 
 const MAX_IRC_LEN = 450;
 
@@ -48,6 +49,17 @@ export function createIrcDriver(
     if (!allowed && !isOwner) {
       const code = await bridge.createPairingCode(from, from);
       sendPrivmsg(replyTo, strings.accessRestricted(code));
+      return;
+    }
+
+    // Owner commands (audit 2026-05-08, group DD): without this branch the
+    // bot has no way to bootstrap pairing requests over IRC — every fresh
+    // user gets a code, but the owner cannot /approve it.
+    if (isOwner && isOwnerCommand(text)) {
+      const reply = await runOwnerCommand(text, bridge, strings);
+      if (reply) {
+        sendPrivmsg(replyTo, reply);
+      }
       return;
     }
 

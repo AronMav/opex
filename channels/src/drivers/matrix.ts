@@ -8,6 +8,7 @@ import type { ChannelDriver } from "../session";
 import type { IncomingMessageDto } from "../types";
 import { getStrings } from "../localization";
 import { splitText, parseDirectives, parseUserCommand } from "./common";
+import { isOwnerCommand, runOwnerCommand } from "../owner-commands";
 
 const SYNC_TIMEOUT_MS = 30000;
 const MAX_MESSAGE_LEN = 4000;
@@ -106,6 +107,15 @@ export function createMatrixDriver(
     if (!allowed && !isOwner) {
       const code = await bridge.createPairingCode(userId, userId);
       await sendMessage(roomId, strings.accessRestricted(code), eventId).catch(() => {});
+      return;
+    }
+
+    // Owner commands (audit 2026-05-08, group DD).
+    if (isOwner && isOwnerCommand(text)) {
+      const reply = await runOwnerCommand(text, bridge, strings);
+      if (reply) {
+        await sendMessage(roomId, reply, eventId).catch(() => {});
+      }
       return;
     }
 

@@ -18,14 +18,15 @@ pub async fn handle(
 
     let md_files = collect_workspace_files(workspace_root, EXCLUDE_DIRS).await?;
 
-    // Clear existing (scoped by agent_id)
-    if clear_existing && !agent_id.is_empty() {
-        sqlx::query("DELETE FROM memory_chunks WHERE agent_id = $1")
-            .bind(agent_id)
-            .execute(db)
-            .await?;
-        tracing::info!(agent_id, "cleared memory before universal reindex");
-    }
+    // Audit 2026-05-08 (5th pass): the DELETE used to run BEFORE any new
+    // chunk was inserted. A worker crash between the DELETE and the
+    // first successful embed_and_insert wiped the agent's memory until
+    // the next reindex ran. We now record the timestamp BEFORE inserts
+    // begin and run the DELETE only AFTER every chunk we intend to keep
+    // is in the table. Worst-case window is duplicate rows during the
+    // indexing window (cleaned up by the trailing DELETE) instead of an
+    // empty memory window.
+    let reindex_started = chrono::Utc::now();
 
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -89,6 +90,28 @@ pub async fn handle(
             "reindex failed: 0 files indexed, {errors} errors out of {total_files} (likely transient embedding error)"
         );
     }
+
+    // Trailing DELETE: drop the OLD chunks (created before reindex_started)
+    // now that the new ones are committed. If the worker crashed earlier in
+    // this function, this line never runs, the agent keeps its old memory,
+    // and the next reindex picks up where this one left off.
+    if clear_existing && !agent_id.is_empty() && indexed > 0 {
+        let cleared = sqlx::query(
+            "DELETE FROM memory_chunks \
+             WHERE agent_id = $1 \
+               AND created_at < $2",
+        )
+        .bind(agent_id)
+        .bind(reindex_started)
+        .execute(db)
+        .await?;
+        tracing::info!(
+            agent_id,
+            removed = cleared.rows_affected(),
+            "removed pre-reindex chunks after successful re-population",
+        );
+    }
+
     Ok(json!({
         "indexed": indexed,
         "session_indexed": session_indexed,

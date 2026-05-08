@@ -76,7 +76,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/stock-analysis
     ports:
-      - "9003:8000"
+      - "127.0.0.1:9003:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -89,7 +89,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/weather
     ports:
-      - "9004:8000"
+      - "127.0.0.1:9004:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -102,7 +102,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/obsidian
     ports:
-      - "9005:8000"
+      - "127.0.0.1:9005:8000"
     volumes:
       - ../workspace:/workspace
       - /etc/localtime:/etc/localtime:ro
@@ -116,7 +116,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/browser-cdp
     ports:
-      - "9030:9030"
+      - "127.0.0.1:9030:9030"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -148,7 +148,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/fetch
     ports:
-      - "9040:8000"
+      - "127.0.0.1:9040:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -161,7 +161,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/memory
     ports:
-      - "9041:8000"
+      - "127.0.0.1:9041:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -174,7 +174,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/sequential-thinking
     ports:
-      - "9042:8000"
+      - "127.0.0.1:9042:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -187,7 +187,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/youtube-transcript
     ports:
-      - "9043:8000"
+      - "127.0.0.1:9043:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -200,7 +200,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/time
     ports:
-      - "9044:8000"
+      - "127.0.0.1:9044:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -213,7 +213,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/filesystem
     ports:
-      - "9045:8000"
+      - "127.0.0.1:9045:8000"
     volumes:
       - ~/hydeclaw/workspace:/workspace:rw
       - /etc/localtime:/etc/localtime:ro
@@ -227,7 +227,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/git
     ports:
-      - "9046:8000"
+      - "127.0.0.1:9046:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -240,7 +240,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/notion
     ports:
-      - "9048:8000"
+      - "127.0.0.1:9048:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -253,7 +253,7 @@ services:
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/todoist
     ports:
-      - "9049:8000"
+      - "127.0.0.1:9049:8000"
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro

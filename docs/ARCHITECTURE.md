@@ -849,11 +849,22 @@ Per-agent subagent delegation policy:
 ```toml
 [agent.delegation]
 max_depth = 1                    # subagents CANNOT recursively spawn further subagents
-blocked_tools_extra = [...]      # extends built-in deny-list
-blocked_tools_override = [...]   # if non-empty, replaces built-in deny-list entirely
+blocked_tools_extra = [...]      # extends built-in deny-list (used at runtime)
+blocked_tools_override = [...]   # visibility-only — see note below
 ```
 
-`SUBAGENT_DENIED_TOOLS` built-in list always denied for subagents unless `blocked_tools_override` is set.
+`SUBAGENT_DENIED_TOOLS` is the runtime safety net for every subagent. The
+runtime gate (`runtime_subagent_denylist`) hard-anchors that constant and only
+honours `blocked_tools_extra` (additive). `blocked_tools_override` is honoured
+ONLY at the visibility / catalog layer (`compute_denied_tools`) — a subagent
+cannot use `blocked_tools_override = ["x"]` to weaken the runtime safety net
+on tools like `cron`, `secret_set`, `process`, `code_exec`, `workspace_delete`,
+`workspace_rename`. Audit 2026-05-08, group T.
+
+Base subagents (`agent.base = true`) get a runtime carve-out for `code_exec`
+because base agents are documented as the host-level operator role
+(`scaffold/base/SOUL.md`); the carve-out applies only when the SUBAGENT itself
+is base, not when a base parent spawns a non-base peer.
 
 ### Rate Limiting
 
