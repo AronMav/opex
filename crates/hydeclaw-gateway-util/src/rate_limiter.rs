@@ -1,3 +1,4 @@
+#![deny(clippy::await_holding_lock)]
 //! Per-IP rate limiters shared by the auth + request middleware.
 //!
 //! Phase 62 RES-04 extracted these types from `middleware.rs` into a leaf
