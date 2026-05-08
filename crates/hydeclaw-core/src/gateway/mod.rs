@@ -510,11 +510,22 @@ mod tests {
 
     #[test]
     fn skill_safe_name_all_special_chars() {
-        // : * ? " < > | all replaced with -
+        // : * ? " < > | all replaced with - and trailing/leading runs of -
+        // are trimmed (audit 2026-05-08 path-traversal hardening).
         assert_eq!(
             skill_safe_name("file:name*bad?\"<>|"),
-            "file-name-bad-----"
+            "file-name-bad"
         );
+    }
+
+    #[test]
+    fn skill_safe_name_collapses_dot_dot() {
+        // Path-traversal regression guard (audit 2026-05-08): '..' must
+        // collapse to '-' and the result must not start with '.' or be
+        // empty.
+        assert_eq!(skill_safe_name(".."), "_unnamed");
+        assert_eq!(skill_safe_name("../etc/passwd"), "etc-passwd");
+        assert_eq!(skill_safe_name("..."), "_unnamed");
     }
 
     // ── docker_subnet_gateways ──────────────────────────────────────────────
