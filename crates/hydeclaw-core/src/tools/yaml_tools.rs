@@ -2244,7 +2244,7 @@ graphql:
         assert!(openapi_security_to_yaml_auth(&scheme).is_none());
     }
 
-    // ── resolve_env_template smoke (Task 1 Step 1.1) ─────────────────────────
+    // ── resolve_env_template ──────────────────────────────────────────────────
 
     #[tokio::test]
     async fn resolve_env_template_handles_multiple_vars() {
@@ -2267,7 +2267,7 @@ graphql:
         assert!(after_env.contains(r#""to":"{{to}}""#));
     }
 
-    // ── render_body_template (Task 1 Step 1.4) ───────────────────────────────
+    // ── render_body_template ─────────────────────────────────────────────────
 
     #[tokio::test]
     async fn render_body_template_resolves_secret_before_params() {

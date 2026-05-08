@@ -1,13 +1,9 @@
 #![deny(clippy::await_holding_lock)]
 //! Approval workflow manager: check/create/wait/cleanup for tool-call approvals.
-//! Extracted from `engine_dispatch.rs` for readability and encapsulation.
 //!
-//! Phase 66 REF-02: the pending-waiter map is backed by `DashMap` (sharded,
-//! synchronous lock-per-bucket) rather than `RwLock<HashMap>`. This eliminates
-//! the "hold write guard across `.await`" anti-pattern that previously forced
-//! us to carefully drop the guard before touching `sse_event_tx` / DB resolvers.
-//! The module-level `#![deny(clippy::await_holding_lock)]` lint ensures the
-//! anti-pattern cannot regress.
+//! The pending-waiter map is backed by `DashMap` (sharded, synchronous
+//! lock-per-bucket), avoiding the "hold write guard across `.await`" anti-pattern.
+//! `#![deny(clippy::await_holding_lock)]` ensures this cannot regress.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

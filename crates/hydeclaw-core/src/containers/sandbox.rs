@@ -409,7 +409,6 @@ impl CodeSandbox {
             }
         };
 
-        // Create exec instance
         let exec = self.docker.create_exec(
             &container_name,
             CreateExecOptions {

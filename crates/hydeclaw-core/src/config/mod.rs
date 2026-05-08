@@ -2367,7 +2367,7 @@ model = "gpt-4"
         assert!(cfg.agent.routing[0].temperature.is_none());
     }
 
-    // ── Task 11: new connection-based route tests ──
+    // ── connection-based route tests ──────────────────────────────────────────
 
     #[test]
     fn route_parses_connection_reference_only() {

@@ -126,7 +126,6 @@ pub struct MetricsRegistry {
     /// Checked against [`MAX_UNIQUE_SERIES`] on every new-key insert.
     unique_series: AtomicU64,
 
-    // ── LLM-timeout refactor Task 22 ─────────────────────────────────────
     /// (provider, kind) → counter. `kind` ∈
     /// {"connect","request","inactivity","max_duration"}. Incremented by
     /// `RoutingProvider::handle_provider_error` when an `LlmCallError` of
@@ -721,7 +720,7 @@ impl MetricsRegistry {
 }
 
 impl MetricsRegistry {
-    // ── LLM-timeout refactor Task 22 — counter APIs ─────────────────────
+    // ── LLM timeout / failover counter APIs ──────────────────────────────
 
     /// Bump `llm_timeout_total{provider, kind}`. `kind` SHOULD be one of
     /// the four bounded-cardinality tokens: `"connect"`, `"request"`,
@@ -964,8 +963,7 @@ pub fn build_dashboard_body_with_snapshot(
         .into_iter()
         .collect();
 
-    // LLM-timeout refactor Task 22: expose llm_timeout_total +
-    // llm_failover_total as nested JSON for the health dashboard.
+    // Expose llm_timeout_total + llm_failover_total as nested JSON for the health dashboard.
     // `llm_timeout_total`: {provider: {kind: count}}
     let mut llm_timeouts: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     for ((provider, kind), count) in registry.snapshot_llm_timeout_total() {

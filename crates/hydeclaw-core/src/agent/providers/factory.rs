@@ -165,8 +165,7 @@ pub fn create_cli_provider_with_options(
 /// The agent MUST have `provider_connection` set.
 ///
 /// Returns a sentinel "unconfigured" provider if no usable connection is found.
-/// Post-Task 12: no more free-form `provider`-field fallback path — that was the
-/// job of the removed `create_provider` function. Agents without a valid
+/// No free-form `provider`-field fallback — agents without a valid
 /// `provider_connection` get an `UnconfiguredProvider` sentinel.
 #[allow(clippy::too_many_arguments)]
 pub async fn resolve_provider_for_agent(

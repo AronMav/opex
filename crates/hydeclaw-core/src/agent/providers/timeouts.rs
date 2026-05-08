@@ -202,8 +202,8 @@ mod tests {
 
     #[test]
     fn legacy_flat_timeout_secs_lands_in_extra() {
-        // Proves the migrator (Task 7) is the only path that resurrects
-        // the legacy key. Loaders see it in `extra` and will warn.
+        // Proves the migrator is the only path that resurrects the legacy key.
+        // Loaders see it in `extra` and will warn.
         let input = r#"{"timeout_secs":120}"#;
         let opts: ProviderOptions = serde_json::from_str(input).unwrap();
         assert_eq!(opts.timeouts, TimeoutsConfig::default());

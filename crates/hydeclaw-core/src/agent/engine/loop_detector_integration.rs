@@ -1,9 +1,5 @@
-//! REF-01 Task 7: `tool_loop_config` + `create_fallback_provider` + the
-//! LLM-call wrappers that drive the fallback/retry path through the loop
-//! detector + budget guard.
-//!
-//! Extracted from `engine/mod.rs` as part of plan 66-02. After Task 7
-//! `engine/mod.rs` is a thin dispatcher (< 600 lines).
+//! `tool_loop_config` + `create_fallback_provider` + LLM-call wrappers for
+//! the fallback/retry path through the loop detector and budget guard.
 
 use std::sync::Arc;
 

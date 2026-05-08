@@ -117,7 +117,7 @@ make ui
 1. Синхронизирует версию в `Cargo.toml`, `ui/package.json`, `channels/package.json`
 2. Компилирует все три бинарника для каждого target
 3. Собирает Next.js UI
-4. Упаковывает архив `release/hydeclaw-v0.4.0.tar.gz`
+4. Упаковывает архив `release/hydeclaw-v<VERSION>.tar.gz`
 
 **Содержимое архива:**
 
@@ -155,11 +155,11 @@ hydeclaw/
 
 ```bash
 # На dev-машине
-scp release/hydeclaw-v0.4.0.tar.gz aronmav@192.168.1.82:~/
+scp release/hydeclaw-v<VERSION>.tar.gz aronmav@192.168.1.82:~/
 
 # На Pi
 ssh aronmav@192.168.1.82
-tar xzf hydeclaw-v0.4.0.tar.gz
+tar xzf hydeclaw-v<VERSION>.tar.gz
 cd hydeclaw
 ./setup.sh
 ```
@@ -534,10 +534,10 @@ curl -sf http://localhost:18789/health
 
 ```bash
 # Загрузить архив на сервер
-scp release/hydeclaw-v0.4.0.tar.gz aronmav@192.168.1.82:~/
+scp release/hydeclaw-v<VERSION>.tar.gz aronmav@192.168.1.82:~/
 
 # Запустить updater
-ssh aronmav@192.168.1.82 "~/hydeclaw/update.sh ~/hydeclaw-v0.4.0.tar.gz"
+ssh aronmav@192.168.1.82 "~/hydeclaw/update.sh ~/hydeclaw-v<VERSION>.tar.gz"
 ```
 
 `update.sh` выполняет:

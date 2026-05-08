@@ -1,5 +1,8 @@
 # HydeClaw Upgrade Notes
 
+> These are historical upgrade notes. The current release is v0.27.0.
+> If upgrading from v0.20+, no action from these sections is needed.
+
 ## Upgrading to v0.20+: toolgate config → Core API single source of truth
 
 **Breaking change:** toolgate no longer reads the following environment variables.
@@ -24,7 +27,7 @@ and capability endpoints will return 503 until providers are configured.
    ```
 2. **For each listed var:** create the equivalent provider via UI (Settings → Media Providers → Add Provider).
 3. **For the MINIMAX normalize case:** note the UUID of the new `text` provider you create. In the TTS provider editor, set `options.normalize_provider_id = "<that UUID>"` and `options.normalize = true`.
-4. **Upgrade:** `./update.sh hydeclaw-v0.20.0.tar.gz`
+4. **Upgrade:** `./update.sh hydeclaw-v<VERSION>.tar.gz`
 5. **Verify:**
    ```bash
    curl -s http://localhost:9011/health | jq .

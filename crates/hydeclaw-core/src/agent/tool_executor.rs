@@ -82,7 +82,7 @@ pub struct DefaultToolExecutor {
     /// Initialized via `set_self_ref` after the executor is wrapped in Arc.
     self_ref: OnceLock<Arc<dyn ToolExecutor>>,
 
-    // ── Migrated tool-only fields (Phase 39-02) ───────────────────────────────
+    // ── Tool-only runtime fields ───────────────────────────────────────────────
 
     /// Code execution sandbox (Docker). None when sandbox disabled or Docker unavailable.
     pub(crate) sandbox: Option<Arc<crate::containers::sandbox::CodeSandbox>>,
@@ -122,8 +122,7 @@ pub struct DefaultToolExecutor {
     /// Event hooks for policy enforcement and logging.
     pub(crate) hooks: Arc<crate::agent::hooks::HookRegistry>,
     /// In-memory waiters for pending tool-call approvals (shared with ApprovalManager).
-    /// Phase 66 REF-02: backed by `DashMap` (sharded sync lock) — see
-    /// `crate::agent::approval_manager::ApprovalWaitersMap`.
+    /// Backed by `DashMap` (sharded sync lock) — see `ApprovalWaitersMap`.
     pub(crate) approval_waiters: crate::agent::approval_manager::ApprovalWaitersMap,
     /// SSE event sender for current streaming session — set/cleared by SSE loop.
     pub(crate) sse_event_tx: Arc<tokio::sync::Mutex<Option<crate::agent::engine_event_sender::EngineEventSender>>>,

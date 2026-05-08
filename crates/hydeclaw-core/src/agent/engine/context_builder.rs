@@ -1,11 +1,8 @@
-//! REF-01 Task 5: `impl ContextBuilderDeps for AgentEngine` + context /
-//! memory / compaction helpers (`build_context`, `build_memory_context`,
-//! `compact_*`, `handle_command`, channel info cache helpers).
+//! `impl ContextBuilderDeps for AgentEngine` — context, memory, compaction helpers.
 //!
-//! Extracted from `engine/mod.rs` as part of plan 66-02. `compact_session`
-//! is an inherent method on `AgentEngine` and remains publicly accessible
-//! via `crate::agent::engine::AgentEngine::compact_session` (inherent methods
-//! travel with the type).
+//! `compact_session` is an inherent method on `AgentEngine` and remains accessible
+//! via `crate::agent::engine::AgentEngine::compact_session` (inherent methods travel
+//! with the type, not with the module file).
 
 use anyhow::Result;
 use hydeclaw_types::{IncomingMessage, Message};
@@ -32,7 +29,6 @@ impl AgentEngine {
 
     /// Get channel info for this agent (cached, refreshed on `channels_changed`).
     pub(super) async fn get_channel_info(&self) -> Vec<workspace::ChannelInfo> {
-        // Check cache first
         {
             let cache = self.state().channel_info_cache.read().await;
             if let Some(ref cached) = *cache {

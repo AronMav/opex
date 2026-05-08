@@ -75,7 +75,7 @@ pub async fn resolve_approval(
     }
 
     // Wake up the waiting tool execution.
-    // Phase 66 REF-02: waiters map is a DashMap — no async lock, `.remove()` returns Option<(K, V)>.
+    // Waiters map is a DashMap — no async lock, `.remove()` returns Option<(K, V)>.
     let waiters = ctx.cfg.approval_manager.waiters();
     if let Some((_id, (tx, _created_at))) = waiters.remove(&approval_id) {
         let result = if approved {

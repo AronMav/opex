@@ -40,22 +40,11 @@ pub use handlers::providers::migrate_provider_keys_to_vault;
 pub(crate) use handlers::backup::create_backup_internal;
 pub(crate) use handlers::notifications::notify;
 
-// ── Phase 66 REF-06 — intentional-leak retirement ────────────────────────
-//
-// Rate limiter family + shared auth token now live behind
-// `OnceLock<Arc<T>>` statics (std::sync, stable since Rust 1.70 — no
-// `once_cell` dep per CONTEXT.md decision). Middleware closures
-// `Arc::clone` into their captures instead of `Copy`-ing a `&'static`
-// reference; the Arc's strong-count stays bounded (router ctor + one per
-// middleware layer + one per sweeper = ~6), and dropping the router
-// drops the middleware closures, decrementing the Arc count back down —
-// no unreclaimable allocation, unlike the retired intentional-leak
-// pattern.
-//
-// The Phase 65-04 `install_rate_limiter_handles` shim is retired; the
-// `/api/health/dashboard` handler reads sizes via the public async helper
-// `crate::gateway::middleware::rate_limiter_sizes`, which delegates to
-// `auth_limiter_opt()` / `request_limiter_opt()` below.
+// Rate limiter family + shared auth token live behind `OnceLock<Arc<T>>` statics.
+// Middleware closures `Arc::clone` into their captures; the strong-count stays
+// bounded (~6), and dropping the router releases those Arcs — no leaked allocation.
+// `/api/health/dashboard` reads sizes via `middleware::rate_limiter_sizes()`,
+// which delegates to `auth_limiter_opt()` / `request_limiter_opt()` below.
 
 static SHARED_TOKEN: OnceLock<Arc<str>> = OnceLock::new();
 static AUTH_LIMITER: OnceLock<Arc<AuthRateLimiter>> = OnceLock::new();
@@ -63,16 +52,13 @@ static REQ_LIMITER: OnceLock<Arc<RequestRateLimiter>> = OnceLock::new();
 static CSP_LIMITER: OnceLock<Arc<handlers::csp::CspReportRateLimiter>> = OnceLock::new();
 static WEBHOOK_LIMITER: OnceLock<Arc<RequestRateLimiter>> = OnceLock::new();
 
-/// Phase 66 REF-06: dashboard size accessor helper. Returns a cheap
-/// `Arc::clone` of the auth rate limiter, or `None` before the router has
-/// been constructed (e.g. early startup / tests that skip the gateway).
+/// Returns the auth rate limiter, or `None` before the router has been
+/// constructed (e.g. early startup / tests that skip the gateway).
 pub(crate) fn auth_limiter_opt() -> Option<Arc<AuthRateLimiter>> {
     AUTH_LIMITER.get().cloned()
 }
 
-/// Phase 66 REF-06: dashboard size accessor helper. Returns a cheap
-/// `Arc::clone` of the request rate limiter, or `None` before the router
-/// has been constructed.
+/// Returns the request rate limiter, or `None` before the router has been constructed.
 pub(crate) fn request_limiter_opt() -> Option<Arc<RequestRateLimiter>> {
     REQ_LIMITER.get().cloned()
 }
@@ -141,11 +127,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::workspace::routes());      // /api/workspace/*
 
     // Auth middleware — REQUIRED. Refuse to start without a token.
-    // Phase 66 REF-06: token + rate limiters are stored in module-level
-    // `OnceLock<Arc<T>>` statics (replacing the Phase 65 intentional-leak
-    // pattern).
-    // The `.set(...).ok()` pattern is idempotent: second router construction
-    // (tests, hot-reload) keeps the original Arc — no allocation delta.
+    // `.set(...).ok()` is idempotent: second router construction (tests,
+    // hot-reload) keeps the original Arc — no allocation delta.
     let Some(token) = auth_token else {
         tracing::error!("FATAL: no auth token configured — refusing to start unauthenticated gateway");
         tracing::error!("set gateway.auth_token_env in config and provide the env var");
@@ -180,12 +163,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         }))
     };
 
-    // Phase 66 REF-06: `install_rate_limiter_handles` retired — the
-    // `/api/health/dashboard` handler reads sizes via
-    // `middleware::rate_limiter_sizes()` which delegates to the
-    // `auth_limiter_opt()` / `request_limiter_opt()` helpers above.
-
-    // Phase 64 SEC-05: dedicated per-IP limiter on /api/csp-report (~30 rpm).
+    // Dedicated per-IP limiter on /api/csp-report (~30 rpm).
     // Additive to the global limiter above — both apply.
     let _ = CSP_LIMITER.set(Arc::new(handlers::csp::CspReportRateLimiter::new()));
     let csp_limiter = CSP_LIMITER.get().cloned().expect("CSP_LIMITER just set");
@@ -205,12 +183,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         }))
     };
 
-    // Phase 62 RES-04: spawn background sweeper tasks.
-    // Every 60s they evict expired entries from the rate-limiter HashMaps,
-    // replacing the inline-on-write eviction that scaled with map size.
-    // Phase 66 REF-06: each sweeper owns its own `Arc::clone` — dropping
-    // the router + joining the task releases the Arc back to the shared
-    // static; no `&'static` leak.
+    // Background sweeper tasks: every 60s evict expired rate-limiter entries.
+    // Each sweeper owns its own Arc::clone — dropping the router releases it.
     {
         let rate_limiter = rate_limiter.clone();
         tokio::spawn(async move {

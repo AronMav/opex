@@ -12,7 +12,7 @@ Thank you for your interest in contributing! Here's how to get started.
 
 ### Prerequisites
 
-- Rust 1.87+ (`rustup update stable`)
+- Rust 1.85+ (`rustup update stable`)
 - PostgreSQL 17 with pgvector extension
 - Bun 1.x (for channel adapters)
 - Python 3.11+ with uv (for toolgate)
@@ -101,9 +101,9 @@ Please do **not** open public issues for security vulnerabilities. Instead, crea
 
 ```bash
 # Build release archive (all platforms)
-./release.sh 0.2.0 --all
+./release.sh 0.27.0 --all
 
-# Result: release/hydeclaw-v0.2.0.tar.gz
+# Result: release/hydeclaw-v0.27.0.tar.gz
 ```
 
 The release script syncs the version to `Cargo.toml` and `package.json` files, builds all binaries, packages the UI, and creates a single archive.
@@ -111,8 +111,8 @@ The release script syncs the version to `Cargo.toml` and `package.json` files, b
 To publish a release on GitHub, create and push a tag — CI builds and publishes automatically:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.27.0
+git push origin v0.27.0
 ```
 
 ## Questions

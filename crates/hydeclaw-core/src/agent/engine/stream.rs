@@ -1,12 +1,4 @@
-//! REF-01 Task 2: thin entry-point and `ProcessingPhase` wire enum +
-//! `ProcessingGuard` RAII tracker + `StreamEvent` re-export.
-//!
-//! Originally also held `handle_isolated()` for cron-style RPC turns. After
-//! the LLM-loop unification (Phases 6–7 of the unification plan), every
-//! caller routes through `pipeline::execute` via
-//! `engine::run::handle_isolated_via_pipeline`, and the legacy parallel
-//! implementation is gone. What remains here is the small re-exports and
-//! the `handle()` thin adapter.
+//! `ProcessingPhase` wire enum + `ProcessingGuard` RAII tracker + `StreamEvent` re-export.
 
 use anyhow::Result;
 use hydeclaw_types::IncomingMessage;
