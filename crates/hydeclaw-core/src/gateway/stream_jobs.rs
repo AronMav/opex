@@ -82,11 +82,20 @@ pub async fn get_active_job(db: &PgPool, session_id: Uuid) -> sqlx::Result<Optio
     .await
 }
 
-/// Delete old finished jobs (older than 1 hour).
+/// Delete old jobs.
+///
+/// Audit 2026-05-08: previously this only removed rows with `finished_at IS
+/// NOT NULL`. If the process crashed mid-stream the row stayed at
+/// `status='running' AND finished_at IS NULL` forever, growing the table
+/// unboundedly. We now also reap rows that have been `'running'` for more
+/// than an hour (with `finished_at` still NULL) — by then the original
+/// process is long gone and the SSE resume window (2 minutes per
+/// `get_active_job`) has expired.
 pub async fn cleanup_old_jobs(db: &PgPool) -> sqlx::Result<u64> {
     let result = sqlx::query(
-        "DELETE FROM stream_jobs WHERE finished_at IS NOT NULL \
-         AND finished_at < now() - interval '1 hour'",
+        "DELETE FROM stream_jobs WHERE \
+            (finished_at IS NOT NULL AND finished_at < now() - interval '1 hour') \
+            OR (finished_at IS NULL AND created_at < now() - interval '1 hour')",
     )
     .execute(db)
     .await?;
