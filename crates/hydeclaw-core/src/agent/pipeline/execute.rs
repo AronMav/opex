@@ -116,6 +116,11 @@ pub async fn execute<S: EventSink>(
         incoming_context,
         channel,
         compressor: _, // passed separately as &mut parameter
+        // CACHE-02: per-agent CLAUDE.md content for the third cache breakpoint.
+        // Same value across the whole session (CLAUDE.md is invariant per turn);
+        // cloned into each CallOptions site below so the value lives long enough
+        // for both the main-loop call and the two forced-final-call paths.
+        claude_md_content,
     } = bootstrap_outcome;
 
     // last_msg_id threads the DB parent chain through intermediate assistant

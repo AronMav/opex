@@ -21,6 +21,11 @@ pub struct ContextSnapshot {
     /// it can decide on `LoopDetector` warm-up and pick the correct
     /// `claim_session_for_reentry` mode.
     pub reentry_mode: hydeclaw_db::ReentryMode,
+    /// CACHE-02: per-agent CLAUDE.md content for the third cache
+    /// breakpoint. `Some(text)` only when `is_base && prompt_cache &&
+    /// non-empty file`. Threaded through `BootstrapOutcome` and consumed
+    /// at every `CallOptions` site in `pipeline::execute`.
+    pub claude_md_content: Option<String>,
 }
 
 /// Abstraction over context building so unit tests can inject a `MockContextBuilder`
@@ -77,6 +82,10 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     // Agent settings
     fn agent_name(&self) -> &str;
     fn agent_base(&self) -> bool;
+    /// CACHE-02: whether the agent has `prompt_cache = true` in its TOML.
+    /// Used by `DefaultContextBuilder::build` to decide whether to load
+    /// CLAUDE.md as a separate cache breakpoint block.
+    fn agent_prompt_cache(&self) -> bool;
     fn agent_language(&self) -> &str;
     fn agent_max_history_messages(&self) -> i64;
     fn agent_dm_scope(&self) -> &str;
@@ -85,6 +94,15 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
 
     // Workspace
     async fn load_workspace_prompt(&self) -> Result<String>;
+    /// CACHE-02: load `workspace/agents/{Name}/CLAUDE.md` as a standalone
+    /// string. `Ok(None)` for missing or whitespace-only files. Only
+    /// invoked by the cache-aware build path.
+    async fn load_claude_md(&self) -> Result<Option<String>>;
+    /// CACHE-02: load the per-agent system prompt EXCLUDING CLAUDE.md.
+    /// Used by the cache-aware path so CLAUDE.md is emitted as its own
+    /// breakpoint block (via `load_claude_md`) rather than inlined into
+    /// the monolithic prompt.
+    async fn load_workspace_prompt_excluding_claude_md(&self) -> Result<String>;
 
     // MCP
     async fn mcp_tool_definitions(&self) -> Vec<ToolDefinition>;
@@ -216,7 +234,18 @@ impl ContextBuilder for DefaultContextBuilder {
         };
 
         // 3. Build system prompt with MCP tool schemas
-        let ws_prompt = deps.load_workspace_prompt().await?;
+        // CACHE-02 / Pitfall 5: only base agents with prompt_cache get
+        // CLAUDE.md as a separate breakpoint block. All other paths use the
+        // monolithic prompt (CLAUDE.md inlined if present).
+        let use_third_breakpoint = deps.agent_base() && deps.agent_prompt_cache();
+        let (ws_prompt, claude_md_content): (String, Option<String>) = if use_third_breakpoint {
+            let prompt = deps.load_workspace_prompt_excluding_claude_md().await?;
+            let claude = deps.load_claude_md().await?;
+            (prompt, claude)
+        } else {
+            let prompt = deps.load_workspace_prompt().await?;
+            (prompt, None)
+        };
 
         // MCP tool schemas in system prompt: name + description only.
         let mcp_defs = deps.mcp_tool_definitions().await;
@@ -593,6 +622,7 @@ impl ContextBuilder for DefaultContextBuilder {
             messages,
             tools,
             reentry_mode,
+            claude_md_content,
         })
     }
 }
@@ -643,6 +673,7 @@ pub mod mock {
                 messages: self.messages.clone(),
                 tools: self.tools.clone(),
                 reentry_mode: self.reentry_mode,
+                claude_md_content: None,
             })
         }
     }
