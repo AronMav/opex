@@ -165,9 +165,17 @@ pub async fn ensure_hnsw_index(db: &PgPool, dim: u32) -> Result<()> {
 
 // ── Search ───────────────────────────────────────────────────────────────────
 
-/// Fetch all pinned chunks for a given agent, ordered oldest first.
-/// Includes shared chunks (scope = 'shared') visible to all agents.
-/// Used by L0 context loading — no embedding or search query needed.
+/// Maximum number of pinned chunks fetched in one call.
+/// `load_pinned` further trims by token budget; this is a hard ceiling so a
+/// pathological agent with thousands of pinned chunks cannot OOM the Pi at
+/// query time. 500 is well above the realistic working set (typically
+/// ~30-50 entries per agent) and far below DB-side memory limits.
+pub const FETCH_PINNED_HARD_LIMIT: i64 = 500;
+
+/// Fetch up to `FETCH_PINNED_HARD_LIMIT` pinned chunks for a given agent,
+/// ordered oldest first. Includes shared chunks (scope = 'shared') visible
+/// to all agents. Used by L0 context loading — no embedding or search query
+/// needed.
 pub async fn fetch_pinned(db: &PgPool, agent_id: &str) -> Result<Vec<MemoryChunk>> {
     let rows = sqlx::query(
         r"SELECT id::text, content, COALESCE(source,'') AS source, pinned,
@@ -175,9 +183,11 @@ pub async fn fetch_pinned(db: &PgPool, agent_id: &str) -> Result<Vec<MemoryChunk
                   created_at, accessed_at
            FROM memory_chunks
            WHERE ($1 = '' OR agent_id = $1 OR scope = 'shared') AND pinned = true
-           ORDER BY created_at ASC",
+           ORDER BY created_at ASC
+           LIMIT $2",
     )
     .bind(agent_id)
+    .bind(FETCH_PINNED_HARD_LIMIT)
     .fetch_all(db)
     .await
     .context("failed to fetch pinned memory chunks")?;
