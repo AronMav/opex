@@ -443,6 +443,23 @@ pub(crate) async fn api_provider_resolve(
 
     let api_key = resolve_key(&auth.secrets, &provider).await.unwrap_or_default();
 
+    // Audit 2026-05-08: this endpoint returns the plaintext API key. Mirror
+    // the SECRET_REVEALED event already emitted by /api/secrets/{name}/reveal
+    // so a forensic timeline shows every plaintext-credential extraction,
+    // regardless of which path produced it.
+    crate::db::audit::audit_spawn(
+        infra.db.clone(),
+        String::new(),
+        crate::db::audit::event_types::SECRET_REVEALED,
+        None,
+        json!({
+            "kind": "provider_api_key",
+            "provider_id": id.to_string(),
+            "provider_name": provider.name,
+            "provider_type": provider.provider_type,
+        }),
+    );
+
     Json(json!({
         "base_url": provider.base_url,
         "provider_type": provider.provider_type,
