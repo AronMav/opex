@@ -1,4 +1,3 @@
-#[allow(dead_code)] // Scaffolding for AgentEngine decomposition — wired in by later tasks.
 pub mod agent_state;
 pub mod memory_service;
 pub mod context_builder;
