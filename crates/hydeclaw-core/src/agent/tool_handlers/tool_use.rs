@@ -50,11 +50,20 @@ async fn promoted_set(deps: &ToolDeps<'_>) -> HashSet<String> {
 
 fn deny_list(deps: &ToolDeps<'_>) -> Vec<String> {
     // Catalogue / describe show only the agent's own tool_policy.deny.
+    //
     // Delegation deny (SUBAGENT_DENIED_TOOLS) is intentionally NOT applied
     // here — applying it for a main agent would hide cron / secret_set /
     // process from the catalogue, breaking the dispatcher's primary use case.
-    // Subagent isolation via dispatcher is a known follow-up gap (see
-    // `engine/tool_executor.rs::execute_tool_calls_partitioned`).
+    // ToolDeps has no subagent-context flag, so we cannot conditionally apply
+    // the subagent deny list at this layer.
+    //
+    // Audit 2026-05-08: this is now an INFORMATIONAL concern only, not an
+    // exploit path. A subagent that sees `code_exec` in its catalogue still
+    // cannot invoke it: the actual call goes through
+    // `dispatcher::rewrite_tool_use_calls` which checks `extra_deny` (the
+    // parent's `compute_denied_tools` list) before producing a Direct call.
+    // See `pipeline::parallel::execute_tool_calls_partitioned` and
+    // `agent::dispatcher::rewrite::rewrite_one`.
     deps.cfg.agent.tools.as_ref()
         .map(|p| p.deny.clone())
         .unwrap_or_default()

@@ -412,15 +412,19 @@ impl SecretsManager {
 
     /// Delete all secrets belonging to a scope.
     /// Called when an agent is deleted to clean up its scoped secrets.
+    ///
+    /// Audit 2026-05-08: takes the cache write-lock BEFORE the SQL DELETE so
+    /// a concurrent `get_scoped` cannot read a value that no longer exists
+    /// in the DB. Mirrors `delete_scoped` / `set_internal` lock ordering.
     pub async fn delete_scope(&self, scope: &str) -> Result<()> {
+        let mut cache = self.cache.write().await;
+
         sqlx::query("DELETE FROM secrets WHERE scope = $1")
             .bind(scope)
             .execute(&self.db)
             .await
             .context("failed to delete secrets for scope")?;
 
-        // Remove from cache
-        let mut cache = self.cache.write().await;
         cache.retain(|(_, s), _| s != scope);
         drop(cache);
 

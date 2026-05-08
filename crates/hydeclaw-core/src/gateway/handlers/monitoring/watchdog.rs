@@ -89,10 +89,34 @@ pub(crate) async fn api_watchdog_settings_update(
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "expected JSON object"}))).into_response();
     };
 
+    // Audit 2026-05-08: validate value shape per key BEFORE writing the
+    // JSONB to DB. Without this, a `{"alert_channel_ids": "not-an-array"}`
+    // body would store an invalid type that the watchdog binary then panics
+    // on at deserialise time. Both keys are arrays of strings (UUIDs / event
+    // names); the watchdog parses event strings into a known enum elsewhere.
     let allowed = ["alert_channel_ids", "alert_events"];
     for (key, value) in obj {
         if !allowed.contains(&key.as_str()) {
             return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("unknown key: {}", key)}))).into_response();
+        }
+        let arr = match value.as_array() {
+            Some(a) => a,
+            None => {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("{key} must be a JSON array")}))).into_response();
+            }
+        };
+        for item in arr {
+            if !item.is_string() {
+                return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("{key} array elements must all be strings")}))).into_response();
+            }
+        }
+        if key == "alert_channel_ids" {
+            for item in arr {
+                let s = item.as_str().unwrap_or_default();
+                if uuid::Uuid::parse_str(s).is_err() {
+                    return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("alert_channel_ids item '{s}' is not a valid UUID")}))).into_response();
+                }
+            }
         }
         if let Err(e) = sqlx::query(
             "INSERT INTO watchdog_settings (key, value, updated_at) VALUES ($1, $2, now())
