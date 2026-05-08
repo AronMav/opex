@@ -144,7 +144,11 @@ impl CheckResult {
 ///   "db_pool_idle": <u64>,
 ///   "memory_worker_heartbeat_age_secs": <i64>,
 ///   "session_events_table_size_bytes": <u64>,
-///   "uptime_secs": <u64>
+///   "uptime_secs": <u64>,
+///   "cache_read_tokens_24h": <i64>,
+///   "cache_creation_tokens_24h": <i64>,
+///   "cache_read_tokens_7d": <i64>,
+///   "cache_creation_tokens_7d": <i64>
 /// }
 /// ```
 ///
@@ -201,6 +205,15 @@ pub(crate) async fn api_health_dashboard(
     .flatten()
     .unwrap_or(-1);
 
+    // CACHE-03: aggregate cache-token usage from usage_log.
+    // `unwrap_or_default()` degrades gracefully on DB error — dashboard
+    // continues to render with zeros rather than failing the request.
+    // Same posture as `session_events_table_size_bytes` and the
+    // `memory_worker_heartbeat_age_secs` reads above.
+    let cache_tokens = hydeclaw_db::usage::cache_metrics(&infra.db)
+        .await
+        .unwrap_or_default();
+
     let snap = DashboardSnapshot {
         active_agents,
         sse_streams,
@@ -215,6 +228,11 @@ pub(crate) async fn api_health_dashboard(
         memory_worker_heartbeat_age_secs,
         session_events_table_size_bytes,
         uptime_secs: status.started_at.elapsed().as_secs(),
+        // CACHE-03: prompt-cache token aggregates (24h + 7d windows).
+        cache_read_tokens_24h: cache_tokens.cache_read_tokens_24h,
+        cache_creation_tokens_24h: cache_tokens.cache_creation_tokens_24h,
+        cache_read_tokens_7d: cache_tokens.cache_read_tokens_7d,
+        cache_creation_tokens_7d: cache_tokens.cache_creation_tokens_7d,
     };
 
     Json(build_dashboard_body_with_snapshot(&infra.metrics, &snap))
