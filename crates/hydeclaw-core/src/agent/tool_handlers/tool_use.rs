@@ -6,7 +6,6 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::agent::dispatcher;
@@ -41,12 +40,6 @@ impl SystemToolHandler for ToolUseHandler {
     }
 }
 
-async fn promoted_set(deps: &ToolDeps<'_>) -> HashSet<String> {
-    match deps.session_tool_state.as_ref() {
-        Some(s) => s.promoted.read().await.clone(),
-        None => HashSet::new(),
-    }
-}
 
 fn deny_list(deps: &ToolDeps<'_>) -> Vec<String> {
     // Catalogue / describe show only the agent's own tool_policy.deny.
@@ -74,13 +67,12 @@ async fn handle_search(deps: ToolDeps<'_>, query: &str) -> String {
         return "Error: search requires a non-empty query string.".to_string();
     }
 
-    let promoted = promoted_set(&deps).await;
     let deny = deny_list(&deps);
 
     let candidates = dispatcher::build_extension_tool_list(
         deps.agent_base,
         &deny,
-        &promoted,
+        &std::collections::HashSet::new(),
         deps.workspace_dir,
         deps.mcp,
     ).await;
@@ -121,20 +113,18 @@ async fn handle_describe(deps: ToolDeps<'_>, name: &str) -> String {
     }
 
     if let Some(state) = deps.session_tool_state.as_ref() {
-        let cache = state.describe_cache.read().await;
-        if let Some(cached) = cache.get(name) {
-            return cached.clone();
+        if let Some(cached) = state.get_describe(name).await {
+            return cached;
         }
     }
 
-    let promoted = promoted_set(&deps).await;
     let deny = deny_list(&deps);
 
     let tool = dispatcher::find_extension_tool(
         name,
         deps.agent_base,
         &deny,
-        &promoted,
+        &std::collections::HashSet::new(),
         deps.workspace_dir,
         deps.mcp,
     ).await;
@@ -160,8 +150,7 @@ async fn handle_describe(deps: ToolDeps<'_>, name: &str) -> String {
     };
 
     if let Some(state) = deps.session_tool_state.as_ref() {
-        let mut cache = state.describe_cache.write().await;
-        cache.insert(name.to_string(), result.clone());
+        state.set_describe(name.to_string(), result.clone()).await;
     }
 
     result
