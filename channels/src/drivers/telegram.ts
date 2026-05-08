@@ -366,6 +366,19 @@ export function createTelegramDriver(
     // Handle approval callbacks (approve:UUID / reject:UUID) via HTTP to Core API
     const approveMatch = data.match(/^(approve|reject):(.+)$/);
     if (approveMatch) {
+      // Audit 2026-05-08: only the agent owner may resolve an approval. Without
+      // this check, any Telegram user who happens to see the inline buttons
+      // (e.g. message visible in a group, forwarded screenshot) could press
+      // them and the adapter would forward the click to Core. Core has its own
+      // is_owner check on the WS path (channel_ws/inline.rs), but the HTTP
+      // /api/approvals/{id}/resolve endpoint did not enforce ownership at the
+      // adapter layer.
+      const access = await bridge.checkAccess(userId);
+      if (!access.isOwner) {
+        await ctx.answerCallbackQuery({ text: strings.approvalForbidden }).catch(() => {});
+        return;
+      }
+
       const [, action, approvalId] = approveMatch;
       const status = action === "approve" ? "approved" : "rejected";
       const label = status === "approved" ? strings.approvalApproved : strings.approvalRejected;

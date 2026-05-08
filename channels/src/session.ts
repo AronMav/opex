@@ -106,8 +106,12 @@ async function runSession(
   }
   const { ticket } = (await ticketResp.json()) as { ticket: string };
   const wsUrl = `${config.coreWs}/ws/channel/${config.agentName}?ticket=${ticket}`;
-
-  console.log(`[${config.agentName}] connecting to ${wsUrl}...`);
+  // Audit 2026-05-08: redact the ticket query param when logging — even
+  // though tickets are one-time and short-lived, journald/systemd logs are
+  // searchable history and the URL fragment makes hand-crafted lookalikes
+  // easier to spot during forensic review.
+  const wsUrlSafe = `${config.coreWs}/ws/channel/${config.agentName}?ticket=***`;
+  console.log(`[${config.agentName}] connecting to ${wsUrlSafe}...`);
   const ws = new WebSocket(wsUrl);
 
   const bridge = new BridgeHandle(
