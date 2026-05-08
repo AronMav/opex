@@ -68,7 +68,7 @@ export function createSessionCrudActions(deps: ActionDeps) {
 
     renameSession: async (sessionId: string, title: string) => {
       const agent = get().currentAgent;
-      await apiPatch(`/api/sessions/${sessionId}`, { title });
+      await apiPatch(`/api/sessions/${sessionId}?agent=${encodeURIComponent(agent)}`, { title });
       queryClient.invalidateQueries({ queryKey: qk.sessions(agent) });
     },
 

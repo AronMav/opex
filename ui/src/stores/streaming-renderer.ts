@@ -87,7 +87,7 @@ export function createStreamingRenderer(store: StoreAccess) {
     uiStateSaveTimers[agent] = setTimeout(() => {
       const st = store.get().agents[agent];
       if (!st?.activeSessionId) return;
-      apiPatch(`/api/sessions/${st.activeSessionId}`, {
+      apiPatch(`/api/sessions/${st.activeSessionId}?agent=${encodeURIComponent(agent)}`, {
         ui_state: { connectionPhase: st.connectionPhase },
       }).catch((e: unknown) => { console.warn("[chat] save failed:", e); });
     }, 500);

@@ -213,12 +213,15 @@ function SpeakButton({ message }: { message: ChatMessage }) {
 function FeedbackButtons({ message }: { message: ChatMessage }) {
   const { t } = useTranslation();
   const [submitted, setSubmitted] = useState<"positive" | "negative" | null>(null);
+  const currentAgent = useChatStore((s) => s.currentAgent);
 
   const handleFeedback = useCallback(
     (type: "positive" | "negative") => {
       const feedback = type === "positive" ? 1 : -1;
       setSubmitted(type);
-      fetch(`/api/messages/${message.id}/feedback`, {
+      // ?agent= is required server-side (audit 2026-05-08, IDOR fix); without
+      // it the backend rejects the call to prevent cross-agent feedback writes.
+      fetch(`/api/messages/${message.id}/feedback?agent=${encodeURIComponent(currentAgent)}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -227,7 +230,7 @@ function FeedbackButtons({ message }: { message: ChatMessage }) {
         body: JSON.stringify({ feedback }),
       }).catch(() => toast.error(t("chat.feedback_error")));
     },
-    [message.id, t],
+    [message.id, t, currentAgent],
   );
 
   return (

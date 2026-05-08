@@ -200,7 +200,7 @@ export function createStreamActions(deps: ActionDeps) {
           message_id: string;
           parent_message_id: string;
           branch_from_message_id: string;
-        }>(`/api/sessions/${sessionId}/fork`, {
+        }>(`/api/sessions/${sessionId}/fork?agent=${encodeURIComponent(agent)}`, {
           branch_from_message_id: messageId,
           content: newContent,
         });
