@@ -272,6 +272,53 @@ pub async fn usage_summary(db: &PgPool, days: u32) -> Result<Vec<UsageSummary>> 
         .collect())
 }
 
+/// Aggregated cache token totals from `usage_log` over rolling time windows.
+///
+/// All four fields are `i64` because `SUM(INTEGER)` in PostgreSQL returns
+/// `BIGINT` and `COALESCE(..., 0)` keeps the type as BIGINT. Token counts
+/// are non-negative; the signed type is for decode compatibility, not range.
+///
+/// `Default::default()` returns all zeros — used by the dashboard handler
+/// to degrade gracefully on DB errors rather than failing the entire
+/// dashboard request.
+#[derive(Debug, Clone, Default)]
+pub struct CacheMetrics {
+    pub cache_read_tokens_24h: i64,
+    pub cache_creation_tokens_24h: i64,
+    pub cache_read_tokens_7d: i64,
+    pub cache_creation_tokens_7d: i64,
+}
+
+/// Cache token aggregates for the last 24 hours and 7 days, suitable for
+/// `/api/health/dashboard`. CACHE-03.
+///
+/// Both `cache_read_tokens` and `cache_creation_tokens` are nullable in
+/// `usage_log` (aborted rows write NULL — see [`insert_aborted_row`]).
+/// `SUM` ignores NULL; `COALESCE(SUM(...), 0)` ensures an empty result set
+/// returns 0 instead of NULL.
+///
+/// Pitfall 6 mitigation: queries use `WHERE created_at > now() - interval`
+/// on the indexed `created_at` column (short windows; bounded scan).
+pub async fn cache_metrics(db: &PgPool) -> Result<CacheMetrics> {
+    let row: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+           COALESCE(SUM(cache_read_tokens) FILTER (WHERE created_at > now() - interval '24 hours'), 0)::BIGINT, \
+           COALESCE(SUM(cache_creation_tokens) FILTER (WHERE created_at > now() - interval '24 hours'), 0)::BIGINT, \
+           COALESCE(SUM(cache_read_tokens) FILTER (WHERE created_at > now() - interval '7 days'), 0)::BIGINT, \
+           COALESCE(SUM(cache_creation_tokens) FILTER (WHERE created_at > now() - interval '7 days'), 0)::BIGINT \
+         FROM usage_log \
+         WHERE created_at > now() - interval '7 days'",
+    )
+    .fetch_one(db)
+    .await?;
+    Ok(CacheMetrics {
+        cache_read_tokens_24h: row.0,
+        cache_creation_tokens_24h: row.1,
+        cache_read_tokens_7d: row.2,
+        cache_creation_tokens_7d: row.3,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +388,53 @@ mod tests {
         // Changing these strings requires migration 025 to be amended.
         assert_eq!(STATUS_ABORTED, "aborted");
         assert_eq!(STATUS_ABORTED_FAILOVER, "aborted_failover");
+    }
+
+    #[test]
+    fn cache_metrics_default_is_all_zeros() {
+        // Default impl is what the dashboard handler uses on DB error,
+        // so it must be safe to surface as JSON without surprise.
+        let m = CacheMetrics::default();
+        assert_eq!(m.cache_read_tokens_24h, 0);
+        assert_eq!(m.cache_creation_tokens_24h, 0);
+        assert_eq!(m.cache_read_tokens_7d, 0);
+        assert_eq!(m.cache_creation_tokens_7d, 0);
+    }
+
+    #[sqlx::test]
+    async fn cache_metrics_returns_zeros_on_empty_table(pool: PgPool) {
+        // CACHE-03: COALESCE-to-zero handling proven on empty table.
+        let m = cache_metrics(&pool).await.expect("query succeeds on empty table");
+        assert_eq!(m.cache_read_tokens_24h, 0);
+        assert_eq!(m.cache_creation_tokens_24h, 0);
+        assert_eq!(m.cache_read_tokens_7d, 0);
+        assert_eq!(m.cache_creation_tokens_7d, 0);
+    }
+
+    #[sqlx::test]
+    async fn cache_metrics_sums_recent_rows(pool: PgPool) {
+        // Insert two rows: one within the 24h window (default created_at = now()),
+        // one outside (10 days old). Verify 24h and 7d aggregates exclude the
+        // older row (since 10d > 7d > 24h).
+        sqlx::query(
+            "INSERT INTO usage_log (agent_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens) \
+             VALUES ('a', 'p', 'm', 100, 50, 700, 200)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert recent");
+        sqlx::query(
+            "INSERT INTO usage_log (agent_id, provider, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, created_at) \
+             VALUES ('a', 'p', 'm', 100, 50, 9999, 9999, now() - interval '10 days')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert old");
+
+        let m = cache_metrics(&pool).await.expect("query succeeds");
+        assert_eq!(m.cache_read_tokens_24h, 700, "24h must include only recent");
+        assert_eq!(m.cache_creation_tokens_24h, 200);
+        assert_eq!(m.cache_read_tokens_7d, 700, "7d must also exclude 10d-old row");
+        assert_eq!(m.cache_creation_tokens_7d, 200);
     }
 }
