@@ -154,6 +154,7 @@ export function ChatThread({
   const { data: sessionMessagesData, isLoading: historyLoading } = useSessionMessages(
     activeSessionId,
     engineRunning,
+    currentAgent,
   );
   // sessionMessagesData used only for showSkeleton — useRenderMessages reads via the cache
 

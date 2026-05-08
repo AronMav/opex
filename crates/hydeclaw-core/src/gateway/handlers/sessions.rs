@@ -221,10 +221,17 @@ pub(crate) async fn api_session_messages(
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
 
-    if let Some(ref agent) = q.agent
-        && let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
-            return resp;
-        }
+    // Audit 2026-05-08 (4th pass): `?agent=` is now MANDATORY here too. The
+    // earlier IDOR fix made it optional which silently bypassed ownership
+    // verification — any token-holder could read any session's messages by
+    // guessing the UUID.
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
+        return resp;
+    }
 
     let db_start = std::time::Instant::now();
     let query_result = sessions::get_messages_page(&infra.db, id, q.before_id, limit).await;
@@ -804,16 +811,23 @@ pub(crate) async fn api_patch_session(
     Json(json!({"ok": true})).into_response()
 }
 
-/// GET /api/sessions/{id}/export — export full session as JSON (metadata + all messages).
+/// GET /api/sessions/{id}/export?agent=xxx — export full session as JSON (metadata + all messages).
+///
+/// Audit 2026-05-08: `?agent=` is required (was optional before, defeating
+/// the ownership check). Markdown export carries arbitrary user content,
+/// JSON export carries the full message tree — both should be gated.
 pub(crate) async fn api_export_session(
     State(infra): State<InfraServices>,
     Path(id): Path<uuid::Uuid>,
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    if let Some(agent) = params.get("agent")
-        && let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
-            return resp;
-        }
+    let agent = match params.get("agent").map(String::as_str) {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
+        return resp;
+    }
 
     let format = params.get("format").map_or("json", std::string::String::as_str);
     match format {
