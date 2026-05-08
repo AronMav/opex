@@ -68,11 +68,6 @@ export const qk = {
   approvals: ["approvals"] as const,
   backups: ["backups"] as const,
   sessions: (agent: string) => ["sessions", "list", agent] as const,
-  // Audit 2026-05-08 (7th pass): kept as 3-element prefix so existing
-  // `invalidateQueries({queryKey: qk.sessionMessages(id)})` calls invalidate
-  // every per-agent cache entry via React Query's default prefix matching.
-  // The actual `queryKey` used by `useSessionMessages`/`useSessionChain`
-  // appends `agent` (4th element) to prevent cross-agent cache collisions.
   sessionMessages: (id: string) => ["sessions", id, "messages"] as const,
   sessionChain: (id: string) => ["sessions", id, "chain"] as const,
   providers: ["providers"] as const,
@@ -550,10 +545,12 @@ export function useSetProviderActive() {
 
 export function useSessionMessages(sessionId: string | null, engineRunning = false, agent?: string) {
   return useQuery({
-    // Keep prefix `["sessions", id, "messages"]` (so existing
-    // invalidations match) and append agent so two agents' caches don't
-    // collide. Empty-string fallback when agent is absent.
-    queryKey: [...qk.sessionMessages(sessionId!), agent ?? ""] as const,
+    // 3-element key so getCachedHistoryMessages / getCachedRawMessages
+    // (which call queryClient.getQueryData with this same key) can find
+    // the data. A session belongs to exactly one agent so cross-agent
+    // cache collision is impossible. Agent is still sent to the backend
+    // for IDOR protection.
+    queryKey: qk.sessionMessages(sessionId!),
     queryFn: () => {
       // Audit 2026-05-08: backend requires ?agent= for owner check.
       const params = new URLSearchParams({ limit: "100" });
@@ -562,7 +559,8 @@ export function useSessionMessages(sessionId: string | null, engineRunning = fal
         `/api/sessions/${sessionId}/messages?${params.toString()}`,
       );
     },
-    enabled: !!sessionId,
+    // Don't fire until agent is known — backend rejects requests without ?agent=.
+    enabled: !!sessionId && !!agent,
     staleTime: 2000,
     gcTime: 24 * 60 * 60 * 1000,
     // Poll every 5s when engine is still processing, 3s when streaming
