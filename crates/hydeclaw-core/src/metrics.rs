@@ -901,7 +901,7 @@ pub fn build_dashboard_body(registry: &MetricsRegistry) -> serde_json::Value {
 /// (`dashboard_has_at_least_10_named_metrics`). This struct is introduced
 /// in Plan 65-02 ONLY because the monitoring handler already references it
 /// and the default/feature builds would otherwise fail to compile.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DashboardSnapshot {
     /// Number of running agents (`AgentCore.map.len()`).
     pub active_agents: u64,
@@ -928,6 +928,15 @@ pub struct DashboardSnapshot {
     pub session_events_table_size_bytes: u64,
     /// Process uptime in whole seconds (`StatusMonitor.started_at.elapsed()`).
     pub uptime_secs: u64,
+    /// CACHE-03: SUM of `cache_read_tokens` from `usage_log` over the last 24 hours.
+    /// 0 on empty table or DB error (graceful degradation in dashboard handler).
+    pub cache_read_tokens_24h: i64,
+    /// CACHE-03: SUM of `cache_creation_tokens` from `usage_log` over the last 24 hours.
+    pub cache_creation_tokens_24h: i64,
+    /// CACHE-03: SUM of `cache_read_tokens` from `usage_log` over the last 7 days.
+    pub cache_read_tokens_7d: i64,
+    /// CACHE-03: SUM of `cache_creation_tokens` from `usage_log` over the last 7 days.
+    pub cache_creation_tokens_7d: i64,
 }
 
 /// Build the `/api/health/dashboard` response body, extending the Phase 62
@@ -1016,6 +1025,11 @@ pub fn build_dashboard_body_with_snapshot(
         "csp_violations_overflow": registry.csp_violations_overflow_count(),
         "llm_timeout_total": llm_timeouts,
         "llm_failover_total": llm_failovers,
+        // CACHE-03: prompt-caching aggregates from usage_log.
+        "cache_read_tokens_24h": snap.cache_read_tokens_24h,
+        "cache_creation_tokens_24h": snap.cache_creation_tokens_24h,
+        "cache_read_tokens_7d": snap.cache_read_tokens_7d,
+        "cache_creation_tokens_7d": snap.cache_creation_tokens_7d,
     })
 }
 
@@ -1121,5 +1135,36 @@ mod tests {
             snap.get(&("agent-x".to_string(), "text-delta".to_string())),
             Some(&10_000)
         );
+    }
+
+    #[test]
+    fn dashboard_body_emits_cache_token_aggregates() {
+        // CACHE-03: four new top-level numeric keys must be present in
+        // build_dashboard_body_with_snapshot's output.
+        let reg = MetricsRegistry::new();
+        let snap = DashboardSnapshot {
+            cache_read_tokens_24h: 12_345,
+            cache_creation_tokens_24h: 678,
+            cache_read_tokens_7d: 99_999,
+            cache_creation_tokens_7d: 4_321,
+            ..Default::default()
+        };
+        let body = build_dashboard_body_with_snapshot(&reg, &snap);
+        assert_eq!(body["cache_read_tokens_24h"].as_i64(), Some(12_345));
+        assert_eq!(body["cache_creation_tokens_24h"].as_i64(), Some(678));
+        assert_eq!(body["cache_read_tokens_7d"].as_i64(), Some(99_999));
+        assert_eq!(body["cache_creation_tokens_7d"].as_i64(), Some(4_321));
+    }
+
+    #[test]
+    fn dashboard_body_cache_aggregates_default_to_zero() {
+        // Empty snapshot → all four cache fields are 0 (not missing, not null).
+        let reg = MetricsRegistry::new();
+        let snap = DashboardSnapshot::default();
+        let body = build_dashboard_body_with_snapshot(&reg, &snap);
+        assert_eq!(body["cache_read_tokens_24h"].as_i64(), Some(0));
+        assert_eq!(body["cache_creation_tokens_24h"].as_i64(), Some(0));
+        assert_eq!(body["cache_read_tokens_7d"].as_i64(), Some(0));
+        assert_eq!(body["cache_creation_tokens_7d"].as_i64(), Some(0));
     }
 }

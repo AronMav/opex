@@ -165,6 +165,7 @@ async fn dashboard_has_at_least_10_named_metrics() {
             memory_worker_heartbeat_age_secs: 3,
             session_events_table_size_bytes: 16_384,
             uptime_secs: 60,
+            ..Default::default()
         };
 
         let body = build_dashboard_body_with_snapshot(&registry, &snapshot);
@@ -261,6 +262,7 @@ async fn dashboard_preserves_phase62_nested_shape() {
             memory_worker_heartbeat_age_secs: -1,
             session_events_table_size_bytes: 0,
             uptime_secs: 0,
+            ..Default::default()
         };
 
         let body = build_dashboard_body_with_snapshot(&registry, &snapshot);
@@ -312,6 +314,7 @@ async fn dashboard_preserves_phase64_csp_fields() {
             memory_worker_heartbeat_age_secs: -1,
             session_events_table_size_bytes: 0,
             uptime_secs: 0,
+            ..Default::default()
         };
 
         let body = build_dashboard_body_with_snapshot(&registry, &snapshot);
@@ -338,4 +341,38 @@ async fn dashboard_preserves_phase64_csp_fields() {
     })
     .await
     .expect("phase 64 csp regression pin timed out");
+}
+
+/// CACHE-03: four new cache-token fields are part of the dashboard contract.
+/// Operators read these to verify prompt-cache hit rates without DB access.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dashboard_includes_cache_token_aggregates() {
+    timeout(Duration::from_secs(10), async {
+        let registry = Arc::new(MetricsRegistry::new());
+        let snap = DashboardSnapshot {
+            cache_read_tokens_24h: 1_234_567,
+            cache_creation_tokens_24h: 89_012,
+            cache_read_tokens_7d: 9_876_543,
+            cache_creation_tokens_7d: 12_345,
+            ..Default::default()
+        };
+        let body = build_dashboard_body_with_snapshot(&registry, &snap);
+        let obj = body.as_object().expect("dashboard body is a JSON object");
+        for key in [
+            "cache_read_tokens_24h",
+            "cache_creation_tokens_24h",
+            "cache_read_tokens_7d",
+            "cache_creation_tokens_7d",
+        ] {
+            assert!(obj.contains_key(key), "dashboard JSON missing key: {key}");
+            assert!(
+                obj[key].is_i64() || obj[key].is_u64(),
+                "key {key} must be an i64-compatible JSON number"
+            );
+        }
+        assert_eq!(obj["cache_read_tokens_24h"].as_i64(), Some(1_234_567));
+        assert_eq!(obj["cache_creation_tokens_7d"].as_i64(), Some(12_345));
+    })
+    .await
+    .expect("cache token aggregates test timed out");
 }
