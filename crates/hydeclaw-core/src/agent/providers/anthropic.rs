@@ -1392,7 +1392,7 @@ mod thinking_config_tests {
             Some(16_000),
             secrets,
         );
-        let opts = CallOptions { thinking_level: 3 };
+        let opts = CallOptions { thinking_level: 3, ..Default::default() };
         let (_, body) = provider.build_request_body(&[], &[], opts);
         let temp = body["temperature"].as_f64().expect("temperature must be in body");
         assert!(temp >= 1.0, "expected temperature >= 1.0 when thinking enabled, got {temp}");
@@ -1409,7 +1409,7 @@ mod thinking_config_tests {
             Some(16_000),
             secrets,
         );
-        let opts = CallOptions { thinking_level: 0 };
+        let opts = CallOptions { thinking_level: 0, ..Default::default() };
         let (_, body) = provider.build_request_body(&[], &[], opts);
         let temp = body["temperature"].as_f64().unwrap();
         assert!((temp - 0.7).abs() < f64::EPSILON);

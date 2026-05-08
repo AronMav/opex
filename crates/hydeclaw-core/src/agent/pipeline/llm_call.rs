@@ -224,7 +224,7 @@ pub async fn chat_stream_with_overflow_recovery(
 
     for compact_attempt in 0..=max_compact_attempts {
         let result = provider
-            .chat_stream(messages, tools, chunk_tx.clone(), opts)
+            .chat_stream(messages, tools, chunk_tx.clone(), opts.clone())
             .await;
         match result {
             Ok(resp) => return Ok(resp),
@@ -272,7 +272,7 @@ pub async fn chat_stream_with_transient_retry(
             tools,
             chunk_tx.clone(),
             compact,
-            opts,
+            opts.clone(),
         )
         .await;
         match result {
@@ -390,7 +390,7 @@ async fn deadline_retry_inner(
             tools,
             chunk_tx.clone(),
             compact,
-            opts,
+            opts.clone(),
         ).await;
 
         match result {

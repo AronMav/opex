@@ -244,6 +244,96 @@ pub async fn load_workspace_prompt(workspace_dir: &str, agent_name: &str) -> Res
     Ok(prompt)
 }
 
+/// Read the per-agent CLAUDE.md as a standalone string, ignoring it if
+/// absent or whitespace-only.
+///
+/// Used by the cache-aware path in `context_builder.rs` to emit CLAUDE.md
+/// as an independently-cached content block (CACHE-02 third breakpoint).
+///
+/// Returns `Ok(None)` rather than `Err` for missing files — CLAUDE.md is
+/// optional per agent, and a non-base agent or a base agent without one
+/// is a normal configuration.
+pub async fn load_claude_md(workspace_dir: &str, agent_name: &str) -> Result<Option<String>> {
+    let dir = agent_dir(workspace_dir, agent_name);
+    let path = dir.join("CLAUDE.md");
+    match fs::read_to_string(&path).await {
+        Ok(content) if !content.trim().is_empty() => {
+            scan_and_warn(agent_name, "CLAUDE.md", &content);
+            let truncated = if content.len() <= MAX_PROMPT_FILE_BYTES {
+                content
+            } else {
+                let boundary = content.floor_char_boundary(MAX_PROMPT_FILE_BYTES);
+                let mut t = String::with_capacity(MAX_PROMPT_FILE_BYTES + 64);
+                t.push_str(&content[..boundary]);
+                t.push_str(&format!(
+                    "\n\n[CLAUDE.md: truncated at {} KB — keep this file concise]\n",
+                    MAX_PROMPT_FILE_BYTES / 1024
+                ));
+                tracing::warn!(file = "CLAUDE.md", bytes = content.len(),
+                    "agent CLAUDE.md truncated for cache breakpoint block");
+                t
+            };
+            Ok(Some(truncated))
+        }
+        Ok(_) => Ok(None),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Same as `load_workspace_prompt` but skips the per-agent `CLAUDE.md`
+/// file. Used by the cache-aware code path so CLAUDE.md is loaded
+/// separately via `load_claude_md` and emitted as its own cache breakpoint
+/// block. Other call paths (openai_compat, subagent_runner) continue to
+/// use `load_workspace_prompt` (unchanged) and get the monolithic prompt
+/// with CLAUDE.md inlined.
+pub async fn load_workspace_prompt_excluding_claude_md(
+    workspace_dir: &str,
+    agent_name: &str,
+) -> Result<String> {
+    let dir = agent_dir(workspace_dir, agent_name);
+    let mut prompt = String::new();
+
+    for file in WORKSPACE_FILES {
+        let path = dir.join(file);
+        if let Ok(content) = fs::read_to_string(&path).await {
+            scan_and_warn(agent_name, file, &content);
+            append_with_limit(&mut prompt, &content, file);
+        }
+    }
+
+    if let Ok(mut entries) = fs::read_dir(&dir).await {
+        let mut extra_files: Vec<String> = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".md")
+                && !WORKSPACE_FILES.contains(&name.as_str())
+                && name != "HEARTBEAT.md"
+                && name != "CLAUDE.md"
+            {
+                extra_files.push(name);
+            }
+        }
+        extra_files.sort();
+        for file in &extra_files {
+            let path = dir.join(file);
+            if let Ok(content) = fs::read_to_string(&path).await {
+                scan_and_warn(agent_name, file, &content);
+                append_with_limit(&mut prompt, &content, file);
+            }
+        }
+    }
+
+    for file in SHARED_ROOT_PROMPT_FILES {
+        let path = Path::new(workspace_dir).join(file);
+        if let Ok(content) = fs::read_to_string(&path).await {
+            scan_and_warn(agent_name, file, &content);
+            append_with_limit(&mut prompt, &content, file);
+        }
+    }
+
+    Ok(prompt)
+}
+
 /// Map language code to full name for LLM instructions.
 fn language_name(code: &str) -> &'static str {
     match code {
@@ -1361,5 +1451,56 @@ mod tests {
         assert!(prompt.contains("I am a helpful AI assistant"), "SOUL.md content must be verbatim in prompt");
         assert!(prompt.contains("My name is TestCleanAgent"), "IDENTITY.md content must be verbatim in prompt");
         assert!(prompt.contains("User prefers concise answers"), "MEMORY.md content must be verbatim in prompt");
+    }
+
+    // ── CACHE-02: load_claude_md + load_workspace_prompt_excluding_claude_md ──
+
+    #[tokio::test]
+    async fn load_claude_md_returns_none_for_missing_file() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let workspace = tmp.path().to_str().unwrap();
+        tokio::fs::create_dir_all(tmp.path().join("agents/TestAgent")).await.unwrap();
+        let result = load_claude_md(workspace, "TestAgent").await.expect("ok");
+        assert!(result.is_none(), "absent CLAUDE.md must return None");
+    }
+
+    #[tokio::test]
+    async fn load_claude_md_returns_none_for_empty_file() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let workspace = tmp.path().to_str().unwrap();
+        let agent_dir = tmp.path().join("agents/TestAgent");
+        tokio::fs::create_dir_all(&agent_dir).await.unwrap();
+        tokio::fs::write(agent_dir.join("CLAUDE.md"), "   \n  \n\t").await.unwrap();
+        let result = load_claude_md(workspace, "TestAgent").await.expect("ok");
+        assert!(result.is_none(), "whitespace-only CLAUDE.md must return None");
+    }
+
+    #[tokio::test]
+    async fn load_claude_md_returns_content_when_present() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let workspace = tmp.path().to_str().unwrap();
+        let agent_dir = tmp.path().join("agents/TestAgent");
+        tokio::fs::create_dir_all(&agent_dir).await.unwrap();
+        let body = "# Project\nUse rustls only.";
+        tokio::fs::write(agent_dir.join("CLAUDE.md"), body).await.unwrap();
+        let result = load_claude_md(workspace, "TestAgent").await.expect("ok");
+        assert_eq!(result.as_deref(), Some(body));
+    }
+
+    #[tokio::test]
+    async fn load_workspace_prompt_excluding_claude_md_omits_claude_md() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let workspace = tmp.path().to_str().unwrap();
+        let agent_dir = tmp.path().join("agents/TestAgent");
+        tokio::fs::create_dir_all(&agent_dir).await.unwrap();
+        tokio::fs::write(agent_dir.join("SOUL.md"), "soul body").await.unwrap();
+        tokio::fs::write(agent_dir.join("CLAUDE.md"), "claude body").await.unwrap();
+
+        let with_claude = load_workspace_prompt(workspace, "TestAgent").await.expect("ok");
+        let without_claude = load_workspace_prompt_excluding_claude_md(workspace, "TestAgent").await.expect("ok");
+
+        assert!(with_claude.contains("claude body"), "load_workspace_prompt must still include CLAUDE.md");
+        assert!(!without_claude.contains("claude body"), "exclusion variant must NOT include CLAUDE.md");
+        assert!(without_claude.contains("soul body"), "non-CLAUDE.md content must remain");
     }
 }

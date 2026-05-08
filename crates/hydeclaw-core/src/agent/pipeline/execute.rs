@@ -299,6 +299,7 @@ pub async fn execute<S: EventSink>(
         let run_max = live_provider.run_max_duration_secs();
         let call_opts = crate::agent::providers::CallOptions {
             thinking_level: engine.state().thinking_level.load(std::sync::atomic::Ordering::Relaxed),
+            claude_md_content: None, // CACHE-02: will be wired in Task 3b
         };
         let llm_fut = crate::agent::pipeline::llm_call::chat_stream_with_deadline_retry(
             live_provider,
