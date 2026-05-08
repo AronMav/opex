@@ -309,11 +309,27 @@ impl AnthropicProvider {
                     })
                 })
                 .collect();
-            // Add cache_control to last tool (Anthropic cache breakpoint rule)
-            if self.prompt_cache
-                && let Some(last) = tools_json.last_mut() {
-                    last["cache_control"] = serde_json::json!({"type": "ephemeral"});
+            // CACHE-01 / Pitfall 1.2: stamp cache_control on the last STABLE tool —
+            // i.e. the last tool whose name appears in the system tool catalogue.
+            // YAML and MCP tools come AFTER system tools and vary per turn (penalty
+            // sort, on-demand load), so stamping the last element of tools_json would mark
+            // a per-turn-mutable tool and produce zero cache hits on turn 2+.
+            //
+            // If no system tool is present (only YAML/MCP), no breakpoint is added —
+            // correct: there is nothing stable to cache. The system-message
+            // breakpoint above (lines 287-299) still fires.
+            if self.prompt_cache {
+                let system_names = crate::agent::pipeline::tool_defs::all_system_tool_names();
+                let last_stable_idx = tools
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, t)| system_names.contains(&t.name.as_str()))
+                    .map(|(i, _)| i);
+                if let Some(idx) = last_stable_idx {
+                    tools_json[idx]["cache_control"] = serde_json::json!({"type": "ephemeral"});
                 }
+            }
             body["tools"] = serde_json::Value::Array(tools_json);
             // Force tool call when a skill trigger was detected in the system prompt
             if let Some(tool_name) = super::forced_skill_tool(messages, tools) {
@@ -1145,6 +1161,153 @@ mod tests {
         assert_eq!(usage.cache_read_tokens, Some(700));
         assert_eq!(usage.cache_creation_tokens, Some(200));
         assert_eq!(usage.reasoning_tokens, None);
+    }
+
+    // ── CACHE-01 / Pitfall 1.2: tool cache breakpoint placement ──────────
+
+    #[tokio::test]
+    async fn cache_breakpoint_lands_on_last_system_tool_not_yaml() {
+        // CACHE-01 / Pitfall 1.2: tools array order is system → YAML → MCP.
+        // The breakpoint must land on the last SYSTEM tool, never on a YAML tool
+        // (which varies per turn and would force a cache write every request).
+        use hydeclaw_types::{Message, MessageRole, ToolDefinition};
+
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let mut provider = AnthropicProvider::for_tests(
+            "claude-sonnet-4-6".to_string(),
+            0.7,
+            Some(8192),
+            secrets,
+        );
+        provider.prompt_cache = true;
+
+        let messages = vec![Message {
+            role: MessageRole::System,
+            content: "you are helpful".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        // workspace_read and memory are real system tool names; my_yaml_tool is fake.
+        let tools = vec![
+            ToolDefinition {
+                name: "workspace_read".to_string(),
+                description: "".to_string(),
+                input_schema: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "memory".to_string(),
+                description: "".to_string(),
+                input_schema: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "my_yaml_tool".to_string(),
+                description: "".to_string(),
+                input_schema: serde_json::json!({}),
+            },
+        ];
+
+        let (_, body) = provider.build_request_body(&messages, &tools, CallOptions::default());
+        let tools_json = body["tools"].as_array().expect("tools array present");
+
+        assert_eq!(tools_json.len(), 3);
+        assert!(
+            tools_json[0].get("cache_control").is_none(),
+            "workspace_read (index 0) must NOT have cache_control — only the LAST system tool gets it"
+        );
+        assert!(
+            tools_json[1].get("cache_control").is_some(),
+            "memory (index 1) must have cache_control — it is the last system tool in the list"
+        );
+        assert!(
+            tools_json[2].get("cache_control").is_none(),
+            "my_yaml_tool (index 2) MUST NOT have cache_control — YAML tools vary per turn (Pitfall 1.2)"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_breakpoint_absent_when_only_yaml_tools() {
+        // No system tool in the list → no tool-level breakpoint.
+        // Better to omit than to stamp a per-turn-mutable tool.
+        use hydeclaw_types::{Message, MessageRole, ToolDefinition};
+
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let mut provider = AnthropicProvider::for_tests(
+            "claude-sonnet-4-6".to_string(),
+            0.7,
+            Some(8192),
+            secrets,
+        );
+        provider.prompt_cache = true;
+
+        let messages = vec![Message {
+            role: MessageRole::System,
+            content: "system".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let tools = vec![
+            ToolDefinition {
+                name: "yaml_only_a".to_string(),
+                description: "".to_string(),
+                input_schema: serde_json::json!({}),
+            },
+            ToolDefinition {
+                name: "yaml_only_b".to_string(),
+                description: "".to_string(),
+                input_schema: serde_json::json!({}),
+            },
+        ];
+
+        let (_, body) = provider.build_request_body(&messages, &tools, CallOptions::default());
+        let tools_json = body["tools"].as_array().expect("tools array present");
+        for (i, t) in tools_json.iter().enumerate() {
+            assert!(
+                t.get("cache_control").is_none(),
+                "tool index {i} (yaml-only) must NOT have cache_control"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cache_breakpoint_absent_when_prompt_cache_disabled() {
+        // prompt_cache = false → no breakpoints anywhere.
+        use hydeclaw_types::{Message, MessageRole, ToolDefinition};
+
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let provider = AnthropicProvider::for_tests(
+            "claude-sonnet-4-6".to_string(),
+            0.7,
+            Some(8192),
+            secrets,
+        );
+        // Note: for_tests sets prompt_cache: false; do not toggle it.
+
+        let messages = vec![Message {
+            role: MessageRole::System,
+            content: "system".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let tools = vec![ToolDefinition {
+            name: "memory".to_string(),
+            description: "".to_string(),
+            input_schema: serde_json::json!({}),
+        }];
+
+        let (_, body) = provider.build_request_body(&messages, &tools, CallOptions::default());
+
+        // System should be a plain string, not a content-block array
+        assert!(body["system"].is_string(), "system must be a plain string when prompt_cache=false");
+        // No cache_control on any tool
+        for (i, t) in body["tools"].as_array().unwrap().iter().enumerate() {
+            assert!(t.get("cache_control").is_none(), "tool index {i} must have no cache_control when prompt_cache=false");
+        }
     }
 }
 
