@@ -251,14 +251,19 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
  */
 export function getCachedHistoryMessages(sessionId: string | null, selectedBranches?: Record<string, string>): ChatMessage[] {
   if (!sessionId) return [];
-  const cached = queryClient.getQueryData<{ messages: MessageRow[] }>(qk.sessionMessages(sessionId));
+  // useSessionMessages stores at a 4-element key [...qk.sessionMessages(id), agent].
+  // getQueriesData with the 3-element prefix matches it regardless of the agent suffix.
+  // A session belongs to exactly one agent, so results[0] is the only possible entry.
+  const results = queryClient.getQueriesData<{ messages: MessageRow[] }>({ queryKey: qk.sessionMessages(sessionId) });
+  const cached = results[0]?.[1];
   return cached ? convertHistory(cached.messages, false, selectedBranches) : [];
 }
 
 /** Get all raw MessageRow[] from React Query cache for a session (for sibling discovery). */
 export function getCachedRawMessages(sessionId: string | null): MessageRow[] {
   if (!sessionId) return [];
-  const cached = queryClient.getQueryData<{ messages: MessageRow[] }>(qk.sessionMessages(sessionId));
+  const results = queryClient.getQueriesData<{ messages: MessageRow[] }>({ queryKey: qk.sessionMessages(sessionId) });
+  const cached = results[0]?.[1];
   return cached?.messages ?? [];
 }
 

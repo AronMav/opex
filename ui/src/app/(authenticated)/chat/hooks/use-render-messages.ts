@@ -29,9 +29,11 @@ export function useRenderMessages(agent: string): ChatMessage[] {
   // Read-only RQ subscription: re-render when the cache for this session
   // is populated by ChatThread's useSessionMessages. staleTime + disabled
   // refetch flags guarantee this hook never initiates a fetch itself.
+  // Key must match useSessionMessages exactly (4-element: [...prefix, agent])
+  // so dataUpdatedAt fires when new messages arrive.
   const { dataUpdatedAt } = useQuery({
-    queryKey: qk.sessionMessages(activeSessionId!),
-    enabled: !!activeSessionId,
+    queryKey: [...qk.sessionMessages(activeSessionId!), agent],
+    enabled: !!activeSessionId && !!agent,
     staleTime: Infinity,
     refetchOnMount: false,
     refetchOnWindowFocus: false,

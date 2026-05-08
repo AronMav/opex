@@ -545,12 +545,11 @@ export function useSetProviderActive() {
 
 export function useSessionMessages(sessionId: string | null, engineRunning = false, agent?: string) {
   return useQuery({
-    // 3-element key so getCachedHistoryMessages / getCachedRawMessages
-    // (which call queryClient.getQueryData with this same key) can find
-    // the data. A session belongs to exactly one agent so cross-agent
-    // cache collision is impossible. Agent is still sent to the backend
-    // for IDOR protection.
-    queryKey: qk.sessionMessages(sessionId!),
+    // 4-element key: getCachedHistoryMessages / getCachedRawMessages use
+    // getQueriesData with the 3-element prefix so they find this entry
+    // regardless of the agent suffix. Agent suffix prevents cross-agent
+    // cache collisions and matches the subscription in useRenderMessages.
+    queryKey: [...qk.sessionMessages(sessionId!), agent ?? ""] as const,
     queryFn: () => {
       // Audit 2026-05-08: backend requires ?agent= for owner check.
       const params = new URLSearchParams({ limit: "100" });
