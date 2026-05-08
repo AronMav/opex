@@ -143,16 +143,30 @@ pub async fn run_subagent_with_session(
         }
     };
     // Subagent-specific deny list: SUBAGENT_DENIED_TOOLS plus the agent's
-    // `delegation.blocked_tools_extra` (or `blocked_tools_override` if
-    // non-empty). Computed once and used for two things:
+    // own `blocked_tools_extra`. Audit 2026-05-08 (4th pass): this used to
+    // call `compute_denied_tools` which honours `blocked_tools_override` —
+    // a subagent author could set `blocked_tools_override = ["x"]` and
+    // grant themselves every dangerous tool. We now use
+    // `runtime_subagent_denylist` which hard-anchors SUBAGENT_DENIED_TOOLS
+    // and only allows the subagent to ADD restrictions via
+    // `blocked_tools_extra`, never to remove them. Used for two things:
     //   1. visibility-filter YAML/MCP tools so the LLM doesn't see them in
     //      the non-dispatcher path,
-    //   2. runtime-gate at the dispatcher rewrite step (`extra_deny`) so a
-    //      subagent that DOES have the dispatcher cannot reach a denied tool
-    //      via `tool_use(action=call, name=X)` (audit 2026-05-08).
-    let denied_for_subagent = crate::agent::pipeline::subagent::compute_denied_tools(
+    //   2. runtime-gate at the dispatcher rewrite step (`extra_deny`).
+    //
+    // Base-agent carve-out: `code_exec` lives in SUBAGENT_DENIED_TOOLS to
+    // keep ordinary subagents away from arbitrary code execution. Base
+    // (system) agents legitimately need it (host-level operator role
+    // documented in scaffold/base/SOUL.md), so for `agent.base = true`
+    // subagents we strip `code_exec` from the runtime deny list. This
+    // restores the legitimate base→base delegation path that group V was
+    // about to lose.
+    let mut denied_for_subagent = crate::agent::pipeline::subagent::runtime_subagent_denylist(
         &executor.cfg().agent.delegation,
     );
+    if subagent_is_base {
+        denied_for_subagent.retain(|t| t != "code_exec");
+    }
     if !dispatch_for_subagent {
         let denied_set: std::collections::HashSet<&str> =
             denied_for_subagent.iter().map(String::as_str).collect();

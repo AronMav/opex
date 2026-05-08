@@ -168,9 +168,16 @@ pub async fn ensure_hnsw_index(db: &PgPool, dim: u32) -> Result<()> {
 /// Maximum number of pinned chunks fetched in one call.
 /// `load_pinned` further trims by token budget; this is a hard ceiling so a
 /// pathological agent with thousands of pinned chunks cannot OOM the Pi at
-/// query time. 500 is well above the realistic working set (typically
+/// query time. 1000 is well above the realistic working set (typically
 /// ~30-50 entries per agent) and far below DB-side memory limits.
-pub const FETCH_PINNED_HARD_LIMIT: i64 = 500;
+///
+/// Audit 2026-05-08 (4th pass): bumped from 500 → 1000 after noting that
+/// shared chunks (scope='shared') compete with per-agent chunks for slots.
+/// At 500, an agent with 30 own chunks plus a workspace with 480 shared
+/// pins would silently lose half its agent-specific pinned context. 1000
+/// restores headroom; we also emit a `warn!` when the limit is hit so the
+/// operator can act before the cap becomes a real constraint.
+pub const FETCH_PINNED_HARD_LIMIT: i64 = 1000;
 
 /// Fetch up to `FETCH_PINNED_HARD_LIMIT` pinned chunks for a given agent,
 /// ordered oldest first. Includes shared chunks (scope = 'shared') visible
@@ -191,6 +198,15 @@ pub async fn fetch_pinned(db: &PgPool, agent_id: &str) -> Result<Vec<MemoryChunk
     .fetch_all(db)
     .await
     .context("failed to fetch pinned memory chunks")?;
+
+    if rows.len() == FETCH_PINNED_HARD_LIMIT as usize {
+        tracing::warn!(
+            agent_id = %agent_id,
+            limit = FETCH_PINNED_HARD_LIMIT,
+            "fetch_pinned reached LIMIT — older chunks may be silently truncated; \
+             consider trimming pinned set or raising FETCH_PINNED_HARD_LIMIT",
+        );
+    }
 
     Ok(rows.iter().map(row_to_memory_chunk).collect())
 }

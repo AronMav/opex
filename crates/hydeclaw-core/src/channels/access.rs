@@ -71,8 +71,18 @@ fn record_pairing_failure(agent_id: &str) {
     }
 }
 
+/// Called after a successful approve. Audit 2026-05-08 (4th pass): the
+/// previous version simply removed the entry, which meant `(9 fails + 1
+/// success) × N` was unbounded — the counter started over after every
+/// successful guess. We now keep the counter and only clear the
+/// active lockout, so the rolling 5-minute window still caps the number
+/// of failed attempts regardless of intermixed successes. Once the
+/// window slides past `first_failure` the counter naturally resets via
+/// `record_pairing_failure`.
 fn clear_pairing_failures(agent_id: &str) {
-    PAIRING_ATTEMPTS.remove(agent_id);
+    if let Some(mut entry) = PAIRING_ATTEMPTS.get_mut(agent_id) {
+        entry.locked_until = None;
+    }
 }
 
 /// Manages access control for a channel bot.
