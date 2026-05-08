@@ -474,6 +474,11 @@ compute `via_dispatcher` per call. After removing promotion that flag is unused 
 replace the `zip` with a plain iteration over `rewritten`. `direct_pending` is also
 gone: the variable is now named `direct_calls` directly.
 
+Immediately after this block, `parallel.rs` rebinds `tool_calls` to point at
+`direct_calls` (line ~292: `let tool_calls: &[ToolCall] = &direct_calls;`). All
+`tool_calls[i]` references inside the loop bodies are therefore safe — they index
+into `direct_calls`, not the function parameter. No additional changes needed.
+
 - [ ] **Step 4.3: Remove `is_system_extension_tool` function**
 
 Delete lines 104–113:
@@ -670,8 +675,8 @@ impl SessionToolState {
 ```
 
 Also remove `#[derive(Default)]` from the struct (no longer needed since `new()` is
-explicit) and remove the `Default` impl if one was generated. Remove unused imports at
-the top of `state.rs` — `HashSet` is no longer needed:
+explicit). Confirmed: no code calls `SessionToolState::default()` — safe to remove.
+Remove unused imports at the top of `state.rs` — `HashSet` is no longer needed:
 
 ```rust
 // CHECK and remove if unused after the change:
