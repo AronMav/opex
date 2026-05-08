@@ -183,6 +183,7 @@ pub async fn handle_openai(
             messages.iter().map(|m| m.content.len()).sum(),
             &mut detector, loop_config.detect_loops, None,
             parallel_batch_id,
+            &[],  // openai_compat is top-level, not a subagent
         ).await;
         for batch in &outcome.results {
             messages.push(Message {

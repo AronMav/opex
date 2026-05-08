@@ -95,6 +95,7 @@ impl AgentEngine {
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
         parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
+        extra_deny: &[String],
     ) -> crate::agent::pipeline::parallel::BatchOutcome {
         // Load YAML tools (cached for 30s)
         let yaml_tools: std::sync::Arc<std::collections::HashMap<String, crate::tools::yaml_tools::YamlToolDef>> = {
@@ -124,18 +125,13 @@ impl AgentEngine {
             m.get(&session_id).map(|r| r.value().clone())
         });
         let promotion_max = self.cfg().agent.tool_dispatcher.promotion_max;
-        // Runtime deny-gate uses ONLY the agent's own tool_policy.deny.
-        //
-        // KNOWN GAP — subagent isolation: when this engine is invoked as a
-        // subagent (via `run_subagent_with_session`), `tool_use(call, name=X)`
-        // can call tools that the parent's `[agent.delegation]` blocks but
-        // are NOT in the subagent's `agent.tools.deny`. Visibility-based
-        // filtering in `internal_tool_definitions_for_subagent` no longer
-        // gates execution once the dispatcher exposes execution-by-name.
-        // Tracked as follow-up: subagent_runner needs to pass parent's
-        // `compute_denied_tools(&parent.delegation)` as `extra_deny` into
-        // the rewrite step. Out of scope for v1 — only affects subagents
-        // spawned via the `agent` tool with dispatcher enabled.
+        // Runtime deny-gate uses BOTH:
+        //   1. the agent's own tool_policy.deny (passed as `policy`), and
+        //   2. `extra_deny`, the parent's SUBAGENT_DENIED_TOOLS when this
+        //      engine is invoked as a subagent. Without (2),
+        //      `tool_use(action="call", name=X)` from inside a subagent
+        //      could reach a tool blocked at the delegation layer (e.g.
+        //      code_exec, cron, secret_set) — closed by audit 2026-05-08.
         let policy = self.cfg().agent.tools.as_ref();
 
         crate::agent::pipeline::parallel::execute_tool_calls_partitioned(
@@ -153,6 +149,7 @@ impl AgentEngine {
             self,
             persist_ctx,
             policy,
+            extra_deny,
             session_tool_state,
             promotion_max,
             self.mcp().as_deref(),
@@ -196,6 +193,7 @@ impl crate::agent::tool_executor::ToolExecutorDeps for AgentEngine {
         detect_loops: bool,
         persist_ctx: Option<&crate::agent::pipeline::parallel::ToolPersistCtx<'_>>,
         parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
+        extra_deny: &[String],
     ) -> crate::agent::pipeline::parallel::BatchOutcome {
         self.execute_tool_calls_partitioned(
             tool_calls,
@@ -207,6 +205,7 @@ impl crate::agent::tool_executor::ToolExecutorDeps for AgentEngine {
             detect_loops,
             persist_ctx,
             parallel_batch_id,
+            extra_deny,
         )
         .await
     }
