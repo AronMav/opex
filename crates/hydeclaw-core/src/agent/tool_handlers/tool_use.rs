@@ -112,10 +112,10 @@ async fn handle_describe(deps: ToolDeps<'_>, name: &str) -> String {
         return format!("Invalid tool name: '{name}'.");
     }
 
-    if let Some(state) = deps.session_tool_state.as_ref() {
-        if let Some(cached) = state.get_describe(name).await {
-            return cached;
-        }
+    if let Some(state) = deps.session_tool_state.as_ref()
+        && let Some(cached) = state.get_describe(name).await
+    {
+        return cached;
     }
 
     let deny = deny_list(&deps);

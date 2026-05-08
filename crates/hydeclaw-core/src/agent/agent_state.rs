@@ -86,14 +86,6 @@ impl AgentState {
         (RequestId(id), token)
     }
 
-    /// Remove a previously registered request by its id.
-    pub fn unregister_request(&self, id: &RequestId) {
-        self.active_requests
-            .lock()
-            .unwrap()
-            .retain(|(i, _)| *i != id.0);
-    }
-
     /// Cancel every active request token.
     pub fn cancel_all_requests(&self) {
         let guard = self.active_requests.lock().unwrap();
@@ -117,6 +109,17 @@ impl AgentState {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+}
+
+#[cfg(test)]
+impl AgentState {
+    /// Remove a previously registered request by its id.
+    pub fn unregister_request(&self, id: &RequestId) {
+        self.active_requests
+            .lock()
+            .unwrap()
+            .retain(|(i, _)| *i != id.0);
     }
 
     /// Number of currently tracked active requests.
