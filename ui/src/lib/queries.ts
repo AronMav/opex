@@ -566,11 +566,19 @@ export function useSessionMessages(sessionId: string | null, engineRunning = fal
   })
 }
 
-export function useSessionChain(sessionId: string | null) {
+export function useSessionChain(sessionId: string | null, agent?: string) {
   return useQuery({
     queryKey: qk.sessionChain(sessionId!),
-    queryFn: () => apiGet<SessionChainResponse>(`/api/sessions/${sessionId}/chain`),
-    enabled: !!sessionId,
+    queryFn: () => {
+      // Audit 2026-05-08: backend requires ?agent= for owner check.
+      const params = new URLSearchParams();
+      if (agent) params.set("agent", agent);
+      const qs = params.toString();
+      return apiGet<SessionChainResponse>(
+        `/api/sessions/${sessionId}/chain${qs ? `?${qs}` : ""}`,
+      );
+    },
+    enabled: !!sessionId && !!agent,
     staleTime: 30_000,
   });
 }

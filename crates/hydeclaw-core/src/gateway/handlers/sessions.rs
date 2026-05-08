@@ -486,7 +486,14 @@ pub(crate) async fn api_search_sessions(
     if query_str.is_empty() {
         return ApiError::BadRequest("q parameter required".into()).into_response();
     }
-    let agent = q.agent.as_deref().unwrap_or("main");
+    // Audit 2026-05-08 (5th pass): replaced silent `unwrap_or("main")` with
+    // an explicit BadRequest. The previous fallback let a token-holder
+    // search agent "main"'s sessions just by omitting `?agent=`, and broke
+    // the contract uniformity established by the rest of session API.
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
     let limit = q.limit.unwrap_or(50).min(200);
 
     match sessions::search_messages(&infra.db, agent, query_str, limit).await {
@@ -1050,10 +1057,24 @@ pub(crate) async fn api_retry_session(
 
 // ── GET /api/sessions/{id}/chain ─────────────────────────────────────────────
 
+/// GET /api/sessions/{id}/chain?agent=xxx — return the conversation tree.
+///
+/// Audit 2026-05-08 (5th pass) found this endpoint was missed by the IDOR
+/// fixes — it returned the full fork graph (parent_session_id, branches,
+/// chain) without any owner check. Now `?agent=` is required and gated by
+/// `verify_session_agent`, matching every other session-read endpoint.
 pub(crate) async fn api_session_chain(
     State(infra): State<InfraServices>,
     Path(id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
 ) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
+        return resp;
+    }
     match crate::db::sessions::get_session_chain(&infra.db, id).await {
         Ok(chain) if chain.is_empty() => (
             StatusCode::NOT_FOUND,
