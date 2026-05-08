@@ -18,6 +18,7 @@ import {
   reUploadAttachments,
   commonMarkToSlack,
 } from "./common";
+import { isOwnerCommand, runOwnerCommand } from "../owner-commands";
 
 const STREAM_EDIT_INTERVAL_MS = 1000;
 const MAX_MESSAGE_LEN = 3000;
@@ -59,6 +60,17 @@ export function createSlackDriver(
     }
 
     const text = msg.text ?? "";
+
+    // Owner commands (audit 2026-05-08, group DD): /approve, /reject, /users,
+    // /revoke. Without this branch the owner could not bootstrap pairing
+    // requests over Slack.
+    if (isOwner && isOwnerCommand(text)) {
+      const reply = await runOwnerCommand(text, bridge, strings);
+      if (reply) {
+        await say({ text: reply, thread_ts: threadTs });
+      }
+      return;
+    }
 
     // User commands
     const cmd = parseUserCommand(text);

@@ -490,20 +490,20 @@ Abort an in-progress stream. Agent stops processing.
 | `GET` | `/api/sessions/stuck` | Find stuck/stale sessions for retry |
 | `GET` | `/api/sessions/failures` | Paginated session failure log |
 | `GET` | `/api/sessions/{id}` | Get session metadata |
-| `PATCH` | `/api/sessions/{id}` | Update session title or UI state |
+| `PATCH` | `/api/sessions/{id}` | Update session title or UI state (requires `?agent=`) |
 | `DELETE` | `/api/sessions/{id}` | Delete session and all messages (requires `?agent=`) |
-| `POST` | `/api/sessions/{id}/compact` | Manually compact session history |
-| `GET` | `/api/sessions/{id}/export` | Export session as JSON or Markdown |
+| `POST` | `/api/sessions/{id}/compact` | Manually compact session history (requires `?agent=`) |
+| `GET` | `/api/sessions/{id}/export` | Export session as JSON or Markdown (requires `?agent=`) |
 | `POST` | `/api/sessions/{id}/invite` | Invite an agent into a multi-agent session |
-| `POST` | `/api/sessions/{id}/fork` | Create a branched message from an existing message |
-| `GET` | `/api/sessions/{id}/active-path` | Get the active message branch path |
-| `GET` | `/api/sessions/{id}/chain` | Get the full session chain (parent + child sessions) |
-| `POST` | `/api/sessions/{id}/retry` | Replay last user message through engine |
-| `GET` | `/api/sessions/{id}/messages` | List messages in a session |
+| `POST` | `/api/sessions/{id}/fork` | Create a branched message from an existing message (requires `?agent=`) |
+| `GET` | `/api/sessions/{id}/active-path` | Get the active message branch path (requires `?agent=`) |
+| `GET` | `/api/sessions/{id}/chain` | Get the full session chain (parent + child sessions) (requires `?agent=`) |
+| `POST` | `/api/sessions/{id}/retry` | Replay last user message through engine (requires `?agent=`) |
+| `GET` | `/api/sessions/{id}/messages` | List messages in a session (requires `?agent=`) |
 | `GET` | `/api/sessions/{id}/failures` | Get failure records for one session |
 | `DELETE` | `/api/messages/{id}` | Delete a single message (requires `?agent=`) |
 | `PATCH` | `/api/messages/{id}` | Edit a user message (requires `?agent=`) |
-| `POST` | `/api/messages/{id}/feedback` | Set message feedback |
+| `POST` | `/api/messages/{id}/feedback` | Set message feedback (requires `?agent=`) |
 
 ### GET /api/sessions
 
@@ -657,7 +657,8 @@ Replays the last user message through the engine in a background task. Useful fo
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `limit` | integer | 50 | Max results (max 200) |
-| `agent` | string | — | Optional ownership check |
+| `agent` | string | **Required** | Owner check — request without it is rejected with `400` |
+| `before_id` | uuid | — | Pagination cursor |
 
 ### POST /api/messages/{id}/feedback
 

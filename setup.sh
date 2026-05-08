@@ -381,11 +381,32 @@ else
   ok "Using existing .env"
 fi
 
-# Docker .env
-[[ ! -f docker/.env ]] && {
-  [[ -f docker/.env.example ]] && cp docker/.env.example docker/.env || \
-  printf 'POSTGRES_USER=hydeclaw\nPOSTGRES_PASSWORD=hydeclaw\n' > docker/.env
-}
+# Docker .env — generate a random POSTGRES_PASSWORD on first install so the
+# default published in docker/.env.example doesn't survive into production.
+# Audit 2026-05-08 (5th pass).
+if [[ ! -f docker/.env ]]; then
+  PG_PASS=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | xxd -p -c 32)
+  if [[ -z "$PG_PASS" ]]; then
+    err "could not generate random POSTGRES_PASSWORD (openssl/xxd missing)"
+    exit 1
+  fi
+  printf 'POSTGRES_USER=hydeclaw\nPOSTGRES_PASSWORD=%s\n' "$PG_PASS" > docker/.env
+  chmod 600 docker/.env
+  # Sync to config/hydeclaw.toml [database].url so Core can connect.
+  if [[ -f config/hydeclaw.toml ]]; then
+    # Only rewrite if the toml still carries the published default. Otherwise
+    # an operator has already customised it — don't clobber.
+    if grep -qE '^url *= *"postgres://hydeclaw:hydeclaw@' config/hydeclaw.toml; then
+      sed -i.bak \
+        -E "s|postgres://hydeclaw:hydeclaw@|postgres://hydeclaw:${PG_PASS}@|" \
+        config/hydeclaw.toml
+      rm -f config/hydeclaw.toml.bak
+      ok "Generated random POSTGRES_PASSWORD and synced to config/hydeclaw.toml"
+    else
+      warn "POSTGRES_PASSWORD generated; update config/hydeclaw.toml [database].url manually"
+    fi
+  fi
+fi
 
 # Configure Docker TCP listener (Core connects via bollard HTTP, not Unix socket)
 if ! curl -sf http://127.0.0.1:2375/version > /dev/null 2>&1; then

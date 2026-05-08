@@ -17,6 +17,8 @@ timezone = "UTC"                         # Optional — if omitted, cron is UTC
 # [agent.delegation]
 # max_depth = 1                       # Default. Subagents CANNOT recurse.
                                        # Set to 2+ for orchestrator pattern.
-# blocked_tools_extra = ["code_exec"] # Added on top of built-in deny list.
-# blocked_tools_override = []          # If non-empty, REPLACES built-in deny list.
-                                       # Use with care.
+# blocked_tools_extra = ["code_exec"] # Added on top of built-in deny list (runtime + visibility).
+# blocked_tools_override = []          # Visibility-only override. Does NOT weaken the runtime
+                                       # safety net (SUBAGENT_DENIED_TOOLS — cron, secret_set,
+                                       # process, code_exec, workspace_delete, workspace_rename).
+                                       # See docs/ARCHITECTURE.md, audit 2026-05-08 group T.
