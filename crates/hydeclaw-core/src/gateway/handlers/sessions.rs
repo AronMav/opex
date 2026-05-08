@@ -551,11 +551,24 @@ pub(crate) async fn api_invite_to_session(
 // ── Session Compaction ──
 
 /// POST /api/sessions/{id}/compact — manually compact a session's history.
+///
+/// Requires `?agent=<owner>` to prove ownership: the bearer token is shared
+/// across the whole instance, so without an owner check any token-holder
+/// could compact any session by guessing UUIDs (audit 2026-05-08, IDOR).
 pub(crate) async fn api_compact_session(
     State(infra): State<InfraServices>,
     State(agents): State<AgentCore>,
     Path(id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
 ) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
+        return resp;
+    }
+
     // Find which agent owns this session
     let session = match sessions::get_session(&infra.db, id).await {
         Ok(Some(s)) => s,
@@ -592,21 +605,34 @@ pub(crate) async fn api_compact_session(
 
 // ── Session Patch (rename) ──
 
-/// POST /api/messages/{id}/feedback — set feedback (1=like, -1=dislike, 0=clear)
+/// POST /api/messages/{id}/feedback?agent=xxx — set feedback (1=like, -1=dislike, 0=clear)
+///
+/// Requires `?agent=<owner>` and JOINs through `sessions.agent_id` to prevent
+/// cross-agent feedback writes (audit 2026-05-08, IDOR).
 pub(crate) async fn api_message_feedback(
     State(infra): State<InfraServices>,
     Path(id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
     Json(body): Json<FeedbackRequest>,
 ) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
     let feedback = body.feedback.clamp(-1, 1);
-    let result = sqlx::query("UPDATE messages SET feedback = $1 WHERE id = $2")
+    let result = sqlx::query(
+        "UPDATE messages SET feedback = $1 \
+         WHERE id = $2 \
+         AND session_id IN (SELECT id FROM sessions WHERE agent_id = $3)",
+    )
         .bind(feedback as i16)
         .bind(id)
+        .bind(agent)
         .execute(&infra.db)
         .await;
     match result {
         Ok(r) if r.rows_affected() > 0 => Json(json!({"ok": true})).into_response(),
-        Ok(_) => ApiError::NotFound("message not found".into()).into_response(),
+        Ok(_) => ApiError::NotFound("message not found or wrong agent".into()).into_response(),
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
     }
 }
@@ -658,12 +684,25 @@ pub(crate) struct ForkRequest {
     content: String,                     // new user message text
 }
 
-/// POST /api/sessions/{id}/fork — create a branched user message from an existing message.
+/// POST /api/sessions/{id}/fork?agent=xxx — create a branched user message from an existing message.
+///
+/// Requires `?agent=<owner>` to prove session ownership: without this any
+/// token-holder could write a message into any session by guessing the UUID
+/// (audit 2026-05-08, IDOR).
 pub(crate) async fn api_fork_session(
     State(infra): State<InfraServices>,
     Path(session_id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
     Json(body): Json<ForkRequest>,
 ) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, session_id, agent).await {
+        return resp;
+    }
+
     // 1. Find the parent of the branch_from message (the message BEFORE it)
     let parent_id = match sessions::find_parent_of_message(
         &infra.db,
@@ -703,12 +742,23 @@ pub(crate) async fn api_fork_session(
     }
 }
 
-/// PATCH /api/sessions/{id} — update session metadata (title).
+/// PATCH /api/sessions/{id}?agent=xxx — update session metadata (title, ui_state).
+///
+/// Requires `?agent=<owner>` to prove session ownership (audit 2026-05-08, IDOR).
 pub(crate) async fn api_patch_session(
     State(infra): State<InfraServices>,
     Path(id): Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
+        return resp;
+    }
+
     if let Some(raw_title) = body.get("title").and_then(|v| v.as_str()) {
         let title: String = raw_title.chars().take(200).collect();
         match sqlx::query("UPDATE sessions SET title = $1 WHERE id = $2")
@@ -842,6 +892,7 @@ fn format_session_as_markdown(data: &serde_json::Value) -> String {
 #[derive(Deserialize)]
 pub(crate) struct ActivePathQuery {
     leaf: Option<uuid::Uuid>,
+    agent: Option<String>,
 }
 
 // ── Session Auto-Retry ──────────────────────────────────────────────────────
@@ -871,12 +922,23 @@ pub(crate) async fn api_stuck_sessions(
     }
 }
 
-/// POST /api/sessions/{id}/retry — replay last user message through engine
+/// POST /api/sessions/{id}/retry?agent=xxx — replay last user message through engine
+///
+/// Requires `?agent=<owner>` (audit 2026-05-08, IDOR).
 pub(crate) async fn api_retry_session(
     State(infra): State<InfraServices>,
     State(agents): State<AgentCore>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
 ) -> impl IntoResponse {
+    let agent_param = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent_param).await {
+        return resp;
+    }
+
     // 1. Load session
     let session: crate::db::sessions::Session = match sqlx::query_as(
         "SELECT * FROM sessions WHERE id = $1"
@@ -993,12 +1055,22 @@ pub(crate) async fn api_session_chain(
     }
 }
 
-/// GET /api/sessions/{id}/active-path -- resolve the linear message chain for display.
+/// GET /api/sessions/{id}/active-path?agent=xxx -- resolve the linear message chain for display.
+///
+/// Requires `?agent=<owner>` (audit 2026-05-08, IDOR).
 pub(crate) async fn api_active_path(
     State(infra): State<InfraServices>,
     Path(session_id): Path<uuid::Uuid>,
     Query(q): Query<ActivePathQuery>,
 ) -> impl IntoResponse {
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, session_id, agent).await {
+        return resp;
+    }
+
     match sessions::resolve_active_path(&infra.db, session_id, q.leaf).await {
         Ok(msgs) => Json(json!({ "messages": msgs })).into_response(),
         Err(e) => ApiError::Internal(e.to_string()).into_response(),
