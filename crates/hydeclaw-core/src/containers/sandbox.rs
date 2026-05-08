@@ -239,23 +239,36 @@ impl CodeSandbox {
             }
 
         // Extra binds from config
-        // Blocked: sensitive host paths that could leak secrets or compromise the host
+        // Blocked: sensitive host paths that could leak secrets or compromise the host.
+        // BLOCKED_PREFIXES is checked against the CANONICAL path so a symlink
+        // (e.g. /var/run -> /run on Debian/Ubuntu) cannot bypass via the
+        // alternative spelling. Audit 2026-05-08.
         const BLOCKED_PREFIXES: &[&str] = &[
             "/etc/shadow", "/etc/passwd", "/root", "/home",
             "/proc", "/sys", "/dev", "/run", "/var/run",
+        ];
+        const BLOCKED_FILES: &[&str] = &[
+            "/var/run/docker.sock", "/run/docker.sock",
         ];
         let ws_path = std::path::Path::new(workspace_host_path);
         let project_root = ws_path.parent(); // workspace parent = project root
         for bind in &self.extra_binds {
             if let Some((src, _dst)) = bind.split_once(':') {
                 let src_path = std::path::Path::new(src);
-                let check_path = if src_path.is_relative() {
-                    project_root.map_or_else(|| src.to_string(), |r| r.join(src_path).display().to_string())
+                let abs_path: std::path::PathBuf = if src_path.is_relative() {
+                    project_root.map_or_else(
+                        || src_path.to_path_buf(),
+                        |r| r.join(src_path),
+                    )
                 } else {
-                    src.to_string()
+                    src_path.to_path_buf()
                 };
-                if BLOCKED_PREFIXES.iter().any(|p| check_path.starts_with(p)) {
-                    tracing::warn!(bind = %bind, "sandbox: blocked sensitive bind mount");
+                let canonical = std::fs::canonicalize(&abs_path).unwrap_or(abs_path.clone());
+                let canonical_str = canonical.to_string_lossy();
+                if BLOCKED_PREFIXES.iter().any(|p| canonical_str.starts_with(p))
+                    || BLOCKED_FILES.iter().any(|f| canonical_str == *f)
+                {
+                    tracing::warn!(bind = %bind, canonical = %canonical_str, "sandbox: blocked sensitive bind mount");
                     continue;
                 }
                 if src_path.is_relative()
@@ -303,6 +316,19 @@ impl CodeSandbox {
                     nano_cpus: if self.nano_cpus > 0 { Some(self.nano_cpus) } else { None },
                     network_mode,
                     binds: Some(binds),
+                    // Audit 2026-05-08 sandbox hardening:
+                    // * pids_limit caps the number of processes inside the
+                    //   container so a fork-bomb cannot exhaust host PIDs.
+                    // * security_opt: no-new-privileges blocks setuid/setgid
+                    //   binaries inside the image from escalating to root
+                    //   even if the image carries them.
+                    // * cap_drop: ALL — drop the default Docker capabilities
+                    //   (CHOWN, NET_RAW, SYS_CHROOT, KILL, …). The sandbox
+                    //   image runs Python; none of the default caps are
+                    //   required for normal interpreted code execution.
+                    pids_limit: Some(256),
+                    security_opt: Some(vec!["no-new-privileges:true".to_string()]),
+                    cap_drop: Some(vec!["ALL".to_string()]),
                     restart_policy: Some(bollard::models::RestartPolicy {
                         name: Some(bollard::models::RestartPolicyNameEnum::UNLESS_STOPPED),
                         ..Default::default()
