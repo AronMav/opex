@@ -7,10 +7,10 @@
 
 ### Prompt Caching (CACHE)
 
-- [ ] **CACHE-01**: Оператор может включить/выключить prompt caching через `[agent] prompt_cache = true/false` в TOML — флаг уже существует, нужны тест и документация поведения для не-Anthropic провайдеров
+- [x] **CACHE-01**: Оператор может включить/выключить prompt caching через `[agent] prompt_cache = true/false` в TOML — флаг уже существует, нужны тест и документация поведения для не-Anthropic провайдеров
 - [ ] **CACHE-02**: CLAUDE.md системного агента участвует в cache_control как отдельная 3-я breakpoint (после system prompt и tool definitions)
 - [x] **CACHE-03**: Метрики cache_read_input_tokens и cache_creation_input_tokens отображаются в `/api/health/dashboard` и записываются в usage_log
-- [ ] **CACHE-04**: Prompt caching применяется только к Anthropic-провайдеру; другие провайдеры игнорируют флаг без ошибки и без изменения поведения
+- [x] **CACHE-04**: Prompt caching применяется только к Anthropic-провайдеру; другие провайдеры игнорируют флаг без ошибки и без изменения поведения
 
 ### Auto-Compaction (COMP)
 
@@ -61,10 +61,10 @@
 | Requirement | Phase | Status |
 | --- | --- | --- |
 | REF-03 | Phase 67 | Complete |
-| CACHE-01 | Phase 68 | Pending |
+| CACHE-01 | Phase 68 | Complete |
 | CACHE-02 | Phase 68 | Pending |
 | CACHE-03 | Phase 68 | Complete |
-| CACHE-04 | Phase 68 | Pending |
+| CACHE-04 | Phase 68 | Complete |
 | COMP-01 | Phase 69 | Pending |
 | COMP-02 | Phase 69 | Pending |
 | COMP-03 | Phase 69 | Pending |

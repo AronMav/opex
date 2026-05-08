@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v0.29.0
 milestone_name: Harness Quality
 status: executing
-last_updated: "2026-05-08T16:00:53.436Z"
+last_updated: "2026-05-08T16:10:15.336Z"
 last_activity: 2026-05-08
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # GSD State
@@ -17,7 +17,7 @@ progress:
 ## Current Position
 
 Phase: 68 (prompt-caching) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-05-08
 
@@ -50,6 +50,8 @@ Phase 67: [░░░░░] Not started
 - Критическая цепочка: CACHE-01..04 должны быть стабильны перед COMP-02 (token counting); COMP-02 перед ROUTE-01 (context_heavy condition)
 - [Phase 67-rate-limiter-dashmap-swap]: REF-03 complete: DashMap replaces Mutex<HashMap> in both rate limiters; collect-keys-then-remove sweep pattern; await_holding_lock deny lint enforced at compile time
 - [Phase 68]: CACHE-03 dashboard metrics: single-pass FILTER aggregate avoids two SQL round-trips; Default derive on DashboardSnapshot forward-proofs test fixtures; unwrap_or_default() on cache_metrics degrades to zeros not 500
+- [Phase 68-01]: Stable-tool breakpoint uses all_system_tool_names() reverse-scan — O(1) after first call, no DB dependency, fixes Pitfall 1.2
+- [Phase 68-01]: routing.rs prompt_cache: None intentionally untouched — Phase 70 ROUTE-02 will thread agent.prompt_cache there
 
 ### Key Pitfalls to Watch
 
