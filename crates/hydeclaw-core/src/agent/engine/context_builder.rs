@@ -243,6 +243,22 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         self.cfg().agent.base
     }
 
+    fn agent_prompt_cache(&self) -> bool {
+        self.cfg().agent.prompt_cache
+    }
+
+    async fn load_claude_md(&self) -> Result<Option<String>> {
+        workspace::load_claude_md(&self.cfg().workspace_dir, &self.cfg().agent.name).await
+    }
+
+    async fn load_workspace_prompt_excluding_claude_md(&self) -> Result<String> {
+        workspace::load_workspace_prompt_excluding_claude_md(
+            &self.cfg().workspace_dir,
+            &self.cfg().agent.name,
+        )
+        .await
+    }
+
     fn agent_language(&self) -> &str {
         &self.cfg().agent.language
     }

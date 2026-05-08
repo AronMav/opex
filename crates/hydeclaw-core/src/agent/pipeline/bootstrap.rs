@@ -37,6 +37,10 @@ pub struct BootstrapOutcome {
     pub channel: String,
     /// Proactive compression state loaded from DB (or fresh if no prior session state).
     pub compressor: crate::agent::compressor::Compressor,
+    /// CACHE-02: per-agent CLAUDE.md content for the third cache
+    /// breakpoint. Forwarded from `ContextSnapshot.claude_md_content`.
+    /// `None` for non-base agents and agents without prompt_cache.
+    pub claude_md_content: Option<String>,
 }
 
 /// Input context for the bootstrap phase.
@@ -95,6 +99,7 @@ pub async fn bootstrap<S: EventSink>(
         mut messages,
         tools,
         reentry_mode,
+        claude_md_content,
     } = engine
         .build_context(
             ctx.msg,
@@ -324,6 +329,7 @@ pub async fn bootstrap<S: EventSink>(
         incoming_context: ctx.msg.context.clone(),
         channel: ctx.msg.channel.clone(),
         compressor,
+        claude_md_content,
     })
 }
 

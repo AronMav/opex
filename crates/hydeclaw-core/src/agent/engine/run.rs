@@ -88,6 +88,7 @@ impl AgentEngine {
             incoming_context,
             channel,
             compressor,
+            claude_md_content,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
         let mut compressor = compressor;
@@ -113,6 +114,7 @@ impl AgentEngine {
             incoming_context,
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
+            claude_md_content,
         };
 
         // Slash-command early exit
@@ -254,6 +256,7 @@ impl AgentEngine {
             incoming_context,
             channel,
             compressor,
+            claude_md_content,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
         let mut compressor = compressor;
@@ -270,6 +273,7 @@ impl AgentEngine {
             incoming_context,
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
+            claude_md_content,
         };
 
         // Channel adapters render slash commands as plain TextDelta
@@ -358,6 +362,7 @@ impl AgentEngine {
             incoming_context,
             channel,
             compressor,
+            claude_md_content,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("set by bootstrap");
         let mut compressor = compressor;
@@ -374,6 +379,7 @@ impl AgentEngine {
             incoming_context,
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
+            claude_md_content,
         };
 
         if let Some(text) = command_output.take() {
@@ -478,6 +484,7 @@ impl AgentEngine {
             incoming_context,
             channel,
             compressor,
+            claude_md_content,
         } = boot;
         let mut lifecycle_guard = lifecycle_guard.expect("bootstrap always sets lifecycle_guard");
         let mut compressor = compressor;
@@ -516,6 +523,7 @@ impl AgentEngine {
             incoming_context,
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
+            claude_md_content,
         };
 
         let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &layers).await?;
