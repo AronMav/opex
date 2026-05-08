@@ -94,11 +94,11 @@ Plans:
 3. `cache_read_input_tokens` and `cache_creation_input_tokens` appear in the `usage_log` table and are visible in `/api/health/dashboard`
 4. The CLAUDE.md of the system agent is registered as a third cache breakpoint (after system prompt, after stable tool definitions)
 
-**Plans:** 1/3 plans executed
+**Plans:** 2/3 plans executed
 
 Plans:
 
-- [ ] 68-01-PLAN.md — Wave 1: AgentSettings.prompt_cache field + factory wiring + tool breakpoint fix (last system tool, not YAML) + non-Anthropic ignore test (CACHE-01, CACHE-04)
+- [x] 68-01-PLAN.md — Wave 1: AgentSettings.prompt_cache field + factory wiring + tool breakpoint fix (last system tool, not YAML) + non-Anthropic ignore test (CACHE-01, CACHE-04)
 - [ ] 68-02-PLAN.md — Wave 2: CLAUDE.md as third cache breakpoint via CallOptions.claude_md_content + workspace loader split + context_builder integration (CACHE-02)
 - [x] 68-03-PLAN.md — Wave 1: hydeclaw-db cache_metrics() query + DashboardSnapshot extension + /api/health/dashboard 4-field emission (CACHE-03)
 
@@ -190,7 +190,7 @@ Plans:
 | 65. Observability | v0.19.0 | Complete | 2026-04-17 |
 | 66. Refactoring | v0.19.0 | Complete | 2026-04-17 |
 | 67. Rate Limiter DashMap Swap | 1/1 | Complete    | 2026-05-08 |
-| 68. Prompt Caching | 1/3 | In Progress|  |
+| 68. Prompt Caching | 2/3 | In Progress|  |
 | 69. Auto-Compaction | v0.29.0 | Not started | - |
 | 70. Model Routing | v0.29.0 | Not started | - |
 | 71. Tool defer_loading | v0.29.0 | Not started | - |
