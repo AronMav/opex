@@ -714,6 +714,24 @@ pub struct AgentSettings {
     /// Defaults to 50 when not set.
     #[serde(default)]
     pub max_history_messages: Option<usize>,
+    /// Enable Anthropic prompt caching for this agent.
+    ///
+    /// When `true` AND the resolved provider is Anthropic-typed, the LLM
+    /// request stamps `cache_control: ephemeral` breakpoints on the system
+    /// message and on the last stable (system/internal) tool. Subsequent
+    /// turns within the 5-minute TTL read from cache for those segments.
+    ///
+    /// Other provider types (openai, google, *-cli) silently ignore this
+    /// flag — no error, no behavior change. See CACHE-04.
+    ///
+    /// Resolution order (in `factory.rs::resolve_provider_from_row`):
+    ///   agent TOML `prompt_cache` (this field) → `ProviderOptions.prompt_cache`
+    ///   (provider's `options` JSON in DB) → `false`.
+    ///
+    /// Setting this to `false` explicitly in agent TOML overrides any
+    /// `prompt_cache: true` set in the provider options blob.
+    #[serde(default)]
+    pub prompt_cache: bool,
     /// Hook configuration — policy enforcement and logging.
     pub hooks: Option<HooksConfig>,
     /// Maximum total tokens (input+output) per day. 0 or absent = unlimited.
@@ -1778,6 +1796,7 @@ model = "m2.5"
                 }),
                 max_tools_in_context: Some(20),
                 max_history_messages: None,
+                prompt_cache: false,
                 routing: vec![ProviderRouteConfig {
                     condition: "default".into(),
                     connection: Some("minimax-default".into()),
@@ -1844,6 +1863,7 @@ model = "m2.5"
                 session: None,
                 max_tools_in_context: None,
                 max_history_messages: None,
+                prompt_cache: false,
                 routing: vec![],
                 icon: Some("uploads/icon.png".into()),
                 approval: Some(ApprovalConfig {
@@ -1880,6 +1900,36 @@ model = "m2.5"
         let restored: AgentConfig =
             toml::from_str(&toml_str).expect("deserialize roundtrip failed");
         assert_eq!(original, restored);
+    }
+
+    // ── CACHE-01: prompt_cache field deserialization ──
+
+    #[test]
+    fn agent_settings_prompt_cache_defaults_to_false() {
+        // Legacy agent TOMLs that pre-date Phase 68 must continue to parse.
+        // CACHE-01: `prompt_cache` defaults to `false` via #[serde(default)].
+        let toml_str = r#"
+[agent]
+name = "test"
+provider = "minimax"
+model = "m2.5"
+"#;
+        let cfg: AgentConfig = toml::from_str(toml_str).expect("parse minimal AgentConfig");
+        assert!(!cfg.agent.prompt_cache, "absent field must default to false");
+    }
+
+    #[test]
+    fn agent_settings_prompt_cache_parsed_when_true() {
+        // CACHE-01: explicit `prompt_cache = true` in agent TOML must be honored.
+        let toml_str = r#"
+[agent]
+name = "test"
+provider = "minimax"
+model = "m2.5"
+prompt_cache = true
+"#;
+        let cfg: AgentConfig = toml::from_str(toml_str).expect("parse AgentConfig with prompt_cache");
+        assert!(cfg.agent.prompt_cache, "explicit true must be parsed");
     }
 
     // ── 4. LimitsConfig defaults ──

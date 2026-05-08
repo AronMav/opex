@@ -194,6 +194,7 @@ pub async fn resolve_provider_for_agent(
                     agent_name,
                     workspace_dir,
                     base,
+                    agent.prompt_cache,
                 ).await;
             }
             Ok(Some(row)) => {
@@ -235,6 +236,7 @@ async fn resolve_provider_from_row(
     agent_name: &str,
     workspace_dir: &str,
     base: bool,
+    agent_prompt_cache: bool,
 ) -> Arc<dyn LlmProvider> {
     let opts: timeouts::ProviderOptions =
         serde_json::from_value(row.options.clone()).unwrap_or_default();
@@ -259,11 +261,17 @@ async fn resolve_provider_from_row(
             }
         }
         _ => {
+            // CACHE-01: thread agent TOML `prompt_cache` into the override chain.
+            // `Some(false)` is explicit and overrides any `prompt_cache: true` in the
+            // provider's `options` JSON — agent-level config wins (Pitfall 3 in 68-RESEARCH).
+            // Anthropic-only effect; non-Anthropic providers ignore this field (CACHE-04).
+            // TODO(Phase-70 / ROUTE-02): routing.rs:110 still hardcodes `prompt_cache: None`;
+            // propagate agent.prompt_cache there too when ROUTE-02 lands.
             let overrides = ProviderOverrides {
                 model: model_override.map(str::to_string),
                 temperature: Some(temperature),
                 max_tokens,
-                prompt_cache: None,
+                prompt_cache: Some(agent_prompt_cache),
             };
             match build_provider(row, secrets.clone(), &timeouts_cfg, cancel, overrides) {
                 Ok(p) => p,
