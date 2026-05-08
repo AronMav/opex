@@ -543,13 +543,17 @@ export function useSetProviderActive() {
   })
 }
 
-export function useSessionMessages(sessionId: string | null, engineRunning = false) {
+export function useSessionMessages(sessionId: string | null, engineRunning = false, agent?: string) {
   return useQuery({
     queryKey: qk.sessionMessages(sessionId!),
-    queryFn: () =>
-      apiGet<{ messages: MessageRow[] }>(
-        `/api/sessions/${sessionId}/messages?limit=100`
-      ),
+    queryFn: () => {
+      // Audit 2026-05-08: backend requires ?agent= for owner check.
+      const params = new URLSearchParams({ limit: "100" });
+      if (agent) params.set("agent", agent);
+      return apiGet<{ messages: MessageRow[] }>(
+        `/api/sessions/${sessionId}/messages?${params.toString()}`,
+      );
+    },
     enabled: !!sessionId,
     staleTime: 2000,
     gcTime: 24 * 60 * 60 * 1000,

@@ -177,8 +177,14 @@ export function createSessionCrudActions(deps: ActionDeps) {
       set((draft: any) => { draft.agents[agentName].isLoadingHistory = true; });
 
       try {
+        // ?agent= is required server-side (audit 2026-05-08, IDOR fix).
+        const params = new URLSearchParams({
+          before_id: firstMsg.id,
+          limit: "50",
+          agent: agentName,
+        });
         const res: MessagesResponse = await fetch(
-          `/api/sessions/${st.activeSessionId}/messages?before_id=${firstMsg.id}&limit=50`,
+          `/api/sessions/${st.activeSessionId}/messages?${params.toString()}`,
           { headers: { Authorization: `Bearer ${getToken()}` } },
         ).then((r) => r.json());
 
