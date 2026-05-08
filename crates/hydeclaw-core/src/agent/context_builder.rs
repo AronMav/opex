@@ -139,13 +139,6 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// at apply time.
     fn agent_core_extra(&self) -> &[String];
 
-    /// Read-only handle to per-session dispatcher state. None when no session
-    /// is bound (subagent / cron paths in some configurations).
-    fn session_tool_state(
-        &self,
-        session_id: uuid::Uuid,
-    ) -> Option<std::sync::Arc<crate::agent::dispatcher::SessionToolState>>;
-
     /// Agent's effective tool-policy deny list (consumed by trigger-hint
     /// logic and extension-list assembly). Returns the union of
     /// `agent.tools.deny` and the delegation-computed deny list

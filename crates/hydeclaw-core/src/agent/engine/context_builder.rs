@@ -407,17 +407,6 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         &self.cfg().agent.tool_dispatcher.core_extra
     }
 
-    fn session_tool_state(
-        &self,
-        session_id: uuid::Uuid,
-    ) -> Option<std::sync::Arc<crate::agent::dispatcher::SessionToolState>> {
-        let map = self.cfg().session_tool_state.as_ref()?;
-        Some(map.entry(session_id)
-            .or_insert_with(crate::agent::dispatcher::SessionToolState::new)
-            .value()
-            .clone())
-    }
-
     fn cfg_deny_list(&self) -> Vec<String> {
         // Trigger-hint uses ONLY the agent's own tool_policy.deny for the
         // same reason as `tool_handlers/tool_use.rs::deny_list`: applying
