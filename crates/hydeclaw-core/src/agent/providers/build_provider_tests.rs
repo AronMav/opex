@@ -206,3 +206,41 @@ async fn openai_new_from_row_falls_back_to_defaults_without_overrides() {
     );
     assert_eq!(provider.test_max_tokens(), None);
 }
+
+#[tokio::test]
+async fn build_provider_openai_silently_ignores_prompt_cache_override() {
+    // CACHE-04: non-Anthropic providers must accept ProviderOverrides {
+    // prompt_cache: Some(true) } without error and without surfacing the
+    // flag anywhere in their request shape. The flag is purely advisory
+    // for OpenAI/Google/CLI providers — silent ignore.
+    use super::openai::OpenAiCompatibleProvider;
+
+    let row = make_row(serde_json::json!({}));
+    let timeouts = TimeoutsConfig::default();
+    let secrets = Arc::new(SecretsManager::new_noop());
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let opts = super::timeouts::ProviderOptions::default();
+
+    // CACHE-04: prompt_cache = Some(true) on a non-Anthropic provider — must NOT error.
+    let overrides = ProviderOverrides {
+        model: None,
+        temperature: Some(0.7),
+        max_tokens: Some(1024),
+        prompt_cache: Some(true),
+    };
+
+    let provider = OpenAiCompatibleProvider::new_from_row(
+        &row,
+        secrets,
+        timeouts,
+        cancel,
+        opts,
+        overrides,
+    )
+    .expect("build must succeed regardless of prompt_cache flag for OpenAI");
+
+    // No assertion on prompt_cache itself — the field does not exist on
+    // OpenAiCompatibleProvider; the silent-ignore is proven by successful
+    // construction with a non-default override.
+    let _ = provider;
+}
