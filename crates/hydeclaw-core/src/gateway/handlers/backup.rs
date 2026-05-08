@@ -436,7 +436,33 @@ pub(crate) async fn api_list_backups() -> impl IntoResponse {
 
 // ── GET /api/backup/:filename ─────────────────────────────────────────────────
 
-pub(crate) async fn api_download_backup(Path(filename): Path<String>) -> impl IntoResponse {
+/// `GET /api/backup/{filename}` — download a backup archive.
+///
+/// The archive contains plaintext copies of every vault secret, channel
+/// credential, and provider API key (see `api_create_backup`). Audit
+/// 2026-05-08 flagged that the only barrier was the global Bearer token —
+/// matching `/api/restore` we now also require an explicit confirmation
+/// header (`X-Confirm-Download: yes-i-am-sure`). Browsers that legitimately
+/// download backups must add the header; defence-in-depth against accidental
+/// CSRF / log-replay / token-leak fan-out.
+pub(crate) async fn api_download_backup(
+    headers: axum::http::HeaderMap,
+    Path(filename): Path<String>,
+) -> impl IntoResponse {
+    let confirm = headers
+        .get("X-Confirm-Download")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if confirm != "yes-i-am-sure" {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "backup download requires header 'X-Confirm-Download: yes-i-am-sure'"
+            })),
+        )
+            .into_response();
+    }
+
     // Prevent path traversal
     if filename.contains('/') || filename.contains('\\') || filename.contains("..") || filename.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": "invalid filename"}))).into_response();
