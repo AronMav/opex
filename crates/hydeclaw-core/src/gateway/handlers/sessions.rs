@@ -1227,7 +1227,7 @@ mod lifecycle_tests {
         tool_state.insert(keep_id, crate::agent::dispatcher::SessionToolState::new());
         tool_state.insert(delete_id, crate::agent::dispatcher::SessionToolState::new());
 
-        let deleted = vec![delete_id];
+        let deleted = [delete_id];
         tool_state.retain(|sid, _| !deleted.contains(sid));
 
         assert!(tool_state.contains_key(&keep_id));
