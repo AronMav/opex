@@ -26,7 +26,17 @@ pub async fn handle(
     // is in the table. Worst-case window is duplicate rows during the
     // indexing window (cleaned up by the trailing DELETE) instead of an
     // empty memory window.
-    let reindex_started = chrono::Utc::now();
+    //
+    // 6th pass: `reindex_started` is read FROM POSTGRES, not from the
+    // worker process clock. `memory_chunks.created_at` is filled by
+    // PostgreSQL's `DEFAULT now()`; comparing two timestamps from the same
+    // clock source eliminates a clock-skew window where a fresh chunk
+    // could get a `created_at < reindex_started` (NTP rebound, virtualised
+    // hosts) and be silently deleted by the trailing cleanup.
+    let reindex_started: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT now()")
+            .fetch_one(db)
+            .await?;
 
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -95,7 +105,13 @@ pub async fn handle(
     // now that the new ones are committed. If the worker crashed earlier in
     // this function, this line never runs, the agent keeps its old memory,
     // and the next reindex picks up where this one left off.
-    if clear_existing && !agent_id.is_empty() && indexed > 0 {
+    //
+    // 6th pass: gate on `(indexed + session_indexed) > 0` (was just
+    // `indexed`). Workspace-only reindex with `include_sessions=false` and
+    // `total_files=0` would otherwise leave every old chunk in place; vice
+    // versa, a session-only reindex (`include_sessions=true` with no
+    // workspace files to index) used to skip the cleanup entirely.
+    if clear_existing && !agent_id.is_empty() && (indexed + session_indexed) > 0 {
         let cleared = sqlx::query(
             "DELETE FROM memory_chunks \
              WHERE agent_id = $1 \

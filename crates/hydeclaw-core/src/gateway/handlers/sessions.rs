@@ -527,15 +527,27 @@ pub(crate) struct InviteRequest {
     pub agent_name: String,
 }
 
-/// POST /api/sessions/{id}/invite — invite an agent into a multi-agent session.
+/// POST /api/sessions/{id}/invite?agent=xxx — invite an agent into a multi-agent session.
+///
+/// Audit 2026-05-08 (6th pass): `?agent=` is required so a token-holder cannot
+/// inject participants into someone else's session by guessing the UUID.
 pub(crate) async fn api_invite_to_session(
     State(infra): State<InfraServices>,
     State(agents): State<AgentCore>,
     State(bus): State<ChannelBus>,
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+    Query(q): Query<SessionsQuery>,
     Json(req): Json<InviteRequest>,
 ) -> impl IntoResponse {
-    // Validate agent exists
+    let agent = match q.agent.as_deref() {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, id, agent).await {
+        return resp;
+    }
+
+    // Validate target agent exists
     let agent_exists = {
         let map = agents.map.read().await;
         map.contains_key(&req.agent_name)
