@@ -407,10 +407,6 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         &self.cfg().agent.tool_dispatcher.core_extra
     }
 
-    fn agent_promotion_max(&self) -> u32 {
-        self.cfg().agent.tool_dispatcher.promotion_max
-    }
-
     fn session_tool_state(
         &self,
         session_id: uuid::Uuid,

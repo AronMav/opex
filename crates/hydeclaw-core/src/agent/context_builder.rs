@@ -130,14 +130,7 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
         k: usize,
     ) -> Vec<ToolDefinition>;
 
-    // Dispatcher-related accessors. Most are now consumed by
-    // `DefaultContextBuilder::build` (Tasks 16/17/18). `agent_promotion_max`
-    // is still pure plumbing for promotion-cap enforcement (consumed via
-    // parameter pass-through to `execute_tool_calls_partitioned`); the trait
-    // method itself is not called from `DefaultContextBuilder::build`, so it
-    // keeps `#[allow(dead_code)]` until that wire lands — clippy
-    // `-D warnings` raises dead_code on the trait declaration when no caller
-    // exists.
+    // Dispatcher-related accessors consumed by `DefaultContextBuilder::build`.
     /// Whether the dispatcher is enabled for this agent.
     fn agent_tool_dispatcher_enabled(&self) -> bool;
 
@@ -145,10 +138,6 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// of dispatcher partition. Subject to deny + base + existence filters
     /// at apply time.
     fn agent_core_extra(&self) -> &[String];
-
-    /// Cap on number of auto-promoted tools per session.
-    #[allow(dead_code)]
-    fn agent_promotion_max(&self) -> u32;
 
     /// Read-only handle to per-session dispatcher state. None when no session
     /// is bound (subagent / cron paths in some configurations).
@@ -373,17 +362,12 @@ impl ContextBuilder for DefaultContextBuilder {
         // Both `cfg_deny_list()` and `mcp_registry()` were added to
         // ContextBuilderDeps in Tasks 14/15.
         if dispatcher_enabled && !user_text.is_empty() {
-            let promoted_set = if let Some(state) = deps.session_tool_state(session_id) {
-                state.promoted.read().await.clone()
-            } else {
-                std::collections::HashSet::new()
-            };
             let deny: Vec<String> = deps.cfg_deny_list();
 
             let candidates = crate::agent::dispatcher::build_extension_tool_list(
                 deps.agent_base(),
                 &deny,
-                &promoted_set,
+                &std::collections::HashSet::new(),
                 deps.workspace_dir(),
                 deps.mcp_registry(),
             ).await;
@@ -582,17 +566,9 @@ impl ContextBuilder for DefaultContextBuilder {
                 let core_extra: std::collections::HashSet<String> =
                     deps.agent_core_extra().iter().cloned().collect();
 
-                let promoted: std::collections::HashSet<String> =
-                    if let Some(state) = deps.session_tool_state(session_id) {
-                        state.promoted.read().await.clone()
-                    } else {
-                        std::collections::HashSet::new()
-                    };
-
                 all_tools.retain(|t| {
                     core_names.contains(t.name.as_str())
                         || core_extra.contains(&t.name)
-                        || promoted.contains(&t.name)
                 });
             } else if let Some(max_k) = deps.agent_max_tools_in_context() {
                 // Legacy dynamic top-K path — only when dispatcher is OFF.
@@ -611,15 +587,11 @@ impl ContextBuilder for DefaultContextBuilder {
         let tools_tokens = tools.iter()
             .map(|t| serde_json::to_string(t).map(|s| s.len()).unwrap_or(0))
             .sum::<usize>() / 4;
-        let promoted_count = if let Some(state) = deps.session_tool_state(session_id) {
-            state.promoted.read().await.len()
-        } else { 0 };
         tracing::info!(
             agent = %deps.agent_name(),
             prompt_tokens = prompt_tokens,
             tools_tokens = tools_tokens,
             dispatcher_enabled = dispatcher_enabled,
-            promoted_count = promoted_count,
             "context_size"
         );
 
