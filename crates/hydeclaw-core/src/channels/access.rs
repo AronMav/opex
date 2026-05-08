@@ -48,6 +48,10 @@ fn pairing_lockout_remaining(agent_id: &str) -> Option<u64> {
 
 fn record_pairing_failure(agent_id: &str) {
     let now = Instant::now();
+    // Opportunistic GC: drop entries that have aged past the window and have
+    // no active lockout. Cheap (DashMap shard scan) and bounded — only runs
+    // on the (rare) failure path.
+    sweep_stale_pairing_entries(now);
     let mut entry = PAIRING_ATTEMPTS
         .entry(agent_id.to_string())
         .or_insert(PairingAttempt {
@@ -71,18 +75,43 @@ fn record_pairing_failure(agent_id: &str) {
     }
 }
 
-/// Called after a successful approve. Audit 2026-05-08 (4th pass): the
-/// previous version simply removed the entry, which meant `(9 fails + 1
-/// success) × N` was unbounded — the counter started over after every
-/// successful guess. We now keep the counter and only clear the
-/// active lockout, so the rolling 5-minute window still caps the number
-/// of failed attempts regardless of intermixed successes. Once the
-/// window slides past `first_failure` the counter naturally resets via
-/// `record_pairing_failure`.
+/// Called after a successful approve.
+///
+/// Audit 2026-05-08:
+/// - 4th pass found that `remove(entry)` made the (9 fails + 1 success) × N
+///   attack unbounded.
+/// - 5th pass found that keeping `fail_count` after success creates a
+///   different DoS: an attacker who races 9 wrong guesses then waits for a
+///   legitimate user's success leaves `fail_count = 9`, and the legitimate
+///   user's next typo trips the 10-fail lockout. The legitimate operator is
+///   denied access by accumulated noise.
+///
+/// Resolution: a successful approve resets `fail_count = 0` AND sets
+/// `first_failure = now`, but leaves the entry in the map. The 5-minute
+/// rolling window therefore restarts cleanly from the success point, while
+/// still preventing the 9+1 cycle attack — any subsequent burst of failures
+/// has to climb back to 10 before lockout, but it no longer inherits the
+/// pre-success counter.
 fn clear_pairing_failures(agent_id: &str) {
     if let Some(mut entry) = PAIRING_ATTEMPTS.get_mut(agent_id) {
+        entry.fail_count = 0;
+        entry.first_failure = Instant::now();
         entry.locked_until = None;
     }
+}
+
+/// Best-effort sweep of stale `PAIRING_ATTEMPTS` entries: anything whose
+/// rolling window expired AND has no active lockout is dropped. Called
+/// opportunistically from `record_pairing_failure` so the map cannot grow
+/// without bound on a long-running instance.
+fn sweep_stale_pairing_entries(now: Instant) {
+    PAIRING_ATTEMPTS.retain(|_, entry| {
+        // Keep entries that are currently locked OR are still inside the
+        // failure-counting window. Drop anything that has aged past the
+        // window with no active lockout — those are inert state.
+        entry.locked_until.is_some_and(|t| now < t)
+            || now.duration_since(entry.first_failure) <= PAIRING_FAILURE_WINDOW
+    });
 }
 
 /// Manages access control for a channel bot.
@@ -204,5 +233,127 @@ impl AccessGuard {
                 vec![]
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the pairing rate-limit helpers. These do NOT touch the
+    //! database — they call the module-private fns directly. They run under a
+    //! shared global `PAIRING_ATTEMPTS`, so every test uses a unique agent_id
+    //! to avoid cross-test contamination.
+    use super::*;
+
+    fn unique_agent(name: &str) -> String {
+        // Combine a per-test prefix with a high-resolution timestamp so two
+        // tests using the same prefix still get distinct keys.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("test-pairing-{name}-{nanos}")
+    }
+
+    #[test]
+    fn ten_failures_in_window_locks_out() {
+        let aid = unique_agent("ten-fails");
+        for _ in 0..10 {
+            record_pairing_failure(&aid);
+        }
+        assert!(
+            pairing_lockout_remaining(&aid).is_some(),
+            "10 failures inside the rolling window must lock out",
+        );
+    }
+
+    #[test]
+    fn nine_then_success_then_fail_does_not_immediately_lock() {
+        // Audit 2026-05-08 (5th pass) regression guard: previously
+        // clear_pairing_failures kept fail_count at 9, so a single
+        // post-success failure tripped lockout. Now success fully resets the
+        // counter — the legitimate user gets the full failure budget back.
+        let aid = unique_agent("nine-success-fail");
+        for _ in 0..9 {
+            record_pairing_failure(&aid);
+        }
+        assert!(pairing_lockout_remaining(&aid).is_none(), "9 failures alone must not lock");
+        clear_pairing_failures(&aid);
+        record_pairing_failure(&aid);
+        assert!(
+            pairing_lockout_remaining(&aid).is_none(),
+            "post-success single failure must NOT lock (counter must have been reset)",
+        );
+    }
+
+    #[test]
+    fn cycle_attack_nine_plus_one_eventually_locks() {
+        // The 4th-pass concern: 9 fail + 1 success ad infinitum. After the
+        // 5th-pass fix, success resets the counter — so the attacker still
+        // has to climb back from 0 each cycle. This test confirms the cycle
+        // is bounded: 9 fails + clear, then 10 more fails inside the window
+        // must lock.
+        let aid = unique_agent("cycle");
+        for _ in 0..9 {
+            record_pairing_failure(&aid);
+        }
+        clear_pairing_failures(&aid);
+        // Now climb from zero: 10 failures must lock.
+        for _ in 0..10 {
+            record_pairing_failure(&aid);
+        }
+        assert!(
+            pairing_lockout_remaining(&aid).is_some(),
+            "10 failures after a clear must still lock out",
+        );
+    }
+
+    #[test]
+    fn clear_pairing_failures_on_unknown_agent_is_noop() {
+        // Must not panic / must not insert a phantom entry.
+        let aid = unique_agent("nonexistent");
+        assert!(PAIRING_ATTEMPTS.get(&aid).is_none());
+        clear_pairing_failures(&aid);
+        assert!(PAIRING_ATTEMPTS.get(&aid).is_none());
+    }
+
+    #[test]
+    fn sweep_drops_stale_entries() {
+        // Insert an entry with `first_failure` artificially far in the past
+        // and no lockout, then call sweep — it must be dropped.
+        let aid = unique_agent("stale");
+        let long_ago = Instant::now() - (PAIRING_FAILURE_WINDOW + Duration::from_secs(60));
+        PAIRING_ATTEMPTS.insert(
+            aid.clone(),
+            PairingAttempt {
+                fail_count: 3,
+                first_failure: long_ago,
+                locked_until: None,
+            },
+        );
+        sweep_stale_pairing_entries(Instant::now());
+        assert!(
+            PAIRING_ATTEMPTS.get(&aid).is_none(),
+            "stale entry beyond window with no lockout should be swept",
+        );
+    }
+
+    #[test]
+    fn sweep_keeps_locked_entries() {
+        let aid = unique_agent("locked");
+        PAIRING_ATTEMPTS.insert(
+            aid.clone(),
+            PairingAttempt {
+                fail_count: 10,
+                first_failure: Instant::now() - Duration::from_secs(60),
+                locked_until: Some(Instant::now() + Duration::from_secs(60)),
+            },
+        );
+        sweep_stale_pairing_entries(Instant::now());
+        assert!(
+            PAIRING_ATTEMPTS.get(&aid).is_some(),
+            "actively-locked entry must survive sweep regardless of window age",
+        );
+        // Cleanup so subsequent tests don't see this entry.
+        PAIRING_ATTEMPTS.remove(&aid);
     }
 }

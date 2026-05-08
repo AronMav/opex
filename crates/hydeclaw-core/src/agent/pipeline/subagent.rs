@@ -865,4 +865,70 @@ mod tests {
         assert!(denied.iter().any(|d| d == "workspace_delete"),
             "empty override must NOT bypass default deny list");
     }
+
+    // ── runtime_subagent_denylist ──────────────────────────────────────────
+    //
+    // Audit 2026-05-08 (5th pass): security-critical helper added in the 4th
+    // pass had no tests. These regressions guard the contract that
+    // `blocked_tools_override` cannot weaken SUBAGENT_DENIED_TOOLS at runtime,
+    // even though `compute_denied_tools` (used elsewhere for visibility) still
+    // honours it.
+
+    #[test]
+    fn runtime_denylist_default_matches_const() {
+        let denied = runtime_subagent_denylist(&DelegationConfig::default());
+        assert_eq!(denied.len(), SUBAGENT_DENIED_TOOLS.len());
+        for tool in SUBAGENT_DENIED_TOOLS {
+            assert!(denied.iter().any(|d| d == *tool),
+                "runtime denylist must include '{tool}' by default");
+        }
+    }
+
+    #[test]
+    fn runtime_denylist_includes_blocked_tools_extra() {
+        let cfg = DelegationConfig {
+            max_depth: 1,
+            blocked_tools_extra: vec!["custom_tool".into()],
+            blocked_tools_override: vec![],
+            subagent_dispatcher_enabled: None,
+        };
+        let denied = runtime_subagent_denylist(&cfg);
+        for tool in SUBAGENT_DENIED_TOOLS {
+            assert!(denied.iter().any(|d| d == *tool));
+        }
+        assert!(denied.iter().any(|d| d == "custom_tool"),
+            "blocked_tools_extra must be additive at runtime");
+    }
+
+    #[test]
+    fn runtime_denylist_ignores_blocked_tools_override() {
+        // Critical regression guard: a subagent author setting `override`
+        // MUST NOT be able to weaken the runtime safety net.
+        let cfg = DelegationConfig {
+            max_depth: 1,
+            blocked_tools_extra: vec![],
+            blocked_tools_override: vec!["only_this".into()],
+            subagent_dispatcher_enabled: None,
+        };
+        let denied = runtime_subagent_denylist(&cfg);
+        for tool in SUBAGENT_DENIED_TOOLS {
+            assert!(denied.iter().any(|d| d == *tool),
+                "runtime denylist must NOT honour blocked_tools_override — '{tool}' should still be denied");
+        }
+        assert!(!denied.iter().any(|d| d == "only_this"),
+            "runtime denylist must not pull in override-only entries");
+    }
+
+    #[test]
+    fn runtime_denylist_dedupes_extra_against_const() {
+        let cfg = DelegationConfig {
+            max_depth: 1,
+            blocked_tools_extra: vec!["cron".into()],  // already in SUBAGENT_DENIED_TOOLS
+            blocked_tools_override: vec![],
+            subagent_dispatcher_enabled: None,
+        };
+        let denied = runtime_subagent_denylist(&cfg);
+        assert_eq!(denied.iter().filter(|d| *d == "cron").count(), 1,
+            "duplicate entries between extra and SUBAGENT_DENIED_TOOLS must be deduped");
+    }
 }

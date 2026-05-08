@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { ChevronDown, ChevronUp, Shrink } from "lucide-react";
 import { useSessionChain } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
+import { useChatStore } from "@/stores/chat-store";
 import type { SessionChainEntry } from "@/types/api";
 
 interface CompactChainBannerProps {
@@ -15,7 +16,8 @@ interface CompactChainBannerProps {
 
 export function CompactChainBanner({ activeSessionId, onNavigate }: CompactChainBannerProps) {
   const { t } = useTranslation();
-  const { data } = useSessionChain(activeSessionId);
+  const currentAgent = useChatStore((s) => s.currentAgent);
+  const { data } = useSessionChain(activeSessionId, currentAgent);
   const [collapsed, setCollapsed] = useState(true);
 
   // Always close when navigating to a different session.
