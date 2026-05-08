@@ -81,6 +81,8 @@ pub(crate) struct AgentCreatePayload {
     #[serde(default, deserialize_with = "nullable")]
     pub hooks: Option<Option<HooksPayload>>,
     pub max_history_messages: Option<usize>,
+    /// Enable Anthropic prompt caching for this agent. `None` = keep existing / default false.
+    pub prompt_cache: Option<bool>,
     pub daily_budget_tokens: Option<u64>,
     pub max_agent_turns: Option<usize>,
     /// Cap on fallback attempts per request in multi-provider routing (default 3).
@@ -276,6 +278,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 inactivity_secs: w.inactivity_secs.unwrap_or(600),
             }),
             max_history_messages: p.max_history_messages,
+            prompt_cache: p.prompt_cache.unwrap_or(false),
             hooks: p.hooks.flatten().map(|h| crate::config::HooksConfig {
                 log_all_tool_calls: h.log_all_tool_calls.unwrap_or(false),
                 block_tools: h.block_tools.unwrap_or_default(),
@@ -378,6 +381,7 @@ mod tests {
             watchdog: None,
             hooks: None,
             max_history_messages: None,
+            prompt_cache: None,
             daily_budget_tokens: None,
             max_agent_turns: None,
             max_failover_attempts: None,

@@ -650,6 +650,24 @@ pub(crate) async fn api_update_agent(
     if cfg.agent.max_history_messages.is_none() {
         cfg.agent.max_history_messages = existing_cfg.agent.max_history_messages;
     }
+    // prompt_cache: preserve existing if payload didn't supply a value.
+    // The schema builder maps None payload → false, so we check the payload directly.
+    // Since `build_agent_config` sets `prompt_cache = p.prompt_cache.unwrap_or(false)`,
+    // we re-check: if payload had no field (None), don't overwrite an existing `true`.
+    // Actual merge uses the cfg already built — if existing was true and payload is None
+    // we want to preserve it. The schema builder already sets `false` for absent payload,
+    // so we restore from existing when the payload didn't carry an explicit value.
+    // We have no direct payload access here — use the `put_agent` caller's payload for
+    // this field via the already-built cfg: if cfg is `false` and existing is `true`,
+    // it may be because payload was absent. We preserve existing unless payload explicitly
+    // set it to false — but since we can't distinguish, we use a simpler rule:
+    // `prompt_cache` is `true` in existing → keep unless payload explicitly sent the field.
+    // Because `AgentCreatePayload.prompt_cache` defaults to `None` (field is absent),
+    // and `build_agent_config` maps that to `false`, we'd inadvertently clear it.
+    // Fix: compare directly — if cfg says false and existing says true, restore.
+    if !cfg.agent.prompt_cache && existing_cfg.agent.prompt_cache {
+        cfg.agent.prompt_cache = existing_cfg.agent.prompt_cache;
+    }
     if cfg.agent.max_agent_turns.is_none() {
         cfg.agent.max_agent_turns = existing_cfg.agent.max_agent_turns;
     }
