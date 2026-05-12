@@ -149,6 +149,7 @@ function VirtuosoFooter({ turnLimitMessage }: { turnLimitMessage: string | null 
 // ── Main MessageList component ──────────────────────────────────────────────
 
 export function MessageList({
+  agent,
   messages,
   isStreaming,
   isTextStreaming,
@@ -160,6 +161,7 @@ export function MessageList({
   searchMatchIds,
   searchActive,
 }: {
+  agent?: string;
   messages: ChatMessage[];
   isStreaming: boolean;
   /** True only during active text emission (phase === "streaming"), not during reconnect. */
@@ -175,7 +177,8 @@ export function MessageList({
   searchActive?: boolean;
 }) {
   const { t } = useTranslation();
-  const currentAgent = useChatStore((s) => s.currentAgent);
+  const storeAgent = useChatStore((s) => s.currentAgent);
+  const currentAgent = agent || storeAgent;
   const activeSessionId = useChatStore((s) => s.agents[currentAgent]?.activeSessionId ?? null);
   const turnLimitMessage = useChatStore((s) => s.agents[currentAgent]?.turnLimitMessage ?? null);
 

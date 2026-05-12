@@ -33,6 +33,8 @@ import { useMessageSearch } from "./hooks/use-message-search";
 // ── Props ────────────────────────────────────────────────────────────────────
 
 interface ChatThreadProps {
+  /** Explicit agent name this thread is for. Prevents sync issues during agent switching. */
+  agent?: string;
   streamError: string | null;
   isReadOnly: boolean;
   activeSession?: SessionRow;
@@ -77,6 +79,7 @@ class ThreadErrorBoundary extends Component<ThreadErrorBoundaryProps, ThreadErro
 // ── Main Thread ──────────────────────────────────────────────────────────────
 
 export function ChatThread({
+  agent,
   streamError,
   isReadOnly,
   activeSession,
@@ -84,13 +87,14 @@ export function ChatThread({
   onRetry,
 }: ChatThreadProps) {
   const keyboardHeight = useVisualViewport();
-  const currentAgent = useChatStore((s) => s.currentAgent);
-  const activeSessionId = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionId ?? null);
-  const connectionPhase = useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle");
-  const reconnectAttempt = useChatStore((s) => s.agents[s.currentAgent]?.reconnectAttempt ?? 0);
-  const maxReconnectAttempts = useChatStore((s) => s.agents[s.currentAgent]?.maxReconnectAttempts ?? 3);
-  const isLlmReconnecting = useChatStore((s) => s.agents[s.currentAgent]?.isLlmReconnecting ?? false);
-  const activeSessionIds = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE_IDS);
+  const storeAgent = useChatStore((s) => s.currentAgent);
+  const currentAgent = agent || storeAgent;
+  const activeSessionId = useChatStore((s) => s.agents[currentAgent]?.activeSessionId ?? null);
+  const connectionPhase = useChatStore((s) => s.agents[currentAgent]?.connectionPhase ?? "idle");
+  const reconnectAttempt = useChatStore((s) => s.agents[currentAgent]?.reconnectAttempt ?? 0);
+  const maxReconnectAttempts = useChatStore((s) => s.agents[currentAgent]?.maxReconnectAttempts ?? 3);
+  const isLlmReconnecting = useChatStore((s) => s.agents[currentAgent]?.isLlmReconnecting ?? false);
+  const activeSessionIds = useChatStore((s) => s.agents[currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE_IDS);
   // Engine running: either WS says it's active, OR React Query sessions list says run_status=running
   const { data: sessionsData } = useSessions(currentAgent);
   const sessionRunStatus = sessionsData?.sessions?.find((s: { id: string }) => s.id === activeSessionId)?.run_status;
@@ -304,10 +308,12 @@ export function ChatThread({
     >
       {search.isOpen && <SearchBar search={search} />}
       <MessageList
+        agent={currentAgent}
         messages={allMessages}
         isStreaming={isStreaming}
         isTextStreaming={isTextStreaming}
         showThinking={showThinking}
+
         isLoadingHistory={(historyLoading && !liveHasContent) || isScrollLoadingHistory}
         emptyState={<EmptyState />}
         hiddenCount={hiddenCount}

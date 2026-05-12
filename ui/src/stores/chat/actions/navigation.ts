@@ -52,6 +52,12 @@ export function createNavigationActions(deps: ActionDeps) {
         return;
       }
 
+      // MEM-01: clean up all Maps for previous agent.
+      // Must happen BEFORE multi-agent reuse check to ensure the previous agent's
+      // connectionPhase is set to "idle" and its stream is aborted.
+      renderer.cleanupAgent(prev);
+      update(prev, { connectionPhase: "idle" });
+
       // Check if current session is multi-agent and includes the new agent
       const prevState = get().agents[prev];
       const activeSessionId = prevState?.activeSessionId;
@@ -81,9 +87,6 @@ export function createNavigationActions(deps: ActionDeps) {
       if (activeSessionId) {
         queryClient.invalidateQueries({ queryKey: qk.sessionMessages(activeSessionId) });
       }
-      // MEM-01: clean up all Maps for previous agent
-      renderer.cleanupAgent(prev);
-      update(prev, { connectionPhase: "idle" });
       ensure(name);
       // Pre-populate with last known session so the first render shows content
       // immediately instead of flashing a blank new-chat state while the restore

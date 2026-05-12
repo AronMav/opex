@@ -918,11 +918,14 @@ function ChatCanvasContent({
     <div className="flex flex-1 flex-col min-h-0">
       {activeSessionId && (
         <CompactChainBanner
+          key={`banner-${currentAgent}-${activeSessionId}`}
           activeSessionId={activeSessionId}
           onNavigate={(sid) => useChatStore.getState().selectSession(sid, currentAgent)}
         />
       )}
       <ChatThread
+        key={`thread-${currentAgent}`}
+        agent={currentAgent}
         streamError={streamError}
         isReadOnly={isReadOnly}
         activeSession={activeSession}
