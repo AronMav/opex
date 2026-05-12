@@ -43,7 +43,7 @@ jobs:
         run: cargo check --all-targets
 
       - name: Run migrations
-        run: cargo run --bin run_migrations
+        run: MIGRATIONS_DIR=$GITHUB_WORKSPACE/migrations cargo run --bin run_migrations
 
       - name: Test
         run: cargo test
