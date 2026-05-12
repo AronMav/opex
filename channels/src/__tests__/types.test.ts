@@ -80,7 +80,7 @@ describe("ChannelInbound serialization", () => {
     };
     const parsed = JSON.parse(JSON.stringify(msg));
     expect(parsed.success).toBe(true);
-    expect(parsed.error).toBeUndefined();
+    expect(parsed.error).toBeNull(); // null in JSON stays null after parse
   });
 });
 
