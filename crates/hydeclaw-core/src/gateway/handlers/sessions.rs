@@ -569,7 +569,7 @@ pub(crate) async fn api_invite_to_session(
         return ApiError::NotFound(format!("agent '{}' not found", req.agent_name)).into_response();
     }
 
-    match crate::db::sessions::add_participant(&infra.db, id, &req.agent_name).await {
+    match crate::db::sessions::add_participant(&infra.db, id, &req.agent_name, None).await {
         Ok(participants) => {
             // Broadcast to WebSocket for live UI updates
             let event = serde_json::json!({
