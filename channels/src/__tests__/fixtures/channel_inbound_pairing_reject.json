@@ -1,0 +1,5 @@
+{
+  "type": "pairing_reject",
+  "request_id": "req-reject-1",
+  "code": "654321"
+}

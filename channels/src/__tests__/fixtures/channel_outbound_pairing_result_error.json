@@ -1,0 +1,6 @@
+{
+  "type": "pairing_result",
+  "request_id": "req-pair-res-2",
+  "success": false,
+  "error": "Invalid code"
+}

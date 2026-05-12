@@ -1,0 +1,5 @@
+{
+  "type": "error",
+  "request_id": "req-err-1",
+  "message": "Tool execution failed"
+}

@@ -1,0 +1,6 @@
+{
+  "type": "access_result",
+  "request_id": "req-acc-1",
+  "allowed": true,
+  "is_owner": true
+}

@@ -1,0 +1,6 @@
+{
+  "type": "action_result",
+  "action_id": "action-002",
+  "success": false,
+  "error": "Permission denied"
+}

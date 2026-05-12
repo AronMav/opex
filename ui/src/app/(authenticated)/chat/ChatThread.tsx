@@ -126,10 +126,17 @@ export function ChatThread({
     // and must not reset the guard — otherwise the stale sessionRunStatus="running"
     // cache would loop: idle→resumeStream→submitted (guard cleared)→204→idle→repeat,
     // keeping connectionPhase in an active phase and showing the blinking cursor.
-    if (connectionPhase === "streaming" || connectionPhase === "reconnecting") {
-      resumedSessionsRef.current.clear();
+    // "complete" is also cleared because it means the stream finished successfully,
+    // so the next idle→running transition is legitimate (not a retry loop).
+    if (!activeSessionId) return;
+    if (
+      connectionPhase === "streaming" ||
+      connectionPhase === "reconnecting" ||
+      connectionPhase === "complete"
+    ) {
+      resumedSessionsRef.current.delete(`${currentAgent}::${activeSessionId}`);
     }
-  }, [connectionPhase]);
+  }, [connectionPhase, currentAgent, activeSessionId]);
 
   // Auto-resume SSE stream when engine is still processing. React 18+ batches
   // state updates; isActivePhase + isRunning guards prevent double-fire.

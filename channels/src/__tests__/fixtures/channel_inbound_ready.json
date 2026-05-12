@@ -1,0 +1,6 @@
+{
+  "type": "ready",
+  "adapter_type": "telegram",
+  "version": "1.0.0",
+  "formatting_prompt": "Use emojis sparingly"
+}
