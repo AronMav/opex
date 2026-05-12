@@ -1,0 +1,6 @@
+{
+  "type": "pairing_create",
+  "request_id": "req-pair-1",
+  "user_id": "user-new",
+  "display_name": "Bob"
+}

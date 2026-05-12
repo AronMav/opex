@@ -1,0 +1,5 @@
+{
+  "type": "pairing_approve",
+  "request_id": "req-approve-1",
+  "code": "123456"
+}

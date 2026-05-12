@@ -173,11 +173,9 @@ describe("S6 Rust → TS round-trip via fixtures", () => {
     const raw = readFileSync(join(FIXTURES, "channel_inbound_message.json"), "utf-8");
     const parsed: ChannelInbound = JSON.parse(raw);
 
-    // Discriminator narrowing
     expect(parsed.type).toBe("message");
     if (parsed.type !== "message") throw new Error("unreachable");
 
-    // Field-level shape assertions
     expect(parsed.request_id).toBe("req-abc-123");
     expect(parsed.msg.user_id).toBe("user-42");
     expect(parsed.msg.display_name).toBe("Alice");
@@ -189,14 +187,110 @@ describe("S6 Rust → TS round-trip via fixtures", () => {
     expect(parsed.msg.attachments[0].file_size).toBe(12345);
     expect(parsed.msg.timestamp).toBe("2026-05-07T15:30:00Z");
 
-    // Context is `unknown` per S6 design — narrow to access
     const ctx = parsed.msg.context as Record<string, unknown>;
     expect(ctx.chat_id).toBe("12345");
 
-    // Re-serialize and verify structure stable
     const reSerialized = JSON.stringify(parsed);
     const reParsed = JSON.parse(reSerialized);
     expect(reParsed).toEqual(parsed);
+  });
+
+  test("ChannelInbound::Ping fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_ping.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("ping");
+  });
+
+  test("ChannelInbound::Cancel fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_cancel.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("cancel");
+    if (parsed.type !== "cancel") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-cancel-42");
+  });
+
+  test("ChannelInbound::Ready fixture with formatting_prompt", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_ready.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("ready");
+    if (parsed.type !== "ready") throw new Error("unreachable");
+    expect(parsed.adapter_type).toBe("telegram");
+    expect(parsed.version).toBe("1.0.0");
+    expect(parsed.formatting_prompt).toBe("Use emojis sparingly");
+  });
+
+  test("ChannelInbound::Ready fixture without formatting_prompt", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_ready_no_formatting.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("ready");
+    if (parsed.type !== "ready") throw new Error("unreachable");
+    expect(parsed.adapter_type).toBe("discord");
+    expect(parsed.formatting_prompt).toBeNull();
+  });
+
+  test("ChannelInbound::ActionResult success fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_action_result_success.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("action_result");
+    if (parsed.type !== "action_result") throw new Error("unreachable");
+    expect(parsed.action_id).toBe("action-001");
+    expect(parsed.success).toBe(true);
+    expect(parsed.error).toBeNull();
+  });
+
+  test("ChannelInbound::ActionResult error fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_action_result_error.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("action_result");
+    if (parsed.type !== "action_result") throw new Error("unreachable");
+    expect(parsed.action_id).toBe("action-002");
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toBe("Permission denied");
+  });
+
+  test("ChannelInbound::AccessCheck fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_access_check.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("access_check");
+    if (parsed.type !== "access_check") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-access-1");
+    expect(parsed.user_id).toBe("user-789");
+  });
+
+  test("ChannelInbound::PairingCreate fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_pairing_create.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("pairing_create");
+    if (parsed.type !== "pairing_create") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-pair-1");
+    expect(parsed.user_id).toBe("user-new");
+    expect(parsed.display_name).toBe("Bob");
+  });
+
+  test("ChannelInbound::PairingCreate fixture without display_name", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_pairing_create_no_name.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("pairing_create");
+    if (parsed.type !== "pairing_create") throw new Error("unreachable");
+    expect(parsed.display_name).toBeNull();
+  });
+
+  test("ChannelInbound::PairingApprove fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_pairing_approve.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("pairing_approve");
+    if (parsed.type !== "pairing_approve") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-approve-1");
+    expect(parsed.code).toBe("123456");
+  });
+
+  test("ChannelInbound::PairingReject fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_inbound_pairing_reject.json"), "utf-8");
+    const parsed: ChannelInbound = JSON.parse(raw);
+    expect(parsed.type).toBe("pairing_reject");
+    if (parsed.type !== "pairing_reject") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-reject-1");
+    expect(parsed.code).toBe("654321");
   });
 
   test("ChannelOutbound::Action fixture parses and matches TS shape", () => {
@@ -209,11 +303,114 @@ describe("S6 Rust → TS round-trip via fixtures", () => {
     expect(parsed.action_id).toBe("action-xyz-789");
     expect(parsed.action.action).toBe("send_photo");
 
-    // params/context are `unknown` per S6 design — narrow to access
     const params = parsed.action.params as Record<string, unknown>;
     expect(params.url).toBe("https://example.com/x.jpg");
 
     const ctx = parsed.action.context as Record<string, unknown>;
     expect(ctx.chat_id).toBe("12345");
+  });
+
+  test("ChannelOutbound::Chunk fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_chunk.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("chunk");
+    if (parsed.type !== "chunk") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-stream-1");
+    expect(parsed.text).toBe("Hello");
+  });
+
+  test("ChannelOutbound::Done fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_done.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("done");
+    if (parsed.type !== "done") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-done-1");
+    expect(parsed.text).toBe("Final response text");
+  });
+
+  test("ChannelOutbound::Error fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_error.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("error");
+    if (parsed.type !== "error") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-err-1");
+    expect(parsed.message).toBe("Tool execution failed");
+  });
+
+  test("ChannelOutbound::Phase fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_phase.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("phase");
+    if (parsed.type !== "phase") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-phase-1");
+    expect(parsed.phase).toBe("thinking");
+    expect(parsed.tool_name).toBe("web_search");
+  });
+
+  test("ChannelOutbound::Phase fixture without tool_name", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_phase_no_tool.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("phase");
+    if (parsed.type !== "phase") throw new Error("unreachable");
+    expect(parsed.tool_name).toBeNull();
+  });
+
+  test("ChannelOutbound::AccessResult fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_access_result.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("access_result");
+    if (parsed.type !== "access_result") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-acc-1");
+    expect(parsed.allowed).toBe(true);
+    expect(parsed.is_owner).toBe(true);
+  });
+
+  test("ChannelOutbound::PairingCode fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_pairing_code.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("pairing_code");
+    if (parsed.type !== "pairing_code") throw new Error("unreachable");
+    expect(parsed.request_id).toBe("req-pair-code-1");
+    expect(parsed.code).toBe("ABC123");
+  });
+
+  test("ChannelOutbound::PairingResult success fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_pairing_result_success.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("pairing_result");
+    if (parsed.type !== "pairing_result") throw new Error("unreachable");
+    expect(parsed.success).toBe(true);
+    expect(parsed.error).toBeNull();
+  });
+
+  test("ChannelOutbound::PairingResult error fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_pairing_result_error.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("pairing_result");
+    if (parsed.type !== "pairing_result") throw new Error("unreachable");
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toBe("Invalid code");
+  });
+
+  test("ChannelOutbound::Pong fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_pong.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("pong");
+  });
+
+  test("ChannelOutbound::Reload fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_reload.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("reload");
+  });
+
+  test("ChannelOutbound::Config fixture", () => {
+    const raw = readFileSync(join(FIXTURES, "channel_outbound_config.json"), "utf-8");
+    const parsed: ChannelOutbound = JSON.parse(raw);
+    expect(parsed.type).toBe("config");
+    if (parsed.type !== "config") throw new Error("unreachable");
+    expect(parsed.language).toBe("ru");
+    expect(parsed.owner_id).toBe("123456789");
+    expect(parsed.typing_mode).toBe("thinking");
   });
 });

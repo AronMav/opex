@@ -1,0 +1,6 @@
+{
+  "type": "phase",
+  "request_id": "req-phase-1",
+  "phase": "thinking",
+  "tool_name": "web_search"
+}
