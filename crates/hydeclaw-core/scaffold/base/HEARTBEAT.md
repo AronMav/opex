@@ -1,37 +1,20 @@
 # Heartbeat: Maintenance Tasks
 
-## Initialization (on first launch)
-
-Check for the existence of a daily backup cron job:
-`cron(action="list")` → if there is no job named `"daily-backup"`:
-
-1. Read `USER.md` → find the line `Timezone: <value>`
-2. If timezone is **not specified or empty** — notify the user:
-   > "Failed to create backup job: Timezone is not specified in USER.md. Please specify a timezone (e.g.: UTC) — I will create the job automatically."
-   Do not create the job.
-3. If timezone is specified — create the job:
-
-```
-cron(action="create", name="daily-backup", expr="0 5 * * *",
-     timezone="<timezone from USER.md>", message="BACKUP", announce_to="{AGENT_NAME}", silent=false)
-```
-
-## Daily Backup (upon receiving the BACKUP message)
-
-Call via code_exec: `curl -sf -X POST http://localhost:18789/api/backup -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"`
-
-- If `ok == true` — record `filename` and `size_bytes`. Respond briefly.
-- If error — notify the user via `message`.
-
-Backups are retained for 7 days. Files older than that are deleted automatically.
-
----
-
-Upon receiving a heartbeat — perform maintenance tasks.
-
 ## Protocol
 
-**Step 1. Long-term memory check**
+**Step 1. Backup health check**
+
+```
+GET /api/backup
+GET /api/config
+```
+
+1. If `backup.enabled == true` — check that at least one backup exists and its `created_at` is within expected interval (based on cron schedule + 2 hour tolerance).
+2. If no backups exist OR newest backup is older than `cron_interval + 2 hours` — notify user: "Backup is overdue. Last backup: {filename} ({age}). Expected: every {cron_description}."
+3. If backup files exist but newest is older than 48h despite being enabled — escalate: "Backup system appears broken. No recent backups created."
+4. Do NOT create backups — that is handled by the automated scheduler. Only monitor and report issues.
+
+**Step 2. Long-term memory check**
 
 ```
 memory(action="search", query="*", limit=50)
@@ -46,7 +29,7 @@ Look for semantic duplicates: entries with high content similarity (>0.92) and c
 
 Do not merge entries from different agents. Do not touch entries with `pinned: true`.
 
-**Step 2. Report**
+**Step 3. Report**
 
 If everything is normal: respond with `HEARTBEAT_OK`.
 
