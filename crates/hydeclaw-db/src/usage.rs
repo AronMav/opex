@@ -401,7 +401,7 @@ mod tests {
         assert_eq!(m.cache_creation_tokens_7d, 0);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn cache_metrics_returns_zeros_on_empty_table(pool: PgPool) {
         // CACHE-03: COALESCE-to-zero handling proven on empty table.
         let m = cache_metrics(&pool).await.expect("query succeeds on empty table");
@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(m.cache_creation_tokens_7d, 0);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn cache_metrics_sums_recent_rows(pool: PgPool) {
         // Insert two rows: one within the 24h window (default created_at = now()),
         // one outside (10 days old). Verify 24h and 7d aggregates exclude the
