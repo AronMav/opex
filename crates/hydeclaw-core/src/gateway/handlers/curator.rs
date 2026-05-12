@@ -209,9 +209,49 @@ pub(crate) async fn api_curator_preview(
 
 // ── GET /api/curator/runs ─────────────────────────────────────────────────────
 
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct CuratorRunResponse {
+    id: uuid::Uuid,
+    started_at: chrono::DateTime<chrono::Utc>,
+    finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    triggered_by: String,
+    phase1_transitions: Option<i32>,
+    phase2_repairs: Option<i32>,
+    phase3_commands: Option<i32>,
+    skipped_reason: Option<String>,
+    report_md: Option<String>,
+    error: Option<String>,
+    duration_ms: Option<i64>,
+}
+
 pub(crate) async fn api_curator_runs(State(infra): State<InfraServices>) -> impl IntoResponse {
     match crate::db::curator_runs::list_runs(&infra.db, 50).await {
-        Ok(runs) => Json(serde_json::json!({"runs": runs})).into_response(),
+        Ok(runs) => {
+            let response: Vec<CuratorRunResponse> = runs
+                .into_iter()
+                .map(|r| {
+                    let duration_ms = r.finished_at.map(|finished| {
+                        (finished - r.started_at).num_milliseconds()
+                    });
+                    CuratorRunResponse {
+                        id: r.id,
+                        started_at: r.started_at,
+                        finished_at: r.finished_at,
+                        triggered_by: r.trigger,
+                        phase1_transitions: r.phase1,
+                        phase2_repairs: r.phase2,
+                        phase3_commands: r.phase3,
+                        skipped_reason: r.skip_reason,
+                        report_md: r.report_md,
+                        error: r.error,
+                        duration_ms,
+                    }
+                })
+                .collect();
+            Json(serde_json::json!({"runs": response})).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }
 }
@@ -223,7 +263,25 @@ pub(crate) async fn api_curator_run_get(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     match crate::db::curator_runs::get_run(&infra.db, id).await {
-        Ok(Some(run)) => Json(run).into_response(),
+        Ok(Some(r)) => {
+            let duration_ms = r.finished_at.map(|finished| {
+                (finished - r.started_at).num_milliseconds()
+            });
+            let response = CuratorRunResponse {
+                id: r.id,
+                started_at: r.started_at,
+                finished_at: r.finished_at,
+                triggered_by: r.trigger,
+                phase1_transitions: r.phase1,
+                phase2_repairs: r.phase2,
+                phase3_commands: r.phase3,
+                skipped_reason: r.skip_reason,
+                report_md: r.report_md,
+                error: r.error,
+                duration_ms,
+            };
+            Json(response).into_response()
+        }
         Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found"}))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
     }

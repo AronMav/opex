@@ -644,7 +644,7 @@ function MonitorPageInner() {
             <TabsTrigger value="statistics" className="text-xs">{t("monitor.tab_statistics")}</TabsTrigger>
             <TabsTrigger value="approvals" className="text-xs">{t("monitor.tab_approvals")}</TabsTrigger>
             <TabsTrigger value="failures" className="text-xs">{t("monitor.tab_failures")}</TabsTrigger>
-            <TabsTrigger value="curator" className="text-xs">Curator</TabsTrigger>
+            <TabsTrigger value="curator" className="text-xs">{t("monitor.tab_curator")}</TabsTrigger>
           </TabsList>
         </div>
 
@@ -1685,6 +1685,7 @@ function MonitorPageInner() {
 // ── CuratorTab component ────────────────────────────────────────────
 
 function CuratorTab() {
+  const { t, locale } = useTranslation();
   const { data, isLoading } = useCuratorRuns();
   const runs: CuratorRun[] = data?.runs ?? [];
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -1702,21 +1703,21 @@ function CuratorTab() {
   if (runs.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
-        <p className="text-sm text-muted-foreground">No curator runs yet.</p>
-        <p className="text-xs text-muted-foreground/60 mt-1">Runs appear here after the curator executes.</p>
+        <p className="text-sm text-muted-foreground">{t("monitor.curator.empty")}</p>
+        <p className="text-xs text-muted-foreground/60 mt-1">{t("monitor.curator.no_runs")}</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-1">
-      <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-2 px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide border-b border-border/50">
-        <span>Time</span>
-        <span>Trigger</span>
-        <span>Status</span>
-        <span className="text-right">Phase 1</span>
-        <span className="text-right">Phase 2</span>
-        <span className="text-right">Duration</span>
+      {/* Header row */}
+      <div className="grid grid-cols-[1fr_80px_60px_60px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide border-b border-border/50">
+        <span>{t("monitor.curator.col_time")}</span>
+        <span>{t("monitor.curator.col_trigger")}</span>
+        <span>{t("monitor.curator.col_status")}</span>
+        <span className="text-right">{t("monitor.curator.col_phase1")}</span>
+        <span className="text-right">{t("monitor.curator.col_phase2")}</span>
       </div>
       {runs.map((run) => {
         const isExpanded = expandedId === run.id;
@@ -1727,49 +1728,50 @@ function CuratorTab() {
           : isSkipped
           ? "text-muted-foreground"
           : "text-green-600 dark:text-green-400";
-        const statusLabel = isError ? "error" : isSkipped ? "skipped" : "ok";
-        const durationStr = run.duration_ms != null
-          ? run.duration_ms < 1000
-            ? `${run.duration_ms}ms`
-            : `${(run.duration_ms / 1000).toFixed(1)}s`
-          : "-";
+        const statusLabel = isError
+          ? t("monitor.curator.status_error")
+          : isSkipped
+          ? t("monitor.curator.status_skipped")
+          : t("monitor.curator.status_ok");
+        const triggerLabel = run.triggered_by === "manual"
+          ? t("monitor.curator.trigger_manual")
+          : t("monitor.curator.trigger_scheduled");
 
         return (
           <div key={run.id} className="rounded-lg border border-border/50 overflow-hidden">
             <button
-              className="w-full grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors"
+              className="w-full grid grid-cols-[1fr_80px_60px_60px_60px] gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors items-center"
               onClick={() => setExpandedId(isExpanded ? null : run.id)}
             >
               <span className="text-xs text-muted-foreground font-mono truncate">
-                {relativeTime(run.started_at)}
+                {relativeTime(run.started_at, locale)}
               </span>
               <Badge
                 variant={run.triggered_by === "manual" ? "secondary" : "outline"}
-                className="text-[10px] px-1.5 py-0 h-5"
+                className="text-[10px] px-1.5 py-0 h-5 w-full justify-center"
               >
-                {run.triggered_by}
+                {triggerLabel}
               </Badge>
               <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
-              <span className="text-xs tabular-nums text-right">{run.phase1_transitions}</span>
-              <span className="text-xs tabular-nums text-right">{run.phase2_repairs}</span>
-              <span className="text-xs tabular-nums text-right font-mono text-muted-foreground">{durationStr}</span>
+              <span className="text-xs tabular-nums text-right">{run.phase1_transitions ?? "-"}</span>
+              <span className="text-xs tabular-nums text-right">{run.phase2_repairs ?? "-"}</span>
             </button>
             {isExpanded && (
               <div className="px-3 pb-3 pt-1 border-t border-border/30 bg-muted/10 space-y-2">
                 {run.skipped_reason && (
                   <p className="text-xs text-muted-foreground">
-                    <span className="font-medium">Skipped:</span> {run.skipped_reason}
+                    <span className="font-medium">{t("monitor.curator.skipped")}</span> {run.skipped_reason}
                   </p>
                 )}
                 {run.error && (
                   <p className="text-xs text-destructive">
-                    <span className="font-medium">Error:</span> {run.error}
+                    <span className="font-medium">{t("monitor.curator.error")}</span> {run.error}
                   </p>
                 )}
                 <div className="flex gap-4 text-xs text-muted-foreground">
-                  <span>Phase 1: <span className="font-medium text-foreground">{run.phase1_transitions}</span> transitions</span>
-                  <span>Phase 2: <span className="font-medium text-foreground">{run.phase2_repairs}</span> repairs</span>
-                  <span>Phase 3: <span className="font-medium text-foreground">{run.phase3_commands}</span> LLM commands</span>
+                  <span>{t("monitor.curator.phase1_label")} <span className="font-medium text-foreground">{run.phase1_transitions}</span> {t("monitor.curator.transitions")}</span>
+                  <span>{t("monitor.curator.phase2_label")} <span className="font-medium text-foreground">{run.phase2_repairs}</span> {t("monitor.curator.repairs")}</span>
+                  <span>{t("monitor.curator.phase3_label")} <span className="font-medium text-foreground">{run.phase3_commands}</span> {t("monitor.curator.llm_commands")}</span>
                 </div>
                 {run.report_md && (
                   <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-background/60 p-3 rounded border border-border/50 max-h-64 overflow-y-auto">
