@@ -80,7 +80,7 @@ describe("ChannelInbound serialization", () => {
     };
     const parsed = JSON.parse(JSON.stringify(msg));
     expect(parsed.success).toBe(true);
-    expect(parsed.error).toBeNull();
+    expect(parsed.error).toBeUndefined();
   });
 });
 
@@ -225,7 +225,7 @@ describe("S6 Rust → TS round-trip via fixtures", () => {
     expect(parsed.type).toBe("ready");
     if (parsed.type !== "ready") throw new Error("unreachable");
     expect(parsed.adapter_type).toBe("discord");
-    expect(parsed.formatting_prompt).toBeNull();
+    expect(parsed.formatting_prompt).toBeUndefined();
   });
 
   test("ChannelInbound::ActionResult success fixture", () => {
@@ -235,7 +235,7 @@ describe("S6 Rust → TS round-trip via fixtures", () => {
     if (parsed.type !== "action_result") throw new Error("unreachable");
     expect(parsed.action_id).toBe("action-001");
     expect(parsed.success).toBe(true);
-    expect(parsed.error).toBeNull();
+    expect(parsed.error).toBeUndefined();
   });
 
   test("ChannelInbound::ActionResult error fixture", () => {
@@ -272,7 +272,7 @@ describe("S6 Rust → TS round-trip via fixtures", () => {
     const parsed: ChannelInbound = JSON.parse(raw);
     expect(parsed.type).toBe("pairing_create");
     if (parsed.type !== "pairing_create") throw new Error("unreachable");
-    expect(parsed.display_name).toBeNull();
+    expect(parsed.display_name).toBeUndefined();
   });
 
   test("ChannelInbound::PairingApprove fixture", () => {
@@ -352,7 +352,7 @@ describe("S6 Rust → TS round-trip via fixtures", () => {
     const parsed: ChannelOutbound = JSON.parse(raw);
     expect(parsed.type).toBe("phase");
     if (parsed.type !== "phase") throw new Error("unreachable");
-    expect(parsed.tool_name).toBeNull();
+    expect(parsed.tool_name).toBeUndefined();
   });
 
   test("ChannelOutbound::AccessResult fixture", () => {
@@ -380,7 +380,7 @@ describe("S6 Rust → TS round-trip via fixtures", () => {
     expect(parsed.type).toBe("pairing_result");
     if (parsed.type !== "pairing_result") throw new Error("unreachable");
     expect(parsed.success).toBe(true);
-    expect(parsed.error).toBeNull();
+    expect(parsed.error).toBeUndefined();
   });
 
   test("ChannelOutbound::PairingResult error fixture", () => {
