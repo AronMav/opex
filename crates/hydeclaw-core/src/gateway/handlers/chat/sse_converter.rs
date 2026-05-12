@@ -241,9 +241,10 @@ pub(super) async fn run_converter(
                 {
                     let invite_db_clone = invite_db.clone();
                     let agent = mentioned.clone();
+                    let tx_clone = registry.ui_event_tx().clone();
                     // AUDIT-FF-008: see docs/superpowers/specs/2026-05-06-s5-tech-debt-hygiene-design.md
                     tokio::spawn(async move {
-                        let _ = crate::db::sessions::add_participant(&invite_db_clone, sid_uuid, &agent).await;
+                        let _ = crate::db::sessions::add_participant(&invite_db_clone, sid_uuid, &agent, Some(&tx_clone)).await;
                     });
                 }
                 // Write empty streaming record immediately — gives frontend a persistent DB signal

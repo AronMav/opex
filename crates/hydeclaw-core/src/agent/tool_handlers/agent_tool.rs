@@ -13,6 +13,7 @@ impl SystemToolHandler for AgentToolHandler {
             deps.session_pools,
             deps.agent_map,
             deps.db,
+            deps.ui_event_tx,
             deps.agent_name,
             args,
             deps.agent_tool_timeouts,

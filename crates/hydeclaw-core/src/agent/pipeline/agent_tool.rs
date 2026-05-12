@@ -110,6 +110,7 @@ pub async fn handle_agent_tool(
     session_pools: Option<&SessionPoolsMap>,
     agent_map: Option<&AgentMap>,
     db: &PgPool,
+    ui_event_tx: Option<&tokio::sync::broadcast::Sender<String>>,
     agent_name: &str,
     args: &serde_json::Value,
     timeouts: AgentToolTimeouts,
@@ -120,7 +121,18 @@ pub async fn handle_agent_tool(
         .unwrap_or("");
 
     match action {
-        "ask" => handle_agent_ask(session_pools, agent_map, db, agent_name, args, timeouts).await,
+        "ask" => {
+            handle_agent_ask(
+                session_pools,
+                agent_map,
+                db,
+                ui_event_tx,
+                agent_name,
+                args,
+                timeouts,
+            )
+            .await
+        }
         "status" => handle_agent_status(session_pools, args).await,
         "kill" => handle_agent_kill(session_pools, args).await,
         other => format!(
@@ -146,6 +158,7 @@ pub async fn handle_agent_ask(
     session_pools: Option<&SessionPoolsMap>,
     agent_map: Option<&AgentMap>,
     db: &PgPool,
+    ui_event_tx: Option<&tokio::sync::broadcast::Sender<String>>,
     agent_name: &str,
     args: &serde_json::Value,
     timeouts: AgentToolTimeouts,
@@ -244,7 +257,7 @@ pub async fn handle_agent_ask(
         }
     };
 
-    let _ = crate::db::sessions::add_participant(db, session_id, target).await;
+    let _ = crate::db::sessions::add_participant(db, session_id, target, ui_event_tx).await;
 
     // Single write lock for the spawn — prevents TOCTOU where two concurrent
     // `ask` calls both observe pool-miss and both try to spawn.

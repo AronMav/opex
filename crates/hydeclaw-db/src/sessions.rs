@@ -1406,7 +1406,13 @@ pub async fn export_session(db: &PgPool, session_id: Uuid) -> sqlx::Result<Optio
 }
 
 /// Add an agent to a session's participants list (idempotent).
-pub async fn add_participant(db: &PgPool, session_id: Uuid, agent_name: &str) -> Result<Vec<String>> {
+/// If `ui_event_tx` is provided, broadcasts a `session_updated` event on success.
+pub async fn add_participant(
+    db: &PgPool,
+    session_id: Uuid,
+    agent_name: &str,
+    ui_event_tx: Option<&tokio::sync::broadcast::Sender<String>>,
+) -> Result<Vec<String>> {
     let row = sqlx::query(
         "UPDATE sessions SET participants = array_append(participants, $2) \
          WHERE id = $1 AND NOT ($2 = ANY(participants)) \
@@ -1416,14 +1422,31 @@ pub async fn add_participant(db: &PgPool, session_id: Uuid, agent_name: &str) ->
     .bind(agent_name)
     .fetch_optional(db)
     .await?;
-    if let Some(r) = row { Ok(r.get("participants")) } else {
+
+    let participants = if let Some(r) = row {
+        let p: Vec<String> = r.get("participants");
+        // Broadcast to all participants so their sidebars/badges refresh
+        if let Some(tx) = ui_event_tx {
+            for participant in &p {
+                let event = serde_json::json!({
+                    "type": "session_updated",
+                    "agent": participant,
+                    "session_id": session_id.to_string(),
+                });
+                let _ = tx.send(event.to_string());
+            }
+        }
+        p
+    } else {
         // Agent was already a participant — return current list
         let r = sqlx::query("SELECT participants FROM sessions WHERE id = $1")
             .bind(session_id)
             .fetch_one(db)
             .await?;
-        Ok(r.get("participants"))
-    }
+        r.get("participants")
+    };
+
+    Ok(participants)
 }
 
 /// Get participants for a session.

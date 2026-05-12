@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Component, useEffect, useMemo, useRef } from "react";
+import React, { Component, useEffect, useMemo, useRef, useCallback } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
 import { useVisualViewport } from "@/hooks/use-visual-viewport";
@@ -101,6 +101,19 @@ export function ChatThread({
 
   // CRITICAL: We are "running" if we're in an active connection phase OR the DB says so.
   const engineRunning = useEngineRunning(currentAgent);
+
+  const handleManualAbort = useCallback(async () => {
+    if (!activeSessionId) return;
+    try {
+      const { apiPost } = await import("@/lib/api");
+      await apiPost(`/api/chat/${activeSessionId}/abort`, {});
+      useChatStore.getState().markSessionInactive(currentAgent, activeSessionId);
+      const { toast } = await import("sonner");
+      toast.success("Сессия принудительно остановлена");
+    } catch (e) {
+      console.error("Manual abort failed", e);
+    }
+  }, [activeSessionId, currentAgent]);
 
   // Derived booleans from message source hooks
   const isLive = useIsLive(currentAgent);
@@ -347,6 +360,27 @@ export function ChatThread({
           onClear={onClearError}
           onRetry={onRetry}
         />
+      )}
+
+      {/* Stuck-session recovery banner — shown when engine is 'running' but UI is idle */}
+      {!streamError && !isReadOnly && engineRunning && !isActivePhase(connectionPhase) && (
+        <div className="mx-auto my-4 w-full max-w-2xl px-4 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-500 shadow-sm backdrop-blur-sm">
+            <div className="flex items-center gap-3">
+              <div className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-75"></span>
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
+              </div>
+              <p className="font-medium">Сессия отмечена как выполняемая, но подключение отсутствует</p>
+            </div>
+            <button
+              onClick={handleManualAbort}
+              className="shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-amber-600 active:scale-95 shadow-sm"
+            >
+              Остановить принудительно
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Input area */}
