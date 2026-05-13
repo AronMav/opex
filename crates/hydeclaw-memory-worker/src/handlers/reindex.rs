@@ -1,11 +1,12 @@
 use crate::tasks::MemoryTask;
+use hydeclaw_embedding::ToolgateClient;
 use sqlx::PgPool;
 use serde_json::json;
 
 pub async fn handle(
     task: &MemoryTask,
     db: &PgPool,
-    toolgate_url: &str,
+    client: &ToolgateClient,
     workspace_dir: &str,
     fts_language: &str,
 ) -> anyhow::Result<serde_json::Value> {
@@ -38,10 +39,6 @@ pub async fn handle(
             .fetch_one(db)
             .await?;
 
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-
     let total_files = md_files.len();
     let mut indexed = 0u32;
     let mut errors = 0u32;
@@ -63,7 +60,7 @@ pub async fn handle(
             .to_string_lossy()
             .to_string();
 
-        match embed_and_insert(db, &http, toolgate_url, &content, &source, fts_language, agent_id).await {
+        match embed_and_insert(db, client, &content, &source, fts_language, agent_id).await {
             Ok(()) => indexed += 1,
             Err(e) => {
                 tracing::warn!(source = %source, error = %e, "index failed");
@@ -82,7 +79,7 @@ pub async fn handle(
     // Index session transcripts
     let mut session_indexed = 0u32;
     if include_sessions && !agent_id.is_empty() {
-        session_indexed = index_sessions(db, &http, toolgate_url, fts_language, agent_id)
+        session_indexed = index_sessions(db, client, fts_language, agent_id)
             .await
             .unwrap_or_else(|e| {
                 tracing::warn!(error = %e, "session transcript indexing failed");
@@ -176,8 +173,7 @@ pub(crate) async fn collect_workspace_files(
 /// Index session transcripts from DB into `memory_chunks`.
 async fn index_sessions(
     db: &PgPool,
-    http: &reqwest::Client,
-    toolgate_url: &str,
+    client: &ToolgateClient,
     fts_language: &str,
     agent_id: &str,
 ) -> anyhow::Result<u32> {
@@ -218,7 +214,7 @@ async fn index_sessions(
             continue;
         }
 
-        match embed_and_insert(db, http, toolgate_url, &transcript, &source, fts_language, agent_id).await {
+        match embed_and_insert(db, client, &transcript, &source, fts_language, agent_id).await {
             Ok(()) => indexed += 1,
             Err(e) => tracing::debug!(session = %session_id, error = %e, "session index failed"),
         }
@@ -229,34 +225,14 @@ async fn index_sessions(
 /// Embed content and insert into `memory_chunks` (transactional replace).
 async fn embed_and_insert(
     db: &PgPool,
-    http: &reqwest::Client,
-    toolgate_url: &str,
+    client: &ToolgateClient,
     content: &str,
     source: &str,
     fts_language: &str,
     agent_id: &str,
 ) -> anyhow::Result<()> {
-    // Embed via toolgate (single call — chunking removed in m033)
-    let body = serde_json::json!({"input": [content]});
-    let resp = http
-        .post(format!("{}/v1/embeddings", toolgate_url.trim_end_matches('/')))
-        .json(&body)
-        .send()
-        .await?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("embedding API error {status}: {text}");
-    }
-
-    let resp_body: serde_json::Value = resp.json().await?;
-    let emb: Vec<f32> = resp_body["data"]
-        .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|d| d["embedding"].as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
-        .ok_or_else(|| anyhow::anyhow!("missing embedding in response"))?;
+    // Embed via shared ToolgateClient (retry policy + tracing applied automatically).
+    let emb = client.embed_one(content).await?;
 
     let vec_str = format!(
         "[{}]",
