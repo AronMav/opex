@@ -219,13 +219,23 @@ export function createNavigationActions(deps: ActionDeps) {
 
     markSessionActive: (agent: string, sessionId: string) => {
       ensure(agent);
+      let shouldResume = false;
       set((draft: any) => {
         const st = draft.agents[agent];
         if (!st) return;
         if (!st.activeSessionIds.includes(sessionId)) {
           st.activeSessionIds.push(sessionId);
         }
+        // Auto-resume trigger: if the session is open in the UI and not
+        // already streaming, kick off a resume. Idempotent — resumeStream
+        // returns 204 if the session is already finalized.
+        if (st.activeSessionId === sessionId && !isActivePhase(st.connectionPhase)) {
+          shouldResume = true;
+        }
       });
+      if (shouldResume) {
+        get().resumeStream(agent, sessionId);
+      }
     },
 
     markSessionInactive: (agent: string, sessionId: string) => {
