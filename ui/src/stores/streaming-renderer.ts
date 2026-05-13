@@ -155,13 +155,13 @@ export function createStreamingRenderer(store: StoreAccess) {
     // Architecture C: live messages = overlay only (current streaming message).
     // History comes from React Query. No seed needed.
     //
-    // Use "submitted" (not "streaming") so ChatThread's resumedSessionsRef
-    // guard is NOT cleared prematurely. The guard is only cleared when
-    // connectionPhase reaches "streaming" or "reconnecting" — i.e. when
-    // actual SSE bytes have arrived. A 204 response transitions
-    // submitted → idle without ever clearing the guard, which prevents the
-    // auto-resume useEffect from re-firing infinitely during WS reconnect
-    // (error #185). processSSEStream sets "streaming" on first data byte.
+    // Use "submitted" (not "streaming") to mark the request as in-flight
+    // before any SSE bytes have arrived. processSSEStream upgrades the phase
+    // to "streaming" on the first data byte; if the server returns 204 (no
+    // events) we transition submitted → idle directly. Setting "streaming"
+    // here would lie about the wire state and break downstream consumers
+    // (e.g. the bootstrap auto-resume effect in ChatThread) that distinguish
+    // "request sent, waiting for first byte" from "actively streaming".
     update(agent, {
       streamError: null,
       connectionPhase: "submitted",
