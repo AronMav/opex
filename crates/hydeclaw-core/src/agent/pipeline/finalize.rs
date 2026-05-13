@@ -373,6 +373,7 @@ pub async fn finalize<S: EventSink>(
                 Some(agent_name_ref),
                 thinking_json.as_ref(),
                 ctx.user_message_id,
+                None,
             )
             .await
             {
@@ -423,6 +424,7 @@ pub async fn finalize<S: EventSink>(
                         Some(agent_name_ref),
                         None,
                         ctx.user_message_id,
+                        None,
                     )
                     .await;
                 } else {
@@ -523,6 +525,7 @@ pub async fn finalize<S: EventSink>(
                         Some(agent_name_ref),
                         None,
                         ctx.user_message_id,
+                        None,
                     )
                     .await;
                 } else {
@@ -1008,6 +1011,7 @@ mod tests {
             Some("test-agent"),
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1067,6 +1071,7 @@ mod tests {
             None,
             Some("call_xyz"),
             Some("test-agent"),
+            None,
             None,
             None,
         )

@@ -480,10 +480,11 @@ pub async fn save_message_ex_with_id(
     agent_id: Option<&str>,
     thinking_blocks: Option<&serde_json::Value>,
     parent_id: Option<Uuid>,
+    parallel_batch_id: Option<hydeclaw_types::ids::ParallelBatchId>,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, agent_id, thinking_blocks, parent_message_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+        "INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, agent_id, thinking_blocks, parent_message_id, parallel_batch_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
          ON CONFLICT (id) DO NOTHING",
     )
     .bind(id)
@@ -495,6 +496,7 @@ pub async fn save_message_ex_with_id(
     .bind(agent_id)
     .bind(thinking_blocks)
     .bind(parent_id)
+    .bind(parallel_batch_id.map(|b| b.as_uuid()))
     .execute(db)
     .await?;
 
