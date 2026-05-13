@@ -283,12 +283,14 @@ export function resolveActivePath(
   }
 
   const childrenOf = new Map<string, MessageRow[]>();
+  const hasDescendants = new Set<string>();
   const roots: MessageRow[] = [];
 
   for (const r of rows) {
     if (r.parent_message_id == null) {
       roots.push(r);
     } else {
+      hasDescendants.add(r.parent_message_id);
       const siblings = childrenOf.get(r.parent_message_id) ?? [];
       siblings.push(r);
       childrenOf.set(r.parent_message_id, siblings);
@@ -311,11 +313,21 @@ export function resolveActivePath(
     if (!children || children.length === 0) break;
 
     // Parallel tool batches: all results are siblings with the same parent.
-    // Include every sibling in path order, then continue from the last one
-    // (which is the parent of the next assistant message in the chain).
+    // D2 (2026-05-13): the heir of a parallel batch is the sibling whose id
+    // is parent_message_id of a later message — backend's `chain_parent`
+    // advances to declaration-last parallel tool, which is rarely the same
+    // as created_at-last (parallel tools complete in execution-speed order).
+    // Swap heir into the last slot before the existing path-push logic.
+    // Work on a copy: childrenOf entries can be revisited via forks.
     if (children.length > 1 && children.every(c => c.role === "tool")) {
-      path.push(...children.slice(0, -1));
-      current = children[children.length - 1];
+      const ordered = [...children];
+      const heirIdx = ordered.findIndex(c => hasDescendants.has(c.id));
+      if (heirIdx >= 0 && heirIdx !== ordered.length - 1) {
+        const heir = ordered.splice(heirIdx, 1)[0];
+        ordered.push(heir);
+      }
+      path.push(...ordered.slice(0, -1));
+      current = ordered[ordered.length - 1];
       continue;
     }
 
