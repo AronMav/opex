@@ -47,7 +47,7 @@ pub(crate) async fn embeddings_proxy(
             Json(json!({
                 "object": "list",
                 "data": data,
-                "model": infra.embedder.embed_model_name().unwrap_or_default(),
+                "model": infra.embedder.embed_provider_display().unwrap_or_default(),
                 "usage": {"prompt_tokens": 0, "total_tokens": 0}
             })).into_response()
         }

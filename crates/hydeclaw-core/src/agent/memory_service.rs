@@ -3,7 +3,7 @@
 /// Engine holds `Arc<dyn MemoryService>` instead of `Arc<MemoryStore>` so unit
 /// tests can inject a `MockMemoryService` without needing a live `PostgreSQL` + pgvector stack.
 ///
-/// Embedding operations (`embed`, `embed_batch`, `embed_dim`, `embed_model_name`)
+/// Embedding operations (`embed`, `embed_batch`, `embed_dim`, `embed_provider_display`)
 /// are on the separate `EmbeddingService` trait (`crate::memory::EmbeddingService`).
 use anyhow::Result;
 use async_trait::async_trait;

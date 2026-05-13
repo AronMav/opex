@@ -551,7 +551,7 @@ mod search_hybrid_rrf_tests {
     impl EmbeddingService for RrfFakeEmbedder {
         fn is_available(&self) -> bool { true }
         fn embed_dim(&self) -> u32 { 4 }
-        fn embed_model_name(&self) -> Option<String> { Some("fake".to_string()) }
+        fn embed_provider_display(&self) -> Option<String> { Some("fake".to_string()) }
         async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
             Ok(vec![0.5, 0.5, 0.5, 0.5])
         }
@@ -572,7 +572,7 @@ mod search_hybrid_rrf_tests {
     impl EmbeddingService for KeywordEmbedder {
         fn is_available(&self) -> bool { true }
         fn embed_dim(&self) -> u32 { 4 }
-        fn embed_model_name(&self) -> Option<String> { Some("keyword-fake".to_string()) }
+        fn embed_provider_display(&self) -> Option<String> { Some("keyword-fake".to_string()) }
         async fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
             let v = if text.contains("RRF_ALPHA") {
                 vec![1.0_f32, 0.0, 0.0, 0.0]
@@ -601,7 +601,7 @@ mod search_hybrid_rrf_tests {
     impl EmbeddingService for DisabledEmbedder {
         fn is_available(&self) -> bool { false }
         fn embed_dim(&self) -> u32 { 0 }
-        fn embed_model_name(&self) -> Option<String> { None }
+        fn embed_provider_display(&self) -> Option<String> { None }
         async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
             anyhow::bail!("embedding unavailable")
         }

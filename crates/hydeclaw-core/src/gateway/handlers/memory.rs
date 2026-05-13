@@ -151,7 +151,7 @@ pub(crate) async fn api_memory_stats(State(state): State<InfraServices>) -> Json
     ).fetch_one(&state.db).await.unwrap_or((0, 0, 0, 0));
 
     let embed_dim = state.embedder.embed_dim();
-    let embed_model = state.embedder.embed_model_name().unwrap_or_default();
+    let embed_model = state.embedder.embed_provider_display().unwrap_or_default();
 
     Json(MemoryStatsDto {
         total,
