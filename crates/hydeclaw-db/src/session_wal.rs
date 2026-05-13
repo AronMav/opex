@@ -23,9 +23,12 @@ pub async fn log_event(
     Ok(())
 }
 
-/// In-transaction variant — inserts the WAL row and refreshes `activity_at`
-/// (debounced to 10s resolution). Used by `cleanup_session_terminated` to
-/// keep all four cleanup steps atomic.
+/// In-transaction variant of [`log_event`]. Inserts the WAL row and refreshes
+/// `activity_at` (debounced to ~10 s resolution).
+///
+/// Use this when you need to combine the WAL write with other DB operations
+/// in a single transaction (e.g. a multi-step cleanup that must be atomic).
+/// Standalone callers should use [`log_event`].
 pub async fn log_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     session_id: Uuid,
@@ -51,7 +54,7 @@ pub async fn log_event_tx(
     //
     // Guard `run_status = 'running'` so terminal sessions are not
     // accidentally resurrected.
-    let _ = sqlx::query(
+    sqlx::query(
         "UPDATE sessions SET activity_at = NOW()
          WHERE id = $1
            AND run_status = 'running'
@@ -59,7 +62,7 @@ pub async fn log_event_tx(
     )
     .bind(session_id)
     .execute(&mut **tx)
-    .await;
+    .await?;
     Ok(())
 }
 
@@ -216,5 +219,25 @@ mod tests {
             "SELECT activity_at < NOW() - INTERVAL '50 minutes' FROM sessions WHERE id = $1"
         ).bind(session_id).fetch_one(&pool).await.unwrap();
         assert!(still_old, "terminal session must not heartbeat");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn log_event_tx_heartbeats_when_activity_at_is_null(pool: sqlx::PgPool) {
+        let session_id = uuid::Uuid::new_v4();
+        // Fresh session with activity_at NULL — the IS NULL branch of the
+        // debounce predicate must allow the heartbeat.
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, run_status, activity_at)
+             VALUES ($1, 'a', 'u', 'web', 'running', NULL)"
+        ).bind(session_id).execute(&pool).await.unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        log_event_tx(&mut tx, session_id, "tool_start", None).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let now_set: bool = sqlx::query_scalar(
+            "SELECT activity_at IS NOT NULL FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert!(now_set, "IS NULL branch of debounce predicate must allow heartbeat");
     }
 }
