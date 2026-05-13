@@ -353,3 +353,29 @@ describe("resolveActivePath — parallel batch heir picked by descendants, not c
     expect(ids).toEqual(["u1", "a1", "t_hyde", "t_alma", "t_search", "t_exch", "a_final"]);
   });
 });
+
+describe("resolveActivePath — trunk-only conversation bypasses tree walk (D1)", () => {
+  it("returns all messages sorted by created_at when branch_from_message_id is NULL everywhere, even with a parallel batch present", () => {
+    // Same parallel-batch shape as Task 1 but with branch_from_message_id NULL
+    // on every row (the realistic case — most sessions are never explicitly
+    // forked). D1 short-circuit must fire and return rows in created_at order
+    // — which differs from walker order because the D2 swap moves t_search
+    // (heir) to the last slot, producing [..., t_hyde, t_alma, t_search, ...]
+    // in walker order vs [..., t_hyde, t_search, t_alma, ...] in created_at
+    // order. Distinct expected arrays prove the short-circuit actually fires.
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", parent_message_id: null, branch_from_message_id: null, created_at: "2026-05-13T10:30:00Z" }),
+      makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", branch_from_message_id: null, created_at: "2026-05-13T10:31:35Z" }),
+      makeRow({ id: "t_hyde",   role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "call_h", created_at: "2026-05-13T10:33:56.067Z" }),
+      makeRow({ id: "t_search", role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "call_s", created_at: "2026-05-13T10:33:56.074Z" }),
+      makeRow({ id: "t_alma",   role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "call_a", created_at: "2026-05-13T10:33:56.090Z" }),
+      makeRow({ id: "t_exch",   role: "tool", parent_message_id: "t_search", branch_from_message_id: null, tool_call_id: "call_e", created_at: "2026-05-13T10:33:57.762Z" }),
+      makeRow({ id: "a_final",  role: "assistant", parent_message_id: "t_exch", branch_from_message_id: null, content: "final", created_at: "2026-05-13T10:35:26Z" }),
+    ];
+
+    const path = resolveActivePath(rows, {});
+    const ids = path.map(r => r.id);
+    // Pure created_at sort — t_search BEFORE t_alma (D2 swap not applied).
+    expect(ids).toEqual(["u1", "a1", "t_hyde", "t_search", "t_alma", "t_exch", "a_final"]);
+  });
+});
