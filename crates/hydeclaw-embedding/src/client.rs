@@ -86,6 +86,75 @@ impl ToolgateClient {
         })
         .await
     }
+
+    pub async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
+        let vs = self.embed_inner(&[text]).await?;
+        vs.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("empty result"))
+    }
+
+    pub async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        self.embed_inner(texts).await
+    }
+
+    async fn embed_inner(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if !self.is_configured() {
+            anyhow::bail!("toolgate client not configured");
+        }
+        let url = format!("{}/v1/embeddings", self.base_url);
+        // Toolgate всегда резолвит активную модель из своего registry — поле
+        // `model` в body не отправляем. requested_dimensions передаём только
+        // если задано явно (актуально для OpenAI text-embedding-3-* с MRL).
+        let mut body = if texts.len() == 1 {
+            serde_json::json!({ "input": texts[0] })
+        } else {
+            serde_json::json!({ "input": texts })
+        };
+        if self.requested_dimensions > 0 {
+            body["dimensions"] = serde_json::json!(self.requested_dimensions);
+        }
+
+        let policy = self.retry_policy;
+        with_retry(&policy, "embed", || async {
+            let req = self.http.post(&url).json(&body);
+            let req = inject_trace_context(req);
+            let resp = req.send().await.map_err(classify_reqwest_err)?;
+            let status = resp.status();
+            if !status.is_success() {
+                return Err(classify_status(status, "embed"));
+            }
+            let body: Value = resp
+                .json()
+                .await
+                .map_err(|e| RetryableError::Permanent(anyhow!("failed to parse: {e}")))?;
+            let data = body["data"].as_array().ok_or_else(|| {
+                RetryableError::Permanent(anyhow!("missing data[] in response"))
+            })?;
+            let mut out: Vec<Vec<f32>> = Vec::with_capacity(data.len());
+            for item in data {
+                let vec: Vec<f32> = item["embedding"]
+                    .as_array()
+                    .ok_or_else(|| {
+                        RetryableError::Permanent(anyhow!("missing embedding in data[]"))
+                    })?
+                    .iter()
+                    .filter_map(|v| v.as_f64().map(|f| f as f32))
+                    .collect();
+                if vec.is_empty() {
+                    return Err(RetryableError::Permanent(anyhow!(
+                        "empty embedding vector"
+                    )));
+                }
+                out.push(vec);
+            }
+            Ok(out)
+        })
+        .await
+    }
 }
 
 fn classify_reqwest_err(e: reqwest::Error) -> RetryableError {
