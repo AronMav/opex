@@ -11,6 +11,8 @@ pub mod store;
 pub mod watcher;
 
 pub use embedding::{fmt_vec, EmbeddingService, ToolgateEmbedder};
+#[cfg(test)]
+pub use embedding::CountingEmbedder;
 pub use store::MemoryStore;
 pub use watcher::spawn_workspace_watcher;
 
