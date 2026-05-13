@@ -57,6 +57,16 @@ pub trait EmbeddingService: Send + Sync {
     async fn reset(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Sync persistent state (e.g. `system_flags["memory.dim_mismatch"]`) into
+    /// in-memory atomics and run any one-time probes. No-op default.
+    ///
+    /// **Must be called at startup before serving HTTP** — without it the
+    /// P0.1 dim_mismatch guard can be bypassed because the in-memory
+    /// `AtomicBool` defaults to `false` until the first `embed()` call runs
+    /// `do_initialize()`. `ToolgateEmbedder` overrides this to load the
+    /// persistent flag and probe the embedding dimension eagerly.
+    async fn ensure_initialized(&self) {}
 }
 
 // ── ToolgateEmbedder ─────────────────────────────────────────────────────────
@@ -121,24 +131,6 @@ impl ToolgateEmbedder {
             0,
             0,
         )
-    }
-
-    /// Lazy initialization: runs embedding probe on first memory operation, not at startup.
-    /// Использует generation-counter — после `reset()` повторно запустит init.
-    pub async fn ensure_initialized(&self) {
-        let target = self.init_generation.load(Ordering::Acquire);
-        if self.initialized_generation.load(Ordering::Acquire) >= target {
-            return; // fast path
-        }
-        let _guard = self.init_mutex.lock().await;
-        let target = self.init_generation.load(Ordering::Acquire);
-        if self.initialized_generation.load(Ordering::Acquire) >= target {
-            return; // другой task завершил init пока ждали lock
-        }
-        if let Err(e) = self.do_initialize().await {
-            tracing::warn!(error = %e, "embedding init failed — memory uses FTS only");
-        }
-        self.initialized_generation.store(target, Ordering::Release);
     }
 
     /// Initialize embedding: auto-detect dimension, validate DB, ensure HNSW index.
@@ -291,6 +283,29 @@ impl EmbeddingService for ToolgateEmbedder {
         sys_flags::delete(&self.db, "memory.embed_dim").await?;
         sys_flags::upsert(&self.db, "memory.dim_mismatch", json!(false)).await?;
         Ok(())
+    }
+
+    /// Lazy initialization: runs embedding probe on first memory operation
+    /// (or eagerly at startup from `main.rs`). Uses generation-counter — after
+    /// `reset()` reruns init.
+    ///
+    /// **P0.1 critical:** must be called at startup before serving HTTP,
+    /// otherwise `dim_mismatch()` lies about the persistent flag until the
+    /// first embed call runs `do_initialize()`.
+    async fn ensure_initialized(&self) {
+        let target = self.init_generation.load(Ordering::Acquire);
+        if self.initialized_generation.load(Ordering::Acquire) >= target {
+            return; // fast path
+        }
+        let _guard = self.init_mutex.lock().await;
+        let target = self.init_generation.load(Ordering::Acquire);
+        if self.initialized_generation.load(Ordering::Acquire) >= target {
+            return; // другой task завершил init пока ждали lock
+        }
+        if let Err(e) = self.do_initialize().await {
+            tracing::warn!(error = %e, "embedding init failed — memory uses FTS only");
+        }
+        self.initialized_generation.store(target, Ordering::Release);
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {

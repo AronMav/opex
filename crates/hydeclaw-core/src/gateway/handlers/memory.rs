@@ -587,9 +587,20 @@ pub(crate) async fn api_export_memory(
 
 // ── Memory Reindex ──
 
-/// `POST /api/memory/reindex` — wipe `memory_chunks`, rebuild the HNSW index for
-/// the current embedding dimension, enqueue per-source reindex tasks for every
-/// indexable workspace file, and clear the `dim_mismatch` flag.
+/// `POST /api/memory/reindex` — drop shared-scope `memory_chunks` (workspace
+/// files), rebuild the HNSW index for the current embedding dimension, enqueue
+/// a single bulk reindex task that the memory worker will pick up, and clear
+/// the `dim_mismatch` flag.
+///
+/// **Scope:** only `scope='shared'` chunks are deleted — agent-private and
+/// session-transcript chunks are preserved. (Previous behaviour did a global
+/// `TRUNCATE memory_chunks`, which destroyed all private knowledge.)
+///
+/// **Tasks:** a single bulk `reindex` task is enqueued — the worker handler
+/// at `crates/hydeclaw-memory-worker/src/handlers/reindex.rs` walks every
+/// indexable workspace file inside one job. (Previous behaviour enqueued
+/// N per-file tasks whose `{"source": ...}` payload the worker ignored, so
+/// each task re-walked the full workspace — O(N²) embeddings.)
 ///
 /// Protected by `infra.reindex_mutex` — a second concurrent caller gets `409
 /// Conflict`. The mutex is held for the full duration of the destructive +
@@ -609,8 +620,9 @@ pub(crate) async fn api_reindex_memory(
     };
 
     match run_reindex(&infra.db, infra.embedder.clone()).await {
-        Ok((enqueued, previous_dim, new_dim)) => Json(json!({
-            "enqueued": enqueued,
+        Ok((sources_to_index, previous_dim, new_dim)) => Json(json!({
+            "task_enqueued": true,
+            "sources_to_index": sources_to_index,
             "previous_dim": previous_dim,
             "new_dim": new_dim,
         }))
@@ -627,16 +639,13 @@ async fn run_reindex(
     db: &sqlx::PgPool,
     embedder: Arc<dyn EmbeddingService>,
 ) -> anyhow::Result<(usize, Option<u32>, u32)> {
-    // 1. Resolve the embedding dimension. `ensure_initialized` is only on the
-    //    concrete `ToolgateEmbedder` (not in the trait), so we trigger lazy
-    //    init through the trait by issuing a tiny probe `embed()` when the
-    //    cached dim is 0.
-    let new_dim = if embedder.embed_dim() > 0 {
-        embedder.embed_dim()
-    } else {
-        let _ = embedder.embed("probe").await?;
-        embedder.embed_dim()
-    };
+    // 1. Sync embedder state (loads persistent dim-mismatch flag + probes
+    //    embedding dimension if not yet detected). This is a single probe
+    //    via `client.probe_dim()` — no retry-policy bait that could block
+    //    this HTTP request (and the `reindex_mutex`) for up to 180s like
+    //    the old `embed("probe")` fallback did.
+    embedder.ensure_initialized().await;
+    let new_dim = embedder.embed_dim();
     if new_dim == 0 {
         anyhow::bail!(
             "embedder not initialized, cannot reindex (check toolgate/embedding provider)"
@@ -647,26 +656,38 @@ async fn run_reindex(
         .await
         .map(|d| d as u32);
 
-    // 2. Wipe storage and rebuild the index at the new dimension.
-    sqlx::query("TRUNCATE memory_chunks").execute(db).await?;
+    // 2. Drop SHARED-scope storage only — workspace files are the only thing
+    //    the worker will rebuild. Private (agent-scoped) and session chunks
+    //    are preserved. Rebuild the HNSW index at the new dimension.
+    sqlx::query("DELETE FROM memory_chunks WHERE scope = 'shared'")
+        .execute(db)
+        .await?;
     memory_queries::drop_hnsw_index(db).await?;
     memory_queries::ensure_hnsw_index(db, new_dim).await?;
 
-    // 3. Enqueue a reindex task per indexable workspace file.
+    // 3. Enumerate workspace sources (for response feedback only — worker
+    //    re-walks the workspace itself inside its bulk handler).
     let workspace_sources = crate::agent::workspace::list_indexable_files()?;
-    let mut count = 0usize;
-    for source in &workspace_sources {
-        memory_queries::enqueue_reindex_task(
-            db,
-            json!({"source": source.to_string_lossy()}),
-        )
-        .await?;
-        count += 1;
-    }
+    let sources_to_index = workspace_sources.len();
 
-    // 4. Clear the dim_mismatch flag (in-memory + persistent system_flags).
+    // 4. Enqueue a SINGLE bulk reindex task. The worker handler reads
+    //    `clear_existing`, `include_sessions`, `agent_id` — `source` is
+    //    ignored. We set `clear_existing=false` because we already dropped
+    //    shared chunks above; `include_sessions=false` because per-agent
+    //    session indexing belongs to a separate flow.
+    memory_queries::enqueue_reindex_task(
+        db,
+        json!({
+            "clear_existing": false,
+            "include_sessions": false,
+            "agent_id": "",
+        }),
+    )
+    .await?;
+
+    // 5. Clear the dim_mismatch flag (in-memory + persistent system_flags).
     embedder.clear_dim_mismatch().await?;
 
-    Ok((count, previous_dim, new_dim))
+    Ok((sources_to_index, previous_dim, new_dim))
 }
 

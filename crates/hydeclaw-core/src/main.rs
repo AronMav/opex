@@ -360,6 +360,14 @@ async fn main() -> Result<()> {
         cfg.memory.embed_dim.unwrap_or(0),
         cfg.memory.embed_dimensions.unwrap_or(0),
     ));
+    // P0.1 CRITICAL: sync persistent `memory.dim_mismatch` flag from
+    // system_flags BEFORE binding the HTTP listener. Without this eager
+    // init, the first POST /api/memory after restart sees the in-memory
+    // `AtomicBool::new(false)` default and bypasses the dim-mismatch guard,
+    // letting a new-dim vector land in a table full of old-dim chunks and
+    // corrupting the HNSW index. Probe / dim detection also happens here
+    // so subsequent index() calls don't pay the latency on first request.
+    embedder.ensure_initialized().await;
     // FTS language resolution order: TOML override → persisted DB value → "simple" placeholder
     // (auto-detect runs later after agent_configs is loaded). Persisted value comes
     // from `system_flags` so PUT /api/memory/fts-language survives restarts.
