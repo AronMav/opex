@@ -995,13 +995,23 @@ fn walk_indexable(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Re
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        let rel = path.strip_prefix(root).unwrap_or(&path);
-        let first = rel
-            .components()
-            .next()
+        // Belt-and-suspenders, matching `memory/watcher.rs:48-65`: check the
+        // first rel-component AFTER stripping root, OR any path component
+        // anywhere in the absolute path. The second clause guards against
+        // symlinks, non-canonical roots and other edge cases where
+        // `strip_prefix` silently fails.
+        let in_excluded_dir = path
+            .strip_prefix(root)
+            .ok()
+            .and_then(|rel| rel.components().next())
             .and_then(|c| c.as_os_str().to_str())
-            .unwrap_or("");
-        if MEMORY_INDEX_EXCLUDE_DIRS.contains(&first) {
+            .is_some_and(|first| MEMORY_INDEX_EXCLUDE_DIRS.contains(&first))
+            || path.components().any(|c| {
+                c.as_os_str()
+                    .to_str()
+                    .is_some_and(|s| MEMORY_INDEX_EXCLUDE_DIRS.contains(&s))
+            });
+        if in_excluded_dir {
             continue;
         }
         if path.is_dir() {

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use regex::Regex;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -57,9 +57,13 @@ pub async fn run_upload_signature_migration(
     db: &PgPool,
     upload_key: &[u8; 32],
 ) -> Result<usize> {
-    // Gate check — returns early if migration already ran
-    if hydeclaw_db::sys_flags::get(db, "upload_sigs_migrated_v1")
+    // Gate check — returns early if migration already ran. Use strict
+    // `try_get` so a transient DB error fails the migration instead of being
+    // silently treated as "not migrated yet" (which would needlessly re-scan
+    // the entire messages table).
+    if hydeclaw_db::sys_flags::try_get(db, "upload_sigs_migrated_v1")
         .await
+        .context("upload signature migration gate-check failed")?
         .is_some()
     {
         return Ok(0);
