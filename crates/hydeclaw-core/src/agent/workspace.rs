@@ -31,6 +31,28 @@ pub const MEMORY_INDEX_EXCLUDE_FILES: &[&str] = &[
     "USER.md",
 ];
 
+/// Filename suffixes excluded from indexing (composite extensions).
+/// `.excalidraw.md` is Excalidraw drawings stored as Markdown with embedded
+/// JSON scene + base64 PNG — bloated and meaningless for semantic search.
+pub const MEMORY_INDEX_EXCLUDE_SUFFIXES: &[&str] = &[".excalidraw.md"];
+
+/// Returns true if a file with the given name is indexable into memory:
+/// extension is `.md` or `.txt`, name is not in `MEMORY_INDEX_EXCLUDE_FILES`,
+/// and name does not end with any `MEMORY_INDEX_EXCLUDE_SUFFIXES`.
+pub fn is_indexable_filename(name: &str) -> bool {
+    if MEMORY_INDEX_EXCLUDE_FILES.contains(&name) {
+        return false;
+    }
+    let lower = name.to_ascii_lowercase();
+    if MEMORY_INDEX_EXCLUDE_SUFFIXES
+        .iter()
+        .any(|sfx| lower.ends_with(sfx))
+    {
+        return false;
+    }
+    lower.ends_with(".md") || lower.ends_with(".txt")
+}
+
 /// Resolve the per-agent workspace directory: `{workspace_dir}/agents/{agent_name}`.
 fn agent_dir(workspace_dir: &str, agent_name: &str) -> PathBuf {
     Path::new(workspace_dir).join("agents").join(agent_name)
@@ -1018,11 +1040,7 @@ fn walk_indexable(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Re
             walk_indexable(root, &path, out)?;
         } else {
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if MEMORY_INDEX_EXCLUDE_FILES.contains(&name) {
-                continue;
-            }
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if matches!(ext, "md" | "txt") {
+            if is_indexable_filename(name) {
                 out.push(path);
             }
         }

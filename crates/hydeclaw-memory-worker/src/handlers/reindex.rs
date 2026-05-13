@@ -160,8 +160,17 @@ pub(crate) async fn collect_workspace_files(
                 }
                 stack.push(path);
             } else {
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if matches!(ext, "md" | "txt") {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                // Composite-suffix exclude (e.g. `.excalidraw.md` — Excalidraw
+                // drawings stored as Markdown with embedded JSON/PNG, bloated
+                // and meaningless for semantic search). Keep in sync with
+                // `hydeclaw_core::agent::workspace::MEMORY_INDEX_EXCLUDE_SUFFIXES`.
+                const EXCLUDE_SUFFIXES: &[&str] = &[".excalidraw.md"];
+                let lower = name.to_ascii_lowercase();
+                if EXCLUDE_SUFFIXES.iter().any(|sfx| lower.ends_with(sfx)) {
+                    continue;
+                }
+                if lower.ends_with(".md") || lower.ends_with(".txt") {
                     files.push(path);
                 }
             }
