@@ -764,9 +764,6 @@ fn spawn_persist_message_row(
     parent_id: Option<Uuid>,
     parallel_batch_id: Option<ParallelBatchId>,
 ) {
-    // Clone db once for the parallel_batch_id UPDATE branch below — the main
-    // INSERT branch consumes its own owned `db` clone via `async move`.
-    let db_for_batch = db.clone();
     let db = db.clone();
     let agent_name = agent_name.to_string();
     let content = content.to_string();
@@ -795,6 +792,7 @@ fn spawn_persist_message_row(
                 Some(&agent_name),
                 thinking_owned.as_ref(),
                 parent_id,
+                parallel_batch_id,
             )
             .await
             {
@@ -830,42 +828,6 @@ fn spawn_persist_message_row(
         }
     });
 
-    // T3: separately UPDATE parallel_batch_id when present. Mirrors the
-    // step_id pattern (own detached spawn, tiny lead-in sleep, retry on
-    // transient errors, non-fatal on final failure). Kept off the main INSERT
-    // signature so legacy callers (finalize, bootstrap) don't need to change.
-    if let Some(batch) = parallel_batch_id {
-        let db_clone = db_for_batch;
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            for attempt in 0..3u32 {
-                let res = sqlx::query(
-                    "UPDATE messages SET parallel_batch_id = $1 WHERE id = $2",
-                )
-                .bind(batch.as_uuid())
-                .bind(id)
-                .execute(&db_clone)
-                .await;
-                match res {
-                    Ok(_) => return,
-                    Err(_) if attempt < 2 => {
-                        tokio::time::sleep(
-                            std::time::Duration::from_millis(50 * (1 << attempt)),
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            error = %e,
-                            msg_id = %id,
-                            "parallel_batch_id update failed (non-fatal)"
-                        );
-                        return;
-                    }
-                }
-            }
-        });
-    }
 }
 
 /// Spawn a fire-and-forget tokio task that persists a single tool result row
@@ -1297,5 +1259,63 @@ mod loop_key_tests {
     fn key_for_tool_use_missing_action_is_question_mark() {
         let tc = make_tc("tool_use", serde_json::json!({}));
         assert_eq!(loop_detector_key(&tc), "tool_use:?");
+    }
+}
+
+#[cfg(test)]
+mod parallel_batch_persistence_tests {
+    //! DB-backed regression tests for the D3 fix (2026-05-13):
+    //! `parallel_batch_id` is written by the main INSERT in
+    //! `save_message_ex_with_id`, not a follow-up UPDATE — eliminating the
+    //! race where the UPDATE matched 0 rows because the INSERT hadn't
+    //! committed yet (silent batch-tag loss observed on Arty's session).
+    use hydeclaw_types::ids::ParallelBatchId;
+    use sqlx::PgPool;
+    use uuid::Uuid;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn save_message_writes_parallel_batch_id_atomically(pool: PgPool) -> anyhow::Result<()> {
+        // Seed a session so the FK on messages.session_id is satisfied.
+        let session_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel) VALUES ($1, 'Test', 'u', 'ui')"
+        )
+        .bind(session_id)
+        .execute(&pool)
+        .await?;
+
+        let msg_id = Uuid::new_v4();
+        let batch = ParallelBatchId::new();
+
+        // After D3 fix: parallel_batch_id is the 11th parameter and is
+        // written in the same INSERT, no follow-up UPDATE needed.
+        crate::db::sessions::save_message_ex_with_id(
+            &pool,
+            msg_id,
+            session_id,
+            "tool",
+            "result body",
+            None,
+            Some("call_x"),
+            Some("Test"),
+            None,
+            None,
+            Some(batch),
+        )
+        .await?;
+
+        let stored: Option<Uuid> = sqlx::query_scalar(
+            "SELECT parallel_batch_id FROM messages WHERE id = $1"
+        )
+        .bind(msg_id)
+        .fetch_one(&pool)
+        .await?;
+
+        assert_eq!(
+            stored,
+            Some(batch.as_uuid()),
+            "batch id must be written by INSERT, not by a follow-up UPDATE"
+        );
+        Ok(())
     }
 }

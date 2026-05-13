@@ -237,6 +237,7 @@ pub async fn bootstrap<S: EventSink>(
             sender_agent_id,
             None,
             parent_message_id,
+            None,
         )
         .await?;
         prealloc_id
