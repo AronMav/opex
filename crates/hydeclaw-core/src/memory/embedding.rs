@@ -36,6 +36,13 @@ pub trait EmbeddingService: Send + Sync {
 
     /// Batch-embed multiple texts in a single request.
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+
+    /// P0.1: гейт для index/search-операций. Default `false` для embedders,
+    /// которым понятие dim-mismatch неприменимо (FakeEmbedder, CountingEmbedder).
+    /// ToolgateEmbedder override'ит это методом, читающим in-memory флаг.
+    fn dim_mismatch(&self) -> bool {
+        false
+    }
 }
 
 // ── ToolgateEmbedder ─────────────────────────────────────────────────────────
@@ -100,12 +107,6 @@ impl ToolgateEmbedder {
             0,
             0,
         )
-    }
-
-    /// True если был детектирован mismatch между текущей dimension и существующими
-    /// `memory_chunks` — семантический поиск надо отключить до `reindex`.
-    pub fn dim_mismatch(&self) -> bool {
-        self.dim_mismatch.load(Ordering::Acquire)
     }
 
     /// Lazy initialization: runs embedding probe on first memory operation, not at startup.
@@ -272,6 +273,10 @@ impl EmbeddingService for ToolgateEmbedder {
 
     fn embed_provider_display(&self) -> Option<String> {
         self.provider_display.load().as_ref().clone()
+    }
+
+    fn dim_mismatch(&self) -> bool {
+        self.dim_mismatch.load(std::sync::atomic::Ordering::Acquire)
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {

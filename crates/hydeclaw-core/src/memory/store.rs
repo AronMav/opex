@@ -98,7 +98,15 @@ impl MemoryStore {
             return Ok((vec![], "none"));
         }
 
-        let (mut results, mode) = if self.is_available() {
+        let (mut results, mode) = if !self.is_available() || self.embedder.dim_mismatch() {
+            let fts = self.search_fts(query, limit, agent_id).await?;
+            let mode_str = if self.embedder.dim_mismatch() {
+                "fts-degraded"
+            } else {
+                "fts"
+            };
+            (fts, mode_str)
+        } else {
             // Run semantic + FTS in parallel and merge via RRF
             match self.search_hybrid(query, limit, agent_id).await {
                 Ok(results) if !results.is_empty() => (results, "hybrid"),
@@ -124,9 +132,6 @@ impl MemoryStore {
                     (fts, "fts")
                 }
             }
-        } else {
-            let fts = self.search_fts(query, limit, agent_id).await?;
-            (fts, "fts")
         };
 
         // L2 dedup: remove chunks already loaded via L0 pinned loading (CTX-04)
@@ -285,6 +290,9 @@ impl MemoryStore {
         scope: &str,
         agent_id: &str,
     ) -> Result<String> {
+        if self.embedder.dim_mismatch() {
+            anyhow::bail!("dim_mismatch: reindex required (POST /api/memory/reindex)");
+        }
         let lang = self.validated_fts_language()?;
         let embedding = self.embedder.embed(content).await?;
         let vec_str = fmt_vec(&embedding);
@@ -301,6 +309,10 @@ impl MemoryStore {
     pub async fn index_batch(&self, items: &[(String, String, bool, String)], agent_id: &str) -> Result<Vec<String>> {
         if items.is_empty() {
             return Ok(vec![]);
+        }
+
+        if self.embedder.dim_mismatch() {
+            anyhow::bail!("dim_mismatch: reindex required (POST /api/memory/reindex)");
         }
 
         let lang = self.validated_fts_language()?;
@@ -512,6 +524,56 @@ mod tests {
         let store = MemoryStore::test_with_embedder(Arc::new(FakeEmbedder { available: false }));
         *store.fts_language.write().unwrap() = "Russian".to_string();
         assert!(store.validated_fts_language().is_err(), "store must reject uppercase lang");
+    }
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Embedder, который сообщает `dim_mismatch=true` через trait-обёртку.
+    /// Используется для проверки guard-логики в MemoryStore без реальной БД.
+    /// Двойная handle (raw + arc.clone) позволяет проверить `embed_calls`
+    /// без unsafe-downcast'а.
+    struct DimMismatchEmbedder {
+        mismatch: AtomicBool,
+        embed_calls: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::memory::EmbeddingService for DimMismatchEmbedder {
+        fn is_available(&self) -> bool { true }
+        fn embed_dim(&self) -> u32 { 4 }
+        fn embed_provider_display(&self) -> Option<String> { Some("fake".into()) }
+        fn dim_mismatch(&self) -> bool { self.mismatch.load(Ordering::Acquire) }
+        async fn embed(&self, _t: &str) -> anyhow::Result<Vec<f32>> {
+            self.embed_calls.store(true, Ordering::Release);
+            Ok(vec![0.1, 0.2, 0.3, 0.4])
+        }
+        async fn embed_batch(&self, _ts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+            self.embed_calls.store(true, Ordering::Release);
+            Ok(vec![vec![0.1, 0.2, 0.3, 0.4]])
+        }
+    }
+
+    #[tokio::test]
+    async fn index_returns_err_on_dim_mismatch() {
+        let raw = std::sync::Arc::new(DimMismatchEmbedder {
+            mismatch: AtomicBool::new(true),
+            embed_calls: AtomicBool::new(false),
+        });
+        let embedder: std::sync::Arc<dyn crate::memory::EmbeddingService> = raw.clone();
+        let store = MemoryStore::test_with_embedder(embedder);
+
+        let res = store
+            .index("text", "source", false, "private", "agent")
+            .await;
+        assert!(res.is_err());
+        let err_msg = format!("{:#}", res.unwrap_err());
+        assert!(err_msg.contains("dim_mismatch"), "got: {err_msg}");
+
+        // embedder.embed НЕ должен был вызываться.
+        assert!(
+            !raw.embed_calls.load(Ordering::Acquire),
+            "embed() should not be called when dim_mismatch=true"
+        );
     }
 }
 
