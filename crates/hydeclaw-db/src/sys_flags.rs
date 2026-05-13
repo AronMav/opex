@@ -66,32 +66,32 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn get_returns_none_for_missing_key(pool: PgPool) {
         assert!(get(&pool, "no.such.key").await.is_none());
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn upsert_then_get_roundtrip(pool: PgPool) {
         upsert(&pool, "test.key", json!(42)).await.unwrap();
         assert_eq!(get(&pool, "test.key").await, Some(json!(42)));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn upsert_overwrites_existing(pool: PgPool) {
         upsert(&pool, "test.key", json!("first")).await.unwrap();
         upsert(&pool, "test.key", json!("second")).await.unwrap();
         assert_eq!(get(&pool, "test.key").await, Some(json!("second")));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn delete_removes_row(pool: PgPool) {
         upsert(&pool, "test.key", json!(1)).await.unwrap();
         delete(&pool, "test.key").await.unwrap();
         assert_eq!(get(&pool, "test.key").await, None);
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn delete_missing_is_noop(pool: PgPool) {
         // не должен падать
         delete(&pool, "no.such.key").await.unwrap();
