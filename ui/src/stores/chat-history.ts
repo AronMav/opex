@@ -99,7 +99,10 @@ export function convertHistory(rows: MessageRow[], isAgentStreaming?: boolean, s
   const nonStreamingRows = rows.filter(m => m.status !== "streaming");
   // Only walk resolveActivePath if branching data is actually present — saves
   // work on trunk-only conversations.
-  const resolvedRows = selectedBranches && nonStreamingRows.some(r => r.parent_message_id != null)
+  // D1 (2026-05-13): real branching is signaled by branch_from_message_id
+  // (m012 schema), not parent_message_id which exists on every non-root row.
+  // Short-circuit trunk-only conversations to a no-walk path.
+  const resolvedRows = selectedBranches && nonStreamingRows.some(r => r.branch_from_message_id != null)
     ? resolveActivePath(nonStreamingRows, selectedBranches)
     : nonStreamingRows;
   const filtered = resolvedRows;
@@ -277,7 +280,11 @@ export function resolveActivePath(
   rows: MessageRow[],
   selectedBranches: Record<string, string>,
 ): MessageRow[] {
-  const hasBranching = rows.some(r => r.parent_message_id != null);
+  // D1 (2026-05-13): defense-in-depth — even if called directly, the walker
+  // short-circuits when there are no forks. Without this fix it walked the
+  // tree on every conversation because parent_message_id is non-null on
+  // ~100% of rows.
+  const hasBranching = rows.some(r => r.branch_from_message_id != null);
   if (!hasBranching) {
     return [...rows].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   }
