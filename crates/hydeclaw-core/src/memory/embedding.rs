@@ -49,6 +49,14 @@ pub trait EmbeddingService: Send + Sync {
     async fn clear_dim_mismatch(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Non-blocking reset of in-memory state + persisted flags.
+    /// Called from PUT /api/provider-active and DELETE /api/providers/{id}
+    /// when the active embedding provider changes. No-op default for embedders
+    /// without persistent state.
+    async fn reset(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 // ── ToolgateEmbedder ─────────────────────────────────────────────────────────
@@ -214,29 +222,6 @@ impl ToolgateEmbedder {
         Ok(())
     }
 
-    /// Non-blocking reset of all in-memory state + persisted flags.
-    /// Bumps `init_generation`, clears `embed_dim`, `provider_display`,
-    /// `dim_mismatch`, and deletes the persisted `memory.embed_dim` /
-    /// `memory.dim_mismatch` keys.
-    ///
-    /// Не дожидается завершения in-flight probe — generation-counter гарантирует,
-    /// что следующий `ensure_initialized()` пере-инициализирует embedder.
-    ///
-    /// **Warning:** clearing `dim_mismatch` here erases the "reindex required"
-    /// signal. Call after PUT /api/provider-active (provider switch invalidates
-    /// the old state anyway) — do NOT call as a generic "reset" without
-    /// follow-up reindex, otherwise old chunks may be silently used with new
-    /// embedding model.
-    pub async fn reset(&self) -> Result<()> {
-        self.init_generation.fetch_add(1, Ordering::AcqRel);
-        self.embed_dim.store(0, Ordering::Release);
-        self.provider_display.store(Arc::new(None));
-        self.dim_mismatch.store(false, Ordering::Release);
-        sys_flags::delete(&self.db, "memory.embed_dim").await?;
-        sys_flags::upsert(&self.db, "memory.dim_mismatch", json!(false)).await?;
-        Ok(())
-    }
-
     /// Lazy init helper: если `embed_dim==0`, и пришёл вектор, выставляем dim
     /// и пытаемся создать HNSW индекс.
     async fn maybe_lazy_init_dim(&self, vec: &[f32]) {
@@ -281,6 +266,29 @@ impl EmbeddingService for ToolgateEmbedder {
     /// Сбросить ТОЛЬКО `dim_mismatch` flag (после успешного reindex).
     async fn clear_dim_mismatch(&self) -> Result<()> {
         self.dim_mismatch.store(false, Ordering::Release);
+        sys_flags::upsert(&self.db, "memory.dim_mismatch", json!(false)).await?;
+        Ok(())
+    }
+
+    /// Non-blocking reset of all in-memory state + persisted flags.
+    /// Bumps `init_generation`, clears `embed_dim`, `provider_display`,
+    /// `dim_mismatch`, and deletes the persisted `memory.embed_dim` /
+    /// `memory.dim_mismatch` keys.
+    ///
+    /// Не дожидается завершения in-flight probe — generation-counter гарантирует,
+    /// что следующий `ensure_initialized()` пере-инициализирует embedder.
+    ///
+    /// **Warning:** clearing `dim_mismatch` here erases the "reindex required"
+    /// signal. Call after PUT /api/provider-active (provider switch invalidates
+    /// the old state anyway) — do NOT call as a generic "reset" without
+    /// follow-up reindex, otherwise old chunks may be silently used with new
+    /// embedding model.
+    async fn reset(&self) -> Result<()> {
+        self.init_generation.fetch_add(1, Ordering::AcqRel);
+        self.embed_dim.store(0, Ordering::Release);
+        self.provider_display.store(Arc::new(None));
+        self.dim_mismatch.store(false, Ordering::Release);
+        sys_flags::delete(&self.db, "memory.embed_dim").await?;
         sys_flags::upsert(&self.db, "memory.dim_mismatch", json!(false)).await?;
         Ok(())
     }
