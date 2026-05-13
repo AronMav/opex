@@ -849,6 +849,64 @@ pub async fn mark_session_run_status_if_running(
     Ok(rows)
 }
 
+/// Single cleanup path for all session terminations.
+///
+/// I1 invariant: watchdog, startup-cleanup, and SessionLifecycleGuard::Drop
+/// all call this function. Idempotent — returns `Ok(false)` when the session
+/// was already terminal (another path won the race).
+///
+/// All four steps run in one transaction so a connection failure between
+/// claim and WAL insert cannot leave the session in a half-cleaned state
+/// (R-CRIT-2).
+pub async fn cleanup_session_terminated(
+    db: &PgPool,
+    session_id: Uuid,
+    target_status: &str,
+    reason: &str,
+) -> Result<bool> {
+    let mut tx = db.begin().await?;
+
+    // 1. Atomic claim — only proceed if still 'running'.
+    let claimed = sqlx::query(
+        "UPDATE sessions SET run_status = $1 WHERE id = $2 AND run_status = 'running'"
+    )
+    .bind(target_status)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if claimed == 0 {
+        tx.rollback().await.ok();
+        return Ok(false);
+    }
+
+    // 2. Preserve partial text in streaming messages (UPDATE, not DELETE).
+    sqlx::query(
+        "UPDATE messages SET status = 'interrupted',
+         content = COALESCE(NULLIF(content, ''), '[interrupted]')
+         WHERE session_id = $1 AND status = 'streaming'"
+    )
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // 3. Synthetic tool results for orphan tool_calls.
+    //    Bare function name — we are already inside `sessions` module, so no
+    //    `crate::sessions::` prefix.
+    insert_synthetic_tool_results_tx(&mut tx, session_id).await?;
+
+    // 4. WAL event. Heartbeat side-effect inside log_event_tx is a no-op here
+    //    because run_status is no longer 'running' inside this tx.
+    //    `session_wal` is a sibling module in the same crate
+    //    (hydeclaw-db/src/lib.rs declares both), so `crate::session_wal::...`
+    //    is the right path.
+    let payload = serde_json::json!({ "reason": reason });
+    crate::session_wal::log_event_tx(&mut tx, session_id, target_status, Some(&payload)).await?;
+
+    tx.commit().await?;
+    Ok(true)
+}
+
 /// Refresh `activity_at` heartbeat (debounced to 10 s resolution, gated by
 /// `run_status = 'running'`). Called from `upsert_streaming_append` every ~2 s
 /// during streaming; the debounce keeps the UPDATE near-free under load and
@@ -2081,6 +2139,88 @@ mod tests {
             "SELECT COUNT(*) FROM messages WHERE session_id = $1 AND role = 'tool'"
         ).bind(session_id).fetch_one(&pool).await.unwrap();
         assert_eq!(count, 0, "rollback must discard synthetic results");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cleanup_session_terminated_is_idempotent(pool: sqlx::PgPool) {
+        let session_id = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        super::set_session_run_status(&pool, session_id, "running").await.unwrap();
+
+        let first = super::cleanup_session_terminated(&pool, session_id, "timeout", "r1")
+            .await.unwrap();
+        assert!(first, "first call must claim");
+
+        let second = super::cleanup_session_terminated(&pool, session_id, "failed", "r2")
+            .await.unwrap();
+        assert!(!second, "second call must return false (already terminal)");
+
+        let status: String = sqlx::query_scalar(
+            "SELECT run_status FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "timeout", "first claim wins, second is no-op");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cleanup_session_terminated_preserves_partial_text(pool: sqlx::PgPool) {
+        let session_id = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        super::set_session_run_status(&pool, session_id, "running").await.unwrap();
+        sqlx::query(
+            "INSERT INTO messages (session_id, role, content, status)
+             VALUES ($1, 'assistant', 'partial answer', 'streaming')"
+        ).bind(session_id).execute(&pool).await.unwrap();
+
+        super::cleanup_session_terminated(&pool, session_id, "timeout", "r")
+            .await.unwrap();
+
+        let row: (String, String) = sqlx::query_as(
+            "SELECT content, status FROM messages WHERE session_id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, "partial answer", "content preserved (not DELETE)");
+        assert_eq!(row.1, "interrupted", "status flipped to interrupted");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cleanup_session_terminated_writes_wal_event(pool: sqlx::PgPool) {
+        let session_id = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        super::set_session_run_status(&pool, session_id, "running").await.unwrap();
+
+        super::cleanup_session_terminated(&pool, session_id, "timeout", "watchdog_X")
+            .await.unwrap();
+
+        let evt: (String, serde_json::Value) = sqlx::query_as(
+            "SELECT event_type, payload FROM session_events
+             WHERE session_id = $1 ORDER BY id DESC LIMIT 1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(evt.0, "timeout");
+        assert_eq!(evt.1["reason"], "watchdog_X");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cleanup_session_terminated_rolls_back_on_failure(pool: sqlx::PgPool) {
+        let session_id = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        super::set_session_run_status(&pool, session_id, "running").await.unwrap();
+
+        // Force the WAL insert (step 4) to fail by DROPping the session_events
+        // table just before the cleanup call. The INSERT inside log_event_tx
+        // will raise `relation "session_events" does not exist`, aborting
+        // the transaction.
+        //
+        // Note: sqlx::test gives each test its own ephemeral DB, so dropping
+        // the table affects only this test's run — safe.
+        sqlx::query("DROP TABLE session_events").execute(&pool).await.unwrap();
+
+        let result = super::cleanup_session_terminated(&pool, session_id, "timeout", "r")
+            .await;
+        assert!(result.is_err(),
+            "cleanup must propagate the WAL insert error and abort the tx");
+
+        // After the failed tx, run_status MUST be back to 'running' —
+        // the atomic claim from step 1 was rolled back.
+        let status: String = sqlx::query_scalar(
+            "SELECT run_status FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "running",
+            "run_status must roll back to 'running' on tx failure (R-CRIT-2)");
     }
 }
 
