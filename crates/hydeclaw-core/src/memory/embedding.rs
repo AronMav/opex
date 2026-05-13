@@ -26,8 +26,10 @@ pub trait EmbeddingService: Send + Sync {
     /// Returns the detected embedding dimension (0 if not yet detected).
     fn embed_dim(&self) -> u32;
 
-    /// Returns the name/label of the active embedding model, if known.
-    fn embed_model_name(&self) -> Option<String>;
+    /// Returns the display-name of the active embedding provider (UI/logs only,
+    /// never sent to embedding API). Renamed from `embed_model_name()` — old
+    /// name was misleading, value was never a model id.
+    fn embed_provider_display(&self) -> Option<String>;
 
     /// Generate an embedding vector for a single text.
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
@@ -104,11 +106,6 @@ impl ToolgateEmbedder {
     /// `memory_chunks` — семантический поиск надо отключить до `reindex`.
     pub fn dim_mismatch(&self) -> bool {
         self.dim_mismatch.load(Ordering::Acquire)
-    }
-
-    /// Provider display-name. Inherent чтобы вызывать из `embed_model_name()` wrapper.
-    pub fn embed_provider_display(&self) -> Option<String> {
-        self.provider_display.load().as_ref().clone()
     }
 
     /// Lazy initialization: runs embedding probe on first memory operation, not at startup.
@@ -273,10 +270,8 @@ impl EmbeddingService for ToolgateEmbedder {
         self.embed_dim.load(Ordering::Relaxed)
     }
 
-    fn embed_model_name(&self) -> Option<String> {
-        // Старое имя метода в trait'е — переименуется в Task 10 атомарно.
-        // Возвращает то же, что embed_provider_display ниже.
-        self.embed_provider_display()
+    fn embed_provider_display(&self) -> Option<String> {
+        self.provider_display.load().as_ref().clone()
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {
@@ -352,7 +347,7 @@ impl EmbeddingService for FakeEmbedder {
         if self.available { 4 } else { 0 }
     }
 
-    fn embed_model_name(&self) -> Option<String> {
+    fn embed_provider_display(&self) -> Option<String> {
         if self.available { Some("fake-model".to_string()) } else { None }
     }
 
@@ -403,7 +398,7 @@ impl Default for CountingEmbedder {
 impl EmbeddingService for CountingEmbedder {
     fn is_available(&self) -> bool { true }
     fn embed_dim(&self) -> u32 { 4 }
-    fn embed_model_name(&self) -> Option<String> { Some("counting".into()) }
+    fn embed_provider_display(&self) -> Option<String> { Some("counting".into()) }
     async fn embed(&self, _t: &str) -> Result<Vec<f32>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(vec![0.1, 0.2, 0.3, 0.4])

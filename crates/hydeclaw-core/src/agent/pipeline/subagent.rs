@@ -581,7 +581,7 @@ mod tests {
     impl crate::memory::EmbeddingService for ErroringEmbedder {
         fn is_available(&self) -> bool { false }
         fn embed_dim(&self) -> u32 { 0 }
-        fn embed_model_name(&self) -> Option<String> { None }
+        fn embed_provider_display(&self) -> Option<String> { None }
         async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
             anyhow::bail!("embedding disabled in test")
         }
