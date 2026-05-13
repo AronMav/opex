@@ -543,7 +543,7 @@ export function useSetProviderActive() {
   })
 }
 
-export function useSessionMessages(sessionId: string | null, engineRunning = false, agent?: string) {
+export function useSessionMessages(sessionId: string | null, agent?: string) {
   return useQuery({
     // 4-element key: getCachedHistoryMessages / getCachedRawMessages use
     // getQueriesData with the 3-element prefix so they find this entry
@@ -562,9 +562,9 @@ export function useSessionMessages(sessionId: string | null, engineRunning = fal
     enabled: !!sessionId && !!agent,
     staleTime: 2000,
     gcTime: 24 * 60 * 60 * 1000,
-    // Poll every 5s when engine is still processing, 3s when streaming
+    // Fallback poll for partial-buffer edge cases when a row is still
+    // streaming. SSE delivers new messages directly otherwise.
     refetchInterval: (query) => {
-      if (engineRunning) return 5000;
       const msgs = (query.state.data as { messages: MessageRow[] } | undefined)?.messages
       return msgs?.some(m => m.status === "streaming") ? 3000 : false
     },
