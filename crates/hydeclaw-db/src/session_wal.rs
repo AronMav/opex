@@ -6,12 +6,28 @@
 //! "[interrupted]" messages are injected.
 
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-/// Log a session lifecycle event to the WAL.
+/// Log a session lifecycle event to the WAL. Standalone variant — opens its
+/// own transaction. Use `log_event_tx` when already inside a transaction.
 pub async fn log_event(
     db: &PgPool,
+    session_id: Uuid,
+    event_type: &str,
+    payload: Option<&serde_json::Value>,
+) -> Result<()> {
+    let mut tx = db.begin().await?;
+    log_event_tx(&mut tx, session_id, event_type, payload).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// In-transaction variant — inserts the WAL row and refreshes `activity_at`
+/// (debounced to 10s resolution). Used by `cleanup_session_terminated` to
+/// keep all four cleanup steps atomic.
+pub async fn log_event_tx(
+    tx: &mut Transaction<'_, Postgres>,
     session_id: Uuid,
     event_type: &str,
     payload: Option<&serde_json::Value>,
@@ -22,8 +38,28 @@ pub async fn log_event(
     .bind(session_id)
     .bind(event_type)
     .bind(payload)
-    .execute(db)
+    .execute(&mut **tx)
     .await?;
+
+    // Heartbeat — debounced to ~10s resolution.
+    //
+    // Without debounce a busy session with 5 parallel tools + 3 LLM calls/sec
+    // would emit 15-20 WAL events/sec, each triggering an UPDATE sessions.
+    // Postgres row-locks on the sessions row would serialise concurrent
+    // tool-end writes and stall throughput. Watchdog polls every 60s, so
+    // a 10s heartbeat granularity is more than enough.
+    //
+    // Guard `run_status = 'running'` so terminal sessions are not
+    // accidentally resurrected.
+    let _ = sqlx::query(
+        "UPDATE sessions SET activity_at = NOW()
+         WHERE id = $1
+           AND run_status = 'running'
+           AND (activity_at IS NULL OR activity_at < NOW() - INTERVAL '10 seconds')",
+    )
+    .bind(session_id)
+    .execute(&mut **tx)
+    .await;
     Ok(())
 }
 
@@ -116,4 +152,69 @@ pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<WalTo
             success: success.unwrap_or(true),
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn log_event_tx_updates_activity_at(pool: sqlx::PgPool) {
+        let session_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, run_status, activity_at)
+             VALUES ($1, 'a', 'u', 'web', 'running', NOW() - INTERVAL '5 minutes')"
+        ).bind(session_id).execute(&pool).await.unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        log_event_tx(&mut tx, session_id, "tool_start", None).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let recent: bool = sqlx::query_scalar(
+            "SELECT activity_at > NOW() - INTERVAL '5 seconds' FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert!(recent, "activity_at must be refreshed by log_event_tx");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn log_event_tx_debounce_skips_recent(pool: sqlx::PgPool) {
+        let session_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, run_status, activity_at)
+             VALUES ($1, 'a', 'u', 'web', 'running', NOW())"
+        ).bind(session_id).execute(&pool).await.unwrap();
+
+        let before: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT activity_at FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+
+        // Sleep < 10s, then log — heartbeat should NOT bump activity_at.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let mut tx = pool.begin().await.unwrap();
+        log_event_tx(&mut tx, session_id, "tool_start", None).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let after: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT activity_at FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(before, after, "debounce must skip heartbeat update within 10s");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn log_event_tx_does_not_resurrect_terminal(pool: sqlx::PgPool) {
+        let session_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, run_status, activity_at)
+             VALUES ($1, 'a', 'u', 'web', 'done', NOW() - INTERVAL '1 hour')"
+        ).bind(session_id).execute(&pool).await.unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        log_event_tx(&mut tx, session_id, "tool_start", None).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let still_old: bool = sqlx::query_scalar(
+            "SELECT activity_at < NOW() - INTERVAL '50 minutes' FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert!(still_old, "terminal session must not heartbeat");
+    }
 }
