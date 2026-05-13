@@ -382,3 +382,52 @@ describe("resolveActivePath — trunk-only conversation bypasses tree walk (D1)"
     expect(ids).toEqual(["u1", "a1", "t_hyde", "t_search", "t_alma", "t_exch", "a_final"]);
   });
 });
+
+describe("resolveActivePath — parallel batch with no descendants is a real leaf", () => {
+  it("includes all sibling tool messages and stops when none have descendants", () => {
+    // If a session ends after a parallel batch (no continuation), the walker
+    // must include every sibling in the path and then stop — not continue
+    // through a phantom heir.
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", parent_message_id: null, branch_from_message_id: "FAKE", created_at: "2026-05-13T10:00:00Z" }),
+      makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", branch_from_message_id: null, created_at: "2026-05-13T10:00:01Z" }),
+      makeRow({ id: "t1", role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "c1", created_at: "2026-05-13T10:00:02Z" }),
+      makeRow({ id: "t2", role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "c2", created_at: "2026-05-13T10:00:03Z" }),
+      makeRow({ id: "t3", role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "c3", created_at: "2026-05-13T10:00:04Z" }),
+    ];
+
+    // Force walker by faking a branch on u1 (otherwise D1 short-circuits).
+    const path = resolveActivePath(rows, {});
+    expect(path.map(r => r.id)).toEqual(["u1", "a1", "t1", "t2", "t3"]);
+  });
+});
+
+describe("resolveActivePath — branched session honors selectedBranches AND D2 swap (D1 + D2 together)", () => {
+  it("walks the selected branch at the fork, excludes the unselected branch, and applies D2 swap inside the chosen subtree's parallel batch", () => {
+    // u1 → a1 → u2 → [a2_main OR a2_alt (branched from a2_main)]
+    // selectedBranches picks a2_alt; walker must follow that branch and
+    // exclude a2_main. a2_alt's subtree contains a parallel batch where
+    // the heir (t_mid) is not the last sibling by created_at, exercising
+    // both D1 (branch_from triggers walker) and D2 (heir swap) in one path.
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", parent_message_id: null, created_at: "2026-05-13T10:00:00Z" }),
+      makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", created_at: "2026-05-13T10:00:01Z" }),
+      makeRow({ id: "u2", role: "user", parent_message_id: "a1", created_at: "2026-05-13T10:00:02Z" }),
+      makeRow({ id: "a2_main", role: "assistant", parent_message_id: "u2", content: "original", created_at: "2026-05-13T10:00:03Z" }),
+      makeRow({ id: "a2_alt",  role: "assistant", parent_message_id: "u2", branch_from_message_id: "a2_main", content: "alternative", created_at: "2026-05-13T10:00:04Z" }),
+      // Parallel batch under a2_alt — heir is t_mid (not last by time).
+      makeRow({ id: "t_first", role: "tool", parent_message_id: "a2_alt", tool_call_id: "c1", created_at: "2026-05-13T10:00:05Z" }),
+      makeRow({ id: "t_mid",   role: "tool", parent_message_id: "a2_alt", tool_call_id: "c2", created_at: "2026-05-13T10:00:06Z" }),
+      makeRow({ id: "t_last",  role: "tool", parent_message_id: "a2_alt", tool_call_id: "c3", created_at: "2026-05-13T10:00:07Z" }),
+      makeRow({ id: "a_end",   role: "assistant", parent_message_id: "t_mid", content: "done", created_at: "2026-05-13T10:00:08Z" }),
+    ];
+
+    const path = resolveActivePath(rows, { u2: "a2_alt" });
+    const ids = path.map(r => r.id);
+    // Walker picks a2_alt at the u2 fork; includes all parallel siblings;
+    // continues through t_mid (the heir, swapped into last slot) to a_end.
+    expect(ids).toEqual(["u1", "a1", "u2", "a2_alt", "t_first", "t_last", "t_mid", "a_end"]);
+    // The unselected branch (a2_main) must NOT appear.
+    expect(ids).not.toContain("a2_main");
+  });
+});
