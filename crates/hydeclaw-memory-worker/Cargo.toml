@@ -29,6 +29,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 dotenv = "0.15"
+
+# Internal — shared embedding client (Toolgate POST /v1/embeddings).
+hydeclaw-embedding = { path = "../hydeclaw-embedding" }
+
 # OTel deps — workspace-pinned, optional, activated only via `--features otel`.
 opentelemetry = { workspace = true, optional = true }
 opentelemetry_sdk = { workspace = true, optional = true }
