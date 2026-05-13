@@ -107,6 +107,14 @@ zeroize = { version = "1", features = ["derive"] }
 hydeclaw-types = { workspace = true, features = ["sqlx"] }
 hydeclaw-db           = { path = "../hydeclaw-db" }
 hydeclaw-gateway-util = { path = "../hydeclaw-gateway-util" }
+hydeclaw-embedding    = { path = "../hydeclaw-embedding" }
+
+# Lock-free atomic swap for hot-reloadable shared state (e.g. ToolgateEmbedder
+# rotating the upstream URL without taking a mutex on every embedding call).
+arc-swap = "1"
+# Bounded in-memory LRU cache (used by tool-embedding cache to cap RSS while
+# preserving hit rate for frequently re-asked queries).
+lru = "0.12"
 
 # OpenTelemetry (optional, behind `otel` feature)
 opentelemetry = { workspace = true, optional = true }
