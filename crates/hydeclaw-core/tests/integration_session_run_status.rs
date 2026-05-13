@@ -1,21 +1,17 @@
-//! Integration tests for `mark_session_run_status_if_running` — the
-//! conditional status transition used on the cancel-grace path to
-//! prevent the `SessionLifecycleGuard`'s `'failed'` fallback from
-//! overwriting an earlier `'interrupted'` write.
+//! Integration tests for `set_session_run_status` FSM.
 //!
-//! The invariant under test: a session already in a terminal state
-//! (`'done'`, `'failed'`, `'interrupted'`, `'timeout'`, `'cancelled'`)
-//! cannot transition to a new status via this helper. Only
-//! `'running'` sessions can.
+//! The conditional-on-running transition is now handled by
+//! `cleanup_session_terminated`, which has its own tests in
+//! `hydeclaw-db/src/sessions.rs`. This file only retains the FSM
+//! regression test for `set_session_run_status` (which restricts
+//! transitions FROM 'running' or NULL).
 //!
 //! Gated to Linux x86_64 because testcontainers requires Docker
 //! (matches the pattern used by `integration_aborted_usage.rs`).
 
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
-use hydeclaw_core::db::sessions::{
-    mark_session_run_status_if_running, set_session_run_status,
-};
+use hydeclaw_core::db::sessions::set_session_run_status;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -38,93 +34,6 @@ async fn current_status(pool: &PgPool, session_id: Uuid) -> Option<String> {
         .fetch_one(pool)
         .await
         .expect("read run_status")
-}
-
-#[sqlx::test(migrations = "../../migrations")]
-async fn transitions_running_to_interrupted(pool: PgPool) {
-    let sid = Uuid::new_v4();
-    seed_session(&pool, sid, "running").await;
-
-    let affected = mark_session_run_status_if_running(&pool, sid, "interrupted")
-        .await
-        .expect("update query");
-    assert_eq!(affected, 1, "expected 1 row updated on running → interrupted");
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("interrupted"));
-}
-
-#[sqlx::test(migrations = "../../migrations")]
-async fn transitions_running_to_failed(pool: PgPool) {
-    // The Drop guard path.
-    let sid = Uuid::new_v4();
-    seed_session(&pool, sid, "running").await;
-
-    let affected = mark_session_run_status_if_running(&pool, sid, "failed")
-        .await
-        .expect("update query");
-    assert_eq!(affected, 1);
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("failed"));
-}
-
-#[sqlx::test(migrations = "../../migrations")]
-async fn does_not_overwrite_done(pool: PgPool) {
-    let sid = Uuid::new_v4();
-    seed_session(&pool, sid, "done").await;
-
-    let affected = mark_session_run_status_if_running(&pool, sid, "failed")
-        .await
-        .expect("update query");
-    assert_eq!(affected, 0, "must not overwrite done with failed");
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("done"));
-}
-
-#[sqlx::test(migrations = "../../migrations")]
-async fn does_not_overwrite_interrupted_with_failed(pool: PgPool) {
-    // This is the critical race the helper prevents: the chat handler
-    // writes `'interrupted'` on grace-exceeded, then the engine task is
-    // hard-aborted, the guard drops, and its Drop impl tries to write
-    // `'failed'`. That write MUST be a no-op.
-    let sid = Uuid::new_v4();
-    seed_session(&pool, sid, "running").await;
-
-    // Handler writes interrupted first.
-    mark_session_run_status_if_running(&pool, sid, "interrupted")
-        .await
-        .expect("first update");
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("interrupted"));
-
-    // Guard drop then attempts failed — must be a no-op.
-    let affected = mark_session_run_status_if_running(&pool, sid, "failed")
-        .await
-        .expect("second update");
-    assert_eq!(affected, 0, "guard drop must not overwrite interrupted");
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("interrupted"));
-}
-
-#[sqlx::test(migrations = "../../migrations")]
-async fn does_not_overwrite_failed(pool: PgPool) {
-    let sid = Uuid::new_v4();
-    seed_session(&pool, sid, "failed").await;
-
-    let affected = mark_session_run_status_if_running(&pool, sid, "interrupted")
-        .await
-        .expect("update query");
-    assert_eq!(affected, 0);
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("failed"));
-}
-
-#[sqlx::test(migrations = "../../migrations")]
-async fn is_idempotent_for_already_terminal_sessions(pool: PgPool) {
-    // Calling the helper twice on an already-terminal session is safe.
-    let sid = Uuid::new_v4();
-    seed_session(&pool, sid, "interrupted").await;
-
-    for _ in 0..3 {
-        let affected = mark_session_run_status_if_running(&pool, sid, "failed")
-            .await
-            .expect("update query");
-        assert_eq!(affected, 0);
-    }
-    assert_eq!(current_status(&pool, sid).await.as_deref(), Some("interrupted"));
 }
 
 #[sqlx::test(migrations = "../../migrations")]
