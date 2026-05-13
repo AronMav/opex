@@ -1,19 +1,26 @@
-/// In-memory cache for tool embeddings used by semantic top-K selection.
-///
-/// Tool descriptors (name + description) are embedded once per unique key
-/// and cached indefinitely (tools rarely change at runtime).
-/// The cache is shared across all calls within one agent engine instance.
-use std::collections::HashMap;
-use tokio::sync::RwLock;
+//! In-memory LRU cache for tool embeddings used by semantic top-K selection.
+//!
+//! Tool descriptors (name + description) are embedded once per unique key
+//! and cached up to `CACHE_CAPACITY` entries with least-recently-used eviction.
+//! The cache is shared across all calls within one agent engine instance.
+
+use std::num::NonZeroUsize;
+
+use lru::LruCache;
+use tokio::sync::Mutex;
+
+const CACHE_CAPACITY: usize = 200;
 
 pub struct ToolEmbeddingCache {
-    embeddings: RwLock<HashMap<String, Vec<f32>>>,
+    embeddings: Mutex<LruCache<String, Vec<f32>>>,
 }
 
 impl ToolEmbeddingCache {
     pub fn new() -> Self {
         Self {
-            embeddings: RwLock::new(HashMap::new()),
+            embeddings: Mutex::new(LruCache::new(
+                NonZeroUsize::new(CACHE_CAPACITY).expect("capacity > 0"),
+            )),
         }
     }
 
@@ -24,16 +31,15 @@ impl ToolEmbeddingCache {
         text: &str,
         embedder: &dyn crate::memory::EmbeddingService,
     ) -> anyhow::Result<Vec<f32>> {
-        if let Some(v) = self.embeddings.read().await.get(key) {
+        // get() двигает запись в начало LRU — нужен write-lock.
+        if let Some(v) = self.embeddings.lock().await.get(key) {
             return Ok(v.clone());
         }
         let v = embedder.embed(text).await?;
-        let mut cache = self.embeddings.write().await;
-        cache.insert(key.to_string(), v.clone());
-        if cache.len() > 200 {
-            cache.clear(); // Simple eviction — re-embed on next access
-            cache.insert(key.to_string(), v.clone());
-        }
+        self.embeddings
+            .lock()
+            .await
+            .put(key.to_string(), v.clone());
         Ok(v)
     }
 }
@@ -87,5 +93,36 @@ mod tests {
         let a = [3.0f32];
         let b = [3.0f32];
         assert!((cosine_similarity(&a, &b) - 1.0).abs() < 1e-6);
+    }
+
+    use crate::memory::embedding::CountingEmbedder;
+
+    #[tokio::test]
+    async fn lru_evicts_least_recently_used_not_all() {
+        let cache = ToolEmbeddingCache::new();
+        let embedder = CountingEmbedder::new();
+
+        // Заполнить кэш до cap (200 elements).
+        for i in 0..200 {
+            let key = format!("tool_{i}");
+            cache.get_or_embed(&key, &key, &embedder).await.unwrap();
+        }
+        assert_eq!(embedder.count(), 200);
+
+        // Touch tool_0 → перемещается в head LRU.
+        cache.get_or_embed("tool_0", "tool_0", &embedder).await.unwrap();
+        assert_eq!(embedder.count(), 200, "tool_0 must be a cache hit");
+
+        // Вставить 201-й → эвикт самого старого (tool_1, поскольку tool_0 только что touched).
+        cache.get_or_embed("tool_200", "tool_200", &embedder).await.unwrap();
+        assert_eq!(embedder.count(), 201);
+
+        // tool_0 должен ОСТАТЬСЯ в кэше (свежий) — повторный вызов = cache hit.
+        cache.get_or_embed("tool_0", "tool_0", &embedder).await.unwrap();
+        assert_eq!(embedder.count(), 201, "tool_0 must still be cached after touch");
+
+        // tool_1 должен быть ЭВИКТНУТ — повторный вызов = cache miss.
+        cache.get_or_embed("tool_1", "tool_1", &embedder).await.unwrap();
+        assert_eq!(embedder.count(), 202, "tool_1 must have been evicted");
     }
 }
