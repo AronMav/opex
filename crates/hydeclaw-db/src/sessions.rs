@@ -849,12 +849,20 @@ pub async fn mark_session_run_status_if_running(
     Ok(rows)
 }
 
-/// Touch `activity_at` heartbeat — called from `upsert_streaming_message` every ~2s.
+/// Refresh `activity_at` heartbeat (debounced to 10 s resolution, gated by
+/// `run_status = 'running'`). Called from `upsert_streaming_append` every ~2 s
+/// during streaming; the debounce keeps the UPDATE near-free under load and
+/// the run-status guard prevents resurrection of terminal sessions.
 pub async fn touch_session_activity(db: &PgPool, session_id: Uuid) -> Result<()> {
-    sqlx::query("UPDATE sessions SET activity_at = NOW() WHERE id = $1")
-        .bind(session_id)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "UPDATE sessions SET activity_at = NOW()
+         WHERE id = $1
+           AND run_status = 'running'
+           AND (activity_at IS NULL OR activity_at < NOW() - INTERVAL '10 seconds')"
+    )
+    .bind(session_id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -2016,6 +2024,27 @@ mod tests {
             compression_events: vec![],
             has_more: false,
         };
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn touch_session_activity_is_debounced(pool: sqlx::PgPool) {
+        let session_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, run_status, activity_at)
+             VALUES ($1, 'a', 'u', 'web', 'running', NOW())"
+        ).bind(session_id).execute(&pool).await.unwrap();
+
+        let before: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT activity_at FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        super::touch_session_activity(&pool, session_id).await.unwrap();
+
+        let after: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
+            "SELECT activity_at FROM sessions WHERE id = $1"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(before, after, "debounce must skip update within 10s");
     }
 }
 
