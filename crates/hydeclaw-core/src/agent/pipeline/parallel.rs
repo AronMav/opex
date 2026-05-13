@@ -1318,4 +1318,99 @@ mod parallel_batch_persistence_tests {
         );
         Ok(())
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn mixed_parallel_sequential_dispatch_persists_tree_correctly(pool: PgPool) -> anyhow::Result<()> {
+        // Seed: session + assistant row that "emitted" the tool calls.
+        let session_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel) VALUES ($1, 'Test', 'u', 'ui')"
+        )
+        .bind(session_id)
+        .execute(&pool)
+        .await?;
+
+        let assistant_id = Uuid::new_v4();
+        crate::db::sessions::save_message_ex_with_id(
+            &pool,
+            assistant_id,
+            session_id,
+            "assistant",
+            "calling tools",
+            None,
+            None,
+            Some("Test"),
+            None,
+            None,
+            None,
+        )
+        .await?;
+
+        // Simulate: 2 parallel tools (batch X), then 1 sequential.
+        let batch = ParallelBatchId::new();
+        let parallel_a = Uuid::new_v4();
+        let parallel_b = Uuid::new_v4();
+        let sequential_c = Uuid::new_v4();
+
+        // Both parallel rows: parent = assistant, batch_id = X, atomically.
+        for (id, tcid) in [(parallel_a, "call_a"), (parallel_b, "call_b")] {
+            crate::db::sessions::save_message_ex_with_id(
+                &pool,
+                id,
+                session_id,
+                "tool",
+                "ok",
+                None,
+                Some(tcid),
+                Some("Test"),
+                None,
+                Some(assistant_id),
+                Some(batch),
+            )
+            .await?;
+        }
+
+        // Sequential follow-up: parent = parallel_b (declaration-last parallel),
+        // batch_id = None.
+        crate::db::sessions::save_message_ex_with_id(
+            &pool,
+            sequential_c,
+            session_id,
+            "tool",
+            "ok",
+            None,
+            Some("call_c"),
+            Some("Test"),
+            None,
+            Some(parallel_b),
+            None,
+        )
+        .await?;
+
+        // Assertions: all 3 tool rows persisted with the correct shape.
+        let rows: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+            "SELECT id, parent_message_id, parallel_batch_id FROM messages \
+             WHERE session_id = $1 AND role = 'tool' ORDER BY created_at"
+        )
+        .bind(session_id)
+        .fetch_all(&pool)
+        .await?;
+
+        assert_eq!(rows.len(), 3, "expected 3 tool rows");
+
+        // First two: parent = assistant, batch_id = batch.
+        assert_eq!(rows[0].1, Some(assistant_id), "parallel_a parent must be assistant");
+        assert_eq!(rows[0].2, Some(batch.as_uuid()), "parallel_a must have batch_id");
+        assert_eq!(rows[1].1, Some(assistant_id), "parallel_b parent must be assistant");
+        assert_eq!(rows[1].2, Some(batch.as_uuid()), "parallel_b must have batch_id");
+
+        // Third: parent = parallel_b (declaration-last), batch_id = None.
+        // NOTE: UI walker (D2 option B) does NOT depend on this invariant —
+        // it uses hasDescendants derived from parent_message_id references.
+        // This assertion guards the backend contract from regression.
+        assert_eq!(rows[2].1, Some(parallel_b), "sequential_c parent must chain off parallel_b");
+        assert_eq!(rows[2].2, None, "sequential_c must NOT have batch_id");
+
+        Ok(())
+    }
 }
