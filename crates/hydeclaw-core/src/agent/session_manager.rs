@@ -370,41 +370,21 @@ impl Drop for SessionLifecycleGuard {
             let agent_id = self.agent_id.clone();
             let already_recorded = self.recorded;
             let fut = async move {
-                // Conditional update: only transition `'running'` → `'failed'`.
-                // The chat handler's cancel-grace path may have already written
-                // `'interrupted'` before hard-aborting our task — if so, we
-                // must not overwrite that signal. `rows_affected == 0` means
-                // the session is already in a terminal state; skip the WAL
-                // event to keep the log honest.
-                match crate::db::sessions::mark_session_run_status_if_running(
+                // Unified cleanup path (I1). Idempotent — returns Ok(false)
+                // if another writer (finalize, watchdog, cancel-grace) already
+                // finalized the session. `cleanup_session_terminated` performs
+                // the atomic running→failed claim, streaming-message preservation,
+                // synthetic tool-result patching, and the WAL `failed` event
+                // in one transaction; no manual `log_event` is needed after.
+                match crate::db::sessions::cleanup_session_terminated(
                     &db,
                     sid,
                     "failed",
+                    "guard dropped (early exit)",
                 )
                 .await
                 {
-                    Ok(0) => {
-                        // Already terminal — the handler (cancel-grace path)
-                        // or another writer set a final status before us.
-                        tracing::debug!(
-                            session_id = %sid,
-                            "guard drop fallback skipped: session already terminal",
-                        );
-                    }
-                    Ok(_) => {
-                        let reason = "guard dropped (early exit)";
-                        let payload = serde_json::json!({ "reason": reason });
-                        if let Err(e) =
-                            crate::db::session_wal::log_event(&db, sid, "failed", Some(&payload))
-                                .await
-                        {
-                            tracing::warn!(
-                                error = %e,
-                                session_id = %sid,
-                                "failed to log WAL failed event in Drop guard"
-                            );
-                        }
-
+                    Ok(true) => {
                         // Structured `session_failures` row — best-effort.
                         // Skipped when the explicit failure path
                         // (`finalize::finalize` Failed branch) already spawned
@@ -419,7 +399,7 @@ impl Drop for SessionLifecycleGuard {
                                     session_id: sid,
                                     agent_id: agent,
                                     failure_kind: "guard_dropped".to_string(),
-                                    error_message: reason.to_string(),
+                                    error_message: "guard dropped (early exit)".to_string(),
                                     last_tool_name: None,
                                     last_tool_output: None,
                                     llm_provider: None,
@@ -446,10 +426,18 @@ impl Drop for SessionLifecycleGuard {
                             }
                         }
                     }
+                    Ok(false) => {
+                        // Already terminal — finalize / watchdog / cancel-grace
+                        // wrote a final status before us. Stay quiet.
+                        tracing::debug!(
+                            session_id = %sid,
+                            "Drop guard cleanup no-op: session already terminal",
+                        );
+                    }
                     Err(e) => tracing::warn!(
                         error = %e,
                         session_id = %sid,
-                        "failed to mark session as failed in Drop guard"
+                        "Drop guard cleanup failed"
                     ),
                 }
             };
