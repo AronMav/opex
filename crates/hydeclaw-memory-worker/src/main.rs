@@ -110,6 +110,27 @@ async fn main() -> anyhow::Result<()> {
     };
 
     loop {
+        // Readiness probe: don't dequeue tasks until Toolgate is up AND an
+        // active embedding provider is configured. Avoids connection-error
+        // spam at cold-start (worker would otherwise pull a task, call
+        // embeddings, fail, retry — flooding logs). `fetch_health()` does not
+        // retry by design (Task 6) — we pace ourselves via `poll` here.
+        match toolgate_client.fetch_health().await {
+            Ok(h) if h.active_embedding_provider.is_some() => {
+                // OK — продолжаем к dequeue
+            }
+            Ok(_) => {
+                tracing::debug!("toolgate up but no active embedding provider, waiting");
+                tokio::time::sleep(poll).await;
+                continue;
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "toolgate health check failed, waiting");
+                tokio::time::sleep(poll).await;
+                continue;
+            }
+        }
+
         // Wait for EITHER a NOTIFY or the poll tick (catch-up safety net).
         let wake = match &mut listener {
             Some(l) => {
