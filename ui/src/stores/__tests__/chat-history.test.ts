@@ -315,3 +315,41 @@ describe("convertHistory — parallel tool results sorted by declared order", ()
     expect(toolParts[2].toolCallId).toBe("call_00_a");
   });
 });
+
+describe("resolveActivePath — parallel batch heir picked by descendants, not created_at", () => {
+  it("continues through the sibling whose id is parent_message_id of a later message, even if it is not the latest by created_at", () => {
+    // Reproduces Arty's session 48fc271b-ebdc-4db0-8542-525a1c792cc6 step 1:
+    //   - assistant a1 dispatches 3 parallel tools t_hyde, t_alma, t_search
+    //   - all three share parent_message_id = a1
+    //   - backend's chain_parent advances to declaration-last parallel tool = t_search
+    //   - sequential follow-up t_exch has parent_message_id = t_search
+    //   - chain continues t_exch → a_final
+    // The bug: walker picks heir = last-by-created_at = t_alma, which has no
+    // descendants, so the walker dead-ends and t_exch, a_final are lost.
+    // NOTE: `a_final` carries a sentinel `branch_from_message_id` to force the
+    // walker to run after D1 lands (Task 4). Without it, D1 would short-circuit
+    // this fixture to a created_at sort and bypass the D2 swap entirely — the
+    // test would still pass but for the wrong reason. The sentinel value never
+    // matches any real id, so it has no effect on traversal.
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", parent_message_id: null, created_at: "2026-05-13T10:30:00Z" }),
+      makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", created_at: "2026-05-13T10:31:35Z" }),
+      // Parallel batch — all parent=a1, but t_alma is the LATEST by created_at
+      // while t_search is the actual heir (has the descendant t_exch).
+      makeRow({ id: "t_hyde",   role: "tool", parent_message_id: "a1", tool_call_id: "call_h", created_at: "2026-05-13T10:33:56.067Z" }),
+      makeRow({ id: "t_search", role: "tool", parent_message_id: "a1", tool_call_id: "call_s", created_at: "2026-05-13T10:33:56.074Z" }),
+      makeRow({ id: "t_alma",   role: "tool", parent_message_id: "a1", tool_call_id: "call_a", created_at: "2026-05-13T10:33:56.090Z" }),
+      // Sequential follow-up chains off t_search (declaration-last parallel tool).
+      makeRow({ id: "t_exch",   role: "tool", parent_message_id: "t_search", tool_call_id: "call_e", created_at: "2026-05-13T10:33:57.762Z" }),
+      makeRow({ id: "a_final",  role: "assistant", parent_message_id: "t_exch", branch_from_message_id: "sentinel-forces-walker", content: "final answer", created_at: "2026-05-13T10:35:26Z" }),
+    ];
+
+    const path = resolveActivePath(rows, {});
+    const ids = path.map(r => r.id);
+
+    // All 7 rows must be reachable, in walk order.
+    // Parallel batch is included in created_at order with heir last,
+    // then walker continues through heir.
+    expect(ids).toEqual(["u1", "a1", "t_hyde", "t_alma", "t_search", "t_exch", "a_final"]);
+  });
+});
