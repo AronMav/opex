@@ -97,10 +97,12 @@ describe("convertHistory — streaming placeholder does not shadow tree root (Bu
     expect(ids).toEqual(["u1", "a1", "u2"]);
   });
 
-  it("sensitivity probe: resolveActivePath picks the NULL-parent streaming row as root if filter runs AFTER", () => {
-    // Informational probe — proves the bug is real. If we call
-    // resolveActivePath DIRECTLY on rows (no pre-filter), the streaming
-    // placeholder shadows u1 because its created_at is earlier.
+  it("sensitivity probe: resolveActivePath on unfiltered rows returns all rows sorted by created_at (streaming placeholder first)", () => {
+    // Post-D1 informational probe — proves that convertHistory must still
+    // pre-filter streaming rows BEFORE calling resolveActivePath.
+    // After D1, with no branch_from_message_id, resolveActivePath short-circuits
+    // to a chronological sort instead of a tree walk. All rows (including the
+    // streaming placeholder) are returned, with the earliest first.
     const rows: MessageRow[] = [
       makeRow({
         id: "u1",
@@ -138,12 +140,13 @@ describe("convertHistory — streaming placeholder does not shadow tree root (Bu
 
     const path = resolveActivePath(rows, {});
     const ids = path.map(r => r.id);
-    // Bug shape: s1 is the earliest root → path is just [s1] with no children.
-    // If convertHistory ran resolveActivePath FIRST then filtered streaming
-    // rows AFTER, u1/a1/u2 would be lost. This probe guarantees the pre-fix
-    // order is demonstrably broken.
+    // Post-D1 shape: no branch_from_message_id → fast sort path.
+    // s1 is earliest (09:59:59) so it appears first; all rows are present.
+    // This proves convertHistory must pre-filter streaming rows before calling
+    // resolveActivePath to prevent the placeholder from leaking into output.
     expect(ids[0]).toBe("s1");
-    expect(ids).not.toContain("u2");
+    expect(ids).toContain("u2");
+    expect(ids).toEqual(["s1", "u1", "a1", "u2"]);
   });
 });
 
