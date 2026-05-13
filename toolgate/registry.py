@@ -1,20 +1,28 @@
 """Provider registry — resolves active providers by capability.
 
-Pull-on-call (TTL=0): every `aget_active` / `aget_instance` fetches the latest
-config from Core API. On fetch failure the registry keeps the last-known
-config — readers never see an empty registry just because Core blipped.
+TTL=30s + ETag conditional GET (Task 18): `_refresh` caches the last fetch
+timestamp + ETag header so steady-state traffic from many `aget_*` calls
+collapses to (a) zero HTTP within the TTL window, and (b) a single 304-not-
+modified hop once the TTL expires while Core's config hasn't changed.
 
-Driver instances are rebuilt only when the fetched config differs from the
-cached one (deep equality on the pydantic model), so the steady-state cost
-of pull-on-call is one HTTP round-trip per call, not a full re-instantiation.
+On any fetch error (network failure, non-200/304 status, bad payload) we
+keep the last-known config — readers never see an empty registry just because
+Core blipped. Driver instances are rebuilt only when the fetched config
+differs from the cached one (deep equality on the pydantic model).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import threading
+import time
+
+import httpx
 
 from config import (
+    CORE_API_URL,
     ProviderConfig,
     ProvidersConfig,
     _aload_config_from_api,
@@ -129,18 +137,68 @@ class ProviderRegistry:
         self.config: ProvidersConfig = ProvidersConfig()
         self._instances: dict[str, Provider] = {}
         self._lock = threading.Lock()
+        # ETag-cache state (Task 18): TTL window + last-seen ETag for conditional
+        # GET. `_refresh_lock` serialises concurrent _refresh() calls so a single
+        # client.get() actually fires per window even under high `aget_*` fan-in.
+        self._etag: str | None = None
+        self._last_fetch: float = 0.0
+        self._refresh_lock = asyncio.Lock()
 
     async def _refresh(self) -> None:
-        """Pull-on-call: best-effort fetch; on failure, keep last-known.
-        Rebuilds driver instances only when the fetched config differs."""
-        config = await _aload_config_from_api()
-        if config is None:
-            return  # Core unreachable — keep cached
-        with self._lock:
-            if config == self.config:
-                return  # No change — skip rebuild
-            self.config = config
-            self._instantiate_all()
+        """TTL=30s + conditional GET. On error — keep last-known config.
+
+        Steady state with healthy Core: ~one HTTP RTT per 30s, and that hop
+        is usually a 304-not-modified (no body). Cold start (`self.config`
+        empty) bypasses TTL so we keep retrying until Core answers.
+        """
+        async with self._refresh_lock:
+            now = time.monotonic()
+            # TTL hit — but only once we actually have providers. On cold start
+            # we keep polling Core every call until something lands, otherwise
+            # the registry would stay in degraded mode for the first 30s after
+            # boot regardless of how fast Core comes up.
+            if self.config.providers and (now - self._last_fetch) < 30:
+                return
+
+            token = os.environ.get("HYDECLAW_AUTH_TOKEN") or os.environ.get("AUTH_TOKEN", "")
+            headers: dict[str, str] = {}
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            if self._etag:
+                headers["If-None-Match"] = self._etag
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        f"{CORE_API_URL}/api/media-config",
+                        headers=headers,
+                        timeout=5.0,
+                    )
+            except Exception as e:
+                log.warning("Core API fetch failed: %s — keep cached", e)
+                return
+
+            if resp.status_code == 304:
+                # Config unchanged — refresh TTL but keep instances & ETag.
+                self._last_fetch = now
+                return
+
+            if resp.status_code == 200:
+                new_etag = resp.headers.get("ETag")
+                try:
+                    config = ProvidersConfig(**resp.json())
+                except Exception:
+                    log.exception("invalid media-config payload — keep cached")
+                    return
+                with self._lock:
+                    if config != self.config:
+                        self.config = config
+                        self._instantiate_all()
+                    self._etag = new_etag
+                    self._last_fetch = now
+                return
+
+            log.warning("Core API returned %d — keep cached", resp.status_code)
 
     async def aload(self) -> None:
         """Startup warm-up — same as `_refresh` now.
