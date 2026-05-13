@@ -352,6 +352,11 @@ pub(crate) async fn api_update_provider(
                 for a in active {
                     if a.provider_name.as_deref() == Some(&p.name) {
                         let _ = providers::set_provider_active(&infra.db, &a.capability, None).await;
+                        if a.capability == "embedding"
+                            && let Err(err) = infra.embedder.reset().await
+                        {
+                            tracing::error!(error = %err, "failed to reset embedder after provider delete");
+                        }
                     }
                 }
             }
@@ -503,6 +508,11 @@ pub(crate) async fn api_set_provider_active(
     {
         Ok(row) => {
             // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
+            if input.capability == "embedding"
+                && let Err(err) = infra.embedder.reset().await
+            {
+                tracing::error!(error = %err, "failed to reset embedder after provider switch");
+            }
             (StatusCode::OK, Json(json!(row))).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
