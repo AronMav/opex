@@ -981,7 +981,23 @@ pub async fn delete_empty_assistant_messages(db: &PgPool, session_id: Uuid) -> R
 /// Insert synthetic tool results for all unmatched tool calls in a session.
 /// Called during startup cleanup and transcript repair.
 /// Returns the number of synthetic results inserted.
+///
+/// Standalone variant — opens its own transaction and commits on success.
+/// Use [`insert_synthetic_tool_results_tx`] when already inside a transaction.
 pub async fn insert_synthetic_tool_results(db: &PgPool, session_id: Uuid) -> Result<usize> {
+    let mut tx = db.begin().await?;
+    let n = insert_synthetic_tool_results_tx(&mut tx, session_id).await?;
+    tx.commit().await?;
+    Ok(n)
+}
+
+/// In-transaction variant — runs all queries through the passed transaction.
+/// Used by `cleanup_session_terminated` (Task 4) to keep multi-step cleanup
+/// atomic. Standalone callers should use [`insert_synthetic_tool_results`].
+pub async fn insert_synthetic_tool_results_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    session_id: Uuid,
+) -> Result<usize> {
     // Find assistant messages with tool_calls that have no matching tool result
     let assistant_msgs = sqlx::query_as::<_, (Uuid, serde_json::Value)>(
         "SELECT id, tool_calls FROM messages
@@ -990,7 +1006,7 @@ pub async fn insert_synthetic_tool_results(db: &PgPool, session_id: Uuid) -> Res
          ORDER BY created_at"
     )
     .bind(session_id)
-    .fetch_all(db)
+    .fetch_all(&mut **tx)
     .await?;
 
     // Collect all tool_call_ids from assistant messages
@@ -1017,7 +1033,7 @@ pub async fn insert_synthetic_tool_results(db: &PgPool, session_id: Uuid) -> Res
     )
     .bind(session_id)
     .bind(&all_call_ids)
-    .fetch_all(db)
+    .fetch_all(&mut **tx)
     .await?;
 
     let existing_set: std::collections::HashSet<&str> = existing.iter().map(std::string::String::as_str).collect();
@@ -1042,7 +1058,6 @@ pub async fn insert_synthetic_tool_results(db: &PgPool, session_id: Uuid) -> Res
     const BIND_COUNT_PER_ROW: usize = 4;
     let chunk_size: usize = MAX_PARAMS_PER_QUERY / BIND_COUNT_PER_ROW;
 
-    let mut tx = db.begin().await?;
     let mut inserted: usize = 0;
     for chunk in missing.chunks(chunk_size) {
         let mut sql = String::from(
@@ -1071,10 +1086,9 @@ pub async fn insert_synthetic_tool_results(db: &PgPool, session_id: Uuid) -> Res
                 .bind(*call_id);
         }
 
-        let result = q.execute(&mut *tx).await?;
+        let result = q.execute(&mut **tx).await?;
         inserted += result.rows_affected() as usize;
     }
-    tx.commit().await?;
     Ok(inserted)
 }
 
@@ -2045,6 +2059,28 @@ mod tests {
             "SELECT activity_at FROM sessions WHERE id = $1"
         ).bind(session_id).fetch_one(&pool).await.unwrap();
         assert_eq!(before, after, "debounce must skip update within 10s");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn insert_synthetic_tool_results_tx_runs_in_provided_tx(pool: sqlx::PgPool) {
+        let session_id = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        sqlx::query(
+            "INSERT INTO messages (session_id, role, content, tool_calls, status)
+             VALUES ($1, 'assistant', '', $2::jsonb, 'complete')"
+        )
+        .bind(session_id)
+        .bind(serde_json::json!([{"id":"call_x","name":"t","arguments":{}}]))
+        .execute(&pool).await.unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let n = super::insert_synthetic_tool_results_tx(&mut tx, session_id).await.unwrap();
+        assert_eq!(n, 1);
+        tx.rollback().await.unwrap();  // verify rollback works
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages WHERE session_id = $1 AND role = 'tool'"
+        ).bind(session_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "rollback must discard synthetic results");
     }
 }
 
