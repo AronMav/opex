@@ -31,6 +31,9 @@ pub struct InfraServices {
     /// Secrets manager — provides HMAC key derivation for signed URLs
     /// (workspace-files endpoint, upload verification).
     pub secrets: Arc<crate::secrets::SecretsManager>,
+    /// Защищает `POST /api/memory/reindex` от concurrent выполнения.
+    /// Per-process — Core инстанс один на Pi.
+    pub reindex_mutex: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl InfraServices {
@@ -45,7 +48,17 @@ impl InfraServices {
         metrics: Arc<crate::metrics::MetricsRegistry>,
         secrets: Arc<crate::secrets::SecretsManager>,
     ) -> Self {
-        Self { db, memory_store, embedder, container_manager, sandbox, process_manager, metrics, secrets }
+        Self {
+            db,
+            memory_store,
+            embedder,
+            container_manager,
+            sandbox,
+            process_manager,
+            metrics,
+            secrets,
+            reindex_mutex: Arc::new(tokio::sync::Mutex::new(())),
+        }
     }
 
     /// Construct a minimal `InfraServices` for unit tests.
@@ -63,6 +76,7 @@ impl InfraServices {
             process_manager: None,
             metrics: Arc::new(crate::metrics::MetricsRegistry::new()),
             secrets: Arc::new(crate::secrets::SecretsManager::new_noop()),
+            reindex_mutex: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 }
