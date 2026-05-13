@@ -121,7 +121,6 @@ export function ChatThread({
   // is needed as fallback (e.g. F5 reload while agent is processing).
   const { data: sessionMessagesData, isLoading: historyLoading } = useSessionMessages(
     activeSessionId,
-    engineRunning,
     currentAgent,
   );
   // sessionMessagesData used only for showSkeleton — useRenderMessages reads via the cache
