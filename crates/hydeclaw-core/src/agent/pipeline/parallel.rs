@@ -836,8 +836,8 @@ fn spawn_persist_message_row(
 ///
 /// `parallel_batch_id` — `Some(_)` when this tool ran in a parallel batch
 /// (≥2 concurrent tools in one turn); `None` for sequential / single-tool
-/// turns. Stored in `messages.parallel_batch_id` (m047) via a follow-up
-/// UPDATE inside `spawn_persist_message_row`.
+/// turns. Written atomically into `messages.parallel_batch_id` (m047) by
+/// the main INSERT in `save_message_ex_with_id` (D3 fix, 2026-05-13).
 #[allow(clippy::too_many_arguments)]
 fn spawn_persist_tool_message(
     db: &sqlx::PgPool,
