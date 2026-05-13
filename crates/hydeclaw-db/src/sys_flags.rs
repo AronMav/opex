@@ -8,6 +8,11 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 /// Return the JSON value stored under `key`, or `None` if no row exists.
+///
+/// Lenient: swallows SQL errors and returns `None`. Use for best-effort
+/// reads (feature flag checks, UI hints). For migration gates and other
+/// operations that must distinguish "missing" from "DB unavailable", use
+/// [`try_get`] instead.
 pub async fn get(db: &PgPool, key: &str) -> Option<Value> {
     sqlx::query_scalar::<_, Value>("SELECT value FROM system_flags WHERE key = $1")
         .bind(key)
@@ -17,11 +22,26 @@ pub async fn get(db: &PgPool, key: &str) -> Option<Value> {
         .flatten()
 }
 
+/// Strict variant of [`get`]: returns `Err` on SQL failure.
+///
+/// Use this for migration gates and other operations where you need to
+/// distinguish "key missing" (`Ok(None)`) from "DB unavailable" (`Err`).
+pub async fn try_get(db: &PgPool, key: &str) -> Result<Option<Value>> {
+    sqlx::query_scalar::<_, Value>("SELECT value FROM system_flags WHERE key = $1")
+        .bind(key)
+        .fetch_optional(db)
+        .await
+        .with_context(|| format!("failed to read system_flags key {key}"))
+}
+
 /// Insert or update `key` with `value` (UPSERT via ON CONFLICT).
+///
+/// Also refreshes `updated_at = NOW()` on conflict — preserves the
+/// diagnostic signal the old inline SQL provided before this helper.
 pub async fn upsert(db: &PgPool, key: &str, value: Value) -> Result<()> {
     sqlx::query(
         "INSERT INTO system_flags (key, value) VALUES ($1, $2) \
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
     )
     .bind(key)
     .bind(value)
