@@ -32,6 +32,12 @@ async def _aload_config_from_api() -> ProvidersConfig | None:
     """Try to load config from Core API (GET /api/media-config) asynchronously.
 
     Returns the parsed ProvidersConfig on success, or None if unavailable.
+
+    Task 18: The production path no longer routes through this function —
+    `ProviderRegistry._refresh` issues conditional GETs (TTL=30s + If-None-Match)
+    directly via httpx so it can capture the ETag header. This helper is kept
+    only as the legacy `aload_config` building block and is still exercised by
+    `tests/test_config.py`. New code should call `registry._refresh()` instead.
     """
     core_url = os.environ.get("CORE_API_URL", CORE_API_URL)
     if not core_url:
