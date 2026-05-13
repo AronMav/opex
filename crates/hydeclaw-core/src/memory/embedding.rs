@@ -136,6 +136,16 @@ impl ToolgateEmbedder {
     /// P0.1: НЕ удаляет `memory_chunks` при dim mismatch. Ставит `dim_mismatch=true`
     /// и `system_flags["memory.dim_mismatch"]=true`. Reindex run by operator.
     async fn do_initialize(&self) -> Result<()> {
+        // Sync persistent dim_mismatch flag → in-memory state.
+        // Without this, after restart `dim_mismatch()` would lie about the
+        // state until do_initialize completes, allowing index() calls to
+        // bypass the P0.1 guard.
+        if let Some(v) = sys_flags::get(&self.db, "memory.dim_mismatch").await
+            && v.as_bool() == Some(true)
+        {
+            self.dim_mismatch.store(true, Ordering::Release);
+        }
+
         if !self.client.is_configured() {
             tracing::info!("embedding not configured, memory will use FTS only");
             return Ok(());
@@ -201,8 +211,18 @@ impl ToolgateEmbedder {
     }
 
     /// Non-blocking reset of all in-memory state + persisted flags.
+    /// Bumps `init_generation`, clears `embed_dim`, `provider_display`,
+    /// `dim_mismatch`, and deletes the persisted `memory.embed_dim` /
+    /// `memory.dim_mismatch` keys.
+    ///
     /// Не дожидается завершения in-flight probe — generation-counter гарантирует,
     /// что следующий `ensure_initialized()` пере-инициализирует embedder.
+    ///
+    /// **Warning:** clearing `dim_mismatch` here erases the "reindex required"
+    /// signal. Call after PUT /api/provider-active (provider switch invalidates
+    /// the old state anyway) — do NOT call as a generic "reset" without
+    /// follow-up reindex, otherwise old chunks may be silently used with new
+    /// embedding model.
     pub async fn reset(&self) -> Result<()> {
         self.init_generation.fetch_add(1, Ordering::AcqRel);
         self.embed_dim.store(0, Ordering::Release);
