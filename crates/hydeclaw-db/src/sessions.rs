@@ -924,20 +924,51 @@ pub async fn touch_session_activity(db: &PgPool, session_id: Uuid) -> Result<()>
     Ok(())
 }
 
-/// Find sessions stuck in 'running' with no activity for > `inactivity_secs` seconds.
-/// Returns Vec<(`session_id`, `agent_id`)>.
-pub async fn find_stale_running_sessions(
+/// Find sessions stuck in 'running' with no activity beyond their per-agent
+/// threshold. Agents missing from the map fall back to `default_secs`.
+/// Returns Vec<(session_id, agent_id, idle_seconds)>.
+pub async fn find_stale_running_sessions_per_agent(
     db: &PgPool,
-    inactivity_secs: u64,
-) -> Result<Vec<(Uuid, String)>> {
-    let rows = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, agent_id FROM sessions
-         WHERE run_status = 'running'
-           AND COALESCE(activity_at, last_message_at) < NOW() - ($1 || ' seconds')::INTERVAL"
-    )
-    .bind(inactivity_secs as i64)
-    .fetch_all(db)
-    .await?;
+    agent_inactivity: &std::collections::HashMap<String, i64>,
+    default_secs: i64,
+) -> Result<Vec<(Uuid, String, i64)>> {
+    if agent_inactivity.is_empty() {
+        // All agents fall back to default.
+        let rows = sqlx::query_as::<_, (Uuid, String, i64)>(
+            "SELECT id, agent_id,
+                    EXTRACT(EPOCH FROM (NOW() - COALESCE(activity_at, last_message_at)))::BIGINT
+             FROM sessions
+             WHERE run_status = 'running'
+               AND COALESCE(activity_at, last_message_at)
+                   < NOW() - make_interval(secs => $1)"
+        )
+        .bind(default_secs)
+        .fetch_all(db)
+        .await?;
+        return Ok(rows);
+    }
+
+    // Build VALUES list for the WITH clause.
+    let mut qb = sqlx::QueryBuilder::new(
+        "WITH agent_thresholds(agent_id, secs) AS (VALUES "
+    );
+    let mut first = true;
+    for (agent, secs) in agent_inactivity {
+        if !first { qb.push(", "); }
+        qb.push("(").push_bind(agent).push("::TEXT, ").push_bind(*secs).push("::BIGINT)");
+        first = false;
+    }
+    qb.push(") SELECT s.id, s.agent_id,
+                     EXTRACT(EPOCH FROM (NOW() - COALESCE(s.activity_at, s.last_message_at)))::BIGINT
+              FROM sessions s
+              LEFT JOIN agent_thresholds t USING (agent_id)
+              WHERE s.run_status = 'running'
+                AND COALESCE(s.activity_at, s.last_message_at)
+                    < NOW() - make_interval(secs => COALESCE(t.secs, ");
+    qb.push_bind(default_secs);
+    qb.push("))");
+
+    let rows = qb.build_query_as::<(Uuid, String, i64)>().fetch_all(db).await?;
     Ok(rows)
 }
 
@@ -1222,15 +1253,6 @@ pub async fn cleanup_interrupted_sessions(db: &PgPool) -> Result<usize> {
         }
     }
 
-    // 4. Final safety check: any session still 'running' with no activity for 30m is 'interrupted'
-    sqlx::query(
-        "UPDATE sessions SET run_status = 'interrupted' \
-         WHERE run_status = 'running' \
-           AND COALESCE(activity_at, last_message_at) < NOW() - interval '30 minutes'"
-    )
-    .execute(db)
-    .await?;
-
     // 5. Clear stale streamStatus from UI metadata.
     //    After a restart, no streams are active, so any session showing "streaming"
     //    in its UI metadata must be stale. Clear them all at once.
@@ -1246,6 +1268,23 @@ pub async fn cleanup_interrupted_sessions(db: &PgPool) -> Result<usize> {
     }
 
     Ok(count)
+}
+
+/// Last-resort safety-net: forcibly mark any 'running' session idle longer
+/// than `threshold_secs` as 'interrupted'. Called from startup-cleanup.
+pub async fn finalize_truly_stale_sessions(
+    db: &PgPool,
+    threshold_secs: i64,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE sessions SET run_status = 'interrupted'
+         WHERE run_status = 'running'
+           AND COALESCE(activity_at, last_message_at) < NOW() - make_interval(secs => $1)"
+    )
+    .bind(threshold_secs)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 /// Delete sessions older than `ttl_days` and their messages (cascade).
@@ -2221,6 +2260,52 @@ mod tests {
         ).bind(session_id).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "running",
             "run_status must roll back to 'running' on tx failure (R-CRIT-2)");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn find_stale_per_agent_respects_thresholds(pool: sqlx::PgPool) {
+        let s_a = super::create_new_session(&pool, "agent_a", "u", "web").await.unwrap();
+        let s_b = super::create_new_session(&pool, "agent_b", "u", "web").await.unwrap();
+        // Both running, both idle for 60s.
+        sqlx::query("UPDATE sessions SET run_status='running',
+                     activity_at = NOW() - INTERVAL '60 seconds' WHERE id = ANY($1)")
+            .bind(vec![s_a, s_b]).execute(&pool).await.unwrap();
+
+        let mut map = std::collections::HashMap::new();
+        map.insert("agent_a".to_string(), 30i64);   // A times out at 30s
+        map.insert("agent_b".to_string(), 600i64);  // B times out at 600s
+        let stale = super::find_stale_running_sessions_per_agent(&pool, &map, 600).await.unwrap();
+
+        let ids: Vec<uuid::Uuid> = stale.iter().map(|t| t.0).collect();
+        assert!(ids.contains(&s_a), "agent_a stale (60s > 30s)");
+        assert!(!ids.contains(&s_b), "agent_b not stale (60s < 600s)");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn find_stale_per_agent_uses_default_for_unknown(pool: sqlx::PgPool) {
+        let s_x = super::create_new_session(&pool, "agent_x", "u", "web").await.unwrap();
+        sqlx::query("UPDATE sessions SET run_status='running',
+                     activity_at = NOW() - INTERVAL '700 seconds' WHERE id = $1")
+            .bind(s_x).execute(&pool).await.unwrap();
+
+        let map = std::collections::HashMap::new();  // x not in map
+        let stale = super::find_stale_running_sessions_per_agent(&pool, &map, 600).await.unwrap();
+        assert!(stale.iter().any(|t| t.0 == s_x), "fallback default (600s) applied");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn finalize_truly_stale_sessions_force_marks_interrupted(pool: sqlx::PgPool) {
+        let s = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        sqlx::query("UPDATE sessions SET run_status='running',
+                     activity_at = NOW() - INTERVAL '2 hours' WHERE id = $1")
+            .bind(s).execute(&pool).await.unwrap();
+
+        let n = super::finalize_truly_stale_sessions(&pool, 3600).await.unwrap();  // 1h threshold
+        assert_eq!(n, 1);
+        let status: String = sqlx::query_scalar(
+            "SELECT run_status FROM sessions WHERE id = $1"
+        ).bind(s).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "interrupted");
     }
 }
 

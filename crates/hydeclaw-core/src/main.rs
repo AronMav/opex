@@ -765,6 +765,30 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Notify UI of a watchdog-triggered session timeout. Best-effort —
+/// failure to notify is logged but never propagates.
+async fn notify_session_timeout(
+    db: &sqlx::PgPool,
+    ui_tx: &tokio::sync::broadcast::Sender<String>,
+    agent_id: &str,
+    session_id: uuid::Uuid,
+    idle_secs: i64,
+) {
+    let _ = crate::gateway::notify(
+        db,
+        ui_tx,
+        "agent_error",
+        "Session timeout",
+        &format!("Agent {agent_id} session was killed after {idle_secs}s of inactivity"),
+        serde_json::json!({
+            "agent": agent_id,
+            "session_id": session_id.to_string(),
+            "kind": "session_timeout",
+            "idle_secs": idle_secs,
+        }),
+    ).await;
+}
+
 /// Repair sessions interrupted by previous crash (batched loop).
 async fn cleanup_interrupted_sessions(db_pool: &sqlx::PgPool) {
     loop {
@@ -945,30 +969,69 @@ async fn spawn_background_tasks(
         }
     });
 
+    // Last-resort safety-net: any session still 'running' with idle beyond
+    // 3× max per-agent threshold is force-finalized.
+    let max_per_agent_secs: i64 = agent_configs.iter()
+        .filter_map(|c| c.agent.watchdog.as_ref())
+        .map(|w| w.inactivity_secs as i64)
+        .max()
+        .unwrap_or(600);
+    let safety_net = max_per_agent_secs.saturating_mul(3);
+    match crate::db::sessions::finalize_truly_stale_sessions(&state.infra.db, safety_net).await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(forced = n, threshold_secs = safety_net,
+            "startup safety-net force-marked stale 'running' sessions"),
+        Err(e) => tracing::error!(error = %e, "safety-net query failed"),
+    }
+
     // Watchdog: detect and kill sessions stuck in 'running'
     let watchdog_db = state.infra.db.clone();
     let watchdog_registry = state.channels.stream_registry.clone();
-    let inactivity_secs = agent_configs
-        .iter()
-        .filter_map(|c| c.agent.watchdog.as_ref())
-        .map(|w| w.inactivity_secs)
-        .min()
-        .unwrap_or(600);
+    let watchdog_ui_tx = state.channels.ui_event_tx.clone();
+    use std::collections::HashMap;
+    let agent_inactivity: HashMap<String, i64> = agent_configs.iter()
+        .map(|c| (
+            c.agent.name.clone(),
+            c.agent.watchdog.as_ref()
+                .map(|w| w.inactivity_secs as i64)
+                .unwrap_or(600),
+        ))
+        .collect();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
-            match crate::db::sessions::find_stale_running_sessions(&watchdog_db, inactivity_secs).await {
+            match crate::db::sessions::find_stale_running_sessions_per_agent(
+                &watchdog_db,
+                &agent_inactivity,
+                600,
+            ).await {
                 Ok(stale) if stale.is_empty() => {}
                 Ok(stale) => {
-                    tracing::warn!(count = stale.len(), "watchdog: found {} stale running session(s)", stale.len());
-                    for (session_id, agent_id) in stale {
-                        tracing::warn!(%session_id, %agent_id, "watchdog: killing stale session");
+                    tracing::warn!(count = stale.len(),
+                        "watchdog: found {} stale running session(s)", stale.len());
+                    for (session_id, agent_id, idle_secs) in stale {
+                        tracing::warn!(%session_id, %agent_id, idle_secs,
+                            "watchdog: terminating stale session");
                         watchdog_registry.cancel(&session_id.to_string()).await;
-                        sqlx::query("DELETE FROM messages WHERE session_id = $1 AND status = 'streaming'")
-                            .bind(session_id).execute(&watchdog_db).await.ok();
-                        crate::db::sessions::insert_synthetic_tool_results(&watchdog_db, session_id).await.ok();
-                        crate::db::sessions::set_session_run_status(&watchdog_db, session_id, "timeout").await.ok();
+                        let reason = format!("watchdog_inactivity_{idle_secs}s");
+                        match crate::db::sessions::cleanup_session_terminated(
+                            &watchdog_db, session_id, "timeout", &reason,
+                        ).await {
+                            Ok(true) => {
+                                notify_session_timeout(
+                                    &watchdog_db,
+                                    &watchdog_ui_tx,
+                                    &agent_id,
+                                    session_id,
+                                    idle_secs,
+                                ).await;
+                            }
+                            Ok(false) => tracing::debug!(%session_id,
+                                "watchdog cleanup: session already terminal"),
+                            Err(e) => tracing::error!(error = %e, %session_id,
+                                "watchdog cleanup failed"),
+                        }
                     }
                 }
                 Err(e) => tracing::error!(error = %e, "watchdog query failed"),
