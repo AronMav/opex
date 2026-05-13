@@ -431,3 +431,38 @@ describe("resolveActivePath — branched session honors selectedBranches AND D2 
     expect(ids).not.toContain("a2_main");
   });
 });
+
+describe("resolveActivePath — degenerate two-heirs case (defensive doc)", () => {
+  it("when two parallel siblings both have descendants, walker picks the first by created_at and the other subtree becomes unreachable", () => {
+    // Defensive documentation test: the current backend (parallel.rs) only
+    // chains `chain_parent` off a single sibling (`parallel_indices.last()`),
+    // so this two-heirs state is NOT producible by correct backend code.
+    // If a future backend change ever creates this shape (or DB corruption
+    // does), the UI walker's `findIndex` picks the first heir by created_at.
+    // The second heir's subtree is silently lost.
+    //
+    // We pin this behavior here so a future change to `resolveActivePath`
+    // can't accidentally introduce hidden divergence without updating this
+    // expectation. If you find this test failing, decide explicitly: either
+    // (a) the new walker behavior is intentional and update this expectation,
+    // or (b) the new walker shouldn't change in this corner.
+    const rows: MessageRow[] = [
+      makeRow({ id: "u1", role: "user", parent_message_id: null, branch_from_message_id: "sentinel", created_at: "2026-05-13T10:00:00Z" }),
+      makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", created_at: "2026-05-13T10:00:01Z" }),
+      // Two tool siblings of a1 — t_one earlier by created_at, t_two later.
+      makeRow({ id: "t_one", role: "tool", parent_message_id: "a1", tool_call_id: "c1", created_at: "2026-05-13T10:00:02Z" }),
+      makeRow({ id: "t_two", role: "tool", parent_message_id: "a1", tool_call_id: "c2", created_at: "2026-05-13T10:00:03Z" }),
+      // BOTH t_one and t_two have descendants — degenerate corrupt state.
+      makeRow({ id: "leaf_one", role: "assistant", parent_message_id: "t_one", content: "one's child", created_at: "2026-05-13T10:00:04Z" }),
+      makeRow({ id: "leaf_two", role: "assistant", parent_message_id: "t_two", content: "two's child (unreachable)", created_at: "2026-05-13T10:00:05Z" }),
+    ];
+
+    const path = resolveActivePath(rows, {});
+    const ids = path.map(r => r.id);
+    // `findIndex` finds t_one first (earlier created_at). Walker swaps it to
+    // last position (no-op here since length=2 and heir was at index 0), then
+    // continues through t_one → leaf_one. leaf_two is unreachable.
+    expect(ids).toEqual(["u1", "a1", "t_two", "t_one", "leaf_one"]);
+    expect(ids).not.toContain("leaf_two");
+  });
+});
