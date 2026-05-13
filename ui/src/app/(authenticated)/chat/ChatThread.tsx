@@ -1,10 +1,10 @@
 "use client";
 
-import React, { Component, useEffect, useMemo, useRef, useCallback } from "react";
+import React, { Component, useEffect, useMemo, useRef } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
 import { useVisualViewport } from "@/hooks/use-visual-viewport";
-import { useSessionMessages, useSessions } from "@/lib/queries";
+import { useSessionMessages } from "@/lib/queries";
 
 import type { SessionRow } from "@/types/api";
 
@@ -95,82 +95,26 @@ export function ChatThread({
   const maxReconnectAttempts = useChatStore((s) => s.agents[currentAgent]?.maxReconnectAttempts ?? 3);
   const isLlmReconnecting = useChatStore((s) => s.agents[currentAgent]?.isLlmReconnecting ?? false);
   const activeSessionIds = useChatStore((s) => s.agents[currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE_IDS);
-  // Engine running: either WS says it's active, OR React Query sessions list says run_status=running
-  const { data: sessionsData } = useSessions(currentAgent);
-  const sessionRunStatus = sessionsData?.sessions?.find((s: { id: string }) => s.id === activeSessionId)?.run_status;
 
   // CRITICAL: We are "running" if we're in an active connection phase OR the DB says so.
   const engineRunning = useEngineRunning(currentAgent);
-
-  const handleManualAbort = useCallback(async () => {
-    if (!activeSessionId) return;
-    try {
-      const { apiPost } = await import("@/lib/api");
-      await apiPost(`/api/chat/${activeSessionId}/abort`, {});
-      useChatStore.getState().markSessionInactive(currentAgent, activeSessionId);
-      const { toast } = await import("sonner");
-      toast.success("Сессия принудительно остановлена");
-    } catch (e) {
-      console.error("Manual abort failed", e);
-    }
-  }, [activeSessionId, currentAgent]);
 
   // Derived booleans from message source hooks
   const isLive = useIsLive(currentAgent);
   const isHistory = useIsReplayingHistory(currentAgent);
   const liveHasContent = useLiveHasContent(currentAgent);
 
-  // Fix #4: track which (agent, sessionId) we have already attempted to
-  // auto-resume for in the current "stale-cache" window. Stale React Query
-  // cache (sessionRunStatus="running") can outlive a finished SSE stream by
-  // up to one polling tick, causing the effect below to re-fire after
-  // resumeStream returns 204 → mode=history. Without this guard the effect
-  // retriggers in a tight loop until the cache refetches.
-  //
-  // The guard is cleared:
-  //  * when activeSessionId / agent changes (different conversation)
-  //  * when connectionPhase enters an active phase (a real stream attached
-  //    successfully — once it ends and goes idle again, a follow-up run
-  //    on the same session is a legitimate idle→running transition that
-  //    must be allowed through)
-  const resumedSessionsRef = useRef<Set<string>>(new Set());
+  // Bootstrap: on session change, if WS already marked this session active
+  // (e.g. WS snapshot arrived before localStorage restored activeSessionId),
+  // kick off auto-resume. Not reactive on activeSessionIds — deliberately
+  // one-shot per session change. resumeStream is idempotent.
   useEffect(() => {
-    resumedSessionsRef.current.clear();
-  }, [currentAgent, activeSessionId]);
-  useEffect(() => {
-    // Clear the resume guard only when actual streaming data arrives ("streaming"),
-    // NOT on "submitted" alone. A 204 response goes submitted→idle without real data
-    // and must not reset the guard — otherwise the stale sessionRunStatus="running"
-    // cache would loop: idle→resumeStream→submitted (guard cleared)→204→idle→repeat,
-    // keeping connectionPhase in an active phase and showing the blinking cursor.
-    // "complete" is also cleared because it means the stream finished successfully,
-    // so the next idle→running transition is legitimate (not a retry loop).
-    if (!activeSessionId) return;
-    if (
-      connectionPhase === "streaming" ||
-      connectionPhase === "reconnecting" ||
-      connectionPhase === "complete"
-    ) {
-      resumedSessionsRef.current.delete(`${currentAgent}::${activeSessionId}`);
+    if (!activeSessionId || isActivePhase(connectionPhase)) return;
+    if (activeSessionIds.includes(activeSessionId)) {
+      useChatStore.getState().resumeStream(currentAgent, activeSessionId);
     }
-  }, [connectionPhase, currentAgent, activeSessionId]);
-
-  // Auto-resume SSE stream when engine is still processing. React 18+ batches
-  // state updates; isActivePhase + isRunning guards prevent double-fire.
-  useEffect(() => {
-    // "complete" is the finishing-window phase: stream done, RQ refetch in progress.
-    // Guard against auto-resume firing during this window (connectionPhase goes
-    // idle→complete→idle; the stale sessionRunStatus="running" would otherwise
-    // trigger a spurious resumeStream call → reconnection loop).
-    if (!activeSessionId || isActivePhase(connectionPhase) || connectionPhase === "complete") return;
-    const isRunning = activeSessionIds.includes(activeSessionId) || sessionRunStatus === "running";
-    if (!isRunning) return;
-    // Re-entry guard against stale React Query cache (Fix #4).
-    const key = `${currentAgent}::${activeSessionId}`;
-    if (resumedSessionsRef.current.has(key)) return;
-    resumedSessionsRef.current.add(key);
-    useChatStore.getState().resumeStream(currentAgent, activeSessionId);
-  }, [activeSessionId, activeSessionIds, sessionRunStatus, connectionPhase, currentAgent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, currentAgent]);  // intentionally NOT activeSessionIds
 
   // Always fetch session messages — even during streaming.
   // During live streaming, sourceMessages prefers live data, but history data
@@ -264,7 +208,7 @@ export function ChatThread({
     && !lastMsgIsOtherAgent
     && connectionPhase !== "complete"
     && (connectionPhase === "submitted" || connectionPhase === "streaming" || connectionPhase === "reconnecting"
-        || engineRunning || sessionRunStatus === "running");
+        || engineRunning);
 
   // ── Message search (Ctrl+Shift+F) ────────────────────────────────────────
   const search = useMessageSearch(allMessages);
@@ -360,27 +304,6 @@ export function ChatThread({
           onClear={onClearError}
           onRetry={onRetry}
         />
-      )}
-
-      {/* Stuck-session recovery banner — shown when engine is 'running' but UI is idle */}
-      {!streamError && !isReadOnly && engineRunning && !isActivePhase(connectionPhase) && (
-        <div className="mx-auto my-4 w-full max-w-2xl px-4 animate-in fade-in slide-in-from-top-2 duration-300">
-          <div className="flex items-center justify-between gap-4 rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-500 shadow-sm backdrop-blur-sm">
-            <div className="flex items-center gap-3">
-              <div className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-75"></span>
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
-              </div>
-              <p className="font-medium">Сессия отмечена как выполняемая, но подключение отсутствует</p>
-            </div>
-            <button
-              onClick={handleManualAbort}
-              className="shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white transition-all hover:bg-amber-600 active:scale-95 shadow-sm"
-            >
-              Остановить принудительно
-            </button>
-          </div>
-        </div>
       )}
 
       {/* Input area */}
