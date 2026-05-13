@@ -70,8 +70,18 @@ async fn main() -> anyhow::Result<()> {
     let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Ready]);
 
     let poll = std::time::Duration::from_secs(cfg.worker.poll_interval_secs);
+
+    // Shared embedding client — retry policy + W3C traceparent injection live
+    // here; worker no longer manages its own reqwest::Client for embeddings.
+    // `requested_dimensions = 0` means "let Toolgate resolve the active
+    // embedding model's native dimension" (worker doesn't override dims).
+    let toolgate_client = hydeclaw_embedding::ToolgateClient::new(
+        cfg.toolgate_url.clone(),
+        0,
+    );
+
     let ctx = handlers::DispatchCtx {
-        toolgate_url: &cfg.toolgate_url,
+        toolgate_client: &toolgate_client,
         workspace_dir: &cfg.workspace_dir,
         fts_language: &cfg.fts_language,
     };
