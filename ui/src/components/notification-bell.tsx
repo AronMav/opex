@@ -202,6 +202,7 @@ export function NotificationBell() {
         <button
           className="group relative flex h-9 w-9 items-center justify-center rounded-md transition-colors hover:bg-accent text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           aria-label={t("notifications.bell_label")}
+          data-testid="notifications-bell"
         >
           <Bell
             size={20}
@@ -216,7 +217,7 @@ export function NotificationBell() {
           )}
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80 p-0">
+      <DropdownMenuContent align="end" className="w-80 p-0" data-testid="notification-list">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <span className="text-sm font-semibold">{t("notifications.title")}</span>

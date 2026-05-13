@@ -253,9 +253,16 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
     }
   }
 
+  // T16.5: testid for E2E — present on any assistant message that is not
+  // actively text-streaming. Live streaming messages carry status === "streaming"
+  // (see stream-processor.ts); history + finalized messages have status of
+  // undefined / "complete" / "aborted" / "failed".
+  const isComplete = (message.status as string | undefined) !== "streaming";
+
   return (
     <div
       data-role="assistant"
+      data-testid={isComplete ? "message-complete" : undefined}
       className={cn(
         "group flex gap-3",
         continuesPrevious
