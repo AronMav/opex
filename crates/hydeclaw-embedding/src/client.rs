@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use reqwest::StatusCode;
 use serde_json::Value;
 
@@ -99,6 +99,37 @@ impl ToolgateClient {
             return Ok(vec![]);
         }
         self.embed_inner(texts).await
+    }
+
+    /// Fetch /health. НЕ применяет retry — failure возвращается немедленно,
+    /// caller сам решает, как ждать.
+    pub async fn fetch_health(&self) -> Result<ToolgateHealth> {
+        if !self.is_configured() {
+            anyhow::bail!("toolgate client not configured");
+        }
+        let url = format!("{}/health", self.base_url);
+        let resp = self
+            .http
+            .get(&url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .await
+            .context("toolgate health request failed")?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("toolgate /health returned HTTP {status}");
+        }
+        let raw: Value = resp
+            .json()
+            .await
+            .context("failed to parse /health response")?;
+        let active = raw["active_providers"]["embedding"]
+            .as_str()
+            .map(|s| s.to_string());
+        Ok(ToolgateHealth {
+            active_embedding_provider: active,
+            raw,
+        })
     }
 
     async fn embed_inner(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
