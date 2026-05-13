@@ -39,4 +39,11 @@ ignore = [
     # use `tracing` for logging and never invoke rand from a logger
     # callback. Will clear when rand 0.10 lands.
     "RUSTSEC-2026-0097",
+
+    # `lru` 0.12.5 — unsoundness in `IterMut` (Stacked Borrows violation).
+    # We use lru only in `tools::embedding::ToolEmbeddingCache` via `.get()`
+    # and `.put()`; no `iter_mut()` callsite exists in the workspace
+    # (verified via grep). Will clear when bumping to lru 0.13+, blocked
+    # only by minor API churn in the constructor.
+    "RUSTSEC-2026-0002",
 ]
