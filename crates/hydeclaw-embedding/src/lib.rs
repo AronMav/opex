@@ -7,4 +7,6 @@ pub mod client;
 pub mod retry;
 pub mod trace;
 
-// Re-exports добавятся в Task 2-6 по мере реализации модулей.
+pub use retry::{RetryPolicy, RetryableError};
+
+// Re-exports добавятся в Task 4-6 по мере реализации модулей.
