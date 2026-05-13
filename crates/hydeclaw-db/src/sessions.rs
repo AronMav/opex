@@ -725,9 +725,10 @@ pub fn warn_invalid_transition(from: Option<SessionStatus>, to: SessionStatus, s
 /// session exists and was claimed (regardless of previous status), `false` when
 /// the session was not found. Allows re-entry from any status including `'done'`
 /// so that users can continue completed conversations. The guard-drop race is
-/// safe: `mark_session_run_status_if_running` (used by `SessionLifecycleGuard`)
-/// guards `WHERE run_status = 'running'`, so a completed-then-reclaimed session
-/// cannot be accidentally set to `'failed'` by a stale guard.
+/// safe: `cleanup_session_terminated` (used by `SessionLifecycleGuard`)
+/// performs its step-1 claim with `WHERE run_status = 'running'`, so a
+/// completed-then-reclaimed session cannot be accidentally set to `'failed'`
+/// by a stale guard.
 pub async fn claim_session_running(db: &PgPool, session_id: Uuid) -> Result<bool> {
     let rows = sqlx::query(
         "UPDATE sessions SET run_status = 'running' WHERE id = $1"
@@ -819,34 +820,6 @@ pub async fn cleanup_session_streaming_messages(
     .execute(db)
     .await?;
     Ok(res.rows_affected())
-}
-
-/// Transition `run_status` from `'running'` to `new_status`. No-op if the
-/// session is already in any terminal state (`'done'`, `'failed'`,
-/// `'interrupted'`, `'timeout'`, `'cancelled'`).
-///
-/// Used on the cancel-grace path in the chat handler to mark sessions
-/// `'interrupted'` when the user aborted a stream that then exceeded the
-/// grace window — this fires BEFORE `engine_handle.abort()` drops the
-/// `SessionLifecycleGuard`, which in turn uses this same helper so its
-/// `'failed'` fallback cannot overwrite an earlier `'interrupted'`.
-///
-/// Returns the number of rows updated (0 if the session was already
-/// terminal, 1 otherwise).
-pub async fn mark_session_run_status_if_running(
-    db: &PgPool,
-    session_id: Uuid,
-    new_status: &str,
-) -> Result<u64> {
-    let rows = sqlx::query(
-        "UPDATE sessions SET run_status = $1 WHERE id = $2 AND run_status = 'running'"
-    )
-        .bind(new_status)
-        .bind(session_id)
-        .execute(db)
-        .await?
-        .rows_affected();
-    Ok(rows)
 }
 
 /// Single cleanup path for all session terminations.

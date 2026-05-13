@@ -174,19 +174,23 @@ pub(super) async fn run_converter(
                 // instead of "ERROR" — the engine task's
                 // `SessionLifecycleGuard` is about to drop, and its
                 // Drop impl would otherwise mark the session `'failed'`.
-                // The guard uses `mark_session_run_status_if_running`,
-                // so once we write `'interrupted'` here the guard's
-                // update affects 0 rows.
+                //
+                // cleanup_session_terminated uses an atomic
+                // `WHERE run_status = 'running'` claim (step 1), so
+                // when the guard's Drop fires afterwards it observes
+                // 'interrupted' and its claim returns Ok(false) — no
+                // overwrite.
                 tracing::warn!(
                     session_id = ?session_id_str,
                     "cancel grace window ({}s) exceeded, hard-aborting engine",
                     CANCEL_GRACE.as_secs(),
                 );
                 if let Some(sid) = session_uuid
-                    && let Err(e) = crate::db::sessions::mark_session_run_status_if_running(
+                    && let Err(e) = crate::db::sessions::cleanup_session_terminated(
                         &db,
                         sid,
                         "interrupted",
+                        "cancel_grace_exceeded",
                     )
                     .await
                 {
