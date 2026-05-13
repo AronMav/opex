@@ -1230,26 +1230,10 @@ pub async fn cleanup_interrupted_sessions(db: &PgPool) -> Result<usize> {
     }
 
     for session_id in &interrupted {
-        // 1. Insert synthetic tool results for incomplete tool calls
-        if let Err(e) = insert_synthetic_tool_results(db, *session_id).await {
-            tracing::warn!(error = %e, session_id = %session_id, "failed to insert synthetic tool results");
-        }
-
-        // 2. Mark orphaned streaming messages as interrupted (instead of deleting)
-        if let Err(e) = sqlx::query(
-            "UPDATE messages SET status = 'interrupted', content = COALESCE(NULLIF(content, ''), '[interrupted]')
-             WHERE session_id = $1 AND status = 'streaming'"
-        )
-            .bind(session_id)
-            .execute(db)
-            .await
-        {
-            tracing::warn!(error = %e, session_id = %session_id, "failed to mark orphaned streaming messages");
-        }
-
-        // 3. Mark session as interrupted
-        if let Err(e) = set_session_run_status(db, *session_id, "interrupted").await {
-            tracing::warn!(error = %e, session_id = %session_id, "failed to mark session interrupted");
+        if let Err(e) = cleanup_session_terminated(
+            db, *session_id, "interrupted", "crash_recovery"
+        ).await {
+            tracing::warn!(error = %e, session_id = %session_id, "startup cleanup failed");
         }
     }
 
@@ -2306,6 +2290,35 @@ mod tests {
             "SELECT run_status FROM sessions WHERE id = $1"
         ).bind(s).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "interrupted");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cleanup_interrupted_sessions_uses_cleanup_helper(pool: sqlx::PgPool) {
+        let s = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        super::set_session_run_status(&pool, s, "running").await.unwrap();
+        sqlx::query("INSERT INTO messages (session_id, role, content, status)
+                     VALUES ($1, 'assistant', 'partial', 'streaming')")
+            .bind(s).execute(&pool).await.unwrap();
+
+        super::cleanup_interrupted_sessions(&pool).await.unwrap();
+
+        // Session marked interrupted, streaming message preserved as interrupted (not deleted).
+        let session_status: String = sqlx::query_scalar(
+            "SELECT run_status FROM sessions WHERE id = $1"
+        ).bind(s).fetch_one(&pool).await.unwrap();
+        assert_eq!(session_status, "interrupted");
+
+        let (content, msg_status): (String, String) = sqlx::query_as(
+            "SELECT content, status FROM messages WHERE session_id = $1"
+        ).bind(s).fetch_one(&pool).await.unwrap();
+        assert_eq!(content, "partial", "partial text preserved");
+        assert_eq!(msg_status, "interrupted");
+
+        // WAL event written via cleanup_session_terminated.
+        let event_type: String = sqlx::query_scalar(
+            "SELECT event_type FROM session_events WHERE session_id = $1 ORDER BY id DESC LIMIT 1"
+        ).bind(s).fetch_one(&pool).await.unwrap();
+        assert_eq!(event_type, "interrupted");
     }
 }
 
