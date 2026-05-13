@@ -25,14 +25,25 @@ impl ToolEmbeddingCache {
     }
 
     /// Return the cached embedding for `key`, or compute it from `text` and cache it.
+    ///
+    /// **Self-healing on dim change:** if the cached vector length differs
+    /// from the embedder's current `embed_dim()`, treat as a cache miss and
+    /// re-embed. This prevents mixed-dim cosine similarities after the
+    /// active embedding provider is switched (`embedder.reset()` clears the
+    /// embedder's in-memory state, but does NOT reach into this per-agent LRU).
     pub async fn get_or_embed(
         &self,
         key: &str,
         text: &str,
         embedder: &dyn crate::memory::EmbeddingService,
     ) -> anyhow::Result<Vec<f32>> {
+        let expected_dim = embedder.embed_dim() as usize;
         // get() двигает запись в начало LRU — нужен write-lock.
-        if let Some(v) = self.embeddings.lock().await.get(key) {
+        // Dim-mismatch falls through (re-embed) to avoid mixed-dim cosine
+        // similarity after the active embedding provider is switched.
+        if let Some(v) = self.embeddings.lock().await.get(key)
+            && (expected_dim == 0 || v.len() == expected_dim)
+        {
             return Ok(v.clone());
         }
         let v = embedder.embed(text).await?;
@@ -96,6 +107,65 @@ mod tests {
     }
 
     use crate::memory::embedding::CountingEmbedder;
+    use crate::memory::EmbeddingService;
+
+    /// Test-only embedder с настраиваемой dim — используется в
+    /// `dim_change_invalidates_cached_vector`, чтобы смоделировать смену
+    /// embedding-провайдера, при которой меняется размерность вектора.
+    struct FixedDimEmbedder {
+        dim: u32,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FixedDimEmbedder {
+        fn new(dim: u32) -> Self {
+            Self { dim, calls: std::sync::atomic::AtomicUsize::new(0) }
+        }
+        fn count(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl EmbeddingService for FixedDimEmbedder {
+        fn is_available(&self) -> bool { true }
+        fn embed_dim(&self) -> u32 { self.dim }
+        fn embed_provider_display(&self) -> Option<String> { Some("fixed-dim".into()) }
+        async fn embed(&self, _t: &str) -> anyhow::Result<Vec<f32>> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![0.1; self.dim as usize])
+        }
+        async fn embed_batch(&self, ts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+            let mut out = Vec::with_capacity(ts.len());
+            for _ in ts { out.push(self.embed("").await?); }
+            Ok(out)
+        }
+    }
+
+    #[tokio::test]
+    async fn dim_change_invalidates_cached_vector() {
+        // Embedder #1: dim=4. Кэшируем вектор для ключа "tool".
+        let embedder_v1 = FixedDimEmbedder::new(4);
+        let cache = ToolEmbeddingCache::new();
+        let v1 = cache.get_or_embed("tool", "tool", &embedder_v1).await.unwrap();
+        assert_eq!(v1.len(), 4);
+        assert_eq!(embedder_v1.count(), 1, "first call must miss + embed");
+
+        // Повторный вызов с тем же embedder — cache hit.
+        let _ = cache.get_or_embed("tool", "tool", &embedder_v1).await.unwrap();
+        assert_eq!(embedder_v1.count(), 1, "second call must hit cache");
+
+        // Переключились на embedder #2 с dim=8 (симулируем смену провайдера +
+        // reset()). Cached dim=4 ≠ expected dim=8 → cache miss → re-embed.
+        let embedder_v2 = FixedDimEmbedder::new(8);
+        let v2 = cache.get_or_embed("tool", "tool", &embedder_v2).await.unwrap();
+        assert_eq!(v2.len(), 8, "must return new-dim vector");
+        assert_eq!(embedder_v2.count(), 1, "dim-change must force re-embed");
+
+        // Следующий вызов с тем же v2 — снова cache hit (свежий 8-dim вектор).
+        let _ = cache.get_or_embed("tool", "tool", &embedder_v2).await.unwrap();
+        assert_eq!(embedder_v2.count(), 1, "subsequent call hits the refreshed cache");
+    }
 
     #[tokio::test]
     async fn lru_evicts_least_recently_used_not_all() {

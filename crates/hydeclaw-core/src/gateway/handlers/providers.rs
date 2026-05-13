@@ -45,8 +45,9 @@ static NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Media capabilities listed in `build_media_config` exports — only these
-/// `provider_active` rows are surfaced to toolgate. Toolgate pulls config
-/// on every provider call (TTL=0), so Core no longer pushes reload notifications.
+/// `provider_active` rows are surfaced to toolgate. Toolgate caches the config
+/// for 30s with an ETag conditional GET (see `api_media_config_export`), so
+/// provider-active changes propagate within 30s automatically.
 const MEDIA_CAPABILITIES: &[&str] = &["stt", "tts", "vision", "imagegen", "embedding"];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -232,7 +233,8 @@ pub(crate) async fn api_create_provider(
                     tracing::warn!(provider = %p.name, error = %e, "failed to store provider key in vault");
                 }
             }
-            // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
+            // Toolgate caches config 30s with ETag conditional GET — provider
+            // changes propagate within 30s automatically.
             let json = provider_json(&auth.secrets, &p).await;
             (StatusCode::CREATED, Json(json)).into_response()
         }
@@ -315,14 +317,13 @@ pub(crate) async fn api_update_provider(
         }))).into_response();
     }
 
-    // Check if type is changing — need to clear provider_active references
-    let old_provider = if body.category.is_some() {
-        providers::get_provider(&infra.db, id).await.ok().flatten()
-    } else {
-        None
-    };
+    // Load the pre-update row once: needed for both type-change detection
+    // (provider_active cleanup) and identity-change detection (embedder reset
+    // on base_url/model/api_key change to the active embedding provider).
+    let old_provider = providers::get_provider(&infra.db, id).await.ok().flatten();
 
     let api_key = body.api_key.clone().filter(|k| !k.is_empty());
+    let api_key_changed = api_key.is_some();
     let input = UpdateProvider {
         name: body.name,
         category: body.category,
@@ -343,8 +344,8 @@ pub(crate) async fn api_update_provider(
                 }
             }
 
-            // If type changed, clear provider_active entries that referenced this provider by name
-            if let Some(old) = old_provider
+            // If type changed, clear provider_active entries that referenced this provider by name.
+            if let Some(ref old) = old_provider
                 && old.category != p.category
             {
                 // Clear active binding for old capabilities that referenced this provider
@@ -352,16 +353,47 @@ pub(crate) async fn api_update_provider(
                 for a in active {
                     if a.provider_name.as_deref() == Some(&p.name) {
                         let _ = providers::set_provider_active(&infra.db, &a.capability, None).await;
-                        if a.capability == "embedding"
-                            && let Err(err) = infra.embedder.reset().await
-                        {
-                            tracing::error!(error = %err, "failed to reset embedder after provider delete");
-                        }
                     }
                 }
             }
 
-            // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
+            // Determine whether the updated row is the active embedding provider,
+            // and whether *anything* about its identity (category, base_url,
+            // default_model, api_key, provider_type, name) has changed. Any such
+            // change requires `embedder.reset()` so that the next embed call
+            // re-probes the dim / provider_display / freshly-resolved key.
+            let active_embedding_name = providers::list_provider_active(&infra.db)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .find(|a| a.capability == "embedding")
+                .and_then(|a| a.provider_name);
+            let is_active_embedding = active_embedding_name.as_deref() == Some(&p.name)
+                || old_provider.as_ref().is_some_and(|old| {
+                    active_embedding_name.as_deref() == Some(&old.name)
+                });
+
+            let identity_changed = if let Some(ref old) = old_provider {
+                old.category != p.category
+                    || old.provider_type != p.provider_type
+                    || old.base_url != p.base_url
+                    || old.default_model != p.default_model
+                    || old.name != p.name
+                    || api_key_changed
+            } else {
+                // Без old_provider консервативно считаем, что identity изменилась.
+                true
+            };
+
+            if is_active_embedding
+                && identity_changed
+                && let Err(err) = infra.embedder.reset().await
+            {
+                tracing::error!(error = %err, "failed to reset embedder after provider update");
+            }
+
+            // Toolgate caches config 30s with ETag conditional GET — provider
+            // changes propagate within 30s automatically.
             let json = provider_json(&auth.secrets, &p).await;
             (StatusCode::OK, Json(json)).into_response()
         }
@@ -375,12 +407,40 @@ pub(crate) async fn api_delete_provider(
     State(auth): State<AuthServices>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
+    // Resolve the provider's NAME before deletion: provider_active.provider_name
+    // is a TEXT field keyed by name (not UUID), so we need the name to detect
+    // whether this delete will invalidate the active embedding binding.
+    // FK `ON DELETE SET NULL` clears the provider_active row after delete, but
+    // the in-memory `ToolgateEmbedder` (cached dim, provider_display, etc.)
+    // retains stale state until `reset()` is called — see embedding.rs:51-56.
+    let provider_name = providers::get_provider(&infra.db, id)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.name);
+    let was_active_embedding = if let Some(ref name) = provider_name {
+        providers::list_provider_active(&infra.db)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|a| a.capability == "embedding" && a.provider_name.as_deref() == Some(name.as_str()))
+    } else {
+        false
+    };
+
     match providers::delete_provider(&infra.db, id).await {
         Ok(true) => {
             if let Err(e) = auth.secrets.delete_scoped(PROVIDER_CREDENTIALS, &id.to_string()).await {
                 tracing::debug!(provider = %id, error = %e, "no vault key to delete for provider");
             }
-            // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
+            if was_active_embedding
+                && let Err(err) = infra.embedder.reset().await
+            {
+                tracing::error!(error = %err,
+                    "failed to reset embedder after embedding provider deletion");
+            }
+            // Toolgate caches config 30s with ETag conditional GET — provider
+            // changes propagate within 30s automatically.
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response(),
@@ -507,7 +567,8 @@ pub(crate) async fn api_set_provider_active(
     .await
     {
         Ok(row) => {
-            // Toolgate pulls config on every provider call (TTL=0) — no notify needed.
+            // Toolgate caches config 30s with ETag conditional GET — provider
+            // changes propagate within 30s automatically.
             if input.capability == "embedding"
                 && let Err(err) = infra.embedder.reset().await
             {
