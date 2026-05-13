@@ -718,12 +718,9 @@ pub(crate) async fn api_restore(
     }
 
     // Mark setup complete
-    let _ = sqlx::query(
-        "INSERT INTO system_flags (key, value) VALUES ('setup_complete', 'true'::jsonb) \
-         ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()"
-    )
-    .execute(&infra.db).await
-    .inspect_err(|e| tracing::warn!(%e, "restore: set setup_complete failed"));
+    let _ = hydeclaw_db::sys_flags::upsert(&infra.db, "setup_complete", json!(true))
+        .await
+        .inspect_err(|e| tracing::warn!(%e, "restore: set setup_complete failed"));
 
     // Restart agents from restored configs
     let restarted = restart_agents_from_disk(

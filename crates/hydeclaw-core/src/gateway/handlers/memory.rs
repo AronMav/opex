@@ -505,13 +505,11 @@ pub(crate) async fn api_set_fts_language(
         Ok(rows) => {
             // Persist so the change survives restarts (TOML override still wins
             // if explicitly set; this writes to system_flags only).
-            if let Err(e) = sqlx::query(
-                "INSERT INTO system_flags (key, value) \
-                 VALUES ('memory.fts_language', $1::jsonb) \
-                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+            if let Err(e) = hydeclaw_db::sys_flags::upsert(
+                &state.db,
+                "memory.fts_language",
+                Value::String(lang.clone()),
             )
-            .bind(Value::String(lang.clone()))
-            .execute(&state.db)
             .await
             {
                 tracing::warn!(error = %e, "FTS language updated in-memory + tsv rebuilt, but failed to persist to system_flags");

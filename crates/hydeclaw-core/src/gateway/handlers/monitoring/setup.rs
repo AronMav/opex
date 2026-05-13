@@ -13,28 +13,17 @@ use crate::agent::cli_backend::CLI_PRESETS;
 use crate::gateway::clusters::InfraServices;
 
 pub(crate) async fn api_setup_status(State(infra): State<InfraServices>) -> Json<Value> {
-    let complete: bool = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT value FROM system_flags WHERE key = 'setup_complete'"
-    )
-    .fetch_optional(&infra.db)
-    .await
-    .ok()
-    .flatten()
-    .and_then(|v| v.as_bool())
-    .unwrap_or(false);
+    let complete: bool = hydeclaw_db::sys_flags::get(&infra.db, "setup_complete")
+        .await
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     Json(json!({ "needs_setup": !complete }))
 }
 
 /// POST /api/setup/complete — mark setup as done; guarded by `setup_guard_middleware`
 pub(crate) async fn api_setup_complete(State(infra): State<InfraServices>) -> impl IntoResponse {
-    let result = sqlx::query(
-        "INSERT INTO system_flags (key, value, updated_at)
-         VALUES ('setup_complete', 'true'::jsonb, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = 'true'::jsonb, updated_at = NOW()"
-    )
-    .execute(&infra.db)
-    .await;
+    let result = hydeclaw_db::sys_flags::upsert(&infra.db, "setup_complete", json!(true)).await;
 
     match result {
         Ok(_) => Json(json!({"ok": true, "message": "setup marked as complete"})).into_response(),
@@ -262,15 +251,10 @@ pub(crate) async fn setup_guard_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> impl IntoResponse {
-    let complete: bool = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT value FROM system_flags WHERE key = 'setup_complete'"
-    )
-    .fetch_optional(&infra.db)
-    .await
-    .ok()
-    .flatten()
-    .and_then(|v| v.as_bool())
-    .unwrap_or(false);
+    let complete: bool = hydeclaw_db::sys_flags::get(&infra.db, "setup_complete")
+        .await
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if complete {
         return (
