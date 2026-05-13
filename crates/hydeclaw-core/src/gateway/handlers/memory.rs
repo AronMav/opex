@@ -356,6 +356,14 @@ pub(crate) async fn api_create_memory(
     // Admin-created chunks are shared so all agents can see them
     match state.memory_store.index(&req.content, source, pinned, "shared", "").await {
         Ok(id) => Json(json!({"id": id, "ok": true})).into_response(),
+        Err(e) if e.to_string().contains("dim_mismatch") => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "dim_mismatch",
+                "hint": "POST /api/memory/reindex to rebuild embeddings"
+            })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": e.to_string()})),
