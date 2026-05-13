@@ -827,7 +827,6 @@ fn spawn_persist_message_row(
             );
         }
     });
-
 }
 
 /// Spawn a fire-and-forget tokio task that persists a single tool result row
@@ -881,6 +880,17 @@ fn spawn_persist_tool_message(
 /// `step_id` column (added by migration 046). Lets analytics or per-step
 /// UI features query intermediate iterations by their tool-loop position.
 /// `None` is treated as "don't set" so legacy callers keep working.
+///
+/// TODO (post-D3, 2026-05-13): same latent race shape as the `parallel_batch_id`
+/// UPDATE that D3 eliminated — the 20ms lead-in `tokio::sleep` is racing the
+/// detached INSERT, and `UPDATE ... WHERE id = X` against a not-yet-committed
+/// row returns 0 rows affected with `Ok(())`, silently losing the step_id tag.
+/// Fix by following the D3 pattern: thread `step_id` into the INSERT signature
+/// of `save_message_ex_with_id` (add `step_id: Option<i32>` parameter and a new
+/// column to the INSERT), then drop this secondary UPDATE entirely. Out of
+/// scope for the D3 spec — see
+/// `docs/superpowers/specs/2026-05-13-session-active-path-truncation-design.md`
+/// §"Out of scope".
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_persist_assistant_message(
     db: &sqlx::PgPool,
