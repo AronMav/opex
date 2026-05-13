@@ -972,6 +972,54 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+// ── Memory indexing: file discovery ──────────────────────────────────────────
+
+/// Returns all .md/.txt files in `workspace/` that should be indexed into memory.
+/// Excludes system directories listed in `MEMORY_INDEX_EXCLUDE_DIRS` and
+/// root-level system docs listed in `MEMORY_INDEX_EXCLUDE_FILES`.
+///
+/// Used by `POST /api/memory/reindex` to enumerate sources for per-file reindex
+/// tasks. Walk semantics mirror those of `memory/watcher.rs` (which is event-
+/// driven and not reused here to avoid cross-module coupling).
+pub fn list_indexable_files() -> anyhow::Result<Vec<PathBuf>> {
+    let root = PathBuf::from(crate::config::WORKSPACE_DIR);
+    let mut out = Vec::new();
+    walk_indexable(&root, &root, &mut out)?;
+    Ok(out)
+}
+
+fn walk_indexable(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path);
+        let first = rel
+            .components()
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+            .unwrap_or("");
+        if MEMORY_INDEX_EXCLUDE_DIRS.contains(&first) {
+            continue;
+        }
+        if path.is_dir() {
+            walk_indexable(root, &path, out)?;
+        } else {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if MEMORY_INDEX_EXCLUDE_FILES.contains(&name) {
+                continue;
+            }
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if matches!(ext, "md" | "txt") {
+                out.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
