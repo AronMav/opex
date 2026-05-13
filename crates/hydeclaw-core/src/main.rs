@@ -366,15 +366,10 @@ async fn main() -> Result<()> {
     let fts_lang = if let Some(toml_lang) = cfg.memory.fts_language.clone() {
         toml_lang
     } else {
-        sqlx::query_scalar::<_, serde_json::Value>(
-            "SELECT value FROM system_flags WHERE key = 'memory.fts_language'",
-        )
-        .fetch_optional(&db_pool)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.as_str().map(String::from))
-        .unwrap_or_else(|| "simple".to_string())
+        hydeclaw_db::sys_flags::get(&db_pool, "memory.fts_language")
+            .await
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "simple".to_string())
     };
     let memory_store = Arc::new(memory::MemoryStore::new(db_pool.clone(), embedder.clone(), fts_lang));
     if embedder.is_available() {
@@ -496,13 +491,11 @@ async fn main() -> Result<()> {
                 "auto-detected FTS language from first agent"
             );
             memory_store.set_fts_language(&detected);
-            if let Err(e) = sqlx::query(
-                "INSERT INTO system_flags (key, value) \
-                 VALUES ('memory.fts_language', $1::jsonb) \
-                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+            if let Err(e) = hydeclaw_db::sys_flags::upsert(
+                &db_pool,
+                "memory.fts_language",
+                serde_json::Value::String(detected.clone()),
             )
-            .bind(serde_json::Value::String(detected.clone()))
-            .execute(&db_pool)
             .await
             {
                 tracing::warn!(error = %e, "failed to persist auto-detected FTS language");

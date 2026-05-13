@@ -58,14 +58,10 @@ pub async fn run_upload_signature_migration(
     upload_key: &[u8; 32],
 ) -> Result<usize> {
     // Gate check — returns early if migration already ran
-    let already_done: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM system_flags \
-         WHERE key = 'upload_sigs_migrated_v1')",
-    )
-    .fetch_one(db)
-    .await?;
-
-    if already_done {
+    if hydeclaw_db::sys_flags::get(db, "upload_sigs_migrated_v1")
+        .await
+        .is_some()
+    {
         return Ok(0);
     }
 
@@ -160,14 +156,8 @@ pub async fn run_upload_signature_migration(
     }
 
     // Write gate — idempotent via ON CONFLICT
-    sqlx::query(
-        "INSERT INTO system_flags (key, value) \
-         VALUES ('upload_sigs_migrated_v1', 'true'::jsonb) \
-         ON CONFLICT (key) DO UPDATE \
-         SET value = 'true'::jsonb, updated_at = now()",
-    )
-    .execute(db)
-    .await?;
+    hydeclaw_db::sys_flags::upsert(db, "upload_sigs_migrated_v1", serde_json::json!(true))
+        .await?;
 
     Ok(total_updated)
 }
