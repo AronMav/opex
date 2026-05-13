@@ -1167,6 +1167,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hydeclaw-embedding"
+version = "0.28.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
 name = "hydeclaw-gateway-util"
 version = "0.28.0"
 dependencies = [
