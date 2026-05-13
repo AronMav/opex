@@ -321,7 +321,7 @@ export function MessageList({
                   continuesPrevious={continuesPrevious}
                 />
                 {isTextStreaming && index === virtualItems.length - 1 && msg.role === "assistant" && (
-                  <div className="pb-1 pl-12">
+                  <div className="pb-1 pl-12" data-testid="streaming-cursor">
                     <CometLoader />
                   </div>
                 )}
