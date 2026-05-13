@@ -466,3 +466,119 @@ test("F5 reload during stream preserves session", async ({ page }) => {
   const chatText = await page.locator("body").innerText();
   expect(chatText.length).toBeGreaterThan(50);
 });
+
+// ── Test 4 (T4.1): F5 reload mid-stream resumes via WS snapshot ──────────────
+//
+// Verifies the session-lifecycle root-fix: when the user presses F5 during
+// streaming, the page must transparently resume from the WS snapshot (or via
+// the one-shot bootstrap effect when WS arrives before localStorage restore)
+// instead of showing a stuck-session recovery banner.
+
+test("F5 reload during streaming resumes via WS snapshot", async ({ page }) => {
+  test.setTimeout(120_000);
+
+  await login(page);
+  await clickNewChat(page);
+  await sendMessage(page, "напиши длинный ответ на 3 параграфа");
+
+  // Wait for streaming to begin.
+  await page.waitForSelector("[data-testid='streaming-cursor']", {
+    timeout: 30_000,
+  });
+
+  // F5 reload mid-stream.
+  await page.reload();
+
+  // If we land on /login, re-authenticate to land back on the chat URL.
+  if (page.url().includes("/login")) {
+    await login(page);
+  }
+
+  // After reload, streaming-cursor must re-appear within a short window —
+  // proves resumeStream was triggered (either by markSessionActive on the WS
+  // snapshot, or by the one-shot bootstrap effect when WS arrives before
+  // localStorage restore).
+  await page.waitForSelector("[data-testid='streaming-cursor']", {
+    timeout: 10_000,
+  });
+
+  // Final answer eventually appears.
+  await page.waitForSelector("[data-testid='message-complete']", {
+    timeout: 60_000,
+  });
+});
+
+// ── Test 5 (T4.2): Watchdog timeout produces UI notification ─────────────────
+//
+// Long-running scenario (>= 75s: 15s inactivity + 60s watchdog tick). Gated
+// behind RUN_LONG_TESTS=1. Requires a test agent named "test_short_inactivity"
+// with watchdog.inactivity_secs = 15 — CI sets this up; locally it must be
+// created manually if running this test outside CI.
+
+test.describe("long-running scenarios", () => {
+  test.skip(
+    process.env.RUN_LONG_TESTS !== "1",
+    "Skipped — set RUN_LONG_TESTS=1 to run this 75+ second test",
+  );
+
+  test("watchdog timeout produces UI notification", async ({ page }) => {
+    test.setTimeout(180_000);
+
+    // Pre-condition: a test agent named "test_short_inactivity" must exist
+    // with watchdog.inactivity_secs = 15. CI sets this up; locally it must be
+    // created manually if running this test outside CI.
+    //
+    // Navigate directly to the agent's chat URL — the helpers in this file
+    // open whichever agent is currently selected, which may not match.
+    await login(page);
+    await page.goto("/chat?agent=test_short_inactivity");
+    await page.waitForURL(/\/chat/, { timeout: 15_000 });
+    await clickNewChat(page);
+    await sendMessage(page, "тест");
+
+    // Wait for streaming to begin then NOT send any further activity.
+    await page.waitForSelector("[data-testid='streaming-cursor']", {
+      timeout: 30_000,
+    });
+
+    // Wait 15s (inactivity threshold) + 60s (watchdog tick interval) + buffer.
+    await page.waitForTimeout(80_000);
+
+    // Notification appears on the bell.
+    await page.click("[data-testid='notifications-bell']");
+    const list = page.locator("[data-testid='notification-list']");
+    await expect(list).toContainText("Session timeout");
+  });
+});
+
+// ── Test 6 (T4.3): Stuck-session banner never renders (negative smoke) ───────
+//
+// Negative regression: the old "Сессия отмечена как выполняемая…" amber banner
+// must never appear after the session-lifecycle root-fix lands. Reload mid-
+// stream and verify the banner stays gone for the stale-RQ-cache window where
+// it used to flash.
+
+test("Stuck-session recovery banner never renders", async ({ page }) => {
+  test.setTimeout(60_000);
+
+  await login(page);
+  await clickNewChat(page);
+  await sendMessage(page, "тест");
+
+  await page.waitForSelector("[data-testid='streaming-cursor']", {
+    timeout: 30_000,
+  });
+  await page.reload();
+
+  // If we land on /login, re-authenticate to land back on the chat URL.
+  if (page.url().includes("/login")) {
+    await login(page);
+  }
+
+  // Wait through the stale RQ cache window where the OLD banner would have shown.
+  await page.waitForTimeout(2_000);
+
+  // Banner text marker — unique amber-bordered message that the old code rendered.
+  const banner = page.locator("text=Сессия отмечена как выполняемая");
+  await expect(banner).not.toBeVisible();
+});
