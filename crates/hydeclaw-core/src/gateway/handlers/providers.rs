@@ -1,13 +1,15 @@
 use axum::{
     Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::header::{CACHE_CONTROL, ETAG, IF_NONE_MATCH},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -561,8 +563,34 @@ pub(crate) async fn build_media_config(infra: &InfraServices, auth: &AuthService
 pub(crate) async fn api_media_config_export(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
-) -> Json<Value> {
-    Json(build_media_config(&infra, &auth).await)
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let config = build_media_config(&infra, &auth).await;
+    let canonical = serde_json::to_vec(&config).unwrap_or_default();
+    // Полный 32-байтовый SHA256 (64 hex-символа). Усекать смысла нет —
+    // ETag сравнивается как opaque-строка, выигрыш в bytes-on-wire
+    // незначителен по сравнению с размером body /api/media-config.
+    let etag = format!("\"{}\"", hex::encode(Sha256::digest(&canonical)));
+
+    if let Some(if_none_match) = headers.get(IF_NONE_MATCH)
+        && if_none_match.to_str().is_ok_and(|v| v == etag)
+    {
+        let mut resp = (StatusCode::NOT_MODIFIED, ()).into_response();
+        if let Ok(v) = HeaderValue::from_str(&etag) {
+            resp.headers_mut().insert(ETAG, v);
+        }
+        return resp;
+    }
+
+    let mut resp = Json(config).into_response();
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        resp.headers_mut().insert(ETAG, v);
+    }
+    resp.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("max-age=30, must-revalidate"),
+    );
+    resp
 }
 
 // ── Static metadata ─────────────────────────────────────────────────────────
@@ -1209,5 +1237,20 @@ mod tests {
         assert!(!is_valid_capability("compaction"));
         assert!(!is_valid_capability("text"));
         assert!(!is_valid_capability(""));
+    }
+}
+
+#[cfg(test)]
+mod etag_tests {
+    use sha2::{Digest, Sha256};
+
+    #[tokio::test]
+    async fn etag_format_is_quoted_hex_sha256() {
+        // ETag format: "<64-char hex of SHA256>"
+        let canonical = b"{\"providers\":{}}";
+        let etag_value = format!("\"{}\"", hex::encode(Sha256::digest(canonical)));
+        assert_eq!(etag_value.len(), 66, "64 hex + 2 quotes");
+        assert!(etag_value.starts_with('"') && etag_value.ends_with('"'));
+        assert!(etag_value[1..65].chars().all(|c| c.is_ascii_hexdigit()));
     }
 }
