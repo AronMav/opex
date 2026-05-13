@@ -96,7 +96,8 @@ export function ChatThread({
   const isLlmReconnecting = useChatStore((s) => s.agents[currentAgent]?.isLlmReconnecting ?? false);
   const activeSessionIds = useChatStore((s) => s.agents[currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE_IDS);
 
-  // CRITICAL: We are "running" if we're in an active connection phase OR the DB says so.
+  // "Running" = active connection phase OR WS push reports the session active.
+  // DB run_status is no longer consulted in the hot path (spec I3).
   const engineRunning = useEngineRunning(currentAgent);
 
   // Derived booleans from message source hooks

@@ -2,7 +2,8 @@
 //!
 //! CONTEXT.md correction #2: the rewrite target is find_stuck_sessions
 //! (the correlated-subquery N+1 at src/db/sessions.rs:360), NOT
-//! find_stale_running_sessions (which is already single-query).
+//! find_stale_running_sessions_per_agent (which is already single-query;
+//! the helper was renamed in the 2026-05-13 session-lifecycle root-fix).
 //!
 //! Identical-results contract: the new window-function SQL produces the
 //! same (session_id, agent_id) set as the legacy correlated-subquery SQL
