@@ -43,6 +43,12 @@ pub trait EmbeddingService: Send + Sync {
     fn dim_mismatch(&self) -> bool {
         false
     }
+
+    /// Сбросить dim_mismatch flag (вызывается из `POST /api/memory/reindex`).
+    /// No-op для embedders без persistent state.
+    async fn clear_dim_mismatch(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 // ── ToolgateEmbedder ─────────────────────────────────────────────────────────
@@ -231,13 +237,6 @@ impl ToolgateEmbedder {
         Ok(())
     }
 
-    /// Сбросить ТОЛЬКО `dim_mismatch` flag (после успешного reindex).
-    pub async fn clear_dim_mismatch(&self) -> Result<()> {
-        self.dim_mismatch.store(false, Ordering::Release);
-        sys_flags::upsert(&self.db, "memory.dim_mismatch", json!(false)).await?;
-        Ok(())
-    }
-
     /// Lazy init helper: если `embed_dim==0`, и пришёл вектор, выставляем dim
     /// и пытаемся создать HNSW индекс.
     async fn maybe_lazy_init_dim(&self, vec: &[f32]) {
@@ -277,6 +276,13 @@ impl EmbeddingService for ToolgateEmbedder {
 
     fn dim_mismatch(&self) -> bool {
         self.dim_mismatch.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Сбросить ТОЛЬКО `dim_mismatch` flag (после успешного reindex).
+    async fn clear_dim_mismatch(&self) -> Result<()> {
+        self.dim_mismatch.store(false, Ordering::Release);
+        sys_flags::upsert(&self.db, "memory.dim_mismatch", json!(false)).await?;
+        Ok(())
     }
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>> {

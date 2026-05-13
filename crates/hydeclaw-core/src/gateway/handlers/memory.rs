@@ -1,15 +1,19 @@
+use std::sync::Arc;
+
 use axum::{
     Router,
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{get, delete},
+    routing::{delete, get, post},
 };
+use hydeclaw_db::memory_queries;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::super::AppState;
 use crate::gateway::clusters::InfraServices;
+use crate::memory::EmbeddingService;
 
 include!("memory_dto_structs.rs");
 
@@ -18,6 +22,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/memory", get(api_list_memory).post(api_create_memory))
         .route("/api/memory/stats", get(api_memory_stats))
         .route("/api/memory/export", get(api_export_memory))
+        .route("/api/memory/reindex", post(api_reindex_memory))
         .route("/api/memory/fts-language", get(api_get_fts_language).put(api_set_fts_language))
         .route("/api/memory/{id}", delete(api_delete_memory).patch(api_patch_memory))
         .route("/api/memory/tasks", get(api_memory_tasks))
@@ -570,5 +575,90 @@ pub(crate) async fn api_export_memory(
         )
             .into_response(),
     }
+}
+
+// ── Memory Reindex ──
+
+/// `POST /api/memory/reindex` — wipe `memory_chunks`, rebuild the HNSW index for
+/// the current embedding dimension, enqueue per-source reindex tasks for every
+/// indexable workspace file, and clear the `dim_mismatch` flag.
+///
+/// Protected by `infra.reindex_mutex` — a second concurrent caller gets `409
+/// Conflict`. The mutex is held for the full duration of the destructive +
+/// rebuild sequence so a reset cannot interleave with task enqueue.
+pub(crate) async fn api_reindex_memory(
+    State(infra): State<InfraServices>,
+) -> impl IntoResponse {
+    let _guard = match infra.reindex_mutex.try_lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({"error": "reindex already in progress"})),
+            )
+                .into_response();
+        }
+    };
+
+    match run_reindex(&infra.db, infra.embedder.clone()).await {
+        Ok((enqueued, previous_dim, new_dim)) => Json(json!({
+            "enqueued": enqueued,
+            "previous_dim": previous_dim,
+            "new_dim": new_dim,
+        }))
+        .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+async fn run_reindex(
+    db: &sqlx::PgPool,
+    embedder: Arc<dyn EmbeddingService>,
+) -> anyhow::Result<(usize, Option<u32>, u32)> {
+    // 1. Resolve the embedding dimension. `ensure_initialized` is only on the
+    //    concrete `ToolgateEmbedder` (not in the trait), so we trigger lazy
+    //    init through the trait by issuing a tiny probe `embed()` when the
+    //    cached dim is 0.
+    let new_dim = if embedder.embed_dim() > 0 {
+        embedder.embed_dim()
+    } else {
+        let _ = embedder.embed("probe").await?;
+        embedder.embed_dim()
+    };
+    if new_dim == 0 {
+        anyhow::bail!(
+            "embedder not initialized, cannot reindex (check toolgate/embedding provider)"
+        );
+    }
+
+    let previous_dim = memory_queries::get_existing_embedding_dim(db)
+        .await
+        .map(|d| d as u32);
+
+    // 2. Wipe storage and rebuild the index at the new dimension.
+    sqlx::query("TRUNCATE memory_chunks").execute(db).await?;
+    memory_queries::drop_hnsw_index(db).await?;
+    memory_queries::ensure_hnsw_index(db, new_dim).await?;
+
+    // 3. Enqueue a reindex task per indexable workspace file.
+    let workspace_sources = crate::agent::workspace::list_indexable_files()?;
+    let mut count = 0usize;
+    for source in &workspace_sources {
+        memory_queries::enqueue_reindex_task(
+            db,
+            json!({"source": source.to_string_lossy()}),
+        )
+        .await?;
+        count += 1;
+    }
+
+    // 4. Clear the dim_mismatch flag (in-memory + persistent system_flags).
+    embedder.clear_dim_mismatch().await?;
+
+    Ok((count, previous_dim, new_dim))
 }
 
