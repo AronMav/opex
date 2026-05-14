@@ -16,6 +16,4 @@ parameters:
     required: true
     location: path
     description: "Repository name"
-rate_limit:
-  max_calls_per_minute: 30
 tags: [github]
