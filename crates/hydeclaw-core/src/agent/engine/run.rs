@@ -69,7 +69,6 @@ impl AgentEngine {
                 msg,
                 resume_session_id,
                 force_new_session,
-                use_history: true,
             },
             &mut s,
         )
@@ -237,7 +236,6 @@ impl AgentEngine {
                 msg,
                 resume_session_id: None,
                 force_new_session: false,
-                use_history: true,
             },
             &mut s,
         )
@@ -329,7 +327,6 @@ impl AgentEngine {
     /// Handle with streaming: sends content chunks via mpsc channel for progressive display.
     ///
     /// Thin adapter over pipeline::{bootstrap, execute, finalize} using `ChunkSink`.
-    /// Uses `use_history: false` (matches old behaviour — streaming callers get no prior context).
     pub async fn handle_streaming(
         &self,
         msg: &IncomingMessage,
@@ -343,7 +340,6 @@ impl AgentEngine {
                 msg,
                 resume_session_id: None,
                 force_new_session: false,
-                use_history: false,
             },
             &mut s,
         )
@@ -432,8 +428,8 @@ impl AgentEngine {
     /// just want a final assistant string back. Same `pipeline::{bootstrap,
     /// execute, finalize}` route as `handle_sse`, but with:
     ///
-    ///   * `force_new_session: true, use_history: false` so each call gets
-    ///     a clean session with no prior message history.
+    ///   * `force_new_session: true` so each call gets a clean session with
+    ///     no prior message history.
     ///   * `BehaviourLayers::for_cron(...)` enabled — fallback provider,
     ///     auto-continue, session-corruption recovery, tool-policy override,
     ///     forced-final-call all engaged with the same defaults the legacy
@@ -465,7 +461,6 @@ impl AgentEngine {
                 msg,
                 resume_session_id: None,
                 force_new_session: true,
-                use_history: false,
             },
             &mut s,
         )

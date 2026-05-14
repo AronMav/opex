@@ -48,7 +48,6 @@ pub struct BootstrapContext<'a> {
     pub msg: &'a IncomingMessage,
     pub resume_session_id: Option<Uuid>,
     pub force_new_session: bool,
-    pub use_history: bool,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -94,6 +93,18 @@ pub async fn bootstrap<S: EventSink>(
     let effective_resume_id: Option<uuid::Uuid> = ctx.resume_session_id;
 
     // 1. Build context (session_id + message history + tool definitions)
+    //
+    // The second positional argument is `include_tools` in `ContextBuilder::build`.
+    // Historically `ctx.use_history` was forwarded here, but the two concepts are
+    // orthogonal — history is loaded separately in `build()` and never gated on
+    // this flag. Wiring `use_history` here was a regression from the LLM-loop
+    // unification (f3356ada): cron / streaming callers passed `use_history:
+    // false` and silently lost all tools, which caused LLMs to hallucinate XML
+    // tool-calls (e.g. `<sequentialthinking>...</sequentialthinking>`) that the
+    // OpenAI-compatible provider then persists as plain assistant text.
+    //
+    // Always request tools — every entry point (SSE, channel, streaming, cron)
+    // needs them.
     let crate::agent::context_builder::ContextSnapshot {
         session_id,
         mut messages,
@@ -103,7 +114,7 @@ pub async fn bootstrap<S: EventSink>(
     } = engine
         .build_context(
             ctx.msg,
-            ctx.use_history,
+            true,
             effective_resume_id,   // ← was ctx.resume_session_id
             ctx.force_new_session,
         )
