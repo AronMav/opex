@@ -240,15 +240,7 @@ impl Scheduler {
 
         // tokio-cron-scheduler expects 6-field cron (sec min hour dom mon dow).
         // Normalize standard 5-field cron by prepending "0 " for seconds.
-        let cron_6field = {
-            let raw = heartbeat.cron.trim();
-            let fields: Vec<&str> = raw.split_whitespace().collect();
-            if fields.len() == 5 {
-                format!("0 {raw}")
-            } else {
-                raw.to_string()
-            }
-        };
+        let cron_6field = normalize_cron_to_6field(&heartbeat.cron);
 
         // Convert cron hours from local timezone to UTC
         let cron_expr = if let Some(ref tz) = heartbeat.timezone {
@@ -656,10 +648,7 @@ impl Scheduler {
         secrets: Arc<crate::secrets::SecretsManager>,
         agent_deps: Arc<tokio::sync::RwLock<crate::gateway::state::AgentDeps>>,
     ) -> Result<()> {
-        let cron_expr = {
-            let raw = cron_expr.trim();
-            if raw.split_whitespace().count() == 5 { format!("0 {raw}") } else { raw.to_string() }
-        };
+        let cron_expr = normalize_cron_to_6field(cron_expr);
         tracing::info!(cron = %cron_expr, retention_days, "scheduling automatic backup");
 
         let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
@@ -711,10 +700,7 @@ impl Scheduler {
         db: PgPool,
         agents: crate::gateway::clusters::AgentCore,
     ) -> Result<()> {
-        let cron_expr = {
-            let raw = cron_expr.trim();
-            if raw.split_whitespace().count() == 5 { format!("0 {raw}") } else { raw.to_string() }
-        };
+        let cron_expr = normalize_cron_to_6field(cron_expr);
         tracing::info!(cron = %cron_expr, "scheduling skill curator");
 
         let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
@@ -834,15 +820,7 @@ impl Scheduler {
         tool_policy: Option<serde_json::Value>,
     ) -> Result<()> {
         // Normalize 5-field cron to 6-field by prepending "0 " for seconds
-        let cron_6field = {
-            let raw = cron_expr.trim();
-            let fields: Vec<&str> = raw.split_whitespace().collect();
-            if fields.len() == 5 {
-                format!("0 {raw}")
-            } else {
-                raw.to_string()
-            }
-        };
+        let cron_6field = normalize_cron_to_6field(cron_expr);
 
         let cron_utc = convert_cron_to_utc(&cron_6field, timezone);
 
@@ -1559,15 +1537,7 @@ pub fn compute_next_run(cron_expr: &str, timezone: &str) -> Option<String> {
     use std::str::FromStr;
 
     // Normalize to 6-field (sec min hour dom mon dow)
-    let cron_6field = {
-        let raw = cron_expr.trim();
-        let fields: Vec<&str> = raw.split_whitespace().collect();
-        if fields.len() == 5 {
-            format!("0 {raw}")
-        } else {
-            raw.to_string()
-        }
-    };
+    let cron_6field = normalize_cron_to_6field(cron_expr);
 
     // Convert local timezone hours to UTC
     let cron_utc = convert_cron_to_utc(&cron_6field, timezone);
@@ -1582,6 +1552,28 @@ pub fn compute_next_run(cron_expr: &str, timezone: &str) -> Option<String> {
     let offset_hours = timezone_offset_hours(timezone);
     let local = next + chrono::Duration::hours(i64::from(offset_hours));
     Some(local.to_rfc3339())
+}
+
+/// Compute the next heartbeat fire time strictly after `after`.
+/// `cron_expr` hour fields are interpreted in `timezone` (e.g. "Europe/Samara").
+/// Returns the result as `DateTime<Utc>`, or `None` for an invalid expression.
+/// Used by the watchdog activity endpoint to derive `next_expected_heartbeat_at`
+/// server-side so the watchdog itself doesn't need the `cron` crate.
+pub fn compute_next_heartbeat_at(
+    cron_expr: &str,
+    timezone: &str,
+    after: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    use cron::Schedule;
+    use std::str::FromStr;
+
+    let cron_6field = normalize_cron_to_6field(cron_expr);
+
+    let cron_utc = convert_cron_to_utc(&cron_6field, timezone);
+    let cron_7field = format!("{cron_utc} *");
+
+    let schedule = Schedule::from_str(&cron_7field).ok()?;
+    schedule.after(&after).next()
 }
 
 /// Get UTC offset hours for common Russian timezones (no DST).
@@ -1602,6 +1594,20 @@ pub fn timezone_offset_hours(tz: &str) -> i32 {
             tracing::warn!(timezone = %tz, "unknown timezone, using UTC");
             0
         }
+    }
+}
+
+/// Normalize a cron expression to 6-field form (sec min hour dom mon dow).
+/// 5-field input (no seconds field) gets `"0 "` prepended so it fires at
+/// :00 of every matching minute. 6-field or other length: returned unchanged
+/// (parsing will succeed-or-fail downstream).
+fn normalize_cron_to_6field(cron_expr: &str) -> String {
+    let raw = cron_expr.trim();
+    let fields: Vec<&str> = raw.split_whitespace().collect();
+    if fields.len() == 5 {
+        format!("0 {raw}")
+    } else {
+        raw.to_string()
     }
 }
 
@@ -2053,5 +2059,32 @@ mod tests {
         let content_part = &text[..text.len() - suffix.len()];
         assert_eq!(content_part.chars().count(), 4000);
         assert!(content_part.chars().all(|c| c == 'a'));
+    }
+
+    // ── compute_next_heartbeat_at ──────────────────────────────────────
+
+    #[test]
+    fn compute_next_heartbeat_at_after_last_fire() {
+        use chrono::TimeZone;
+        let last_fire = chrono::Utc.with_ymd_and_hms(2026, 5, 14, 6, 0, 0).unwrap();
+        let next = compute_next_heartbeat_at("0 * * * *", "Europe/Samara", last_fire);
+        let expected = chrono::Utc.with_ymd_and_hms(2026, 5, 14, 7, 0, 0).unwrap();
+        assert_eq!(next, Some(expected));
+    }
+
+    #[test]
+    fn compute_next_heartbeat_at_invalid_cron_returns_none() {
+        let last_fire = chrono::Utc::now();
+        let next = compute_next_heartbeat_at("not a cron expr", "Europe/Samara", last_fire);
+        assert!(next.is_none());
+    }
+
+    #[test]
+    fn compute_next_heartbeat_at_handles_epoch_fallback() {
+        let epoch = chrono::DateTime::from_timestamp(0, 0).unwrap();
+        let next = compute_next_heartbeat_at("0 * * * *", "Europe/Samara", epoch);
+        // 1970-01-01 01:00:00 UTC is the next hourly fire strictly after epoch.
+        let expected = chrono::DateTime::from_timestamp(3600, 0).unwrap();
+        assert_eq!(next, Some(expected));
     }
 }
