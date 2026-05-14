@@ -849,21 +849,14 @@ Per-agent subagent delegation policy:
 [agent.delegation]
 max_depth = 1                    # subagents CANNOT recursively spawn further subagents
 blocked_tools_extra = [...]      # extends built-in deny-list (used at runtime)
-blocked_tools_override = [...]   # NOT honoured anywhere at runtime — see note
 ```
 
 `SUBAGENT_DENIED_TOOLS` is the runtime safety net for every subagent. The
 runtime gate (`runtime_subagent_denylist`) hard-anchors that constant and
-only honours `blocked_tools_extra` (additive). `blocked_tools_override` is
-not honoured at any runtime path: not by the subagent runner, not by the
-dispatcher rewrite, and not by the visibility list shown to the LLM. A
-subagent author cannot use `blocked_tools_override = ["x"]` to gain access
-to `cron`, `secret_set`, `process`, `code_exec`, `workspace_delete`, or
-`workspace_rename` — they remain blocked everywhere. The
-`compute_denied_tools` helper is retained only for tests and possible
-future operator-facing UIs that explicitly want override-respecting
-semantics; it is no longer wired into any execution path. Audit 2026-05-08,
-groups T (5th pass) and FF (6th pass).
+only honours `blocked_tools_extra` (additive). A subagent author cannot
+gain access to `cron`, `secret_set`, `process`, `code_exec`,
+`workspace_delete`, or `workspace_rename` — they remain blocked everywhere.
+Audit 2026-05-08, groups T (5th pass) and FF (6th pass).
 
 Base subagents (`agent.base = true`) get a runtime carve-out for `code_exec`
 because base agents are documented as the host-level operator role

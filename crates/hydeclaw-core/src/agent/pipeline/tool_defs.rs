@@ -997,8 +997,7 @@ pub fn build_sandbox_tool_definitions() -> Vec<ToolDefinition> {
 ///
 /// `denied_tools` is owned-strings (typically the output of
 /// `subagent::runtime_subagent_denylist(&DelegationConfig)` — anchored to
-/// `SUBAGENT_DENIED_TOOLS`, ignoring `blocked_tools_override`; see audit
-/// 2026-05-08 group FF for the rationale).
+/// `SUBAGENT_DENIED_TOOLS`; see audit 2026-05-08 groups T and FF for the rationale).
 pub fn filter_for_subagent(
     all_tools: Vec<ToolDefinition>,
     denied_tools: &[String],

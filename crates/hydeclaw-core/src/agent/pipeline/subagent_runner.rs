@@ -143,13 +143,9 @@ pub async fn run_subagent_with_session(
         }
     };
     // Subagent-specific deny list: SUBAGENT_DENIED_TOOLS plus the agent's
-    // own `blocked_tools_extra`. Audit 2026-05-08 (4th pass): this used to
-    // call `compute_denied_tools` which honours `blocked_tools_override` —
-    // a subagent author could set `blocked_tools_override = ["x"]` and
-    // grant themselves every dangerous tool. We now use
-    // `runtime_subagent_denylist` which hard-anchors SUBAGENT_DENIED_TOOLS
-    // and only allows the subagent to ADD restrictions via
-    // `blocked_tools_extra`, never to remove them. Used for two things:
+    // own `blocked_tools_extra`. `runtime_subagent_denylist` hard-anchors
+    // SUBAGENT_DENIED_TOOLS — the subagent can only ADD restrictions via
+    // `blocked_tools_extra`, never remove them. Used for two things:
     //   1. visibility-filter YAML/MCP tools so the LLM doesn't see them in
     //      the non-dispatcher path,
     //   2. runtime-gate at the dispatcher rewrite step (`extra_deny`).
