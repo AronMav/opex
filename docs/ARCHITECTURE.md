@@ -719,7 +719,6 @@ run_once, run_at, tool_policy (JSONB override)
 | Input form | Resolved as |
 |-----------|-------------|
 | `"local"` | `{"type": "local"}` → save to `workspace/agents/{agent}/cron_output/` |
-| `"origin"` | `{"type": "origin"}` → reply to originating channel (logged as unsupported) |
 | `"telegram:12345"` | `{"channel": "telegram", "chat_id": 12345}` |
 | `"telegram:12345:67890"` | same (thread_id dropped, future work) |
 | Object | pass through |
