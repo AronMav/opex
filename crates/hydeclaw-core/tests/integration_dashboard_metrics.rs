@@ -146,7 +146,7 @@ async fn dashboard_handler_groups_drops_by_agent() {
 /// version, active_agents, sse_streams, approval_waiters,
 /// auth_rate_limiter_size, request_rate_limiter_size, stream_registry_size,
 /// db_pool_total, db_pool_idle, memory_worker_heartbeat_age_secs,
-/// session_events_table_size_bytes, uptime_secs,
+/// session_timeline_table_size_bytes, uptime_secs,
 /// sse_events_dropped_total, csp_violations, csp_violations_overflow
 /// ```
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -163,7 +163,7 @@ async fn dashboard_has_at_least_10_named_metrics() {
             db_pool_total: 10,
             db_pool_idle: 8,
             memory_worker_heartbeat_age_secs: 3,
-            session_events_table_size_bytes: 16_384,
+            session_timeline_table_size_bytes: 16_384,
             uptime_secs: 60,
             ..Default::default()
         };
@@ -187,7 +187,7 @@ async fn dashboard_has_at_least_10_named_metrics() {
             "db_pool_total",
             "db_pool_idle",
             "memory_worker_heartbeat_age_secs",
-            "session_events_table_size_bytes",
+            "session_timeline_table_size_bytes",
             "uptime_secs",
             "sse_events_dropped_total",
             "csp_violations",
@@ -209,7 +209,7 @@ async fn dashboard_has_at_least_10_named_metrics() {
         assert_eq!(obj["db_pool_idle"].as_u64(), Some(8));
         assert_eq!(obj["memory_worker_heartbeat_age_secs"].as_i64(), Some(3));
         assert_eq!(
-            obj["session_events_table_size_bytes"].as_u64(),
+            obj["session_timeline_table_size_bytes"].as_u64(),
             Some(16_384)
         );
         assert_eq!(obj["uptime_secs"].as_u64(), Some(60));
@@ -260,7 +260,7 @@ async fn dashboard_preserves_phase62_nested_shape() {
             db_pool_total: 0,
             db_pool_idle: 0,
             memory_worker_heartbeat_age_secs: -1,
-            session_events_table_size_bytes: 0,
+            session_timeline_table_size_bytes: 0,
             uptime_secs: 0,
             ..Default::default()
         };
@@ -312,7 +312,7 @@ async fn dashboard_preserves_phase64_csp_fields() {
             db_pool_total: 0,
             db_pool_idle: 0,
             memory_worker_heartbeat_age_secs: -1,
-            session_events_table_size_bytes: 0,
+            session_timeline_table_size_bytes: 0,
             uptime_secs: 0,
             ..Default::default()
         };

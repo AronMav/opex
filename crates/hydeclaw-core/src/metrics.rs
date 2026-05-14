@@ -923,9 +923,9 @@ pub struct DashboardSnapshot {
     /// Age in seconds of the latest `memory_tasks` row, or `-1` if the
     /// heartbeat is unknown / the table is empty.
     pub memory_worker_heartbeat_age_secs: i64,
-    /// `pg_total_relation_size('session_events')` — Postgres-reported
-    /// on-disk size of the session_timeline table, in bytes.
-    pub session_events_table_size_bytes: u64,
+    /// `pg_total_relation_size('session_timeline')` — Postgres-reported
+    /// on-disk size of the session timeline table, in bytes.
+    pub session_timeline_table_size_bytes: u64,
     /// Process uptime in whole seconds (`StatusMonitor.started_at.elapsed()`).
     pub uptime_secs: u64,
     /// CACHE-03: SUM of `cache_read_tokens` from `usage_log` over the last 24 hours.
@@ -1018,7 +1018,7 @@ pub fn build_dashboard_body_with_snapshot(
         "db_pool_total": snap.db_pool_total,
         "db_pool_idle": snap.db_pool_idle,
         "memory_worker_heartbeat_age_secs": snap.memory_worker_heartbeat_age_secs,
-        "session_events_table_size_bytes": snap.session_events_table_size_bytes,
+        "session_timeline_table_size_bytes": snap.session_timeline_table_size_bytes,
         "uptime_secs": snap.uptime_secs,
         "sse_events_dropped_total": by_agent,
         "csp_violations": csp_violations,
