@@ -10,6 +10,9 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
+use crate::alerter::{AlertConfig, Alerter};
+use crate::config::WatchdogSettings;
+
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
 pub enum AlertType {
     StaleActivity,
@@ -58,16 +61,16 @@ pub fn classify(
 ) -> Vec<AlertType> {
     let mut out = Vec::new();
 
-    if let Some(latest) = agent.latest_activity_at {
-        if now - latest > stale_threshold {
-            out.push(AlertType::StaleActivity);
-        }
+    if let Some(latest) = agent.latest_activity_at
+        && now - latest > stale_threshold
+    {
+        out.push(AlertType::StaleActivity);
     }
 
-    if let Some(expected) = agent.next_expected_heartbeat_at {
-        if now > expected + heartbeat_grace {
-            out.push(AlertType::MissedHeartbeat);
-        }
+    if let Some(expected) = agent.next_expected_heartbeat_at
+        && now > expected + heartbeat_grace
+    {
+        out.push(AlertType::MissedHeartbeat);
     }
 
     out
@@ -127,6 +130,99 @@ pub fn reconcile(
     }
 
     (fires, recovers)
+}
+
+pub async fn fetch_agent_activity(
+    http: &reqwest::Client,
+    core_url: &str,
+    auth_token: &str,
+) -> anyhow::Result<Vec<AgentActivity>> {
+    let resp = http
+        .get(format!("{core_url}/api/watchdog/agent-activity"))
+        .header("Authorization", format!("Bearer {auth_token}"))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("agent-activity endpoint returned status {status}");
+    }
+    let list: Vec<AgentActivity> = resp.json().await?;
+    Ok(list)
+}
+
+pub async fn tick(
+    http: &reqwest::Client,
+    core_url: &str,
+    auth_token: &str,
+    cfg: &WatchdogSettings,
+    state: &mut HashMap<EpisodeKey, AlertState>,
+    alerter: &Alerter,
+    alert_config: &AlertConfig,
+) -> anyhow::Result<()> {
+    let activity = fetch_agent_activity(http, core_url, auth_token).await?;
+
+    let now = Utc::now();
+    let stale = Duration::hours(cfg.stale_activity_timeout_hours as i64);
+    let grace = Duration::minutes(cfg.missed_heartbeat_grace_minutes as i64);
+
+    let mut classified: HashMap<String, Vec<AlertType>> = HashMap::new();
+    let mut activity_map: HashMap<String, AgentActivity> = HashMap::new();
+    let mut known_agents: HashSet<String> = HashSet::new();
+
+    for a in &activity {
+        known_agents.insert(a.agent_id.clone());
+        let alerts = classify(a, now, stale, grace);
+        if !alerts.is_empty() {
+            classified.insert(a.agent_id.clone(), alerts);
+        }
+        activity_map.insert(a.agent_id.clone(), a.clone());
+    }
+
+    let (fires, recovers) = reconcile(classified, &activity_map, &known_agents, state, now);
+
+    // Reuse existing "down"/"recovery" event types so UI's existing
+    // ALL_ALERT_EVENTS toggle covers these without UI changes.
+    for fire in fires {
+        let msg = format_fire_message(&fire);
+        alerter.send(alert_config, &msg, "down").await;
+    }
+    for rec in recovers {
+        let msg = format_recover_message(&rec);
+        alerter.send(alert_config, &msg, "recovery").await;
+    }
+
+    Ok(())
+}
+
+fn format_fire_message(f: &Fire) -> String {
+    match f.alert_type {
+        AlertType::StaleActivity => {
+            let last = f
+                .latest_activity_at
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| "never".to_string());
+            format!("agent {} inactive (last activity: {})", f.agent_id, last)
+        }
+        AlertType::MissedHeartbeat => {
+            let expected = f
+                .next_expected_heartbeat_at
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_else(|| "?".to_string());
+            format!(
+                "agent {} missed heartbeat (expected at {})",
+                f.agent_id, expected
+            )
+        }
+    }
+}
+
+fn format_recover_message(r: &Recover) -> String {
+    let kind = match r.alert_type {
+        AlertType::StaleActivity => "activity",
+        AlertType::MissedHeartbeat => "heartbeat",
+    };
+    format!("agent {} recovered ({})", r.agent_id, kind)
 }
 
 #[cfg(test)]

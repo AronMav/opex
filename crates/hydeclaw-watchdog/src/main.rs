@@ -1,10 +1,13 @@
-mod alerter;
 mod checker;
-mod config;
-mod inactivity;
 mod recovery;
 mod resources;
 mod status;
+// alerter, config, and inactivity live in the lib crate (src/lib.rs); the
+// loop reaches alerter+config below and inactivity will be wired in by
+// Task 5 — sharing them with the lib avoids compiling duplicate copies
+// (which surface dead_code warnings until every field is referenced).
+
+use hydeclaw_watchdog::{alerter, config};
 
 use std::collections::HashMap;
 

@@ -3,6 +3,10 @@ name = "hydeclaw-watchdog"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "hydeclaw_watchdog"
+path = "src/lib.rs"
+
 [dependencies]
 tokio = { workspace = true }
 reqwest = { workspace = true }
@@ -15,3 +19,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 sd-notify = "0.4"
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
