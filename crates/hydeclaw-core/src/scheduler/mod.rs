@@ -27,9 +27,8 @@ fn parse_target_string(s: &str) -> Option<serde_json::Value> {
     if s.is_empty() {
         return None;
     }
-    match s {
-        "local" => return Some(serde_json::json!({"type": "local"})),
-        _ => {}
+    if s == "local" {
+        return Some(serde_json::json!({"type": "local"}));
     }
     let mut parts = s.splitn(3, ':');
     let channel = parts.next()?.trim();
