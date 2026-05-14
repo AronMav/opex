@@ -53,13 +53,13 @@ pub struct BootstrapContext<'a> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Log a WAL "running" event with a single retry on failure.
-pub(crate) async fn log_wal_running_with_retry(sm: &SessionManager, session_id: Uuid) {
-    if let Err(e) = sm.log_wal_event(session_id, "running", None).await {
-        tracing::warn!(session_id = %session_id, error = %e, "failed to log WAL running event, retrying");
+/// Log a timeline "running" event with a single retry on failure.
+pub(crate) async fn log_timeline_running_with_retry(sm: &SessionManager, session_id: Uuid) {
+    if let Err(e) = sm.log_timeline_event(session_id, "running", None).await {
+        tracing::warn!(session_id = %session_id, error = %e, "failed to log timeline running event, retrying");
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        if let Err(e2) = sm.log_wal_event(session_id, "running", None).await {
-            tracing::error!(session_id = %session_id, error = %e2, "WAL running event retry also failed");
+        if let Err(e2) = sm.log_timeline_event(session_id, "running", None).await {
+            tracing::error!(session_id = %session_id, error = %e2, "timeline running event retry also failed");
         }
     }
 }
@@ -126,7 +126,7 @@ pub async fn bootstrap<S: EventSink>(
         Err(e) => {
             // Must propagate: continuing without a successful claim allows two
             // concurrent SSE handlers to race on the same session (both write
-            // WAL "running", both persist assistant messages).
+            // timeline "running", both persist assistant messages).
             tracing::error!(session_id = %session_id, error = %e, "claim_session_with_retry failed; aborting bootstrap");
             return Err(e);
         }
@@ -141,7 +141,7 @@ pub async fn bootstrap<S: EventSink>(
         Err(e) => tracing::warn!(session=%session_id, error=%e, "cleanup_session_streaming_messages failed"),
     }
 
-    log_wal_running_with_retry(&sm, session_id).await;
+    log_timeline_running_with_retry(&sm, session_id).await;
 
     // 3. Emit first Phase event (silently dropped by SseSink; routed by ChannelStatusSink)
     let _ = sink.emit(PipelineEvent::Phase(ProcessingPhase::Thinking)).await;
@@ -149,7 +149,7 @@ pub async fn bootstrap<S: EventSink>(
     // 4. Lifecycle guard (kept in Option so the adapter can .take() it for finalize)
     //    `with_agent` is required for the Drop-path `session_failures` insert
     //    (NOT NULL column). Without it the Drop fallback still marks the session
-    //    `failed` in `sessions` + WAL but skips the structured failure row.
+    //    `failed` in `sessions` + timeline but skips the structured failure row.
     let lifecycle_guard = Some(
         SessionLifecycleGuard::new(engine.cfg().db.clone(), session_id)
             .with_tracker(engine.state().bg_tasks.clone())
@@ -255,7 +255,7 @@ pub async fn bootstrap<S: EventSink>(
         .await?
     };
 
-    // 7. LoopDetector: warm from WAL ONLY when this is a true continuation
+    // 7. LoopDetector: warm from timeline ONLY when this is a true continuation
     //    of an in-flight run (`ResumeRunning` after a crash, or `ExplicitResume`
     //    where the user re-opened a session via UI). For `NewSession` and
     //    `NewTurnAfterDone` the user is starting a fresh conversational turn —
@@ -264,19 +264,19 @@ pub async fn bootstrap<S: EventSink>(
     //    warm-up unconditionally; we now scope it to crash-recovery only.)
     let loop_config = engine.tool_loop_config();
     let loop_detector = if reentry_mode.warm_loop_detector() {
-        let wal_events =
-            crate::db::session_wal::load_tool_events(&engine.cfg().db, session_id)
+        let timeline_events =
+            crate::db::session_timeline::load_tool_events(&engine.cfg().db, session_id)
                 .await
                 .unwrap_or_default();
-        if !wal_events.is_empty() {
+        if !timeline_events.is_empty() {
             tracing::debug!(
                 session = %session_id,
-                events = wal_events.len(),
+                events = timeline_events.len(),
                 ?reentry_mode,
-                "LoopDetector warmed from WAL",
+                "LoopDetector warmed from timeline",
             );
         }
-        LoopDetector::warm_up_from_wal(&loop_config, &wal_events)
+        LoopDetector::warm_up_from_timeline(&loop_config, &timeline_events)
     } else {
         LoopDetector::new(&loop_config)
     };

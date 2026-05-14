@@ -339,7 +339,7 @@ pub fn audit(
 /// Handled by `execute::forward_chunks_into_sink` to emit `StreamEvent::Reconnecting`.
 pub(crate) const RECONNECTING_PREFIX: &str = "__reconnecting__:";
 
-/// Inner timeout-retry loop without WAL logging — extracted for unit testability.
+/// Inner timeout-retry loop without timeline logging — extracted for unit testability.
 /// Production callers use `chat_stream_with_deadline_retry` which wraps this.
 #[allow(clippy::too_many_arguments)]
 async fn deadline_retry_inner(
@@ -469,7 +469,7 @@ async fn deadline_retry_inner(
 /// Streaming LLM call with deadline retry for timeout errors.
 ///
 /// On `InactivityTimeout` or `MaxDurationExceeded`, retries with exponential
-/// backoff (2s base, 30s cap). Logs a WAL `llm_retry` event on each retry.
+/// backoff (2s base, 30s cap). Logs a timeline `llm_retry` event on each retry.
 /// Stops when the model succeeds, `run_max_duration_secs` is exceeded, or
 /// `session_cancel` fires (user Stop).
 ///
@@ -521,7 +521,7 @@ pub async fn chat_stream_with_deadline_retry(
                     "delay_ms": delay_ms,
                 });
                 let sm2 = crate::agent::session_manager::SessionManager::new(sm_db);
-                sm2.log_wal_event(session_id, "llm_retry", Some(&details)).await.ok();
+                sm2.log_timeline_event(session_id, "llm_retry", Some(&details)).await.ok();
             });
         },
         opts,

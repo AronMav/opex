@@ -190,11 +190,11 @@ async fn review_session_inner(
         .filter(|s| !s.is_empty())
         .collect();
 
-    // 4. Tool names from session_events WAL.
+    // 4. Tool names from session_timeline.
     let tool_names: Vec<String> = {
         let names: Vec<Option<String>> = sqlx::query_scalar(
             "SELECT DISTINCT payload->>'tool_name' \
-             FROM session_events \
+             FROM session_timeline \
              WHERE session_id = $1 AND event_type = 'tool_end'",
         )
         .bind(session_id)

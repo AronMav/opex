@@ -924,7 +924,7 @@ pub struct DashboardSnapshot {
     /// heartbeat is unknown / the table is empty.
     pub memory_worker_heartbeat_age_secs: i64,
     /// `pg_total_relation_size('session_events')` — Postgres-reported
-    /// on-disk size of the SSE WAL table, in bytes.
+    /// on-disk size of the session_timeline table, in bytes.
     pub session_events_table_size_bytes: u64,
     /// Process uptime in whole seconds (`StatusMonitor.started_at.elapsed()`).
     pub uptime_secs: u64,

@@ -1,4 +1,4 @@
-//! Pipeline step: parallel — parallel tool execution with WAL.
+//! Pipeline step: parallel — parallel tool execution with timeline.
 //!
 //! Extracted from `engine_parallel.rs`. All logic lives in free functions;
 //! `AgentEngine` methods delegate here.
@@ -47,7 +47,7 @@ pub struct ToolBatchResult {
 /// `execute_tool_calls_partitioned`.
 ///
 /// When `Some(_)` is supplied, each tool result is persisted to the
-/// `messages` table immediately after its `tool_end` WAL entry, via a
+/// `messages` table immediately after its `tool_end` timeline entry, via a
 /// detached `tokio::spawn` so the insert survives parent-task cancellation
 /// (e.g. SSE client disconnect → engine task abort). Each tool's row id is
 /// pre-generated synchronously and threaded into `parent_message_id` so the
@@ -357,7 +357,7 @@ pub async fn execute_tool_calls_partitioned(
     };
     if !parallel_indices.is_empty() {
         for &i in &parallel_indices {
-            let _ = crate::db::session_wal::log_event(
+            let _ = crate::db::session_timeline::log_event(
                 db,
                 session_id,
                 "tool_start",
@@ -495,7 +495,7 @@ pub async fn execute_tool_calls_partitioned(
             }
 
             // results[i] already set at the top of this loop iteration.
-            let _ = crate::db::session_wal::log_event(
+            let _ = crate::db::session_timeline::log_event(
                 db,
                 session_id,
                 "tool_end",
@@ -504,7 +504,7 @@ pub async fn execute_tool_calls_partitioned(
             .await;
 
             // Durable persist for THIS tool — spawned immediately after its
-            // `tool_end` WAL so we don't leave a window where the WAL says
+            // `tool_end` timeline entry so we don't leave a window where the timeline says
             // "ended" but the row isn't queued for insert. Detached so the
             // insert survives parent-task cancellation between here and
             // `execute()` returning. Row id and parent link were pre-allocated
@@ -554,7 +554,7 @@ pub async fn execute_tool_calls_partitioned(
                 loop_break: Some(Some(reason)),
             };
         }
-        let _ = crate::db::session_wal::log_event(
+        let _ = crate::db::session_timeline::log_event(
             db,
             session_id,
             "tool_start",
@@ -635,7 +635,7 @@ pub async fn execute_tool_calls_partitioned(
         }
 
         results[i] = Some(res.clone());
-        let _ = crate::db::session_wal::log_event(
+        let _ = crate::db::session_timeline::log_event(
             db,
             session_id,
             "tool_end",
@@ -1064,11 +1064,11 @@ mod sequential_enrichment_tests {
     }
 
     /// Lazy PgPool that never connects. The sequential branch issues
-    /// `crate::db::session_wal::log_event(...)` and `spawn_persist_tool_message`,
+    /// `crate::db::session_timeline::log_event(...)` and `spawn_persist_tool_message`,
     /// both of which swallow DB errors (the former via `let _ = ...`, the
     /// latter via detached `tokio::spawn`). Safe for unit-test shape checks.
     ///
-    /// `acquire_timeout` is shrunk to 100ms so the WAL-event call doesn't
+    /// `acquire_timeout` is shrunk to 100ms so the timeline-event call doesn't
     /// stall the test for the default 30s pool acquire timeout.
     fn fake_db() -> sqlx::PgPool {
         sqlx::postgres::PgPoolOptions::new()

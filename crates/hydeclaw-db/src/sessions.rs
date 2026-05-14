@@ -829,7 +829,7 @@ pub async fn cleanup_session_streaming_messages(
 /// was already terminal (another path won the race).
 ///
 /// All four steps run in one transaction so a connection failure between
-/// claim and WAL insert cannot leave the session in a half-cleaned state
+/// claim and timeline insert cannot leave the session in a half-cleaned state
 /// (R-CRIT-2).
 pub async fn cleanup_session_terminated(
     db: &PgPool,
@@ -868,13 +868,13 @@ pub async fn cleanup_session_terminated(
     //    `crate::sessions::` prefix.
     insert_synthetic_tool_results_tx(&mut tx, session_id).await?;
 
-    // 4. WAL event. Heartbeat side-effect inside log_event_tx is a no-op here
+    // 4. Timeline event. Heartbeat side-effect inside log_event_tx is a no-op here
     //    because run_status is no longer 'running' inside this tx.
-    //    `session_wal` is a sibling module in the same crate
-    //    (hydeclaw-db/src/lib.rs declares both), so `crate::session_wal::...`
+    //    `session_timeline` is a sibling module in the same crate
+    //    (hydeclaw-db/src/lib.rs declares both), so `crate::session_timeline::...`
     //    is the right path.
     let payload = serde_json::json!({ "reason": reason });
-    crate::session_wal::log_event_tx(&mut tx, session_id, target_status, Some(&payload)).await?;
+    crate::session_timeline::log_event_tx(&mut tx, session_id, target_status, Some(&payload)).await?;
 
     tx.commit().await?;
     Ok(true)
@@ -1836,7 +1836,7 @@ pub async fn mark_messages_compressed(
     Ok(())
 }
 
-/// Insert a session_events WAL record for a compression boundary.
+/// Insert a session_timeline record for a compression boundary.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_compression_event(
     db: &PgPool,
@@ -1857,7 +1857,7 @@ pub async fn insert_compression_event(
         "tokens_after": tokens_after,
     });
     sqlx::query(
-        "INSERT INTO session_events (session_id, event_type, payload)
+        "INSERT INTO session_timeline (session_id, event_type, payload)
          VALUES ($1, 'compression', $2)",
     )
     .bind(session_id)
@@ -1924,7 +1924,7 @@ pub async fn get_messages_page(
     } else {
         sqlx::query(
             r#"SELECT payload
-               FROM session_events
+               FROM session_timeline
                WHERE session_id = $1
                  AND event_type = 'compression'
                  AND (payload->>'first_live_message_id')::uuid = ANY($2)"#,
@@ -2176,7 +2176,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn cleanup_session_terminated_writes_wal_event(pool: sqlx::PgPool) {
+    async fn cleanup_session_terminated_writes_timeline_event(pool: sqlx::PgPool) {
         let session_id = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
         super::set_session_run_status(&pool, session_id, "running").await.unwrap();
 
@@ -2184,7 +2184,7 @@ mod tests {
             .await.unwrap();
 
         let evt: (String, serde_json::Value) = sqlx::query_as(
-            "SELECT event_type, payload FROM session_events
+            "SELECT event_type, payload FROM session_timeline
              WHERE session_id = $1 ORDER BY id DESC LIMIT 1"
         ).bind(session_id).fetch_one(&pool).await.unwrap();
         assert_eq!(evt.0, "timeout");
@@ -2196,19 +2196,19 @@ mod tests {
         let session_id = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
         super::set_session_run_status(&pool, session_id, "running").await.unwrap();
 
-        // Force the WAL insert (step 4) to fail by DROPping the session_events
+        // Force the timeline insert (step 4) to fail by DROPping the session_timeline
         // table just before the cleanup call. The INSERT inside log_event_tx
-        // will raise `relation "session_events" does not exist`, aborting
+        // will raise `relation "session_timeline" does not exist`, aborting
         // the transaction.
         //
         // Note: sqlx::test gives each test its own ephemeral DB, so dropping
         // the table affects only this test's run — safe.
-        sqlx::query("DROP TABLE session_events").execute(&pool).await.unwrap();
+        sqlx::query("DROP TABLE session_timeline").execute(&pool).await.unwrap();
 
         let result = super::cleanup_session_terminated(&pool, session_id, "timeout", "r")
             .await;
         assert!(result.is_err(),
-            "cleanup must propagate the WAL insert error and abort the tx");
+            "cleanup must propagate the timeline insert error and abort the tx");
 
         // After the failed tx, run_status MUST be back to 'running' —
         // the atomic claim from step 1 was rolled back.
@@ -2287,9 +2287,9 @@ mod tests {
         assert_eq!(content, "partial", "partial text preserved");
         assert_eq!(msg_status, "interrupted");
 
-        // WAL event written via cleanup_session_terminated.
+        // Timeline event written via cleanup_session_terminated.
         let event_type: String = sqlx::query_scalar(
-            "SELECT event_type FROM session_events WHERE session_id = $1 ORDER BY id DESC LIMIT 1"
+            "SELECT event_type FROM session_timeline WHERE session_id = $1 ORDER BY id DESC LIMIT 1"
         ).bind(s).fetch_one(&pool).await.unwrap();
         assert_eq!(event_type, "interrupted");
     }

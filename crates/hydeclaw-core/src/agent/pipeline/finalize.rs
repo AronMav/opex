@@ -192,12 +192,12 @@ pub(crate) fn spawn_record_failure(
 
         // tool_call_id is opaque; resolve a tool_name by matching the
         // matching assistant tool_calls payload. Best effort — None if
-        // the WAL lookup fails or the payload is missing.
+        // the timeline lookup fails or the payload is missing.
         let last_tool_name = match &last_tool {
             Some((Some(tcid), _)) => {
                 let wal_match: Option<String> = sqlx::query_scalar(
                     "SELECT payload->>'tool_name' \
-                     FROM session_events \
+                     FROM session_timeline \
                      WHERE session_id = $1 \
                        AND event_type = 'tool_end' \
                        AND payload->>'tool_call_id' = $2 \
@@ -215,9 +215,9 @@ pub(crate) fn spawn_record_failure(
         };
         let last_tool_output = last_tool.and_then(|(_, c)| c);
 
-        // Iteration count: count of tool_end events in WAL for this session.
+        // Iteration count: count of tool_end events in timeline for this session.
         let iteration_count: Option<i32> = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT COUNT(*)::BIGINT FROM session_events \
+            "SELECT COUNT(*)::BIGINT FROM session_timeline \
              WHERE session_id = $1 AND event_type = 'tool_end'",
         )
         .bind(session_id)
@@ -642,10 +642,10 @@ pub(crate) fn spawn_knowledge_extraction(
 
 // ── spawn_skill_review() ──────────────────────────────────────────────────────
 
-/// Count tool_end WAL events for a session (best-effort, returns 0 on error).
+/// Count tool_end timeline events for a session (best-effort, returns 0 on error).
 async fn count_tool_calls(db: &PgPool, session_id: Uuid) -> u32 {
     sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT COUNT(*)::BIGINT FROM session_events \
+        "SELECT COUNT(*)::BIGINT FROM session_timeline \
          WHERE session_id = $1 AND event_type = 'tool_end'",
     )
     .bind(session_id)

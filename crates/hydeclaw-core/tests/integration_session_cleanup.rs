@@ -11,7 +11,7 @@ use hydeclaw_core::db::sessions::{
     create_new_session, set_session_run_status, cleanup_session_terminated,
     find_stale_running_sessions_per_agent,
 };
-use hydeclaw_core::db::session_wal::log_event_tx;
+use hydeclaw_core::db::session_timeline::log_event_tx;
 use std::collections::HashMap;
 
 /// T2.1: watchdog must never overwrite a `done` status (B2 regression).
@@ -33,10 +33,10 @@ async fn watchdog_cannot_overwrite_done(pool: PgPool) {
     assert_eq!(status, "done", "done status preserved (B2 fix)");
 }
 
-/// T2.2: WAL-event heartbeat prevents false-positive timeout during long
+/// T2.2: Timeline-event heartbeat prevents false-positive timeout during long
 /// tool/LLM calls (B3 fix).
 #[sqlx::test(migrations = "../../migrations")]
-async fn wal_event_heartbeat_prevents_false_positive(pool: PgPool) {
+async fn timeline_event_heartbeat_prevents_false_positive(pool: PgPool) {
     let s = create_new_session(&pool, "a", "u", "web").await.unwrap();
     sqlx::query(
         "UPDATE sessions SET run_status = 'running', activity_at = NOW() - INTERVAL '90 seconds'
@@ -53,7 +53,7 @@ async fn wal_event_heartbeat_prevents_false_positive(pool: PgPool) {
     map.insert("a".to_string(), 60i64);
     let stale = find_stale_running_sessions_per_agent(&pool, &map, 60).await.unwrap();
     assert!(stale.iter().all(|t| t.0 != s),
-        "session must not be stale after WAL heartbeat (B3 fix)");
+        "session must not be stale after timeline heartbeat (B3 fix)");
 }
 
 /// T2.3: watchdog and startup-cleanup produce equivalent terminal state for
@@ -63,7 +63,7 @@ async fn watchdog_and_startup_produce_equivalent_terminal_state(pool: PgPool) {
     // Sessions A and B: identical setup. A goes through cleanup() with
     // target=timeout (watchdog scenario), B with target=interrupted
     // (startup-cleanup scenario). Both must preserve partial-text and
-    // write WAL events.
+    // write timeline events.
     let s_a = create_new_session(&pool, "a", "u", "web").await.unwrap();
     let s_b = create_new_session(&pool, "a", "u", "web").await.unwrap();
     for sid in [s_a, s_b] {

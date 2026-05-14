@@ -3,7 +3,7 @@ pub use hydeclaw_db::approvals;
 pub use hydeclaw_db::memory_queries;
 pub use hydeclaw_db::notifications;
 pub use hydeclaw_db::session_failures;
-pub use hydeclaw_db::session_wal;
+pub use hydeclaw_db::session_timeline;
 pub use hydeclaw_db::sessions;
 pub use hydeclaw_db::usage;
 

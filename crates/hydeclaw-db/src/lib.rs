@@ -4,7 +4,7 @@ pub mod notifications;
 pub mod reentry_mode;
 pub mod session_failures;
 pub mod session_status;
-pub mod session_wal;
+pub mod session_timeline;
 pub mod sessions;
 pub mod sys_flags;
 pub mod usage;

@@ -36,7 +36,7 @@ impl SessionManager {
 
     /// Find or create a session for the given agent+user+channel.
     /// Returns `(session_id, reentry_mode)` so bootstrap can decide whether
-    /// to warm the LoopDetector from WAL.
+    /// to warm the LoopDetector from the timeline.
     pub async fn get_or_create(
         &self,
         agent_id: &str,
@@ -156,14 +156,14 @@ impl SessionManager {
         Ok(row.map(|r| r.get::<Uuid, _>("id")))
     }
 
-    /// Log a session lifecycle event to the WAL (fire-and-forget pattern).
-    pub async fn log_wal_event(
+    /// Log a session lifecycle event to the timeline (fire-and-forget pattern).
+    pub async fn log_timeline_event(
         &self,
         session_id: Uuid,
         event_type: &str,
         payload: Option<&serde_json::Value>,
     ) -> Result<()> {
-        crate::db::session_wal::log_event(&self.db, session_id, event_type, payload).await
+        crate::db::session_timeline::log_event(&self.db, session_id, event_type, payload).await
     }
 
     /// Insert synthetic tool results for missing call IDs (crash-recovery, ENG-01).
@@ -227,7 +227,7 @@ pub(crate) struct SessionLifecycleGuard {
     /// Agent that owns this session. Required for the Drop-path
     /// `session_failures` insert (NOT NULL column). When `None`, Drop
     /// can still mark the session as failed but skips the structured
-    /// failure row (best-effort — the WAL `failed` event still records).
+    /// failure row (best-effort — the timeline `failed` event still records).
     agent_id: Option<String>,
     /// Set to `true` once a structured failure row has been (or will be)
     /// recorded by an explicit code path — namely:
@@ -241,7 +241,7 @@ pub(crate) struct SessionLifecycleGuard {
     /// When `false` and Drop fires the fallback `mark-failed` path, we also
     /// enqueue a `session_failures` insert with
     /// `failure_kind = "guard_dropped"` so cancelled / early-exit sessions
-    /// stop being invisible to operators (previously only `session_events`
+    /// stop being invisible to operators (previously only `session_timeline`
     /// recorded "guard dropped (early exit)" while `session_failures`
     /// stayed empty).
     recorded: bool,
@@ -287,8 +287,8 @@ impl SessionLifecycleGuard {
         {
             Ok(()) => {
                 self.outcome = SessionOutcome::Done;
-                if let Err(e) = crate::db::session_wal::log_event(&self.db, self.session_id, "done", None).await {
-                    tracing::warn!(session_id = %self.session_id, error = %e, "failed to log WAL done event");
+                if let Err(e) = crate::db::session_timeline::log_event(&self.db, self.session_id, "done", None).await {
+                    tracing::warn!(session_id = %self.session_id, error = %e, "failed to log timeline done event");
                 }
             }
             Err(e) => tracing::warn!(
@@ -316,8 +316,8 @@ impl SessionLifecycleGuard {
             Ok(()) => {
                 self.outcome = SessionOutcome::Failed;
                 let payload = serde_json::json!({ "reason": reason });
-                if let Err(e) = crate::db::session_wal::log_event(&self.db, self.session_id, "failed", Some(&payload)).await {
-                    tracing::warn!(session_id = %self.session_id, error = %e, "failed to log WAL failed event");
+                if let Err(e) = crate::db::session_timeline::log_event(&self.db, self.session_id, "failed", Some(&payload)).await {
+                    tracing::warn!(session_id = %self.session_id, error = %e, "failed to log timeline failed event");
                 }
             }
             Err(e) => tracing::warn!(
@@ -341,11 +341,11 @@ impl SessionLifecycleGuard {
             Ok(()) => {
                 self.outcome = SessionOutcome::Interrupted;
                 let payload = serde_json::json!({ "reason": reason });
-                if let Err(e) = crate::db::session_wal::log_event(
+                if let Err(e) = crate::db::session_timeline::log_event(
                     &self.db, self.session_id, "interrupted", Some(&payload)
                 ).await {
                     tracing::warn!(session_id = %self.session_id, error = %e,
-                        "failed to log WAL interrupted event");
+                        "failed to log timeline interrupted event");
                 }
             }
             Err(e) => tracing::warn!(
@@ -374,7 +374,7 @@ impl Drop for SessionLifecycleGuard {
                 // if another writer (finalize, watchdog, cancel-grace) already
                 // finalized the session. `cleanup_session_terminated` performs
                 // the atomic running→failed claim, streaming-message preservation,
-                // synthetic tool-result patching, and the WAL `failed` event
+                // synthetic tool-result patching, and the timeline `failed` event
                 // in one transaction; no manual `log_event` is needed after.
                 match crate::db::sessions::cleanup_session_terminated(
                     &db,
@@ -391,7 +391,7 @@ impl Drop for SessionLifecycleGuard {
                         // its own `spawn_record_failure`, signalled by
                         // `recorded == true` on the guard before Drop fired.
                         // Also skipped when we don't know the agent (NOT NULL
-                        // column) — the WAL event still serves as a forensic
+                        // column) — the timeline event still serves as a forensic
                         // breadcrumb in that case.
                         if !already_recorded {
                             if let Some(agent) = agent_id {
@@ -470,7 +470,7 @@ mod tests {
         assert_eq!(status, "interrupted");
 
         let event_type: String = sqlx::query_scalar(
-            "SELECT event_type FROM session_events WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
+            "SELECT event_type FROM session_timeline WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
         )
         .bind(session_id)
         .fetch_one(&pool)
@@ -544,9 +544,9 @@ mod tests {
                 .unwrap();
         assert_eq!(status, "failed");
 
-        // 2. WAL event recorded.
+        // 2. Timeline event recorded.
         let event_type: String = sqlx::query_scalar(
-            "SELECT event_type FROM session_events WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
+            "SELECT event_type FROM session_timeline WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
         )
         .bind(session_id)
         .fetch_one(&pool)

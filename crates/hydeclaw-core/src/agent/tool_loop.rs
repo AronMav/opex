@@ -104,14 +104,14 @@ impl LoopDetector {
         self.record_result(tool_name, success)
     }
 
-    /// Replay a WAL event into the detector (warm-up after crash/resume).
+    /// Replay a timeline event into the detector (warm-up after crash/resume).
     /// Unlike `record_execution`, this only tracks error streaks — no hash tracking
-    /// since WAL doesn't store full args.
-    pub fn record_result_from_wal(&mut self, tool_name: &str, success: bool) {
+    /// since the timeline doesn't store full args.
+    pub fn record_result_from_timeline(&mut self, tool_name: &str, success: bool) {
         let _ = self.record_result(tool_name, success);
     }
 
-    /// Record only the result (used for WAL warm-up and after execution).
+    /// Record only the result (used for timeline warm-up and after execution).
     pub fn record_result(&mut self, tool_name: &str, success: bool) -> LoopStatus {
         if success {
             self.consecutive_errors = 0;
@@ -130,15 +130,15 @@ impl LoopDetector {
         LoopStatus::Ok
     }
 
-    /// Reconstruct detector state from WAL tool_end events after crash/resume (BUG-026).
+    /// Reconstruct detector state from timeline tool_end events after crash/resume (BUG-026).
     ///
-    /// Replays error-streak (consecutive_errors + last_error_tool) from WAL history.
+    /// Replays error-streak (consecutive_errors + last_error_tool) from timeline history.
     /// Hash-based consecutive detection (consecutive/last_hash) is NOT restored —
-    /// WAL does not store args.
-    pub fn warm_up_from_wal(config: &ToolLoopConfig, events: &[hydeclaw_db::session_wal::WalToolEvent]) -> Self {
+    /// the timeline does not store args.
+    pub fn warm_up_from_timeline(config: &ToolLoopConfig, events: &[hydeclaw_db::session_timeline::TimelineToolEvent]) -> Self {
         let mut detector = Self::new(config);
         for e in events {
-            detector.record_result_from_wal(&e.tool_name, e.success);
+            detector.record_result_from_timeline(&e.tool_name, e.success);
         }
         detector
     }
@@ -186,7 +186,7 @@ pub fn is_context_overflow(error: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hydeclaw_db::session_wal::WalToolEvent;
+    use hydeclaw_db::session_timeline::TimelineToolEvent;
 
     fn config(threshold: usize) -> ToolLoopConfig {
         ToolLoopConfig {
@@ -227,43 +227,43 @@ mod tests {
     }
 
     #[test]
-    fn warm_up_from_wal_restores_error_streak() {
+    fn warm_up_from_timeline_restores_error_streak() {
         let cfg = config(3); // error_break_threshold = 3
         let events = vec![
-            WalToolEvent { tool_name: "fs".to_string(), success: false },
-            WalToolEvent { tool_name: "fs".to_string(), success: false },
+            TimelineToolEvent { tool_name: "fs".to_string(), success: false },
+            TimelineToolEvent { tool_name: "fs".to_string(), success: false },
         ];
-        let mut detector = LoopDetector::warm_up_from_wal(&cfg, &events);
+        let mut detector = LoopDetector::warm_up_from_timeline(&cfg, &events);
         let status = detector.record_result("fs", false);
         assert!(
             matches!(status, LoopStatus::Break(_)),
-            "error streak should be restored from WAL — 2 prior failures + 1 new = trip at threshold 3"
+            "error streak should be restored from timeline — 2 prior failures + 1 new = trip at threshold 3"
         );
     }
 
     #[test]
-    fn warm_up_from_wal_empty_events_gives_fresh_detector() {
+    fn warm_up_from_timeline_empty_events_gives_fresh_detector() {
         let cfg = config(3);
-        let events: Vec<WalToolEvent> = vec![];
-        let mut detector = LoopDetector::warm_up_from_wal(&cfg, &events);
+        let events: Vec<TimelineToolEvent> = vec![];
+        let mut detector = LoopDetector::warm_up_from_timeline(&cfg, &events);
         // Two failures — should NOT trip yet (only 2 of 3 threshold)
         detector.record_result("tool", false);
         let status = detector.record_result("tool", false);
-        assert!(matches!(status, LoopStatus::Ok), "empty WAL should produce fresh detector");
+        assert!(matches!(status, LoopStatus::Ok), "empty timeline should produce fresh detector");
     }
 
     #[test]
-    fn warm_up_from_wal_success_resets_streak() {
+    fn warm_up_from_timeline_success_resets_streak() {
         let cfg = config(3);
         let events = vec![
-            WalToolEvent { tool_name: "tool".to_string(), success: false },
-            WalToolEvent { tool_name: "tool".to_string(), success: false },
-            WalToolEvent { tool_name: "tool".to_string(), success: true }, // success resets
+            TimelineToolEvent { tool_name: "tool".to_string(), success: false },
+            TimelineToolEvent { tool_name: "tool".to_string(), success: false },
+            TimelineToolEvent { tool_name: "tool".to_string(), success: true }, // success resets
         ];
-        let mut detector = LoopDetector::warm_up_from_wal(&cfg, &events);
+        let mut detector = LoopDetector::warm_up_from_timeline(&cfg, &events);
         // After a success reset, two more failures should not trip
         detector.record_result("tool", false);
         let status = detector.record_result("tool", false);
-        assert!(matches!(status, LoopStatus::Ok), "success in WAL should reset error streak");
+        assert!(matches!(status, LoopStatus::Ok), "success in timeline should reset error streak");
     }
 }

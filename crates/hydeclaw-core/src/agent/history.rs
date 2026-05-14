@@ -695,7 +695,7 @@ Context was compacted to free space. Continue based on the recent messages below
 /// Returns extracted facts (empty Vec if `cfg.extract_to_memory = false`).
 ///
 /// `db` + `session_id` are used to persist the compression boundary to the DB
-/// (mark messages compressed, insert session_events WAL record). Failures are
+/// (mark messages compressed, insert session_timeline record). Failures are
 /// non-fatal: logged as warnings, compression continues in memory regardless.
 pub async fn compress_messages(
     messages: &mut Vec<Message>,
@@ -864,7 +864,7 @@ Continue based on the recent messages below."
             tokens_before as i64,
             tokens_after as i64,
         ).await {
-            tracing::warn!(error = %e, "failed to insert compression WAL event");
+            tracing::warn!(error = %e, "failed to insert compression timeline event");
         }
     }
 
