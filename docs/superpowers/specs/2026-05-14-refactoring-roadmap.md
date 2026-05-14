@@ -41,7 +41,7 @@ Each wave passes the same gate:
 
 ### Wave 1 — providers
 
-**Files (3996 LoC total → target ~8 modules, average ~400-500 LoC):**
+**Files (3996 LoC total → target 15 modules, average ~270 LoC):**
 
 | File                                                    | LoC  | Action                                                       |
 | ------------------------------------------------------- | ---- | ------------------------------------------------------------ |
@@ -288,12 +288,12 @@ Each of these is resolved during that wave's design brainstorm. The roadmap does
 
 | Wave                       | Source LoC | Target modules | Risk        | Wall-clock estimate       |
 | -------------------------- | ---------- | -------------- | ----------- | ------------------------- |
-| W1 providers               | 3996       | ~8             | low         | 2-3 days                  |
+| W1 providers               | 3996       | 15             | low         | 2-3 days                  |
 | W2 pipeline                | 6993       | ~15            | medium-high | 5-7 days                  |
 | W3 data+config+tools       | 10930      | ~25            | medium      | 5-7 days (3 sub-projects) |
 | W4 handlers+scheduler+main | 7407       | ~15            | low-medium  | 5-6 days                  |
 | W5 UI                      | 6880       | ~30            | low         | 5-7 days                  |
-| **Total**                  | **36206**  | **~93**        | —           | **22-30 days**            |
+| **Total**                  | **36206**  | **~100**       | —           | **22-30 days**            |
 
 Estimates assume the work is the *only* thing on a focused engineer's plate. With normal interrupt-driven work this stretches to ~6-9 weeks elapsed time.
 

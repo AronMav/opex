@@ -4,6 +4,8 @@
 **Wave:** W1 of refactoring roadmap (`docs/superpowers/specs/2026-05-14-refactoring-roadmap.md`)
 **Status:** approved design, ready for plan
 
+> **Note:** this brainstorm refined the roadmap's W1 estimate from ~8 to 15 target modules. The roadmap's effort summary table has been updated in the same fixup commit as this spec.
+
 ## Goal
 
 Split the three largest LLM adapter files (`anthropic.rs`, `openai.rs`, `google.rs`) into focused sibling modules per concern. Surface the seams that already exist in the code — request build / response parse / streaming / tool-call accumulation / variant-specific quirks — without changing the `LlmProvider` trait contract or any wire-level behaviour.
@@ -75,7 +77,7 @@ Per-module LoC estimates are derived from current file structure (functions and 
 - **`mod.rs`** — public face of the adapter. `AnthropicProvider` struct, `impl LlmProvider`. Imports from siblings via `mod request; mod response; mod stream; mod tool_calls; mod thinking;`. Re-exports `pub use request::…`, `pub use response::…` only where call sites in `factory.rs` / `routing.rs` need it.
 - **`request.rs`** — pure functions that turn `&[Message]` + `CallOptions` into the JSON body for `POST /v1/messages`. No HTTP. No `Arc<SecretsManager>`. Inputs/outputs are owned values.
 - **`response.rs`** — non-streaming response parsing. `AnthropicResponse`, `AnthropicContentBlock`, `AnthropicUsage` types. `parse_anthropic_response(api_resp, model) -> LlmResponse`.
-- **`stream.rs`** — SSE event handling. `process_sse_event`, `process_sse_events_for_test`, `parse_streaming_usage_for_test`. `StreamingAnthropicUsage` aggregator. Owns the `streaming_thinking_tests` submodule (it tests this code).
+- **`stream.rs`** — SSE event handling. `process_sse_event`, `process_sse_events_for_test`, `parse_streaming_usage_for_test`. `StreamingAnthropicUsage` aggregator. Owns the `streaming_thinking_tests` submodule (it tests this code). Also owns the free-standing `#[cfg(test)] pub fn *_for_test` helpers currently scattered in `anthropic.rs` at lines 637 and 664 (outside any `mod tests` block) — they move with their test consumers.
 - **`tool_calls.rs`** — tool_use content blocks: extraction from non-streaming responses, delta accumulation in streaming. Used by both `response.rs` and `stream.rs`.
 - **`thinking.rs`** — `thinking_mode(model: &str) -> ThinkingMode` and `thinking_config(level, model, max_tokens) -> Option<Value>`. Owns the `thinking_config_tests` submodule.
 
@@ -99,10 +101,16 @@ Per-module LoC estimates are derived from current file structure (functions and 
 Linear sequence of small, independently-buildable commits. Every commit passes `cargo clippy --all-targets -- -D warnings` and `cargo test --workspace`.
 
 1. **Discovery commit** — `chore(providers): freeze test baseline before W1 refactor`
-   - Run `cargo llvm-cov test -p hydeclaw-core agent::providers` (or `cargo-tarpaulin` if simpler on Windows); attach an LCOV snapshot to the discovery commit as `docs/architecture/2026-05-14-providers-coverage-baseline.lcov` (or inline summary in commit message)
-   - Identify under-tested branches (likely candidates: Anthropic `redacted_thinking`/`server_tool_use` content blocks; MiniMax XML edge cases; Gemini `safetyRatings`)
-   - Add golden-fixture tests inline (`#[cfg(test)] mod golden_fixtures` in each existing megafile) covering each gap. These tests must be co-moved with their production code during extraction.
-   - Commit baseline + new tests as a single commit.
+   - **Test inventory verification** — run `grep -nE "^mod [a-z_]*tests" providers/{anthropic,openai,google}.rs` and lock the list. Currently confirmed (2026-05-14): Anthropic has `mod tests` + `mod thinking_config_tests` + `mod streaming_thinking_tests`; OpenAI has **only** `mod xml_tests` (no regular `mod tests` — gap to address below); Google has `mod tests`. Any subsequent module add/remove must be justified in its extract commit.
+   - Run `cargo llvm-cov test -p hydeclaw-core agent::providers` (works fine on Windows; uses LLVM source-based coverage). Inline summary (per-file coverage %) in the commit message — do **not** commit LCOV artifacts.
+   - Identify under-tested branches and gaps. Confirmed gaps to address:
+     - OpenAI lacks any non-XML `mod tests` — author a baseline `mod tests` covering request-building + response-parsing happy paths.
+     - Anthropic `redacted_thinking` / `server_tool_use` content blocks (likely uncovered)
+     - MiniMax XML with multiple `<invoke>` blocks in one stream
+     - Anthropic + OpenAI tool-call delta arriving across 3+ chunks
+     - Gemini `safetyRatings` block (must not crash parser)
+   - Add golden-fixture tests inline: one `#[cfg(test)] mod golden_fixtures` per adapter (three modules total — one in each of `anthropic.rs`, `openai.rs`, `google.rs`). These tests are co-moved with the production code they cover during the subsequent extract commits.
+   - Commit baseline-summary + new tests as a single commit.
 
 Each extract commit does only this: create the new file, `mv` the relevant items into it, add the `mod foo;` line in `mod.rs`, update `use super::…` paths inside the moved code, fix any `pub(super)` visibility needed for cross-module calls. No rewriting. Test set unchanged.
 
@@ -148,8 +156,8 @@ Total: **~18 commits** (1 discovery + 6 Anthropic + 6 OpenAI + 3 Google + cleanu
 - `agent::providers::anthropic::tests` (request building, response parsing)
 - `agent::providers::anthropic::thinking_config_tests` (thinking helpers)
 - `agent::providers::anthropic::streaming_thinking_tests` (SSE streaming)
-- `agent::providers::openai::xml_tests` (MiniMax XML parsing)
-- Any inline `#[cfg(test)] mod tests` in `google.rs`
+- `agent::providers::openai::xml_tests` (MiniMax XML parsing) — **note:** OpenAI adapter has *no other* unit-test module currently; this is a known gap addressed by the discovery commit
+- `agent::providers::google::tests` (inline `mod tests` in google.rs)
 - `tests/integration_mock_provider.rs` (provider trait contract)
 - `tests/integration_aborted_usage.rs` (streaming-usage invariant)
 
@@ -176,12 +184,13 @@ These are added *before* the first extract and removed if redundant in the accep
 
 ## Acceptance criteria (Wave 1)
 
-- All 15 commits build independently (`cargo check -p hydeclaw-core` clean)
+- All 18 commits build independently (`cargo check -p hydeclaw-core` clean)
 - `cargo clippy --all-targets -- -D warnings` clean at every commit
-- `cargo test --workspace` baseline failures unchanged (same 3 pre-existing failures as before W1: 2 stale dto snapshots if not yet fixed; 1 sqlx VersionMismatch on local DB)
+- `cargo test --workspace` baseline failures unchanged. Current baseline (as of 2026-05-14, after the CI cleanup commits `81b012ef` + `a4d2e4a8`): **1 known failure** — `db::outbound::tests::test_outbound_queue_lifecycle` (sqlx `VersionMismatch(13)` on local test-DB only; CI is green). Any additional failure is a W1 regression.
 - `cargo tree --workspace | grep -E 'openssl-sys|native-tls'` returns nothing (rustls invariant)
 - Public surface unchanged: `mod.rs` re-exports identical to pre-W1
 - Module-tree summary in acceptance commit message
+- Per-module final LoC measurements recorded in acceptance commit body (trend record for future audit)
 
 ## Out of scope (deliberately)
 
@@ -191,6 +200,11 @@ These are added *before* the first extract and removed if redundant in the accep
 - **`LlmProvider` trait shape** — frozen during W1.
 - **`build_provider_tests.rs` / `routing_tests.rs`** — testing artifacts, not megafiles.
 - **Behavioural changes** of any kind. No new fields, no new error variants, no new event types. Renaming an internal function is allowed only if the new name is a strict improvement *and* the rename lives in its own commit.
+
+## Follow-up observations (record in acceptance commit, no action in W1)
+
+- **`StreamingAnthropicUsage` ↔ `StreamingUsage` similarity** — both adapters keep partial token counts that are folded into `hydeclaw_types::TokenUsage` at stream end. Out of scope for W1 (premature abstraction risk), but worth flagging as a follow-up unification candidate if duplication remains visually obvious after split.
+- **`minimax_xml.rs` lives under `openai/`** — MiniMax is reached via the OpenAI-compatible API plus a vendor-specific XML payload. Right home today (it's an OpenAI dialect quirk). If MiniMax-specific provider routing emerges later, this is the file that promotes to a sibling adapter directory.
 
 ## Effort
 
