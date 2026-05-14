@@ -777,7 +777,6 @@
   "config.subagents_off": "Субагенты отключены",
   "config.editable_fields": "Редактируемые параметры",
   "config.saved": "Конфигурация сохранена",
-  "config.max_agent_turns_description": "Максимальное число ходов между агентами до остановки цикла",
   "config.embed_dimensions_placeholder": "0 = по умолчанию модели",
   "config.embed_dimensions_description": "Запрашиваемая размерность эмбеддингов (0 = по умолчанию модели). Требует рестарт.",
   "config.embed_dimensions_hint": "Рекомендации: 1024 — оптимальный баланс (~95% качества, IVFFlat индекс). 768 — ~93%, 512 — ~90%. Ниже 512 заметная потеря на русском. Выше 2000 — индекс не создаётся (sequential scan).",

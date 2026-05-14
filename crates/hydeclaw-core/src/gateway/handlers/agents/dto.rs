@@ -118,7 +118,6 @@ impl AgentDetailDto {
             }),
             max_history_messages: a.max_history_messages,
             daily_budget_tokens: a.daily_budget_tokens,
-            max_agent_turns: a.max_agent_turns,
             max_failover_attempts: a.max_failover_attempts,
             is_running,
             config_dirty,

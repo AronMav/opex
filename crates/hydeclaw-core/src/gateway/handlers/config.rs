@@ -187,7 +187,6 @@ pub(crate) async fn api_get_config(
             "max_requests_per_minute": config.limits.max_requests_per_minute,
             "max_tool_concurrency": config.limits.max_tool_concurrency,
             "request_timeout_secs": config.limits.request_timeout_secs,
-            "max_agent_turns": config.limits.max_agent_turns,
         },
         "subagents": {
             "enabled": config.subagents.enabled,
@@ -249,7 +248,6 @@ pub(crate) struct ConfigUpdatePayload {
     subagents_enabled: Option<bool>,
     max_requests_per_minute: Option<u32>,
     max_tool_concurrency: Option<u32>,
-    max_agent_turns: Option<usize>,
     public_url: Option<String>,
     backup_enabled: Option<bool>,
     backup_cron: Option<String>,
@@ -361,12 +359,11 @@ pub(crate) async fn api_update_config(
         }
 
     // Update limits config in TOML
-    if (payload.max_requests_per_minute.is_some() || payload.max_tool_concurrency.is_some() || payload.max_agent_turns.is_some())
+    if (payload.max_requests_per_minute.is_some() || payload.max_tool_concurrency.is_some())
         && let Err(e) = crate::config::update_limits_config(
             "config/hydeclaw.toml",
             payload.max_requests_per_minute,
             payload.max_tool_concurrency,
-            payload.max_agent_turns,
         )
     {
         restore_and_fail!("failed to update limits config", e);

@@ -55,14 +55,6 @@ pub fn validate_config(cfg: &AppConfig) -> Vec<ValidationError> {
             });
         }
 
-    // limits.max_agent_turns: must be at least 1 if subagents are enabled
-    if cfg.subagents.enabled && cfg.limits.max_agent_turns == 0 {
-        errors.push(ValidationError {
-            field: "limits.max_agent_turns".to_string(),
-            message: "must be at least 1 when subagents are enabled".to_string(),
-        });
-    }
-
     errors
 }
 

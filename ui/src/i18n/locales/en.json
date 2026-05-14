@@ -777,7 +777,6 @@
   "config.subagents_off": "Subagents disabled",
   "config.editable_fields": "Editable Parameters",
   "config.saved": "Configuration saved",
-  "config.max_agent_turns_description": "Maximum agent-to-agent turns before stopping the loop",
   "config.embed_dimensions_placeholder": "0 = model default",
   "config.embed_dimensions_description": "Requested embedding dimensions (0 = model default). Requires restart.",
   "config.embed_dimensions_hint": "Recommended: 1024 — optimal balance (~95% quality, IVFFlat index). 768 — ~93%, 512 — ~90%. Below 512 noticeable loss for multilingual. Above 2000 — no index (sequential scan).",

@@ -84,7 +84,6 @@ pub(crate) struct AgentCreatePayload {
     /// Enable Anthropic prompt caching for this agent. `None` = keep existing / default false.
     pub prompt_cache: Option<bool>,
     pub daily_budget_tokens: Option<u64>,
-    pub max_agent_turns: Option<usize>,
     /// Cap on fallback attempts per request in multi-provider routing (default 3).
     pub max_failover_attempts: Option<u32>,
 }
@@ -285,7 +284,6 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 webhooks: h.webhooks.unwrap_or_default(),
             }),
             daily_budget_tokens: p.daily_budget_tokens.unwrap_or(0),
-            max_agent_turns: p.max_agent_turns,
             // Default 3 matches the `#[serde(default)]` on AgentSettings.
             max_failover_attempts: p.max_failover_attempts.unwrap_or(3),
             base: false,
@@ -383,7 +381,6 @@ mod tests {
             max_history_messages: None,
             prompt_cache: None,
             daily_budget_tokens: None,
-            max_agent_turns: None,
             max_failover_attempts: None,
         }
     }
@@ -409,7 +406,6 @@ mod tests {
         assert!(config.agent.watchdog.is_none());
         assert!(config.agent.hooks.is_none());
         assert_eq!(config.agent.daily_budget_tokens, 0);
-        assert!(config.agent.max_agent_turns.is_none());
         assert!(config.agent.routing.is_empty());
     }
 

@@ -668,9 +668,6 @@ pub(crate) async fn api_update_agent(
     if !cfg.agent.prompt_cache && existing_cfg.agent.prompt_cache {
         cfg.agent.prompt_cache = existing_cfg.agent.prompt_cache;
     }
-    if cfg.agent.max_agent_turns.is_none() {
-        cfg.agent.max_agent_turns = existing_cfg.agent.max_agent_turns;
-    }
     // max_failover_attempts is a u32 with serde default 3 — cannot distinguish
     // "absent in payload" from "explicit 3" post-deserialization, but the
     // schema builder sets 3 only when the payload field is `None`, so

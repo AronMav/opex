@@ -81,7 +81,6 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
     hooks: null,
     max_history_messages: null,
     daily_budget_tokens: 0,
-    max_agent_turns: null,
     max_failover_attempts: 0,
     is_running: false,
     config_dirty: false,

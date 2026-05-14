@@ -69,7 +69,6 @@ export default function ConfigPage() {
   const [editPublicUrl, setEditPublicUrl] = useState("");
   const [editMaxReqPerMin, setEditMaxReqPerMin] = useState("");
   const [editMaxToolConcurrency, setEditMaxToolConcurrency] = useState("");
-  const [editMaxAgentTurns, setEditMaxAgentTurns] = useState("");
   const [editEmbedDimensions, setEditEmbedDimensions] = useState("");
   // [agent_tool] — multi-agent timeouts
   const [editAgentToolWaitForIdle, setEditAgentToolWaitForIdle] = useState("");
@@ -111,7 +110,6 @@ export default function ConfigPage() {
         const limits = d.limits as Record<string, unknown> | undefined;
         setEditMaxReqPerMin(String(limits?.max_requests_per_minute ?? ""));
         setEditMaxToolConcurrency(String(limits?.max_tool_concurrency ?? ""));
-        setEditMaxAgentTurns(String(limits?.max_agent_turns ?? ""));
         const memory = d.memory as Record<string, unknown> | undefined;
         setEditEmbedDimensions(String(memory?.embed_dimensions ?? ""));
         const agentTool = d.agent_tool as Record<string, unknown> | undefined;
@@ -185,7 +183,6 @@ export default function ConfigPage() {
       };
       if (editMaxReqPerMin.trim()) payload.max_requests_per_minute = Number(editMaxReqPerMin);
       if (editMaxToolConcurrency.trim()) payload.max_tool_concurrency = Number(editMaxToolConcurrency);
-      if (editMaxAgentTurns.trim()) payload.max_agent_turns = Number(editMaxAgentTurns);
       if (editEmbedDimensions.trim()) payload.embed_dimensions = Number(editEmbedDimensions);
       await apiPut("/api/config", payload);
       toast.success(t("config.saved"));
@@ -413,26 +410,6 @@ export default function ConfigPage() {
                           </TooltipTrigger>
                           {(() => { const d = getFieldDescription(schema, ["limits", "max_tool_concurrency"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
                         </Tooltip>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="font-mono text-xs text-muted-foreground">max_agent_turns</label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Input
-                              type="number"
-                              value={editMaxAgentTurns}
-                              onChange={(e) => setEditMaxAgentTurns(e.target.value)}
-                              placeholder="5"
-                              className="font-mono text-sm h-9"
-                              min={1}
-                              max={50}
-                            />
-                          </TooltipTrigger>
-                          {(() => { const d = getFieldDescription(schema, ["limits", "max_agent_turns"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
-                        </Tooltip>
-                        <p className="text-xs text-muted-foreground/60">
-                          {t("config.max_agent_turns_description")}
-                        </p>
                       </div>
                       <div className="space-y-1.5">
                         <label className="font-mono text-xs text-muted-foreground">embed_dimensions</label>
