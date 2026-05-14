@@ -484,7 +484,7 @@ Both tiers searched together. `pinned` flag surfaced in search results.
 
 ### Memory Watcher (`memory/watcher.rs`)
 
-File watcher (notify crate) monitors workspace file `Create`/`Modify` events. On change: re-indexes the file as `scope='shared'` via memory worker task queue. Watcher is delta-only (no initial scan). First-run bootstrap handled by Core startup (enqueue one-shot reindex if zero shared chunks).
+File watcher (notify crate) monitors workspace file `Create`/`Modify` events. On change: re-indexes the file as `scope='shared'` by calling `MemoryStore::index` **directly** — the embedding HTTP call and the `memory_chunks` upsert happen synchronously inside the watcher's tokio task, NOT through the `memory_tasks` queue / memory-worker process. The async task queue path is used only by (a) Core startup bootstrap reindex (when `memory_chunks` has zero `scope='shared'` rows) and (b) the explicit `POST /api/memory/reindex` endpoint. Watcher is delta-only (no initial scan).
 
 ### Memory Worker LISTEN/NOTIFY
 
