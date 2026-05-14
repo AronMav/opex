@@ -143,8 +143,7 @@ fn default_content_type() -> String { "application/json".to_string() }
 
 // ── Cache config ─────────────────────────────────────────────────────────────
 
-// Fields are parsed from YAML for forward-compatibility; not used at runtime
-// since ToolExecutionContext (the cache runtime) is test-only.
+// Fields wired in Task 8 (engine_dispatch YAML-tool cache path).
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct YamlCacheConfig {
@@ -176,66 +175,111 @@ pub struct YamlPaginationConfig {
     pub next_path: Option<String>,
 }
 
-// ── Execution context (test-only) ────────────────────────────────────────────
+// ── Execution context ────────────────────────────────────────────────────────
 
-#[cfg(test)]
-struct CachedResponse {
+pub(crate) struct CachedResponse {
     body: String,
     expires_at: std::time::Instant,
 }
 
-/// Shared execution state for YAML tools: response cache.
-/// Only used in tests — production callers never pass a context.
-#[cfg(test)]
+/// Shared response cache for YAML tools. Process-wide singleton held inside
+/// `Arc<ToolExecutionContext>` on `AgentConfig`. Lazy TTL on read, batch
+/// eviction on write at the soft cap.
+// Callers wired in Tasks 7 (AgentConfig threading) and 8 (engine_dispatch).
+#[allow(dead_code)]
 pub struct ToolExecutionContext {
-    cache: tokio::sync::Mutex<HashMap<String, CachedResponse>>,
+    cache: dashmap::DashMap<String, CachedResponse>,
+    max_entries: usize,
 }
 
-#[cfg(test)]
+#[allow(dead_code)]
 impl ToolExecutionContext {
-    pub fn new() -> Self {
+    pub fn new(max_entries: usize) -> Self {
         Self {
-            cache: tokio::sync::Mutex::new(HashMap::new()),
+            cache: dashmap::DashMap::new(),
+            max_entries,
         }
     }
 
-    async fn get_cached(&self, key: &str) -> Option<String> {
-        let cache = self.cache.lock().await;
-        if let Some(entry) = cache.get(key)
-            && std::time::Instant::now() < entry.expires_at {
-                return Some(entry.body.clone());
-            }
-        None
+    /// Test-only inspection.
+    #[cfg(test)]
+    pub fn cache_len(&self) -> usize {
+        self.cache.len()
     }
 
-    async fn set_cached(&self, key: &str, body: &str, ttl_secs: u64) {
-        let mut cache = self.cache.lock().await;
-        cache.insert(key.to_string(), CachedResponse {
-            body: body.to_string(),
-            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(ttl_secs),
-        });
+    pub async fn get_cached(&self, key: &str) -> Option<String> {
+        let now = std::time::Instant::now();
+        let body = {
+            let entry = self.cache.get(key)?;
+            if now >= entry.expires_at {
+                None
+            } else {
+                Some(entry.body.clone())
+            }
+        };
+        if body.is_none() {
+            // Expired — drop the entry.
+            self.cache.remove(key);
+        }
+        body
+    }
+
+    pub async fn set_cached(&self, key: &str, body: &str, ttl_secs: u64) {
+        if self.cache.len() >= self.max_entries {
+            let target_remove = (self.max_entries / 10).max(1);
+            let mut victims: Vec<(String, std::time::Instant)> = self
+                .cache
+                .iter()
+                .map(|e| (e.key().clone(), e.value().expires_at))
+                .collect();
+            victims.sort_by_key(|(_, exp)| *exp);
+            for (k, _) in victims.into_iter().take(target_remove) {
+                self.cache.remove(&k);
+            }
+        }
+        self.cache.insert(
+            key.to_string(),
+            CachedResponse {
+                body: body.to_string(),
+                expires_at: std::time::Instant::now() + std::time::Duration::from_secs(ttl_secs),
+            },
+        );
     }
 }
 
-#[cfg(test)]
-fn build_cache_key(tool_name: &str, params: &serde_json::Value, key_params: &[String]) -> String {
-    let mut key = tool_name.to_string();
+// Callers wired in Task 8 (engine_dispatch YAML-tool cache path).
+#[allow(dead_code)]
+pub(crate) fn build_cache_key(
+    tool_name: &str,
+    method: &str,
+    endpoint: &str,
+    params: &serde_json::Value,
+    key_params: &[String],
+) -> String {
+    let mut key = format!("{tool_name}|{method}|{endpoint}|");
     if let Some(obj) = params.as_object() {
         if key_params.is_empty() {
-            // Use all params
-            for (k, v) in obj {
-                key.push(':');
-                key.push_str(k);
-                key.push('=');
-                key.push_str(&v.to_string());
+            // serde_json::Map preserves insertion order (preserve_order feature
+            // enabled via schemars). Sort keys explicitly so the cache key is
+            // independent of JSON-object key order.
+            let mut keys: Vec<&String> = obj.keys().collect();
+            keys.sort();
+            for k in keys {
+                if let Some(v) = obj.get(k) {
+                    key.push_str(k);
+                    key.push('=');
+                    key.push_str(&v.to_string());
+                    key.push('&');
+                }
             }
         } else {
+            // key_params provides explicit order — preserve it.
             for kp in key_params {
                 if let Some(v) = obj.get(kp) {
-                    key.push(':');
                     key.push_str(kp);
                     key.push('=');
                     key.push_str(&v.to_string());
+                    key.push('&');
                 }
             }
         }
@@ -1854,16 +1898,97 @@ method: GET
 
     #[test]
     fn cache_key_uses_specified_params() {
-        let key1 = build_cache_key("tool", &serde_json::json!({"ticker": "AAPL", "extra": 1}), &["ticker".into()]);
-        let key2 = build_cache_key("tool", &serde_json::json!({"ticker": "AAPL", "extra": 2}), &["ticker".into()]);
+        let key1 = build_cache_key(
+            "tool",
+            "GET",
+            "https://example.com",
+            &serde_json::json!({"ticker": "AAPL", "extra": 1}),
+            &["ticker".into()],
+        );
+        let key2 = build_cache_key(
+            "tool",
+            "GET",
+            "https://example.com",
+            &serde_json::json!({"ticker": "AAPL", "extra": 2}),
+            &["ticker".into()],
+        );
         assert_eq!(key1, key2); // extra ignored
     }
 
     #[test]
     fn cache_key_all_params_when_empty() {
-        let key1 = build_cache_key("t", &serde_json::json!({"a": 1, "b": 2}), &[]);
-        let key2 = build_cache_key("t", &serde_json::json!({"a": 1, "b": 3}), &[]);
+        let key1 = build_cache_key(
+            "t",
+            "GET",
+            "https://example.com",
+            &serde_json::json!({"a": 1, "b": 2}),
+            &[],
+        );
+        let key2 = build_cache_key(
+            "t",
+            "GET",
+            "https://example.com",
+            &serde_json::json!({"a": 1, "b": 3}),
+            &[],
+        );
         assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_object_keys_are_order_independent() {
+        let a = build_cache_key(
+            "x",
+            "POST",
+            "https://api.test/v",
+            &serde_json::json!({"a": 1, "b": 2}),
+            &[],
+        );
+        let b = build_cache_key(
+            "x",
+            "POST",
+            "https://api.test/v",
+            &serde_json::json!({"b": 2, "a": 1}),
+            &[],
+        );
+        assert_eq!(
+            a, b,
+            "object key order must not matter (serde_json::Map is BTreeMap)"
+        );
+    }
+
+    #[test]
+    fn cache_key_array_order_matters() {
+        let a = build_cache_key(
+            "x",
+            "POST",
+            "https://api.test/v",
+            &serde_json::json!({"tags": ["a", "b"]}),
+            &[],
+        );
+        let b = build_cache_key(
+            "x",
+            "POST",
+            "https://api.test/v",
+            &serde_json::json!({"tags": ["b", "a"]}),
+            &[],
+        );
+        assert_ne!(a, b, "array element order is part of the cache key");
+    }
+
+    #[tokio::test]
+    async fn cache_evicts_oldest_at_cap_with_min_one() {
+        // max_entries = 3 -> eviction target = max(3/10, 1) = 1 per write.
+        let ctx = ToolExecutionContext::new(3);
+        ctx.set_cached("k1", "v1", 60).await;
+        ctx.set_cached("k2", "v2", 60).await;
+        ctx.set_cached("k3", "v3", 60).await;
+        assert_eq!(ctx.cache_len(), 3);
+        ctx.set_cached("k4", "v4", 60).await;
+        assert!(ctx.cache_len() <= 3, "soft cap must hold at max_entries");
+        assert!(
+            ctx.get_cached("k4").await.is_some(),
+            "newest write must be present"
+        );
     }
 
     #[test]
@@ -1894,7 +2019,7 @@ method: GET
 
     #[tokio::test]
     async fn execution_context_cache_basic() {
-        let ctx = ToolExecutionContext::new();
+        let ctx = ToolExecutionContext::new(1000);
         assert!(ctx.get_cached("key").await.is_none());
         ctx.set_cached("key", "value", 60).await;
         assert_eq!(ctx.get_cached("key").await, Some("value".to_string()));
