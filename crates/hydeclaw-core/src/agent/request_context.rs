@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::agent::engine::StreamEvent;
 use crate::agent::tool_loop::{LoopDetector, ToolLoopConfig};
-use crate::db::session_wal;
+use crate::db::session_timeline;
 
 /// Per-request execution context, holding session identity, cancellation,
 /// loop detection, and the optional SSE sender.
@@ -22,7 +22,7 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
-    /// Create a fresh context (no WAL warm-up).
+    /// Create a fresh context (no timeline warm-up).
     pub fn new(session_id: Uuid, cancel: CancellationToken, loop_config: &ToolLoopConfig) -> Self {
         Self {
             session_id,
@@ -34,30 +34,30 @@ impl RequestContext {
         }
     }
 
-    /// Create a context with WAL warm-up — replays tool_end events into LoopDetector.
-    /// Best-effort: if WAL read fails, proceeds with a fresh detector.
+    /// Create a context with timeline warm-up — replays tool_end events into LoopDetector.
+    /// Best-effort: if timeline read fails, proceeds with a fresh detector.
     pub async fn new_for_session(
         db: &sqlx::PgPool,
         session_id: Uuid,
         cancel: CancellationToken,
         loop_config: &ToolLoopConfig,
     ) -> Self {
-        let detector = match session_wal::load_tool_events(db, session_id).await {
+        let detector = match session_timeline::load_tool_events(db, session_id).await {
             Ok(events) => {
                 if !events.is_empty() {
                     tracing::debug!(
                         session_id = %session_id,
                         count = events.len(),
-                        "WAL warm-up: replayed tool events into LoopDetector",
+                        "timeline warm-up: replayed tool events into LoopDetector",
                     );
                 }
-                LoopDetector::warm_up_from_wal(loop_config, &events)
+                LoopDetector::warm_up_from_timeline(loop_config, &events)
             }
             Err(e) => {
                 tracing::warn!(
                     session_id = %session_id,
                     error = %e,
-                    "WAL warm-up failed, proceeding with fresh LoopDetector",
+                    "timeline warm-up failed, proceeding with fresh LoopDetector",
                 );
                 LoopDetector::new(loop_config)
             }

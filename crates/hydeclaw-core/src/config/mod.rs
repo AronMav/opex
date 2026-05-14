@@ -52,7 +52,7 @@ pub struct AppConfig {
     /// Scheduled skill curator (disabled by default).
     #[serde(default)]
     pub curator: CuratorConfig,
-    /// Phase 62 RES-03 cleanup scheduler tuning (session_events WAL retention).
+    /// Phase 62 RES-03 cleanup scheduler tuning (session_events timeline retention).
     #[serde(default)]
     pub cleanup: CleanupConfig,
     /// Phase 62 RES-05 graceful-shutdown drain tuning (drain timeout).
@@ -255,12 +255,12 @@ impl Default for CuratorConfig {
 
 // ── CleanupConfig ─────────────────────────────────────────────────────────────
 
-/// Phase 62 RES-03: batched cleanup tuning for the hourly `session_events` WAL
+/// Phase 62 RES-03: batched cleanup tuning for the hourly `session_events` timeline
 /// prune cron. Both fields have operator-friendly defaults; `retention_days = 0`
 /// disables the hourly cleanup entirely.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct CleanupConfig {
-    /// Retention for `session_events` WAL rows in days. `0` disables cleanup.
+    /// Retention for `session_events` timeline rows in days. `0` disables cleanup.
     /// Default: 7 days.
     #[serde(default = "default_session_events_retention_days")]
     pub session_events_retention_days: u32,

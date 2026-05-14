@@ -167,7 +167,7 @@ pub(crate) async fn api_list_sessions(
             } else {
                 sqlx::query_as::<_, (uuid::Uuid, i64)>(
                     "SELECT session_id, COUNT(*)::bigint \
-                     FROM session_events \
+                     FROM session_timeline \
                      WHERE session_id = ANY($1) AND event_type = 'compression' \
                      GROUP BY session_id",
                 )

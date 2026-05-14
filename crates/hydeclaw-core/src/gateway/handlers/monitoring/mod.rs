@@ -180,7 +180,7 @@ pub(crate) async fn api_health_dashboard(
     // ── DB-backed reads (bounded; cheap — both queries read metadata or a
     //    single aggregate, never scan data pages) ─────────────────────────
     let session_events_table_size_bytes: u64 = sqlx::query_scalar::<_, i64>(
-        "SELECT pg_total_relation_size('session_events')",
+        "SELECT pg_total_relation_size('session_timeline')",
     )
     .fetch_one(&infra.db)
     .await

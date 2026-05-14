@@ -2,7 +2,7 @@
 //! after a clean `done`, recovery into a still-`running` session (mid-task
 //! crash / restart), or an explicit user resume from the UI.
 //!
-//! Used by bootstrap to decide whether to warm `LoopDetector` from WAL and
+//! Used by bootstrap to decide whether to warm `LoopDetector` from the timeline and
 //! by `claim_session_for_reentry` to decide which status transitions are legal.
 
 use crate::SessionStatus;
@@ -16,7 +16,7 @@ pub enum ReentryMode {
     NewTurnAfterDone,
     /// Re-entering a session whose previous run was still `'running'` —
     /// either the process crashed mid-loop or another worker is racing us.
-    /// LoopDetector should warm from WAL to preserve error streaks.
+    /// LoopDetector should warm from timeline to preserve error streaks.
     ResumeRunning,
     /// User explicitly opened a session via UI deep-link, fork, or
     /// `resume_session_id`. Status may be anything (including soft-terminal
@@ -27,7 +27,7 @@ pub enum ReentryMode {
 }
 
 impl ReentryMode {
-    /// Should bootstrap warm the `LoopDetector` from past WAL tool events?
+    /// Should bootstrap warm the `LoopDetector` from past timeline tool events?
     /// True for `ResumeRunning` and `ExplicitResume` — both indicate the user
     /// is continuing a previous run and prior error streaks remain relevant.
     /// False for `NewSession` / `NewTurnAfterDone` — fresh turn, past errors

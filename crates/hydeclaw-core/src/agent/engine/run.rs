@@ -443,8 +443,8 @@ impl AgentEngine {
     ///
     /// Returns the final assistant text (or a graceful user-facing error
     /// message when the LLM call failed unrecoverably). The same DB
-    /// row-shape and WAL lifecycle the SSE path produces — cron runs are
-    /// now first-class sessions in `messages` and `session_events`.
+    /// row-shape and timeline lifecycle the SSE path produces — cron runs are
+    /// now first-class sessions in `messages` and `session_timeline`.
     pub async fn handle_isolated_via_pipeline(
         &self,
         msg: &IncomingMessage,

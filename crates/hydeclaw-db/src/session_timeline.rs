@@ -1,16 +1,25 @@
-//! Session WAL (Write-Ahead Log) — journal table for session lifecycle events.
+//! Session timeline — chronological log of session lifecycle events.
 //!
-//! During normal operation, session state transitions (running, `tool_start`, `tool_end`,
-//! done, failed) are logged to `session_events`. On crash recovery, this WAL is read
-//! to identify what was in-flight and reconstruct state cleanly — no synthetic
-//! "[interrupted]" messages are injected.
+//! During normal operation, session state transitions (running, `tool_start`,
+//! `tool_end`, done, failed) are appended to `session_timeline`. The table is
+//! used for:
+//!   * LoopDetector warm-up on session re-entry (preserves loop-break
+//!     decisions across restarts — see `load_tool_events`).
+//!   * Diagnostics: a per-session audit trail of what happened and when.
+//!   * The UI Timeline view (future).
+//!
+//! This is NOT a Write-Ahead Log: there is no replay-based recovery. On
+//! crash, completed work is preserved by the persisted side effects
+//! (workspace files, memory chunks, channel messages, DB rows), not by
+//! replaying events from this table. The `session_events` legacy name and
+//! "WAL" framing have been retired (migration m049).
 
 use anyhow::Result;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-/// Log a session lifecycle event to the WAL. Standalone variant — opens its
-/// own transaction. Use `log_event_tx` when already inside a transaction.
+/// Log a session lifecycle event. Standalone variant — opens its own
+/// transaction. Use `log_event_tx` when already inside a transaction.
 pub async fn log_event(
     db: &PgPool,
     session_id: Uuid,
@@ -23,12 +32,12 @@ pub async fn log_event(
     Ok(())
 }
 
-/// In-transaction variant of [`log_event`]. Inserts the WAL row and refreshes
-/// `activity_at` (debounced to ~10 s resolution).
+/// In-transaction variant of [`log_event`]. Appends a timeline row and
+/// refreshes `activity_at` (debounced to ~10 s resolution).
 ///
-/// Use this when you need to combine the WAL write with other DB operations
-/// in a single transaction (e.g. a multi-step cleanup that must be atomic).
-/// Standalone callers should use [`log_event`].
+/// Use this when you need to combine the timeline write with other DB
+/// operations in a single transaction (e.g. a multi-step cleanup that
+/// must be atomic). Standalone callers should use [`log_event`].
 pub async fn log_event_tx(
     tx: &mut Transaction<'_, Postgres>,
     session_id: Uuid,
@@ -36,7 +45,7 @@ pub async fn log_event_tx(
     payload: Option<&serde_json::Value>,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO session_events (session_id, event_type, payload) VALUES ($1, $2, $3)",
+        "INSERT INTO session_timeline (session_id, event_type, payload) VALUES ($1, $2, $3)",
     )
     .bind(session_id)
     .bind(event_type)
@@ -47,7 +56,7 @@ pub async fn log_event_tx(
     // Heartbeat — debounced to ~10s resolution.
     //
     // Without debounce a busy session with 5 parallel tools + 3 LLM calls/sec
-    // would emit 15-20 WAL events/sec, each triggering an UPDATE sessions.
+    // would emit 15-20 timeline events/sec, each triggering an UPDATE sessions.
     // Postgres row-locks on the sessions row would serialise concurrent
     // tool-end writes and stall throughput. Watchdog polls every 60s, so
     // a 10s heartbeat granularity is more than enough.
@@ -66,7 +75,7 @@ pub async fn log_event_tx(
     Ok(())
 }
 
-/// Phase 62 RES-03: batched DELETE for `session_events` rows older than `days`.
+/// Phase 62 RES-03: batched DELETE for `session_timeline` rows older than `days`.
 ///
 /// PostgreSQL has no native `DELETE ... LIMIT`. We wrap with
 /// `DELETE FROM t WHERE id IN (SELECT id FROM t WHERE <cond> ORDER BY id LIMIT N)`
@@ -96,9 +105,9 @@ pub async fn prune_old_events_batched(
     loop {
         let affected = sqlx::query(
             r#"
-            DELETE FROM session_events
+            DELETE FROM session_timeline
             WHERE id IN (
-                SELECT id FROM session_events
+                SELECT id FROM session_timeline
                 WHERE created_at < now() - make_interval(days => $1)
                 ORDER BY id
                 LIMIT $2
@@ -122,22 +131,22 @@ pub async fn prune_old_events_batched(
     Ok(total_deleted)
 }
 
-/// WAL event row for LoopDetector warm-up.
+/// Timeline event row for LoopDetector warm-up.
 #[derive(Debug)]
-pub struct WalToolEvent {
+pub struct TimelineToolEvent {
     pub tool_name: String,
     pub success: bool,
 }
 
 /// Load tool_end events for a session to replay into LoopDetector (BUG-026).
-/// The WAL payload for tool_end events contains: {"tool_call_id": "...", "tool_name": "...", "success": true/false}
-pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<WalToolEvent>> {
+/// The timeline payload for tool_end events contains: {"tool_call_id": "...", "tool_name": "...", "success": true/false}
+pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<TimelineToolEvent>> {
     let rows = sqlx::query_as::<_, (String, Option<bool>)>(
         r#"
         SELECT
             payload->>'tool_name' AS tool_name,
             (payload->>'success')::bool AS success
-        FROM session_events
+        FROM session_timeline
         WHERE session_id = $1
           AND event_type = 'tool_end'
           AND payload->>'tool_name' IS NOT NULL
@@ -150,7 +159,7 @@ pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<WalTo
 
     Ok(rows
         .into_iter()
-        .map(|(name, success)| WalToolEvent {
+        .map(|(name, success)| TimelineToolEvent {
             tool_name: name,
             success: success.unwrap_or(true),
         })

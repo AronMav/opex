@@ -384,7 +384,7 @@ impl Scheduler {
     /// by age AND enforce per-agent entry cap).
     ///
     /// `batch_size` is threaded through to `prune_old_events_batched` for the
-    /// daily WAL prune so it honours the same `CleanupConfig::session_events_batch_size`
+    /// daily timeline prune so it honours the same `CleanupConfig::session_events_batch_size`
     /// the hourly job uses — keeping both jobs consistent.
     pub async fn add_session_cleanup(
         &self,
@@ -432,18 +432,18 @@ impl Scheduler {
                         "session cap enforcement failed"
                     ),
                 }
-                // Prune old WAL events alongside session cleanup. Uses the
+                // Prune old timeline events alongside session cleanup. Uses the
                 // batched variant (Phase 62 RES-03) to avoid long table locks
-                // and WAL bloat — `batch_size` is sourced from
+                // and PG WAL bloat — `batch_size` is sourced from
                 // `CleanupConfig::session_events_batch_size`, mirroring the
                 // hourly job.
-                match crate::db::session_wal::prune_old_events_batched(&db, ttl_days, batch_size).await {
+                match crate::db::session_timeline::prune_old_events_batched(&db, ttl_days, batch_size).await {
                     Ok(pruned) => {
                         if pruned > 0 {
-                            tracing::info!(pruned, "WAL event pruning completed");
+                            tracing::info!(pruned, "timeline event pruning completed");
                         }
                     }
-                    Err(e) => tracing::error!(error = %e, "WAL event pruning failed"),
+                    Err(e) => tracing::error!(error = %e, "timeline event pruning failed"),
                 }
             })
         })?;
@@ -452,12 +452,12 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Phase 62 RES-03: hourly batched cleanup of `session_events` WAL rows.
+    /// Phase 62 RES-03: hourly batched cleanup of `session_events` timeline rows.
     ///
     /// Cron `0 0 * * * *` fires at the top of every hour (`sec=0 min=0 hour=* *`
     /// — 6-field tokio-cron-scheduler format). The job calls
     /// `prune_old_events_batched`, which deletes at most `batch_size` rows per
-    /// iteration to avoid long table locks and WAL bloat.
+    /// iteration to avoid long table locks and PG WAL bloat.
     ///
     /// `retention_days = 0` disables the hourly cleanup (returns `Ok(())` without
     /// registering a job). Errors surfaced by `prune_old_events_batched` are
@@ -481,7 +481,7 @@ impl Scheduler {
         let job = Job::new_async("0 0 * * * *", move |_uuid, _lock| {
             let db = db.clone();
             Box::pin(async move {
-                match crate::db::session_wal::prune_old_events_batched(
+                match crate::db::session_timeline::prune_old_events_batched(
                     &db,
                     retention_days,
                     batch_size,

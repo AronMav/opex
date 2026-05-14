@@ -8,7 +8,7 @@ mod support;
 
 use std::time::Duration;
 
-use hydeclaw_core::db::session_wal::prune_old_events_batched;
+use hydeclaw_core::db::session_timeline::prune_old_events_batched;
 use support::TestHarness;
 use tokio::time::timeout;
 use uuid::Uuid;

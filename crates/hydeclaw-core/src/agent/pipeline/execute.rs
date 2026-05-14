@@ -34,7 +34,7 @@
 //! `engine/run.rs`) pass [`BehaviourLayers::for_cron`] to enable the cron-only
 //! features above.
 //!
-//! WAL warm-up replay is owned by bootstrap; execute receives the
+//! Timeline warm-up replay is owned by bootstrap; execute receives the
 //! already-warmed detector via [`BootstrapOutcome::loop_detector`].
 //! Thinking-block stripping is owned by finalize.
 

@@ -1176,7 +1176,7 @@ async fn schedule_periodic_jobs(
         }
     }
 
-    // Phase 62 RES-03: hourly batched session_events WAL cleanup. Runs
+    // Phase 62 RES-03: hourly batched session_events timeline cleanup. Runs
     // alongside the legacy daily add_session_cleanup (which still handles
     // cleanup_old_sessions) — the hourly job only prunes session_events,
     // with bounded LIMIT per batch to avoid long table locks.
