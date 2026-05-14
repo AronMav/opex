@@ -1,13 +1,15 @@
 //! OpenAI-compatible LLM provider (`MiniMax`, `OpenAI`, Ollama, etc.) —
 //! extracted from providers.rs for readability.
 
-use super::{async_trait, Deserialize, Arc, SecretsManager, ModelOverride, LlmProvider, Message, ToolDefinition, Result, LlmResponse, messages_to_openai_format, mpsc};
+use super::{async_trait, Arc, SecretsManager, ModelOverride, LlmProvider, Message, ToolDefinition, Result, LlmResponse, messages_to_openai_format, mpsc};
 use crate::agent::providers::http::SendError;
 
 mod minimax_xml;
 mod response;
+mod stream;
 pub(crate) use minimax_xml::extract_minimax_xml_tool_calls;
-use response::{ChatCompletionResponse, ChatUsage};
+use response::ChatCompletionResponse;
+use stream::{StreamChunk, StreamingUsage};
 
 // ── OpenAI-Compatible Provider (works with MiniMax, OpenAI, Ollama, etc.) ──
 
@@ -886,96 +888,6 @@ impl OpenAiCompatibleProvider {
         }
         None
     }
-}
-
-/// Internal buffer for usage data captured across streaming chunks.
-///
-/// OpenAI sends usage only in the final chunk of a streaming response (when
-/// `stream_options.include_usage = true`), but we use a buffer instead of
-/// directly building `TokenUsage` because the chunk-handler loop is in a
-/// different scope from `LlmResponse` construction.
-///
-/// Replaces a 5-tuple at multiple sites — named fields prevent positional-confusion
-/// bugs (e.g. swapping `cache_read` and `cache_creation` at construction).
-#[derive(Default)]
-struct StreamingUsage {
-    input: u32,
-    output: u32,
-    cache_read: Option<u32>,
-    cache_creation: Option<u32>,
-    reasoning: Option<u32>,
-}
-
-impl From<StreamingUsage> for hydeclaw_types::TokenUsage {
-    fn from(u: StreamingUsage) -> Self {
-        Self {
-            input_tokens: u.input,
-            output_tokens: u.output,
-            cache_read_tokens: u.cache_read,
-            cache_creation_tokens: u.cache_creation,
-            reasoning_tokens: u.reasoning,
-        }
-    }
-}
-
-// ── MiniMax XML tool call extraction ──
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn streaming_usage_to_token_usage_includes_cache_fields() {
-        let s = StreamingUsage {
-            input: 100,
-            output: 50,
-            cache_read: Some(30),
-            cache_creation: None,
-            reasoning: None,
-        };
-        let tu: hydeclaw_types::TokenUsage = s.into();
-        assert_eq!(tu.input_tokens, 100);
-        assert_eq!(tu.output_tokens, 50);
-        assert_eq!(tu.cache_read_tokens, Some(30));
-    }
-
-}
-
-// ── SSE streaming types ──
-
-#[derive(Debug, Deserialize)]
-struct StreamChunk {
-    #[serde(default)]
-    choices: Vec<StreamChoice>,
-    usage: Option<ChatUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamChoice {
-    delta: StreamDelta,
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamDelta {
-    content: Option<String>,
-    /// DeepSeek extended thinking — must be captured and passed back on subsequent turns.
-    reasoning_content: Option<String>,
-    #[serde(default)]
-    tool_calls: Vec<StreamToolCallDelta>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamToolCallDelta {
-    index: usize,
-    id: Option<String>,
-    function: Option<StreamFunctionDelta>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StreamFunctionDelta {
-    name: Option<String>,
-    arguments: Option<String>,
 }
 
 #[cfg(test)]
