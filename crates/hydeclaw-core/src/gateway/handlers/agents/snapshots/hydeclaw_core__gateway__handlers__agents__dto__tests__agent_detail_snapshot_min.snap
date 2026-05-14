@@ -34,7 +34,6 @@ expression: dto
   "hooks": null,
   "max_history_messages": null,
   "daily_budget_tokens": 0,
-  "max_agent_turns": null,
   "max_failover_attempts": 3,
   "is_running": false,
   "config_dirty": false
