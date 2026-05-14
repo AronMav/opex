@@ -5,6 +5,7 @@ use super::{async_trait, Arc, SecretsManager, ModelOverride, LlmProvider, Messag
 use crate::agent::providers::http::SendError;
 
 mod minimax_xml;
+mod request;
 mod response;
 mod stream;
 pub(crate) use minimax_xml::extract_minimax_xml_tool_calls;
@@ -239,42 +240,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         _opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         let effective_model = self.model.effective();
-        let mut body = serde_json::json!({
-            "model": effective_model,
-            "messages": messages_to_openai_format(messages, self.uses_reasoning_content()),
-            "temperature": self.temperature,
-        });
-        if let Some(mt) = self.max_tokens {
-            body["max_tokens"] = serde_json::json!(mt);
-        }
-
-        if !tools.is_empty() {
-            let tools_json: Vec<serde_json::Value> = tools
-                .iter()
-                .map(|t| {
-                    serde_json::json!({
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.input_schema,
-                        }
-                    })
-                })
-                .collect();
-            body["tools"] = serde_json::Value::Array(tools_json);
-            if let Some(tool_name) = super::forced_skill_tool(messages, tools) {
-                if self.supports_forced_tool_choice() {
-                    body["tool_choice"] = serde_json::json!({
-                        "type": "function",
-                        "function": {"name": tool_name}
-                    });
-                }
-                // else: reasoner models reject tool_choice — let model pick skill_use naturally
-            } else if self.supports_parallel_tools() {
-                body["parallel_tool_calls"] = serde_json::json!(true);
-            }
-        }
+        let body = self.build_chat_body(messages, tools, false);
 
         let msg_count = messages.len();
         let tool_count = tools.len();
@@ -445,46 +411,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         _opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         let effective_model = self.model.effective();
-        let mut body = serde_json::json!({
-            "model": effective_model,
-            "messages": messages_to_openai_format(messages, self.uses_reasoning_content()),
-            "temperature": self.temperature,
-            "stream": true,
-            // Opt into the usage block on the final chunk. OpenAI-compatible
-            // servers (Ollama, vLLM, SGLang, LiteLLM, DeepSeek, Moonshot, …)
-            // omit `usage` from streaming responses by default; without this
-            // flag we record 0 input/output tokens for every message on
-            // locally-hosted backends. The parser already reads usage when
-            // present, so this request-side opt-in is all that's needed.
-            "stream_options": { "include_usage": true },
-        });
-        if let Some(mt) = self.max_tokens {
-            body["max_tokens"] = serde_json::json!(mt);
-        }
-        if !tools.is_empty() {
-            let tools_json: Vec<serde_json::Value> = tools
-                .iter()
-                .map(|t| serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.input_schema,
-                    }
-                }))
-                .collect();
-            body["tools"] = serde_json::Value::Array(tools_json);
-            if let Some(tool_name) = super::forced_skill_tool(messages, tools) {
-                if self.supports_forced_tool_choice() {
-                    body["tool_choice"] = serde_json::json!({
-                        "type": "function",
-                        "function": {"name": tool_name}
-                    });
-                }
-            } else if self.supports_parallel_tools() {
-                body["parallel_tool_calls"] = serde_json::json!(true);
-            }
-        }
+        let body = self.build_chat_body(messages, tools, true);
 
         tracing::info!(
             provider = %self.provider_name,
