@@ -201,7 +201,7 @@ pub(crate) fn spawn_record_failure(
                      WHERE session_id = $1 \
                        AND event_type = 'tool_end' \
                        AND payload->>'tool_call_id' = $2 \
-                     ORDER BY ts DESC LIMIT 1",
+                     ORDER BY created_at DESC LIMIT 1",
                 )
                 .bind(session_id)
                 .bind(tcid)
