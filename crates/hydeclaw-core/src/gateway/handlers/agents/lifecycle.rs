@@ -54,6 +54,7 @@ pub async fn start_agent_from_config(
             &agent_cfg.agent.routing,
             effective_temperature,
             effective_max_tokens,
+            agent_cfg.agent.prompt_cache,
             agent_cfg.agent.max_failover_attempts,
             auth.secrets.clone(),
         ).await

@@ -54,10 +54,12 @@ pub struct RoutingProvider {
 /// named DB provider via `connection`; this function resolves each to a
 /// `ProviderRow` and builds a provider via `build_provider`.
 ///
-/// `agent_temperature` / `agent_max_tokens` provide agent-level defaults; a
-/// route's `temperature` field (if present) takes precedence. `model` override
-/// comes from the route's `model` field. These are bundled into
-/// `ProviderOverrides` and passed to `build_provider`.
+/// `agent_temperature` / `agent_max_tokens` / `agent_prompt_cache` provide
+/// agent-level defaults that propagate to every route's provider build. A
+/// route's `temperature` field (if present) takes precedence over
+/// `agent_temperature`; `model` override comes from the route's `model` field.
+/// `agent_prompt_cache` mirrors the same field on the direct (non-routing)
+/// path: Anthropic providers honour it, others ignore it (CACHE-04).
 ///
 /// `max_failover_attempts` caps the number of fallback attempts per request
 /// (re-added post-c55b039 / 8d33376 — see issue #9).
@@ -69,6 +71,7 @@ pub async fn create_routing_provider(
     routes: &[crate::config::ProviderRouteConfig],
     agent_temperature: f64,
     agent_max_tokens: Option<u32>,
+    agent_prompt_cache: bool,
     max_failover_attempts: u32,
     secrets: Arc<SecretsManager>,
 ) -> Arc<dyn LlmProvider> {
@@ -107,7 +110,10 @@ pub async fn create_routing_provider(
             model: model_override,
             temperature: Some(effective_temperature),
             max_tokens: agent_max_tokens,
-            prompt_cache: None,
+            // Agent-level prompt_cache flag propagates to every route's
+            // provider build. Anthropic honours it; other providers ignore
+            // (CACHE-04). Mirrors the non-routing build path in factory.rs.
+            prompt_cache: Some(agent_prompt_cache),
         };
         let p = match build_provider(&row, secrets.clone(), &timeouts_cfg, cancel, overrides) {
             Ok(p) => {
