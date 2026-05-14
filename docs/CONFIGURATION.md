@@ -98,8 +98,6 @@ url = "postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw"
 | `max_requests_per_minute` | u32 | `300` | Rate limit (rpm). Аутентифицированные запросы освобождены. Loopback освобождён. |
 | `max_tool_concurrency` | u32 | `10` | Максимум параллельных tool-вызовов (семафор в engine) |
 | `request_timeout_secs` | u64 | `180` | Timeout одного запроса (LLM-loop + tools), секунды. `0` = без лимита |
-| `max_agent_turns` | usize | `5` | Максимум agent-to-agent turns в одном цикле (API-only, не используется внутри loop) |
-| `max_inter_agent_context_chars` | usize | `2000` | Максимум символов для inter-agent контекста (API-only) |
 | `max_restore_size_mb` | u64 | `500` | Лимит тела `POST /api/restore` в МБ. Превышение → 413 |
 | `max_sessions_per_agent` | u32 | `500` | Максимум сессий на агента. `0` = без лимита |
 
@@ -374,7 +372,6 @@ MCP-серверы в форме `[mcp.NAME]`. Альтернативный сп
 | `max_history_messages` | Option\<usize\> | `50` | Максимум сообщений истории в LLM-контексте |
 | `max_tools_in_context` | Option\<usize\> | — | Лимит инструментов в контексте (relevance-based отбор при превышении) |
 | `daily_budget_tokens` | u64 | `0` | Лимит токенов (input+output) в день. `0` = без лимита |
-| `max_agent_turns` | Option\<usize\> | — | Переопределение глобального `limits.max_agent_turns` для этого агента |
 | `max_failover_attempts` | u32 | `3` | Максимум попыток failover при multi-provider routing |
 | `icon` | Option\<String\> | — | Путь к иконке агента (`"uploads/agent-icon.png"`) |
 

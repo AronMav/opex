@@ -11,7 +11,6 @@ icon = "uploads/robot.png"
 max_tools_in_context = 20
 max_history_messages = 100
 daily_budget_tokens = 500000
-max_agent_turns = 10
 max_failover_attempts = 2
 
 [agent.access]

@@ -197,7 +197,6 @@ pub struct AgentDetailDto {
     // u64 → number: token budgets always within JS safe integer range
     #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
     pub daily_budget_tokens: u64,
-    pub max_agent_turns: Option<usize>,
     pub max_failover_attempts: u32,
     pub is_running: bool,
     pub config_dirty: bool,

@@ -10,13 +10,13 @@ export type AgentDetailApprovalDto = { enabled: boolean, require_for: Array<stri
 
 export type AgentDetailCompactionDto = { enabled: boolean, threshold: number, preserve_tool_calls: boolean, preserve_last_n: number, max_context_tokens: number | null, };
 
-export type AgentDetailDto = { name: string, language: string, provider: string, model: string, provider_connection: string | null, fallback_provider: string | null, tts_provider: string | null, imagegen_provider: string | null, temperature: number, max_tokens: number | null, access: AgentDetailAccessDto | null, heartbeat: AgentDetailHeartbeatDto | null, tools: AgentDetailToolsDto | null, compaction: AgentDetailCompactionDto | null, skill_review: AgentDetailSkillReviewDto | null, session: AgentDetailSessionDto | null, icon: string | null, 
+export type AgentDetailDto = { name: string, language: string, provider: string, model: string, provider_connection: string | null, fallback_provider: string | null, tts_provider: string | null, imagegen_provider: string | null, temperature: number, max_tokens: number | null, access: AgentDetailAccessDto | null, heartbeat: AgentDetailHeartbeatDto | null, tools: AgentDetailToolsDto | null, compaction: AgentDetailCompactionDto | null, skill_review: AgentDetailSkillReviewDto | null, session: AgentDetailSessionDto | null, icon: string | null,
 /**
  * Pre-signed URL for the icon under `/uploads/{filename}`. Long-TTL
  * (`HISTORICAL_URL_TTL_SECS`) so a saved agent icon stays viewable across
  * restarts. `None` when `icon` is absent or no upload key is available.
  */
-icon_url: string | null, max_tools_in_context: number | null, tool_loop: AgentDetailToolLoopDto | null, tool_dispatcher: AgentDetailToolDispatcherDto | null, approval: AgentDetailApprovalDto | null, routing: Array<AgentDetailRoutingDto>, watchdog: AgentDetailWatchdogDto | null, hooks: AgentDetailHooksDto | null, max_history_messages: number | null, daily_budget_tokens: number, max_agent_turns: number | null, max_failover_attempts: number, is_running: boolean, config_dirty: boolean, 
+icon_url: string | null, max_tools_in_context: number | null, tool_loop: AgentDetailToolLoopDto | null, tool_dispatcher: AgentDetailToolDispatcherDto | null, approval: AgentDetailApprovalDto | null, routing: Array<AgentDetailRoutingDto>, watchdog: AgentDetailWatchdogDto | null, hooks: AgentDetailHooksDto | null, max_history_messages: number | null, daily_budget_tokens: number, max_failover_attempts: number, is_running: boolean, config_dirty: boolean,
 /**
  * Injected by the handler from scoped TTS_VOICE secret; absent when not set.
  */

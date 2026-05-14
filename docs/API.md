@@ -261,7 +261,6 @@ Create a new agent. Config is written to `config/agents/{name}.toml` and the age
 | `tool_loop` | object\|null | No | Tool loop config |
 | `max_tools_in_context` | integer | No | Max tool definitions injected into context |
 | `max_history_messages` | integer | No | Max messages loaded from session history |
-| `max_agent_turns` | integer | No | Max turns before automatic stop |
 | `daily_budget_tokens` | integer | No | Daily token budget cap (0 = no limit) |
 
 **`access` object:**

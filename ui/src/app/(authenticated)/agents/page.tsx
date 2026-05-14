@@ -102,7 +102,6 @@ export const emptyForm: FormState = {
   accessOwnerId: "",
   fallbackProvider: "",
   ttsProvider: "",
-  maxAgentTurles: "",
   toolDispatcherEnabled: false,
   toolDispatcherCoreExtra: [],
   toolDispatcherPromotionMax: "8",
@@ -175,7 +174,6 @@ export function detailToForm(d: AgentDetail): FormState {
     ttsProvider: d.tts_provider ?? "",
     srEnabled: !!d.skill_review && d.skill_review.enabled,
     srMinToolCalls: String(d.skill_review?.min_tool_calls ?? 3),
-    maxAgentTurles: d.max_agent_turns != null ? String(d.max_agent_turns) : '',
     toolDispatcherEnabled: d.tool_dispatcher?.enabled ?? false,
     toolDispatcherCoreExtra: d.tool_dispatcher?.core_extra ?? [],
     toolDispatcherPromotionMax: d.tool_dispatcher?.promotion_max != null ? String(d.tool_dispatcher.promotion_max) : '8',
@@ -275,7 +273,6 @@ export function formToPayload(f: FormState) {
     daily_budget_tokens: parseInt(f.dailyBudgetTokens) || 0,
     fallback_provider: f.fallbackProvider,
     tts_provider: f.ttsProvider || null,
-    max_agent_turns: f.maxAgentTurles ? parseInt(f.maxAgentTurles) : undefined,
     tool_dispatcher: {
       enabled: f.toolDispatcherEnabled,
       core_extra: f.toolDispatcherCoreExtra,

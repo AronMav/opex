@@ -375,14 +375,6 @@ pub struct LimitsConfig {
     /// 0 = no limit. Default: 180 (3 minutes).
     #[serde(default = "default_request_timeout")]
     pub request_timeout_secs: u64,
-    /// Maximum agent-to-agent turns in a single turn loop (default: 5).
-    /// Exposed via GET/PUT /api/config — not consumed internally by the turn loop.
-    #[serde(default = "default_max_agent_turns")]
-    pub max_agent_turns: usize,
-    /// Maximum characters for inter-agent context (API-only, no internal consumer).
-    /// Exposed via GET/PUT /api/config — not consumed internally by the turn loop.
-    #[serde(default = "default_max_inter_agent_context_chars")]
-    pub max_inter_agent_context_chars: usize,
     /// Phase 64 SEC-04: cap for POST /api/restore request body size in megabytes.
     /// Default 500 MB. Enforced by `check_content_length_cap` (fast-path) +
     /// `drain_body_with_cap` (streaming byte counter). Overflow → 413 Payload Too Large.
@@ -402,8 +394,6 @@ pub struct LimitsConfig {
 fn default_max_requests() -> u32 { 300 }
 fn default_max_tool_concurrency() -> u32 { 10 }
 fn default_request_timeout() -> u64 { 180 }
-fn default_max_agent_turns() -> usize { 5 }
-fn default_max_inter_agent_context_chars() -> usize { 2000 }
 fn default_max_restore_size_mb() -> u64 { 500 }
 fn default_max_sessions_per_agent() -> u32 { 500 }
 
@@ -413,8 +403,6 @@ impl Default for LimitsConfig {
             max_requests_per_minute: default_max_requests(),
             max_tool_concurrency: default_max_tool_concurrency(),
             request_timeout_secs: default_request_timeout(),
-            max_agent_turns: default_max_agent_turns(),
-            max_inter_agent_context_chars: default_max_inter_agent_context_chars(),
             max_restore_size_mb: default_max_restore_size_mb(),
             max_sessions_per_agent: default_max_sessions_per_agent(),
         }
@@ -678,9 +666,6 @@ pub struct AgentSettings {
     /// Maximum total tokens (input+output) per day. 0 or absent = unlimited.
     #[serde(default)]
     pub daily_budget_tokens: u64,
-    /// Per-agent override for max agent-to-agent turns. None = use global limit.
-    #[serde(default)]
-    pub max_agent_turns: Option<usize>,
     /// Maximum number of failover attempts per request when multi-provider
     /// routing is configured. Does NOT count the primary call — a value of 3
     /// means "up to 3 fallbacks after primary failed". Cap exists to prevent
@@ -1414,7 +1399,6 @@ pub fn update_limits_config(
     config_path: &str,
     max_requests_per_minute: Option<u32>,
     max_tool_concurrency: Option<u32>,
-    max_agent_turns: Option<usize>,
 ) -> Result<()> {
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
@@ -1432,10 +1416,6 @@ pub fn update_limits_config(
 
     if let Some(v) = max_tool_concurrency {
         doc["limits"]["max_tool_concurrency"] = toml_edit::value(i64::from(v));
-    }
-
-    if let Some(v) = max_agent_turns {
-        doc["limits"]["max_agent_turns"] = toml_edit::value(v as i64);
     }
 
     std::fs::write(config_path, doc.to_string())
@@ -1772,7 +1752,6 @@ model = "m2.5"
                 fallback_provider: None,
                 hooks: None,
                 daily_budget_tokens: 0,
-                max_agent_turns: None,
                 max_failover_attempts: default_max_failover_attempts(),
                 tool_dispatcher: ToolDispatcherConfig::default(),
             },
@@ -1849,7 +1828,6 @@ model = "m2.5"
                 fallback_provider: None,
                 hooks: None,
                 daily_budget_tokens: 0,
-                max_agent_turns: None,
                 max_failover_attempts: default_max_failover_attempts(),
                 tool_dispatcher: ToolDispatcherConfig::default(),
             },
@@ -1899,7 +1877,6 @@ prompt_cache = true
         assert_eq!(cfg.max_requests_per_minute, 300);
         assert_eq!(cfg.max_tool_concurrency, 10);
         assert_eq!(cfg.request_timeout_secs, 180);
-        assert_eq!(cfg.max_agent_turns, 5);
         // Phase 64 SEC-04: new [limits] key — default 500 MB.
         assert_eq!(cfg.max_restore_size_mb, 500);
     }
@@ -1943,53 +1920,6 @@ url = "postgres://localhost/test"
         let cfg: AppConfig = toml::from_str(toml_str).expect("parse");
         assert_eq!(cfg.uploads.signed_url_ttl_secs, 86_400);
         assert!(cfg.uploads.require_signature);
-    }
-
-    // ── 4a. AgentSettings max_agent_turns defaults to None ──
-
-    #[test]
-    fn agent_config_max_agent_turns_none_by_default() {
-        let toml_str = r#"
-[agent]
-name = "test"
-provider = "minimax"
-model = "m2.5"
-"#;
-        let cfg: AgentConfig = toml::from_str(toml_str).expect("parse");
-        assert!(cfg.agent.max_agent_turns.is_none());
-    }
-
-    // ── 4b. AgentSettings max_agent_turns override ──
-
-    #[test]
-    fn agent_config_max_agent_turns_override() {
-        let toml_str = r#"
-[agent]
-name = "test"
-provider = "minimax"
-model = "m2.5"
-max_agent_turns = 3
-"#;
-        let cfg: AgentConfig = toml::from_str(toml_str).expect("parse");
-        assert_eq!(cfg.agent.max_agent_turns, Some(3));
-    }
-
-    // ── 4c. LimitsConfig max_agent_turns custom value ──
-
-    #[test]
-    fn limits_config_max_agent_turns_custom() {
-        let toml_str = r#"
-[gateway]
-listen = "0.0.0.0:18789"
-
-[database]
-url = "postgres://localhost/test"
-
-[limits]
-max_agent_turns = 10
-"#;
-        let cfg: AppConfig = toml::from_str(toml_str).expect("parse");
-        assert_eq!(cfg.limits.max_agent_turns, 10);
     }
 
     // ── 4e. LimitsConfig max_restore_size_mb (Phase 64 SEC-04) ──
@@ -2424,26 +2354,6 @@ session_tools = false
         assert!(tools.groups.tool_management); // default true
         assert!(tools.groups.skill_editing);   // default true
         assert!(!tools.groups.session_tools);
-    }
-
-    // ── LimitsConfig: max_inter_agent_context_chars (inter-agent context) ──
-
-    #[test]
-    fn limits_config_default_inter_agent_context_chars() {
-        let cfg = LimitsConfig::default();
-        assert_eq!(cfg.max_inter_agent_context_chars, 2000);
-    }
-
-    #[test]
-    fn limits_config_custom_inter_agent_context_chars() {
-        let toml_str = r#"
-max_inter_agent_context_chars = 500
-"#;
-        let cfg: LimitsConfig = toml::from_str(toml_str).expect("failed to parse");
-        assert_eq!(cfg.max_inter_agent_context_chars, 500);
-        // Other fields should get defaults
-        assert_eq!(cfg.max_requests_per_minute, 300);
-        assert_eq!(cfg.max_agent_turns, 5);
     }
 
     // ── AgentToolConfig (multi-agent timeouts) ──────────────────────────────
