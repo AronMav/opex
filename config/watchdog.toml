@@ -1,7 +1,6 @@
 [watchdog]
 enabled = true
 interval_secs = 60
-max_restart_attempts = 3
 cooldown_secs = 300
 grace_period_secs = 60
 flap_window_secs = 600
