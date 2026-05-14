@@ -38,6 +38,7 @@ mod setup;
 mod status;
 mod usage;
 mod watchdog;
+mod watchdog_endpoint;
 
 pub(crate) fn routes(state: AppState) -> Router<AppState> {
     Router::new()
@@ -61,6 +62,7 @@ pub(crate) fn routes(state: AppState) -> Router<AppState> {
         .route("/api/watchdog/config", get(watchdog::api_watchdog_config).put(watchdog::api_watchdog_config_update))
         .route("/api/watchdog/settings", get(watchdog::api_watchdog_settings).put(watchdog::api_watchdog_settings_update))
         .route("/api/watchdog/restart/{name}", post(watchdog::api_watchdog_restart_check))
+        .route("/api/watchdog/agent-activity", get(watchdog_endpoint::api_watchdog_agent_activity))
 }
 
 // ── Doctor check types ──────────────────────────────────────────────────────
