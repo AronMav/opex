@@ -1,8 +1,18 @@
 # WAL retirement and durable plans — design
 
 **Date:** 2026-05-14
-**Status:** approved (brainstorming)
+**Status:** **split** — Part A extracted to its own focused spec (being implemented); Part B is forward-looking design (on hold).
 **Scope:** one design doc covering two causally linked changes.
+
+> **Split note (2026-05-14):** Operator chose to implement Part A immediately
+> (technical-debt cleanup, no behaviour change) and defer Part B until a
+> concrete long-running-agent scenario emerges. Part A now lives as a focused,
+> ready-to-implement spec at
+> [`2026-05-14-session-timeline-rename-design.md`](2026-05-14-session-timeline-rename-design.md).
+> This combined document is preserved as the reference design for Part B
+> (durable plans / `plans` / `plan_steps` / ACTIVE PLAN block) and as the
+> rationale narrative tying both halves together. When Part B is picked up,
+> revive this doc — most of the design work is already done.
 
 ## Summary
 
