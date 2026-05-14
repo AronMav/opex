@@ -107,17 +107,25 @@ For now, only the new test (`m049_renames_...`) needs to pass. The existing test
 
 To unblock the commit, accept this: run `cargo test -p hydeclaw-db --lib session_wal::tests::m049_renames_session_events_to_session_timeline -- --nocapture` and confirm only that one test passes.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Commit (with bisect-skip marker in body)**
 
 ```bash
 git add migrations/049_rename_session_events_to_timeline.sql crates/hydeclaw-db/src/session_wal.rs
-git commit -m "feat(db): m049 rename session_events to session_timeline
+git commit -m "feat(db): m049 rename session_events to session_timeline [bisect-skip]
 
 Metadata-only rename via ALTER TABLE/INDEX. Old migrations (m013, m030)
 left intact as append-only history. Module file rename and SQL string
-updates follow in the next commit — workspace tests are temporarily
-broken between these two commits."
+updates follow in the next commit (Task 2) — workspace tests targeting
+session_wal::tests::log_event_tx_* are temporarily broken in THIS
+commit only and pass again at the end of Task 2.
+
+For git bisect: skip this commit (it is a transient broken-tests
+state between two halves of an atomic operation that could not fit
+in a single commit cleanly). The combined Task 1 + Task 2 pair is
+the actual atomic unit of correctness."
 ```
+
+Bisect users can skip this commit via `git bisect skip <sha>` if they hit it.
 
 ---
 
@@ -125,22 +133,27 @@ broken between these two commits."
 
 This is the largest single task because the module rename and every consumer of `session_wal::*` / `WalToolEvent` / `session_events` (SQL string) must change together or `cargo build` fails. We do it as one atomic commit.
 
-**Files:**
+**Files** (audited against `grep -rn 'session_events\|session_wal\|WalToolEvent\|warm_up_from_wal' crates/`):
 
 - Rename: `crates/hydeclaw-db/src/session_wal.rs` → `crates/hydeclaw-db/src/session_timeline.rs`
-- Modify: `crates/hydeclaw-db/src/lib.rs`
+- Modify: `crates/hydeclaw-db/src/lib.rs` (module declaration)
 - Modify: `crates/hydeclaw-db/src/session_timeline.rs` (post-rename — internal content)
-- Modify: `crates/hydeclaw-db/src/sessions.rs` (4 SQL strings + 1 `DROP TABLE` in test + 1 doc-comment)
-- Modify: `crates/hydeclaw-core/src/agent/tool_loop.rs` (`WalToolEvent` → `TimelineToolEvent`, import path)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` (1 import path)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/parallel.rs` (4 call sites + 1 comment)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` (3 SQL strings referencing `session_events`)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/llm_call.rs` (any `session_wal` reference)
-- Modify: `crates/hydeclaw-core/src/agent/engine/run.rs` (1 doc-comment)
-- Modify: `crates/hydeclaw-core/src/agent/history.rs` (1 doc-comment)
-- Modify: `crates/hydeclaw-core/src/agent/session_manager.rs` (3 call sites)
-- Modify: `crates/hydeclaw-core/src/agent/request_context.rs` (1 call site)
-- Modify: `crates/hydeclaw-core/src/skills/evolution.rs` (1 SQL string + 1 comment)
+- Modify: `crates/hydeclaw-db/src/sessions.rs` (6 places — lines 873–877 sibling-module call + lines 1839, 1860, 1927, 2187, 2199–2206, 2292)
+- Modify: `crates/hydeclaw-core/src/db/mod.rs` (line 6 — re-export `pub use hydeclaw_db::session_wal;`)
+- Modify: `crates/hydeclaw-core/src/lib.rs` (line 93 — second re-export `pub use hydeclaw_db::session_wal;`)
+- Modify: `crates/hydeclaw-core/src/agent/tool_loop.rs` (function rename + 6 lines in test fn names + 8 `WalToolEvent` constructor calls)
+- Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs:268` (1 import path)
+- Modify: `crates/hydeclaw-core/src/agent/pipeline/parallel.rs` (4 call sites + 1 comment at lines 360, 498, 557, 638, 1067)
+- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs:200, 220, 648` (3 SQL strings)
+- Modify: `crates/hydeclaw-core/src/agent/engine/run.rs:447` (1 doc-comment)
+- Modify: `crates/hydeclaw-core/src/agent/history.rs:698` (1 doc-comment)
+- Modify: `crates/hydeclaw-core/src/agent/session_manager.rs` (7 places — lines 166, 244, 290, 319, 344, 473, 549)
+- Modify: `crates/hydeclaw-core/src/agent/request_context.rs:11, 45` (use + call)
+- Modify: `crates/hydeclaw-core/src/skills/evolution.rs:193, 197` (1 comment + 1 SQL string)
+- Modify: `crates/hydeclaw-core/src/gateway/handlers/sessions.rs:170` (1 SQL string `FROM session_events`)
+- Modify: `crates/hydeclaw-core/tests/integration_session_cleanup.rs:14` (1 `use` of `session_wal::log_event_tx` — note: distinct file from `integration_session_events_cleanup.rs` which is handled in Task 7)
+
+The plan's previous draft mistakenly listed `crates/hydeclaw-core/src/agent/pipeline/llm_call.rs` — grep confirmed it has **zero** matches. Removed.
 
 - [ ] **Step 1: Rename the file**
 
@@ -251,7 +264,14 @@ The four existing `#[sqlx::test]` tests (`log_event_tx_updates_activity_at`, etc
 
 - [ ] **Step 7: Update `crates/hydeclaw-db/src/sessions.rs`**
 
-Search for `session_events` in this file. There are 4 SQL string literals + 1 test that drops the table + 1 doc-comment. Replace each:
+This file has **two** clusters of references — the first around line 873 (sibling-module call) and the second from line 1839 onwards (SQL strings + test).
+
+Cluster 1 — sibling-module call (lines 873–877):
+
+- Lines 873–874 doc-comment: `// session_wal is a sibling module ...` → `// session_timeline is a sibling module ...` (also update `hydeclaw-db/src/lib.rs declares both` reference inside the comment — the lib.rs `pub mod` is being updated in Step 2).
+- Line 877: `crate::session_wal::log_event_tx(...)` → `crate::session_timeline::log_event_tx(...)`.
+
+Cluster 2 — SQL strings + test (from line 1839 onwards):
 
 - Line ~1839: doc-comment `/// Insert a session_events WAL record ...` → `/// Insert a session_timeline record for a compression boundary.`
 - Line ~1860: `"INSERT INTO session_events (...)` → `"INSERT INTO session_timeline (...)`
@@ -260,63 +280,91 @@ Search for `session_events` in this file. There are 4 SQL string literals + 1 te
 - Lines ~2199–2201: the test comment talks about dropping `session_events` to force a WAL insert failure. Replace `session_events` with `session_timeline` in the comment AND in the `DROP TABLE` statement at line 2206: `sqlx::query("DROP TABLE session_events")` → `sqlx::query("DROP TABLE session_timeline")`. Also rewrite the comment: replace "WAL insert (step 4)" with "timeline insert (step 4)".
 - Line ~2292: `"SELECT event_type FROM session_events ...` → `"SELECT event_type FROM session_timeline ...`
 
-- [ ] **Step 8: Update all `use ... session_wal` and `crate::db::session_wal::` paths in core**
+After editing, run `grep -n 'session_events\|session_wal' crates/hydeclaw-db/src/sessions.rs` and confirm zero matches.
 
-The grep results identified these files. For each:
+- [ ] **Step 8: Update re-exports in hydeclaw-core (TWO critical lines — without these, every `crate::db::session_wal::` path breaks)**
 
-```bash
-# Run from repo root to verify the remaining occurrences:
-grep -rn "session_wal" crates/hydeclaw-core/src/ --include="*.rs"
-```
+- `crates/hydeclaw-core/src/db/mod.rs:6` — `pub use hydeclaw_db::session_wal;` → `pub use hydeclaw_db::session_timeline;`.
+- `crates/hydeclaw-core/src/lib.rs:93` — `pub use hydeclaw_db::session_wal;` → `pub use hydeclaw_db::session_timeline;`.
 
-Replace every `session_wal` with `session_timeline` in the following files:
+These are the re-export points that make `crate::db::session_wal::*` and `hydeclaw_core::db::session_wal::*` resolve everywhere else. Skip them and every subsequent file fails to compile.
 
-- `crates/hydeclaw-core/src/agent/tool_loop.rs` — lines 138, 189, 233, 234, 247, 259, 260, 261. Three concrete renames in this file:
-  1. The function `warm_up_from_wal` at line 138 → `warm_up_from_timeline`. Its parameter type `&[hydeclaw_db::session_wal::WalToolEvent]` → `&[hydeclaw_db::session_timeline::TimelineToolEvent]`.
-  2. The `use hydeclaw_db::session_wal::WalToolEvent;` at line 189 → `use hydeclaw_db::session_timeline::TimelineToolEvent;`.
-  3. Every `WalToolEvent { ... }` constructor call at lines 233, 234, 247, 259, 260, 261 → `TimelineToolEvent { ... }`.
+- [ ] **Step 9: Update all `session_wal::` / `WalToolEvent` / SQL `session_events` consumers in core**
 
-  After editing, find all callers of `warm_up_from_wal` and rename them too: `grep -rn 'warm_up_from_wal' crates/`. The grep results will name each call site. Update each.
+For each file below, replace every `session_wal` with `session_timeline`, every `WalToolEvent` with `TimelineToolEvent`, every `warm_up_from_wal` with `warm_up_from_timeline`, and every SQL `session_events` with `session_timeline`. After each file, run `grep -n 'session_events\|session_wal\|WalToolEvent\|warm_up_from_wal' <file>` and confirm zero matches.
+
+- `crates/hydeclaw-core/src/agent/tool_loop.rs` — 12 places total:
+  1. Line 138 — function declaration `pub fn warm_up_from_wal(...)` → `pub fn warm_up_from_timeline(...)`. Parameter type `&[hydeclaw_db::session_wal::WalToolEvent]` → `&[hydeclaw_db::session_timeline::TimelineToolEvent]`.
+  2. Line 189 — `use hydeclaw_db::session_wal::WalToolEvent;` → `use hydeclaw_db::session_timeline::TimelineToolEvent;`.
+  3. Line 230 — test fn `fn warm_up_from_wal_restores_error_streak()` → `fn warm_up_from_timeline_restores_error_streak()`.
+  4. Lines 233, 234 — `WalToolEvent { ... }` → `TimelineToolEvent { ... }`.
+  5. Line 236 — `LoopDetector::warm_up_from_wal(...)` → `LoopDetector::warm_up_from_timeline(...)`.
+  6. Line 245 — test fn `fn warm_up_from_wal_empty_events_gives_fresh_detector()` → `fn warm_up_from_timeline_empty_events_gives_fresh_detector()`.
+  7. Line 247 — `let events: Vec<WalToolEvent>` → `let events: Vec<TimelineToolEvent>`.
+  8. Line 248 — `LoopDetector::warm_up_from_wal(...)` → `LoopDetector::warm_up_from_timeline(...)`.
+  9. Line 256 — test fn `fn warm_up_from_wal_success_resets_streak()` → `fn warm_up_from_timeline_success_resets_streak()`.
+  10. Lines 259, 260, 261 — `WalToolEvent { ... }` constructors → `TimelineToolEvent { ... }`.
+  11. Line 263 — `LoopDetector::warm_up_from_wal(...)` → `LoopDetector::warm_up_from_timeline(...)`.
+
 - `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs:268` — `crate::db::session_wal::load_tool_events` → `crate::db::session_timeline::load_tool_events`.
-- `crates/hydeclaw-core/src/agent/pipeline/parallel.rs` — lines 360, 498, 557, 638, 1067 (`crate::db::session_wal::log_event` calls and one comment).
-- `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` — lines 200, 220, 648 are SQL string literals referencing `session_events`. Replace with `session_timeline`.
-- `crates/hydeclaw-core/src/agent/pipeline/llm_call.rs` — any `session_wal` reference (run `grep -n session_wal` on this file inside Step 8 to find them).
-- `crates/hydeclaw-core/src/agent/engine/run.rs:447` — doc-comment `/// now first-class sessions in messages and session_events.` → `/// now first-class sessions in messages and session_timeline.`
-- `crates/hydeclaw-core/src/agent/history.rs:698` — doc-comment `(mark messages compressed, insert session_events WAL record).` → `(mark messages compressed, insert session_timeline record).`
-- `crates/hydeclaw-core/src/agent/session_manager.rs` — lines 166, 290, 319 (`crate::db::session_wal::log_event` calls).
-- `crates/hydeclaw-core/src/agent/request_context.rs:45` — `session_wal::load_tool_events` → `session_timeline::load_tool_events` (note: this file uses an unqualified `session_wal::` so check the top-of-file `use` statement and update accordingly).
-- `crates/hydeclaw-core/src/skills/evolution.rs:193,197` — line 193 is a comment `// 4. Tool names from session_events WAL.` → `// 4. Tool names from session_timeline.`; line 197 is `FROM session_events` SQL → `FROM session_timeline`.
 
-For each file: open it, find every `session_wal`, `session_events`, `WalToolEvent`, `warm_up_from_wal`, and update them as described.
+- `crates/hydeclaw-core/src/agent/pipeline/parallel.rs` — lines 360, 498, 557, 638 (`crate::db::session_wal::log_event` calls) and line 1067 (1 comment mentioning `crate::db::session_wal::log_event(...)`).
 
-- [ ] **Step 9: Verify the workspace builds**
+- `crates/hydeclaw-core/src/agent/pipeline/finalize.rs:200, 220, 648` — three SQL string literals `FROM session_events` → `FROM session_timeline`.
+
+- `crates/hydeclaw-core/src/agent/engine/run.rs:447` — doc-comment `/// now first-class sessions in messages and session_events.` → `/// now first-class sessions in messages and session_timeline.`.
+
+- `crates/hydeclaw-core/src/agent/history.rs:698` — doc-comment `(mark messages compressed, insert session_events WAL record).` → `(mark messages compressed, insert session_timeline record).`.
+
+- `crates/hydeclaw-core/src/agent/session_manager.rs` — 7 places:
+  - Line 166 — `crate::db::session_wal::log_event(...)` → `crate::db::session_timeline::log_event(...)`.
+  - Line 244 — doc-comment mentioning `session_events` → `session_timeline`.
+  - Line 290 — `crate::db::session_wal::log_event(...)` → `crate::db::session_timeline::log_event(...)`.
+  - Line 319 — same call rename.
+  - Line 344 — same call rename.
+  - Line 473 — SQL string `FROM session_events` → `FROM session_timeline`.
+  - Line 549 — same SQL rename.
+
+- `crates/hydeclaw-core/src/agent/request_context.rs` — line 11 (`use crate::db::session_wal;` → `use crate::db::session_timeline;`) and line 45 (`session_wal::load_tool_events(...)` → `session_timeline::load_tool_events(...)`).
+
+- `crates/hydeclaw-core/src/skills/evolution.rs:193, 197` — line 193 comment → `// 4. Tool names from session_timeline.`; line 197 SQL `FROM session_events` → `FROM session_timeline`.
+
+- `crates/hydeclaw-core/src/gateway/handlers/sessions.rs:170` — SQL `FROM session_events \` → `FROM session_timeline \`.
+
+- `crates/hydeclaw-core/tests/integration_session_cleanup.rs:14` — `use hydeclaw_core::db::session_wal::log_event_tx;` → `use hydeclaw_core::db::session_timeline::log_event_tx;`. (This is a **different file** from `integration_session_events_cleanup.rs` handled in Task 7 — do not confuse them.)
+
+After all files: run `grep -rn 'session_events\|session_wal\|WalToolEvent\|warm_up_from_wal' crates/ --include='*.rs'` and confirm only matches are inside `crates/hydeclaw-db/src/session_timeline.rs` (the module itself, which legitimately uses the new names) and possibly inside `migrations/013_session_wal.sql` (handled in Task 8). Anywhere else means a missed reference — fix it.
+
+- [ ] **Step 10: Verify the workspace builds**
 
 Run: `cargo build --workspace --all-targets`
 
 Expected: PASS, no compile errors. If something fails, the message will name the file and line — go back and fix the missed reference.
 
-- [ ] **Step 10: Run all lib tests (no DB-backed tests)**
+- [ ] **Step 11: Run all lib tests (no DB-backed tests)**
 
 Run: `cargo test --workspace --lib -- --nocapture`
 
 Expected: PASS for non-DB tests. `#[sqlx::test]` tests will be skipped because `DATABASE_URL` may be unset; that's OK — Task 1's test is the canonical migration check.
 
-- [ ] **Step 11: Run DB-backed tests if DATABASE_URL is set**
+- [ ] **Step 12: Run DB-backed tests if DATABASE_URL is set**
 
 Run: `cargo test -p hydeclaw-db --lib session_timeline -- --nocapture`
 
 Expected: PASS for all 5 tests in the `session_timeline` module (the 4 originals + `m049_renames_session_events_to_session_timeline`). The originals previously inserted into `session_events` via `log_event_tx`; they now insert into `session_timeline` automatically because the SQL string was updated in Step 5.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 13: Commit (atomic — closes the bisect window opened by Task 1)**
 
 ```bash
 git add -A
 git commit -m "refactor(db): rename session_wal module to session_timeline
 
 Module file, type WalToolEvent (-> TimelineToolEvent), function
-warm_up_from_wal (-> warm_up_from_timeline), and all SQL string
-literals referring to the old table name are updated in lockstep with
-m049. Workspace builds and tests pass."
+warm_up_from_wal (-> warm_up_from_timeline), the two re-exports in
+hydeclaw-core (db/mod.rs, lib.rs), and all SQL string literals
+referring to the old table name are updated in lockstep with m049.
+Workspace builds and tests pass. Bisect window opened by [bisect-skip]
+in the previous commit closes here."
 ```
 
 ---
@@ -671,17 +719,13 @@ session_timeline_batch_size = 1000
 }
 ```
 
-If `tempfile` is not already a dev-dependency, add it. Check first:
+`tempfile` is already a `[dev-dependencies]` entry in `crates/hydeclaw-core/Cargo.toml` (currently `tempfile = "3.27.0"`). The test uses it directly via `tempfile::NamedTempFile`. No `Cargo.toml` change needed; verify with:
 
 ```bash
 grep -n "tempfile" crates/hydeclaw-core/Cargo.toml
 ```
 
-If not present, add to `[dev-dependencies]` in `crates/hydeclaw-core/Cargo.toml`:
-
-```toml
-tempfile = "3"
-```
+Expected output: `141:tempfile = "3.27.0"` (or a later version — whatever is committed).
 
 - [ ] **Step 2: Run the test, confirm it fails**
 
@@ -763,7 +807,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/config/mod.rs crates/hydeclaw-core/Cargo.toml
+git add crates/hydeclaw-core/src/config/mod.rs
 git commit -m "feat(config): startup PreCheck for renamed [cleanup] keys
 
 Catches the operator using the pre-m049 key names
@@ -829,6 +873,11 @@ Mirrors the m049 + module rename. Test logic unchanged."
 - Modify: `docs/API.md` (1 JSON example field at line 171)
 - Modify: `migrations/013_session_wal.sql` (header SQL comment only — file name stays)
 
+**Explicit exclusions:**
+
+- `docs/architecture/2026-05-06-architecture-review.md` and `docs/architecture/2026-05-06-llm-loop-unification-plan.md` — these are **dated snapshots** (the directory pattern is `YYYY-MM-DD-…`). Do **not** rewrite them. They reflect what the codebase looked like on their date. Future readers expect snapshots to be immutable. The Task 9 grep AC excludes `docs/architecture/` for this reason.
+- Existing items inside `docs/superpowers/plans/` and `docs/superpowers/specs/` that reference the old names — these are also dated, historical, and left alone.
+
 Use this phrase-anchor where the WAL/recovery framing is being replaced:
 
 > Session timeline — chronological log of session lifecycle events. Used for LoopDetector warm-up after restart (preserves loop-break decisions across crashes), diagnostics, audit, and the UI Timeline view. Not a Write-Ahead Log: no replay-based recovery; completed work is preserved by persisted side effects, not event replay.
@@ -853,7 +902,7 @@ Concrete edits — search and replace:
 
 - Any other line in `CLAUDE.md` containing `session_events` or `WAL` related to this concept — update with the phrase-anchor or simply replace `session_events` with `session_timeline` and `WAL` with `timeline`.
 
-After editing, verify: `grep -nE "session_events|WAL" CLAUDE.md` returns zero matches.
+After editing, verify: `grep -nwE 'session_events|WAL' CLAUDE.md` returns zero matches. (The `-w` flag uses word boundaries so we don't false-positive on any unrelated word containing the substring `WAL`.)
 
 - [ ] **Step 2: Update `docs/ARCHITECTURE.md`**
 
@@ -865,7 +914,7 @@ Open `docs/ARCHITECTURE.md`. The grep above identified five lines:
 - Line 736: `Session cleanup | hourly | Prune \`session_events\` WAL rows older than \`retention_days\`` → `Session cleanup | hourly | Prune \`session_timeline\` rows older than \`retention_days\``.
 - Line 759: `\`session_events\` | WAL journal | ...` → `\`session_timeline\` | chronological lifecycle log | ...`.
 
-After editing, verify: `grep -nE "session_events|session WAL|WAL replay" docs/ARCHITECTURE.md` returns zero matches.
+After editing, verify: `grep -nwE 'session_events|session WAL|WAL replay' docs/ARCHITECTURE.md` returns zero matches. Note this targets `docs/ARCHITECTURE.md` (the live doc) — not the `docs/architecture/*.md` snapshots.
 
 - [ ] **Step 3: Update `docs/CONFIGURATION.md`**
 
@@ -925,11 +974,17 @@ The file name `013_session_wal.sql` is intentionally **not** changed — migrati
 Run:
 
 ```bash
-grep -wr 'WAL' crates/ docs/ CLAUDE.md --exclude-dir=migrations
-grep -wr 'session_events' crates/ docs/ CLAUDE.md --exclude-dir=migrations
+grep -wr 'WAL' crates/ docs/ CLAUDE.md \
+    --exclude-dir=migrations --exclude-dir=architecture \
+    --exclude-dir=plans --exclude-dir=specs --exclude-dir=target
+grep -wr 'session_events' crates/ docs/ CLAUDE.md \
+    --exclude-dir=migrations --exclude-dir=architecture \
+    --exclude-dir=plans --exclude-dir=specs --exclude-dir=target
 ```
 
-Expected: zero matches related to the session-timeline concept. (If `WAL` appears in an unrelated context — e.g., PostgreSQL's own WAL in some Docker config — leave it; the grep needs visual inspection.)
+Expected: zero matches related to the session-timeline concept.
+
+`--exclude-dir=architecture`, `--exclude-dir=plans`, `--exclude-dir=specs` skip the dated snapshots inside `docs/architecture/`, `docs/superpowers/plans/`, and `docs/superpowers/specs/` — these are historical artifacts and intentionally not rewritten (the rationale is in this task's *Explicit exclusions* section). If `WAL` appears in any unrelated context (e.g., PostgreSQL's own WAL in some Docker config), leave it; the grep needs visual inspection of the remaining matches if any.
 
 - [ ] **Step 7: Commit**
 
@@ -952,18 +1007,28 @@ companion design doc."
 - [ ] **Step 1: Run the full grep audit**
 
 ```bash
-echo "--- session_events outside migrations (must be empty): ---"
-grep -wrn 'session_events' crates/ docs/ CLAUDE.md --exclude-dir=migrations
+EXCLUDES="--exclude-dir=migrations --exclude-dir=architecture \
+          --exclude-dir=plans --exclude-dir=specs --exclude-dir=target"
 
-echo "--- session_wal outside migrations (must be empty): ---"
-grep -wrn 'session_wal' crates/ docs/ CLAUDE.md --exclude-dir=migrations
+echo "--- session_events outside migrations + dated docs (must be empty): ---"
+grep -wrn 'session_events' crates/ docs/ CLAUDE.md $EXCLUDES
 
-echo "--- session-timeline-related WAL mentions (must be empty): ---"
-grep -nE 'session WAL|WAL journal|WAL replay|WAL recovery|crash recovery via WAL' \
-    crates/ docs/ CLAUDE.md -r --exclude-dir=migrations
+echo "--- session_wal outside migrations + dated docs (must be empty): ---"
+grep -wrn 'session_wal' crates/ docs/ CLAUDE.md $EXCLUDES
+
+echo "--- session-timeline-related WAL mentions outside dated docs (must be empty): ---"
+grep -rnE 'session WAL|WAL journal|WAL replay|WAL recovery|crash recovery via WAL' \
+    crates/ docs/ CLAUDE.md $EXCLUDES
 ```
 
-Expected: all three searches print zero matches. (Migrations m013 and m030 still mention these terms historically — that's intentional and excluded.)
+Expected: all three searches print zero matches.
+
+Exclusions explained:
+
+- `migrations/` — m013 and m030 are append-only history.
+- `docs/architecture/` — dated snapshots (file names start with the date the snapshot captured).
+- `docs/superpowers/plans/` and `docs/superpowers/specs/` — dated planning artifacts; once committed they reflect the moment, not current truth.
+- `target/` — build artifacts.
 
 - [ ] **Step 2: Run the full workspace build**
 
@@ -1030,7 +1095,7 @@ Already locked in the spec — do not expand into:
 This plan covers every section of the spec:
 
 - Migration m049 — Task 1.
-- Module file rename + all Rust consumers — Task 2.
+- Module file rename + atomic update of all Rust consumers — Task 2.
 - Scheduler function rename + main.rs caller — Task 3.
 - Public metric rename + SQL + tests — Task 4.
 - Config field rename + main.rs references — Task 5.
@@ -1039,4 +1104,18 @@ This plan covers every section of the spec:
 - Documentation rewrites (CLAUDE.md / ARCHITECTURE.md / CONFIGURATION.md / API.md / m013 SQL comment) — Task 8.
 - Final acceptance-criteria checks — Task 9.
 
-The plan keeps each commit's workspace in a compilable, testable state: Task 1 introduces a single deliberate exception (a temporarily-broken set of `session_wal::tests` between Task 1 and Task 2) and the plan calls it out explicitly with the workaround (run only the new test) so the executor knows it's expected, not a bug.
+The plan keeps each commit's workspace in a compilable, testable state with **one** intentional exception: Task 1's commit is marked `[bisect-skip]` in its commit body, because the migration must land before the module rename but the two cannot fit in a single commit cleanly. Task 2's final step explicitly closes that bisect window with an "all tests pass" commit. Bisect users who hit Task 1's hash should `git bisect skip` it.
+
+## Audit trail
+
+This plan was patched on 2026-05-14 after a `/review` pass against `grep -rn 'session_events\|session_wal\|WalToolEvent\|warm_up_from_wal' crates/`.
+
+Patches added:
+
+- Four files originally missed: `crates/hydeclaw-core/src/db/mod.rs`, `crates/hydeclaw-core/src/lib.rs`, `crates/hydeclaw-core/src/gateway/handlers/sessions.rs`, `crates/hydeclaw-core/tests/integration_session_cleanup.rs`.
+- Additional lines in already-listed files: `sessions.rs:873–877`, `session_manager.rs:244, 344, 473, 549`, `tool_loop.rs:230, 236, 245, 256, 263`.
+- Removed `llm_call.rs` from the consumer list (false positive — zero matches).
+- Explicit exclusion of dated docs (`docs/architecture/`, `docs/superpowers/plans/`, `docs/superpowers/specs/`) from the grep ACs.
+- Bisect-skip marker in Task 1's commit message.
+- Confirmed `tempfile` is already a dev-dependency — no Cargo.toml change needed.
+- Switched grep ACs to `-w` word-boundary matching.
