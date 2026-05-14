@@ -1641,3 +1641,43 @@ mod streaming_thinking_tests {
         assert_eq!(blocks[0].signature, "abc123");
     }
 }
+
+#[cfg(test)]
+mod golden_fixtures {
+    use super::*;
+
+    /// Regression: Anthropic content_block_delta of type "thinking" must
+    /// parse without crashing the SSE handler.
+    #[test]
+    fn content_block_delta_thinking_parses() {
+        let lines = vec![
+            r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}"#.to_string(),
+            r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Hmm..."}}"#.to_string(),
+            r#"data: {"type":"content_block_stop","index":0}"#.to_string(),
+        ];
+        let usage = parse_streaming_usage_for_test(&lines);
+        // We only assert the parser did not panic and returned a value.
+        let _ = usage;
+    }
+
+    /// Regression: Anthropic tool_use content block in non-streaming response.
+    #[test]
+    fn tool_use_block_in_response_parses() {
+        let raw = r#"{
+            "id": "msg_x",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-5-sonnet",
+            "content": [
+                {"type": "text", "text": "Calling tool"},
+                {"type": "tool_use", "id": "toolu_1", "name": "search", "input": {"q": "rust"}}
+            ],
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        }"#;
+        let parsed: AnthropicResponse = serde_json::from_str(raw).unwrap();
+        let resp = parse_anthropic_response(parsed, "claude-3-5-sonnet");
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].name, "search");
+    }
+}

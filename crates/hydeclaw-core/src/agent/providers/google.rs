@@ -617,3 +617,25 @@ mod tests {
         assert_eq!(u.cached_content_token_count, Some(600));
     }
 }
+
+#[cfg(test)]
+mod golden_fixtures {
+    use super::*;
+
+    /// Regression: Gemini response with `safetyRatings` block must parse
+    /// without erroring (the field is ignored, not required).
+    #[test]
+    fn safety_ratings_block_does_not_crash_parser() {
+        let raw = r#"{
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "hi"}]},
+                "safetyRatings": [
+                    {"category": "HARM_CATEGORY_HARASSMENT", "probability": "NEGLIGIBLE"}
+                ]
+            }],
+            "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6}
+        }"#;
+        let parsed: GeminiResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.candidates.as_ref().map(|c| c.len()), Some(1));
+    }
+}
