@@ -1106,6 +1106,48 @@ fn xml_extract_attr(s: &str, attr: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserialize_null_as_empty_vec_handles_null() {
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde(deserialize_with = "deserialize_null_as_empty_vec")]
+            items: Vec<String>,
+        }
+        let h: Holder = serde_json::from_str(r#"{"items": null}"#).unwrap();
+        assert!(h.items.is_empty());
+    }
+
+    #[test]
+    fn deserialize_null_as_empty_vec_handles_array() {
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde(deserialize_with = "deserialize_null_as_empty_vec")]
+            items: Vec<String>,
+        }
+        let h: Holder = serde_json::from_str(r#"{"items": ["a", "b"]}"#).unwrap();
+        assert_eq!(h.items, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn streaming_usage_to_token_usage_includes_cache_fields() {
+        let s = StreamingUsage {
+            input: 100,
+            output: 50,
+            cache_read: Some(30),
+            cache_creation: None,
+            reasoning: None,
+        };
+        let tu: hydeclaw_types::TokenUsage = s.into();
+        assert_eq!(tu.input_tokens, 100);
+        assert_eq!(tu.output_tokens, 50);
+        assert_eq!(tu.cache_read_tokens, Some(30));
+    }
+}
+
+#[cfg(test)]
 mod xml_tests {
     use super::*;
 
@@ -1227,4 +1269,32 @@ struct StreamToolCallDelta {
 struct StreamFunctionDelta {
     name: Option<String>,
     arguments: Option<String>,
+}
+
+#[cfg(test)]
+mod golden_fixtures {
+    use super::*;
+
+    /// Regression: MiniMax XML with two `<invoke>` blocks in one response
+    /// must yield two tool calls.
+    #[test]
+    fn minimax_xml_two_invoke_blocks() {
+        let content = r#"prefix <minimax:tool_call>
+<invoke name="alpha"><parameter name="x">1</parameter></invoke>
+<invoke name="beta"><parameter name="y">2</parameter></invoke>
+</minimax:tool_call> suffix"#;
+        let (_cleaned, calls) = extract_minimax_xml_tool_calls(content);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "alpha");
+        assert_eq!(calls[1].name, "beta");
+    }
+
+    /// Regression: parse_xml_parameters with no <parameter> tags returns
+    /// an empty map rather than crashing.
+    #[test]
+    fn xml_parameters_empty_body() {
+        let mut params = serde_json::Map::new();
+        parse_xml_parameters("", &mut params);
+        assert!(params.is_empty());
+    }
 }
