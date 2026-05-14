@@ -1,4 +1,4 @@
-//! RES-03 (Phase 62): verify batched DELETE `prune_old_events_batched` against a real PG.
+//! RES-03 (Phase 62): verify batched DELETE `prune_old_events_batched` against a real PG (session timeline).
 //!
 //! Tests validate the wrapped-SELECT-with-LIMIT pattern PostgreSQL requires
 //! (no native `DELETE ... LIMIT`). See `.planning/phases/62-resilience/62-RESEARCH.md`
@@ -13,7 +13,7 @@ use support::TestHarness;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-/// Insert a session row (FK target for session_events) and return its id.
+/// Insert a session row (FK target for session_timeline) and return its id.
 async fn insert_session(pool: &sqlx::PgPool) -> Uuid {
     let id: Uuid = sqlx::query_scalar(
         r#"
@@ -29,13 +29,13 @@ async fn insert_session(pool: &sqlx::PgPool) -> Uuid {
 }
 
 /// Seed `count` events aged `age_days` days old. Uses a shared session to avoid
-/// FK churn — `session_events.session_id` references `sessions.id` ON DELETE CASCADE.
+/// FK churn — `session_timeline.session_id` references `sessions.id` ON DELETE CASCADE.
 async fn seed_events(pool: &sqlx::PgPool, count: usize, age_days: i32) {
     let session_id = insert_session(pool).await;
     for i in 0..count {
         sqlx::query(
             r#"
-            INSERT INTO session_events (session_id, event_type, payload, created_at)
+            INSERT INTO session_timeline (session_id, event_type, payload, created_at)
             VALUES ($1, 'tool_end', NULL, now() - make_interval(days => $2, secs => $3))
             "#,
         )
@@ -65,7 +65,7 @@ async fn prune_batched_deletes_only_old_rows() {
         assert_eq!(deleted, 100, "only the 100 old rows must be deleted");
 
         let remaining: (i64,) =
-            sqlx::query_as("SELECT COUNT(*)::bigint FROM session_events")
+            sqlx::query_as("SELECT COUNT(*)::bigint FROM session_timeline")
                 .fetch_one(pool)
                 .await
                 .expect("count remaining");
@@ -89,7 +89,7 @@ async fn prune_batched_zero_days_is_noop() {
         assert_eq!(deleted, 0, "days=0 must be a no-op (guard against 'delete all')");
 
         let remaining: (i64,) =
-            sqlx::query_as("SELECT COUNT(*)::bigint FROM session_events")
+            sqlx::query_as("SELECT COUNT(*)::bigint FROM session_timeline")
                 .fetch_one(pool)
                 .await
                 .expect("count remaining");
@@ -127,7 +127,7 @@ async fn prune_batched_rejects_non_positive_batch_size() {
 /// reasonable time without a `created_at` index? This is the explicit
 /// benchmark requested by the plan's <output> section.
 ///
-/// Run with: `cargo test -p hydeclaw-core --test integration_session_events_cleanup -- --ignored`
+/// Run with: `cargo test -p hydeclaw-core --test integration_session_timeline_cleanup -- --ignored`
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "slow — run explicitly to validate 15k-row batching path"]
 async fn prune_batched_15k_rows_three_iterations() {
@@ -151,7 +151,7 @@ async fn prune_batched_15k_rows_three_iterations() {
         assert_eq!(deleted, 15_000, "15_000 old rows deleted");
 
         let remaining: (i64,) =
-            sqlx::query_as("SELECT COUNT(*)::bigint FROM session_events")
+            sqlx::query_as("SELECT COUNT(*)::bigint FROM session_timeline")
                 .fetch_one(pool)
                 .await
                 .expect("count remaining");
