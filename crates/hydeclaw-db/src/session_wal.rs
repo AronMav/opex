@@ -240,4 +240,34 @@ mod tests {
         ).bind(session_id).fetch_one(&pool).await.unwrap();
         assert!(now_set, "IS NULL branch of debounce predicate must allow heartbeat");
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn m049_renames_session_events_to_session_timeline(pool: sqlx::PgPool) {
+        // After all migrations run, the table must be `session_timeline` and the
+        // old `session_events` name must not resolve.
+        let exists_new: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_name = 'session_timeline')"
+        ).fetch_one(&pool).await.unwrap();
+        assert!(exists_new, "session_timeline table must exist after m049");
+
+        let exists_old: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT FROM information_schema.tables \
+             WHERE table_schema = 'public' AND table_name = 'session_events')"
+        ).fetch_one(&pool).await.unwrap();
+        assert!(!exists_old, "session_events table must be gone after m049");
+
+        // Indexes renamed.
+        let idx_session: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT FROM pg_indexes \
+             WHERE indexname = 'idx_session_timeline_session')"
+        ).fetch_one(&pool).await.unwrap();
+        assert!(idx_session, "idx_session_timeline_session must exist after m049");
+
+        let idx_type: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT FROM pg_indexes \
+             WHERE indexname = 'idx_session_timeline_type')"
+        ).fetch_one(&pool).await.unwrap();
+        assert!(idx_type, "idx_session_timeline_type must exist after m049");
+    }
 }
