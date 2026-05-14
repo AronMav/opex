@@ -116,6 +116,8 @@ pub struct AgentDeps {
     pub tool_embed_cache: Arc<crate::tools::embedding::ToolEmbeddingCache>,
     pub penalty_cache: Arc<crate::db::tool_quality::PenaltyCache>,
     pub audit_queue: Arc<crate::db::audit_queue::AuditQueue>,
+    /// Shared YAML-tool response cache (process-wide singleton).
+    pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>,
 }
 
 #[cfg(test)]
@@ -132,6 +134,7 @@ impl AgentDeps {
             tool_embed_cache: Arc::new(crate::tools::embedding::ToolEmbeddingCache::new()),
             penalty_cache: Arc::new(crate::db::tool_quality::PenaltyCache::new(db.clone())),
             audit_queue: Arc::new(crate::db::audit_queue::AuditQueue::new(db)),
+            tool_exec_ctx: Arc::new(crate::tools::yaml_tools::ToolExecutionContext::new(100)),
         }
     }
 }

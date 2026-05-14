@@ -63,6 +63,10 @@ pub struct AppConfig {
     /// watcher and the `/api/config` PUT endpoint.
     #[serde(default)]
     pub agent_tool: AgentToolConfig,
+    /// YAML-tool response cache tuning. Process-wide singleton shared
+    /// across all agents via `Arc<ToolExecutionContext>`.
+    #[serde(default)]
+    pub tools_cache: ToolCacheConfig,
 }
 
 // ── UploadsConfig (Phase 64 SEC-03) ───────────────────────────────────────────
@@ -302,6 +306,26 @@ impl Default for ShutdownConfig {
         Self {
             drain_timeout_secs: default_drain_timeout_secs(),
         }
+    }
+}
+
+// ── ToolCacheConfig ──────────────────────────────────────────────────────────
+
+/// YAML-tool response cache tuning. The cache is a process-wide singleton
+/// (`Arc<ToolExecutionContext>`) shared across all agents.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct ToolCacheConfig {
+    /// Maximum entries in the YAML-tool response cache. Soft cap — at the
+    /// limit, ~10 % of oldest entries (min 1) are evicted before insert.
+    #[serde(default = "default_tool_cache_max_entries")]
+    pub max_entries: usize,
+}
+
+fn default_tool_cache_max_entries() -> usize { 1000 }
+
+impl Default for ToolCacheConfig {
+    fn default() -> Self {
+        Self { max_entries: default_tool_cache_max_entries() }
     }
 }
 

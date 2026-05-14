@@ -551,6 +551,10 @@ async fn main() -> Result<()> {
 
     let audit_queue = Arc::new(crate::db::audit_queue::AuditQueue::new(db_pool.clone()));
 
+    let tool_exec_ctx = Arc::new(crate::tools::yaml_tools::ToolExecutionContext::new(
+        cfg.tools_cache.max_entries,
+    ));
+
     let agent_deps = Arc::new(tokio::sync::RwLock::new(gateway::AgentDeps {
         mcp: mcp_registry.clone(),
         workspace_dir: config::WORKSPACE_DIR.to_string(),
@@ -559,6 +563,7 @@ async fn main() -> Result<()> {
         tool_embed_cache,
         penalty_cache: penalty_cache.clone(),
         audit_queue,
+        tool_exec_ctx,
     }));
 
     let agents_map: gateway::AgentMap = Arc::new(tokio::sync::RwLock::new(HashMap::new()));

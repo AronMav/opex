@@ -54,6 +54,12 @@ pub struct AgentConfig {
     /// latency, LLM call duration, and token usage. Cloned from
     /// `InfraServices.metrics` at engine construction time.
     pub metrics: Arc<crate::metrics::MetricsRegistry>,
+    /// Shared YAML-tool response cache (process-wide singleton). Cloned
+    /// from `AgentDeps.tool_exec_ctx` at engine construction time.
+    /// Read by engine_dispatch in Task 8 — kept allocated already so Task 8
+    /// is a pure wiring patch with no struct churn.
+    #[allow(dead_code)]
+    pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>,
 }
 
 #[cfg(test)]
