@@ -21,8 +21,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub subagents: SubagentsConfig,
     #[serde(default)]
-    pub discussion: DiscussionConfig,
-    #[serde(default)]
     #[schemars(skip)]
     pub mcp: HashMap<String, McpConfig>,
     #[serde(default)]
@@ -460,48 +458,6 @@ impl Default for SubagentsConfig {
             docker_timeout: default_docker_timeout(),
             in_process_timeout: default_in_process_timeout(),
             core_image: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct DiscussionConfig {
-    /// Max discussion rounds (1-3). Research shows >3 leads to sycophancy.
-    #[serde(default = "default_discussion_max_rounds")]
-    pub max_rounds: u32,
-    /// Per-agent timeout in seconds.
-    #[serde(default = "default_discussion_agent_timeout")]
-    pub agent_timeout_secs: u64,
-    /// Enable response anonymization in round 2+ (reduces sycophancy).
-    #[serde(default = "default_discussion_anonymize")]
-    pub anonymize_after_round1: bool,
-    /// Enable devil's advocate role for the last agent.
-    #[serde(default = "default_discussion_advocate")]
-    pub devils_advocate: bool,
-    /// Enable synthesizer pass after all rounds.
-    #[serde(default = "default_discussion_synthesize")]
-    pub synthesize: bool,
-    /// Max chars per agent response before truncation in next round.
-    #[serde(default = "default_discussion_max_response_len")]
-    pub max_response_len: usize,
-}
-
-fn default_discussion_max_rounds() -> u32 { 2 }
-fn default_discussion_agent_timeout() -> u64 { 120 }
-fn default_discussion_anonymize() -> bool { true }
-fn default_discussion_advocate() -> bool { true }
-fn default_discussion_synthesize() -> bool { true }
-fn default_discussion_max_response_len() -> usize { 1500 }
-
-impl Default for DiscussionConfig {
-    fn default() -> Self {
-        Self {
-            max_rounds: default_discussion_max_rounds(),
-            agent_timeout_secs: default_discussion_agent_timeout(),
-            anonymize_after_round1: default_discussion_anonymize(),
-            devils_advocate: default_discussion_advocate(),
-            synthesize: default_discussion_synthesize(),
-            max_response_len: default_discussion_max_response_len(),
         }
     }
 }
