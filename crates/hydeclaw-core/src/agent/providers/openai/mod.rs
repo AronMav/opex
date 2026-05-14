@@ -5,7 +5,9 @@ use super::{async_trait, Deserialize, Arc, SecretsManager, ModelOverride, LlmPro
 use crate::agent::providers::http::SendError;
 
 mod minimax_xml;
+mod response;
 pub(crate) use minimax_xml::extract_minimax_xml_tool_calls;
+use response::{ChatCompletionResponse, ChatUsage};
 
 // ── OpenAI-Compatible Provider (works with MiniMax, OpenAI, Ollama, etc.) ──
 
@@ -886,69 +888,6 @@ impl OpenAiCompatibleProvider {
     }
 }
 
-// ── OpenAI-compatible API response types ──
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionResponse {
-    #[serde(default, deserialize_with = "deserialize_null_as_empty_vec")]
-    choices: Vec<ChatChoice>,
-    usage: Option<ChatUsage>,
-}
-
-fn deserialize_null_as_empty_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    Option::<Vec<T>>::deserialize(deserializer).map(std::option::Option::unwrap_or_default)
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatChoice {
-    message: ChatMessage,
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatMessage {
-    content: Option<String>,
-    tool_calls: Option<Vec<ChatToolCall>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatToolCall {
-    id: String,
-    function: ChatFunction,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatFunction {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatUsage {
-    prompt_tokens: u32,
-    completion_tokens: u32,
-    #[serde(default)]
-    prompt_tokens_details: Option<ChatPromptTokensDetails>,
-    #[serde(default)]
-    completion_tokens_details: Option<ChatCompletionTokensDetails>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct ChatPromptTokensDetails {
-    #[serde(default)]
-    cached_tokens: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-struct ChatCompletionTokensDetails {
-    #[serde(default)]
-    reasoning_tokens: Option<u32>,
-}
-
 /// Internal buffer for usage data captured across streaming chunks.
 ///
 /// OpenAI sends usage only in the final chunk of a streaming response (when
@@ -986,28 +925,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deserialize_null_as_empty_vec_handles_null() {
-        #[derive(Deserialize)]
-        struct Holder {
-            #[serde(deserialize_with = "deserialize_null_as_empty_vec")]
-            items: Vec<String>,
-        }
-        let h: Holder = serde_json::from_str(r#"{"items": null}"#).unwrap();
-        assert!(h.items.is_empty());
-    }
-
-    #[test]
-    fn deserialize_null_as_empty_vec_handles_array() {
-        #[derive(Deserialize)]
-        struct Holder {
-            #[serde(deserialize_with = "deserialize_null_as_empty_vec")]
-            items: Vec<String>,
-        }
-        let h: Holder = serde_json::from_str(r#"{"items": ["a", "b"]}"#).unwrap();
-        assert_eq!(h.items, vec!["a", "b"]);
-    }
-
-    #[test]
     fn streaming_usage_to_token_usage_includes_cache_fields() {
         let s = StreamingUsage {
             input: 100,
@@ -1022,38 +939,6 @@ mod tests {
         assert_eq!(tu.cache_read_tokens, Some(30));
     }
 
-    #[test]
-    fn openai_chat_usage_maps_cached_and_reasoning() {
-        let json = r#"{
-            "choices": [{
-                "message": {"content": "hi", "tool_calls": null},
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 1000,
-                "completion_tokens": 600,
-                "prompt_tokens_details": { "cached_tokens": 700 },
-                "completion_tokens_details": { "reasoning_tokens": 400 }
-            }
-        }"#;
-        let resp: ChatCompletionResponse = serde_json::from_str(json).expect("parse");
-        let u = resp.usage.expect("usage present");
-
-        assert_eq!(u.prompt_tokens, 1000);
-        assert_eq!(u.completion_tokens, 600);
-        assert_eq!(
-            u.prompt_tokens_details
-                .as_ref()
-                .and_then(|d| d.cached_tokens),
-            Some(700)
-        );
-        assert_eq!(
-            u.completion_tokens_details
-                .as_ref()
-                .and_then(|d| d.reasoning_tokens),
-            Some(400)
-        );
-    }
 }
 
 // ── SSE streaming types ──
