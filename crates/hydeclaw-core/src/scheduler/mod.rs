@@ -17,8 +17,6 @@ const HEARTBEAT_OK: &str = "HEARTBEAT_OK";
 ///
 /// Accepted forms:
 /// - `"local"` → `{"type": "local"}` — save reply to `workspace/agents/{agent}/cron_output/`
-/// - `"origin"` → `{"type": "origin"}` — reply to the channel that owns the cron job
-///   (currently logged as unsupported by cron dispatch)
 /// - `"{channel}:{chat_id}"` → `{"channel": ..., "chat_id": ...}` — chat_id parsed as i64
 /// - `"{channel}:{chat_id}:{thread_id}"` → same as above (thread dropped, future work)
 ///
@@ -31,7 +29,6 @@ fn parse_target_string(s: &str) -> Option<serde_json::Value> {
     }
     match s {
         "local" => return Some(serde_json::json!({"type": "local"})),
-        "origin" => return Some(serde_json::json!({"type": "origin"})),
         _ => {}
     }
     let mut parts = s.splitn(3, ':');
@@ -58,7 +55,7 @@ fn parse_target_string(s: &str) -> Option<serde_json::Value> {
 /// - Anything else (null, number, bool) → empty Vec
 ///
 /// Per-target dispatch-time validation (`channel`/`chat_id` for channel targets,
-/// `type` for local/origin) still applies.
+/// `type` for local) still applies.
 fn normalize_announce_to(val: &serde_json::Value) -> Vec<serde_json::Value> {
     match val {
         serde_json::Value::Array(items) => items
@@ -1129,16 +1126,6 @@ impl Scheduler {
                                             );
                                             continue;
                                         }
-                                        // origin target — not yet supported for scheduled jobs (no
-                                        // originating channel/chat captured at job-creation time).
-                                        if target["type"].as_str() == Some("origin") {
-                                            tracing::warn!(
-                                                agent = %agent_name,
-                                                job_id = %db_id,
-                                                "cron announce: 'origin' target not supported for scheduled jobs; skipping"
-                                            );
-                                            continue;
-                                        }
                                         // Channel target — existing path with new (possibly truncated) text.
                                         let Some(ch) = target["channel"].as_str() else {
                                             tracing::warn!(
@@ -2034,11 +2021,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_target_string_origin() {
-        assert_eq!(
-            parse_target_string("origin"),
-            Some(serde_json::json!({"type": "origin"}))
-        );
+    fn parse_target_string_origin_is_unsupported() {
+        // 'origin' was advertised but never implemented for scheduled jobs;
+        // the keyword is now treated like any other unknown string and yields None.
+        assert_eq!(parse_target_string("origin"), None);
     }
 
     #[test]
