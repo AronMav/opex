@@ -43,7 +43,7 @@ This spec preserves that pattern. We add:
 
 ### A.2 New core endpoint: `GET /api/watchdog/agent-activity`
 
-Returns the data the watchdog needs to compute inactivity without touching the DB itself.
+Returns the data the watchdog needs to compute inactivity without touching the DB itself. **All cron parsing happens server-side** so the watchdog avoids new dependencies (no `cron`, no `chrono-tz`).
 
 ```json
 [
@@ -51,30 +51,27 @@ Returns the data the watchdog needs to compute inactivity without touching the D
     "agent_id": "Hyde",
     "enabled": true,
     "latest_activity_at": "2026-05-14T10:14:00Z",
-    "heartbeat_cron": "0 * * * *",
-    "heartbeat_timezone": "Europe/Samara",
-    "last_heartbeat_at": "2026-05-14T10:00:00Z"
+    "next_expected_heartbeat_at": "2026-05-14T11:00:00Z"
   },
   {
     "agent_id": "Alma",
     "enabled": true,
     "latest_activity_at": "2026-05-13T18:42:00Z",
-    "heartbeat_cron": null,
-    "heartbeat_timezone": null,
-    "last_heartbeat_at": null
+    "next_expected_heartbeat_at": null
   }
 ]
 ```
 
 Where:
 
-- `latest_activity_at` = `SELECT MAX(GREATEST(activity_at, last_message_at)) FROM sessions WHERE agent_id = $1`. Covers any session activity (user messages, channel messages, heartbeats, cron-triggered runs). Heartbeat is a session like any other (`channel = 'heartbeat'`, see `agent/channel_kind.rs:4`), so its activity naturally bumps this value.
-- `heartbeat_cron` / `heartbeat_timezone` = mirror the agent's `[agent.heartbeat] cron / timezone` TOML fields. The schedule comes from the agent's config (in-memory after startup), not from the `scheduled_jobs` DB table.
-- `last_heartbeat_at` = `SELECT MAX(started_at) FROM sessions WHERE agent_id = $1 AND channel = 'heartbeat'`. NULL if heartbeat never fired (agent freshly added).
+- `latest_activity_at` = `SELECT MAX(GREATEST(activity_at, last_message_at)) FROM sessions WHERE agent_id = $1`. Covers any session activity (user messages, channel messages, heartbeats, cron-triggered runs). Heartbeat is a session like any other (`channel = 'heartbeat'`, see `agent/channel_kind.rs:4`), so its activity naturally bumps this value. `None` if the agent has no sessions yet.
+- `next_expected_heartbeat_at` = if the agent has `[agent.heartbeat] cron` set, server computes the next firing time after `last_heartbeat_at` (where `last_heartbeat_at = SELECT MAX(started_at) FROM sessions WHERE agent_id = $1 AND channel = 'heartbeat'`, fallback `epoch_start` if NULL) using the existing `scheduler::convert_cron_to_utc` + `cron::Schedule::after(&last_heartbeat_at)` pipeline. `None` if the agent has no heartbeat configured.
 
-The endpoint is added under `gateway/handlers/monitoring/` (next to the existing `/api/doctor` and `/api/dashboard` handlers) and authenticated by the same Bearer-token middleware. Returns 200 on success, 500 on DB error.
+The agent registry and heartbeat configs come from the in-memory `AgentCore` cluster on `AppState` — the same source `/api/agents` already uses. **The schedule comes from the agent's `[agent.heartbeat]` TOML config, not from the `scheduled_jobs` DB table** (the latter holds user-created dynamic crons spawned via the `cron` tool, an unrelated concept).
 
-**Why this split:** core owns the data (agent registry, sessions table); watchdog owns the *policy* (thresholds + episode state). Keeps the watchdog dumb and offline-from-DB.
+The endpoint is added under `gateway/handlers/monitoring/` (next to the existing `/api/doctor` and `/api/dashboard` handlers) and authenticated by the same Bearer-token middleware — shares the same authorization posture as `/api/agents` (a bearer token holder already has the agent list, so this endpoint reveals nothing new). Returns 200 on success, 500 on DB error.
+
+**Why this split:** core owns the data **and the cron arithmetic** (agent registry, sessions table, existing scheduler helpers); watchdog owns the *policy* (thresholds + episode state). Keeps the watchdog dumb, offline-from-DB, and free of cron-parsing dependencies.
 
 ### A.3 Watchdog config
 
@@ -96,6 +93,8 @@ missed_heartbeat_grace_minutes = 10
 ```
 
 ### A.4 Watchdog `inactivity.rs` module
+
+No `cron` or `chrono-tz` dependency — all timing decisions are subtraction on `chrono::DateTime<Utc>` because the endpoint already returns `next_expected_heartbeat_at` server-computed.
 
 ```rust
 //! Per-agent inactivity checks (stale activity, missed heartbeat).
@@ -120,9 +119,7 @@ pub(crate) struct AgentActivity {
     pub agent_id: String,
     pub enabled: bool,
     pub latest_activity_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub heartbeat_cron: Option<String>,
-    pub heartbeat_timezone: Option<String>,
-    pub last_heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub next_expected_heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub(crate) async fn fetch_agent_activity(
@@ -130,12 +127,6 @@ pub(crate) async fn fetch_agent_activity(
     core_url: &str,
     auth_token: &str,
 ) -> Result<Vec<AgentActivity>>;
-
-pub(crate) fn next_cron_after(
-    cron_expr: &str,
-    timezone: &str,           // e.g. "Europe/Samara"
-    after: chrono::DateTime<chrono::Utc>,
-) -> Option<chrono::DateTime<chrono::Utc>>;
 
 /// Pure transition function — easy to unit-test.
 pub(crate) fn classify(
@@ -146,8 +137,10 @@ pub(crate) fn classify(
 ) -> Vec<AlertType>;
 
 /// Mutate episode state based on classify() output, emit alert/recover actions.
+/// Also handles "agent gone" cleanup — see §A.6.
 pub(crate) fn reconcile(
     classified: HashMap<String, Vec<AlertType>>,
+    known_agents: &HashSet<String>,
     state: &mut HashMap<EpisodeKey, AlertState>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> (Vec<Fire>, Vec<Recover>);
@@ -162,29 +155,29 @@ pub(crate) async fn tick(
 ) -> Result<()>;
 ```
 
+`auth_token` and `core_url` are existing `&str` values constructed in `main.rs:34-46` (from `HYDECLAW_AUTH_TOKEN` / `HYDECLAW_CORE_URL` env vars), the same way the existing `Alerter` already receives them. No new env vars, no new config fields for auth.
+
 ### A.5 Classification logic
 
 Given `agent` (from the endpoint) and `now`:
 
-- **`StaleActivity`**: fires when `agent.enabled && agent.latest_activity_at < now - stale_threshold`. Special case: `latest_activity_at == None` (agent never had any session) — *do not fire*. Fresh agents are not stale.
-- **`MissedHeartbeat`**: fires when all of:
-  - `agent.enabled == true`
-  - `agent.heartbeat_cron.is_some()`
-  - The next expected fire time, computed as `next_cron_after(cron_expr, timezone, last_heartbeat_at.unwrap_or(epoch))`, is past `now - heartbeat_grace`.
-
-  Cron parsing uses the `cron = "0.13"` workspace dep (already pulled in by the scheduler). Timezone handling: parse via `chrono-tz` (already in tree via `chrono`'s tz feature path — verify during impl, add if needed).
+- **`StaleActivity`**: fires when `agent.enabled && agent.latest_activity_at.is_some() && agent.latest_activity_at < now - stale_threshold`. Special case: `latest_activity_at == None` (agent never had any session) — *do not fire*. Fresh agents are not stale.
+- **`MissedHeartbeat`**: fires when `agent.enabled && agent.next_expected_heartbeat_at.is_some() && now > agent.next_expected_heartbeat_at + heartbeat_grace`. No cron parsing on the watchdog side — the server already gave us the absolute deadline.
 
 Both checks are *independent*. An agent can fire one, the other, both, or neither. Both go through the same dedup machinery — `reconcile` keys by `(agent_id, AlertType)`.
 
 ### A.6 Episode dedup & recovery
 
-`HashMap<EpisodeKey, AlertState>` in `main.rs`, allocated alongside the existing `was_down` / `was_resource_warning` maps. `reconcile`:
+`HashMap<EpisodeKey, AlertState>` in `main.rs`, allocated alongside the existing `was_down` / `was_resource_warning` maps. `reconcile` takes both the classification map AND a `known_agents: &HashSet<String>` (built from the current endpoint response, regardless of classification outcome):
 
 - For each `(agent, alert_type)` returned by `classify` as currently-firing:
   - If `state.get(&key).is_none()` → emit `Fire` event, insert `AlertState { fired_at: now }`.
   - Otherwise → no-op (already alerted, episode ongoing).
-- For each existing key in `state` whose agent did **not** return that `alert_type` from `classify`:
-  - Emit `Recover` event, remove from `state`.
+- For each existing key `(agent, alert_type)` in `state`:
+  - If `known_agents` **does not contain** `agent` → agent was deleted or renamed; silently remove the entry from `state` (no `Recover` alert — there's no agent to refer to in the message).
+  - Else if the agent's classify-result no longer contains this `alert_type` → emit `Recover` event, remove from `state`.
+
+This handles three cases: ongoing inactivity (no-op), resolved inactivity (recovery alert), and disappeared agent (silent cleanup). Renames look like "Hyde disappeared, Hyder appeared" from the watchdog's perspective — both old episode state is dropped silently and the new name starts fresh.
 
 `Fire` and `Recover` are translated into channel-notify HTTP calls by the existing `alerter.rs`. Message format:
 
@@ -232,9 +225,11 @@ The two existing `#[cfg(test)]` cache tests (`execution_context_cache_basic` plu
 
 ### B.2 Shared placement
 
-Add `pub tool_exec_ctx: Arc<ToolExecutionContext>` to `InfraServices` (`crates/hydeclaw-core/src/gateway/clusters/infra_services.rs`), constructed once at startup with the operator-configured `max_entries`. `engine_dispatch.rs` reaches it through the engine's `app_state.infra.tool_exec_ctx`.
+Add `pub tool_exec_ctx: Arc<ToolExecutionContext>` to `AgentConfig` (`crates/hydeclaw-core/src/agent/agent_config.rs`). The struct is what `AgentEngine` exposes via `self.cfg()` — already the access path for shared resources inside the engine (`self.cfg().metrics: Arc<MetricsRegistry>` is the existing precedent at `agent_config.rs:56`). All agents constructed at startup receive the *same* `Arc` clone, so the cache is truly process-wide despite living "per-agent" in the config struct.
 
-`InfraServices` is the right home — it already holds shared, process-wide infrastructure (`db: PgPool`, `memory_store`, `embedder`, `sandbox`, `process_manager`).
+Construction order: `main.rs` builds one `Arc<ToolExecutionContext>` from `[tools.cache]` config, passes it into the `AgentConfig` builder used for each agent. Same pattern as how `Arc<MetricsRegistry>` is threaded today.
+
+`engine_dispatch.rs::execute_tool_call_inner` reaches it via `self.cfg().tool_exec_ctx` — compile-checked path, no `AppState` dependency from inside the engine.
 
 ### B.3 Config
 
@@ -268,7 +263,8 @@ fn default_tool_cache_max_entries() -> usize { 1000 }
 
 - `tool_name` first so collisions across renamed tools are visible in `tracing::debug!`.
 - `method` + `endpoint` included so two YAML tools with the same name but different URLs never share a key.
-- Params: if `key_params` is empty, all params from the LLM call sorted alphabetically; otherwise only the listed ones. Values serialised as `serde_json::Value::to_string()` to handle nested objects/arrays deterministically (note: `to_string()` already produces sorted-object form for `Map` since JSON doesn't guarantee object key order — document this caveat, accept rare false-positive misses for nested arguments).
+- Params: if `key_params` is empty, all params from the LLM call sorted alphabetically by key; otherwise only the listed ones, in `key_params` declaration order.
+- Values serialised as `serde_json::Value::to_string()`. **Object keys ARE sorted** (because `serde_json::Map` is `BTreeMap` by default — the crate is built *without* the `preserve_order` feature in this workspace; verify in `Cargo.toml` during impl). **Array elements preserve order** — `["a", "b"]` and `["b", "a"]` produce different cache keys even if semantically equivalent to the underlying API. This is a known limitation; accepted because LLM tool-call args rarely contain order-insensitive arrays. Add a unit test that pins this behaviour (`cache_key_object_keys_are_order_independent`, `cache_key_array_order_matters`) so a future accidental enablement of `preserve_order` fails loudly.
 
 ### B.5 Dispatch integration
 
@@ -290,7 +286,7 @@ let cache_key = match &yaml_tool.cache {
 };
 
 if let Some(ref key) = cache_key {
-    if let Some(body) = self.app_state.infra.tool_exec_ctx.get_cached(key).await {
+    if let Some(body) = self.cfg().tool_exec_ctx.get_cached(key).await {
         tracing::debug!(tool = %yaml_tool.name, "yaml tool cache hit");
         return Ok(body);
     }
@@ -301,9 +297,11 @@ After the HTTP execution returns successfully (and only on 2xx status):
 
 ```rust
 if let (Some(ref key), Some(ref cfg)) = (cache_key.as_ref(), yaml_tool.cache.as_ref()) {
-    self.app_state.infra.tool_exec_ctx.set_cached(key, &body, cfg.ttl).await;
+    self.cfg().tool_exec_ctx.set_cached(key, &body, cfg.ttl).await;
 }
 ```
+
+`self.cfg()` returns `&AgentConfig` — the same accessor used elsewhere in `execute_tool_call_inner` (e.g. `self.cfg().metrics.record_tool_latency(...)`). The cache is `Arc`-shared across all agents in the process, so two agents calling the same external API hit the same cache entry — see §B.4 for the keying that makes this safe.
 
 Three explicit non-caching paths (encoded in the `Some(cfg) if ...` guard above):
 
@@ -318,9 +316,9 @@ Three explicit non-caching paths (encoded in the `Some(cfg) if ...` guard above)
 ```rust
 pub async fn set_cached(&self, key: &str, body: &str, ttl_secs: u64) {
     if self.cache.len() >= self.max_entries {
-        // Soft eviction: remove the N oldest by expires_at.
-        // Simple O(n) walk — acceptable for max_entries ≤ 10_000.
-        let target_remove = self.max_entries / 10;          // 10 % of cap
+        // Soft eviction: remove ~10 % of cap, minimum 1 — guards against
+        // tiny caps (e.g. max_entries = 5 → 5/10 = 0 → cap never enforced).
+        let target_remove = (self.max_entries / 10).max(1);
         let mut victims: Vec<(String, std::time::Instant)> = self.cache
             .iter()
             .map(|e| (e.key().clone(), e.value().expires_at))
@@ -368,16 +366,16 @@ No background sweeper. Untouched expired entries linger until eviction kicks in 
 
 **Unit (`crates/hydeclaw-watchdog/src/inactivity.rs`)**
 
-- `next_cron_after_basic`: cron `0 * * * *`, tz `Europe/Samara`, last_fire `10:00 UTC` → `11:00 UTC` (with tz shift verified).
 - `classify_stale_activity_triggers`: agent with `latest_activity_at < now - 6h` → returns `[StaleActivity]`.
 - `classify_stale_activity_respects_enabled_false`: disabled agent → empty.
 - `classify_stale_activity_skips_never_active`: `latest_activity_at = None` → empty (fresh agent).
-- `classify_missed_heartbeat_triggers`: `heartbeat_cron = "0 * * * *"`, `last_heartbeat_at = now - 90min`, grace 10min → returns `[MissedHeartbeat]`.
-- `classify_missed_heartbeat_respects_grace`: same setup with `last_heartbeat_at = now - 30min` → empty (next fire not yet expected).
-- `classify_no_heartbeat_cron_no_alert`: `heartbeat_cron = None` → empty for that alert type.
+- `classify_missed_heartbeat_triggers`: `next_expected_heartbeat_at = now - 30min`, grace 10min → returns `[MissedHeartbeat]` (overdue by 30min > 10min grace).
+- `classify_missed_heartbeat_respects_grace`: `next_expected_heartbeat_at = now - 5min`, grace 10min → empty (overdue but within grace).
+- `classify_no_expected_heartbeat_no_alert`: `next_expected_heartbeat_at = None` → empty for MissedHeartbeat.
 - `reconcile_fires_once`: first call with `[StaleActivity]` → 1 Fire emitted, state populated. Second call same input → 0 emits.
 - `reconcile_recovers_on_resolution`: state has `StaleActivity` open, classified returns empty → 1 Recover emitted, state cleared.
 - `reconcile_independent_alert_types`: state has only `StaleActivity` open, classified returns `[StaleActivity, MissedHeartbeat]` → 0 Fire for stale (already open), 1 Fire for missed.
+- `reconcile_silent_cleanup_on_disappeared_agent`: state has `(Hyde, StaleActivity)` open, but `known_agents` no longer contains "Hyde" (agent renamed or deleted) → entry removed silently, 0 Fire, 0 Recover.
 
 **Integration (`crates/hydeclaw-watchdog/tests/integration_inactivity.rs`)**
 
@@ -387,8 +385,11 @@ No background sweeper. Untouched expired entries linger until eviction kicks in 
 
 **Endpoint test (`crates/hydeclaw-core/tests/integration_watchdog_agent_activity.rs`)**
 
-- `#[sqlx::test]` — insert agents, sessions (some heartbeat, some not), call the endpoint, assert correct `latest_activity_at` and `last_heartbeat_at` aggregation.
-- `endpoint_requires_auth`: no Bearer → 401.
+- `#[sqlx::test]` — insert agents (with and without `[agent.heartbeat]` config), insert sessions (some `channel='heartbeat'`, some other channels), call `GET /api/watchdog/agent-activity`, assert:
+  - `latest_activity_at` aggregates correctly across all session channels per agent.
+  - `next_expected_heartbeat_at` is `Some(...)` when the agent has heartbeat config, `None` otherwise.
+  - For heartbeat-configured agents, the returned `next_expected_heartbeat_at` equals `compute_next_heartbeat_at(cron_expr, timezone, last_heartbeat_at)` for some fixed inputs (this is essentially a snapshot test of the cron arithmetic, covered also by the existing `compute_next_run_with_timezone` test in `scheduler/mod.rs`).
+- `endpoint_requires_auth`: no Bearer → 401. Wrong Bearer → 401.
 
 ### YAML cache tests (Part B)
 
@@ -416,7 +417,7 @@ No background sweeper. Untouched expired entries linger until eviction kicks in 
 1. With `[watchdog].stale_activity_timeout_hours = 1` and an agent whose newest session activity is older than 1 h, the watchdog fires exactly one alert via `POST /api/channels/notify` per episode.
 2. When that agent's `activity_at` is bumped (any new session or message), the watchdog fires exactly one recovery alert and clears the episode.
 3. An agent with `enabled = false` (config TOML) is never alerted on, regardless of activity timestamps.
-4. An agent with `[agent.heartbeat] cron = "0 * * * *"` whose `last_heartbeat_at` is older than (next_cron_after + grace) produces a `MissedHeartbeat` alert independent of whether `StaleActivity` is also firing.
+4. An agent with `[agent.heartbeat] cron = "0 * * * *"` whose `next_expected_heartbeat_at` (computed server-side) is older than `now - grace_minutes` produces a `MissedHeartbeat` alert independent of whether `StaleActivity` is also firing.
 5. `GET /api/watchdog/agent-activity` returns 200 + valid JSON with the documented shape, given a valid Bearer token; returns 401 without one.
 6. Watchdog tolerates core being unreachable (returns 500 / connection refused on the endpoint) — logs a warn, continues looping, does not crash.
 7. `cargo test --workspace --lib` and `make test-db` are green; `cargo test -p hydeclaw-watchdog --tests` runs the integration tests above.
@@ -459,8 +460,8 @@ Steps 1–3 are Part A end-to-end. Steps 4–5 are Part B end-to-end. They can s
 
 ## Known risks and mitigations
 
-1. **Cron parser edge cases.** `chrono-tz` and the `cron` crate occasionally disagree on DST transitions. Mitigation: the unit tests pin a known cron + tz combination across a DST boundary; if mismatch surfaces, document the behaviour rather than fight the libraries.
-2. **Watchdog ↔ core auth.** The endpoint needs a Bearer token. The watchdog already reads `HYDECLAW_AUTH_TOKEN` from its env (via `cfg.auth_token`); confirm and reuse.
+1. **Cron parser edge cases (server-side).** The existing `scheduler::convert_cron_to_utc()` shifts cron hours by a fixed offset per timezone, which is wrong across DST transitions (e.g. Europe/Samara doesn't observe DST but Europe/Moscow does — for DST-observing zones the offset varies). The endpoint inherits this behaviour. Mitigation: this spec does not change `convert_cron_to_utc()`; if a DST-related off-by-an-hour `MissedHeartbeat` ever fires, the existing helper is the place to fix, not anything new in this design. Acceptable for the targeted timezones today.
+2. **Watchdog ↔ core auth.** The endpoint needs a Bearer token. Verified: `main.rs:34` reads `HYDECLAW_AUTH_TOKEN` from env into a local `auth_token: String`, threaded into `Alerter::new(&core_url, &auth_token)` and used as `Authorization: Bearer {auth_token}` on every existing core call. `inactivity::tick(...)` receives the same `&str auth_token` parameter and uses the same header format — zero new auth surface.
 3. **Cache-key collision on nested params.** `Value::to_string()` on objects gives a JSON repr, but key order inside nested objects is technically not stable in `serde_json` (it depends on `Map` impl, which is `BTreeMap` by default in this crate — verify at impl time; if the dependency switched to `IndexMap` for preserve-order, sort manually).
 4. **Episode state lost on watchdog restart.** Acceptable: one false-positive re-fire per restart. Watchdog restarts are rare and human-triggered.
 5. **Cache poisoning across agents.** Shared cache means agent A's cached response is served to agent B for the same `(tool, method, endpoint, params)` key. This is *intentional* — same HTTP call should return the same body regardless of which agent asked. The cache is keyed by API call shape, not by agent identity. If an external API ever returns per-caller-different bodies based on something other than the request URL/params (e.g., session cookies), we'd need to extend the key, but no such tool exists today.
