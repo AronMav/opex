@@ -29,6 +29,10 @@ pub struct WatchdogSettings {
     pub session_retry_stale_secs: u64,
     #[serde(default = "default_3")]
     pub session_retry_max_attempts: u32,
+    #[serde(default = "default_stale_activity_timeout_hours")]
+    pub stale_activity_timeout_hours: u64,
+    #[serde(default = "default_missed_heartbeat_grace_minutes")]
+    pub missed_heartbeat_grace_minutes: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -72,6 +76,8 @@ impl Default for ResourceSettings {
 
 fn default_true() -> bool { true }
 fn default_90() -> u64 { 90 }
+fn default_stale_activity_timeout_hours() -> u64 { 6 }
+fn default_missed_heartbeat_grace_minutes() -> u64 { 10 }
 fn default_1() -> u64 { 1 }
 fn default_3() -> u32 { 3 }
 fn default_5() -> u64 { 5 }
@@ -100,6 +106,8 @@ enabled = true
         assert!(cfg.watchdog.enabled);
         assert_eq!(cfg.watchdog.interval_secs, 60);
         assert!(cfg.checks.is_empty());
+        assert_eq!(cfg.watchdog.stale_activity_timeout_hours, 6);
+        assert_eq!(cfg.watchdog.missed_heartbeat_grace_minutes, 10);
     }
 
     #[test]
