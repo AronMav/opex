@@ -1265,9 +1265,40 @@ impl AppConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("failed to read config: {}", path.as_ref().display()))?;
+        Self::check_renamed_keys(&content)?;
         let config: Self = toml::from_str(&content)
             .with_context(|| "failed to parse config TOML")?;
         Ok(config)
+    }
+
+    /// Catch operator-facing key renames before the bare serde error surfaces.
+    /// Each entry maps an old key to its new name + the [section] it lives in.
+    fn check_renamed_keys(raw_toml: &str) -> Result<()> {
+        const RENAMES: &[(&str, &str, &str)] = &[
+            // (old key, new key, section)
+            ("session_events_retention_days", "session_timeline_retention_days", "[cleanup]"),
+            ("session_events_batch_size",     "session_timeline_batch_size",     "[cleanup]"),
+        ];
+        for (old, new, section) in RENAMES {
+            // Match the old key at the start of a line (allowing leading
+            // whitespace), followed by optional spaces and `=`. This avoids
+            // false positives from comments or inline strings.
+            let found_as_key = raw_toml.lines().any(|line| {
+                let trimmed = line.trim_start();
+                trimmed.starts_with(old)
+                    && trimmed
+                        .get(old.len()..)
+                        .map(|tail| tail.trim_start().starts_with('='))
+                        .unwrap_or(false)
+            });
+            if found_as_key {
+                anyhow::bail!(
+                    "config error: {section} key `{old}` was renamed to \
+                     `{new}` in this release. Update hydeclaw.toml.",
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -2707,4 +2738,68 @@ mod backup_config_tests {
         assert_eq!(cfg.backup.postgres_container, "my-postgres-2");
     }
 
+}
+
+#[cfg(test)]
+mod precheck_tests {
+    use super::AppConfig;
+    use std::io::Write;
+
+    fn write_temp_toml(content: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().expect("temp file");
+        f.write_all(content.as_bytes()).expect("write toml");
+        f
+    }
+
+    #[test]
+    fn precheck_rejects_old_session_events_retention_days() {
+        let toml = r#"
+[cleanup]
+session_events_retention_days = 14
+"#;
+        let f = write_temp_toml(toml);
+        let err = AppConfig::load(f.path()).expect_err("must reject old key");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("session_events_retention_days")
+                && msg.contains("renamed")
+                && msg.contains("session_timeline_retention_days"),
+            "PreCheck error must name old AND new key. Got: {msg}"
+        );
+    }
+
+    #[test]
+    fn precheck_rejects_old_session_events_batch_size() {
+        let toml = r#"
+[cleanup]
+session_events_batch_size = 1000
+"#;
+        let f = write_temp_toml(toml);
+        let err = AppConfig::load(f.path()).expect_err("must reject old key");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("session_events_batch_size")
+                && msg.contains("session_timeline_batch_size"),
+            "PreCheck error must name old AND new key. Got: {msg}"
+        );
+    }
+
+    #[test]
+    fn precheck_accepts_new_session_timeline_keys() {
+        let toml = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+
+[cleanup]
+session_timeline_retention_days = 14
+session_timeline_batch_size = 1000
+"#;
+        let f = write_temp_toml(toml);
+        let cfg = AppConfig::load(f.path()).expect("new keys must parse");
+        assert_eq!(cfg.cleanup.session_timeline_retention_days, 14);
+        assert_eq!(cfg.cleanup.session_timeline_batch_size, 1000);
+    }
 }
