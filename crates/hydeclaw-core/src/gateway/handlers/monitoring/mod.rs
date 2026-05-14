@@ -143,7 +143,7 @@ impl CheckResult {
 ///   "db_pool_total": <u64>,
 ///   "db_pool_idle": <u64>,
 ///   "memory_worker_heartbeat_age_secs": <i64>,
-///   "session_events_table_size_bytes": <u64>,
+///   "session_timeline_table_size_bytes": <u64>,
 ///   "uptime_secs": <u64>,
 ///   "cache_read_tokens_24h": <i64>,
 ///   "cache_creation_tokens_24h": <i64>,
@@ -179,7 +179,7 @@ pub(crate) async fn api_health_dashboard(
 
     // ── DB-backed reads (bounded; cheap — both queries read metadata or a
     //    single aggregate, never scan data pages) ─────────────────────────
-    let session_events_table_size_bytes: u64 = sqlx::query_scalar::<_, i64>(
+    let session_timeline_table_size_bytes: u64 = sqlx::query_scalar::<_, i64>(
         "SELECT pg_total_relation_size('session_timeline')",
     )
     .fetch_one(&infra.db)
@@ -208,7 +208,7 @@ pub(crate) async fn api_health_dashboard(
     // CACHE-03: aggregate cache-token usage from usage_log.
     // `unwrap_or_default()` degrades gracefully on DB error — dashboard
     // continues to render with zeros rather than failing the request.
-    // Same posture as `session_events_table_size_bytes` and the
+    // Same posture as `session_timeline_table_size_bytes` and the
     // `memory_worker_heartbeat_age_secs` reads above.
     let cache_tokens = hydeclaw_db::usage::cache_metrics(&infra.db)
         .await
@@ -226,7 +226,7 @@ pub(crate) async fn api_health_dashboard(
         db_pool_total,
         db_pool_idle,
         memory_worker_heartbeat_age_secs,
-        session_events_table_size_bytes,
+        session_timeline_table_size_bytes,
         uptime_secs: status.started_at.elapsed().as_secs(),
         // CACHE-03: prompt-cache token aggregates (24h + 7d windows).
         cache_read_tokens_24h: cache_tokens.cache_read_tokens_24h,
