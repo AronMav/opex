@@ -265,8 +265,8 @@ async fn resolve_provider_from_row(
             // `Some(false)` is explicit and overrides any `prompt_cache: true` in the
             // provider's `options` JSON — agent-level config wins (Pitfall 3 in 68-RESEARCH).
             // Anthropic-only effect; non-Anthropic providers ignore this field (CACHE-04).
-            // TODO(Phase-70 / ROUTE-02): routing.rs:110 still hardcodes `prompt_cache: None`;
-            // propagate agent.prompt_cache there too when ROUTE-02 lands.
+            // The routing path (`routing::create_routing_provider`) propagates the
+            // same flag, so multi-route agents get the same cache behaviour.
             let overrides = ProviderOverrides {
                 model: model_override.map(str::to_string),
                 temperature: Some(temperature),
