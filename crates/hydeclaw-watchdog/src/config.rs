@@ -15,9 +15,6 @@ pub struct WatchdogSettings {
     pub enabled: bool,
     #[serde(default = "default_60")]
     pub interval_secs: u64,
-    #[allow(dead_code)] // reserved for future restart logic
-    #[serde(default = "default_3")]
-    pub max_restart_attempts: u32,
     #[serde(default = "default_300")]
     pub cooldown_secs: u64,
     #[serde(default = "default_60")]
@@ -102,7 +99,6 @@ enabled = true
         let cfg: WatchdogConfig = toml::from_str(toml).unwrap();
         assert!(cfg.watchdog.enabled);
         assert_eq!(cfg.watchdog.interval_secs, 60);
-        assert_eq!(cfg.watchdog.max_restart_attempts, 3);
         assert!(cfg.checks.is_empty());
     }
 
