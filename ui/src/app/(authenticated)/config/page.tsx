@@ -24,10 +24,6 @@ interface ConfigData {
 
 interface SubagentsSection {
   enabled: boolean;
-  default_mode: string;
-  max_concurrent_in_process: number;
-  max_concurrent_docker: number;
-  docker_timeout: string;
 }
 
 /**

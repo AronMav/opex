@@ -191,10 +191,6 @@ pub(crate) async fn api_get_config(
         },
         "subagents": {
             "enabled": config.subagents.enabled,
-            "default_mode": config.subagents.default_mode,
-            "max_concurrent_in_process": config.subagents.max_concurrent_in_process,
-            "max_concurrent_docker": config.subagents.max_concurrent_docker,
-            "docker_timeout": config.subagents.docker_timeout,
             "in_process_timeout": config.subagents.in_process_timeout,
         },
         "docker": {

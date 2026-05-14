@@ -424,40 +424,25 @@ impl Default for LimitsConfig {
 pub(crate) fn default_true() -> bool { true }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[allow(dead_code)] // Deserialized from TOML; fields used for subagent configuration
 pub struct SubagentsConfig {
+    /// Globally enable or disable the `agent` tool. Toggled at runtime via
+    /// `PUT /api/config` `{ "subagents_enabled": bool }`.
     #[serde(default = "default_subagents_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_subagent_mode")]
-    pub default_mode: String,
-    #[serde(default = "default_max_concurrent_in_process")]
-    pub max_concurrent_in_process: u32,
-    #[serde(default = "default_max_concurrent_docker")]
-    pub max_concurrent_docker: u32,
-    #[serde(default = "default_docker_timeout")]
-    pub docker_timeout: String,
+    /// Wall-clock timeout for an in-process subagent invocation. Parsed
+    /// by `parse_subagent_timeout` (`"2m"`, `"30s"`).
     #[serde(default = "default_in_process_timeout")]
     pub in_process_timeout: String,
-    pub core_image: Option<String>,
 }
 
 fn default_subagents_enabled() -> bool { true }
-fn default_subagent_mode() -> String { "in-process".to_string() }
-fn default_max_concurrent_in_process() -> u32 { 5 }
-fn default_max_concurrent_docker() -> u32 { 3 }
-fn default_docker_timeout() -> String { "5m".to_string() }
 fn default_in_process_timeout() -> String { "2m".to_string() }
 
 impl Default for SubagentsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            default_mode: default_subagent_mode(),
-            max_concurrent_in_process: default_max_concurrent_in_process(),
-            max_concurrent_docker: default_max_concurrent_docker(),
-            docker_timeout: default_docker_timeout(),
             in_process_timeout: default_in_process_timeout(),
-            core_image: None,
         }
     }
 }
@@ -2047,10 +2032,7 @@ max_requests_per_minute = 200
     fn subagents_config_defaults() {
         let cfg = SubagentsConfig::default();
         assert!(cfg.enabled);
-        assert_eq!(cfg.default_mode, "in-process");
-        assert_eq!(cfg.max_concurrent_in_process, 5);
-        assert_eq!(cfg.max_concurrent_docker, 3);
-        assert!(cfg.core_image.is_none());
+        assert_eq!(cfg.in_process_timeout, "2m");
     }
 
     // ── 7. CompactionConfig defaults ──
@@ -2206,7 +2188,7 @@ url = "postgres://localhost/test"
         assert_eq!(cfg.limits.max_requests_per_minute, 300);
         assert_eq!(cfg.limits.max_tool_concurrency, 10);
         assert!(cfg.subagents.enabled);
-        assert_eq!(cfg.subagents.default_mode, "in-process");
+        assert_eq!(cfg.subagents.in_process_timeout, "2m");
         assert!(cfg.mcp.is_empty());
         assert!(!cfg.sandbox.enabled);
         assert_eq!(cfg.docker.compose_file, "docker/docker-compose.yml");
