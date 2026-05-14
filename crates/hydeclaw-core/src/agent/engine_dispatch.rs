@@ -208,6 +208,33 @@ impl AgentEngine {
                 {
                     return cached;
                 }
+
+                // YAML tool response cache (pre-execution lookup). Skipped
+                // when the tool has channel_action (binary response routed
+                // to a channel, not returned to the LLM) or pagination
+                // (multi-page fetch — caching one page is wrong).
+                let cache_key = match &yaml_tool.cache {
+                    Some(cfg)
+                        if yaml_tool.channel_action.is_none()
+                            && yaml_tool.pagination.is_none() =>
+                    {
+                        Some(crate::tools::yaml_tools::build_cache_key(
+                            &yaml_tool.name,
+                            &yaml_tool.method,
+                            &yaml_tool.endpoint,
+                            arguments,
+                            &cfg.key_params,
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some(ref key) = cache_key
+                    && let Some(body) = self.cfg().tool_exec_ctx.get_cached(key).await
+                {
+                    tracing::debug!(tool = %yaml_tool.name, "yaml tool cache hit");
+                    return body;
+                }
+
                 let resolver = self.make_resolver();
                 let oauth_ctx = self.make_oauth_context();
                 let client = if crate::tools::ssrf::is_internal_endpoint(&yaml_tool.endpoint) {
@@ -223,6 +250,14 @@ impl AgentEngine {
                             && let Some(q) = arguments.get("query").and_then(|v| v.as_str())
                         {
                             self.store_search_cache(q, &result).await;
+                        }
+                        if let (Some(key), Some(cfg)) =
+                            (cache_key.as_ref(), yaml_tool.cache.as_ref())
+                        {
+                            self.cfg()
+                                .tool_exec_ctx
+                                .set_cached(key, &result, cfg.ttl)
+                                .await;
                         }
                         result
                     }

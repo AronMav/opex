@@ -55,10 +55,8 @@ pub struct AgentConfig {
     /// `InfraServices.metrics` at engine construction time.
     pub metrics: Arc<crate::metrics::MetricsRegistry>,
     /// Shared YAML-tool response cache (process-wide singleton). Cloned
-    /// from `AgentDeps.tool_exec_ctx` at engine construction time.
-    /// Read by engine_dispatch in Task 8 — kept allocated already so Task 8
-    /// is a pure wiring patch with no struct churn.
-    #[allow(dead_code)]
+    /// from `AgentDeps.tool_exec_ctx` at engine construction time. Read by
+    /// `engine_dispatch::execute_tool_call_inner` on the YAML-tool path.
     pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>,
 }
 
