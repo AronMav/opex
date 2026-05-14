@@ -1,4 +1,4 @@
-//! Small leaf handlers: `health`, `mcp_callback`, `api_chat_abort`,
+//! Small leaf handlers: `health`, `api_chat_abort`,
 //! `set_model_override`. Grouped here because each is under ~25 lines and
 //! splitting them further produces files dominated by their import blocks.
 
@@ -10,7 +10,6 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::gateway::clusters::{AgentCore, ChannelBus, ConfigServices, InfraServices};
-use crate::tasks;
 
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct ModelOverrideBody {
@@ -50,24 +49,6 @@ pub(crate) async fn health(
         "db": db_ok,
         "listen": config.gateway.listen,
     }))
-}
-
-pub(crate) async fn mcp_callback(
-    State(infra): State<InfraServices>,
-    Json(payload): Json<hydeclaw_types::McpCallback>,
-) -> StatusCode {
-    tracing::info!(
-        task_id = %payload.task_id,
-        status = %payload.status,
-        "MCP callback received"
-    );
-
-    if let Err(e) = tasks::update_step_from_callback(&infra.db, &payload).await {
-        tracing::error!(error = %e, "failed to process MCP callback");
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
-
-    StatusCode::OK
 }
 
 /// POST /api/chat/{id}/abort — cancel an in-progress stream from any client.

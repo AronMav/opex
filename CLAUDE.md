@@ -128,7 +128,7 @@ Axum HTTP API on port 18789. **Sub-router pattern:** 27 handler modules each exp
   - `sse_converter.rs` — `StreamEvent` → SSE-JSON converter loop (AUDIT:SSE-01/02/03 invariants)
   - `resume.rs` — `/api/chat/{id}/stream` resume + replay
   - `streaming_db.rs` — `StreamingMessageGuard` + `upsert_streaming_append` etc.
-  - `misc.rs` — `/health`, `/api/mcp/callback`, `/api/chat/{id}/abort`, model-override
+  - `misc.rs` — `/health`, `/api/chat/{id}/abort`, model-override
 - `sessions.rs` — session CRUD + fork endpoint (`POST /api/sessions/{id}/fork`) + active-path endpoint
 - `services.rs` — managed native processes (channels, toolgate) + Docker container management (MCP, browser-renderer)
 - `state.rs: agent_names()` / `agent_summaries()` — return agents sorted base-first then alphabetical

@@ -10,7 +10,6 @@
 //! ```text
 //! routes()
 //!   ├── /health                       → misc::health
-//!   ├── /api/mcp/callback             → misc::mcp_callback
 //!   ├── /v1/chat/completions          → openai_compat::chat_completions
 //!   ├── /v1/models                    → models::list_models
 //!   ├── /v1/embeddings                → embeddings::embeddings_proxy
@@ -45,7 +44,6 @@ pub(crate) use misc::set_model_override;
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/health", get(misc::health))
-        .route("/api/mcp/callback", post(misc::mcp_callback))
         .route("/v1/chat/completions", post(openai_compat::chat_completions))
         .route("/v1/models", get(models::list_models))
         .route("/v1/embeddings", post(embeddings::embeddings_proxy))

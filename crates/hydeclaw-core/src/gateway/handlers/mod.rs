@@ -3,7 +3,6 @@ pub(crate) mod secrets;
 pub(crate) mod sessions;
 pub(crate) mod session_failures;
 pub(crate) mod monitoring;
-pub(crate) mod tasks;
 pub(crate) mod memory;
 pub(crate) mod cron;
 pub(crate) mod tools;

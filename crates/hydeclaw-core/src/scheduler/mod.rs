@@ -356,27 +356,6 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Add task cleanup job (daily at 4:00 UTC — delete old completed/failed tasks).
-    pub async fn add_task_cleanup(&self, db: PgPool) -> Result<()> {
-        tracing::info!("scheduling task cleanup (daily 04:00 UTC)");
-
-        let job = Job::new_async("0 0 4 * * *", move |_uuid, _lock| {
-            let db = db.clone();
-            Box::pin(async move {
-                tracing::info!("task cleanup triggered");
-                match run_task_cleanup(&db).await {
-                    Ok((tasks, steps)) => {
-                        tracing::info!(tasks, steps, "task cleanup completed");
-                    }
-                    Err(e) => tracing::error!(error = %e, "task cleanup failed"),
-                }
-            })
-        })?;
-
-        self.scheduler.add(job).await?;
-        Ok(())
-    }
-
     /// Add session cleanup job (daily at 5:00 UTC — delete old sessions
     /// by age AND enforce per-agent entry cap).
     ///
@@ -1571,30 +1550,6 @@ async fn run_memory_decay(db: &PgPool) -> Result<(u64, u64)> {
     let deleted = delete_result.rows_affected();
 
     Ok((decayed, deleted))
-}
-
-/// Delete old completed/failed tasks (>30 days) and orphan steps.
-async fn run_task_cleanup(db: &PgPool) -> Result<(u64, u64)> {
-    // Steps are cascade-deleted via FK, but count them first
-    let steps_result = sqlx::query(
-        "SELECT COUNT(*) as cnt FROM task_steps WHERE task_id IN \
-         (SELECT id FROM tasks WHERE status IN ('completed', 'failed', 'cancelled') \
-          AND updated_at < now() - interval '30 days')",
-    )
-    .fetch_one(db)
-    .await?;
-    let steps: i64 = sqlx::Row::get(&steps_result, "cnt");
-
-    let tasks_result = sqlx::query(
-        "DELETE FROM tasks \
-         WHERE status IN ('completed', 'failed', 'cancelled') \
-           AND updated_at < now() - interval '30 days'",
-    )
-    .execute(db)
-    .await?;
-    let tasks = tasks_result.rows_affected();
-
-    Ok((tasks, steps as u64))
 }
 
 /// Compute the next fire time for a cron expression in the given timezone.

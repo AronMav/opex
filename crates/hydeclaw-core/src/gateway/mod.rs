@@ -93,7 +93,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .and_then(|env_name| std::env::var(env_name).ok());
 
     let app = Router::new()
-        .merge(handlers::chat::routes())           // /health, /api/chat, /v1/chat/completions, /v1/models, /v1/embeddings, /api/mcp/callback
+        .merge(handlers::chat::routes())           // /health, /api/chat, /v1/chat/completions, /v1/models, /v1/embeddings
         .merge(handlers::auth::routes())            // /api/auth/ws-ticket
         .merge(handlers::channel_ws::routes())      // /ws, /ws/channel/{agent_name}
         .merge(handlers::agents::routes())          // /api/agents/*, /api/approvals/*
@@ -119,7 +119,6 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::email_triggers::routes())  // /api/triggers/email/*
         .merge(handlers::github_repos::routes())    // /api/agents/*/github/repos/*
         .merge(handlers::access::routes())          // /api/access/*
-        .merge(handlers::tasks::routes())           // /api/tasks/*
         .merge(handlers::notifications::routes())   // /api/notifications/*
         .merge(handlers::csp::routes())             // Phase 64 SEC-05: /api/csp-report (report-only)
         .merge(handlers::media::routes())           // /uploads/*, /api/media/*

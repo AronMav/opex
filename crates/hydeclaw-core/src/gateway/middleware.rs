@@ -211,7 +211,6 @@ pub(crate) async fn auth_middleware(
     tracing::debug!(ip = %client_ip, path = %path, loopback = is_loopback(&client_ip), "auth middleware");
 
     // ── Loopback-only paths (internal service calls) ─────────────────
-    // /api/mcp/callback    — MCP server callbacks
     // /api/channels/notify — watchdog/internal alerts
     // /api/media/upload    — toolgate media uploads
     // /api/vision/analyze  — vision proxy called by analyze_image YAML tool
@@ -224,7 +223,7 @@ pub(crate) async fn auth_middleware(
     // fetches a one-time ticket via POST /api/auth/ws-ticket, so requiring
     // the ticket on loopback breaks nothing legitimate.
     if is_loopback(&client_ip) {
-        const LOOPBACK_EXACT: &[&str] = &["/health", "/api/mcp/callback", "/api/channels/notify", "/api/media/upload", "/api/vision/analyze"];
+        const LOOPBACK_EXACT: &[&str] = &["/health", "/api/channels/notify", "/api/media/upload", "/api/vision/analyze"];
         const LOOPBACK_PREFIX: &[&str] = &["/uploads/"];
         let loopback_allowed = LOOPBACK_EXACT.contains(&path)
             || LOOPBACK_PREFIX.iter().any(|p| path.starts_with(p));
