@@ -542,7 +542,7 @@ Each `workspace/tools/*.yaml` defines one tool. 30-second in-memory cache to avo
 3. Auth:
    bearer_env | basic_env | api_key_header | api_key_query |
    custom (${VAR} substitution) | oauth_refresh | oauth_provider | none
-4. Execute via reqwest (standard client — admin-configured, not SSRF-checked)
+4. Execute via reqwest with **conditional SSRF**: `engine_dispatch.rs` checks the tool's `endpoint` against `tools::ssrf::is_internal_endpoint`. Internal endpoints (toolgate:9011, browser-renderer, etc. — admin-configured and trusted) use the standard `http_client()`. External endpoints (any URL not on the internal allow-list) use `ssrf_http_client()` with DNS-level private-IP blocking.
 5. response_transform: optional JSONPath extraction ("$.path.to.field")
 6. If channel_action → route binary result to ChannelActionRouter instead of LLM
 7. Return text result to LLM context
@@ -569,7 +569,7 @@ Phase 64 unified guard for user-supplied URLs (`web_fetch`, `fetch_url_content`)
 - If ALL resolved addresses are private → `PermissionDenied` (connection never attempted)
 - Closes DNS-rebinding TOCTOU gap
 
-YAML tools and Toolgate calls bypass SSRF checks (admin-configured endpoints).
+**Conditional SSRF for YAML tools**: the runtime checks `tools::ssrf::is_internal_endpoint(&yaml_tool.endpoint)`. Endpoints recognised as internal (toolgate, browser-renderer, core itself, etc.) use the standard `http_client()`; everything else uses `ssrf_http_client()` with private-IP blocking. Toolgate's own outbound calls share the same logic.
 
 **`ssrf_http_client()`** — canonical safe client: 30s default timeout, 10s connect timeout, redirect policy NONE, `SsrfSafeResolver`.
 

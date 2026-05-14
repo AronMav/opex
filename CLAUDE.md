@@ -145,7 +145,7 @@ Axum HTTP API on port 18789. **Sub-router pattern:** 27 handler modules each exp
 - `required_base: true` — only available to `base = true` agents
 - `channel_action:` — after execution, sends binary result via Telegram (send_photo, send_voice)
 - Loaded by `load_yaml_tools(workspace_dir)`, found by `find_yaml_tool(workspace_dir, name)`
-- **SSRF protection:** YAML tool execution uses `ssrf_http_client` with DNS-level private IP blocking. Path params are URL-encoded, body templates are JSON-escaped. Binary responses limited to 50MB.
+- **Conditional SSRF:** `engine_dispatch.rs` picks the HTTP client by endpoint: `tools::ssrf::is_internal_endpoint(&yaml_tool.endpoint)` returns true for trusted admin-configured services (toolgate, browser-renderer, core itself, …) which use the standard `http_client()`. Every other endpoint uses `ssrf_http_client()` with DNS-level private-IP blocking. Path params are URL-encoded, body templates are JSON-escaped. Binary responses limited to 50MB.
 - **Tool name validation:** API handlers enforce `[a-zA-Z0-9_-]` on tool and MCP entry names (prevents path traversal)
 
 **Service registry:** `config/services/*.yaml` — internal service definitions (browser-renderer, toolgate, STT, TTS, embedding, vision). These are infrastructure entries (URL, healthcheck, concurrency), NOT agent tools. Loaded by `service_registry.rs`.
@@ -690,7 +690,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Config: TOML parsed with serde; missing required fields cause startup error
 - Tool names: API enforces `[a-zA-Z0-9_-]` pattern (prevents path traversal in workspace/tools lookup)
 - Workspace paths: `workspace.rs:is_read_only()` prevents tool from writing outside allowed dirs
-- SSRF: YAML tool HTTP client uses custom DNS resolver to block private IP ranges (169.254.x.x, 10.x.x.x, 127.x, 172.16-31.x, 192.168.x)
+- SSRF: external YAML tool endpoints use `ssrf_http_client()` with a custom DNS resolver that blocks private IP ranges (169.254.x.x, 10.x.x.x, 127.x, 172.16-31.x, 192.168.x); admin-configured internal endpoints recognised by `tools::ssrf::is_internal_endpoint` (toolgate, browser-renderer, …) use the standard client
 - API Token: Single bearer token (env var HYDECLAW_AUTH_TOKEN) checked by middleware
 - Session ID: Opaque UUID, returned first in SSE (data-session-id event)
 - WebSocket Ticket: One-time ticket issued by POST `/api/auth/ws-ticket`, consumed by WS connection
