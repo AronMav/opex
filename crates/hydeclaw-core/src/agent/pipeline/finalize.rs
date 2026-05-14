@@ -195,7 +195,7 @@ pub(crate) fn spawn_record_failure(
         // the timeline lookup fails or the payload is missing.
         let last_tool_name = match &last_tool {
             Some((Some(tcid), _)) => {
-                let wal_match: Option<String> = sqlx::query_scalar(
+                let timeline_match: Option<String> = sqlx::query_scalar(
                     "SELECT payload->>'tool_name' \
                      FROM session_timeline \
                      WHERE session_id = $1 \
@@ -209,7 +209,7 @@ pub(crate) fn spawn_record_failure(
                 .await
                 .ok()
                 .flatten();
-                wal_match
+                timeline_match
             }
             _ => None,
         };
