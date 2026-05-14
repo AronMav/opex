@@ -2,12 +2,11 @@ mod checker;
 mod recovery;
 mod resources;
 mod status;
-// alerter, config, and inactivity live in the lib crate (src/lib.rs); the
-// loop reaches alerter+config below and inactivity will be wired in by
-// Task 5 — sharing them with the lib avoids compiling duplicate copies
-// (which surface dead_code warnings until every field is referenced).
+// alerter, config, and inactivity live in the lib crate (src/lib.rs);
+// sharing them with the lib avoids compiling duplicate copies into the
+// binary (and the dead_code warnings that go with it).
 
-use hydeclaw_watchdog::{alerter, config};
+use hydeclaw_watchdog::{alerter, config, inactivity};
 
 use std::collections::HashMap;
 
@@ -60,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
     let mut resource_status: Option<resources::ResourceStatus> = None;
     let mut was_resource_warning: HashMap<String, bool> = HashMap::new();
     let mut was_container_unhealthy: HashMap<String, bool> = HashMap::new();
+    let mut inactivity_state: HashMap<inactivity::EpisodeKey, inactivity::AlertState> =
+        HashMap::new();
     let start_time = std::time::Instant::now();
     // Initialize to force immediate check on first iteration
     let mut resource_timer = std::time::Instant::now()
@@ -217,6 +218,21 @@ async fn main() -> anyhow::Result<()> {
 
 
             resource_status = Some(res);
+        }
+
+        // ── Agent inactivity check ──────────────────────────────────────
+        if let Err(e) = inactivity::tick(
+            &http,
+            &core_url,
+            &auth_token,
+            &cfg.watchdog,
+            &mut inactivity_state,
+            &alerter,
+            &alert_config,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, "inactivity tick failed");
         }
 
         // ── Session auto-retry ──────────────────────────────────────────
