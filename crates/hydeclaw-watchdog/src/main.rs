@@ -1,6 +1,7 @@
 mod alerter;
 mod checker;
 mod config;
+mod inactivity;
 mod recovery;
 mod resources;
 mod status;
