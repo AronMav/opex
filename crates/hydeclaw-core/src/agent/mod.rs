@@ -28,7 +28,6 @@ pub(crate) mod thinking;
 pub mod subagent_state;
 pub mod session_agent_pool;
 pub mod tool_loop;
-pub mod request_context;
 pub(crate) mod url_tools;
 pub mod mention_parser;
 pub mod workspace;
