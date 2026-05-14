@@ -110,12 +110,10 @@ Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/p
   subagents
 - `blocked_tools_extra = [...]` — extends the built-in deny-list
   (`SUBAGENT_DENIED_TOOLS`) at runtime AND in the visibility list
-- `blocked_tools_override = [...]` — **NOT honoured at runtime** (audit
-  2026-05-08, groups T+FF). The built-in `SUBAGENT_DENIED_TOOLS` cannot be
-  weakened by subagents. The setting is retained on disk but ignored by
-  `runtime_subagent_denylist` (used by both the subagent runner and the
-  visibility list). See `docs/ARCHITECTURE.md` §DelegationConfig for the
-  rationale.
+  The built-in `SUBAGENT_DENIED_TOOLS` cannot be weakened by subagents —
+  `runtime_subagent_denylist` hard-anchors that constant (used by both the
+  subagent runner and the visibility list). See `docs/ARCHITECTURE.md`
+  §DelegationConfig for the rationale.
 
 ### Gateway (`src/gateway/`)
 

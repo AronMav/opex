@@ -884,10 +884,6 @@ pub struct DelegationConfig {
     #[serde(default)]
     pub blocked_tools_extra: Vec<String>,
 
-    /// If non-empty, REPLACES SUBAGENT_DENIED_TOOLS entirely. Use with care.
-    #[serde(default)]
-    pub blocked_tools_override: Vec<String>,
-
     /// When `Some(true|false)`, overrides parent's tool_dispatcher.enabled
     /// for subagents spawned by this agent. When `None`, subagent inherits
     /// parent's setting.
@@ -902,7 +898,6 @@ impl Default for DelegationConfig {
         Self {
             max_depth: default_max_depth(),
             blocked_tools_extra: Vec::new(),
-            blocked_tools_override: Vec::new(),
             subagent_dispatcher_enabled: None,
         }
     }
@@ -923,14 +918,6 @@ impl DelegationConfig {
             );
         }
 
-        if !self.blocked_tools_override.is_empty() && !self.blocked_tools_extra.is_empty() {
-            errors.push(
-                "set either blocked_tools_extra OR blocked_tools_override, not both — \
-                 extra is silently ignored when override is non-empty"
-                .to_string()
-            );
-        }
-
         // Tool name regex: [a-zA-Z0-9_-]+ (project convention).
         // We warn on violations but don't reject — operator may have YAML/MCP tools not yet loaded.
         // Validation here is best-effort syntactic — semantic existence check happens at filter time.
@@ -939,7 +926,7 @@ impl DelegationConfig {
                 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         };
 
-        for name in self.blocked_tools_extra.iter().chain(self.blocked_tools_override.iter()) {
+        for name in self.blocked_tools_extra.iter() {
             if !valid_tool_name(name) {
                 errors.push(format!(
                     "invalid tool name {name:?} (expected [a-zA-Z0-9_-]+ — case sensitive)"
@@ -2571,7 +2558,6 @@ foo_bar_baz = 42
         let cfg = DelegationConfig {
             max_depth: 0,
             blocked_tools_extra: vec![],
-            blocked_tools_override: vec![],
             subagent_dispatcher_enabled: None,
         };
         let errors = cfg.validate();
@@ -2580,24 +2566,10 @@ foo_bar_baz = 42
     }
 
     #[test]
-    fn delegation_validate_extra_with_override_rejected() {
-        let cfg = DelegationConfig {
-            max_depth: 1,
-            blocked_tools_extra: vec!["foo".into()],
-            blocked_tools_override: vec!["bar".into()],
-            subagent_dispatcher_enabled: None,
-        };
-        let errors = cfg.validate();
-        assert!(!errors.is_empty(), "extra+override combo must be rejected");
-        assert!(errors.iter().any(|e| e.contains("extra OR blocked_tools_override")));
-    }
-
-    #[test]
     fn delegation_validate_invalid_tool_name_rejected() {
         let cfg = DelegationConfig {
             max_depth: 1,
             blocked_tools_extra: vec!["valid_tool".into(), "bad name".into()],
-            blocked_tools_override: vec![],
             subagent_dispatcher_enabled: None,
         };
         let errors = cfg.validate();
@@ -2616,7 +2588,6 @@ foo_bar_baz = 42
         let cfg = DelegationConfig {
             max_depth: 2,
             blocked_tools_extra: vec!["code_exec".into(), "process".into()],
-            blocked_tools_override: vec![],
             subagent_dispatcher_enabled: None,
         };
         assert!(cfg.validate().is_empty());

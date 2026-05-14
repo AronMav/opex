@@ -160,9 +160,8 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// Agent's effective tool-policy deny list (consumed by trigger-hint
     /// logic and extension-list assembly). Returns the union of
     /// `agent.tools.deny` and the delegation-computed deny list
-    /// (`SUBAGENT_DENIED_TOOLS` + `blocked_tools_extra`, or
-    /// `blocked_tools_override` when set). Returns an empty Vec when no
-    /// policy is set and delegation defaults are empty.
+    /// (`SUBAGENT_DENIED_TOOLS` + `blocked_tools_extra`).
+    /// Returns an empty Vec when no policy is set and delegation defaults are empty.
     fn cfg_deny_list(&self) -> Vec<String>;
 
     /// Optional MCP registry for tool discovery (consumed by extension-list

@@ -199,7 +199,7 @@ pub async fn execute_tool_calls_partitioned(
     persist_ctx: Option<&ToolPersistCtx<'_>>,
     policy: Option<&crate::config::AgentToolPolicy>,
     // `extra_deny`: subagent isolation list applied at dispatcher rewrite.
-    // Subagent callers pass parent's compute_denied_tools(&parent.delegation)
+    // Subagent callers pass runtime_subagent_denylist(&parent.delegation)
     // so tool_use(action=call, name=X) cannot reach a tool blocked at the
     // delegation layer. Non-subagent callers pass &[].
     extra_deny: &[String],

@@ -452,9 +452,6 @@ deny = ["code_exec", "workspace_delete"]
 |------|-----|--------|----------|
 | `max_depth` | u8 | `1` | Максимальная глубина рекурсивного порождения субагентов. `1` = субагенты НЕ могут порождать дальнейших. Минимум `1`. |
 | `blocked_tools_extra` | Vec\<String\> | `[]` | Добавить в deny-list субагентов (расширяет `SUBAGENT_DENIED_TOOLS`) |
-| `blocked_tools_override` | Vec\<String\> | `[]` | Если непусто — ЗАМЕНЯЕТ весь `SUBAGENT_DENIED_TOOLS` |
-
-> Нельзя задавать `blocked_tools_extra` и `blocked_tools_override` одновременно.
 
 ```toml
 [agent.delegation]

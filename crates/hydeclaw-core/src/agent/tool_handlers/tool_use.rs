@@ -50,12 +50,10 @@ fn deny_list(deps: &ToolDeps<'_>) -> Vec<String> {
     // ToolDeps has no subagent-context flag, so we cannot conditionally apply
     // the subagent deny list at this layer.
     //
-    // Audit 2026-05-08: this is now an INFORMATIONAL concern only, not an
-    // exploit path. A subagent that sees `code_exec` in its catalogue still
-    // cannot invoke it: the actual call goes through
-    // `dispatcher::rewrite_tool_use_calls` which checks `extra_deny` (the
-    // parent's `compute_denied_tools` list) before producing a Direct call.
-    // See `pipeline::parallel::execute_tool_calls_partitioned` and
+    // The actual invocation goes through `dispatcher::rewrite_tool_use_calls`
+    // which checks `extra_deny` (the parent's `runtime_subagent_denylist`)
+    // before producing a Direct call. See
+    // `pipeline::parallel::execute_tool_calls_partitioned` and
     // `agent::dispatcher::rewrite::rewrite_one`.
     deps.cfg.agent.tools.as_ref()
         .map(|p| p.deny.clone())

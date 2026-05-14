@@ -13,8 +13,7 @@ use crate::config::DelegationConfig;
 /// `code_exec` is included even though Docker provides a sandbox, because:
 ///   1. parents are the only callers expected to run arbitrary code,
 ///   2. Setup wizard's auto-deny for non-base agents already lists code_exec
-///      — subagents inherit that intent: dangerous-by-default, opt-in via
-///      `[agent.delegation] blocked_tools_override = []` if needed.
+///      — subagents inherit that intent: dangerous-by-default.
 pub const SUBAGENT_DENIED_TOOLS: &[&str] = &[
     "workspace_delete",
     "workspace_rename",
@@ -24,51 +23,12 @@ pub const SUBAGENT_DENIED_TOOLS: &[&str] = &[
     "code_exec",
 ];
 
-/// Compute effective deny list for subagent tool filtering, given a delegation config.
-///
-/// Logic:
-/// - If `blocked_tools_override` is non-empty: use it as the complete deny list
-///   (replaces SUBAGENT_DENIED_TOOLS)
-/// - Otherwise: SUBAGENT_DENIED_TOOLS + blocked_tools_extra (deduplicated)
-///
-/// **Deprecated for runtime use.** Audit 2026-05-08 (6th pass) found that
-/// honouring `blocked_tools_override` in any runtime path (visibility list,
-/// dispatcher rewrite) lets a subagent author weaken SUBAGENT_DENIED_TOOLS.
-/// All runtime call sites now use `runtime_subagent_denylist` instead. This
-/// function is retained only because its `blocked_tools_override` semantics
-/// are tested in this module — if a future caller wants the
-/// "override-respecting" semantics for an operator-facing view (not runtime),
-/// they can still use it explicitly.
-#[allow(dead_code)]
-pub fn compute_denied_tools(cfg: &DelegationConfig) -> Vec<String> {
-    if !cfg.blocked_tools_override.is_empty() {
-        return cfg.blocked_tools_override.clone();
-    }
-
-    let mut denied: Vec<String> = SUBAGENT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect();
-    for extra in &cfg.blocked_tools_extra {
-        if !denied.contains(extra) {
-            denied.push(extra.clone());
-        }
-    }
-    denied
-}
-
 /// Strict subagent runtime deny list — always SUBAGENT_DENIED_TOOLS, regardless
 /// of what the subagent's own `[agent.delegation]` config says.
 ///
-/// Audit 2026-05-08 (4th pass) found that the runner reached for the
-/// SUBAGENT'S OWN `compute_denied_tools(&executor.cfg().agent.delegation)`,
-/// which let a subagent author set `blocked_tools_override = ["x"]` to
-/// effectively grant themselves every dangerous tool (cron, secret_set,
-/// process, code_exec, …) — `blocked_tools_override` was meant for the
-/// SPAWNING parent to apply restrictions, not for the subagent to weaken
-/// its own. Until parent's delegation is plumbed through the spawn chain
-/// (live agents in `session_agent_pool` only carry the subagent's engine
-/// today), the runner-side deny list is hard-anchored to SUBAGENT_DENIED_TOOLS.
-///
-/// The subagent is still allowed to add its own additional restrictions via
-/// `blocked_tools_extra` (more, never fewer).
+/// Hard-anchored to SUBAGENT_DENIED_TOOLS so the subagent cannot weaken its
+/// own safety net. The subagent may only add further restrictions via
+/// `blocked_tools_extra` (more, never fewer). Audit 2026-05-08, groups T and FF.
 pub fn runtime_subagent_denylist(cfg: &DelegationConfig) -> Vec<String> {
     let mut denied: Vec<String> = SUBAGENT_DENIED_TOOLS.iter().map(|s| s.to_string()).collect();
     for extra in &cfg.blocked_tools_extra {
@@ -800,89 +760,13 @@ mod tests {
         assert_eq!(out, "", "no title + no content → empty string, not Err");
     }
 
-    // ── compute_denied_tools ────────────────────────────────────────────────
-
-    #[test]
-    fn compute_denied_tools_default_matches_const() {
-        let denied = compute_denied_tools(&DelegationConfig::default());
-        for tool in SUBAGENT_DENIED_TOOLS {
-            assert!(denied.iter().any(|d| d == *tool),
-                "default DelegationConfig must include all SUBAGENT_DENIED_TOOLS, missing: {}", tool);
-        }
-        assert_eq!(denied.len(), SUBAGENT_DENIED_TOOLS.len(),
-            "default has no extras, length must match SUBAGENT_DENIED_TOOLS");
-    }
+    // ── runtime_subagent_denylist ──────────────────────────────────────────
 
     #[test]
     fn default_delegation_blocks_recursion() {
         let cfg = DelegationConfig::default();
         assert_eq!(cfg.max_depth, 1, "default max_depth must be 1 (no nested subagents by default)");
     }
-
-    #[test]
-    fn extra_blocked_tools_extend_default() {
-        let cfg = DelegationConfig {
-            max_depth: 1,
-            blocked_tools_extra: vec!["code_exec".into(), "cron".into()], // cron is already in default
-            blocked_tools_override: vec![],
-            subagent_dispatcher_enabled: None,
-        };
-        let denied = compute_denied_tools(&cfg);
-        // All default tools must still be present
-        for default in SUBAGENT_DENIED_TOOLS {
-            assert!(denied.iter().any(|d| d == *default),
-                "default-denied {} must remain when extra is set", default);
-        }
-        // Extra entry is added
-        assert!(denied.iter().any(|d| d == "code_exec"),
-            "code_exec must be added via blocked_tools_extra");
-        // Duplicate "cron" must NOT appear twice
-        assert_eq!(denied.iter().filter(|d| *d == "cron").count(), 1,
-            "duplicate entries in blocked_tools_extra must be deduped against default list");
-    }
-
-    #[test]
-    fn override_replaces_default_deny_list_entirely() {
-        let cfg = DelegationConfig {
-            max_depth: 1,
-            blocked_tools_extra: vec!["this_should_be_ignored".into()],
-            blocked_tools_override: vec!["only_this".into()],
-            subagent_dispatcher_enabled: None,
-        };
-        let denied = compute_denied_tools(&cfg);
-        // Only override entries
-        assert_eq!(denied, vec!["only_this".to_string()]);
-        // Default tools NOT present (override replaces)
-        for default in SUBAGENT_DENIED_TOOLS {
-            assert!(!denied.iter().any(|d| d == *default),
-                "default-denied {} must be replaced by override", default);
-        }
-        // Extra ignored when override set
-        assert!(!denied.iter().any(|d| d == "this_should_be_ignored"),
-            "blocked_tools_extra must be IGNORED when blocked_tools_override is non-empty");
-    }
-
-    #[test]
-    fn empty_override_falls_back_to_default_plus_extra() {
-        let cfg = DelegationConfig {
-            max_depth: 1,
-            blocked_tools_extra: vec!["code_exec".into()],
-            blocked_tools_override: vec![],  // empty = fall back to default + extra
-            subagent_dispatcher_enabled: None,
-        };
-        let denied = compute_denied_tools(&cfg);
-        assert!(denied.iter().any(|d| d == "code_exec"));
-        assert!(denied.iter().any(|d| d == "workspace_delete"),
-            "empty override must NOT bypass default deny list");
-    }
-
-    // ── runtime_subagent_denylist ──────────────────────────────────────────
-    //
-    // Audit 2026-05-08 (5th pass): security-critical helper added in the 4th
-    // pass had no tests. These regressions guard the contract that
-    // `blocked_tools_override` cannot weaken SUBAGENT_DENIED_TOOLS at runtime,
-    // even though `compute_denied_tools` (used elsewhere for visibility) still
-    // honours it.
 
     #[test]
     fn runtime_denylist_default_matches_const() {
@@ -899,7 +783,6 @@ mod tests {
         let cfg = DelegationConfig {
             max_depth: 1,
             blocked_tools_extra: vec!["custom_tool".into()],
-            blocked_tools_override: vec![],
             subagent_dispatcher_enabled: None,
         };
         let denied = runtime_subagent_denylist(&cfg);
@@ -911,30 +794,10 @@ mod tests {
     }
 
     #[test]
-    fn runtime_denylist_ignores_blocked_tools_override() {
-        // Critical regression guard: a subagent author setting `override`
-        // MUST NOT be able to weaken the runtime safety net.
-        let cfg = DelegationConfig {
-            max_depth: 1,
-            blocked_tools_extra: vec![],
-            blocked_tools_override: vec!["only_this".into()],
-            subagent_dispatcher_enabled: None,
-        };
-        let denied = runtime_subagent_denylist(&cfg);
-        for tool in SUBAGENT_DENIED_TOOLS {
-            assert!(denied.iter().any(|d| d == *tool),
-                "runtime denylist must NOT honour blocked_tools_override — '{tool}' should still be denied");
-        }
-        assert!(!denied.iter().any(|d| d == "only_this"),
-            "runtime denylist must not pull in override-only entries");
-    }
-
-    #[test]
     fn runtime_denylist_dedupes_extra_against_const() {
         let cfg = DelegationConfig {
             max_depth: 1,
             blocked_tools_extra: vec!["cron".into()],  // already in SUBAGENT_DENIED_TOOLS
-            blocked_tools_override: vec![],
             subagent_dispatcher_enabled: None,
         };
         let denied = runtime_subagent_denylist(&cfg);

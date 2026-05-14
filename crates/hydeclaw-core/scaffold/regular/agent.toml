@@ -6,6 +6,4 @@
 # [agent.delegation]
 # max_depth = 1                       # Default. Subagents CANNOT recurse.
 # blocked_tools_extra = ["code_exec"] # Added on top of built-in deny list (runtime + visibility).
-# blocked_tools_override = []          # NOT honoured at runtime. SUBAGENT_DENIED_TOOLS cannot
-#                                      # be weakened. See docs/ARCHITECTURE.md, audit
-#                                      # 2026-05-08 groups T and FF.
+#                                     # SUBAGENT_DENIED_TOOLS cannot be weakened.
