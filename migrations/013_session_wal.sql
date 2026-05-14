@@ -1,5 +1,8 @@
--- Session Write-Ahead Log: journal table for session lifecycle events.
--- Used for crash recovery instead of injecting synthetic "[interrupted]" messages.
+-- Session timeline (historical name: session_events, renamed by m049).
+-- Chronological log of session lifecycle events. Used for LoopDetector
+-- warm-up after restart, diagnostics, and audit. NOT a Write-Ahead Log:
+-- no replay-based recovery. The "WAL" framing this migration originally
+-- carried was misleading and was removed by m049 + accompanying docs.
 
 CREATE TABLE session_events (
     id         BIGSERIAL PRIMARY KEY,

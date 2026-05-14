@@ -74,7 +74,7 @@ Startup sequence:
 1. Load `.env` from binary dir (auto-generate if missing with `HYDECLAW_AUTH_TOKEN`, `HYDECLAW_MASTER_KEY`, `DATABASE_URL`)
 2. Load `config/hydeclaw.toml`
 3. Run sqlx migrations (`migrations/*.sql`) automatically
-4. Recover stale `session_events` WAL entries from previous crash
+4. Stale `session_timeline` entries from a previous crash are not replayed; LoopDetector is warmed from tool_end events only.
 5. Bootstrap `SecretsManager` (decrypt `secrets` table into in-memory cache)
 6. Detect `embed_dim` from Toolgate (auto-probe at startup)
 7. Load agents from `config/agents/{Name}.toml`, build `Arc<AgentEngine>` per agent
@@ -147,7 +147,7 @@ Entry point: `toolgate/app.py`.
 | `tool_executor.rs` | `impl ToolExecutor for AgentEngine`: routes single tool call to pipeline |
 | `yaml_tool_runner.rs` | YAML tool HTTP execution logic |
 | `approval_flow.rs` | Approval gate: `check_needs_approval`, `wait_for_approval` |
-| `loop_detector_integration.rs` | `LoopDetector` warm-up from WAL on session entry |
+| `loop_detector_integration.rs` | `LoopDetector` warm-up from session timeline on session entry |
 | `stream.rs` | `ProcessingGuard`, `ProcessingPhase` enum |
 
 `AgentConfig` (`crates/hydeclaw-core/src/agent/agent_config.rs`) is an immutable snapshot holding all engine dependencies, grouped into five concern areas:
@@ -186,12 +186,12 @@ Production sinks: `SseSink` (SSE), `ChannelStatusSink` (channel), `ChunkSink` (p
 **`bootstrap.rs`** — session entry:
 1. Resolve or create session (check `resume_session_id`, handle `force_new_session`)
 2. Check `pending_split` compaction state → `maybe_split_session()` creates child session B, marks parent A with `end_reason='compression'`
-3. Persist user message to DB, write WAL `running` event (with single retry)
+3. Persist user message to DB, write timeline `running` event (with single retry)
 4. Build `ProcessingGuard` (marks session in-flight), `SessionLifecycleGuard`
 5. Load `Compressor` state from `sessions.compaction_state` JSONB
 6. Detect and handle slash-commands → `command_output` early exit
 7. Load session history (`max_history_messages`, default 50), assemble `tools` list
-8. Warm up `LoopDetector` from WAL replay
+8. Warm up `LoopDetector` from session timeline (tool_end events only)
 9. Return `BootstrapOutcome { session_id, messages, tools, loop_detector, compressor, ... }`
 
 **`execute.rs`** — main LLM + tools loop:
@@ -214,7 +214,7 @@ for iteration in 0..loop_config.effective_max_iterations():
 
 **`finalize.rs`** — single exit point:
 1. Persist final assistant message to DB (or partial on interruption)
-2. Transition `SessionLifecycleGuard`: WAL `done|failed|interrupted`
+2. Transition `SessionLifecycleGuard`: timeline `done|failed|interrupted`
 3. Record `session_failures` row on `Failed` status
 4. Emit `notify_agent_error` / `notify_iteration_limit` UI notifications
 5. Enqueue knowledge extraction (background `tokio::spawn`, ≥5 messages)
@@ -321,22 +321,22 @@ POST /api/chat (new)
        │
        ▼
 bootstrap(): resolve/create session
-       │ WAL: "running"
+       │ timeline: "running"
        ▼
 execute(): LLM + tools loop
        │   ── tool_calls ──► execute_tool_calls_partitioned()
-       │                         ├── WAL: tool_start / tool_end per call
+       │                         ├── timeline: tool_start / tool_end per call
        │                         └── tool results persisted via detached spawn
        ▼
 finalize(): persist assistant message
-       │ WAL: "done" | "failed" | "interrupted"
+       │ timeline: "done" | "failed" | "interrupted"
        │ session_failures row on Failed
        ▼
 background: knowledge extraction (≥5 messages)
             compressor state saved to sessions.compaction_state
 ```
 
-**Session WAL** (`session_events` table, migration m013): logs lifecycle transitions — `running`, `tool_start`, `tool_end`, `done`, `failed`, `interrupted`. Retention: 7 days by default (`cleanup.session_events_retention_days`), cleaned in batches of 5000 rows hourly.
+**Session timeline** (`session_timeline` table, migration m013 + renamed by m049): chronological log of session lifecycle events — `running`, `tool_start`, `tool_end`, `done`, `failed`, `interrupted`. Used for LoopDetector warm-up after restart (preserves loop-break decisions across crashes), diagnostics, audit, and the UI Timeline view. Not a Write-Ahead Log: no replay-based recovery; completed work is preserved by persisted side effects, not event replay. Retention: 7 days by default (`cleanup.session_timeline_retention_days`), cleaned in batches of 5000 rows hourly.
 
 **Message branching** (migration m012): `parent_message_id` links each message to its predecessor; `branch_from_message_id` marks fork points. Both nullable (NULL = trunk). Enables conversation tree navigation.
 
@@ -431,7 +431,7 @@ Returns process-wide resilience metrics (Phase 62 + Phase 65):
 - `auth_rate_limiter_size`, `request_rate_limiter_size`, `stream_registry_size`
 - `db_pool_total`, `db_pool_idle`
 - `memory_worker_heartbeat_age_secs` — seconds since memory worker last processed a task (-1 = unknown)
-- `session_events_table_size_bytes`
+- `session_timeline_table_size_bytes`
 - `uptime_secs`
 
 ---
@@ -733,7 +733,7 @@ run_once, run_at, tool_policy (JSONB override)
 |-----|----------|-------------|
 | Memory decay | 03:00 UTC daily | `relevance_score *= exp(-decay)` on raw chunks |
 | Memory cleanup | 08:00 UTC daily | Delete chunks with `relevance_score < 0.1` AND >180 days old |
-| Session cleanup | hourly | Prune `session_events` WAL rows older than `retention_days` |
+| Session cleanup | hourly | Prune `session_timeline` rows older than `retention_days` |
 | Session age prune | 05:00 UTC daily | Delete oldest sessions exceeding `max_sessions_per_agent` |
 | Backup | configurable (default 05:00 UTC) | `pg_dump` via Docker container |
 | Curator | configurable (default Sunday 03:00) | Skill review and repair pipeline |
@@ -756,7 +756,7 @@ PostgreSQL 17 + pgvector. Migrations in `migrations/*.sql` (sqlx). Auto-run on s
 |-------|-------------|-----------------|
 | `sessions` | Chat sessions | `id`, `agent_id`, `status` (running/done/failed/interrupted), `parent_session_id` (compression chain), `end_reason` ('compression' or NULL), `compaction_state` (JSONB with `CompressorState`) |
 | `messages` | Individual messages | `id`, `session_id`, `role`, `content`, `parent_message_id`, `branch_from_message_id`, `is_mirror` (bool) |
-| `session_events` | WAL journal | `session_id`, `event_type` (running/tool_start/tool_end/done/failed), `created_at` |
+| `session_timeline` | chronological lifecycle log | `session_id`, `event_type` (running/tool_start/tool_end/done/failed), `created_at` |
 | `session_failures` | Terminal failure log | `session_id`, `failure_kind`, `error_message`, `last_tool_name`, `llm_provider`, `llm_model`, `iteration_count` |
 | `memory_chunks` | Vector memory | `id`, `agent_id`, `scope` (agent name/'shared'), `content`, `embedding` (halfvec), `fts_vector` (tsvector), `relevance_score`, `pinned`, `accessed_at` |
 | `memory_tasks` | Worker task queue | `id`, `task_type`, `status` (pending/processing/done/failed), `payload` (JSONB) |
