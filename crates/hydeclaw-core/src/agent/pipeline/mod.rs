@@ -1,7 +1,7 @@
 //! Pipeline — free functions for each step of the agent execution loop.
 //!
-//! Each function takes explicit `(&AgentConfig, &AgentState, &mut RequestContext)`
-//! dependencies instead of `&self` on `AgentEngine`.
+//! Each function takes an explicit `CommandContext` parameter (see below)
+//! instead of `&self` on `AgentEngine`.
 
 /// Parameter object bundling the three decomposed AgentEngine pieces
 /// plus the immutable subagent recursion depth for the current call.
