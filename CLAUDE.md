@@ -101,7 +101,7 @@ Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/p
 - `base = true` — system agent: can't be renamed/deleted, runs on host (no sandbox), can write to service dirs and tools
 - `base = true` — cannot be renamed/deleted via API; SOUL.md + IDENTITY.md are immutable
 - Both flags are **never** changed via PUT API — preserved from disk on every update
-- Agent rename updates 19 DB tables in a transaction (sessions, messages, usage_log, webhooks, etc.)
+- Agent rename updates ~20 DB tables in a transaction (19 in `TABLES_WITH_AGENT_ID_NOT_NULL` + the nullable `messages.agent_id`; plus `agent_channels.agent_name` handled separately)
 
 **Subagent delegation:** `[agent.delegation]` section (optional) controls how the
 `agent` tool spawns subagents:
@@ -117,7 +117,7 @@ Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/p
 
 ### Gateway (`src/gateway/`)
 
-Axum HTTP API on port 18789. **Sub-router pattern:** 27 handler modules each export `pub(crate) fn routes() -> Router<AppState>`; `mod.rs` composes them via `.merge()`. Key handlers:
+Axum HTTP API on port 18789. **Sub-router pattern:** 31 handler modules each export `pub(crate) fn routes() -> Router<AppState>`; `mod.rs` composes them via `.merge()`. Key handlers:
 
 - `agents.rs` — CRUD for agent configs; sorts base agents first
 - `chat/` — SSE streaming chat split by route family. `chat/mod.rs` (`routes()` only) merges:
