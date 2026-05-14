@@ -2,10 +2,8 @@
 //!
 //! Five orthogonal opt-in policies — fallback provider, auto-continue,
 //! session-corruption recovery, tool-policy override, forced final call —
-//! that today live only inside `engine::stream::handle_isolated`. This
-//! module re-expresses them as **data-only** policy structs bundled into
-//! `BehaviourLayers`, which `pipeline::execute` consults at well-defined
-//! insertion points.
+//! expressed as **data-only** policy structs bundled into `BehaviourLayers`,
+//! which `pipeline::execute` consults at well-defined insertion points.
 //!
 //! See `docs/architecture/2026-05-06-llm-loop-unification-plan.md` for the
 //! full divergent-feature map (Appendix A) and the phased delivery plan
@@ -175,13 +173,12 @@ pub struct ForcedFinalCallPolicy;
 ///
 /// `default()` (and the SSE caller) leaves every layer `None` — the loop
 /// runs with vanilla semantics, no fallback, no auto-continue, no session
-/// recovery. The cron caller calls `for_cron(...)` to populate the same
-/// set of layers `handle_isolated` enables today.
+/// recovery. The cron caller calls `for_cron(...)` to populate the layers
+/// that RPC-style callers need (see `handle_isolated_via_pipeline`).
 ///
 /// Construction is cheap (clones of small structs); the runtime cost
 /// inside `execute()` is one `if let Some(_)` check per layer per
-/// iteration — the same shape as today's branching, just localised to
-/// well-defined insertion points.
+/// iteration — localised to well-defined insertion points.
 #[derive(Clone, Default)]
 pub struct BehaviourLayers {
     pub fallback_provider: Option<FallbackPolicy>,
@@ -197,13 +194,13 @@ impl BehaviourLayers {
         Self::default()
     }
 
-    /// The same set of layers `engine::stream::handle_isolated` enables
-    /// today, for use by cron jobs and other RPC-style callers.
+    /// Populates the layer set used by `handle_isolated_via_pipeline`
+    /// (cron jobs and other RPC-style callers).
     ///
     /// `tool_policy_override` is sourced from `msg.tool_policy_override`
     /// (the optional JSON blob carried by the IncomingMessage); if the
     /// blob is absent or malformed, the layer stays `None` so behaviour
-    /// matches today's "no override applied" path.
+    /// matches the "no override applied" path.
     pub fn for_cron(
         loop_config: &crate::agent::tool_loop::ToolLoopConfig,
         msg: &hydeclaw_types::IncomingMessage,
@@ -303,7 +300,7 @@ mod tests {
     }
 
     /// `for_cron` populates all five layers with the loop_config-derived
-    /// values; mirrors what `handle_isolated` enables today.
+    /// values; mirrors what `handle_isolated_via_pipeline` enables.
     #[test]
     fn for_cron_populates_all_five_layers() {
         let loop_config = crate::agent::tool_loop::ToolLoopConfig {
@@ -332,8 +329,8 @@ mod tests {
 
     /// When `tool_policy_override` is the wrong shape (e.g. a JSON
     /// array instead of an object), the layer falls through to None
-    /// instead of failing — matches the legacy "best-effort" handling
-    /// in handle_isolated.
+    /// instead of failing — matches the "best-effort" handling
+    /// in `handle_isolated_via_pipeline`.
     ///
     /// Note: every field on `AgentToolPolicy` is `#[serde(default)]`,
     /// so an empty object `{}` or any object with unknown keys
