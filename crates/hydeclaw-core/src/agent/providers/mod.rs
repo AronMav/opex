@@ -20,7 +20,6 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use hydeclaw_types::{LlmResponse, Message, MessageRole, ToolDefinition};
-use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 

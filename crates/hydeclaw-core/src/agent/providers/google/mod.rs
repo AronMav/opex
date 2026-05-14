@@ -1,7 +1,10 @@
 //! Google Gemini API provider —
 //! extracted from providers.rs for readability.
 
-use super::{Deserialize, async_trait, Arc, SecretsManager, ModelOverride, Message, MessageRole, LlmProvider, ToolDefinition, Result, LlmResponse, mpsc};
+use super::{async_trait, Arc, SecretsManager, ModelOverride, Message, MessageRole, LlmProvider, ToolDefinition, Result, LlmResponse, mpsc};
+
+mod response;
+use response::GeminiResponse;
 
 // ── Google Gemini API Provider ──────────────────────────────────────────────
 
@@ -157,50 +160,6 @@ pub(super) fn messages_to_gemini_format(messages: &[Message]) -> (Option<String>
         .collect();
 
     (system, contents)
-}
-
-#[derive(Debug, Deserialize)]
-struct GeminiResponse {
-    candidates: Option<Vec<GeminiCandidate>>,
-    #[serde(rename = "usageMetadata")]
-    usage_metadata: Option<GeminiUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeminiCandidate {
-    content: Option<GeminiContent>,
-    #[serde(rename = "finishReason")]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeminiContent {
-    parts: Option<Vec<GeminiPart>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeminiPart {
-    text: Option<String>,
-    #[serde(rename = "functionCall")]
-    function_call: Option<GeminiFunctionCall>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeminiFunctionCall {
-    name: String,
-    args: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GeminiUsage {
-    #[serde(rename = "promptTokenCount")]
-    prompt_token_count: Option<u32>,
-    #[serde(rename = "candidatesTokenCount")]
-    candidates_token_count: Option<u32>,
-    #[serde(rename = "thoughtsTokenCount", default)]
-    thoughts_token_count: Option<u32>,
-    #[serde(rename = "cachedContentTokenCount", default)]
-    cached_content_token_count: Option<u32>,
 }
 
 #[async_trait]
@@ -618,24 +577,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod golden_fixtures {
-    use super::*;
-
-    /// Regression: Gemini response with `safetyRatings` block must parse
-    /// without erroring (the field is ignored, not required).
-    #[test]
-    fn safety_ratings_block_does_not_crash_parser() {
-        let raw = r#"{
-            "candidates": [{
-                "content": {"role": "model", "parts": [{"text": "hi"}]},
-                "safetyRatings": [
-                    {"category": "HARM_CATEGORY_HARASSMENT", "probability": "NEGLIGIBLE"}
-                ]
-            }],
-            "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 1, "totalTokenCount": 6}
-        }"#;
-        let parsed: GeminiResponse = serde_json::from_str(raw).unwrap();
-        assert_eq!(parsed.candidates.as_ref().map(|c| c.len()), Some(1));
-    }
-}
