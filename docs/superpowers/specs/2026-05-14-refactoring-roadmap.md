@@ -2,6 +2,7 @@
 
 **Date:** 2026-05-14
 **Status:** approved decomposition map (no implementation yet — each wave gets its own spec → plan → impl cycle)
+**Context:** follow-up to `docs/architecture/2026-05-06-architecture-review.md`, which flagged "six handler modules >1000 lines" and "decomposition work needed before scaling". This roadmap turns those findings into a concrete sequenced plan.
 
 ## Goal
 
@@ -29,23 +30,26 @@ Each wave passes the same gate:
 
 - `cargo clippy --all-targets -- -D warnings` clean
 - `cargo test --workspace` clean against the test DB (existing baseline failures unchanged)
-- `cargo test --no-default-features` and `--features otel` clean (rustls invariant)
+- rustls invariant holds (`cargo tree --workspace` shows no `openssl-sys` / `native-tls`; verified by existing CI jobs `rustls-only (default)` and `rustls-only (otel)`)
 - Every commit independently builds — no half-merged states
 - Behaviour-preserving: no SSE event field added/removed, no DB column touched, no TOML key renamed
 - Each "split" commit moves code without rewriting it; rewrites are separate follow-up commits if needed
-- Open-PR final review summarises new module tree
+- Wave-end (acceptance) commit message summarises the new module tree; this repo pushes direct to `master` (no PR workflow)
+- No public surface (re-exports, trait shapes) changes mid-wave — only at the wave-final cleanup commit
 
 ## Waves
 
 ### Wave 1 — providers
 
-**Files (4906 LoC total → target ~10 modules, average ~400-500 LoC):**
+**Files (3996 LoC total → target ~8 modules, average ~400-500 LoC):**
 
-- `crates/hydeclaw-core/src/agent/providers/anthropic.rs` — 1643 LoC
-- `crates/hydeclaw-core/src/agent/providers/openai.rs` — 1230 LoC
-- `crates/hydeclaw-core/src/agent/providers/google.rs`
-- `crates/hydeclaw-core/src/agent/providers/claude_cli.rs`
-- `crates/hydeclaw-core/src/agent/providers/http.rs`
+| File                                                    | LoC  | Action                                                       |
+| ------------------------------------------------------- | ---- | ------------------------------------------------------------ |
+| `crates/hydeclaw-core/src/agent/providers/anthropic.rs` | 1643 | full split (5 modules)                                       |
+| `crates/hydeclaw-core/src/agent/providers/openai.rs`    | 1230 | full split (5 modules)                                       |
+| `crates/hydeclaw-core/src/agent/providers/google.rs`    | 619  | optional partial split (2-3 modules) if W1 brainstorm agrees |
+| `crates/hydeclaw-core/src/agent/providers/http.rs`      | 350  | leave as-is (already under threshold)                        |
+| `crates/hydeclaw-core/src/agent/providers/claude_cli.rs`| 154  | leave as-is                                                  |
 
 **Target split per adapter:**
 
@@ -130,6 +134,8 @@ Same shape for `openai/`, smaller wedges for `google/`, `claude_cli/`, `http/`.
 
 **Risk:** medium. Serde and sqlx are sensitive to field order and column order. The fast feedback loop is `cargo test`; the slow loop is "did I break TOML deserialization for a niche config section". Drift-checks help here.
 
+> The module layouts above are **proposed targets**; each W3 sub-spec re-opens them via its own brainstorm (in particular: is `tools/yaml/` the right home, should `[tools_cache]` nest under `[tools]`, etc. — see Open questions).
+
 **Test guards:**
 
 - `cargo test -p hydeclaw-core --bin hydeclaw-core config::tests` (parse round-trip)
@@ -166,10 +172,11 @@ Same shape for `openai/`, smaller wedges for `google/`, `claude_cli/`, `http/`.
 
 **Test guards:**
 
-- `tests/integration_data_layer_indexes.rs`, `integration_data_layer_approval.rs`
 - `tests/integration_gateway_no_leak.rs`
-- All `gateway::handlers::*::tests`
-- `scheduler::tests` (already comprehensive)
+- `tests/integration_approval_id.rs`, `integration_approval_race.rs`, `integration_approval_security.rs` (handler-layer behaviour)
+- `tests/integration_csp_report.rs`, `integration_mock_provider.rs`
+- All `gateway::handlers::*::tests` (per-handler unit suites)
+- `scheduler::tests` (53 tests; already comprehensive, including T1 additions)
 - New: a "boot smoke" integration test for `main.rs` — spawn the binary against a fixture config + ephemeral postgres, hit `/api/doctor`, assert all 16 checks `ok`.
 
 **Discovery commit:** add the boot smoke test before splitting `main.rs`.
@@ -198,7 +205,7 @@ Same shape for `openai/`, smaller wedges for `google/`, `claude_cli/`, `http/`.
 - `ui/src/__tests__/*.test.{ts,tsx}` (existing vitest suite)
 - New: per-extracted-component unit test if logic is non-trivial
 
-**Effort:** ~4-5 days, can run in parallel with any Rust wave (no shared files).
+**Effort:** ~5-7 days, can run in parallel with any Rust wave (no shared files). The wider range vs Rust waves reflects the absence of a Playwright E2E baseline — visual regressions require manual smoke.
 
 ---
 
@@ -251,7 +258,7 @@ The wave is "done" when every extract commit independently builds + tests + clip
 
 ## Cross-cutting rules
 
-- **One wave at a time.** Two open wave branches will conflict in `lib.rs` re-exports.
+- **One Rust wave at a time.** UI wave (W5) is parallel-safe with any Rust wave (touches no shared files). Two Rust waves running in parallel risk conflict in `crates/hydeclaw-core/src/lib.rs` re-exports and `agent/mod.rs` / `gateway/mod.rs` module declarations — serialize at those merge points.
 - **No rewrites in extract commits.** If you change *what* code does in the same commit that moves it, the diff is unreviewable. Rewrites are separate follow-up commits clearly labelled `refactor(<scope>): simplify <thing>`.
 - **No new features.** If discovery turns up a bug, file an issue and fix it in a separate commit on the same wave branch — the bug fix is reviewed on its own merits.
 - **No tool-policy change.** `agent::engine::dispatch_impl::SUBAGENT_DENIED_TOOLS` and friends are out of scope unless a wave's seam crosses them (it shouldn't).
@@ -281,14 +288,14 @@ Each of these is resolved during that wave's design brainstorm. The roadmap does
 
 | Wave                       | Source LoC | Target modules | Risk        | Wall-clock estimate       |
 | -------------------------- | ---------- | -------------- | ----------- | ------------------------- |
-| W1 providers               | 4906       | ~10            | low         | 2-3 days                  |
+| W1 providers               | 3996       | ~8             | low         | 2-3 days                  |
 | W2 pipeline                | 6993       | ~15            | medium-high | 5-7 days                  |
-| W3 data+config+tools       | 11030      | ~25            | medium      | 5-7 days (3 sub-projects) |
+| W3 data+config+tools       | 10930      | ~25            | medium      | 5-7 days (3 sub-projects) |
 | W4 handlers+scheduler+main | 7407       | ~15            | low-medium  | 5-6 days                  |
-| W5 UI                      | 6876       | ~30            | low         | 4-5 days                  |
-| **Total**                  | **37212**  | **~95**        | —           | **21-28 days**            |
+| W5 UI                      | 6880       | ~30            | low         | 5-7 days                  |
+| **Total**                  | **36206**  | **~93**        | —           | **22-30 days**            |
 
-Estimates assume the work is the *only* thing on a focused engineer's plate. With normal interrupt-driven work this stretches to 6-8 weeks elapsed time.
+Estimates assume the work is the *only* thing on a focused engineer's plate. With normal interrupt-driven work this stretches to ~6-9 weeks elapsed time.
 
 ## Next step
 
