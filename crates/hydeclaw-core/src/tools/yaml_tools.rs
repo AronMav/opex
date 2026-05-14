@@ -122,14 +122,6 @@ pub struct YamlAuth {
     pub token_field: Option<String>,
 }
 
-// ── Rate limit ────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // YAML schema field — accepted on parse, runtime enforcement TBD.
-pub struct YamlRateLimit {
-    pub max_calls_per_minute: Option<u32>,
-}
-
 // ── Retry config ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -187,23 +179,15 @@ pub struct YamlPaginationConfig {
 // ── Execution context (test-only) ────────────────────────────────────────────
 
 #[cfg(test)]
-struct RateLimiterState {
-    max_per_minute: u32,
-    window_start: std::time::Instant,
-    count: u32,
-}
-
-#[cfg(test)]
 struct CachedResponse {
     body: String,
     expires_at: std::time::Instant,
 }
 
-/// Shared execution state for YAML tools: rate limiters & response cache.
+/// Shared execution state for YAML tools: response cache.
 /// Only used in tests — production callers never pass a context.
 #[cfg(test)]
 pub struct ToolExecutionContext {
-    rate_limiters: tokio::sync::Mutex<HashMap<String, RateLimiterState>>,
     cache: tokio::sync::Mutex<HashMap<String, CachedResponse>>,
 }
 
@@ -211,32 +195,8 @@ pub struct ToolExecutionContext {
 impl ToolExecutionContext {
     pub fn new() -> Self {
         Self {
-            rate_limiters: tokio::sync::Mutex::new(HashMap::new()),
             cache: tokio::sync::Mutex::new(HashMap::new()),
         }
-    }
-
-    async fn check_rate_limit(&self, tool_name: &str, max_per_minute: u32) -> Result<()> {
-        let mut limiters = self.rate_limiters.lock().await;
-        let now = std::time::Instant::now();
-        let entry = limiters.entry(tool_name.to_string()).or_insert_with(|| RateLimiterState {
-            max_per_minute,
-            window_start: now,
-            count: 0,
-        });
-
-        // Reset window if expired
-        if now.duration_since(entry.window_start) >= std::time::Duration::from_secs(60) {
-            entry.window_start = now;
-            entry.count = 0;
-        }
-
-        if entry.count >= entry.max_per_minute {
-            anyhow::bail!("rate limit exceeded for tool '{tool_name}': {max_per_minute} calls/min");
-        }
-
-        entry.count += 1;
-        Ok(())
     }
 
     async fn get_cached(&self, key: &str) -> Option<String> {
@@ -408,7 +368,7 @@ pub struct ChannelActionConfig {
 
 /// Full YAML tool definition loaded from a file.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // YAML schema fields (extends/created_by/rate_limit/cache) are accepted on
+#[allow(dead_code)] // YAML schema fields (extends/created_by/cache) are accepted on
                     // parse for forward-compat; runtime enforcement lives elsewhere.
 pub struct YamlToolDef {
     #[serde(default)]
@@ -436,7 +396,6 @@ pub struct YamlToolDef {
     pub status: ToolStatus,
     #[serde(default)]
     pub created_by: String,
-    pub rate_limit: Option<YamlRateLimit>,
     /// Per-tool timeout in seconds (default 60).
     #[serde(default = "default_timeout")]
     pub timeout: u64,
@@ -1707,7 +1666,6 @@ mod tests {
             channel_action: None,
             status: ToolStatus::Verified,
             created_by: String::new(),
-            rate_limit: None,
             timeout: 60,
             retry: None,
             content_type: "application/json".to_string(),
@@ -1940,22 +1898,6 @@ method: GET
         assert!(ctx.get_cached("key").await.is_none());
         ctx.set_cached("key", "value", 60).await;
         assert_eq!(ctx.get_cached("key").await, Some("value".to_string()));
-    }
-
-    #[tokio::test]
-    async fn execution_context_rate_limit_allows_within_limit() {
-        let ctx = ToolExecutionContext::new();
-        assert!(ctx.check_rate_limit("tool", 10).await.is_ok());
-        assert!(ctx.check_rate_limit("tool", 10).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn execution_context_rate_limit_blocks_over_limit() {
-        let ctx = ToolExecutionContext::new();
-        for _ in 0..5 {
-            ctx.check_rate_limit("tool", 5).await.unwrap();
-        }
-        assert!(ctx.check_rate_limit("tool", 5).await.is_err());
     }
 
     #[test]
