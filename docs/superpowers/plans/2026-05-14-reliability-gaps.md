@@ -176,7 +176,6 @@ use crate::gateway::clusters::{AgentCore, InfraServices};
 #[derive(Debug, Serialize)]
 pub(crate) struct AgentActivity {
     pub agent_id: String,
-    pub enabled: bool,
     pub latest_activity_at: Option<DateTime<Utc>>,
     pub next_expected_heartbeat_at: Option<DateTime<Utc>>,
 }
@@ -188,6 +187,11 @@ pub(crate) async fn api_watchdog_agent_activity(
     let map = agents.map.read().await;
     let mut out: Vec<AgentActivity> = Vec::with_capacity(map.len());
 
+    // Every agent present in the AgentCore map is by definition "enabled":
+    // it has a config file under config/agents/ that loaded successfully at
+    // startup (or was added at runtime via PUT /api/agents). There is no
+    // per-agent `enabled: bool` flag — removing the file is the only way
+    // to disable an agent. So we iterate the whole map without filtering.
     for (name, handle) in map.iter() {
         let cfg = handle.cfg();
         // Aggregate latest activity across all sessions for this agent.
@@ -224,7 +228,6 @@ pub(crate) async fn api_watchdog_agent_activity(
 
         out.push(AgentActivity {
             agent_id: name.clone(),
-            enabled: cfg.agent.enabled,
             latest_activity_at,
             next_expected_heartbeat_at,
         });
@@ -261,7 +264,6 @@ use support::TestHarness;
 #[derive(Debug, Deserialize)]
 struct AgentActivity {
     agent_id: String,
-    enabled: bool,
     latest_activity_at: Option<chrono::DateTime<chrono::Utc>>,
     next_expected_heartbeat_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -287,7 +289,6 @@ async fn endpoint_returns_per_agent_activity(pool: PgPool) {
         .expect("call endpoint");
 
     let agent = resp.iter().find(|a| a.agent_id == "TestAgent").expect("TestAgent present");
-    assert!(agent.enabled);
     assert!(agent.latest_activity_at.is_some(), "regular session bumps latest_activity_at");
     assert!(
         agent.next_expected_heartbeat_at.is_none(),
@@ -359,6 +360,10 @@ Create `crates/hydeclaw-watchdog/src/inactivity.rs`:
 ```rust
 //! Per-agent inactivity checks (stale activity, missed heartbeat).
 //! Pure logic; HTTP fetch and orchestration live in main.rs.
+//!
+//! Types and functions are `pub` (not `pub(crate)`) so integration
+//! tests in `tests/` can drive `tick` against a wiremock server. The
+//! watchdog crate is a binary — there's no public API surface to leak.
 
 use std::collections::{HashMap, HashSet};
 
@@ -366,28 +371,27 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, Hash, Eq, PartialEq)]
-pub(crate) enum AlertType {
+pub enum AlertType {
     StaleActivity,
     MissedHeartbeat,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AlertState {
+pub struct AlertState {
     pub fired_at: DateTime<Utc>,
 }
 
-pub(crate) type EpisodeKey = (String, AlertType);
+pub type EpisodeKey = (String, AlertType);
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct AgentActivity {
+pub struct AgentActivity {
     pub agent_id: String,
-    pub enabled: bool,
     pub latest_activity_at: Option<DateTime<Utc>>,
     pub next_expected_heartbeat_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Fire {
+pub struct Fire {
     pub agent_id: String,
     pub alert_type: AlertType,
     pub latest_activity_at: Option<DateTime<Utc>>,
@@ -395,22 +399,23 @@ pub(crate) struct Fire {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Recover {
+pub struct Recover {
     pub agent_id: String,
     pub alert_type: AlertType,
 }
 
 /// Pure classification: given one agent's activity snapshot and thresholds,
 /// returns which alerts are currently firing (zero, one, or both).
-pub(crate) fn classify(
+///
+/// There is no `enabled` check — every agent the endpoint returns is by
+/// definition "loaded into AgentCore.map", which is the only meaning of
+/// "enabled" in this codebase (`AgentSettings` has no `enabled` field).
+pub fn classify(
     agent: &AgentActivity,
     now: DateTime<Utc>,
     stale_threshold: Duration,
     heartbeat_grace: Duration,
 ) -> Vec<AlertType> {
-    if !agent.enabled {
-        return Vec::new();
-    }
     let mut out = Vec::new();
 
     if let Some(latest) = agent.latest_activity_at {
@@ -431,7 +436,7 @@ pub(crate) fn classify(
 /// Pure dedup: walks classified results AND the set of currently-known
 /// agents (so disappeared agents are silently cleaned up). Mutates state,
 /// returns the events to emit.
-pub(crate) fn reconcile(
+pub fn reconcile(
     classified: HashMap<String, Vec<AlertType>>,
     activity: &HashMap<String, AgentActivity>,
     known_agents: &HashSet<String>,
@@ -489,10 +494,9 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
 
-    fn agent(name: &str, latest: Option<DateTime<Utc>>, next_hb: Option<DateTime<Utc>>, enabled: bool) -> AgentActivity {
+    fn agent(name: &str, latest: Option<DateTime<Utc>>, next_hb: Option<DateTime<Utc>>) -> AgentActivity {
         AgentActivity {
             agent_id: name.to_string(),
-            enabled,
             latest_activity_at: latest,
             next_expected_heartbeat_at: next_hb,
         }
@@ -504,21 +508,14 @@ mod tests {
 
     #[test]
     fn classify_stale_activity_triggers() {
-        let a = agent("A", Some(t(10)), None, true);
+        let a = agent("A", Some(t(10)), None);
         let result = classify(&a, Utc::now(), Duration::hours(6), Duration::minutes(10));
         assert_eq!(result, vec![AlertType::StaleActivity]);
     }
 
     #[test]
-    fn classify_stale_activity_respects_enabled_false() {
-        let a = agent("A", Some(t(10)), None, false);
-        let result = classify(&a, Utc::now(), Duration::hours(6), Duration::minutes(10));
-        assert!(result.is_empty());
-    }
-
-    #[test]
     fn classify_stale_activity_skips_never_active() {
-        let a = agent("A", None, None, true);
+        let a = agent("A", None, None);
         let result = classify(&a, Utc::now(), Duration::hours(6), Duration::minutes(10));
         assert!(result.is_empty());
     }
@@ -526,7 +523,7 @@ mod tests {
     #[test]
     fn classify_missed_heartbeat_triggers() {
         // expected 30 min ago, grace 10 min → overdue by 20 min → fire
-        let a = agent("A", Some(Utc::now()), Some(Utc::now() - Duration::minutes(30)), true);
+        let a = agent("A", Some(Utc::now()), Some(Utc::now() - Duration::minutes(30)));
         let result = classify(&a, Utc::now(), Duration::hours(6), Duration::minutes(10));
         assert_eq!(result, vec![AlertType::MissedHeartbeat]);
     }
@@ -534,14 +531,14 @@ mod tests {
     #[test]
     fn classify_missed_heartbeat_respects_grace() {
         // expected 5 min ago, grace 10 min → still in grace → no fire
-        let a = agent("A", Some(Utc::now()), Some(Utc::now() - Duration::minutes(5)), true);
+        let a = agent("A", Some(Utc::now()), Some(Utc::now() - Duration::minutes(5)));
         let result = classify(&a, Utc::now(), Duration::hours(6), Duration::minutes(10));
         assert!(result.is_empty());
     }
 
     #[test]
     fn classify_no_expected_heartbeat_no_alert() {
-        let a = agent("A", Some(Utc::now()), None, true);
+        let a = agent("A", Some(Utc::now()), None);
         let result = classify(&a, Utc::now(), Duration::hours(6), Duration::minutes(10));
         assert!(result.is_empty());
     }
@@ -552,7 +549,7 @@ mod tests {
         let now = Utc::now();
         let mut classified: HashMap<String, Vec<AlertType>> = HashMap::new();
         classified.insert("A".to_string(), vec![AlertType::StaleActivity]);
-        let activity = HashMap::from([("A".to_string(), agent("A", Some(t(10)), None, true))]);
+        let activity = HashMap::from([("A".to_string(), agent("A", Some(t(10)), None))]);
         let known: HashSet<String> = ["A".to_string()].into_iter().collect();
 
         let (fires1, recs1) = reconcile(classified.clone(), &activity, &known, &mut state, now);
@@ -569,7 +566,7 @@ mod tests {
         let mut state: HashMap<EpisodeKey, AlertState> = HashMap::new();
         let now = Utc::now();
         state.insert(("A".to_string(), AlertType::StaleActivity), AlertState { fired_at: now });
-        let activity = HashMap::from([("A".to_string(), agent("A", Some(now), None, true))]);
+        let activity = HashMap::from([("A".to_string(), agent("A", Some(now), None))]);
         let known: HashSet<String> = ["A".to_string()].into_iter().collect();
 
         let (fires, recs) = reconcile(HashMap::new(), &activity, &known, &mut state, now);
@@ -587,7 +584,7 @@ mod tests {
 
         let mut classified: HashMap<String, Vec<AlertType>> = HashMap::new();
         classified.insert("A".to_string(), vec![AlertType::StaleActivity, AlertType::MissedHeartbeat]);
-        let activity = HashMap::from([("A".to_string(), agent("A", Some(t(10)), Some(t(1)), true))]);
+        let activity = HashMap::from([("A".to_string(), agent("A", Some(t(10)), Some(t(1))))]);
         let known: HashSet<String> = ["A".to_string()].into_iter().collect();
 
         let (fires, recs) = reconcile(classified, &activity, &known, &mut state, now);
@@ -628,7 +625,7 @@ mod inactivity;
 cargo test -p hydeclaw-watchdog --bin hydeclaw-watchdog inactivity -- --nocapture
 ```
 
-Expected: PASS — 9 tests in `inactivity::tests`.
+Expected: PASS — 9 tests in `inactivity::tests` (5 classify_*, 4 reconcile_*).
 
 - [ ] **Step 4: Run the workspace build**
 
@@ -674,10 +671,10 @@ Wraps the pure logic from Task 3 with HTTP I/O and exercises it end-to-end again
 Append to `crates/hydeclaw-watchdog/src/inactivity.rs` (after the `tests` module — production code goes before tests; you'll need to place this code BEFORE the `#[cfg(test)] mod tests` block):
 
 ```rust
-use crate::alerter::Alerter;
+use crate::alerter::{AlertConfig, Alerter};
 use crate::config::WatchdogSettings;
 
-pub(crate) async fn fetch_agent_activity(
+pub async fn fetch_agent_activity(
     http: &reqwest::Client,
     core_url: &str,
     auth_token: &str,
@@ -696,13 +693,14 @@ pub(crate) async fn fetch_agent_activity(
     Ok(list)
 }
 
-pub(crate) async fn tick(
+pub async fn tick(
     http: &reqwest::Client,
     core_url: &str,
     auth_token: &str,
     cfg: &WatchdogSettings,
     state: &mut HashMap<EpisodeKey, AlertState>,
     alerter: &Alerter,
+    alert_config: &AlertConfig,
 ) -> anyhow::Result<()> {
     let activity = fetch_agent_activity(http, core_url, auth_token).await?;
 
@@ -725,13 +723,16 @@ pub(crate) async fn tick(
 
     let (fires, recovers) = reconcile(classified, &activity_map, &known_agents, state, now);
 
+    // Reuse existing "down"/"recovery" event types so the UI's existing
+    // ALL_ALERT_EVENTS toggle covers these without UI changes. The body
+    // text disambiguates inactivity vs service-down.
     for fire in fires {
         let msg = format_fire_message(&fire);
-        alerter.send_to_all_channels(&msg).await;
+        alerter.send(alert_config, &msg, "down").await;
     }
     for rec in recovers {
         let msg = format_recover_message(&rec);
-        alerter.send_to_all_channels(&msg).await;
+        alerter.send(alert_config, &msg, "recovery").await;
     }
 
     Ok(())
@@ -763,7 +764,9 @@ fn format_recover_message(r: &Recover) -> String {
 }
 ```
 
-(The `Alerter` struct already has a `send_to_all_channels` method — verify with `grep -n "send_to_all_channels\|pub fn\|pub async fn" crates/hydeclaw-watchdog/src/alerter.rs` and adjust the call if the actual method name differs. If it doesn't exist, add a thin wrapper that loops over `alert_channel_ids` and posts the message via the existing per-channel notify call.)
+The `Alerter::send(&self, config: &AlertConfig, message: &str, event_type: &str)` method already exists at [alerter.rs:106](crates/hydeclaw-watchdog/src/alerter.rs#L106). It filters by `config.events.contains(event_type)`, so reusing `"down"`/`"recovery"` (already in the default `AlertConfig.events`) means operators get inactivity alerts without UI/config changes. The body text (`"agent X inactive (last activity: ...)"`) disambiguates from real service-down alerts.
+
+`AlertConfig` is fetched once at watchdog startup (via `alerter.fetch_config()`) and stored in a local variable `alert_config` in `main.rs`; it's hot-reloaded by the existing config refresh logic. The new `tick` takes `&alert_config` as an explicit parameter — keeps the dependency flow visible.
 
 - [ ] **Step 2: Verify wiremock is a dev-dep, add if missing**
 
@@ -785,31 +788,69 @@ Create `crates/hydeclaw-watchdog/tests/integration_inactivity.rs`:
 
 ```rust
 //! Integration: watchdog inactivity::tick against a wiremock-mocked
-//! core endpoint.
+//! core endpoint. Drives `tick` directly — all referenced types and
+//! functions are `pub` in inactivity.rs (Task 3 Step 1).
+//!
+//! For this to compile, the integration test must be able to import
+//! from the watchdog crate. The watchdog crate is `[[bin]]` only; to
+//! make its modules visible to integration tests, the crate must
+//! expose a thin `src/lib.rs` that re-exports the needed modules.
+//! This is the standard Rust pattern for binary crates with
+//! integration tests — see [the Rust book chapter on integration tests
+//! for binary crates].
+//!
+//! Step 1 of this test setup, if not already done in Task 3: create
+//! `crates/hydeclaw-watchdog/src/lib.rs` with:
+//!
+//! ```rust
+//! pub mod alerter;
+//! pub mod config;
+//! pub mod inactivity;
+//! ```
+//!
+//! and update `Cargo.toml` to declare both the lib and the bin (the
+//! bin already has `[[bin]] name = "hydeclaw-watchdog" path = "src/main.rs"`;
+//! add `[lib] name = "hydeclaw_watchdog" path = "src/lib.rs"`).
+//! `main.rs` then imports its modules via `use hydeclaw_watchdog::...`
+//! OR keeps `mod alerter; mod config; mod inactivity;` — both work.
+//!
+//! Simpler alternative if lib re-export feels heavy: relocate this
+//! integration test INTO `inactivity.rs` as a `#[tokio::test]` inside
+//! the existing `#[cfg(test)] mod tests` block. Same coverage,
+//! single-file diff. Pick whichever fits the codebase style.
 
 use std::collections::HashMap;
+
+use hydeclaw_watchdog::alerter::{AlertConfig, Alerter};
+use hydeclaw_watchdog::config::WatchdogSettings;
+use hydeclaw_watchdog::inactivity::{self, EpisodeKey, AlertState};
+
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-// Re-import the things tick needs. These are pub(crate) so the test
-// must live in the same crate — file is in tests/ so it builds with
-// the integration-test entry point.
-//
-// If pub(crate) blocks compilation of integration tests, switch the
-// `pub(crate)` markers in inactivity.rs to `pub` (still no public-API
-// risk because the watchdog crate has no library target; binaries can't
-// have public APIs anyway).
-//
-// The simplest approach for this integration test: spawn the watchdog
-// binary itself with HYDECLAW_CORE_URL pointing at the mock server,
-// and observe outbound POST /api/channels/notify hits. That's a true
-// E2E test but slow.
+fn minimal_settings() -> WatchdogSettings {
+    // Construct via default + override; assumes `WatchdogSettings: Default`
+    // or has a builder. If it doesn't, the implementer adds a `Default`
+    // impl during Task 3 (trivial — all numeric defaults).
+    WatchdogSettings {
+        enabled: true,
+        interval_secs: 60,
+        cooldown_secs: 300,
+        grace_period_secs: 60,
+        flap_window_secs: 600,
+        flap_threshold: 3,
+        session_retry_enabled: true,
+        session_retry_stale_secs: 90,
+        session_retry_max_attempts: 3,
+        stale_activity_timeout_hours: 6,
+        missed_heartbeat_grace_minutes: 10,
+    }
+}
 
 #[tokio::test]
 async fn tick_fires_alert_for_stale_agent() {
     let mock_server = MockServer::start().await;
 
-    // GET /api/watchdog/agent-activity → one stale agent
     let very_old = chrono::Utc::now() - chrono::Duration::hours(10);
     Mock::given(method("GET"))
         .and(path("/api/watchdog/agent-activity"))
@@ -817,7 +858,6 @@ async fn tick_fires_alert_for_stale_agent() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
                 "agent_id": "Hyde",
-                "enabled": true,
                 "latest_activity_at": very_old.to_rfc3339(),
                 "next_expected_heartbeat_at": null
             }
@@ -825,31 +865,97 @@ async fn tick_fires_alert_for_stale_agent() {
         .mount(&mock_server)
         .await;
 
-    // POST /api/channels/notify → expect 1 hit
-    let notify_mock = Mock::given(method("POST"))
+    // POST /api/channels/notify → expect exactly 1 hit (one fire alert).
+    Mock::given(method("POST"))
         .and(path("/api/channels/notify"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
         .expect(1)
-        .named("notify-1");
-    notify_mock.mount(&mock_server).await;
+        .named("notify-on-fire")
+        .mount(&mock_server)
+        .await;
 
-    // Invoke tick directly. NOTE: requires pub visibility — see comment above.
-    // For now this test is a SCAFFOLD: actual wiring depends on the
-    // privacy decision made when this task is implemented. If pub(crate)
-    // is kept, the test moves into `crates/hydeclaw-watchdog/src/inactivity.rs`'s
-    // tests block as a `#[tokio::test]` with a `MockServer` parameter
-    // injected via a helper.
-    //
-    // Drop a `panic!("TODO: wire tick into integration test once visibility settled")`
-    // here as a hard reminder if the implementer hits compile errors —
-    // ABSOLUTELY NOT a real placeholder, the task description includes
-    // the alternative path.
-    let _ = mock_server;
-    let _: HashMap<String, ()> = HashMap::new();
+    let http = reqwest::Client::new();
+    let alerter = Alerter::new(&mock_server.uri(), "test-token");
+    let alert_config = AlertConfig {
+        channel_ids: vec!["test-channel-uuid".to_string()],
+        events: vec!["down".into(), "recovery".into()],
+    };
+    let cfg = minimal_settings();
+    let mut state: HashMap<EpisodeKey, AlertState> = HashMap::new();
+
+    inactivity::tick(&http, &mock_server.uri(), "test-token", &cfg, &mut state, &alerter, &alert_config)
+        .await
+        .expect("tick must succeed against the mock");
+
+    // wiremock asserts .expect(1) on Mock drop at end-of-test scope.
+    assert_eq!(state.len(), 1, "one episode should be open after fire");
+}
+
+#[tokio::test]
+async fn tick_emits_recovery_when_agent_returns() {
+    let mock_server = MockServer::start().await;
+
+    let fresh = chrono::Utc::now();
+    Mock::given(method("GET"))
+        .and(path("/api/watchdog/agent-activity"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            { "agent_id": "Hyde", "latest_activity_at": fresh.to_rfc3339(), "next_expected_heartbeat_at": null }
+        ])))
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/channels/notify"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .expect(1)
+        .named("notify-on-recovery")
+        .mount(&mock_server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let alerter = Alerter::new(&mock_server.uri(), "test-token");
+    let alert_config = AlertConfig {
+        channel_ids: vec!["test-channel-uuid".to_string()],
+        events: vec!["down".into(), "recovery".into()],
+    };
+    let cfg = minimal_settings();
+
+    // Pre-seed an open episode for Hyde to simulate "was inactive, now recovered".
+    let mut state: HashMap<EpisodeKey, AlertState> = HashMap::new();
+    state.insert(
+        ("Hyde".to_string(), inactivity::AlertType::StaleActivity),
+        AlertState { fired_at: chrono::Utc::now() - chrono::Duration::hours(1) },
+    );
+
+    inactivity::tick(&http, &mock_server.uri(), "test-token", &cfg, &mut state, &alerter, &alert_config)
+        .await
+        .expect("tick must succeed");
+
+    assert!(state.is_empty(), "episode must be cleared after recovery");
+}
+
+#[tokio::test]
+async fn tick_tolerates_endpoint_500() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/watchdog/agent-activity"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let http = reqwest::Client::new();
+    let alerter = Alerter::new(&mock_server.uri(), "test-token");
+    let alert_config = AlertConfig::default();
+    let cfg = minimal_settings();
+    let mut state: HashMap<EpisodeKey, AlertState> = HashMap::new();
+
+    let result = inactivity::tick(&http, &mock_server.uri(), "test-token", &cfg, &mut state, &alerter, &alert_config).await;
+    assert!(result.is_err(), "tick returns Err on endpoint failure (logged + swallowed by main.rs loop)");
+    assert!(state.is_empty(), "no episodes opened on error path");
 }
 ```
 
-> **Implementer note:** if `pub(crate)` makes the `inactivity` functions invisible from an integration test in `tests/`, the simplest fix is to promote them to `pub` (the watchdog crate is a binary, no public API is exposed externally) OR move this integration test into `inactivity.rs`'s `#[cfg(test)] mod tests` block as a tokio async test. Either is fine — pick the smaller diff.
+> **Implementer setup note:** if `crates/hydeclaw-watchdog/` doesn't yet have `src/lib.rs`, add it during Task 3 Step 1 with the three `pub mod` lines above and add a `[lib]` section to `Cargo.toml` pointing at it. The single-file diff is trivial and unlocks integration tests cleanly. The existing `main.rs` continues to `mod alerter; mod config; mod inactivity;` — those work alongside the lib (Rust allows a crate to be both `[lib]` and `[[bin]]`).
 
 - [ ] **Step 4: Run the unit tests + integration test, confirm they pass**
 
@@ -857,7 +963,7 @@ async fn tick_fires_alert_for_stale_agent() {
 cargo test -p hydeclaw-watchdog -- --nocapture
 ```
 
-Expected: previous 9 unit tests + the new integration test PASS. If the integration-test visibility issue described in Step 3 hits, follow the implementer note and re-run.
+Expected: previous 9 unit tests (one of which is `reconcile_silent_cleanup_on_disappeared_agent`) + the new integration test PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -930,10 +1036,13 @@ Inside the main `loop` (around line 75+), after the existing `resources::check_r
             &cfg.watchdog,
             &mut inactivity_state,
             &alerter,
+            &alert_config,
         ).await {
             tracing::warn!(error = %e, "inactivity tick failed");
         }
 ```
+
+`alert_config` already exists as a local variable in `main.rs` — it's the same `AlertConfig` value that the existing `resources::check_resources` and the resource-warning blocks already receive (search for `alerter.send(&alert_config, ...)` in `main.rs` for the pattern).
 
 - [ ] **Step 3: Run config tests**
 
@@ -1255,21 +1364,40 @@ Edit `crates/hydeclaw-core/src/agent/agent_config.rs`. Near the `pub metrics: Ar
     pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>,
 ```
 
-- [ ] **Step 3: Construct the cache once at startup**
+- [ ] **Step 3: Add `tool_exec_ctx` field to `AgentDeps`**
 
-Edit `crates/hydeclaw-core/src/main.rs`. Find the spot where `AppState` / `InfraServices` / `AgentDeps` are built (after config is loaded, before agents are loaded). Add:
+Edit `crates/hydeclaw-core/src/gateway/state.rs`. Find the `pub struct AgentDeps { ... }` block (around line 53) and add:
+
+```rust
+    /// Shared YAML-tool response cache (process-wide singleton).
+    pub tool_exec_ctx: std::sync::Arc<crate::tools::yaml_tools::ToolExecutionContext>,
+```
+
+`AgentDeps` is the natural home — it's already "shared deps needed to spawn agents at runtime" and holds analogous shared resources (`tool_embed_cache`, `penalty_cache`, `audit_queue`). The cache is a per-agent dep, not infrastructure, so it doesn't belong on `InfraServices` (which holds `db`, `embedder`, etc.).
+
+Update the test-only `AgentDeps::for_test()` / similar constructor (around line 68+ — search for `#[cfg(test)] impl AgentDeps`) to include the new field. Use `Arc::new(ToolExecutionContext::new(100))` — small cap fine for tests.
+
+- [ ] **Step 4: Construct the cache once at startup and thread into `AgentDeps`**
+
+Edit `crates/hydeclaw-core/src/main.rs`. Find the place where `AgentDeps { ... }` is constructed (search for `AgentDeps {` — should be one or two call sites). Add construction:
 
 ```rust
     let tool_exec_ctx = std::sync::Arc::new(
         crate::tools::yaml_tools::ToolExecutionContext::new(
-            state.config.config.tools_cache.max_entries,
+            cfg.config.tools_cache.max_entries,
         ),
     );
 ```
 
-Then thread `tool_exec_ctx.clone()` into `AgentDeps` (or whichever struct carries shared-cache deps to lifecycle). If `AgentDeps` doesn't yet have such a field, add `pub tool_exec_ctx: Arc<ToolExecutionContext>,` to it and update its constructor / call sites.
+placed before the `AgentDeps { ... }` literal. Then add to the literal:
 
-- [ ] **Step 4: Pass the field at `AgentConfig` construction**
+```rust
+        tool_exec_ctx: tool_exec_ctx.clone(),
+```
+
+(The `cfg.config.tools_cache` path assumes Task 7 Step 1 added the field as a top-level on `AppConfig`. If the implementer chose to nest under `[tools].cache` instead, the path is `cfg.config.tools.cache.max_entries` — keep consistent with the Step 1 choice.)
+
+- [ ] **Step 5: Pass the field at `AgentConfig` construction**
 
 Edit `crates/hydeclaw-core/src/gateway/handlers/agents/lifecycle.rs:152`. The `AgentConfig { ... }` block needs:
 
@@ -1277,11 +1405,9 @@ Edit `crates/hydeclaw-core/src/gateway/handlers/agents/lifecycle.rs:152`. The `A
         tool_exec_ctx: deps.tool_exec_ctx.clone(),
 ```
 
-added among the other `infra.*.clone()` lines (e.g. just after `metrics: infra.metrics.clone(),`).
+added among the other `*.clone()` lines (e.g. just after `metrics: infra.metrics.clone(),`).
 
-If `deps` is `AgentDeps` and that's where the field lives, this works. If `tool_exec_ctx` lives on `InfraServices` instead, use `infra.tool_exec_ctx.clone()`.
-
-- [ ] **Step 5: Run the build, fix any tests that construct `AgentConfig` directly**
+- [ ] **Step 6: Run the build, fix any tests that construct `AgentConfig` directly**
 
 ```bash
 cargo build --workspace --all-targets
@@ -1297,7 +1423,7 @@ If `AgentConfig` is built in test fixtures or unit tests, they need the new fiel
 
 (100 is fine for tests — small but non-zero.)
 
-- [ ] **Step 6: Run the full tests**
+- [ ] **Step 7: Run the full tests**
 
 ```bash
 DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
@@ -1306,12 +1432,13 @@ DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test
 
 Expected: no failures attributable to the new field.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add crates/hydeclaw-core/src/agent/agent_config.rs \
         crates/hydeclaw-core/src/config/mod.rs \
         crates/hydeclaw-core/src/gateway/handlers/agents/lifecycle.rs \
+        crates/hydeclaw-core/src/gateway/state.rs \
         crates/hydeclaw-core/src/main.rs
 git commit -m "$(cat <<'EOF'
 feat(config): thread Arc<ToolExecutionContext> through AgentConfig
@@ -1413,7 +1540,57 @@ async fn non_2xx_response_not_cached() {
     let r2 = harness.invoke_tool("search", serde_json::json!({"q": "x"})).await;
     assert!(r2.contains("ok"), "second call must hit the 200 branch, not cached 500");
 }
+
+#[tokio::test]
+async fn channel_action_bypasses_cache() {
+    // Tools with `channel_action: {...}` route binary output to a channel;
+    // their HTTP response is never returned as text to the LLM. Caching
+    // such a response is meaningless. The dispatch path must skip cache
+    // logic when channel_action is configured even if `cache:` is set.
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0xFF; 100]))
+        .expect(2) // both calls hit HTTP — cache bypassed
+        .mount(&mock_server)
+        .await;
+
+    let harness = TestHarness::with_yaml_tool_channel_action(
+        "send_voice",
+        &mock_server.uri(),
+        Some(60), // cache.ttl = 60 — should still be bypassed
+    )
+    .await;
+    let _ = harness.invoke_tool("send_voice", serde_json::json!({"text": "hi"})).await;
+    let _ = harness.invoke_tool("send_voice", serde_json::json!({"text": "hi"})).await;
+}
+
+#[tokio::test]
+async fn pagination_bypasses_cache() {
+    // Tools with `pagination: {...}` auto-fetch multiple pages mid-execution.
+    // Responses are not idempotent without full pagination state. The
+    // dispatch path must skip cache logic when pagination is configured
+    // even if `cache:` is set.
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})))
+        .expect(2)
+        .mount(&mock_server)
+        .await;
+
+    let harness = TestHarness::with_yaml_tool_paginated(
+        "list_items",
+        &mock_server.uri(),
+        Some(60),
+    )
+    .await;
+    let _ = harness.invoke_tool("list_items", serde_json::json!({})).await;
+    let _ = harness.invoke_tool("list_items", serde_json::json!({})).await;
+}
 ```
+
+> **Implementer note:** the test helpers `with_yaml_tool_channel_action` and `with_yaml_tool_paginated` are minor variants of `with_yaml_tool` — they build the same `YamlToolDef` plus `channel_action: Some(...)` / `pagination: Some(...)` respectively. Add them next to `with_yaml_tool` in `tests/support/`. If `TestHarness` doesn't exist yet, build the minimal version inside `tests/support/mod.rs` borrowing the AppState construction pattern from `tests/integration_session_timeline_cleanup.rs`.
 
 (If `TestHarness` doesn't have `with_yaml_tool` / `invoke_tool` helpers, look at how `tests/integration_session_timeline_cleanup.rs` builds its harness for a similar tool-flow test. Add the missing helpers to `tests/support/` — they should be small enough to inline if needed.)
 
