@@ -452,30 +452,30 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Phase 62 RES-03: hourly batched cleanup of `session_events` timeline rows.
+    /// Phase 62 RES-03: hourly batched cleanup of `session_timeline` rows.
     ///
     /// Cron `0 0 * * * *` fires at the top of every hour (`sec=0 min=0 hour=* *`
     /// — 6-field tokio-cron-scheduler format). The job calls
     /// `prune_old_events_batched`, which deletes at most `batch_size` rows per
-    /// iteration to avoid long table locks and PG WAL bloat.
+    /// iteration to avoid long table locks and PG bloat.
     ///
     /// `retention_days = 0` disables the hourly cleanup (returns `Ok(())` without
     /// registering a job). Errors surfaced by `prune_old_events_batched` are
     /// logged at WARN and never crash the scheduler — cleanup is best-effort.
-    pub async fn add_session_events_cleanup_hourly(
+    pub async fn add_session_timeline_cleanup_hourly(
         &self,
         db: PgPool,
         retention_days: u32,
         batch_size: i64,
     ) -> Result<()> {
         if retention_days == 0 {
-            tracing::info!("session_events hourly cleanup disabled (retention_days = 0)");
+            tracing::info!("session_timeline hourly cleanup disabled (retention_days = 0)");
             return Ok(());
         }
         tracing::info!(
             retention_days,
             batch_size,
-            "scheduling hourly session_events cleanup (RES-03)"
+            "scheduling hourly session_timeline cleanup (RES-03)"
         );
 
         let job = Job::new_async("0 0 * * * *", move |_uuid, _lock| {
@@ -489,13 +489,13 @@ impl Scheduler {
                 .await
                 {
                     Ok(deleted) if deleted > 0 => {
-                        tracing::info!(deleted, "session_events hourly cleanup completed");
+                        tracing::info!(deleted, "session_timeline hourly cleanup completed");
                     }
                     Ok(_) => {}
                     Err(e) => {
                         tracing::warn!(
                             error = %e,
-                            "session_events hourly cleanup failed (non-fatal)"
+                            "session_timeline hourly cleanup failed (non-fatal)"
                         );
                     }
                 }

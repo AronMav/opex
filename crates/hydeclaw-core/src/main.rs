@@ -1176,19 +1176,19 @@ async fn schedule_periodic_jobs(
         }
     }
 
-    // Phase 62 RES-03: hourly batched session_events timeline cleanup. Runs
+    // Phase 62 RES-03: hourly batched session_timeline cleanup. Runs
     // alongside the legacy daily add_session_cleanup (which still handles
-    // cleanup_old_sessions) — the hourly job only prunes session_events,
+    // cleanup_old_sessions) — the hourly job only prunes session_timeline,
     // with bounded LIMIT per batch to avoid long table locks.
     if let Err(e) = sched
-        .add_session_events_cleanup_hourly(
+        .add_session_timeline_cleanup_hourly(
             db.clone(),
             state.config.config.cleanup.session_events_retention_days,
             state.config.config.cleanup.session_events_batch_size,
         )
         .await
     {
-        tracing::warn!(error = %e, job = "session_events_cleanup_hourly", "failed to register cron job");
+        tracing::warn!(error = %e, job = "session_timeline_cleanup_hourly", "failed to register cron job");
     }
 
     // Automatic backup
