@@ -143,9 +143,7 @@ fn default_content_type() -> String { "application/json".to_string() }
 
 // ── Cache config ─────────────────────────────────────────────────────────────
 
-// Fields wired in Task 8 (engine_dispatch YAML-tool cache path).
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub struct YamlCacheConfig {
     /// TTL in seconds.
     pub ttl: u64,
@@ -185,14 +183,11 @@ pub(crate) struct CachedResponse {
 /// Shared response cache for YAML tools. Process-wide singleton held inside
 /// `Arc<ToolExecutionContext>` on `AgentConfig`. Lazy TTL on read, batch
 /// eviction on write at the soft cap.
-// Callers wired in Tasks 7 (AgentConfig threading) and 8 (engine_dispatch).
-#[allow(dead_code)]
 pub struct ToolExecutionContext {
     cache: dashmap::DashMap<String, CachedResponse>,
     max_entries: usize,
 }
 
-#[allow(dead_code)]
 impl ToolExecutionContext {
     pub fn new(max_entries: usize) -> Self {
         Self {
@@ -247,8 +242,6 @@ impl ToolExecutionContext {
     }
 }
 
-// Callers wired in Task 8 (engine_dispatch YAML-tool cache path).
-#[allow(dead_code)]
 pub(crate) fn build_cache_key(
     tool_name: &str,
     method: &str,
@@ -2452,5 +2445,202 @@ graphql:
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(parsed["summary"], "Meet");
         assert_eq!(parsed["description"], "Weekly sync");
+    }
+
+    // ── YAML cache dispatch (wiremock-driven) ───────────────────────────────
+    //
+    // Verify the cache decisions that `engine_dispatch::execute_tool_call_inner`
+    // makes around `YamlToolDef::execute_oauth`. The `dispatch_with_cache`
+    // helper mirrors the exact bypass conditions in engine_dispatch:
+    //   - skip when `cache:` is absent
+    //   - skip when `channel_action:` is set (binary routed elsewhere)
+    //   - skip when `pagination:` is set (single-page cache is wrong)
+    //   - never cache when execute_oauth returns Err (non-2xx path)
+    //
+    // Kept inline next to the cache primitives per the lib.rs facade discipline
+    // (only leaf modules are re-exported, and `yaml_tools` has `crate::*` deps).
+
+    use wiremock::matchers::{method as wm_method, path as wm_path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    async fn dispatch_with_cache(
+        tool: &YamlToolDef,
+        args: &serde_json::Value,
+        ctx: &ToolExecutionContext,
+        http: &reqwest::Client,
+    ) -> Result<String, String> {
+        let cache_key = match &tool.cache {
+            Some(cfg)
+                if tool.channel_action.is_none() && tool.pagination.is_none() =>
+            {
+                Some(build_cache_key(
+                    &tool.name,
+                    &tool.method,
+                    &tool.endpoint,
+                    args,
+                    &cfg.key_params,
+                ))
+            }
+            _ => None,
+        };
+
+        if let Some(key) = cache_key.as_ref()
+            && let Some(body) = ctx.get_cached(key).await
+        {
+            return Ok(body);
+        }
+
+        match tool.execute_oauth(args, http, None, None).await {
+            Ok(body) => {
+                if let (Some(key), Some(cfg)) = (cache_key.as_ref(), tool.cache.as_ref()) {
+                    ctx.set_cached(key, &body, cfg.ttl).await;
+                }
+                Ok(body)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    fn yaml_tool(spec: &str) -> YamlToolDef {
+        serde_yaml::from_str::<YamlToolDef>(spec).expect("parse tool yaml")
+    }
+
+    #[tokio::test]
+    async fn cache_hit_skips_http_call() {
+        let mock = MockServer::start().await;
+        // Exactly one upstream call — the second invocation must hit cache.
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/v"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": "v1"})),
+            )
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let tool = yaml_tool(&format!(
+            "name: search\ndescription: test\nendpoint: {}/v\nmethod: GET\ncache:\n  ttl: 60\n",
+            mock.uri()
+        ));
+
+        let ctx = ToolExecutionContext::new(100);
+        let http = reqwest::Client::new();
+        let args = serde_json::json!({"q": "hello"});
+
+        let r1 = dispatch_with_cache(&tool, &args, &ctx, &http).await.expect("call 1");
+        let r2 = dispatch_with_cache(&tool, &args, &ctx, &http).await.expect("call 2");
+        assert_eq!(r1, r2, "second call must return same body from cache");
+    }
+
+    #[tokio::test]
+    async fn cache_miss_on_distinct_args() {
+        let mock = MockServer::start().await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/v"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": "v1"})),
+            )
+            .expect(2)
+            .mount(&mock)
+            .await;
+
+        let tool = yaml_tool(&format!(
+            "name: search\ndescription: test\nendpoint: {}/v\nmethod: GET\ncache:\n  ttl: 60\n",
+            mock.uri()
+        ));
+
+        let ctx = ToolExecutionContext::new(100);
+        let http = reqwest::Client::new();
+        let _ = dispatch_with_cache(&tool, &serde_json::json!({"q": "a"}), &ctx, &http)
+            .await
+            .expect("a");
+        let _ = dispatch_with_cache(&tool, &serde_json::json!({"q": "b"}), &ctx, &http)
+            .await
+            .expect("b");
+    }
+
+    #[tokio::test]
+    async fn non_2xx_response_not_cached() {
+        let mock = MockServer::start().await;
+        // 500 first, then 200. If 500 were cached the second dispatch
+        // wouldn't reach the second mock — the .expect(1) would fail.
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/v"))
+            .respond_with(ResponseTemplate::new(500))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/v"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": "ok"})),
+            )
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let tool = yaml_tool(&format!(
+            "name: search\ndescription: test\nendpoint: {}/v\nmethod: GET\ncache:\n  ttl: 60\n",
+            mock.uri()
+        ));
+
+        let ctx = ToolExecutionContext::new(100);
+        let http = reqwest::Client::new();
+        let args = serde_json::json!({"q": "x"});
+        let r1 = dispatch_with_cache(&tool, &args, &ctx, &http).await;
+        assert!(r1.is_err(), "first call returns Err for 500");
+        let r2 = dispatch_with_cache(&tool, &args, &ctx, &http).await.expect("call 2");
+        assert!(r2.contains("ok"), "second call must hit the 200 branch, not a cached 500");
+    }
+
+    #[tokio::test]
+    async fn channel_action_bypasses_cache() {
+        // channel_action tools route binary output to a channel; their HTTP
+        // response is never returned to the LLM. Caching is meaningless.
+        let mock = MockServer::start().await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/v"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(vec![0x01, 0x02, 0x03]),
+            )
+            .expect(2)
+            .mount(&mock)
+            .await;
+
+        let tool = yaml_tool(&format!(
+            "name: send_voice\ndescription: test\nendpoint: {}/v\nmethod: GET\ncache:\n  ttl: 60\nchannel_action:\n  action: send_voice\n  data_field: _binary\n",
+            mock.uri()
+        ));
+
+        let ctx = ToolExecutionContext::new(100);
+        let http = reqwest::Client::new();
+        let args = serde_json::json!({"text": "hi"});
+        let _ = dispatch_with_cache(&tool, &args, &ctx, &http).await;
+        let _ = dispatch_with_cache(&tool, &args, &ctx, &http).await;
+    }
+
+    #[tokio::test]
+    async fn pagination_bypasses_cache() {
+        // pagination tools auto-fetch multiple pages mid-execution; caching
+        // one page is wrong (the next dispatch would skip pagination).
+        let mock = MockServer::start().await;
+        Mock::given(wm_method("GET"))
+            .and(wm_path("/v"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})),
+            )
+            .expect(2)
+            .mount(&mock)
+            .await;
+
+        let tool = yaml_tool(&format!(
+            "name: list_items\ndescription: test\nendpoint: {}/v\nmethod: GET\ncache:\n  ttl: 60\npagination:\n  type: offset\n  param: offset\n  limit_param: limit\n  limit: 20\n  max_pages: 1\n",
+            mock.uri()
+        ));
+
+        let ctx = ToolExecutionContext::new(100);
+        let http = reqwest::Client::new();
+        let _ = dispatch_with_cache(&tool, &serde_json::json!({}), &ctx, &http).await;
+        let _ = dispatch_with_cache(&tool, &serde_json::json!({}), &ctx, &http).await;
     }
 }
