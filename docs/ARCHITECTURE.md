@@ -157,9 +157,9 @@ Entry point: `toolgate/app.py`.
 - **Tools**: `tools: ToolRegistry`, `approval_manager`
 - **Infra**: `scheduler`, `agent_map`, `session_pools`, `audit_queue`, `metrics: Arc<MetricsRegistry>`
 
-### Three Entry Points
+### Four Entry Points
 
-All three entry points (`run.rs`) construct an `EventSink` and delegate to `pipeline::{bootstrap, execute, finalize}`:
+All four entry points (`run.rs`) construct an `EventSink` and delegate to `pipeline::{bootstrap, execute, finalize}`:
 
 1. **`handle_sse(msg, event_tx, resume_session_id, force_new_session, cancel)`** — web SSE via `SseSink` wrapping an `EngineEventSender` (bounded `mpsc::Sender<StreamEvent>`, capacity 256). Fires `HookEvent::BeforeMessage` before any processing; publishes `sse_event_tx` so `ApprovalManager` can broadcast tool-approval notifications while the stream is live.
 
@@ -350,7 +350,7 @@ background: knowledge extraction (≥5 messages)
 
 ### Sub-Router Pattern
 
-`crates/hydeclaw-core/src/gateway/mod.rs` composes the router via `.merge()` of 35 handler modules. Each handler module exports `pub(crate) fn routes() -> Router<AppState>`.
+`crates/hydeclaw-core/src/gateway/mod.rs` composes the router via `.merge()` of 31 handler modules. Each handler module exports `pub(crate) fn routes() -> Router<AppState>`.
 
 **Current handler modules** (`src/gateway/handlers/`):
 
@@ -746,7 +746,7 @@ run_once, run_at, tool_policy (JSONB override)
 
 PostgreSQL 17 + pgvector. Migrations in `migrations/*.sql` (sqlx). Auto-run on startup. No ORM — raw sqlx queries in `crates/hydeclaw-core/src/db/`.
 
-**Current migration state:** m001 through m043 (43 migrations).
+**Current migration state:** m001 through m051 (latest migration in `migrations/`); some numbers in the sequence were never committed (count of `.sql` files is the source of truth).
 
 ### Key Tables
 

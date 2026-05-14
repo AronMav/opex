@@ -77,7 +77,6 @@ pub(super) const TABLES_WITH_AGENT_ID_NOT_NULL: &[&str] = &[
     "session_failures",
     "sessions",
     "stream_jobs",
-    "tasks",
     "usage_log",
     "webhooks",
 ];
@@ -1224,9 +1223,9 @@ mod tests {
     /// This test documents the expected behavior by simulating the rename loop in-memory.
     #[test]
     fn test_rename_mid_failure_leaves_pre_rename_state() {
-        // Mirror the exact table list from the rename handler (20 tables total)
+        // Mirror the exact table list from the rename handler (19 tables total)
         let tables_agent_id: Vec<&str> = vec![
-            "sessions", "tasks", "scheduled_jobs", "channel_allowed_users",
+            "sessions", "scheduled_jobs", "channel_allowed_users",
             "usage_log", "cron_runs", "audit_events", "pending_approvals",
             "pending_messages", "webhooks", "stream_jobs", "outbound_queue",
             "audit_log", "agent_github_repos", "gmail_triggers",
@@ -1240,7 +1239,7 @@ mod tests {
             .copied()
             .collect();
 
-        assert_eq!(all_tables.len(), 20, "rename should cover exactly 20 tables");
+        assert_eq!(all_tables.len(), 19, "rename should cover exactly 19 tables");
 
         let old_name = "OldAgent";
         let new_name = "NewAgent";
