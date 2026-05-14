@@ -8,7 +8,6 @@ pub use channels::*;
 use chrono::{DateTime, Utc};
 use ids::{MessageId, ToolCallId};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 pub(crate) fn default_typing_mode() -> String { "instant".to_string() }
 
@@ -179,17 +178,6 @@ pub struct TokenUsage {
     /// SUBSET of output_tokens — do not add to total.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u32>,
-}
-
-// ── Callback from MCP servers ──
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpCallback {
-    pub task_id: Uuid,
-    pub step_id: Option<Uuid>,
-    pub status: String,
-    pub result: Option<serde_json::Value>,
-    pub error: Option<String>,
 }
 
 #[cfg(test)]
@@ -829,48 +817,7 @@ mod tests {
         assert_eq!(back.output_tokens, 200);
     }
 
-    // ── 13. McpCallback roundtrip ──
-
-    #[test]
-    fn mcp_callback_full_roundtrip() {
-        let task_id = Uuid::new_v4();
-        let step_id = Uuid::new_v4();
-        let cb = McpCallback {
-            task_id,
-            step_id: Some(step_id),
-            status: "completed".into(),
-            result: Some(json!({"output": "done", "code": 0})),
-            error: None,
-        };
-        let json = serde_json::to_string(&cb).unwrap();
-        let back: McpCallback = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.task_id, task_id);
-        assert_eq!(back.step_id, Some(step_id));
-        assert_eq!(back.status, "completed");
-        assert_eq!(back.result.unwrap()["output"], "done");
-        assert!(back.error.is_none());
-    }
-
-    #[test]
-    fn mcp_callback_with_error_roundtrip() {
-        let task_id = Uuid::new_v4();
-        let cb = McpCallback {
-            task_id,
-            step_id: None,
-            status: "failed".into(),
-            result: None,
-            error: Some("timeout after 30s".into()),
-        };
-        let json = serde_json::to_string(&cb).unwrap();
-        let back: McpCallback = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.task_id, task_id);
-        assert_eq!(back.step_id, None);
-        assert_eq!(back.status, "failed");
-        assert!(back.result.is_none());
-        assert_eq!(back.error, Some("timeout after 30s".into()));
-    }
-
-    // ── 14. ChannelActionDto standalone roundtrip ──
+    // ── 13. ChannelActionDto standalone roundtrip ──
 
     #[test]
     fn channel_action_dto_roundtrip() {

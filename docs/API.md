@@ -403,10 +403,6 @@ OpenAI-format chat completions. Supports streaming (`"stream": true`) and non-st
 | `stream` | bool | Enable SSE streaming (default: false) |
 | `agent` | string | HydeClaw extension: target agent name |
 
-### POST /api/mcp/callback
-
-Internal OAuth callback for MCP server authentication. Not intended for direct use.
-
 ---
 
 ## 5. Chat SSE (Native Streaming)
@@ -1000,41 +996,7 @@ Channel adapters connect via WebSocket. Authentication:
 
 ---
 
-## 13. Tasks
-
-Tasks are multi-step execution pipelines tracked in the database.
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/tasks` | List tasks |
-| `POST` | `/api/tasks` | Create a task |
-| `GET` | `/api/tasks/{id}` | Get a task |
-| `DELETE` | `/api/tasks/{id}` | Delete a task |
-| `GET` | `/api/tasks/{id}/steps` | Get task execution steps |
-| `GET` | `/api/tasks/audit` | List tool execution audit log |
-
-### GET /api/tasks
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `agent` | string | `"main"` | Filter by agent |
-| `limit` | integer | 50 | Max results (max 200) |
-
-### POST /api/tasks
-
-**Request body:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `agent` | string | Yes | Target agent name |
-| `input` | string | Yes | Task description/prompt |
-| `source` | string | No | Source identifier (default: `"api"`) |
-
-**Response:** `{ "ok": true, "task_id": "uuid" }`
-
----
-
-## 14. Approvals
+## 13. Approvals
 
 Human-in-the-loop approval for sensitive tool calls. Approval endpoints are registered under `/api/agents` router.
 

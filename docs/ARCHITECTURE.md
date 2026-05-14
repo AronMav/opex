@@ -356,7 +356,7 @@ background: knowledge extraction (≥5 messages)
 
 | Module | Routes |
 |--------|--------|
-| `chat.rs` | `/health`, `POST /api/chat`, `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`, `/api/mcp/callback` |
+| `chat.rs` | `/health`, `POST /api/chat`, `/v1/chat/completions`, `/v1/models`, `/v1/embeddings` |
 | `auth.rs` | `POST /api/auth/ws-ticket` |
 | `channel_ws.rs` | `GET /ws`, `GET /ws/channel/{agent_name}` |
 | `agents.rs` | `/api/agents/*`, `/api/approvals/*` |
@@ -382,7 +382,6 @@ background: knowledge extraction (≥5 messages)
 | `email_triggers.rs` | `/api/triggers/email/*` |
 | `github_repos.rs` | `/api/agents/*/github/repos/*` |
 | `access.rs` | `/api/access/*` |
-| `tasks.rs` | `/api/tasks/*` |
 | `notifications.rs` | `/api/notifications/*` |
 | `csp.rs` | `POST /api/csp-report` |
 | `media.rs` | `/uploads/*`, `/api/media/*` |

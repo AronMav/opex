@@ -16,7 +16,6 @@ mod mcp;
 mod shutdown;
 mod skills;
 mod curator;
-mod tasks;
 mod tools;
 mod trace_propagation;
 mod uploads;
@@ -1114,9 +1113,6 @@ async fn schedule_periodic_jobs(
     // Daily maintenance jobs
     if let Err(e) = sched.add_memory_decay(db.clone()).await {
         tracing::warn!(error = %e, job = "memory_decay", "failed to register cron job");
-    }
-    if let Err(e) = sched.add_task_cleanup(db.clone()).await {
-        tracing::warn!(error = %e, job = "task_cleanup", "failed to register cron job");
     }
     if let Err(e) = sched.add_audit_cleanup(db.clone(), 30).await {
         tracing::warn!(error = %e, job = "audit_cleanup", "failed to register cron job");
