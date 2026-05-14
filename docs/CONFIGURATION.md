@@ -131,36 +131,14 @@ require_signature = false
 
 | Поле | Тип | Дефолт | Описание |
 |------|-----|--------|----------|
-| `enabled` | bool | `true` | Разрешить запуск субагентов |
-| `default_mode` | String | `"in-process"` | Режим по умолчанию: `"in-process"` или `"docker"` |
-| `max_concurrent_in_process` | u32 | `5` | Максимум одновременных in-process субагентов |
-| `max_concurrent_docker` | u32 | `3` | Максимум одновременных Docker субагентов |
-| `docker_timeout` | String | `"5m"` | Timeout для Docker-субагентов |
-| `in_process_timeout` | String | `"2m"` | Timeout для in-process субагентов |
-| `core_image` | Option\<String\> | — | Docker-образ Core для Docker-субагентов |
+| `enabled` | bool | `true` | Разрешить запуск субагентов (toggle через `PUT /api/config`) |
+| `in_process_timeout` | String | `"2m"` | Wall-clock timeout для одного in-process subagent вызова |
 
 ```toml
 [subagents]
 enabled = true
-default_mode = "in-process"
-max_concurrent_in_process = 5
-max_concurrent_docker = 3
-docker_timeout = "5m"
 in_process_timeout = "2m"
 ```
-
-### [discussion]
-
-Конфигурация multi-agent discussion-режима. Все поля имеют дефолты.
-
-| Поле | Тип | Дефолт | Описание |
-|------|-----|--------|----------|
-| `max_rounds` | u32 | `2` | Максимум раундов обсуждения (1–3; >3 ведёт к sycophancy) |
-| `agent_timeout_secs` | u64 | `120` | Timeout на ответ одного агента |
-| `anonymize_after_round1` | bool | `true` | Анонимизировать ответы начиная со 2-го раунда |
-| `devils_advocate` | bool | `true` | Последний агент играет роль devil's advocate |
-| `synthesize` | bool | `true` | Финальный synthesizer-проход после всех раундов |
-| `max_response_len` | usize | `1500` | Максимум символов ответа агента (перед обрезкой в следующем раунде) |
 
 ### [docker]
 
