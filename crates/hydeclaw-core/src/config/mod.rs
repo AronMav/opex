@@ -52,7 +52,7 @@ pub struct AppConfig {
     /// Scheduled skill curator (disabled by default).
     #[serde(default)]
     pub curator: CuratorConfig,
-    /// Phase 62 RES-03 cleanup scheduler tuning (session_events timeline retention).
+    /// Phase 62 RES-03 cleanup scheduler tuning (session_timeline retention).
     #[serde(default)]
     pub cleanup: CleanupConfig,
     /// Phase 62 RES-05 graceful-shutdown drain tuning (drain timeout).
@@ -255,29 +255,29 @@ impl Default for CuratorConfig {
 
 // ── CleanupConfig ─────────────────────────────────────────────────────────────
 
-/// Phase 62 RES-03: batched cleanup tuning for the hourly `session_events` timeline
+/// Phase 62 RES-03: batched cleanup tuning for the hourly `session_timeline`
 /// prune cron. Both fields have operator-friendly defaults; `retention_days = 0`
 /// disables the hourly cleanup entirely.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct CleanupConfig {
-    /// Retention for `session_events` timeline rows in days. `0` disables cleanup.
+    /// Retention for `session_timeline` rows in days. `0` disables cleanup.
     /// Default: 7 days.
-    #[serde(default = "default_session_events_retention_days")]
-    pub session_events_retention_days: u32,
+    #[serde(default = "default_session_timeline_retention_days")]
+    pub session_timeline_retention_days: u32,
     /// Rows deleted per batch iteration — keeps lock hold-time short and
     /// autovacuum-friendly. Must be `> 0`. Default: 5000.
-    #[serde(default = "default_session_events_batch_size")]
-    pub session_events_batch_size: i64,
+    #[serde(default = "default_session_timeline_batch_size")]
+    pub session_timeline_batch_size: i64,
 }
 
-fn default_session_events_retention_days() -> u32 { 7 }
-fn default_session_events_batch_size() -> i64 { 5000 }
+fn default_session_timeline_retention_days() -> u32 { 7 }
+fn default_session_timeline_batch_size() -> i64 { 5000 }
 
 impl Default for CleanupConfig {
     fn default() -> Self {
         Self {
-            session_events_retention_days: default_session_events_retention_days(),
-            session_events_batch_size: default_session_events_batch_size(),
+            session_timeline_retention_days: default_session_timeline_retention_days(),
+            session_timeline_batch_size: default_session_timeline_batch_size(),
         }
     }
 }

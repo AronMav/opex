@@ -1148,7 +1148,7 @@ async fn schedule_periodic_jobs(
             db.clone(),
             ttl_days,
             max_sessions_per_agent,
-            state.config.config.cleanup.session_events_batch_size,
+            state.config.config.cleanup.session_timeline_batch_size,
         )
         .await
     {
@@ -1183,8 +1183,8 @@ async fn schedule_periodic_jobs(
     if let Err(e) = sched
         .add_session_timeline_cleanup_hourly(
             db.clone(),
-            state.config.config.cleanup.session_events_retention_days,
-            state.config.config.cleanup.session_events_batch_size,
+            state.config.config.cleanup.session_timeline_retention_days,
+            state.config.config.cleanup.session_timeline_batch_size,
         )
         .await
     {

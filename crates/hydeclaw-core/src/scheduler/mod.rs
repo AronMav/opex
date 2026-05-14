@@ -384,7 +384,7 @@ impl Scheduler {
     /// by age AND enforce per-agent entry cap).
     ///
     /// `batch_size` is threaded through to `prune_old_events_batched` for the
-    /// daily timeline prune so it honours the same `CleanupConfig::session_events_batch_size`
+    /// daily timeline prune so it honours the same `CleanupConfig::session_timeline_batch_size`
     /// the hourly job uses — keeping both jobs consistent.
     pub async fn add_session_cleanup(
         &self,
@@ -435,7 +435,7 @@ impl Scheduler {
                 // Prune old timeline events alongside session cleanup. Uses the
                 // batched variant (Phase 62 RES-03) to avoid long table locks
                 // and PG WAL bloat — `batch_size` is sourced from
-                // `CleanupConfig::session_events_batch_size`, mirroring the
+                // `CleanupConfig::session_timeline_batch_size`, mirroring the
                 // hourly job.
                 match crate::db::session_timeline::prune_old_events_batched(&db, ttl_days, batch_size).await {
                     Ok(pruned) => {
