@@ -168,7 +168,7 @@ Returns runtime counters and pool sizes. Unknown fields are opaque — clients m
   "db_pool_total": 5,
   "db_pool_idle": 4,
   "memory_worker_heartbeat_age_secs": 120,
-  "session_events_table_size_bytes": 204800,
+  "session_timeline_table_size_bytes": 204800,
   "uptime_secs": 3600
 }
 ```

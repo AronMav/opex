@@ -83,9 +83,9 @@ Four entry points on `AgentEngine`, all thin adapters in [engine/run.rs](crates/
 Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/pipeline/):
 
 - `sink.rs` — `EventSink` trait, `PipelineEvent` (`Stream(StreamEvent)` | `Phase(ProcessingPhase)`), `SinkError`, four production sinks (`SseSink`, `ChannelStatusSink`, `ChunkSink`, `NoopSink`)
-- `bootstrap.rs` — session entry, user-message persist, WAL `running`, `ProcessingGuard`, slash-command detection. Same code path drives both SSE (`use_history=true`) and cron (`force_new_session=true, use_history=false`)
+- `bootstrap.rs` — session entry, user-message persist, timeline `running`, `ProcessingGuard`, slash-command detection. Same code path drives both SSE (`use_history=true`) and cron (`force_new_session=true, use_history=false`)
 - `execute.rs` — main LLM+tools loop, transport-agnostic. Takes `&BehaviourLayers` parameter (see below)
-- `finalize.rs` — single exit point: persist assistant or partial, WAL `done|failed|interrupted` via `SessionLifecycleGuard`, enqueue knowledge extraction
+- `finalize.rs` — single exit point: persist assistant or partial, timeline `done|failed|interrupted` via `SessionLifecycleGuard`, enqueue knowledge extraction
 - `behaviour.rs` — five composable opt-in policy structs (`FallbackPolicy`, `AutoContinuePolicy`, `SessionRecoveryPolicy`, `ToolPolicyOverride`, `ForcedFinalCallPolicy`) bundled into `BehaviourLayers`. SSE callers use `BehaviourLayers::none()`; cron callers use `BehaviourLayers::for_cron(loop_config, msg)`. Each layer adds zero hot-path branches when disengaged. See [docs/architecture/2026-05-06-llm-loop-unification-plan.md](docs/architecture/2026-05-06-llm-loop-unification-plan.md).
 
 **Key execution paths:**
@@ -93,7 +93,7 @@ Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/p
 - `pipeline::handlers::*` — tool implementations (workspace_write, workspace_read, etc.)
 - `workspace.rs::is_read_only()` — path protection
 
-**Loop detection (`tool_loop.rs`):** Two-phase `LoopDetector` — `check_limits()` (pre-execution, read-only) + `record_execution()` (post-execution, tracks success/failure). Error-aware: 3 consecutive errors on same tool → break. WAL records lifecycle events for diagnostics. LoopDetector resets on each session entry (crash recovery via WAL replay is not yet implemented). See design spec at [docs/superpowers/specs/2026-04-20-execution-pipeline-unification-design.md](docs/superpowers/specs/2026-04-20-execution-pipeline-unification-design.md).
+**Loop detection (`tool_loop.rs`):** Two-phase `LoopDetector` — `check_limits()` (pre-execution, read-only) + `record_execution()` (post-execution, tracks success/failure). Error-aware: 3 consecutive errors on same tool → break. Session timeline records lifecycle events for diagnostics and LoopDetector warm-up. LoopDetector resets on each new session entry; warm-up from timeline only runs for `ResumeRunning` and `ExplicitResume` re-entry modes. See design spec at [docs/superpowers/specs/2026-04-20-execution-pipeline-unification-design.md](docs/superpowers/specs/2026-04-20-execution-pipeline-unification-design.md).
 
 **Session-scoped agents (`session_agent_pool.rs` + `engine_agent_tool.rs`):** Unified `agent` tool (run/message/status/kill) replaces old `subagent` + `handoff` tools. Agents are always-alive peers bound to a session via `SessionAgentPool` in `AppState.session_pools`. Each `LiveAgent` holds its own LLM dialog context in memory, receives messages via mpsc channel, and processes them in a background tokio task using `run_subagent()`. Polling-based — no automatic routing or turn loop. Peer-to-peer: any agent in a session can spawn, message, or kill any other.
 
@@ -181,7 +181,7 @@ Agent opts in via TOML: `[agent.channel.telegram] enabled = true`
 - **`inline.rs`** holds non-Message handlers: `Ping`, `AccessCheck`, `Pairing*`, approval-callback intercept.
 - **`session_locks.rs`** is a `DashMap<SessionKey, Arc<Mutex<()>>>` with refcount-based eviction (`LockHandle::Drop` releases the guard before counting refs — the `_guard` placement matters).
 
-**Session re-entry:** `get_or_create_session` returns `(Uuid, ReentryMode)`. Soft-terminal sessions (`failed`/`interrupted`/`timeout`/`cancelled`) within the 4-hour window are NOT reused — a fresh session is created instead. `done` sessions are reused (chat continuity). The bootstrap then calls `claim_session_with_retry` which retries once with `ExplicitResume` if a TOCTOU race flipped the status between resolve and claim. `LoopDetector` warm-up from WAL only runs for `ResumeRunning` (true crash recovery) and `ExplicitResume` (UI-explicit reopen) — `NewSession` and `NewTurnAfterDone` get a fresh detector so prior tool errors don't pollute the next turn.
+**Session re-entry:** `get_or_create_session` returns `(Uuid, ReentryMode)`. Soft-terminal sessions (`failed`/`interrupted`/`timeout`/`cancelled`) within the 4-hour window are NOT reused — a fresh session is created instead. `done` sessions are reused (chat continuity). The bootstrap then calls `claim_session_with_retry` which retries once with `ExplicitResume` if a TOCTOU race flipped the status between resolve and claim. `LoopDetector` warm-up from session timeline only runs for `ResumeRunning` (true crash recovery) and `ExplicitResume` (UI-explicit reopen) — `NewSession` and `NewTurnAfterDone` get a fresh detector so prior tool errors don't pollute the next turn.
 
 **Cron mirror:** `mirror_to_session` uses `resolve_active_dm_session` so mirrors land in the same session a live Telegram message would land in — soft-terminal and >4h-stale sessions are skipped.
 
@@ -291,11 +291,11 @@ RSC chunks are flattened automatically during `next build` via `ui/build/adapter
 
 PostgreSQL 17 + pgvector. Migrations in `migrations/` (sqlx). Auto-run on startup. No ORM — raw sqlx queries in `src/db/`.
 
-Key tables: `sessions`, `messages`, `session_events` (WAL journal), `memory_chunks`, `scheduled_jobs`, `secrets`, `agent_channels`, `usage_log`, `providers`, `provider_active`, `watchdog_settings`.
+Key tables: `sessions`, `messages`, `session_timeline` (chronological lifecycle log), `memory_chunks`, `scheduled_jobs`, `secrets`, `agent_channels`, `usage_log`, `providers`, `provider_active`, `watchdog_settings`.
 
 **Message branching (m012):** `parent_message_id` links to predecessor, `branch_from_message_id` marks fork points. Both nullable — NULL = trunk. Enables conversation tree navigation.
 
-**Session WAL (m013):** `session_events` logs lifecycle transitions (running, tool_start, tool_end, done, failed). WAL records lifecycle events for diagnostics. LoopDetector resets on each session entry (crash recovery via WAL replay is not yet implemented).
+**Session timeline (m013, renamed by m049):** `session_timeline` is a chronological log of session lifecycle events (running, tool_start, tool_end, done, failed, interrupted). Used for LoopDetector warm-up after restart (preserves loop-break decisions across crashes), diagnostics, audit, and the UI Timeline view. Not a Write-Ahead Log: no replay-based recovery; completed work is preserved by persisted side effects, not event replay.
 
 **Active providers:** `provider_active` maps capabilities (stt, tts, vision, imagegen, embedding) to providers. UI configures active providers via the Active Providers page.
 
