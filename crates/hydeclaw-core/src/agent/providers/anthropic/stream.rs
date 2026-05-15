@@ -280,7 +280,9 @@ mod golden_fixtures {
     use super::*;
 
     /// Regression: Anthropic content_block_delta of type "thinking" must
-    /// parse without crashing the SSE handler.
+    /// route the thinking content to the thinking sink (not text), and the
+    /// usage parser (which has no message_start event in this fixture) must
+    /// return None rather than crash.
     #[test]
     fn content_block_delta_thinking_parses() {
         let lines = vec![
@@ -288,8 +290,18 @@ mod golden_fixtures {
             r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Hmm..."}}"#.to_string(),
             r#"data: {"type":"content_block_stop","index":0}"#.to_string(),
         ];
-        let usage = parse_streaming_usage_for_test(&lines);
-        // We only assert the parser did not panic and returned a value.
-        let _ = usage;
+        // Usage parser: no message_start in fixture, must yield None (not panic, not Some).
+        assert!(
+            parse_streaming_usage_for_test(&lines).is_none(),
+            "no message_start event => no usage"
+        );
+        // Stream processor: thinking content must reach the thinking sink, not text.
+        let (text, thinking, _blocks) = process_sse_events_for_test(&lines);
+        assert!(text.is_empty(), "no text chunks expected, got {text:?}");
+        assert_eq!(
+            thinking,
+            vec!["<thinking>".to_string(), "Hmm...".to_string(), "</thinking>".to_string()],
+            "thinking_delta must be routed to the thinking sink with open/close markers"
+        );
     }
 }
