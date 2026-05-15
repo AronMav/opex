@@ -2,7 +2,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from "vitest";
 
 // Mock dependencies before importing chat-store
 vi.mock("@/lib/query-client", () => ({
-  queryClient: { invalidateQueries: vi.fn(), getQueryData: vi.fn(() => undefined) },
+  queryClient: { invalidateQueries: vi.fn(), getQueryData: vi.fn(() => undefined), getQueriesData: vi.fn(() => []) },
 }));
 vi.mock("@/lib/api", () => ({
   apiGet: vi.fn(),
