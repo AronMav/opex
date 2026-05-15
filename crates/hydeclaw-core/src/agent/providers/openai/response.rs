@@ -9,7 +9,7 @@ pub(super) struct ChatCompletionResponse {
     pub(super) usage: Option<ChatUsage>,
 }
 
-pub(super) fn deserialize_null_as_empty_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+fn deserialize_null_as_empty_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: serde::Deserialize<'de>,
