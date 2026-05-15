@@ -104,7 +104,10 @@ describe("useRenderMessages — RQ cache subscription", () => {
     // Simulate ChatThread's useSessionMessages populating the RQ cache.
     // None of the other useMemo deps (messageSource, selectedBranches,
     // activeSessionId, agent) change — only the cache fills.
-    qc.setQueryData(qk.sessionMessages("sess-1"), {
+    // The hook (variant C, post-refactor) subscribes to the 4-element key
+    // [...qk.sessionMessages(id), agent]; setQueryData must store there so
+    // useQuery's dataUpdatedAt actually fires the memo recompute.
+    qc.setQueryData([...qk.sessionMessages("sess-1"), "Arty"], {
       messages: rawMessages,
     });
 
