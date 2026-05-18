@@ -36,6 +36,43 @@ pub(crate) fn routes() -> Router<AppState> {
         )
 }
 
+/// Allowlist for `POST /api/media/upload`: only MIME types that match the
+/// project's "safe to store as a client upload" rationale (the old
+/// `SAFE_EXTENSIONS` list, expressed as MIME families). Defense in depth — the
+/// serve side (`uploads_serve::api_uploads_serve`) also forces a download
+/// disposition for non-image/audio/video bytes and sends `X-Content-Type-Options:
+/// nosniff` unconditionally. Both `text/html` and `image/svg+xml` are rejected
+/// here because they can execute script same-origin if a future change ever
+/// inlines them.
+fn is_safe_client_upload_mime(mime: &str) -> bool {
+    let lower = mime.to_ascii_lowercase();
+    if lower.starts_with("image/") {
+        // svg explicitly rejected — can carry <script>.
+        !lower.starts_with("image/svg")
+    } else if lower.starts_with("audio/") || lower.starts_with("video/") {
+        true
+    } else {
+        matches!(
+            lower.as_str(),
+            "application/pdf"
+                | "application/zip"
+                | "application/gzip"
+                | "application/x-tar"
+                | "application/octet-stream"
+                | "application/json"
+                | "application/msword"
+                | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                | "application/vnd.ms-excel"
+                | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                | "application/vnd.ms-powerpoint"
+                | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                | "text/plain"
+                | "text/csv"
+                | "text/markdown"
+        )
+    }
+}
+
 /// POST /api/media/upload — multipart upload, stores bytes in the `uploads`
 /// table as `owner_type='client_upload'` with 30-day retention.
 ///
@@ -56,12 +93,30 @@ pub(crate) async fn api_media_upload(
     // Prefer the multipart field's Content-Type; fall back to extension-based
     // inference, then octet-stream. Acceptance stays broad — this endpoint
     // serves chat attachments + bridge media (audio, video, pdf, archives).
-    let field_mime = field.content_type().map(|s| s.to_string());
+    //
+    // Filter out empty Content-Type and the uninformative `application/octet-stream`
+    // default so we still reach the extension-based fallback for those cases.
+    let field_mime = field
+        .content_type()
+        .map(str::to_string)
+        .filter(|s| !s.is_empty() && s != "application/octet-stream");
     let file_name = field.file_name().unwrap_or("file").to_string();
     let mime = field_mime.unwrap_or_else(|| {
         let guessed = crate::uploads::guess_mime_from_extension(&file_name);
         guessed.to_string()
     });
+
+    // MIME allowlist (defense in depth — the serve side also forces
+    // Content-Disposition: attachment for non-inlineable bytes and sends
+    // X-Content-Type-Options: nosniff unconditionally). text/html and
+    // image/svg+xml are rejected here as a belt-and-braces measure.
+    if !is_safe_client_upload_mime(&mime) {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(json!({"error": "mime not allowed"})),
+        )
+            .into_response();
+    }
 
     let data = match field.bytes().await {
         Ok(b) => b,
@@ -87,11 +142,13 @@ pub(crate) async fn api_media_upload(
     {
         Ok(id) => id,
         Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("db: {e}")})),
-            )
-                .into_response();
+            tracing::warn!(
+                error = %e,
+                mime = %mime,
+                size = data.len(),
+                "media upload: db insert failed"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
@@ -108,6 +165,8 @@ pub(crate) async fn api_media_upload(
         &key,
         cfg.config.uploads.signed_url_ttl_secs,
     );
+
+    tracing::info!(id = %id, mime = %mime, size = data.len(), "client_upload stored");
 
     Json(json!({"url": url, "filename": id.to_string(), "size": data.len()})).into_response()
 }
