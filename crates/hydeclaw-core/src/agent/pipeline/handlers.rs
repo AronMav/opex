@@ -265,11 +265,12 @@ async fn br_post(
 /// Save binary data to the `uploads` table (owner_type='tool_output') and
 /// return (signed_url, media_type).
 ///
-/// This is the post-migration version of `save_binary_to_uploads`: the bytes
-/// are persisted to PostgreSQL with an `expires_at` TTL of `retention_days`,
-/// not written to `workspace/uploads/`. The returned URL is the id-based
-/// `/api/uploads/{id}?sig=…&exp=…` endpoint, signed with
-/// `HISTORICAL_URL_TTL_SECS` so chat history stays viewable across deploys.
+/// The bytes are persisted to PostgreSQL with an `expires_at` TTL of
+/// `retention_days`. The returned URL is the id-based
+/// `/api/uploads/{id}?sig=…&exp=…` endpoint, signed for the same
+/// `retention_days` window so the URL becomes invalid at the same moment
+/// the row is reaped — clients see a single failure mode (403/410), not
+/// two (URL still valid, row gone → 404 with no hint about retention).
 ///
 /// `upload_key` is the HKDF-derived per-domain key obtained via
 /// `SecretsManager::get_upload_hmac_key()`; callers MUST NOT pass raw master
@@ -283,7 +284,7 @@ pub async fn save_binary_to_uploads(
     upload_key: &[u8; 32],
     base_url: &str,
 ) -> Result<(String, String)> {
-    use crate::uploads::{HISTORICAL_URL_TTL_SECS, mint_uploads_url};
+    use crate::uploads::mint_uploads_url;
 
     // Detect media type from magic bytes (existing helper in this module).
     let (_, media_type) = detect_media_type(data, hint);
@@ -298,7 +299,11 @@ pub async fn save_binary_to_uploads(
     )
     .await?;
 
-    let url = mint_uploads_url(base_url, id, upload_key, HISTORICAL_URL_TTL_SECS);
+    // URL TTL matches row retention: when the cron deletes the row, the
+    // signed URL is already expired anyway. No "valid URL, missing row"
+    // window.
+    let url_ttl_secs = u64::from(retention_days) * 86_400;
+    let url = mint_uploads_url(base_url, id, upload_key, url_ttl_secs);
     tracing::info!(
         url = %url,
         media_type = %media_type,

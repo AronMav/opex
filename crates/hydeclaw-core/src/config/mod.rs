@@ -71,16 +71,24 @@ pub struct AppConfig {
 
 // ── UploadsConfig (Phase 64 SEC-03) ───────────────────────────────────────────
 
-/// Signed-URL configuration for `GET /uploads/*`.
+/// Signed-URL configuration for uploads and workspace-files.
 ///
 /// Enforced since v0.26.0 (default `true`). Set to `false` in your
 /// `hydeclaw.toml` only if you need to serve unsigned legacy URLs.
+///
+/// **Scope:** `signed_url_ttl_secs` governs (a) `POST /api/media/upload`
+/// (client_upload rows) and (b) workspace-files URLs. It does NOT govern
+/// agent_icon rows (URL TTL = `HISTORICAL_URL_TTL_SECS`, ~50 years, since
+/// the row never expires) nor tool_output rows (URL TTL =
+/// `cleanup.uploads_retention_days * 86_400`, matched to row lifetime so
+/// URL and row expire together).
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct UploadsConfig {
-    /// TTL for signed `/uploads` URLs (seconds). Default: 24 h (86_400 s).
+    /// TTL for signed `/api/media/upload` and workspace-files URLs (seconds).
+    /// Default: 24 h (86_400 s). See struct-level doc for scope.
     #[serde(default = "default_signed_url_ttl")]
     pub signed_url_ttl_secs: u64,
-    /// Enforce HMAC verification on every `/uploads/*` request.
+    /// Enforce HMAC verification on every signed-URL request.
     /// Default: `true` (enforced). Set `false` to accept unsigned URLs.
     #[serde(default = "default_require_signature")]
     pub require_signature: bool,
