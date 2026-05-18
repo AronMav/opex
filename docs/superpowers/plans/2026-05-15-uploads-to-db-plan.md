@@ -383,7 +383,7 @@ pub async fn cleanup_expired(pool: &PgPool) -> Result<u64> {
 mod tests {
     use super::*;
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn agent_icon_upsert_inserts_then_replaces(pool: PgPool) {
         let id1 = upsert_agent_icon(&pool, "Hyde", "image/png", b"first").await.unwrap();
         let id2 = upsert_agent_icon(&pool, "Hyde", "image/jpeg", b"second-and-larger").await.unwrap();
@@ -404,14 +404,14 @@ mod tests {
         assert_eq!(row.data, b"second-and-larger");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_agent_icon_id_returns_current(pool: PgPool) {
         assert!(lookup_agent_icon_id(&pool, "Hyde").await.unwrap().is_none());
         let id = upsert_agent_icon(&pool, "Hyde", "image/png", b"x").await.unwrap();
         assert_eq!(lookup_agent_icon_id(&pool, "Hyde").await.unwrap(), Some(id));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn list_agent_icon_ids_batch(pool: PgPool) {
         upsert_agent_icon(&pool, "Hyde", "image/png", b"h").await.unwrap();
         upsert_agent_icon(&pool, "Alma", "image/png", b"a").await.unwrap();
@@ -423,13 +423,13 @@ mod tests {
         assert!(!map.contains_key("Missing"));
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn list_agent_icon_ids_empty_input(pool: PgPool) {
         let map = list_agent_icon_ids(&pool, &[]).await.unwrap();
         assert!(map.is_empty());
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn delete_agent_icon_returns_count(pool: PgPool) {
         assert_eq!(delete_agent_icon(&pool, "Hyde").await.unwrap(), 0);
         upsert_agent_icon(&pool, "Hyde", "image/png", b"x").await.unwrap();
@@ -437,7 +437,7 @@ mod tests {
         assert!(lookup_agent_icon_id(&pool, "Hyde").await.unwrap().is_none());
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn insert_with_retention_sets_expires_at(pool: PgPool) {
         let id = insert_with_retention(&pool, "tool_output", Some("msg-uuid"), "audio/mp3", b"audio-bytes", 30).await.unwrap();
         let row = get_by_id(&pool, id).await.unwrap().unwrap();
@@ -449,13 +449,13 @@ mod tests {
         assert!(delta >= 29 && delta <= 31, "expires ~30 days from now, got {delta} day delta");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn insert_with_retention_rejects_unknown_owner_type(pool: PgPool) {
         let result = insert_with_retention(&pool, "bogus", None, "image/png", b"x", 30).await;
         assert!(result.is_err());
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn get_by_id_hides_expired(pool: PgPool) {
         // Insert a row that already expired (retention = -1 days).
         let id = Uuid::new_v4();
@@ -469,7 +469,7 @@ mod tests {
         assert!(get_by_id(&pool, id).await.unwrap().is_none(), "expired row must not surface");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn cleanup_expired_deletes_only_expired(pool: PgPool) {
         // One expired tool_output, one fresh tool_output, one permanent agent_icon.
         sqlx::query(
@@ -531,7 +531,7 @@ grep -n "fn mint_workspace_file_url\|fn verify_signed_url\|workspace_files:\|upl
 
 Expected: `mint_workspace_file_url` at ~line 139, `uploads:` namespace literal at ~line 212.
 
-- [ ] **Step 2: Add new signing fn alongside the old one (don't remove yet)**
+- [ ] **Step 2: Add new signing helpers reusing `mint_namespaced_url`**
 
 In `crates/hydeclaw-core/src/uploads.rs`, add after `mint_workspace_file_url`:
 
@@ -540,73 +540,47 @@ In `crates/hydeclaw-core/src/uploads.rs`, add after `mint_workspace_file_url`:
 ///
 /// HMAC namespace stays `"uploads:"` (preserves the
 /// `cross_namespace_forgery_rejected` test invariant). Signed payload bytes:
-/// `"uploads:{id}:{exp_unix}"`.
-pub fn mint_uploads_url(id: uuid::Uuid, key: &[u8; 32], ttl_secs: u64) -> String {
-    let base = public_base_url();
-    let exp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock before epoch")
-        .as_secs()
-        + ttl_secs;
+/// `"uploads:{id}:{exp_unix}"`. Internally reuses `mint_namespaced_url` and
+/// rewrites the `/uploads/` path prefix to `/api/uploads/` so the read
+/// endpoint is the id-based one.
+pub fn mint_uploads_url(base: &str, id: uuid::Uuid, key: &[u8; 32], ttl_secs: u64) -> String {
     let id_str = id.to_string();
-    let payload = format!("uploads:{id_str}:{exp}");
-    let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key)
-        .expect("HMAC accepts any key length");
-    hmac::Mac::update(&mut mac, payload.as_bytes());
-    let tag = hmac::Mac::finalize(mac).into_bytes();
-    let sig = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tag);
-    format!("{base}/api/uploads/{id_str}?sig={sig}&exp={exp}")
+    // mint_namespaced_url produces "{base}/uploads/{filename}?sig=...&exp=...".
+    // Swap the path segment to "/api/uploads/" while keeping the same signed
+    // payload format ("uploads:{id}:{exp}") so the HMAC namespace tag is
+    // unchanged.
+    let url = mint_namespaced_url(base, "uploads", &id_str, key, ttl_secs);
+    url.replacen("/uploads/", "/api/uploads/", 1)
 }
 
 /// Verify a signed `/api/uploads/{id}` URL. Inputs: the id parsed from the path,
 /// the query params, and the same key. Returns Ok(()) on success.
+///
+/// Implemented by delegating to `verify_signed_url` with the id-as-string as
+/// the filename token; the signed payload `"uploads:{id}:{exp}"` is identical
+/// to what `mint_uploads_url` produces.
 pub fn verify_uploads_url(
     id: uuid::Uuid,
     sig_b64: &str,
     exp_unix: u64,
     key: &[u8; 32],
 ) -> Result<(), UploadSignatureError> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("clock before epoch")
-        .as_secs();
-    if exp_unix < now {
-        return Err(UploadSignatureError::Expired);
-    }
-    let payload = format!("uploads:{}:{}", id, exp_unix);
-    let expected = {
-        let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key)
-            .expect("HMAC accepts any key length");
-        hmac::Mac::update(&mut mac, payload.as_bytes());
-        hmac::Mac::finalize(mac).into_bytes()
+    let q = SignedUploadQuery {
+        sig: sig_b64.to_string(),
+        exp: exp_unix,
     };
-    let provided = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(sig_b64.as_bytes())
-        .map_err(|_| UploadSignatureError::BadSignature)?;
-    if subtle::ConstantTimeEq::ct_eq(provided.as_slice(), expected.as_slice()).unwrap_u8() == 1 {
-        Ok(())
-    } else {
-        Err(UploadSignatureError::BadSignature)
-    }
+    verify_signed_url(&id.to_string(), &q, key)
 }
 ```
 
-If `public_base_url()` doesn't exist as a helper, inline the equivalent logic that `mint_workspace_file_url` uses (likely reads from a const or config) — match its convention exactly.
+`mint_namespaced_url` and `verify_signed_url` are existing helpers in this module — no new HMAC, base64, or HKDF code. `base` is passed in by the caller (handler builds it from `cfg.config.gateway.public_url` or `format!("http://localhost:{port}")` — copy the exact pattern from `media.rs:87-92`).
 
 - [ ] **Step 3: Add tests for the new functions**
 
 Append to the `#[cfg(test)] mod tests` block at the end of `crates/hydeclaw-core/src/uploads.rs`:
 
 ```rust
-#[test]
-fn mint_and_verify_uploads_url_roundtrip() {
-    let key = [42u8; 32];
-    let id = uuid::Uuid::new_v4();
-    let url = mint_uploads_url(id, &key, 60);
-    assert!(url.contains(&format!("/api/uploads/{id}?sig=")), "{url}");
-    assert!(url.contains("&exp="));
-
-    // Extract sig + exp from URL, verify.
+fn parse_url_qs(url: &str) -> (String, u64) {
     let qs = url.split('?').nth(1).unwrap();
     let mut sig = String::new();
     let mut exp = 0u64;
@@ -618,6 +592,17 @@ fn mint_and_verify_uploads_url_roundtrip() {
             _ => {}
         }
     }
+    (sig, exp)
+}
+
+#[test]
+fn mint_and_verify_uploads_url_roundtrip() {
+    let key = [42u8; 32];
+    let id = uuid::Uuid::new_v4();
+    let url = mint_uploads_url("http://h", id, &key, 60);
+    assert!(url.starts_with(&format!("http://h/api/uploads/{id}?sig=")), "{url}");
+    assert!(!url.contains("/uploads/") || url.contains("/api/uploads/"), "must not leave bare /uploads/ in URL: {url}");
+    let (sig, exp) = parse_url_qs(&url);
     assert!(verify_uploads_url(id, &sig, exp, &key).is_ok());
 }
 
@@ -625,18 +610,8 @@ fn mint_and_verify_uploads_url_roundtrip() {
 fn verify_uploads_url_rejects_tampered_id() {
     let key = [7u8; 32];
     let id = uuid::Uuid::new_v4();
-    let url = mint_uploads_url(id, &key, 60);
-    let qs = url.split('?').nth(1).unwrap();
-    let mut sig = String::new();
-    let mut exp = 0u64;
-    for kv in qs.split('&') {
-        let (k, v) = kv.split_once('=').unwrap();
-        match k {
-            "sig" => sig = v.to_string(),
-            "exp" => exp = v.parse().unwrap(),
-            _ => {}
-        }
-    }
+    let url = mint_uploads_url("http://h", id, &key, 60);
+    let (sig, exp) = parse_url_qs(&url);
     let other_id = uuid::Uuid::new_v4();
     assert!(verify_uploads_url(other_id, &sig, exp, &key).is_err());
 }
@@ -645,40 +620,26 @@ fn verify_uploads_url_rejects_tampered_id() {
 fn verify_uploads_url_rejects_expired() {
     let key = [1u8; 32];
     let id = uuid::Uuid::new_v4();
-    // exp in the past.
-    let past_exp: u64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap()
-        .as_secs() - 10;
-    let payload = format!("uploads:{}:{}", id, past_exp);
-    let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&key).unwrap();
-    hmac::Mac::update(&mut mac, payload.as_bytes());
-    let tag = hmac::Mac::finalize(mac).into_bytes();
-    let sig = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tag);
-
-    match verify_uploads_url(id, &sig, past_exp, &key) {
-        Err(UploadSignatureError::Expired) => {}
-        other => panic!("expected Expired, got {other:?}"),
-    }
+    // Mint with ttl=1, sleep past expiry, then verify.
+    let url = mint_uploads_url("http://h", id, &key, 1);
+    let (sig, exp) = parse_url_qs(&url);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let result = verify_uploads_url(id, &sig, exp, &key);
+    assert!(result.is_err(), "expired URL must be rejected, got {result:?}");
 }
 
 #[test]
 fn uploads_url_namespace_cannot_forge_workspace_files() {
-    // Mint with the uploads HMAC + try to verify as a workspace_files URL. Must fail.
+    // Mint with the uploads HMAC + try to verify against the workspace_files
+    // namespace via verify_workspace_file_url. Must fail because the signed
+    // payload starts with "uploads:" not "workspace_files:".
     let key = [9u8; 32];
     let id = uuid::Uuid::new_v4();
-    let url = mint_uploads_url(id, &key, 60);
-    let qs = url.split('?').nth(1).unwrap();
-    let sig = qs.split('&').next().unwrap().split('=').nth(1).unwrap();
-    let exp: u64 = qs.split('&').nth(1).unwrap().split('=').nth(1).unwrap().parse().unwrap();
-
-    // Try verifying as a workspace_files URL by passing the id's string as the filename.
-    // We use the existing verify_signed_url (workspace_files namespace).
-    let result = verify_signed_url(
-        &id.to_string(),
-        &SignedUploadQuery { sig: sig.to_string(), exp },
-        &key,
-    );
-    assert!(result.is_err(), "cross-namespace forgery must be rejected");
+    let url = mint_uploads_url("http://h", id, &key, 60);
+    let (sig, exp) = parse_url_qs(&url);
+    let q = SignedUploadQuery { sig, exp };
+    let result = verify_workspace_file_url(&id.to_string(), &q, &key);
+    assert!(result.is_err(), "cross-namespace forgery must be rejected, got {result:?}");
 }
 ```
 
@@ -731,8 +692,8 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::gateway::state::AppState;
-use crate::uploads::{verify_uploads_url, UploadSignatureError};
+use crate::gateway::state::{AppState, AuthServices, InfraServices};
+use crate::uploads::verify_uploads_url;
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new().route("/api/uploads/{id}", get(api_uploads_serve))
@@ -745,7 +706,8 @@ pub(crate) struct UploadsQuery {
 }
 
 pub(crate) async fn api_uploads_serve(
-    State(state): State<AppState>,
+    State(auth): State<AuthServices>,
+    State(infra): State<InfraServices>,
     Path(id_str): Path<String>,
     Query(q): Query<UploadsQuery>,
 ) -> Response {
@@ -754,20 +716,15 @@ pub(crate) async fn api_uploads_serve(
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
 
-    let key = match state.config.config.uploads.upload_signing_key() {
-        Some(k) => k,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "upload key not configured").into_response(),
-    };
+    // Real pattern (mirrors media.rs:94): SecretsManager::get_upload_hmac_key
+    // returns [u8; 32] directly via HKDF from the master key. No Option.
+    let key = auth.secrets.get_upload_hmac_key();
 
-    if let Err(e) = verify_uploads_url(id, &q.sig, q.exp, &key) {
-        let code = match e {
-            UploadSignatureError::Expired => StatusCode::FORBIDDEN,
-            UploadSignatureError::BadSignature => StatusCode::FORBIDDEN,
-        };
-        return code.into_response();
+    if verify_uploads_url(id, &q.sig, q.exp, &key).is_err() {
+        return StatusCode::FORBIDDEN.into_response();
     }
 
-    let row = match crate::db::uploads::get_by_id(&state.infra.db, id).await {
+    let row = match crate::db::uploads::get_by_id(&infra.db, id).await {
         Ok(Some(row)) => row,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
@@ -802,7 +759,7 @@ mod tests {
 }
 ```
 
-The `state.config.config.uploads.upload_signing_key()` accessor must exist; if not, use whatever helper `mint_workspace_file_url`'s callers use to retrieve the key — match that pattern.
+`auth.secrets.get_upload_hmac_key()` and the `State<AuthServices>` / `State<InfraServices>` extractors mirror the existing pattern from `media.rs:40-54`. If `verify_uploads_url`'s `UploadSignatureError` discriminates Expired vs BadSignature semantically the same (both → 403), the simplified `is_err()` check is correct.
 
 - [ ] **Step 2: Register the module**
 
@@ -844,12 +801,12 @@ use axum::{
     extract::{Multipart, Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, put},
+    routing::{put},
     Json, Router,
 };
 use serde::Serialize;
 
-use crate::gateway::state::AppState;
+use crate::gateway::state::{AgentCore, AppState, AuthServices, ConfigServices, InfraServices};
 use crate::uploads::{mint_uploads_url, HISTORICAL_URL_TTL_SECS};
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -865,13 +822,27 @@ struct IconResponse {
     icon_url: String,
 }
 
+/// Build the public base URL for signed URLs, mirroring media.rs:87-92.
+fn public_base(cfg: &ConfigServices) -> String {
+    if let Some(ref pu) = cfg.config.gateway.public_url {
+        pu.trim_end_matches('/').to_string()
+    } else {
+        let port = cfg.config.gateway.listen.rsplit(':').next().unwrap_or("18789");
+        format!("http://localhost:{port}")
+    }
+}
+
 pub(crate) async fn api_put_agent_icon(
-    State(state): State<AppState>,
+    State(agents): State<AgentCore>,
+    State(infra): State<InfraServices>,
+    State(auth): State<AuthServices>,
+    State(cfg): State<ConfigServices>,
     Path(name): Path<String>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    // Validate agent exists (read from in-memory agent map).
-    let known_agents = state.agents.agent_names().await;
+    // Validate agent exists (in-memory agent map). agent_names() exists at
+    // gateway/clusters/agent_core.rs:83.
+    let known_agents = agents.agent_names().await;
     if !known_agents.iter().any(|n| n == &name) {
         return (StatusCode::NOT_FOUND, format!("agent '{name}' not found")).into_response();
     }
@@ -910,7 +881,7 @@ pub(crate) async fn api_put_agent_icon(
             .into_response();
     }
 
-    let id = match crate::db::uploads::upsert_agent_icon(&state.infra.db, &name, &mime, &data).await {
+    let id = match crate::db::uploads::upsert_agent_icon(&infra.db, &name, &mime, &data).await {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!(error = %e, agent = %name, "icon upsert failed");
@@ -918,20 +889,18 @@ pub(crate) async fn api_put_agent_icon(
         }
     };
 
-    let key = match state.config.config.uploads.upload_signing_key() {
-        Some(k) => k,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "upload key not configured").into_response(),
-    };
-    let icon_url = mint_uploads_url(id, &key, HISTORICAL_URL_TTL_SECS);
+    let key = auth.secrets.get_upload_hmac_key();
+    let base = public_base(&cfg);
+    let icon_url = mint_uploads_url(&base, id, &key, HISTORICAL_URL_TTL_SECS);
 
     (StatusCode::OK, Json(IconResponse { icon_url })).into_response()
 }
 
 pub(crate) async fn api_delete_agent_icon(
-    State(state): State<AppState>,
+    State(infra): State<InfraServices>,
     Path(name): Path<String>,
 ) -> impl IntoResponse {
-    match crate::db::uploads::delete_agent_icon(&state.infra.db, &name).await {
+    match crate::db::uploads::delete_agent_icon(&infra.db, &name).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             tracing::warn!(error = %e, agent = %name, "icon delete failed");
@@ -941,7 +910,7 @@ pub(crate) async fn api_delete_agent_icon(
 }
 ```
 
-The `state.agents.agent_names()` accessor must exist (the codebase already exposes agent names via `AppState`). If the method name is different, match what `crud.rs` uses for the same purpose.
+All State extractors (`AgentCore`, `InfraServices`, `AuthServices`, `ConfigServices`) match the pattern already established in `media.rs:40-54`. `agents.agent_names()` exists at `gateway/clusters/agent_core.rs:83`.
 
 - [ ] **Step 2: Register the module**
 
@@ -968,60 +937,82 @@ git commit -m "feat(gateway): PUT/DELETE /api/agents/{name}/icon multipart handl
 **Files:**
 
 - Modify: `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` (the fn at line 277)
+- Modify: `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs:150,200` (callsite update — new params)
+- Modify: `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:527` (callsite update)
+- Modify: `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:624` (callsite update)
 
-- [ ] **Step 1: Read current implementation**
+**Signature changes** (the spec hedged "preserve signature" but no global-pool helper exists in `gateway::state` — and adding one is more risk than threading the pool explicitly). The new signature **adds two parameters** at the front: `pool` and `retention_days`. All four callsites update.
+
+- [ ] **Step 1: Read current implementation + callsites**
 
 ```bash
 sed -n '270,330p' crates/hydeclaw-core/src/agent/pipeline/handlers.rs
+sed -n '195,215p' crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs
+sed -n '520,545p' crates/hydeclaw-core/src/agent/pipeline/media_background.rs
+sed -n '618,640p' crates/hydeclaw-core/src/agent/pipeline/media_background.rs
 ```
 
-Note the existing helper calls used inside the body (e.g. `detect_media_type`, `mint_signed_url` / `mint_workspace_file_url`).
-
-- [ ] **Step 2: Replace the body**
-
-Keep the signature exactly: `pub async fn save_binary_to_uploads(workspace_dir: &str, data: &[u8], hint: &str, upload_key: &[u8; 32], ttl_secs: u64) -> Result<(String, String)>`.
-
-New body:
+- [ ] **Step 2: Replace the fn body in handlers.rs**
 
 ```rust
 pub async fn save_binary_to_uploads(
-    _workspace_dir: &str,  // unused after DB migration; kept for signature parity
+    pool: &sqlx::PgPool,
+    retention_days: u32,
     data: &[u8],
     hint: &str,
     upload_key: &[u8; 32],
-    _ttl_secs: u64,  // retention now driven by CleanupConfig.uploads_retention_days
+    base_url: &str,
 ) -> Result<(String, String)> {
-    use crate::uploads::mint_uploads_url;
+    use crate::uploads::{mint_uploads_url, HISTORICAL_URL_TTL_SECS};
 
     // Detect media type from magic bytes.
     let (_ext, media_type) = detect_media_type(data, hint);
 
-    // Use the global pool stored via the dispatcher singleton. The
-    // pipeline tool handlers already have access via the call context;
-    // adjust this to read from the same place as the rest of pipeline/handlers.rs
-    // uses (likely a thread-local or static; if needed change the fn signature
-    // in a follow-up commit but keep this commit scoped to body-swap).
-    let pool = crate::gateway::state::global_pool().ok_or_else(|| anyhow::anyhow!("DB pool not initialised"))?;
-    let retention = crate::gateway::state::uploads_retention_days().unwrap_or(30);
-
     let id = crate::db::uploads::insert_with_retention(
-        &pool,
+        pool,
         "tool_output",
-        None, // message_id is not available at this point; left NULL for now
+        None, // message_id not known at this layer; future commit can thread it through
         &media_type,
         data,
-        retention,
+        retention_days,
     )
     .await?;
 
-    let url = mint_uploads_url(id, upload_key, crate::uploads::HISTORICAL_URL_TTL_SECS);
+    let url = mint_uploads_url(base_url, id, upload_key, HISTORICAL_URL_TTL_SECS);
     Ok((url, media_type))
 }
 ```
 
-If `crate::gateway::state::global_pool()` or `uploads_retention_days()` doesn't exist, the implementer should add them as thin accessors over the existing `AppState` singletons in the same commit (the codebase uses these patterns elsewhere, e.g. for tracing-context propagation). Match the existing pattern.
+The old `workspace_dir`, `hint`, `ttl_secs` parameters are replaced with `pool`, `retention_days`, `base_url`. The dropped `ttl_secs` is replaced by the constant `HISTORICAL_URL_TTL_SECS` (50-year URL TTL, matches the agent_icon path and chat-history retention semantics).
 
-- [ ] **Step 3: Verify build (callers untouched)**
+- [ ] **Step 3: Update channel_actions.rs callsite (~line 200)**
+
+Find the call. Old shape:
+
+```rust
+save_binary_to_uploads(&workspace_dir, &bytes, &hint, &upload_key, ttl_secs).await
+```
+
+New shape (use whatever names exist in the surrounding fn for `pool`, `cfg.config.cleanup.uploads_retention_days`, and the base URL):
+
+```rust
+save_binary_to_uploads(
+    pool,
+    cfg.config.cleanup.uploads_retention_days,
+    &bytes,
+    &hint,
+    &upload_key,
+    &base_url,
+).await
+```
+
+If `pool` / `cfg` / `base_url` aren't already in scope in this fn, add them as parameters to the enclosing fn and thread them down from the caller. Mirror the `media.rs:40-54` pattern for `base_url` construction. The caller of channel_actions is an axum handler that already has all four via `State<...>` extractors.
+
+- [ ] **Step 4: Update media_background.rs callsites (~lines 527 and 624)**
+
+Same shape as Step 3. Both callsites live inside fns that are already invoked from contexts with access to `pool`/`cfg`/`auth`/`base_url` (the agent pipeline runs inside a handler that has `AppState`). Thread them through.
+
+- [ ] **Step 5: Verify build**
 
 ```bash
 cargo check -p hydeclaw-core
@@ -1030,27 +1021,31 @@ DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test
   cargo test -p hydeclaw-core --bin hydeclaw-core agent::pipeline 2>&1 | tail -10
 ```
 
-All 3 callsites (`channel_actions.rs:200`, `media_background.rs:527,624`) compile unchanged.
+All 4 callsites compile with the new signature.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/handlers.rs
+git add crates/hydeclaw-core/src/agent/pipeline/handlers.rs \
+        crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs \
+        crates/hydeclaw-core/src/agent/pipeline/media_background.rs
 git commit -m "$(cat <<'EOF'
 feat(pipeline): save_binary_to_uploads writes to uploads table (tool_output)
 
-Body-swap only — fn signature is preserved so callers in
-channel_actions.rs and media_background.rs compile unchanged.
+Signature change — added `pool: &PgPool`, `retention_days: u32`, and
+`base_url: &str` parameters at the front; dropped `workspace_dir` and
+`ttl_secs`. The URL TTL is now the long-lived HISTORICAL_URL_TTL_SECS
+constant (matches the agent_icon path), so chat history with TTS
+audio and generated images stays viewable across deploys.
+
+All 4 callsites updated: channel_actions.rs:200, media_background.rs:527
+and :624 thread the new params from their enclosing axum handler
+context.
 
 Behaviour: instead of writing the file to workspace/uploads/, this
 helper now INSERTs a uploads row with owner_type='tool_output' and
-expires_at = NOW() + uploads_retention_days. Returns a signed
-/api/uploads/{id} URL (long-TTL HISTORICAL_URL_TTL_SECS so chat
-history stays viewable for a long time).
-
-workspace_dir and ttl_secs parameters become unused at the body level
-but are kept in the signature; cleaning them up is a follow-up commit
-to keep this one focused on the storage swap.
+expires_at = NOW() + retention_days. The row is fetched on demand by
+GET /api/uploads/{id}.
 EOF
 )"
 ```
@@ -1307,23 +1302,28 @@ In `crates/hydeclaw-core/src/scheduler/mod.rs`, find `add_session_timeline_clean
 
 ```rust
     pub async fn add_uploads_cleanup_hourly(
-        &mut self,
+        &self,
         db: PgPool,
-    ) -> Result<(), anyhow::Error> {
-        use tokio_cron_scheduler::Job;
-        // Hourly: "0 0 * * * *" = at minute 0 of every hour.
-        let db = db.clone();
-        let job = Job::new_async("0 0 * * * *", move |_, _| {
+    ) -> Result<()> {
+        tracing::info!("scheduling hourly uploads cleanup");
+
+        // Hourly at minute 0 (6-field cron: "0 0 * * * *").
+        let job = Job::new_async("0 0 * * * *", move |_uuid, _lock| {
             let db = db.clone();
             Box::pin(async move {
                 match crate::db::uploads::cleanup_expired(&db).await {
                     Ok(0) => {}
-                    Ok(n) => tracing::info!(deleted = n, "uploads cleanup: removed expired rows"),
-                    Err(e) => tracing::warn!(error = %e, "uploads cleanup failed"),
+                    Ok(deleted) => {
+                        tracing::info!(deleted, "uploads hourly cleanup completed");
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "uploads hourly cleanup failed (non-fatal)");
+                    }
                 }
             })
         })?;
-        self.inner.add(job).await?;
+
+        self.scheduler.add(job).await?;
         Ok(())
     }
 ```
@@ -1463,13 +1463,18 @@ EOF
 
 - [ ] **Step 1: Write the integration test**
 
+The codebase has TWO integration-test patterns for DB tests:
+
+1. **`#[sqlx::test(migrations = "../../migrations")]`** — used by inline `#[cfg(test)] mod tests` blocks in `src/` (e.g. `pipeline/finalize.rs`, `pipeline/parallel.rs`). The macro provisions an ephemeral DB and applies migrations automatically.
+2. **`tests/support/harness.rs::TestHarness`** — used by `tests/integration_*.rs` files. Spins up a testcontainers PG, applies migrations via `super::migrations::apply_all`.
+
+For `tests/integration_uploads_db.rs` we use **pattern #2** (matches existing siblings like `integration_watchdog_agent_activity.rs`, `integration_data_layer_indexes.rs`).
+
 `crates/hydeclaw-core/tests/integration_uploads_db.rs`:
 
 ```rust
-//! End-to-end: PUT agent icon → GET via signed URL → DELETE → GET 404.
-//!
-//! Uses the existing tests/support harness with a real ephemeral
-//! PostgreSQL container.
+//! End-to-end: agent_icon upsert/lookup/delete + tool_output retention + cleanup
+//! against a real ephemeral PostgreSQL container.
 
 mod support;
 
@@ -1492,9 +1497,7 @@ async fn icon_roundtrip_db_layer() {
     assert!(row.expires_at.is_none());
 
     let key = [123u8; 32];
-    let url = mint_uploads_url(id, &key, 60);
-
-    // Extract sig + exp, verify.
+    let url = mint_uploads_url("http://h", id, &key, 60);
     let qs = url.split('?').nth(1).unwrap();
     let mut sig = String::new();
     let mut exp = 0u64;
@@ -1524,10 +1527,13 @@ async fn tool_output_with_retention_then_cleanup() {
     ).await.unwrap();
 
     // Insert one already-expired row directly via SQL.
+    let sha = vec![0u8; 32];
     sqlx::query(
         r#"INSERT INTO uploads (id, owner_type, owner_id, mime, data, sha256, size_bytes, expires_at)
-           VALUES (gen_random_uuid(), 'tool_output', 'old', 'a', '\x00', '\x00', 1, NOW() - INTERVAL '1 day')"#,
+           VALUES (gen_random_uuid(), 'tool_output', 'old', 'a', $1, $2, 1, NOW() - INTERVAL '1 day')"#,
     )
+    .bind(b"a".to_vec())
+    .bind(&sha)
     .execute(pool).await.unwrap();
 
     let deleted = uploads::cleanup_expired(pool).await.unwrap();
@@ -1538,7 +1544,7 @@ async fn tool_output_with_retention_then_cleanup() {
 }
 ```
 
-If `support::harness::TestHarness` doesn't match the existing pattern, copy the constructor shape from `tests/integration_watchdog_agent_activity.rs` or `tests/integration_data_layer_indexes.rs`.
+`hydeclaw_core::db::uploads` must be re-exported via the lib facade (`crates/hydeclaw-core/src/lib.rs`) for the integration test to reach it. Check if it's already exported; if not, add `pub use db::uploads;` to the lib facade in the same commit, mirroring how `db::session_timeline` or other DB modules are exposed for tests.
 
 - [ ] **Step 2: Verify**
 
