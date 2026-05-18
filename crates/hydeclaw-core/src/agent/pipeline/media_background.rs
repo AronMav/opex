@@ -330,7 +330,7 @@ impl BackgroundMediaTask {
             ),
             db:             ctx.cfg.db.clone(),
             upload_key:     ctx.tex.secrets.get_upload_hmac_key(),
-            retention_days: crate::agent::pipeline::handlers::DEFAULT_UPLOADS_RETENTION_DAYS,
+            retention_days: ctx.cfg.app_config.cleanup.uploads_retention_days,
             tool_headers,
             context,
             agent_name:     ctx.cfg.agent.name.clone(),

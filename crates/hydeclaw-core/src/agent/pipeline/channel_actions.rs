@@ -219,7 +219,7 @@ async fn execute_inline_for_ui(
     let base_url = public_base_for_uploads(&ctx.cfg.app_config);
     let (url, media_type) = match save_binary_to_uploads(
         &ctx.cfg.db,
-        crate::agent::pipeline::handlers::DEFAULT_UPLOADS_RETENTION_DAYS,
+        ctx.cfg.app_config.cleanup.uploads_retention_days,
         &bytes,
         kind.upload_hint(),
         &upload_key,

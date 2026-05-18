@@ -262,11 +262,6 @@ async fn br_post(
 
 // ── Media helpers ───────────────────────────────────────────────
 
-/// Default retention window for tool_output uploads written by
-/// `save_binary_to_uploads`. Used until Tasks 7/8 callsites are migrated
-/// to read `CleanupConfig.uploads_retention_days` from app config.
-pub const DEFAULT_UPLOADS_RETENTION_DAYS: u32 = 30;
-
 /// Save binary data to the `uploads` table (owner_type='tool_output') and
 /// return (signed_url, media_type).
 ///
