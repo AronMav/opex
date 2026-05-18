@@ -17,10 +17,13 @@ pub(crate) fn uploads_local_url(att_url: &str, gateway_listen: &str) -> String {
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(18789);
     // Extract path from URL. After the uploads-to-db migration the public
-    // shape is "/api/uploads/{id}?sig=...&exp=..."; legacy chat history may
-    // still carry plain "/uploads/{filename}" links that workspace_files
-    // serves. Prefer the longer prefix to avoid stripping "/api" off the
-    // new shape.
+    // shape is "/api/uploads/{id}?sig=...&exp=...". Prefer the longer prefix
+    // so `find()` doesn't match the inner "/uploads/" inside "/api/uploads/"
+    // and strip the "/api" segment. Bare "/uploads/{filename}" is no longer
+    // routable (the legacy filesystem-serving handler was removed); the
+    // fallback exists so malformed legacy URLs at least resolve to a
+    // deterministic 404 path instead of being passed verbatim to the
+    // localhost downloader.
     let path = if let Some(idx) = att_url.find("/api/uploads/") {
         &att_url[idx..]
     } else if let Some(idx) = att_url.find("/uploads/") {

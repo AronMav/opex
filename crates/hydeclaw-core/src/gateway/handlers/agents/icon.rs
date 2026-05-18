@@ -16,21 +16,33 @@ use crate::gateway::state::AppState;
 use crate::uploads::{HISTORICAL_URL_TTL_SECS, mint_uploads_url};
 
 pub(crate) fn routes() -> Router<AppState> {
-    // Axum's default per-request body limit is 2 MiB. Without this layer the
-    // multipart parser refuses any icon over 2 MiB long before the handler's
-    // MAX_BYTES check runs. Round up to MAX_BYTES so the explicit error
-    // response can fire instead.
-    Router::new()
+    // Axum's default per-request body limit is 2 MiB. Multipart and JSON
+    // routes need different caps so the handler's MAX_BYTES check is
+    // reachable in both: the multipart body is roughly equal to the binary
+    // payload, but the JSON body carries base64 (4/3 inflation) plus a
+    // small envelope. Split the sub-routers so each can declare its own
+    // limit.
+    let multipart = Router::new()
         .route(
             "/api/agents/{name}/icon",
             put(api_put_agent_icon).delete(api_delete_agent_icon),
         )
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BYTES));
+    let json = Router::new()
         .route("/api/agents/{name}/icon/json", post(api_post_agent_icon_json))
-        .layer(axum::extract::DefaultBodyLimit::max(MAX_BYTES))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_JSON_BODY_BYTES));
+    multipart.merge(json)
 }
 
 const ALLOWED_MIME: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
-const MAX_BYTES: usize = 10 * 1024 * 1024; // 10 MB
+const MAX_BYTES: usize = 10 * 1024 * 1024; // 10 MB binary cap (handler-level)
+
+/// Body-cap for the JSON variant: MAX_BYTES of binary, base64-encoded
+/// (4/3 inflation), plus 4 KiB slack for the JSON envelope (`mime`,
+/// quoting, keys). Mirrors the handler-level MAX_BYTES so a 10 MiB icon
+/// reaches `store_icon` and surfaces the explicit "icon must be <= N
+/// bytes" error instead of axum's generic 413.
+const MAX_JSON_BODY_BYTES: usize = MAX_BYTES.div_ceil(3) * 4 + 4096;
 
 #[derive(Debug, Serialize)]
 struct IconResponse {
