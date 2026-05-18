@@ -175,6 +175,7 @@ fi
 # ── 8. Replace scripts ──
 if [[ -d "$SRC/scripts" ]]; then
   info "Updating scripts..."
+  mkdir -p "$DEST/scripts"
   cp -r "$SRC/scripts/"* "$DEST/scripts/"
   chmod +x "$DEST/scripts/"*.sh 2>/dev/null || true
   ok "Scripts updated"
