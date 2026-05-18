@@ -140,6 +140,61 @@ pub fn mint_workspace_file_url(rel_path: &str, key: &[u8; 32], ttl_secs: u64) ->
     mint_namespaced_url("", "workspace-files", rel_path, key, ttl_secs)
 }
 
+/// Mint a signed URL for an upload row: `{base}/api/uploads/{id}?sig=...&exp=...`.
+///
+/// HMAC namespace stays `"uploads"` (preserves the
+/// `cross_namespace_forgery_rejected` test invariant). Signed payload bytes:
+/// `"uploads:{id}:{exp_unix}"`. Internally reuses `mint_namespaced_url` and
+/// rewrites the `/uploads/` path prefix to `/api/uploads/` so the read
+/// endpoint is the id-based one. The HMAC payload is unchanged (URL path
+/// rewriting is purely cosmetic; the signature is over `"uploads:{id}:{exp}"`).
+///
+/// Not yet referenced from the binary tree — the id-based `/api/uploads/`
+/// endpoint that consumes it is added in a later task. `#[allow(dead_code)]`
+/// matches the pattern used by `guess_mime_from_extension` for the same
+/// reason (lib facade doesn't drag the binary handlers into the lib target).
+#[allow(dead_code)]
+pub fn mint_uploads_url(base: &str, id: uuid::Uuid, key: &[u8; 32], ttl_secs: u64) -> String {
+    let id_str = id.to_string();
+    // mint_namespaced_url produces "{base}/uploads/{id}?sig=...&exp=...".
+    // Swap the path segment to "/api/uploads/" while keeping the same signed
+    // payload format ("uploads:{id}:{exp}") so the HMAC namespace tag is
+    // unchanged.
+    let url = mint_namespaced_url(base, "uploads", &id_str, key, ttl_secs);
+    url.replacen("/uploads/", "/api/uploads/", 1)
+}
+
+/// Verify a signed `/api/uploads/{id}` URL. Inputs: the id parsed from the
+/// path, the signature and expiry from the query, and the same key used to
+/// mint. Returns `Ok(())` on success.
+///
+/// Implemented by delegating to `verify_signed_url` with the id-as-string as
+/// the filename token; the signed payload `"uploads:{id}:{exp}"` is identical
+/// to what `mint_uploads_url` produces. `now_unix` is sourced from the system
+/// clock here so the caller doesn't need to plumb it through (this matches
+/// what production callers want; tests that need clock-injection should call
+/// `verify_signed_url` directly).
+///
+/// `#[allow(dead_code)]` for the same reason as `mint_uploads_url` — the
+/// id-based read handler that consumes this lands in a later task.
+#[allow(dead_code)]
+pub fn verify_uploads_url(
+    id: uuid::Uuid,
+    sig_b64: &str,
+    exp_unix: u64,
+    key: &[u8; 32],
+) -> Result<(), UploadSignatureError> {
+    let q = SignedUploadQuery {
+        sig: Some(sig_b64.to_string()),
+        exp: Some(exp_unix),
+    };
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_secs();
+    verify_signed_url(&id.to_string(), &q, key, now_unix)
+}
+
 /// Verify a workspace-files signed URL.
 pub fn verify_workspace_file_url(
     rel_path: &str,
@@ -383,5 +438,65 @@ mod tests {
     fn historical_url_ttl_secs_is_50_years() {
         // 50 * 365 * 24 * 3600
         assert_eq!(HISTORICAL_URL_TTL_SECS, 1_576_800_000u64);
+    }
+
+    fn parse_url_qs(url: &str) -> (String, u64) {
+        let qs = url.split('?').nth(1).unwrap();
+        let mut sig = String::new();
+        let mut exp = 0u64;
+        for kv in qs.split('&') {
+            let (k, v) = kv.split_once('=').unwrap();
+            match k {
+                "sig" => sig = v.to_string(),
+                "exp" => exp = v.parse().unwrap(),
+                _ => {}
+            }
+        }
+        (sig, exp)
+    }
+
+    #[test]
+    fn mint_and_verify_uploads_url_roundtrip() {
+        let key = [42u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let url = mint_uploads_url("http://h", id, &key, 60);
+        assert!(url.starts_with(&format!("http://h/api/uploads/{id}?sig=")), "{url}");
+        let (sig, exp) = parse_url_qs(&url);
+        assert!(verify_uploads_url(id, &sig, exp, &key).is_ok());
+    }
+
+    #[test]
+    fn verify_uploads_url_rejects_tampered_id() {
+        let key = [7u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let url = mint_uploads_url("http://h", id, &key, 60);
+        let (sig, exp) = parse_url_qs(&url);
+        let other_id = uuid::Uuid::new_v4();
+        assert!(verify_uploads_url(other_id, &sig, exp, &key).is_err());
+    }
+
+    #[test]
+    fn verify_uploads_url_rejects_expired() {
+        let key = [1u8; 32];
+        let id = uuid::Uuid::new_v4();
+        // Mint with ttl=1, sleep past expiry, then verify.
+        let url = mint_uploads_url("http://h", id, &key, 1);
+        let (sig, exp) = parse_url_qs(&url);
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let result = verify_uploads_url(id, &sig, exp, &key);
+        assert!(result.is_err(), "expired URL must be rejected, got {result:?}");
+    }
+
+    #[test]
+    fn uploads_url_namespace_cannot_forge_workspace_files() {
+        // Mint with the uploads HMAC + try to verify against the workspace-files
+        // namespace via verify_workspace_file_url. Must fail because the signed
+        // payload starts with "uploads:" not "workspace-files:".
+        let key = [9u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let url = mint_uploads_url("http://h", id, &key, 60);
+        let (sig, exp) = parse_url_qs(&url);
+        let result = verify_workspace_file_url(&id.to_string(), &sig, exp, &key, now());
+        assert!(result.is_err(), "cross-namespace forgery must be rejected, got {result:?}");
     }
 }
