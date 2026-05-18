@@ -82,7 +82,7 @@ pub(crate) async fn csp_report_rate_limit_middleware(
 /// via HMAC signatures), so without a dedicated limiter a noisy webhook
 /// source could exhaust the global 300 rpm `RequestRateLimiter` shared
 /// with other anonymous endpoints (`/health`, `/api/oauth/callback`,
-/// `/api/triggers/email/push`, `/api/csp-report`, `/uploads/*`,
+/// `/api/triggers/email/push`, `/api/csp-report`, `/api/uploads/*`,
 /// `/workspace-files/*`).
 ///
 /// Additive to the global limiter — both apply. Loopback callers (internal
@@ -188,7 +188,7 @@ pub(crate) async fn auth_middleware(
     // ── Public paths (no auth required) ──────────────────────────────
     // /health              — liveness probe
     // /webhook/*           — per-endpoint auth (HMAC signatures)
-    // /uploads/*           — UUID filenames, no secrets
+    // /api/uploads/*       — HMAC-signed read endpoint for DB-backed binary assets
     // /api/oauth/callback  — browser redirect from OAuth provider
     // /api/triggers/email/push — validates ?token= query param internally
     // /api/csp-report      — browsers cannot authenticate CSP reports;
@@ -201,7 +201,7 @@ pub(crate) async fn auth_middleware(
         "/api/triggers/email/push",
         "/api/csp-report",
     ];
-    const PUBLIC_PREFIX: &[&str] = &["/webhook/", "/uploads/", "/workspace-files/"];
+    const PUBLIC_PREFIX: &[&str] = &["/webhook/", "/api/uploads/", "/workspace-files/"];
 
     if PUBLIC_EXACT.contains(&path) || PUBLIC_PREFIX.iter().any(|p| path.starts_with(p)) {
         return next.run(req).await;
@@ -214,7 +214,7 @@ pub(crate) async fn auth_middleware(
     // /api/channels/notify — watchdog/internal alerts
     // /api/media/upload    — toolgate media uploads
     // /api/vision/analyze  — vision proxy called by analyze_image YAML tool
-    // /uploads/*           — static file serving
+    // /api/uploads/*       — DB-backed binary read endpoint
     //
     // /ws* is intentionally NOT free-passed here even on loopback. Audit
     // 2026-05-08 found that any local process (toolgate, MCP container with
@@ -224,7 +224,7 @@ pub(crate) async fn auth_middleware(
     // the ticket on loopback breaks nothing legitimate.
     if is_loopback(&client_ip) {
         const LOOPBACK_EXACT: &[&str] = &["/health", "/api/channels/notify", "/api/media/upload", "/api/vision/analyze"];
-        const LOOPBACK_PREFIX: &[&str] = &["/uploads/"];
+        const LOOPBACK_PREFIX: &[&str] = &["/api/uploads/"];
         let loopback_allowed = LOOPBACK_EXACT.contains(&path)
             || LOOPBACK_PREFIX.iter().any(|p| path.starts_with(p));
         if loopback_allowed {

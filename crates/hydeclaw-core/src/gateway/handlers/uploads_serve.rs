@@ -1,12 +1,9 @@
 //! `GET /api/uploads/{id}` — read-through to the `uploads` table with HMAC verification.
 //!
-//! This endpoint is intended to be excluded from the bearer auth middleware
+//! This endpoint is excluded from the bearer auth middleware
 //! (see `crate::gateway::middleware::PUBLIC_PREFIX`) so HTML `img`/`audio` tags
 //! work without bearer headers. Security comes from the HMAC-signed query
-//! string (`?sig=&exp=`). The router wiring + middleware allowlist landing in
-//! a later task of the uploads-to-db migration plan; this commit is a bridge.
-
-#![allow(dead_code)]
+//! string (`?sig=&exp=`).
 
 use axum::{
     Router,

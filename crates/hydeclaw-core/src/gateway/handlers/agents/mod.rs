@@ -26,4 +26,5 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/approvals/{id}/resolve", post(api_resolve_approval))
         .route("/api/approvals/allowlist", get(api_list_allowlist).post(api_add_to_allowlist))
         .route("/api/approvals/allowlist/{id}", delete(api_delete_from_allowlist))
+        .merge(icon::routes())
 }
