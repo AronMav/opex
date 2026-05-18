@@ -473,6 +473,32 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Hourly cleanup of expired `uploads` rows (tool_output + client_upload).
+    /// Permanent rows (`agent_icon`, `expires_at IS NULL`) are untouched.
+    /// Retention is materialised at INSERT time via `expires_at`, so this
+    /// job needs no retention parameter — it just deletes anything past due.
+    pub async fn add_uploads_cleanup_hourly(&self, db: PgPool) -> Result<()> {
+        tracing::info!("scheduling hourly uploads cleanup");
+
+        let job = Job::new_async("0 0 * * * *", move |_uuid, _lock| {
+            let db = db.clone();
+            Box::pin(async move {
+                match crate::db::uploads::cleanup_expired(&db).await {
+                    Ok(deleted) if deleted > 0 => {
+                        tracing::info!(deleted, "uploads hourly cleanup completed");
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "uploads hourly cleanup failed (non-fatal)");
+                    }
+                }
+            })
+        })?;
+
+        self.scheduler.add(job).await?;
+        Ok(())
+    }
+
     /// Add `pending_messages` cleanup job (daily at 6:30 UTC — delete rows older than 7 days).
     pub async fn add_pending_messages_cleanup(&self, db: PgPool) -> Result<()> {
         tracing::info!("scheduling pending_messages cleanup (daily 06:30 UTC)");
