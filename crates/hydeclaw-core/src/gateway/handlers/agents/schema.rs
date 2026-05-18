@@ -69,7 +69,6 @@ pub(crate) struct AgentCreatePayload {
     #[serde(default, deserialize_with = "nullable")]
     pub routing: Option<Option<Vec<RoutingRulePayload>>>,
     pub voice: Option<String>,
-    pub icon: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
     pub approval: Option<Option<ApprovalPayload>>,
     #[serde(default, deserialize_with = "nullable")]
@@ -238,7 +237,6 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 enabled: sr.enabled.unwrap_or(false),
                 min_tool_calls: sr.min_tool_calls.unwrap_or(3),
             }),
-            icon: p.icon,
             max_tools_in_context: p.max_tools_in_context,
             routing: p.routing.flatten().unwrap_or_default().into_iter().map(|r| {
                 crate::config::ProviderRouteConfig {
@@ -372,7 +370,6 @@ mod tests {
             max_tools_in_context: None,
             routing: None,
             voice: None,
-            icon: None,
             approval: None,
             tool_loop: None,
             tool_dispatcher: None,

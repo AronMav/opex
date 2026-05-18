@@ -91,7 +91,7 @@ impl AgentCore {
         names.into_iter().map(|(_, n)| n).collect()
     }
 
-    /// Get list of running agents with name and icon (base agents first, then alphabetical).
+    /// Get list of running agents with name (base agents first, then alphabetical).
     pub async fn agent_summaries(&self) -> Vec<serde_json::Value> {
         let mut summaries: Vec<(bool, String, serde_json::Value)> =
             self.map.read().await.values()
@@ -101,7 +101,6 @@ impl AgentCore {
                         h.engine.cfg().agent.name.clone(),
                         serde_json::json!({
                             "name": h.engine.cfg().agent.name,
-                            "icon": h.engine.cfg().agent.icon,
                         }),
                     )
                 })

@@ -632,7 +632,6 @@ pub(crate) async fn api_update_agent(
                 promotion_max: Some(a.tool_dispatcher.promotion_max),
             }));
         }
-        if payload.icon.is_none() { payload.icon = a.icon.clone(); }
         if payload.provider_connection.is_none() { payload.provider_connection = a.provider_connection.clone(); }
         payload.fallback_provider =
             merge_clearable_string(payload.fallback_provider.take(), a.fallback_provider.as_deref());
