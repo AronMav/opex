@@ -148,12 +148,6 @@ pub fn mint_workspace_file_url(rel_path: &str, key: &[u8; 32], ttl_secs: u64) ->
 /// rewrites the `/uploads/` path prefix to `/api/uploads/` so the read
 /// endpoint is the id-based one. The HMAC payload is unchanged (URL path
 /// rewriting is purely cosmetic; the signature is over `"uploads:{id}:{exp}"`).
-///
-/// Not yet referenced from the binary tree — the id-based `/api/uploads/`
-/// endpoint that consumes it is added in a later task. `#[allow(dead_code)]`
-/// matches the pattern used by `guess_mime_from_extension` for the same
-/// reason (lib facade doesn't drag the binary handlers into the lib target).
-#[allow(dead_code)]
 pub fn mint_uploads_url(base: &str, id: uuid::Uuid, key: &[u8; 32], ttl_secs: u64) -> String {
     let id_str = id.to_string();
     // mint_namespaced_url produces "{base}/uploads/{id}?sig=...&exp=...".
@@ -174,10 +168,6 @@ pub fn mint_uploads_url(base: &str, id: uuid::Uuid, key: &[u8; 32], ttl_secs: u6
 /// clock here so the caller doesn't need to plumb it through (this matches
 /// what production callers want; tests that need clock-injection should call
 /// `verify_signed_url` directly).
-///
-/// `#[allow(dead_code)]` for the same reason as `mint_uploads_url` — the
-/// id-based read handler that consumes this lands in a later task.
-#[allow(dead_code)]
 pub fn verify_uploads_url(
     id: uuid::Uuid,
     sig_b64: &str,

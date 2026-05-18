@@ -1,10 +1,4 @@
 //! `PUT/DELETE /api/agents/{name}/icon` — multipart upload + delete for agent icons.
-//!
-//! The route is not yet merged into the main router; this commit is a bridge
-//! landing the handler ahead of the wiring task in the uploads-to-db migration
-//! plan. `#[allow(dead_code)]` mirrors the precedent set by Tasks 3 and 4.
-
-#![allow(dead_code)]
 
 use axum::{
     Json, Router,

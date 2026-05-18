@@ -1,8 +1,4 @@
 //! `uploads` table CRUD. See docs/superpowers/specs/2026-05-15-uploads-to-db-design.md.
-//!
-//! Public functions are not yet wired into handlers/DTO factories; that happens
-//! in subsequent tasks of the uploads-to-db migration plan.
-#![allow(dead_code)]
 
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
@@ -11,6 +7,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]   // id/expires_at part of the query shape; reserved for diagnostics
 pub struct UploadRow {
     pub id: Uuid,
     pub mime: String,
@@ -117,7 +114,10 @@ pub async fn get_by_id(pool: &PgPool, id: Uuid) -> Result<Option<UploadRow>> {
     }))
 }
 
-/// Read just the id of an agent's icon (cheap — no BYTEA fetch).
+/// Read just the id of an agent's icon (cheap — no BYTEA fetch). Used by tests
+/// and as a single-agent fast path; handlers prefer the batch
+/// `list_agent_icon_ids` to avoid N+1 lookups.
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn lookup_agent_icon_id(pool: &PgPool, agent_name: &str) -> Result<Option<Uuid>> {
     let row = sqlx::query(
         r#"SELECT id FROM uploads WHERE owner_type = 'agent_icon' AND owner_id = $1"#,
