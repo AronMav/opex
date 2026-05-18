@@ -331,6 +331,7 @@
   "agents.field_top_k_tools": "Top-K инструментов",
   "agents.placeholder_all": "все",
   "agents.icon_alt": "иконка агента",
+  "agents.icon_save_agent_first": "Сначала сохраните агента, затем загрузите иконку",
   "agents.field_voice_profile": "Профиль голоса TTS",
   "agents.section_tool_policy": "Политика инструментов",
   "agents.allow_all_tools": "Разрешить все инструменты",

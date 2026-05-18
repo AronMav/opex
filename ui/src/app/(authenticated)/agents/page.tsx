@@ -80,7 +80,6 @@ export const emptyForm: FormState = {
   sessionMaxMessages: "0",
   routing: [],
   voice: "",
-  icon: "",
   iconUrl: "",
   approvalEnabled: false,
   approvalRequireFor: [],
@@ -150,7 +149,6 @@ export function detailToForm(d: AgentDetail): FormState {
       cooldown_secs: r.cooldown_secs,
     })),
     voice: d.voice || "",
-    icon: d.icon || "",
     iconUrl: d.icon_url || "",
     approvalEnabled: !!d.approval?.enabled,
     approvalRequireFor: d.approval?.require_for ?? [],
@@ -241,7 +239,6 @@ export function formToPayload(f: FormState) {
       cooldown_secs: r.cooldown_secs ?? 60,
     })) : null,
     voice: f.voice || null,
-    icon: f.icon || null,
     approval: f.approvalEnabled
       ? {
           enabled: true,

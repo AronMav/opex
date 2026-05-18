@@ -72,7 +72,6 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
     tools: null,
     compaction: null,
     session: null,
-    icon: null,
     max_tools_in_context: null,
     tool_loop: null,
     approval: null,
