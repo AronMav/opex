@@ -7,7 +7,6 @@ provider_connection = "main-claude"
 fallback_provider = "openai-fallback"
 temperature = 0.8
 max_tokens = 4096
-icon = "uploads/robot.png"
 max_tools_in_context = 20
 max_history_messages = 100
 daily_budget_tokens = 500000

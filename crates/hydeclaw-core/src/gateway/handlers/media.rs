@@ -128,8 +128,7 @@ pub(crate) async fn api_media_upload(
         return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({"error": "file too large (max 20MB)"}))).into_response();
     }
 
-    // TODO(uploads-task-10): read from cfg.config.cleanup.uploads_retention_days.
-    let retention_days = crate::agent::pipeline::handlers::DEFAULT_UPLOADS_RETENTION_DAYS;
+    let retention_days = cfg.config.cleanup.uploads_retention_days;
     let id = match crate::db::uploads::insert_with_retention(
         &infra.db,
         "client_upload",
