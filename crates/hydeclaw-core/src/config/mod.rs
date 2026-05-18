@@ -270,16 +270,22 @@ pub struct CleanupConfig {
     /// autovacuum-friendly. Must be `> 0`. Default: 5000.
     #[serde(default = "default_session_timeline_batch_size")]
     pub session_timeline_batch_size: i64,
+    /// Retention for uploads with non-NULL expires_at (tool_output + client_upload).
+    /// Permanent rows (agent_icon) are not affected. Default: 30 days.
+    #[serde(default = "default_uploads_retention_days")]
+    pub uploads_retention_days: u32,
 }
 
 fn default_session_timeline_retention_days() -> u32 { 7 }
 fn default_session_timeline_batch_size() -> i64 { 5000 }
+fn default_uploads_retention_days() -> u32 { 30 }
 
 impl Default for CleanupConfig {
     fn default() -> Self {
         Self {
             session_timeline_retention_days: default_session_timeline_retention_days(),
             session_timeline_batch_size: default_session_timeline_batch_size(),
+            uploads_retention_days: default_uploads_retention_days(),
         }
     }
 }
@@ -649,9 +655,6 @@ pub struct AgentSettings {
     /// Evaluated in order — first matching condition is used.
     #[serde(default)]
     pub routing: Vec<ProviderRouteConfig>,
-    /// URL path to agent icon image (e.g. "uploads/agent-icon.png").
-    /// Served via GET /uploads/{filename}.
-    pub icon: Option<String>,
     /// Optional approval config — require owner confirmation before executing specific tools.
     pub approval: Option<ApprovalConfig>,
     /// Tool loop settings — iteration limits, loop detection, overflow recovery.
@@ -1712,7 +1715,6 @@ model = "m2.5"
         assert!(cfg.agent.session.is_none());
         assert!(cfg.agent.max_tools_in_context.is_none());
         assert!(cfg.agent.routing.is_empty());
-        assert!(cfg.agent.icon.is_none());
         assert!(cfg.agent.approval.is_none());
         assert!(cfg.agent.tool_loop.is_none());
     }
@@ -1767,7 +1769,6 @@ model = "m2.5"
                     temperature: Some(0.8),
                     cooldown_secs: 60,
                 }],
-                icon: None,
                 approval: None,
                 tool_loop: None,
                 base: false,
@@ -1827,7 +1828,6 @@ model = "m2.5"
                 max_history_messages: None,
                 prompt_cache: false,
                 routing: vec![],
-                icon: Some("uploads/icon.png".into()),
                 approval: Some(ApprovalConfig {
                     enabled: true,
                     require_for: vec!["shell_exec".into()],
