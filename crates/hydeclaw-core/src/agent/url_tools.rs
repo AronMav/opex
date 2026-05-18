@@ -16,8 +16,14 @@ pub(crate) fn uploads_local_url(att_url: &str, gateway_listen: &str) -> String {
         .next()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(18789);
-    // Extract path from URL (e.g. "/uploads/uuid.jpg") or fall back to full URL
-    let path = if let Some(idx) = att_url.find("/uploads/") {
+    // Extract path from URL. After the uploads-to-db migration the public
+    // shape is "/api/uploads/{id}?sig=...&exp=..."; legacy chat history may
+    // still carry plain "/uploads/{filename}" links that workspace_files
+    // serves. Prefer the longer prefix to avoid stripping "/api" off the
+    // new shape.
+    let path = if let Some(idx) = att_url.find("/api/uploads/") {
+        &att_url[idx..]
+    } else if let Some(idx) = att_url.find("/uploads/") {
         &att_url[idx..]
     } else {
         att_url
