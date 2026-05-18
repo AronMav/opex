@@ -1,5 +1,6 @@
 mod crud;
 pub mod dto;
+mod icon;
 mod lifecycle;
 mod schema;
 
