@@ -23,6 +23,7 @@ pub mod skill_versions;
 pub mod tool_audit;
 pub mod tool_quality;
 pub mod upload_migration;
+pub mod uploads;
 
 use anyhow::Result;
 use sqlx::postgres::PgPoolOptions;
