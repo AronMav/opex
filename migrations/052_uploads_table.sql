@@ -9,7 +9,7 @@ CREATE TABLE uploads (
     mime TEXT NOT NULL,
     data BYTEA NOT NULL,
     sha256 BYTEA NOT NULL,
-    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0 AND size_bytes <= 10485760),
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0 AND size_bytes <= 20971520),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ
 );

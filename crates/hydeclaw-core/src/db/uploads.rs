@@ -6,6 +6,11 @@ use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Hard upper bound on a single uploads.data row, matching the DB CHECK in
+/// `migrations/052_uploads_table.sql`. Callers must reject larger inputs
+/// before INSERT — the DB will refuse a CHECK violation otherwise.
+pub const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]   // id/expires_at part of the query shape; reserved for diagnostics
 pub struct UploadRow {
@@ -24,6 +29,9 @@ pub async fn upsert_agent_icon(
     mime: &str,
     data: &[u8],
 ) -> Result<Uuid> {
+    if data.len() > MAX_UPLOAD_BYTES {
+        return Err(anyhow!("upload exceeds {} byte cap", MAX_UPLOAD_BYTES));
+    }
     let new_id = Uuid::new_v4();
     let sha = Sha256::digest(data).to_vec();
     let size = i64::try_from(data.len()).map_err(|_| anyhow!("data too large"))?;
@@ -66,6 +74,9 @@ pub async fn insert_with_retention(
 ) -> Result<Uuid> {
     if owner_type != "tool_output" && owner_type != "client_upload" {
         return Err(anyhow!("owner_type must be tool_output or client_upload"));
+    }
+    if data.len() > MAX_UPLOAD_BYTES {
+        return Err(anyhow!("upload exceeds {} byte cap", MAX_UPLOAD_BYTES));
     }
     let id = Uuid::new_v4();
     let sha = Sha256::digest(data).to_vec();
