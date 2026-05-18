@@ -29,6 +29,8 @@ Single polymorphic `uploads` table holds every binary tied to an agent or a mess
 
 Serving uses the existing HMAC-signed URL pattern from Phase 64 SEC-03: `GET /api/uploads/{id}?sig={hmac}&exp={unix_ts}` is excluded from the auth middleware (so HTML `img` and `audio` tags work without bearer headers), and `crates/hydeclaw-core/src/uploads.rs::verify_url_signature` validates the HMAC on each request. URL minting moves from filesystem-path inputs to upload-row IDs.
 
+**HMAC namespace preservation:** the signed payload changes from `"uploads:{filename}:{exp}"` to `"uploads:{id}:{exp}"`. The namespace tag stays `"uploads:"`. This keeps the existing `cross_namespace_forgery_rejected` test invariant alive (a `workspace_files:` URL still cannot be forged with the `uploads:` HMAC key). Only the second token in the signed payload changes from filename to UUID-as-string.
+
 The cleanup loop already exists for `session_timeline` retention. We extend it with one more `DELETE FROM uploads WHERE expires_at < NOW()` query and a `uploads_retention_days` knob in `CleanupConfig`.
 
 ## Database schema
@@ -55,7 +57,24 @@ CREATE UNIQUE INDEX uploads_agent_icon_unique ON uploads(owner_id) WHERE owner_t
 
 - `size_bytes <= 10 MB`: enough for high-res avatars and 60-second TTS clips; rejected at handler before INSERT so we never write oversized rows.
 - `sha256` enables future deduplication; the initial implementation simply stores it for forensics.
-- The partial unique index `uploads_agent_icon_unique` enforces one-icon-per-agent at the DB level — PUT does INSERT ... ON CONFLICT UPDATE.
+- `owner_id` is TEXT (not UUID) because `agent_icon` rows use the agent name; for `tool_output` rows we encode the message UUID as canonical string via `Uuid::to_string()`. Heterogeneity is intentional and confined to two known consumer types.
+- The partial unique index `uploads_agent_icon_unique` enforces one-icon-per-agent at the DB level. PostgreSQL requires the `ON CONFLICT` clause to repeat the partial predicate explicitly:
+
+  ```sql
+  INSERT INTO uploads (id, owner_type, owner_id, mime, data, sha256, size_bytes, expires_at)
+  VALUES ($1, 'agent_icon', $2, $3, $4, $5, $6, NULL)
+  ON CONFLICT (owner_id) WHERE owner_type = 'agent_icon'
+  DO UPDATE SET
+      id = EXCLUDED.id,
+      mime = EXCLUDED.mime,
+      data = EXCLUDED.data,
+      sha256 = EXCLUDED.sha256,
+      size_bytes = EXCLUDED.size_bytes,
+      created_at = NOW()
+  RETURNING id;
+  ```
+
+  Without the `WHERE owner_type = 'agent_icon'` in the conflict target, PG errors with "there is no unique or exclusion constraint matching the ON CONFLICT specification".
 - `expires_at IS NULL` for agent_icon rows; the partial index on `expires_at` skips them, so the cleanup query stays cheap.
 
 ## API surface
@@ -66,9 +85,53 @@ CREATE UNIQUE INDEX uploads_agent_icon_unique ON uploads(owner_id) WHERE owner_t
 
 **`GET /api/uploads/{id}?sig=…&exp=…`** — unauthenticated route excluded from the bearer middleware; HMAC verification happens in the handler. Validates the signature; on success streams BYTEA with `Content-Type` from `mime`, `Content-Length` from `size_bytes`, and `ETag` set to the hex of `sha256`. On invalid or expired signature: `403`. On missing row: `404`. On expired `expires_at`: `410 Gone`.
 
-`AgentDetailDto.icon_url: Option<String>` stays as the contract for the UI. The minting changes: instead of `signed_icon_url(agent.icon_filename, key)` it becomes `lookup_agent_icon_id(agent_name) → mint_uploads_url(id, key, ttl)`. UI is transparent.
+**DTO field changes:**
 
-`save_binary_to_uploads()` in `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` (and any other call sites) is rewired to INSERT a `tool_output` row and return the signed `/api/uploads/{id}` URL. The `__file__:` SSE marker keeps its existing format — only the URL it carries changes. UI and channel adapters are transparent.
+- `AgentDetailDto.icon: Option<String>` (filename, line 184 of `dto_structs.rs`) — **removed** along with `AgentSettings.icon`.
+- `AgentSummaryDto.icon: Option<String>` (filename, line 232) — **removed** for the same reason.
+- `AgentDetailDto.icon_url: Option<String>` — **kept**; this is the actual UI contract.
+- `AgentSummaryDto.icon_url: Option<String>` — **kept**.
+
+**`signed_icon_url` rewire — batch-prefetch pattern (NOT async-cascade):**
+
+To avoid making `agent_to_summary_dto` and `agent_to_detail_dto` async (which would ripple through every handler that builds these DTOs), the lookup happens **outside** the DTO factory:
+
+1. Each agents handler (list/get) does ONE upfront DB query to fetch all relevant `agent_icon` upload IDs:
+
+   ```rust
+   let icon_ids: HashMap<String, Uuid> = db::uploads::list_agent_icon_ids(pool, &agent_names).await?;
+   ```
+
+2. Pass the map into the DTO factory:
+
+   ```rust
+   fn signed_icon_url(
+       agent_name: &str,
+       icon_ids: &HashMap<String, Uuid>,
+       upload_key: Option<&[u8; 32]>,
+   ) -> Option<String> {
+       let id = icon_ids.get(agent_name)?;
+       let key = upload_key?;
+       Some(mint_uploads_url(*id, key, HISTORICAL_URL_TTL_SECS))
+   }
+   ```
+
+`signed_icon_url` stays **synchronous**; `agent_to_summary_dto` / `agent_to_detail_dto` stay synchronous. This matches the existing pattern where `upload_key` is passed in as a parameter rather than fetched inside the DTO factory.
+
+`save_binary_to_uploads()` lives in `crates/hydeclaw-core/src/agent/pipeline/handlers.rs:277` with three call sites:
+
+- `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs:150,200`
+- `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:527`
+- `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:624`
+
+Its existing signature `async fn save_binary_to_uploads(workspace_dir, data, hint, upload_key, ttl_secs) -> Result<(String, String)>` (returning `(url, media_type)`) is **preserved** so the three callers compile unchanged. Implementation rewires the body to:
+
+1. detect media type via `detect_media_type(data, hint)` (existing helper)
+2. INSERT a `tool_output` row into `uploads` (sha256 + size + mime + bytes + `expires_at = NOW() + retention_days`)
+3. mint a signed `/api/uploads/{id}` URL
+4. return `(url, media_type)` exactly as before
+
+The `__file__:` SSE marker keeps its existing format — only the URL substring changes. UI and channel adapters are transparent. The `workspace_dir` parameter becomes unused at call site but is kept in the signature to minimise diff scope; a follow-up commit can drop it from all four signatures.
 
 ## Code changes
 
@@ -78,12 +141,14 @@ CREATE UNIQUE INDEX uploads_agent_icon_unique ON uploads(owner_id) WHERE owner_t
 | DB layer | `crates/hydeclaw-core/src/db/uploads.rs` (new) | `get_by_id(pool, id) -> Option<UploadRow>`, `upsert_agent_icon(pool, name, mime, data) -> Uuid`, `insert_tool_output(pool, owner_id, mime, data, retention_days) -> Uuid`, `delete_agent_icon(pool, name)`, `cleanup_expired(pool) -> u64` |
 | HTTP handler | `crates/hydeclaw-core/src/gateway/handlers/uploads.rs` (new) | `GET /api/uploads/{id}` reads HMAC params, calls `verify_url_signature`, streams BYTEA. Excluded from auth middleware. |
 | HTTP handler | `crates/hydeclaw-core/src/gateway/handlers/agents/icon.rs` (new) | `PUT /api/agents/{name}/icon` (multipart) and `DELETE /api/agents/{name}/icon` |
-| DTO | `crates/hydeclaw-core/src/gateway/handlers/agents/dto.rs` | `signed_icon_url(agent_name, upload_key, pool)` — DB lookup by agent_name, then `mint_uploads_url`. Async. |
-| Tool dispatch | `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` (and any other `save_binary_to_uploads()` call sites — at minimum image_gen and TTS handlers) | INSERT into uploads instead of writing file; return signed `/api/uploads/{id}` URL |
+| DTO struct | `crates/hydeclaw-core/src/gateway/handlers/agents/dto_structs.rs` | Drop `AgentDetailDto.icon` (line 184) and `AgentSummaryDto.icon` (line 232). Keep both `icon_url` fields. TS regen propagates. |
+| DTO factory | `crates/hydeclaw-core/src/gateway/handlers/agents/dto.rs` | `signed_icon_url(agent_name: &str, icon_ids: &HashMap<String, Uuid>, upload_key: Option<&[u8; 32]>) -> Option<String>` — stays sync; reads from a prefetched map. New helper `db::uploads::list_agent_icon_ids(pool, &[agent_name]) -> HashMap<String, Uuid>` called once per request in the agents handler before DTO construction. |
+| Tool dispatch | `crates/hydeclaw-core/src/agent/pipeline/handlers.rs:277` (definition) | `save_binary_to_uploads` body rewired to INSERT a `tool_output` row + mint `/api/uploads/{id}` URL. Signature **preserved**: `async fn save_binary_to_uploads(workspace_dir, data, hint, upload_key, ttl_secs) -> Result<(String, String)>`. `workspace_dir` becomes unused at the body level; kept in signature for now. |
+| Tool dispatch callers | `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs:150,200` + `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:527,624` | No source changes (signature preserved); behaviour now writes to DB instead of file. |
 | Config | `crates/hydeclaw-core/src/config/mod.rs` | Remove `AgentSettings.icon: Option<String>`. Add `CleanupConfig.uploads_retention_days: u32` (default 30) and `default_uploads_retention_days() -> u32 { 30 }`. |
 | Signing | `crates/hydeclaw-core/src/uploads.rs` | Rename `mint_workspace_file_url` → `mint_uploads_url(id: Uuid, key, ttl)`. URL format becomes `{base}/api/uploads/{id}?sig=...&exp=...`. Updated `verify_url_signature` accepts the id-based path. Existing 30+ tests in this file get adjusted for the new path shape. |
 | Cleanup loop | `crates/hydeclaw-core/src/scheduler/mod.rs` — alongside the existing `add_session_timeline_cleanup_hourly` registration in `crates/hydeclaw-core/src/main.rs` | Add new method `Scheduler::add_uploads_cleanup_hourly(pool, retention_days)`. The cron body runs `DELETE FROM uploads WHERE expires_at IS NOT NULL AND expires_at < NOW()` and logs the row count via tracing. main.rs adds one registration call mirroring the session_timeline pattern. |
-| Routing | `crates/hydeclaw-core/src/gateway/mod.rs` | `merge(uploads::routes())` + `merge(agents::icon::routes())`. Auth-middleware exclusion: add `/api/uploads/` prefix alongside the existing `/uploads/` exclusion. Drop the old `/uploads/*` static-file route. |
+| Routing | `crates/hydeclaw-core/src/gateway/mod.rs` + `crates/hydeclaw-core/src/gateway/middleware.rs:204` | `merge(uploads::routes())` + `merge(agents::icon::routes())`. Update `PUBLIC_PREFIX` in `middleware.rs:204`: **replace** `"/uploads/"` with `"/api/uploads/"` (no parallel coexistence — old route is removed cleanly). Drop the old `/uploads/*` static-file route from the router. `/workspace-files/` and `/webhook/` exclusions stay. |
 | UI | `ui/src/app/(authenticated)/agents/AgentEditDialog.tsx` | Change the icon-upload PUT endpoint from the legacy `/uploads/...` flow to `/api/agents/{name}/icon` multipart. The existing `img` tag binding (`src={dto.icon_url}`) is unchanged. |
 | TS types | `ui/src/types/api.generated.ts` (regen) | Regenerated by `make gen-types` after `AgentSettings.icon` field is dropped. Already in sync at this commit; nothing manual. |
 | TOML | `config/agents/Hyde.toml`, `Arty.toml`, `Alma.toml` (Pi) | Remove dead `icon = "..."` lines. Optional; serde would ignore unknown fields after the struct removal, but tidiness is cheap. |
