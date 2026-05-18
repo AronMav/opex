@@ -1192,6 +1192,12 @@ async fn schedule_periodic_jobs(
         tracing::warn!(error = %e, job = "session_timeline_cleanup_hourly", "failed to register cron job");
     }
 
+    // Hourly cleanup of expired uploads (tool_output + client_upload).
+    // Retention is materialised at INSERT time, so no parameter needed here.
+    if let Err(e) = sched.add_uploads_cleanup_hourly(db.clone()).await {
+        tracing::warn!(error = %e, job = "uploads_cleanup_hourly", "failed to register cron job");
+    }
+
     // Automatic backup
     if state.config.config.backup.enabled
         && let Err(e) = sched.add_backup(
