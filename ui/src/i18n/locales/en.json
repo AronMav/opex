@@ -331,6 +331,7 @@
   "agents.field_top_k_tools": "Top-K tools",
   "agents.placeholder_all": "all",
   "agents.icon_alt": "agent icon",
+  "agents.icon_save_agent_first": "Save the agent first, then upload its icon",
   "agents.field_voice_profile": "TTS voice profile",
   "agents.section_tool_policy": "Tool Policy",
   "agents.allow_all_tools": "Allow all tools",

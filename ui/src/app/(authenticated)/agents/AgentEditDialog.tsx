@@ -88,11 +88,9 @@ export interface FormState {
   sessionMaxMessages: string;
   routing: RoutingRule[];
   voice: string;
-  icon: string;
-  /// Pre-signed `/uploads/{filename}?sig=&exp=` URL for icon preview.
-  /// Hydrated from `AgentDetailDto.icon_url` or from `/api/media/upload`'s
-  /// `url` after a fresh upload. `icon` keeps just the filename for the PUT
-  /// payload — the backend re-signs on every GET.
+  /// Pre-signed `/api/uploads/{id}?sig=&exp=` URL for icon preview.
+  /// Hydrated from `AgentDetailDto.icon_url`. Refreshed by the
+  /// `PUT /api/agents/{name}/icon` response after a fresh upload.
   iconUrl: string;
   approvalEnabled: boolean;
   approvalRequireFor: string[];
@@ -253,6 +251,10 @@ export function AgentEditDialog({
                       type="button"
                       className="relative group"
                       onClick={async () => {
+                        if (!editName) {
+                          toast.error(t("agents.icon_save_agent_first"));
+                          return;
+                        }
                         const input = document.createElement("input");
                         input.type = "file";
                         input.accept = "image/*";
@@ -260,28 +262,22 @@ export function AgentEditDialog({
                           const file = input.files?.[0];
                           if (!file) return;
                           const fd = new FormData();
-                          fd.append("file", file);
+                          fd.append("image", file);
                           try {
                             const token = useAuthStore.getState().token;
-                            const resp = await fetch("/api/media/upload", {
-                              method: "POST",
+                            const resp = await fetch(`/api/agents/${encodeURIComponent(editName)}/icon`, {
+                              method: "PUT",
                               headers: { Authorization: `Bearer ${token}` },
                               body: fd,
                             });
                             if (!resp.ok) throw new Error(t("common.upload_error"));
-                            const data = await resp.json();
-                            const filename: string | undefined =
-                              data.filename || (typeof data.url === "string" ? data.url.split("?")[0].split("/").pop() : undefined);
-                            // Use `url` straight from the upload response so the
-                            // preview shows the freshly-signed image without a
-                            // round-trip through the agents GET. `icon` keeps just
-                            // the filename — backend re-signs on every read.
+                            const data = (await resp.json()) as { icon_url: string };
+                            // Strip origin for same-origin browser fetch.
                             const previewUrl = (() => {
-                              if (typeof data.url !== "string") return "";
-                              try { return new URL(data.url).pathname + new URL(data.url).search; }
-                              catch { return data.url as string; }
+                              try { return new URL(data.icon_url, window.location.origin).pathname + new URL(data.icon_url, window.location.origin).search; }
+                              catch { return data.icon_url; }
                             })();
-                            if (filename) upd({ icon: filename, iconUrl: previewUrl });
+                            upd({ iconUrl: previewUrl });
                           } catch {
                             toast.error(t("common.icon_upload_error"));
                           }
