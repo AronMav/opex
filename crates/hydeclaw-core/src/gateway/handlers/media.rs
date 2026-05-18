@@ -8,7 +8,7 @@ use axum::{
 use serde_json::json;
 
 use super::super::AppState;
-use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices};
+use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices, InfraServices};
 use crate::uploads::{verify_signed_url, SignedUploadQuery, UploadSignatureError};
 
 /// Query extractor for `?sig=&exp=`. Kept as a local `#[derive(Deserialize)]`
@@ -36,53 +36,64 @@ pub(crate) fn routes() -> Router<AppState> {
         )
 }
 
-/// POST /api/media/upload — multipart upload, saves to workspace/uploads/{uuid}.{ext}
+/// POST /api/media/upload — multipart upload, stores bytes in the `uploads`
+/// table as `owner_type='client_upload'` with 30-day retention.
+///
+/// Response: `{url, filename, size}` where `filename` is the new upload UUID
+/// (no extension) — preserved for backward compat with ChatComposer,
+/// AgentEditDialog, and `channels/src/bridge.ts`.
 pub(crate) async fn api_media_upload(
-    State(agents): State<AgentCore>,
+    State(infra): State<InfraServices>,
     State(cfg): State<ConfigServices>,
     State(auth): State<AuthServices>,
     mut multipart: axum::extract::Multipart,
 ) -> impl IntoResponse {
-    let workspace_dir = agents.deps.read().await.workspace_dir.clone();
-    let uploads_dir = std::path::PathBuf::from(&workspace_dir).join("uploads");
-    if let Err(e) = tokio::fs::create_dir_all(&uploads_dir).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("mkdir: {e}")}))).into_response();
-    }
-
     let field = match multipart.next_field().await {
         Ok(Some(f)) => f,
         _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": "no file field in multipart"}))).into_response(),
     };
 
-    let original_name = field.file_name().unwrap_or("file").to_string();
-    let ext = original_name.rsplit('.').next().unwrap_or("bin").to_lowercase();
-    // Only allow safe media extensions — reject html/svg/etc to prevent XSS
-    const SAFE_EXTENSIONS: &[&str] = &[
-        "jpg", "jpeg", "png", "gif", "webp", "bmp", "ico",
-        "mp4", "webm", "mov", "avi",
-        "ogg", "oga", "mp3", "wav", "flac", "aac", "m4a",
-        "pdf", "docx", "xlsx", "pptx",
-        "txt", "md", "csv", "log", "json", "toml", "yaml", "yml",
-        "zip", "tar", "gz", "bin",
-    ];
-    let ext = if SAFE_EXTENSIONS.contains(&ext.as_str()) { ext } else { "bin".to_string() };
-    let uuid = uuid::Uuid::new_v4();
-    let filename = format!("{uuid}.{ext}");
-    let path = uploads_dir.join(&filename);
+    // Prefer the multipart field's Content-Type; fall back to extension-based
+    // inference, then octet-stream. Acceptance stays broad — this endpoint
+    // serves chat attachments + bridge media (audio, video, pdf, archives).
+    let field_mime = field.content_type().map(|s| s.to_string());
+    let file_name = field.file_name().unwrap_or("file").to_string();
+    let mime = field_mime.unwrap_or_else(|| {
+        let guessed = crate::uploads::guess_mime_from_extension(&file_name);
+        guessed.to_string()
+    });
 
     let data = match field.bytes().await {
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("read: {e}")}))).into_response(),
     };
 
-    // 20 MB limit
+    // 20 MB hard cap (the route layer also enforces DefaultBodyLimit).
     if data.len() > 20 * 1024 * 1024 {
         return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({"error": "file too large (max 20MB)"}))).into_response();
     }
 
-    if let Err(e) = tokio::fs::write(&path, &data).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("write: {e}")}))).into_response();
-    }
+    // TODO(uploads-task-10): read from cfg.config.cleanup.uploads_retention_days.
+    let retention_days = crate::agent::pipeline::handlers::DEFAULT_UPLOADS_RETENTION_DAYS;
+    let id = match crate::db::uploads::insert_with_retention(
+        &infra.db,
+        "client_upload",
+        None,
+        &mime,
+        &data,
+        retention_days,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("db: {e}")})),
+            )
+                .into_response();
+        }
+    };
 
     let base = if let Some(ref pu) = cfg.config.gateway.public_url {
         pu.trim_end_matches('/').to_string()
@@ -90,13 +101,15 @@ pub(crate) async fn api_media_upload(
         let port = cfg.config.gateway.listen.rsplit(':').next().unwrap_or("18789");
         format!("http://localhost:{port}")
     };
-    let url = if cfg.config.uploads.require_signature {
-        let key = auth.secrets.get_upload_hmac_key();
-        crate::uploads::mint_signed_url(&base, &filename, &key, cfg.config.uploads.signed_url_ttl_secs)
-    } else {
-        format!("{base}/uploads/{filename}")
-    };
-    Json(json!({"url": url, "filename": filename, "size": data.len()})).into_response()
+    let key = auth.secrets.get_upload_hmac_key();
+    let url = crate::uploads::mint_uploads_url(
+        &base,
+        id,
+        &key,
+        cfg.config.uploads.signed_url_ttl_secs,
+    );
+
+    Json(json!({"url": url, "filename": id.to_string(), "size": data.len()})).into_response()
 }
 
 /// GET /uploads/{filename} — serve uploaded files.
