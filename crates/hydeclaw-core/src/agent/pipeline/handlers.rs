@@ -262,39 +262,57 @@ async fn br_post(
 
 // ── Media helpers ───────────────────────────────────────────────
 
-/// Save binary data to workspace/uploads/ and return (signed_url, media_type).
+/// Default uploads retention until [cleanup] `uploads_retention_days` is wired
+/// up (Task 10 of the uploads-to-db migration).
 ///
-/// Phase 64 SEC-03: the returned URL is HMAC-signed with a TTL so agent-emitted
-/// media (Telegram send_photo, send_voice) cannot be enumerated or replayed
-/// indefinitely. `upload_key` is the HKDF-derived per-domain key obtained via
+/// TODO(uploads-task-10): replace with
+/// `cfg.config.cleanup.uploads_retention_days`.
+pub const DEFAULT_UPLOADS_RETENTION_DAYS: u32 = 30;
+
+/// Save binary data to the `uploads` table (owner_type='tool_output') and
+/// return (signed_url, media_type).
+///
+/// This is the post-migration version of `save_binary_to_uploads`: the bytes
+/// are persisted to PostgreSQL with an `expires_at` TTL of `retention_days`,
+/// not written to `workspace/uploads/`. The returned URL is the id-based
+/// `/api/uploads/{id}?sig=…&exp=…` endpoint, signed with
+/// `HISTORICAL_URL_TTL_SECS` so chat history stays viewable across deploys.
+///
+/// `upload_key` is the HKDF-derived per-domain key obtained via
 /// `SecretsManager::get_upload_hmac_key()`; callers MUST NOT pass raw master
-/// bytes here. `ttl_secs` is sourced from `[uploads] signed_url_ttl_secs` in
-/// hydeclaw.toml (default 24 h).
-///
-/// The URL is relative (`/uploads/{uuid}.{ext}?sig=…&exp=…`) so the UI and
-/// channel adapters append it to their own base. GET /uploads verifies the
-/// signature; see `crate::gateway::handlers::media::api_media_serve`.
+/// bytes here. `base_url` should be the public base (no trailing slash) —
+/// e.g. `https://hydeclaw.example.com` or `http://localhost:18789`.
 pub async fn save_binary_to_uploads(
-    workspace_dir: &str,
+    pool: &sqlx::PgPool,
+    retention_days: u32,
     data: &[u8],
     hint: &str,
     upload_key: &[u8; 32],
-    ttl_secs: u64,
+    base_url: &str,
 ) -> Result<(String, String)> {
-    let uploads_dir = std::path::PathBuf::from(workspace_dir).join("uploads");
-    tokio::fs::create_dir_all(&uploads_dir).await?;
+    use crate::uploads::{HISTORICAL_URL_TTL_SECS, mint_uploads_url};
 
-    // Detect image type from magic bytes
-    let (ext, media_type) = detect_media_type(data, hint);
-    let uuid = uuid::Uuid::new_v4();
-    let filename = format!("{}.{}", uuid, ext);
-    let path = uploads_dir.join(&filename);
+    // Detect media type from magic bytes (existing helper in this module).
+    let (_, media_type) = detect_media_type(data, hint);
 
-    tokio::fs::write(&path, data).await?;
+    let id = crate::db::uploads::insert_with_retention(
+        pool,
+        "tool_output",
+        None, // message_id not threaded here yet — future commit can pass it through
+        &media_type,
+        data,
+        retention_days,
+    )
+    .await?;
 
-    // Phase 64 SEC-03: mint signed URL. Empty base → relative "/uploads/{file}?...".
-    let url = crate::uploads::mint_signed_url("", &filename, upload_key, ttl_secs);
-    tracing::info!(url = %url, media_type = %media_type, bytes = data.len(), "saved signed media to uploads");
+    let url = mint_uploads_url(base_url, id, upload_key, HISTORICAL_URL_TTL_SECS);
+    tracing::info!(
+        url = %url,
+        media_type = %media_type,
+        bytes = data.len(),
+        retention_days = retention_days,
+        "saved media to uploads (DB)"
+    );
     Ok((url, media_type))
 }
 
