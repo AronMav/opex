@@ -152,6 +152,19 @@ async fn rename_agent_id_in_tables(
                 e
             })?;
     }
+    // uploads.owner_id holds the agent name for agent_icon rows. Partial
+    // unique index keys off it, so rename must follow.
+    sqlx::query(
+        "UPDATE uploads SET owner_id = $1 WHERE owner_type = 'agent_icon' AND owner_id = $2",
+    )
+    .bind(new)
+    .bind(old)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, "failed to rename agent_icon owner on rename");
+        e
+    })?;
     Ok(())
 }
 
@@ -185,6 +198,17 @@ async fn delete_agent_id_in_tables(
                 e
             })?;
     }
+    // Drop the agent's icon row (uploads.owner_id = agent name for
+    // agent_icon owner_type). Permanent rows (expires_at NULL) would
+    // never be reaped by the hourly cleanup cron otherwise.
+    sqlx::query("DELETE FROM uploads WHERE owner_type = 'agent_icon' AND owner_id = $1")
+        .bind(agent_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, "failed to delete agent_icon row on agent delete");
+            e
+        })?;
     Ok(())
 }
 
