@@ -193,6 +193,7 @@ async fn delete_agent_id_in_tables(
 pub(crate) async fn api_agents(
     State(agents): State<AgentCore>,
     State(auth): State<AuthServices>,
+    State(infra): State<InfraServices>,
 ) -> Json<Value> {
     // Read configs from disk (source of truth)
     let mut disk_configs = crate::config::load_agent_configs("config/agents").unwrap_or_default();
@@ -204,6 +205,22 @@ pub(crate) async fn api_agents(
     let agents_map = agents.map.read().await;
 
     let upload_key = auth.secrets.get_upload_hmac_key();
+
+    // Batch-prefetch icon upload IDs for ALL names we may build DTOs for
+    // (disk configs + running engines with no disk config). One DB round-trip
+    // instead of N-per-DTO. Over-fetching a few names is cheaper than two
+    // passes; dedupe afterwards.
+    let mut all_names: Vec<String> = disk_configs.iter().map(|c| c.agent.name.clone()).collect();
+    all_names.extend(agents_map.keys().cloned());
+    all_names.sort();
+    all_names.dedup();
+    let icon_ids = crate::db::uploads::list_agent_icon_ids(&infra.db, &all_names)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "list_agent_icon_ids failed; icons will be missing this request");
+            std::collections::HashMap::new()
+        });
+
     let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut agents: Vec<AgentInfoDto> = Vec::new();
 
@@ -227,6 +244,7 @@ pub(crate) async fn api_agents(
             config_dirty,
             Some(cfg.agent.base),
             None,
+            &icon_ids,
             Some(&upload_key),
         ));
     }
@@ -244,6 +262,7 @@ pub(crate) async fn api_agents(
             false,
             None,
             Some(true),
+            &icon_ids,
             Some(&upload_key),
         ));
     }
@@ -256,6 +275,7 @@ pub(crate) async fn api_agents(
 pub(crate) async fn api_get_agent(
     State(agents): State<AgentCore>,
     State(auth): State<AuthServices>,
+    State(infra): State<InfraServices>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let path = agent_config_path(&name);
@@ -275,7 +295,13 @@ pub(crate) async fn api_get_agent(
 
     let voice = auth.secrets.get_scoped("TTS_VOICE", &name).await;
     let upload_key = auth.secrets.get_upload_hmac_key();
-    let detail = AgentDetailDto::from_config(&cfg, is_running, config_dirty, voice, Some(&upload_key));
+    let icon_ids = crate::db::uploads::list_agent_icon_ids(&infra.db, std::slice::from_ref(&name))
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, agent = %name, "list_agent_icon_ids failed");
+            std::collections::HashMap::new()
+        });
+    let detail = AgentDetailDto::from_config(&cfg, is_running, config_dirty, voice, &icon_ids, Some(&upload_key));
     Json(detail).into_response()
 }
 

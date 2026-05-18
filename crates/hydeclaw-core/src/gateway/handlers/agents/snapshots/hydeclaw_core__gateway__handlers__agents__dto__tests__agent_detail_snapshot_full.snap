@@ -53,7 +53,6 @@ expression: dto
     "max_messages": 200,
     "prune_tool_output_after_turns": 3
   },
-  "icon": "uploads/robot.png",
   "icon_url": null,
   "max_tools_in_context": 20,
   "tool_loop": {
