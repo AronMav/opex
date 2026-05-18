@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+use uuid::Uuid;
 use crate::config::AgentConfig;
-use crate::uploads::{mint_signed_url, HISTORICAL_URL_TTL_SECS};
+use crate::uploads::{mint_uploads_url, HISTORICAL_URL_TTL_SECS};
 
 // ── Struct definitions (leaf module — no crate-internal imports) ─────────────
 // Pulled in via include! so that `lib.rs` can expose dto_structs.rs under the
@@ -8,13 +10,22 @@ include!("dto_structs.rs");
 
 // ── icon_url helper ──────────────────────────────────────────────────────────
 
-/// Build a long-TTL signed `/uploads/{filename}` URL when both an icon
-/// filename and an HMAC key are available. Returns `None` otherwise so JSON
-/// callers can distinguish "no icon" from "icon unsigned".
-fn signed_icon_url(icon: Option<&str>, upload_key: Option<&[u8; 32]>) -> Option<String> {
-    let filename = icon?;
+/// Build a long-TTL signed `/api/uploads/{id}` URL when both an icon upload
+/// ID (from a precomputed batch lookup) and an HMAC key are available.
+/// Returns `None` otherwise so JSON callers can distinguish "no icon" from
+/// "icon unsigned".
+///
+/// `icon_ids` is built once per request by the handler via
+/// `db::uploads::list_agent_icon_ids` to avoid an N+1 per-DTO DB lookup.
+fn signed_icon_url(
+    agent_name: &str,
+    icon_ids: &HashMap<String, Uuid>,
+    upload_key: Option<&[u8; 32]>,
+) -> Option<String> {
+    let id = icon_ids.get(agent_name)?;
     let key = upload_key?;
-    Some(mint_signed_url("", filename, key, HISTORICAL_URL_TTL_SECS))
+    // base = "" — relative URL, the UI joins origin itself.
+    Some(mint_uploads_url("", *id, key, HISTORICAL_URL_TTL_SECS))
 }
 
 // ── Constructor impl ─────────────────────────────────────────────────────────
@@ -25,6 +36,7 @@ impl AgentDetailDto {
         is_running: bool,
         config_dirty: bool,
         voice: Option<String>,
+        icon_ids: &HashMap<String, Uuid>,
         upload_key: Option<&[u8; 32]>,
     ) -> Self {
         let a = &cfg.agent;
@@ -77,8 +89,7 @@ impl AgentDetailDto {
                 max_messages: s.max_messages,
                 prune_tool_output_after_turns: s.prune_tool_output_after_turns,
             }),
-            icon: a.icon.clone(),
-            icon_url: signed_icon_url(a.icon.as_deref(), upload_key),
+            icon_url: signed_icon_url(&a.name, icon_ids, upload_key),
             max_tools_in_context: a.max_tools_in_context,
             tool_loop: a.tool_loop.as_ref().map(|tl| AgentDetailToolLoopDto {
                 max_iterations: tl.max_iterations,
@@ -127,6 +138,7 @@ impl AgentDetailDto {
 }
 
 impl AgentInfoDto {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_config(
         cfg: &AgentConfig,
         routing_count: usize,
@@ -134,6 +146,7 @@ impl AgentInfoDto {
         config_dirty: bool,
         base: Option<bool>,
         pending_delete: Option<bool>,
+        icon_ids: &HashMap<String, Uuid>,
         upload_key: Option<&[u8; 32]>,
     ) -> Self {
         let a = &cfg.agent;
@@ -144,8 +157,7 @@ impl AgentInfoDto {
             provider: a.provider.clone(),
             provider_connection: a.provider_connection.clone(),
             fallback_provider: a.fallback_provider.clone(),
-            icon: a.icon.clone(),
-            icon_url: signed_icon_url(a.icon.as_deref(), upload_key),
+            icon_url: signed_icon_url(&a.name, icon_ids, upload_key),
             temperature: a.temperature,
             has_access: a.access.is_some(),
             access_mode: a.access.as_ref().map(|ac| ac.mode.clone()),
@@ -181,21 +193,24 @@ mod tests {
     #[test]
     fn agent_detail_dto_snapshot_min() {
         let cfg = load_fixture("SnapshotMin");
-        let dto = AgentDetailDto::from_config(&cfg, false, false, None, None);
+        let icons: HashMap<String, Uuid> = HashMap::new();
+        let dto = AgentDetailDto::from_config(&cfg, false, false, None, &icons, None);
         insta::assert_json_snapshot!("agent_detail_snapshot_min", dto);
     }
 
     #[test]
     fn agent_detail_dto_snapshot_full() {
         let cfg = load_fixture("SnapshotFull");
-        let dto = AgentDetailDto::from_config(&cfg, false, false, None, None);
+        let icons: HashMap<String, Uuid> = HashMap::new();
+        let dto = AgentDetailDto::from_config(&cfg, false, false, None, &icons, None);
         insta::assert_json_snapshot!("agent_detail_snapshot_full", dto);
     }
 
     #[test]
     fn agent_info_dto_snapshot_min() {
         let cfg = load_fixture("SnapshotMin");
-        let dto = AgentInfoDto::from_config(&cfg, 0, false, false, Some(false), None, None);
+        let icons: HashMap<String, Uuid> = HashMap::new();
+        let dto = AgentInfoDto::from_config(&cfg, 0, false, false, Some(false), None, &icons, None);
         insta::assert_json_snapshot!("agent_info_snapshot_min", dto);
     }
 }
