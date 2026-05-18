@@ -304,9 +304,13 @@ pub(crate) async fn api_vision_analyze(
         .build()
         .unwrap_or_default();
 
-    // Internal path: starts with / or contains /uploads/ — download via localhost
+    // Internal path: starts with / or contains /api/uploads/ — download via localhost.
+    // Legacy /uploads/{filename} URLs from pre-migration chat history are still
+    // served by workspace_files; prefer the longer prefix so /api isn't stripped.
     if image_url.starts_with('/') || image_url.contains("/uploads/") {
-        let path = if let Some(idx) = image_url.find("/uploads/") {
+        let path = if let Some(idx) = image_url.find("/api/uploads/") {
+            &image_url[idx..]
+        } else if let Some(idx) = image_url.find("/uploads/") {
             &image_url[idx..]
         } else {
             &image_url
