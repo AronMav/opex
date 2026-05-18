@@ -1,23 +1,27 @@
 //! `PUT/DELETE /api/agents/{name}/icon` — multipart upload + delete for agent icons.
+//! `POST /api/agents/{name}/icon/json` — JSON `{mime, data_base64}` for agent self-service.
 
 use axum::{
     Json, Router,
     extract::{Multipart, Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::put,
+    routing::{post, put},
 };
-use serde::Serialize;
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use serde::{Deserialize, Serialize};
 
 use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices, InfraServices};
 use crate::gateway::state::AppState;
 use crate::uploads::{HISTORICAL_URL_TTL_SECS, mint_uploads_url};
 
 pub(crate) fn routes() -> Router<AppState> {
-    Router::new().route(
-        "/api/agents/{name}/icon",
-        put(api_put_agent_icon).delete(api_delete_agent_icon),
-    )
+    Router::new()
+        .route(
+            "/api/agents/{name}/icon",
+            put(api_put_agent_icon).delete(api_delete_agent_icon),
+        )
+        .route("/api/agents/{name}/icon/json", post(api_post_agent_icon_json))
 }
 
 const ALLOWED_MIME: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
@@ -26,6 +30,12 @@ const MAX_BYTES: usize = 10 * 1024 * 1024; // 10 MB
 #[derive(Debug, Serialize)]
 struct IconResponse {
     icon_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct IconJsonPayload {
+    mime: String,
+    data_base64: String,
 }
 
 /// Build the public base URL for signed URLs, mirroring `media.rs:87-92`.
@@ -42,6 +52,48 @@ fn public_base(cfg: &ConfigServices) -> String {
             .unwrap_or("18789");
         format!("http://localhost:{port}")
     }
+}
+
+/// Shared validation + upsert + URL mint. Both PUT (multipart) and POST/json
+/// route into this so they cannot drift apart.
+async fn store_icon(
+    infra: &InfraServices,
+    auth: &AuthServices,
+    cfg: &ConfigServices,
+    agent_name: &str,
+    mime: &str,
+    data: &[u8],
+) -> axum::response::Response {
+    if data.is_empty() {
+        return (StatusCode::BAD_REQUEST, "empty image payload").into_response();
+    }
+    if data.len() > MAX_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("icon must be <= {} bytes, got {}", MAX_BYTES, data.len()),
+        )
+            .into_response();
+    }
+    if !ALLOWED_MIME.contains(&mime) {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            format!("MIME {mime} not allowed; expected one of {ALLOWED_MIME:?}"),
+        )
+            .into_response();
+    }
+
+    let id = match crate::db::uploads::upsert_agent_icon(&infra.db, agent_name, mime, data).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = %e, agent = %agent_name, "icon upsert failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let key = auth.secrets.get_upload_hmac_key();
+    let base = public_base(cfg);
+    let icon_url = mint_uploads_url(&base, id, &key, HISTORICAL_URL_TTL_SECS);
+    (StatusCode::OK, Json(IconResponse { icon_url })).into_response()
 }
 
 pub(crate) async fn api_put_agent_icon(
@@ -65,18 +117,7 @@ pub(crate) async fn api_put_agent_icon(
         }
         mime = field.content_type().map(|s| s.to_string());
         match field.bytes().await {
-            Ok(bytes) if bytes.len() <= MAX_BYTES => data = Some(bytes.to_vec()),
-            Ok(bytes) => {
-                return (
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    format!(
-                        "icon must be <= {} bytes, got {}",
-                        MAX_BYTES,
-                        bytes.len()
-                    ),
-                )
-                    .into_response();
-            }
+            Ok(bytes) => data = Some(bytes.to_vec()),
             Err(e) => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -89,31 +130,40 @@ pub(crate) async fn api_put_agent_icon(
     }
 
     let data = match data {
-        Some(d) if !d.is_empty() => d,
-        _ => return (StatusCode::BAD_REQUEST, "missing 'image' field").into_response(),
+        Some(d) => d,
+        None => return (StatusCode::BAD_REQUEST, "missing 'image' field").into_response(),
     };
     let mime = mime.unwrap_or_else(|| "application/octet-stream".to_string());
-    if !ALLOWED_MIME.contains(&mime.as_str()) {
-        return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            format!("MIME {mime} not allowed; expected one of {ALLOWED_MIME:?}"),
-        )
-            .into_response();
+    store_icon(&infra, &auth, &cfg, &name, &mime, &data).await
+}
+
+/// JSON variant for agent self-service: `{mime, data_base64}`.
+/// Mirrors the multipart endpoint's validation. Agents reach this through the
+/// `set_my_icon` YAML tool.
+pub(crate) async fn api_post_agent_icon_json(
+    State(agents): State<AgentCore>,
+    State(infra): State<InfraServices>,
+    State(auth): State<AuthServices>,
+    State(cfg): State<ConfigServices>,
+    Path(name): Path<String>,
+    Json(payload): Json<IconJsonPayload>,
+) -> axum::response::Response {
+    let known_agents = agents.agent_names().await;
+    if !known_agents.iter().any(|n| n == &name) {
+        return (StatusCode::NOT_FOUND, format!("agent '{name}' not found")).into_response();
     }
 
-    let id = match crate::db::uploads::upsert_agent_icon(&infra.db, &name, &mime, &data).await {
-        Ok(id) => id,
+    let data = match B64.decode(payload.data_base64.as_bytes()) {
+        Ok(b) => b,
         Err(e) => {
-            tracing::warn!(error = %e, agent = %name, "icon upsert failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("data_base64 decode failed: {e}"),
+            )
+                .into_response();
         }
     };
-
-    let key = auth.secrets.get_upload_hmac_key();
-    let base = public_base(&cfg);
-    let icon_url = mint_uploads_url(&base, id, &key, HISTORICAL_URL_TTL_SECS);
-
-    (StatusCode::OK, Json(IconResponse { icon_url })).into_response()
+    store_icon(&infra, &auth, &cfg, &name, &payload.mime, &data).await
 }
 
 pub(crate) async fn api_delete_agent_icon(
