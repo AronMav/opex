@@ -16,12 +16,17 @@ use crate::gateway::state::AppState;
 use crate::uploads::{HISTORICAL_URL_TTL_SECS, mint_uploads_url};
 
 pub(crate) fn routes() -> Router<AppState> {
+    // Axum's default per-request body limit is 2 MiB. Without this layer the
+    // multipart parser refuses any icon over 2 MiB long before the handler's
+    // MAX_BYTES check runs. Round up to MAX_BYTES so the explicit error
+    // response can fire instead.
     Router::new()
         .route(
             "/api/agents/{name}/icon",
             put(api_put_agent_icon).delete(api_delete_agent_icon),
         )
         .route("/api/agents/{name}/icon/json", post(api_post_agent_icon_json))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BYTES))
 }
 
 const ALLOWED_MIME: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];

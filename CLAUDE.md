@@ -247,7 +247,7 @@ Chat endpoint streams `StreamEvent` variants over SSE (Vercel AI SDK v3 compatib
 | `"finish"` | stream end | — |
 | `"error"` | stream error | `errorText` |
 
-File events: tool handlers emit `FILE_PREFIX = "__file__:"` inline in tool result; `save_binary_to_uploads()` saves to `workspace/uploads/` and returns `/uploads/{uuid}.ext` URL. The `/uploads/*` path is excluded from auth middleware.
+File events: tool handlers emit `FILE_PREFIX = "__file__:"` inline in tool result; `save_binary_to_uploads()` inserts a row into the `uploads` table (owner_type='tool_output') and returns a signed `/api/uploads/{id}?sig=&exp=` URL. The `/api/uploads/*` path is excluded from auth middleware (HMAC-signed URLs are the security boundary). Agent icons live in the same table (owner_type='agent_icon', permanent); chat composer attachments use owner_type='client_upload'.
 
 ## Configuration
 
