@@ -217,7 +217,11 @@ pub(crate) async fn api_agents(
     let icon_ids = crate::db::uploads::list_agent_icon_ids(&infra.db, &all_names)
         .await
         .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "list_agent_icon_ids failed; icons will be missing this request");
+            tracing::warn!(
+                error = %e,
+                agents_count = all_names.len(),
+                "list_agent_icon_ids failed; icons will be missing this request"
+            );
             std::collections::HashMap::new()
         });
 
