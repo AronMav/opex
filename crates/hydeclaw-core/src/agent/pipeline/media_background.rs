@@ -227,10 +227,10 @@ pub struct BackgroundMediaTask {
     pub(crate) channel_router: Option<ChannelActionRouter>,
     pub(crate) ui_event_tx:    Option<broadcast::Sender<String>>,
     pub(crate) bg_tasks:       Arc<TaskTracker>,
-    pub(crate) workspace_dir:  String,
+    pub(crate) base_url:       String,
     pub(crate) db:             sqlx::PgPool,
     pub(crate) upload_key:     [u8; 32],
-    pub(crate) ttl_secs:       u64,
+    pub(crate) retention_days: u32,
     pub(crate) tool_headers:   Vec<(String, String)>,
     pub(crate) context:        serde_json::Value,
     pub(crate) agent_name:     String,
@@ -325,10 +325,12 @@ impl BackgroundMediaTask {
             channel_router: ctx.state.channel_router.clone(),
             ui_event_tx:    ctx.state.ui_event_tx.clone(),
             bg_tasks:       ctx.state.bg_tasks.clone(),
-            workspace_dir:  ctx.cfg.workspace_dir.clone(),
+            base_url:       crate::agent::pipeline::channel_actions::public_base_for_uploads(
+                &ctx.cfg.app_config,
+            ),
             db:             ctx.cfg.db.clone(),
             upload_key:     ctx.tex.secrets.get_upload_hmac_key(),
-            ttl_secs:       ctx.cfg.app_config.uploads.signed_url_ttl_secs,
+            retention_days: crate::agent::pipeline::handlers::DEFAULT_UPLOADS_RETENTION_DAYS,
             tool_headers,
             context,
             agent_name:     ctx.cfg.agent.name.clone(),
@@ -394,7 +396,8 @@ impl BackgroundMediaTask {
 
     /// Send media bytes to the channel adapter (Telegram / Discord / ...).
     ///
-    /// On a successful channel send, ALSO save the bytes to `workspace/uploads/`,
+    /// On a successful channel send, ALSO save the bytes to the `uploads` DB
+    /// table (owner_type='tool_output'),
     /// prepend a `__file__:{url, mediaType}\n` marker to the persisted tool
     /// message row (via [`prepend_message_content`]), and emit a
     /// `<kind>_ready` notification on `ui_event_tx` so live UI viewers receive
@@ -416,9 +419,9 @@ impl BackgroundMediaTask {
         let agent_name = self.agent_name.clone();
         let action = self.ca.action.clone();
         let context = self.context.clone();
-        let workspace_dir = self.workspace_dir.clone();
+        let base_url = self.base_url.clone();
         let upload_key = self.upload_key;
-        let ttl_secs = self.ttl_secs;
+        let retention_days = self.retention_days;
         let db = self.db.clone();
         let ui_event_tx = self.ui_event_tx.clone();
         let tool_message_id = self.tool_message_id;
@@ -466,12 +469,12 @@ impl BackgroundMediaTask {
                 // session's web-UI representation. Failures here do NOT regress
                 // the channel-delivery success.
                 persist_channel_media_inline(
-                    &workspace_dir,
+                    &db,
+                    retention_days,
+                    &base_url,
                     &bytes,
                     kind,
                     &upload_key,
-                    ttl_secs,
-                    &db,
                     tool_message_id,
                     ui_event_tx.as_ref(),
                     &agent_name,
@@ -528,11 +531,12 @@ impl BackgroundMediaTask {
         use crate::gateway::notify;
 
         let (url, media_type) = match save_binary_to_uploads(
-            &self.workspace_dir,
+            &self.db,
+            self.retention_days,
             &bytes,
             kind.upload_hint(),
             &self.upload_key,
-            self.ttl_secs,
+            &self.base_url,
         )
         .await
         {
@@ -594,7 +598,8 @@ impl BackgroundMediaTask {
 /// After a successful channel send, mirror the same media into the session's
 /// web-UI representation:
 ///
-/// 1. Save the bytes to `workspace/uploads/` so the UI has a stable URL.
+/// 1. Save the bytes to the `uploads` DB table (owner_type='tool_output')
+///    so the UI has a stable id-based URL.
 /// 2. Prepend `__file__:{url, mediaType}\n` to the persisted tool message row
 ///    (only when `tool_message_id` is `Some(_)`) so reloading the session in
 ///    the web UI renders the media inline. The `chat-history.ts:196` parser
@@ -611,12 +616,12 @@ impl BackgroundMediaTask {
 /// must NOT abort the caller, only log a `warn!`.
 #[allow(clippy::too_many_arguments)]
 async fn persist_channel_media_inline(
-    workspace_dir: &str,
+    db: &sqlx::PgPool,
+    retention_days: u32,
+    base_url: &str,
     bytes: &[u8],
     kind: MediaKind,
     upload_key: &[u8; 32],
-    ttl_secs: u64,
-    db: &sqlx::PgPool,
     tool_message_id: Option<Uuid>,
     ui_event_tx: Option<&broadcast::Sender<String>>,
     agent_name: &str,
@@ -625,11 +630,12 @@ async fn persist_channel_media_inline(
     use crate::gateway::notify;
 
     let (url, media_type) = match save_binary_to_uploads(
-        workspace_dir,
+        db,
+        retention_days,
         bytes,
         kind.upload_hint(),
         upload_key,
-        ttl_secs,
+        base_url,
     )
     .await
     {
@@ -1006,10 +1012,10 @@ mod tests {
             channel_router: router,
             ui_event_tx:    Some(ui_tx),
             bg_tasks:       Arc::new(TaskTracker::new()),
-            workspace_dir:  std::env::temp_dir().to_string_lossy().into_owned(),
+            base_url:       "http://localhost:18789".into(),
             db:             fake_db(),
             upload_key:     [0u8; 32],
-            ttl_secs:       3600,
+            retention_days: 30,
             tool_headers:   vec![],
             context:        context.clone(),
             agent_name:     "Arty".into(),
@@ -1198,10 +1204,10 @@ mod tests {
             channel_router: None,
             ui_event_tx:    Some(ui_tx),
             bg_tasks:       Arc::new(TaskTracker::new()),
-            workspace_dir:  std::env::temp_dir().to_string_lossy().into_owned(),
+            base_url:       "http://localhost:18789".into(),
             db,
             upload_key:     [0u8; 32],
-            ttl_secs:       3600,
+            retention_days: 30,
             tool_headers:   vec![],
             context:        context.clone(),
             agent_name:     "Arty".into(),
@@ -1282,21 +1288,25 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn deliver_to_ui_photo_save_failure_emits_image_error(pool: sqlx::PgPool) {
-        // Force save_binary_to_uploads to fail by pointing workspace_dir at a
-        // path that cannot be created (a NUL byte is invalid on every OS).
+        // Force save_binary_to_uploads to fail by dropping the `uploads` table
+        // on the test pool — INSERT will now error, but `notifications` stays
+        // available so the error-path notify call still lands its row.
+        sqlx::query("DROP TABLE uploads")
+            .execute(&pool)
+            .await
+            .expect("drop uploads");
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/audio/speech"))
             .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNG"))
             .mount(&server)
             .await;
-        let mut task = make_task_with_db(
+        let task = make_task_with_db(
             &server.uri(),
             "send_photo",
             pool.clone(),
             serde_json::json!({}),
         );
-        task.workspace_dir = "\0invalid-path".into();
         task.run().await;
         assert_notification_inserted(&pool, "image_error", "Не удалось сгенерировать изображение").await;
     }
@@ -1354,10 +1364,10 @@ mod tests {
             channel_router: router,
             ui_event_tx:    Some(ui_tx),
             bg_tasks:       Arc::new(TaskTracker::new()),
-            workspace_dir:  std::env::temp_dir().to_string_lossy().into_owned(),
+            base_url:       "http://localhost:18789".into(),
             db,
             upload_key:     [0u8; 32],
-            ttl_secs:       3600,
+            retention_days: 30,
             tool_headers:   vec![],
             context:        ctx_json.clone(),
             agent_name:     "Arty".into(),
@@ -1589,8 +1599,11 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(marker).expect("marker must parse as JSON");
         assert!(
-            parsed.get("url").and_then(|v| v.as_str()).is_some_and(|s| s.starts_with("/uploads/")),
-            "url must point at /uploads/, got: {parsed}"
+            parsed
+                .get("url")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.contains("/api/uploads/")),
+            "url must point at /api/uploads/{{id}}, got: {parsed}"
         );
         assert!(
             parsed.get("mediaType").is_some(),
@@ -1675,7 +1688,7 @@ mod tests {
         let router = ChannelActionRouter::new();
         let (_conn_id, mut rx) = router.subscribe("telegram").await;
         let ctx_json = serde_json::json!({"chat_id": 42, "channel": "telegram"});
-        let (mut task, mut ui_rx) = make_task_with_db_router_msg_id(
+        let (task, mut ui_rx) = make_task_with_db_router_msg_id(
             &server.uri(),
             "send_photo",
             pool.clone(),
@@ -1683,9 +1696,14 @@ mod tests {
             ctx_json,
             Some(row_id),
         );
-        // NUL byte invalidates the path on every OS — save_binary_to_uploads
-        // fails synchronously without writing anything.
-        task.workspace_dir = "\0invalid-path".into();
+        // Force save_binary_to_uploads to fail post-migration: dropping the
+        // `uploads` table makes the INSERT error, but `messages` /
+        // `notifications` remain available so the no-prepend / no-notify
+        // assertions below still execute against a healthy schema.
+        sqlx::query("DROP TABLE uploads")
+            .execute(&pool)
+            .await
+            .expect("drop uploads");
 
         let run = tokio::spawn(task.run());
         let action = tokio::time::timeout(
