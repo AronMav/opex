@@ -106,6 +106,9 @@ pub mod db {
 
     #[path = "upload_migration.rs"]
     pub mod upload_migration;
+
+    #[path = "uploads.rs"]
+    pub mod uploads;
 }
 
 // `channels::access` exposes `AccessGuard` for
