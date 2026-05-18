@@ -1,0 +1,26 @@
+name: set_my_icon
+description: "Set/replace this agent's avatar icon. Pass `agent_name` (your own name from IDENTITY.md), `mime` (image/png|jpeg|webp|gif), and `data_base64` (raw image bytes, base64-encoded — for example, the base64 output of generate_image stored to a file then read back). Use sparingly: changing your own avatar without operator consent is poor form."
+endpoint: "http://localhost:18789/api/agents/{agent_name}/icon/json"
+method: POST
+parameters:
+  agent_name:
+    type: string
+    required: true
+    location: path
+    description: "Your own agent name (case-sensitive, must match an existing agent)"
+  mime:
+    type: string
+    required: true
+    location: body
+    description: "MIME type — one of image/png, image/jpeg, image/webp, image/gif"
+  data_base64:
+    type: string
+    required: true
+    location: body
+    description: "Image bytes, base64-encoded (standard alphabet, no URL-safe variant). Max 10 MB decoded."
+response_transform: "$.icon_url"
+auth:
+  type: bearer_env
+  key: HYDECLAW_AUTH_TOKEN
+status: draft
+tags: ["agent", "icon", "self-service"]
