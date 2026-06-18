@@ -244,7 +244,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        chunk_tx: mpsc::UnboundedSender<String>,
+        chunk_tx: mpsc::Sender<String>,
         opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         self.execute_chat_stream(messages, tools, chunk_tx, opts).await

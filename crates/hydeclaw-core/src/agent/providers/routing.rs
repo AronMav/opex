@@ -546,7 +546,7 @@ impl LlmProvider for RoutingProvider {
         &self,
         messages: &[hydeclaw_types::Message],
         tools: &[hydeclaw_types::ToolDefinition],
-        chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
+        chunk_tx: tokio::sync::mpsc::Sender<String>,
         opts: CallOptions,
     ) -> Result<hydeclaw_types::LlmResponse> {
         let primary = self.select_route(messages, tools)?;
@@ -564,14 +564,14 @@ impl LlmProvider for RoutingProvider {
         } else {
             use std::sync::atomic::{AtomicBool, Ordering};
             let chunks_sent = Arc::new(AtomicBool::new(false));
-            let (tracking_tx, mut tracking_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let (tracking_tx, mut tracking_rx) = tokio::sync::mpsc::channel::<String>(1024);
             let forwarder = {
                 let sentinel = chunks_sent.clone();
                 let forward_tx = chunk_tx.clone();
                 tokio::spawn(async move {
                     while let Some(chunk) = tracking_rx.recv().await {
                         sentinel.store(true, Ordering::Relaxed);
-                        forward_tx.send(chunk).ok();
+                        forward_tx.send(chunk).await.ok();
                     }
                 })
             };

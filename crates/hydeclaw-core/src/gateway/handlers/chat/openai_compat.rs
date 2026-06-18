@@ -129,7 +129,7 @@ pub(crate) async fn chat_completions(
 
         let messages = req.messages.clone();
         tokio::spawn(async move {
-            let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<String>(1024);
 
             let engine_clone = engine.clone();
             let handle = tokio::spawn(async move {

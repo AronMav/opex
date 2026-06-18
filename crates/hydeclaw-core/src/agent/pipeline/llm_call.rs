@@ -215,7 +215,7 @@ pub async fn chat_stream_with_overflow_recovery(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,
     tools: &[ToolDefinition],
-    chunk_tx: mpsc::UnboundedSender<String>,
+    chunk_tx: mpsc::Sender<String>,
     compact: &impl Compactor,
     opts: crate::agent::providers::CallOptions,
 ) -> Result<hydeclaw_types::LlmResponse> {
@@ -258,7 +258,7 @@ pub async fn chat_stream_with_transient_retry(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,
     tools: &[ToolDefinition],
-    chunk_tx: mpsc::UnboundedSender<String>,
+    chunk_tx: mpsc::Sender<String>,
     compact: &impl Compactor,
     opts: crate::agent::providers::CallOptions,
 ) -> Result<hydeclaw_types::LlmResponse> {
@@ -346,7 +346,7 @@ async fn deadline_retry_inner(
     provider: &dyn LlmProvider,
     messages: &mut Vec<hydeclaw_types::Message>,
     tools: &[hydeclaw_types::ToolDefinition],
-    chunk_tx: mpsc::UnboundedSender<String>,
+    chunk_tx: mpsc::Sender<String>,
     compact: &impl Compactor,
     session_cancel: &tokio_util::sync::CancellationToken,
     run_max_duration_secs: u64,
@@ -415,7 +415,7 @@ async fn deadline_retry_inner(
 
                         // Signal the UI via chunk_tx (handled by forward_chunks_into_sink)
                         let signal = format!("{}{attempt}:{delay_ms}", RECONNECTING_PREFIX);
-                        let _ = chunk_tx.send(signal);
+                        chunk_tx.send(signal).await.ok();
 
                         tracing::warn!(
                             attempt,
@@ -502,7 +502,7 @@ pub async fn chat_stream_with_deadline_retry(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,
     tools: &[ToolDefinition],
-    chunk_tx: mpsc::UnboundedSender<String>,
+    chunk_tx: mpsc::Sender<String>,
     compact: &impl Compactor,
     session_cancel: &tokio_util::sync::CancellationToken,
     run_max_duration_secs: u64,
@@ -521,7 +521,10 @@ pub async fn chat_stream_with_deadline_retry(
                     "delay_ms": delay_ms,
                 });
                 let sm2 = crate::agent::session_manager::SessionManager::new(sm_db);
-                sm2.log_timeline_event(session_id, "llm_retry", Some(&details)).await.ok();
+                match sm2.log_timeline_event(session_id, "llm_retry", Some(&details)).await {
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "failed to log llm_retry timeline event"),
+                }
             });
         },
         opts,
@@ -551,7 +554,7 @@ pub(crate) async fn chat_stream_with_deadline_retry_no_wal(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,
     tools: &[ToolDefinition],
-    chunk_tx: mpsc::UnboundedSender<String>,
+    chunk_tx: mpsc::Sender<String>,
     compact: &impl Compactor,
     session_cancel: &tokio_util::sync::CancellationToken,
     run_max_duration_secs: u64,
@@ -604,7 +607,7 @@ mod deadline_retry_tests {
         async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
             Ok(ok_response())
         }
-        async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+        async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
             let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n == 0 {
                 return Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
@@ -613,7 +616,7 @@ mod deadline_retry_tests {
                     partial_state: PartialState::Empty,
                 }));
             }
-            tx.send("done".into()).ok();
+            tx.send("done".into()).await.ok();
             Ok(ok_response())
         }
         fn name(&self) -> &str { "retry-once" }
@@ -622,7 +625,7 @@ mod deadline_retry_tests {
     #[tokio::test]
     async fn deadline_retry_succeeds_on_second_attempt() {
         let provider = RetryOnceProvider::new();
-        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<String>(1024);
         let cancel = CancellationToken::new();
         let mut messages = vec![];
         let compact = NoopCompact;
@@ -650,7 +653,7 @@ mod deadline_retry_tests {
         #[async_trait::async_trait]
         impl crate::agent::providers::LlmProvider for AlwaysInactiveProvider {
             async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
-            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
                 Err(anyhow::Error::new(LlmCallError::InactivityTimeout {
                     provider: "test".into(), silent_secs: 60, partial_state: PartialState::Empty,
                 }))
@@ -659,7 +662,7 @@ mod deadline_retry_tests {
         }
 
         let cancel = CancellationToken::new();
-        let (chunk_tx, _) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (chunk_tx, _) = tokio::sync::mpsc::channel::<String>(1024);
         let mut messages = vec![];
 
         let cancel_clone = cancel.clone();
@@ -689,14 +692,14 @@ mod deadline_retry_tests {
         #[async_trait::async_trait]
         impl crate::agent::providers::LlmProvider for ConnectFailProvider {
             async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> { Ok(ok_response()) }
-            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _tx: tokio::sync::mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
                 Err(anyhow::Error::new(LlmCallError::ConnectTimeout { provider: "test".into(), elapsed_secs: 10 }))
             }
             fn name(&self) -> &str { "connect-fail" }
         }
 
         let cancel = CancellationToken::new();
-        let (chunk_tx, _) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (chunk_tx, _) = tokio::sync::mpsc::channel::<String>(1024);
         let mut messages = vec![];
 
         let result = chat_stream_with_deadline_retry_no_wal(
@@ -737,7 +740,7 @@ mod deadline_retry_tests {
             async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
                 Ok(ok_response())
             }
-            async fn chat_stream(&self, m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            async fn chat_stream(&self, m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
                 self.received_messages.lock().unwrap().push(m.to_vec());
                 let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if n == 0 {
@@ -748,7 +751,7 @@ mod deadline_retry_tests {
                         partial_state: PartialState::Text("partial response".into()),
                     }));
                 }
-                tx.send("continuation".into()).ok();
+                tx.send("continuation".into()).await.ok();
                 Ok(ok_response())
             }
             fn name(&self) -> &str { "prefill-capturing" }
@@ -757,7 +760,7 @@ mod deadline_retry_tests {
 
         let provider = PrefillCapturingProvider::new();
         let captured = Arc::clone(&provider.received_messages);
-        let (chunk_tx, _) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (chunk_tx, _) = tokio::sync::mpsc::channel::<String>(1024);
         let cancel = CancellationToken::new();
         let mut messages = vec![];
 
@@ -783,5 +786,90 @@ mod deadline_retry_tests {
         let prefill_msg = &all_calls[1][0];
         assert_eq!(prefill_msg.role, hydeclaw_types::MessageRole::Assistant);
         assert_eq!(prefill_msg.content, "partial response");
+    }
+
+    /// Verify that the bounded `chunk_tx` channel (capacity 1024) applies
+    /// backpressure: a slow receiver causes `.send().await` to block until
+    /// space is available, and no chunks are lost.
+    ///
+    /// Test design: a provider emits N > capacity chunks as fast as possible.
+    /// The receiver sleeps briefly between reads to simulate a slow sink.
+    /// After the provider completes, all N chunks must be present in the
+    /// receiver — none silently dropped.
+    #[tokio::test]
+    async fn bounded_chunk_channel_applies_backpressure() {
+        const CAPACITY: usize = 1024;
+        const CHUNK_COUNT: usize = 1500; // exceeds capacity
+
+        struct BurstProvider { count: usize }
+
+        #[async_trait::async_trait]
+        impl crate::agent::providers::LlmProvider for BurstProvider {
+            async fn chat(
+                &self,
+                _m: &[hydeclaw_types::Message],
+                _t: &[hydeclaw_types::ToolDefinition],
+                _opts: crate::agent::providers::CallOptions,
+            ) -> anyhow::Result<LlmResponse> {
+                Ok(ok_response())
+            }
+
+            async fn chat_stream(
+                &self,
+                _m: &[hydeclaw_types::Message],
+                _t: &[hydeclaw_types::ToolDefinition],
+                tx: tokio::sync::mpsc::Sender<String>,
+                _opts: crate::agent::providers::CallOptions,
+            ) -> anyhow::Result<LlmResponse> {
+                for i in 0..self.count {
+                    // `.send().await` blocks when buffer is full → backpressure.
+                    tx.send(format!("chunk-{i}")).await.expect("receiver must be alive");
+                }
+                Ok(ok_response())
+            }
+
+            fn name(&self) -> &str { "burst" }
+        }
+
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::channel::<String>(CAPACITY);
+        let cancel = CancellationToken::new();
+        let mut messages = vec![];
+
+        // Spawn a slow consumer in the background.
+        let consumer = tokio::spawn(async move {
+            let mut received = Vec::new();
+            while let Some(chunk) = chunk_rx.recv().await {
+                received.push(chunk);
+                // Simulate a slow sink to guarantee backpressure is exercised.
+                if received.len() % 100 == 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            }
+            received
+        });
+
+        let provider = BurstProvider { count: CHUNK_COUNT };
+        let result = chat_stream_with_deadline_retry_no_wal(
+            &provider,
+            &mut messages,
+            &[],
+            chunk_tx,
+            &NoopCompact,
+            &cancel,
+            0,
+        ).await;
+
+        assert!(result.is_ok(), "provider must succeed: {result:?}");
+
+        let received = consumer.await.expect("consumer task must not panic");
+        assert_eq!(
+            received.len(),
+            CHUNK_COUNT,
+            "all {CHUNK_COUNT} chunks must arrive — none dropped under backpressure"
+        );
+        // Verify order
+        for (i, chunk) in received.iter().enumerate() {
+            assert_eq!(chunk, &format!("chunk-{i}"), "chunk order must be preserved");
+        }
     }
 }

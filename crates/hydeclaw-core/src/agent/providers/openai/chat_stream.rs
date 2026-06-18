@@ -14,7 +14,7 @@ impl OpenAiCompatibleProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        chunk_tx: mpsc::UnboundedSender<String>,
+        chunk_tx: mpsc::Sender<String>,
         _opts: super::super::CallOptions,
     ) -> Result<LlmResponse> {
         let effective_model = self.model.effective();
@@ -152,7 +152,7 @@ impl OpenAiCompatibleProvider {
                                     full_content.push_str(content);
                                     let filtered = thinking_filter.process(content);
                                     if !filtered.is_empty() {
-                                        chunk_tx.send(filtered).ok();
+                                        chunk_tx.send(filtered).await.ok();
                                     }
                                 }
                                 // Capture DeepSeek reasoning_content (not streamed to UI)

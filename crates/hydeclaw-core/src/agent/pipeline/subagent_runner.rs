@@ -198,7 +198,7 @@ pub async fn run_subagent_with_session(
             && std::time::Instant::now() > dl {
                 tracing::warn!(iteration, "subagent deadline reached, returning partial result");
                 // Use streaming client for the forced-finish call too — no total-body timeout.
-                let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+                let (tx, _rx) = tokio::sync::mpsc::channel::<String>(1024);
                 let forced = cfg.provider.chat_stream(&messages, &[], tx, crate::agent::providers::CallOptions::default()).await?;
                 return Ok(extract_result_text(&forced.content, &messages));
             }
@@ -209,7 +209,8 @@ pub async fn run_subagent_with_session(
         // very large reasoning_content, and parallel subagents can easily exceed 120s
         // waiting for the full non-streaming body — leading to "error decoding response body".
         // Chunks are discarded (subagents don't stream to the UI); only the final LlmResponse is used.
-        let (chunk_tx, _chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        // Bounded channel; chunks are discarded (subagents don't stream to the UI).
+        let (chunk_tx, _chunk_rx) = tokio::sync::mpsc::channel::<String>(1024);
         let response = if loop_config.compact_on_overflow {
             crate::agent::pipeline::llm_call::chat_stream_with_overflow_recovery(
                 cfg.provider.as_ref(),

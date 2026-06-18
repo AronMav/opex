@@ -7,7 +7,9 @@ use std::time::Duration;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::agent::session_agent_pool::{self, SessionAgentPool, SessionPoolsMap};
+use crate::agent::session_agent_pool::{self, SessionPoolsMap};
+#[cfg(test)]
+use crate::agent::session_agent_pool::SessionAgentPool;
 use crate::config::{AgentToolConfig, DelegationConfig};
 use crate::gateway::state::AgentMap;
 
@@ -263,9 +265,33 @@ pub async fn handle_agent_ask(
     // `ask` calls both observe pool-miss and both try to spawn.
     {
         let mut pools_write = pools.write().await;
+
+        // Enforce hard cap: evict oldest idle pool before adding a new session entry.
+        if !pools_write.contains_key(&session_id)
+            && pools_write.len() >= session_agent_pool::SESSION_AGENT_POOL_MAX
+        {
+            let evict_id = pools_write
+                .iter()
+                .filter(|(_, p)| p.is_all_idle())
+                .min_by_key(|(_, p)| p.last_activity)
+                .or_else(|| pools_write.iter().min_by_key(|(_, p)| p.last_activity))
+                .map(|(id, _)| *id);
+
+            if let Some(id) = evict_id {
+                pools_write.remove(&id);
+                tracing::warn!(
+                    evicted_session = %id,
+                    cap = session_agent_pool::SESSION_AGENT_POOL_MAX,
+                    "session agent pool cap reached — evicted oldest idle pool"
+                );
+            }
+        }
+
         let pool = pools_write
             .entry(session_id)
-            .or_insert_with(|| SessionAgentPool::new(session_id));
+            .or_insert_with(|| session_agent_pool::SessionAgentPool::new(session_id));
+        pool.touch();
+
         // Re-check under write lock: another `ask` may have raced us.
         if pool.contains(target) {
             // Fall through to the continue-existing path after dropping the lock.

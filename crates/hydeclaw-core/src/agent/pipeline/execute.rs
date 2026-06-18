@@ -290,7 +290,9 @@ pub async fn execute<S: EventSink>(
         //    the sink interleaved with the LLM call. Contract pinned by
         //    `tests::streams_chunks_individually_during_no_tool_turn` and
         //    `tests::emits_reasoning_text_before_tool_call` below.
-        let (chunk_tx, chunk_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        // Bounded channel (1024 chunks): provides backpressure so slow sinks
+        // cannot cause unbounded memory growth with large LLM responses.
+        let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<String>(1024);
         // When the fallback layer is engaged for this turn, the live
         // provider points at the fallback Arc instead of the engine's
         // primary. Either way, `chat_stream_with_deadline_retry` takes a
@@ -1095,7 +1097,7 @@ async fn extract_tool_result_events<S: EventSink>(
 // Returns `(llm_result, concatenated_partial_text, first_fatal_sink_error)`.
 pub(crate) async fn forward_chunks_into_sink<S, F, T, E>(
     llm_fut: F,
-    mut chunk_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    mut chunk_rx: tokio::sync::mpsc::Receiver<String>,
     sink: &mut S,
 ) -> (Result<T, E>, String, Option<anyhow::Error>)
 where
@@ -1220,15 +1222,15 @@ mod tests {
     /// end-of-turn emit. A batched implementation MUST fail this assertion.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn streams_chunks_individually_during_no_tool_turn() {
-        let (chunk_tx, chunk_rx) = mpsc::unbounded_channel::<String>();
+        let (chunk_tx, chunk_rx) = mpsc::channel::<String>(1024);
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
         // LLM future: push 3 chunks, then wait for a signal before resolving
         // (with no tool_calls — mimics a plain text reply).
         let llm_fut = async move {
-            chunk_tx.send("Hel".to_string()).unwrap();
-            chunk_tx.send("lo ".to_string()).unwrap();
-            chunk_tx.send("world".to_string()).unwrap();
+            chunk_tx.send("Hel".to_string()).await.unwrap();
+            chunk_tx.send("lo ".to_string()).await.unwrap();
+            chunk_tx.send("world".to_string()).await.unwrap();
             // Yield so the forwarder select! has a chance to tick.
             done_rx.await.unwrap();
             drop(chunk_tx); // close sender so recv() returns None
@@ -1294,12 +1296,12 @@ mod tests {
     /// partial text accumulator. A subsequent plain text chunk IS accumulated.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reconnecting_prefix_emits_reconnecting_event_and_skips_partial() {
-        let (chunk_tx, chunk_rx) = mpsc::unbounded_channel::<String>();
+        let (chunk_tx, chunk_rx) = mpsc::channel::<String>(1024);
 
         // LLM future: send reconnecting signal then a normal text chunk.
         let llm_fut = async move {
-            chunk_tx.send("__reconnecting__:1:2000".to_string()).unwrap();
-            chunk_tx.send("Hello".to_string()).unwrap();
+            chunk_tx.send("__reconnecting__:1:2000".to_string()).await.unwrap();
+            chunk_tx.send("Hello".to_string()).await.unwrap();
             drop(chunk_tx);
             Ok::<LlmResponse, anyhow::Error>(mk_response(vec![]))
         };
@@ -1343,11 +1345,11 @@ mod tests {
     /// observation point, which MUST fail this assertion.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn emits_reasoning_text_before_tool_call() {
-        let (chunk_tx, chunk_rx) = mpsc::unbounded_channel::<String>();
+        let (chunk_tx, chunk_rx) = mpsc::channel::<String>(1024);
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
 
         let llm_fut = async move {
-            chunk_tx.send("Let me think. ".to_string()).unwrap();
+            chunk_tx.send("Let me think. ".to_string()).await.unwrap();
             // Block until the test releases us — the sink MUST already
             // contain the TextDelta by the time this await completes, or
             // the forwarder batched instead of streaming.

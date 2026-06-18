@@ -249,7 +249,7 @@ impl LlmProvider for GoogleProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        chunk_tx: mpsc::UnboundedSender<String>,
+        chunk_tx: mpsc::Sender<String>,
         _opts: super::CallOptions,
     ) -> Result<LlmResponse> {
         if !tools.is_empty() {
@@ -257,7 +257,7 @@ impl LlmProvider for GoogleProvider {
             if response.tool_calls.is_empty() {
                 let filtered = crate::agent::thinking::strip_thinking(&response.content);
                 if !filtered.is_empty() {
-                    chunk_tx.send(filtered).ok();
+                    chunk_tx.send(filtered).await.ok();
                 }
             }
             return Ok(response);
@@ -379,7 +379,7 @@ impl LlmProvider for GoogleProvider {
                                                 full_content.push_str(text);
                                                 let filtered = thinking_filter.process(text);
                                                 if !filtered.is_empty() {
-                                                    chunk_tx.send(filtered).ok();
+                                                    chunk_tx.send(filtered).await.ok();
                                                 }
                                             }
                                         }

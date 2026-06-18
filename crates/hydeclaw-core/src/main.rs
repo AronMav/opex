@@ -668,8 +668,13 @@ async fn main() -> Result<()> {
 
     // Managed processes started after TcpListener::bind below — toolgate needs Core API ready.
 
+    // Shutdown token: cancelled once axum::serve returns (i.e. after SIGTERM/Ctrl-C).
+    // Background tasks select on this token so they exit promptly instead of
+    // completing their current DB-query round-trip first (Bug 24).
+    let bg_shutdown = tokio_util::sync::CancellationToken::new();
+
     // Spawn periodic background tasks (cleanup, watchdog, etc.)
-    spawn_background_tasks(&state, process_manager.clone(), &agent_configs).await;
+    spawn_background_tasks(&state, process_manager.clone(), &agent_configs, bg_shutdown.clone()).await;
 
     // Start all agents from config
     start_configured_agents(&state, &agent_configs).await;
@@ -721,6 +726,11 @@ async fn main() -> Result<()> {
     axum::serve(listener, gateway::router(state)?.into_make_service_with_connect_info::<std::net::SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    // Signal background tasks to stop. They select on bg_shutdown.cancelled()
+    // at the top of each iteration so they exit within one tick instead of
+    // waiting for the current DB query to finish (Bug 24 fix).
+    bg_shutdown.cancel();
 
     // ── Graceful shutdown: cancel → drain → stop ──────────────────────────
     // Phase 62 RES-05: extracted into `shutdown::drain_agents_with_scheduler`.
@@ -946,17 +956,27 @@ async fn init_mcp_registry(container_manager: Option<Arc<containers::ContainerMa
 }
 
 /// Spawn various background tasks for session cleanup, watchdog, and health monitoring.
+///
+/// `shutdown` is cancelled when the server begins graceful shutdown. Each loop
+/// selects on `shutdown.cancelled()` so it exits within one tick rather than
+/// completing its current DB round-trip (Bug 24).
 async fn spawn_background_tasks(
     state: &gateway::AppState,
     process_manager: Option<Arc<process_manager::ProcessManager>>,
     agent_configs: &[config::AgentConfig],
+    shutdown: tokio_util::sync::CancellationToken,
 ) {
     // Periodic session agent pool cleanup (every 5 minutes)
     let pools = state.agents.session_pools.clone();
+    let shutdown_pools = shutdown.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                biased;
+                _ = shutdown_pools.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             agent::session_agent_pool::cleanup_stale_pools(&pools).await;
         }
     });
@@ -964,10 +984,15 @@ async fn spawn_background_tasks(
     // Stream cleanup: in-memory broadcast (2 min TTL) + DB jobs (1 hour TTL)
     let registry = state.channels.stream_registry.clone();
     let cleanup_db = state.infra.db.clone();
+    let shutdown_stream = shutdown.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                biased;
+                _ = shutdown_stream.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             registry.cleanup(std::time::Duration::from_secs(120)).await;
             gateway::stream_jobs::cleanup_old_jobs(&cleanup_db).await.ok();
         }
@@ -1001,10 +1026,15 @@ async fn spawn_background_tasks(
                 .unwrap_or(600),
         ))
         .collect();
+    let shutdown_watchdog = shutdown.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                biased;
+                _ = shutdown_watchdog.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             match crate::db::sessions::find_stale_running_sessions_per_agent(
                 &watchdog_db,
                 &agent_inactivity,
@@ -1046,10 +1076,15 @@ async fn spawn_background_tasks(
     // Channel health monitor
     let health_channels = state.channels.connected_channels.clone();
     let health_pm = process_manager;
+    let shutdown_health = shutdown;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                biased;
+                _ = shutdown_health.cancelled() => break,
+                _ = interval.tick() => {}
+            }
             let now = chrono::Utc::now();
             let stale_threshold = chrono::Duration::minutes(5);
             let channels = health_channels.read().await;
