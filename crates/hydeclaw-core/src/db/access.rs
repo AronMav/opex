@@ -146,8 +146,11 @@ pub async fn list_pairing_codes(db: &PgPool, agent_id: &str) -> Result<Vec<Pairi
     )
     .bind(agent_id).fetch_all(db).await?;
     // Cleanup expired
-    sqlx::query("DELETE FROM pairing_codes WHERE created_at <= now() - interval '5 minutes'")
-        .execute(db).await.ok();
+    if let Err(e) = sqlx::query("DELETE FROM pairing_codes WHERE created_at <= now() - interval '5 minutes'")
+        .execute(db).await
+    {
+        tracing::warn!(error = %e, "pairing code cleanup failed; table may accumulate stale rows");
+    }
     Ok(rows)
 }
 

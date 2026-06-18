@@ -85,15 +85,37 @@ pub async fn start_agent_from_config(
                                         base: agent_cfg.agent.base,
                                         secrets: auth.secrets.clone(),
                                     };
-                                    build_cli_provider(&provider_row, None, ctx).await.ok()
+                                    match build_cli_provider(&provider_row, None, ctx).await {
+                                        Ok(p) => Some(p),
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                agent = %name,
+                                                provider = %provider_name,
+                                                error = ?e,
+                                                "compaction provider build failed; falling back to primary"
+                                            );
+                                            None
+                                        }
+                                    }
                                 }
-                                _ => build_provider(
+                                _ => match build_provider(
                                     &provider_row,
                                     auth.secrets.clone(),
                                     &timeouts_cfg,
                                     cancel,
                                     crate::agent::providers::ProviderOverrides::default(),
-                                ).ok(),
+                                ) {
+                                    Ok(p) => Some(p),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            agent = %name,
+                                            provider = %provider_name,
+                                            error = ?e,
+                                            "compaction provider build failed; falling back to primary"
+                                        );
+                                        None
+                                    }
+                                },
                             };
                         match built {
                             Some(p) => {
