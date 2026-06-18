@@ -6,7 +6,26 @@ import pytest
 import respx
 import httpx
 
-from providers.tts_local import Qwen3TTS
+from providers.tts_local import Qwen3TTS, _ffmpeg_denoise
+
+
+def test_denoise_option_off_by_default():
+    assert Qwen3TTS(base_url="x", options={"voice": "nova"}).denoise is None
+    assert Qwen3TTS(base_url="x", options={}).denoise is None
+
+
+def test_denoise_option_string_and_true():
+    assert Qwen3TTS(base_url="x", options={"denoise": "afftdn=nr=10:nf=-45"}).denoise == "afftdn=nr=10:nf=-45"
+    assert Qwen3TTS(base_url="x", options={"denoise": True}).denoise == "afftdn=nr=10:nf=-45"
+    assert Qwen3TTS(base_url="x", options={"denoise": "  "}).denoise is None
+
+
+@pytest.mark.asyncio
+async def test_ffmpeg_denoise_passes_through_unknown_format():
+    """Unknown/raw formats are returned untouched (never corrupted)."""
+    data = b"RAWPCMBYTES"
+    assert await _ffmpeg_denoise(data, "pcm", "afftdn=nr=10:nf=-45") == data
+    assert await _ffmpeg_denoise(b"", "mp3", "afftdn") == b""
 
 
 class _FakeTextProvider:

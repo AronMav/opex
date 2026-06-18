@@ -4,6 +4,7 @@ Normalize-LLM credentials come from a separate `type=text` provider
 referenced via `options.normalize_provider_id` (UUID). This keeps the
 API key in the encrypted vault instead of plaintext JSONB options."""
 
+import asyncio
 import logging
 
 import httpx
@@ -12,6 +13,48 @@ from normalize import NormalizeLLMConfig, normalize_text
 
 
 log = logging.getLogger("toolgate.tts_local")
+
+
+# response_format → ffmpeg output encoder args. Formats not listed are returned
+# un-denoised (we won't risk corrupting raw PCM or unknown containers).
+_FFMPEG_ENCODE = {
+    "opus": ["-c:a", "libopus", "-b:a", "64k", "-f", "ogg"],
+    "mp3": ["-c:a", "libmp3lame", "-q:a", "2", "-f", "mp3"],
+    "aac": ["-c:a", "aac", "-f", "adts"],
+    "flac": ["-c:a", "flac", "-f", "flac"],
+    "wav": ["-c:a", "pcm_s16le", "-f", "wav"],
+}
+
+
+async def _ffmpeg_denoise(audio: bytes, response_format: str, af: str) -> bytes:
+    """Filter generated audio through ffmpeg (e.g. denoise the XTTS output).
+
+    Best-effort: any failure (ffmpeg missing, unknown format, non-zero exit)
+    logs a warning and returns the ORIGINAL audio so TTS never breaks here."""
+    enc = _FFMPEG_ENCODE.get((response_format or "mp3").lower())
+    if enc is None or not audio:
+        return audio
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
+           "-i", "pipe:0", "-af", af, *enc, "pipe:1"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate(input=audio)
+        if proc.returncode != 0 or not out:
+            log.warning("denoise ffmpeg rc=%s: %s", proc.returncode,
+                        err[:300].decode("utf-8", "ignore"))
+            return audio
+        return out
+    except FileNotFoundError:
+        log.warning("ffmpeg not installed — skipping output denoise")
+        return audio
+    except Exception as e:  # never fail TTS because of the denoise step
+        log.warning("denoise error: %s", e)
+        return audio
 
 
 class Qwen3TTS:
@@ -35,6 +78,17 @@ class Qwen3TTS:
             if isinstance(timeouts, dict) and timeouts.get("request_secs") is not None
             else None
         )
+        # Optional post-synthesis denoise of the TTS output via ffmpeg. XTTS's
+        # vocoder leaves a faint hiss that reference-cleaning can't remove, so we
+        # filter the generated audio. `options.denoise` is an ffmpeg -af filter
+        # string (e.g. "afftdn=nr=10:nf=-45"); `true` selects a sane default.
+        denoise_opt = opts.get("denoise")
+        if denoise_opt is True:
+            self.denoise: str | None = "afftdn=nr=10:nf=-45"
+        elif isinstance(denoise_opt, str) and denoise_opt.strip():
+            self.denoise = denoise_opt.strip()
+        else:
+            self.denoise = None
 
     async def _resolve_llm_config(self, registry) -> NormalizeLLMConfig | None:
         """Resolve normalize-LLM config from the referenced text provider.
@@ -88,4 +142,7 @@ class Qwen3TTS:
             kwargs["timeout"] = self.request_timeout
         resp = await http.post(f"{self.base_url}/v1/audio/speech", **kwargs)
         resp.raise_for_status()
-        return resp.content
+        audio = resp.content
+        if self.denoise:
+            audio = await _ffmpeg_denoise(audio, response_format, self.denoise)
+        return audio

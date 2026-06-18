@@ -109,13 +109,22 @@ pub(crate) async fn api_tts_synthesize(
     };
 
     let client = TOOLGATE_CLIENT.get_or_init(reqwest::Client::new);
+    // Build the body, deferring `model`/`voice` to the active provider's
+    // configured defaults when the caller omits them. Hardcoding "tts-1" here
+    // forced the piper tier on OpenAI-style servers (e.g. openedai-speech),
+    // where an XTTS voice clone is only reachable via the provider's
+    // `default_model` ("tts-1-hd") — so the preview returned empty audio.
+    // Omitting the field lets toolgate fall back to that default_model.
+    let mut payload = serde_json::json!({
+        "input": body.text,
+        "voice": body.voice.unwrap_or_default(),
+    });
+    if let Some(model) = body.model.filter(|m| !m.is_empty()) {
+        payload["model"] = serde_json::Value::String(model);
+    }
     let resp = client
         .post(format!("{}/v1/audio/speech", base.trim_end_matches('/')))
-        .json(&serde_json::json!({
-            "input": body.text,
-            "voice": body.voice.unwrap_or_default(),
-            "model": body.model.unwrap_or_else(|| "tts-1".to_string()),
-        }))
+        .json(&payload)
         .send()
         .await;
 
