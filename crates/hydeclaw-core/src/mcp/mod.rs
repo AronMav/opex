@@ -176,11 +176,24 @@ impl McpRegistry {
         let body = parse_mcp_response(resp).await?;
         let tools = parse_mcp_tools(&body)?;
 
-        // Cache the result in memory
-        self.tool_cache
-            .write()
-            .await
-            .insert(mcp_name.to_string(), tools.clone());
+        // Cache the result in memory (Bug 22: hard cap to prevent unbounded growth
+        // from repeated add/remove cycles; evict the oldest entry when at limit).
+        const TOOL_CACHE_MAX: usize = 256;
+        {
+            let mut cache = self.tool_cache.write().await;
+            if cache.len() >= TOOL_CACHE_MAX
+                && !cache.contains_key(mcp_name)
+                && let Some(oldest) = cache.keys().next().cloned()
+            {
+                tracing::warn!(
+                    evicted = %oldest,
+                    cap = TOOL_CACHE_MAX,
+                    "MCP tool cache at capacity, evicting oldest entry"
+                );
+                cache.remove(&oldest);
+            }
+            cache.insert(mcp_name.to_string(), tools.clone());
+        }
 
         // Persist to disk (best-effort)
         if let Err(e) = self.persist_cache_to_disk(mcp_name, &tools).await {
