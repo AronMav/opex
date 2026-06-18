@@ -273,6 +273,7 @@ pub(crate) async fn api_mcp_reload(
 /// POST /api/mcp/:name/toggle — flip enabled/disabled in YAML config.
 pub(crate) async fn api_mcp_toggle(
     State(infra): State<InfraServices>,
+    State(agents): State<AgentCore>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     use crate::tools::mcp_workspace::{load_mcp_entries, save_mcp_entry};
@@ -294,6 +295,14 @@ pub(crate) async fn api_mcp_toggle(
             }
         } else {
             cm.remove_mcp(&entry.name).await;
+        }
+    }
+    // Bug 22: when disabling an MCP, also evict its tool definitions from the
+    // McpRegistry cache so the LLM stops seeing those tools immediately.
+    if !entry.enabled {
+        let deps = agents.deps.read().await;
+        if let Some(ref mcp) = deps.mcp {
+            mcp.invalidate_mcp_cache(&name).await;
         }
     }
     tracing::info!(mcp = %name, enabled = entry.enabled, "MCP toggled via UI");

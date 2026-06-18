@@ -295,7 +295,15 @@ async fn main() -> Result<()> {
     // Config hot-reload watcher
     let shared_config = std::sync::Arc::new(tokio::sync::RwLock::new(cfg.clone()));
     let config_api_write_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    config::spawn_config_watcher("config/hydeclaw.toml".to_string(), shared_config.clone(), config_api_write_flag.clone());
+    // CancellationToken for the OS-thread watchers is created now so they can be
+    // cancelled at the bottom of main alongside the tokio bg_shutdown token (Bug 13).
+    let watcher_cancel = tokio_util::sync::CancellationToken::new();
+    config::spawn_config_watcher(
+        "config/hydeclaw.toml".to_string(),
+        shared_config.clone(),
+        config_api_write_flag.clone(),
+        watcher_cancel.clone(),
+    );
 
     // Database pool — DATABASE_URL env var overrides hydeclaw.toml value
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| cfg.database.url.clone());
@@ -386,6 +394,7 @@ async fn main() -> Result<()> {
             config::WORKSPACE_DIR.to_string(),
             memory_store.clone(),
             tokio::runtime::Handle::current(),
+            watcher_cancel.clone(),
         );
         // First-run bootstrap: the watcher only handles file CHANGE events, so
         // a fresh install with workspace files already on disk would have zero
@@ -466,11 +475,18 @@ async fn main() -> Result<()> {
         tracing::info!("embedding not configured — memory features disabled");
     }
 
+    // Shutdown token: cancelled once axum::serve returns (i.e. after SIGTERM/Ctrl-C).
+    // Background tasks select on this token so they exit promptly instead of
+    // completing their current DB-query round-trip first (Bug 24).
+    // Created here (before init_container_manager) so the idle-reaper task (Bug 14)
+    // can select on it from the moment it is spawned.
+    let bg_shutdown = tokio_util::sync::CancellationToken::new();
+
     // Tool registry — load service endpoints from workspace/tools/*.yaml
     let tool_registry = init_tool_registry().await;
 
     // Container Manager (Docker lifecycle for on-demand MCP servers)
-    let container_manager = init_container_manager().await;
+    let container_manager = init_container_manager(bg_shutdown.clone()).await;
 
     // MCP registry (MCP tool discovery from MCP containers)
     let mcp_registry = init_mcp_registry(container_manager.clone()).await;
@@ -668,11 +684,6 @@ async fn main() -> Result<()> {
 
     // Managed processes started after TcpListener::bind below — toolgate needs Core API ready.
 
-    // Shutdown token: cancelled once axum::serve returns (i.e. after SIGTERM/Ctrl-C).
-    // Background tasks select on this token so they exit promptly instead of
-    // completing their current DB-query round-trip first (Bug 24).
-    let bg_shutdown = tokio_util::sync::CancellationToken::new();
-
     // Spawn periodic background tasks (cleanup, watchdog, etc.)
     spawn_background_tasks(&state, process_manager.clone(), &agent_configs, bg_shutdown.clone()).await;
 
@@ -731,6 +742,9 @@ async fn main() -> Result<()> {
     // at the top of each iteration so they exit within one tick instead of
     // waiting for the current DB query to finish (Bug 24 fix).
     bg_shutdown.cancel();
+
+    // Signal OS-thread watchers (workspace + config) to exit (Bug 12 / Bug 13).
+    watcher_cancel.cancel();
 
     // ── Graceful shutdown: cancel → drain → stop ──────────────────────────
     // Phase 62 RES-05: extracted into `shutdown::drain_agents_with_scheduler`.
@@ -885,7 +899,12 @@ async fn init_tool_registry() -> tools::ToolRegistry {
 }
 
 /// Initialize the Container Manager for Docker-based MCP servers.
-async fn init_container_manager() -> Option<Arc<containers::ContainerManager>> {
+///
+/// `shutdown` is passed so the idle-reaper task (Bug 14) can select on it and exit
+/// promptly on graceful shutdown.
+async fn init_container_manager(
+    shutdown: tokio_util::sync::CancellationToken,
+) -> Option<Arc<containers::ContainerManager>> {
     let docker_url = std::env::var("DOCKER_HOST")
         .unwrap_or_else(|_| "tcp://127.0.0.1:2375".to_string());
     let mcp_map = crate::tools::mcp_workspace::load_mcp_map(crate::config::MCP_DIR).await;
@@ -900,12 +919,17 @@ async fn init_container_manager() -> Option<Arc<containers::ContainerManager>> {
             }
             // Cleanup orphaned on-demand containers from previous crash
             cm.cleanup_orphans().await;
-            // Spawn idle reaper
+            // Spawn idle reaper (Bug 14: cancelled on shutdown via the passed token).
             let cm_clone = cm.clone();
+            let reaper_cancel = shutdown.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
                 loop {
-                    interval.tick().await;
+                    tokio::select! {
+                        biased;
+                        _ = reaper_cancel.cancelled() => break,
+                        _ = interval.tick() => {}
+                    }
                     cm_clone.reap_idle().await;
                 }
             });

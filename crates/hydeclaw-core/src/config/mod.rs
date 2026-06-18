@@ -1607,7 +1607,15 @@ pub type ConfigApiWriteFlag = Arc<std::sync::atomic::AtomicBool>;
 /// Watch config file for changes and reload atomically.
 /// Debounces changes (500ms) and validates before applying.
 /// Skips reload when `api_write_flag` is set (API handler already updated in-memory config).
-pub fn spawn_config_watcher(config_path: String, shared: SharedConfig, api_write_flag: ConfigApiWriteFlag) {
+///
+/// The `cancel` token is polled every 250 ms so the OS thread exits promptly on
+/// graceful shutdown instead of blocking the process indefinitely (Bug 13).
+pub fn spawn_config_watcher(
+    config_path: String,
+    shared: SharedConfig,
+    api_write_flag: ConfigApiWriteFlag,
+    cancel: tokio_util::sync::CancellationToken,
+) {
     use notify::{Event, EventKind, RecursiveMode, Watcher};
 
     // Capture tokio runtime handle before spawning OS thread
@@ -1632,7 +1640,18 @@ pub fn spawn_config_watcher(config_path: String, shared: SharedConfig, api_write
         tracing::info!(path = %config_path, "config file watcher started");
         let mut last_reload = std::time::Instant::now();
 
-        for event in rx {
+        loop {
+            if cancel.is_cancelled() {
+                tracing::debug!("config watcher: shutdown signal received, exiting");
+                break;
+            }
+
+            let event = match rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                Ok(ev) => ev,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
             match event {
                 Ok(Event {
                     kind: EventKind::Modify(_),
