@@ -1,17 +1,15 @@
 #!/usr/sbin/nft -f
-# HydeClaw port isolation on the public-IP server (188.246.224.118).
-# Public NIC = eth0. Allow only loopback, WireGuard (10.8.0.0/24),
-# docker_wg (10.10.1.0/24), and LAN (192.168.0.0/16) to reach HydeClaw ports;
-# drop them when they arrive on the public interface. SSH (22) is untouched.
-table inet hydeclaw {
-    set hydeclaw_ports {
-        type inet_service
-        elements = { 18789, 9011, 5432, 4317 }
-    }
-    chain input {
-        type filter hook input priority -10; policy accept;
-        iifname "lo" accept
-        ip saddr { 10.8.0.0/24, 10.10.1.0/24, 192.168.0.0/16 } tcp dport @hydeclaw_ports accept
-        iifname "eth0" tcp dport @hydeclaw_ports drop
-    }
-}
+# HydeClaw runs natively on the host (0.0.0.0:18789). The server's host firewall
+# is `table inet filter` with `hook input priority filter; policy drop` — it only
+# allows an explicit set of ports, so 18789 is dropped for EVERYONE by default,
+# including docker_wg containers (so nginx-proxy-manager can't reach it) and the
+# public interface (good — public stays blocked).
+#
+# This file APPENDS one allow to that existing input chain so docker_wg containers
+# (notably nginx-proxy-manager at 10.10.1.6) can reach the HydeClaw API and
+# reverse-proxy it. Public access remains blocked by the policy drop. Loaded after
+# /etc/nftables.conf via the `include "/etc/nftables.d/*.nft"` line.
+#
+# Bridge name br-ad0f7035afac == the docker_wg network (matches the existing
+# wg-easy allow rules in /etc/nftables.conf).
+add rule inet filter input iifname "br-ad0f7035afac" ip saddr 10.10.1.0/24 tcp dport 18789 accept
