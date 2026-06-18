@@ -11,8 +11,10 @@ LLM normalization: English->Cyrillic transliteration via configurable LLM
 Post-processing (<1ms): strip Latin chars, fix punctuation
 """
 
+import asyncio
 import logging
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 
@@ -177,6 +179,202 @@ _LATIN_WORD_RE = re.compile(r"\b[a-zA-Z]{2,}\b")
 _LATIN_CHAR_RE = re.compile(r"(?<![a-zA-Zа-яА-ЯёЁ])[a-zA-Z](?![a-zA-Zа-яА-ЯёЁ])")
 
 
+# ── Latin → Cyrillic transliteration ──
+# XTTS in ru-mode silently drops Latin and `post_process` strips it, so English
+# words go unspoken. When the optional LLM transliteration step is unavailable
+# (text providers are not exported to toolgate's registry), this rule-based pass
+# keeps English words audible by rendering them in phonetic Cyrillic.
+
+# Russian names of Latin letters — used to spell out acronyms (GPU → джи пи ю).
+_LETTER_NAMES = {
+    "a": "эй", "b": "би", "c": "си", "d": "ди", "e": "и", "f": "эф",
+    "g": "джи", "h": "эйч", "i": "ай", "j": "джей", "k": "кей", "l": "эл",
+    "m": "эм", "n": "эн", "o": "оу", "p": "пи", "q": "кью", "r": "ар",
+    "s": "эс", "t": "ти", "u": "ю", "v": "ви", "w": "дабл-ю", "x": "экс",
+    "y": "уай", "z": "зет",
+}
+
+# Hand-tuned pronunciations for common words/acronyms (highest quality).
+_TRANSLIT_DICT = {
+    "ai": "эй ай", "api": "эй пи ай", "url": "ю эр эл", "id": "ай ди",
+    "ok": "окей", "sql": "эс кью эл", "json": "джейсон", "http": "эйч ти ти пи",
+    "https": "эйч ти ти пи эс", "css": "си эс эс", "html": "эйч ти эм эл",
+    "cpu": "си пи ю", "gpu": "джи пи ю", "ram": "рам", "ssd": "эс эс ди",
+    "usb": "ю эс би", "pdf": "пи ди эф", "ui": "ю ай", "ux": "ю экс",
+    "python": "пайтон", "java": "джава", "javascript": "джаваскрипт",
+    "github": "гитхаб", "git": "гит", "docker": "докер", "linux": "линукс",
+    "windows": "виндоус", "android": "андроид", "google": "гугл",
+    "telegram": "телеграм", "openai": "оупен эй ай", "chatgpt": "чат джи пи ти",
+    "server": "сервер", "online": "онлайн", "offline": "офлайн",
+    "email": "имейл", "internet": "интернет", "hello": "хэллоу", "test": "тест",
+    # AI / tech proper nouns — espeak's general G2P mispronounces these brand
+    # names, so we pin them by hand.
+    "gemini": "джемини", "claude": "клод", "chatgpt": "чат джи пи ти",
+    "gpt": "джи пи ти", "qwen": "квен", "siri": "сири", "apple": "эпл",
+    "microsoft": "майкрософт", "anthropic": "энтропик", "openai": "оупен эй ай",
+    "grok": "грок", "llama": "лама", "mistral": "мистраль", "nvidia": "энвидиа",
+    "deepseek": "дипсик", "kimi": "кими", "copilot": "копайлот",
+    "iphone": "айфон", "ipad": "айпад", "macos": "макос", "nano": "нано",
+}
+
+# Multi-letter phonetic rules for the fallback path (matched longest-first).
+_DIGRAPHS = [
+    ("sch", "ш"), ("tch", "ч"), ("igh", "ай"),
+    ("sh", "ш"), ("ch", "ч"), ("th", "т"), ("ph", "ф"), ("wh", "в"),
+    ("ck", "к"), ("qu", "кв"), ("oo", "у"), ("ee", "и"), ("ea", "и"),
+    ("oa", "оу"), ("ou", "ау"), ("ow", "ау"), ("ay", "эй"), ("ai", "эй"),
+    ("ey", "эй"), ("oy", "ой"), ("oi", "ой"), ("ng", "нг"), ("yu", "ю"),
+    ("ya", "я"), ("yo", "ё"),
+]
+
+_SINGLES = {
+    "a": "а", "b": "б", "c": "к", "d": "д", "e": "е", "f": "ф", "g": "г",
+    "h": "х", "i": "и", "j": "дж", "k": "к", "l": "л", "m": "м", "n": "н",
+    "o": "о", "p": "п", "q": "к", "r": "р", "s": "с", "t": "т", "u": "у",
+    "v": "в", "w": "в", "x": "кс", "y": "и", "z": "з",
+}
+
+_TRANSLIT_WORD_RE = re.compile(r"[A-Za-z]+(?:['’-][A-Za-z]+)*")
+
+
+def _translit_word(word: str) -> str:
+    low = word.lower()
+    if low in _TRANSLIT_DICT:
+        return _TRANSLIT_DICT[low]
+    letters = [c for c in word if c.isalpha()]
+    # All-caps short token → spell it out letter by letter (acronym).
+    if word.isupper() and 1 <= len(letters) <= 5:
+        return " ".join(_LETTER_NAMES.get(c.lower(), "") for c in letters).strip()
+    # Phonetic fallback: greedy digraphs, then single letters.
+    out = []
+    i = 0
+    n = len(low)
+    while i < n:
+        for dg, repl in _DIGRAPHS:
+            if low.startswith(dg, i):
+                out.append(repl)
+                i += len(dg)
+                break
+        else:
+            out.append(_SINGLES.get(low[i], ""))
+            i += 1
+    return "".join(out)
+
+
+# ── espeak-ng G2P: word → IPA → Cyrillic (handles arbitrary words) ──
+# Multi-symbol IPA → Cyrillic (matched longest-first: affricates, diphthongs).
+_IPA_SEQS = [
+    ("dʒ", "дж"), ("tʃ", "ч"),
+    ("aɪ", "ай"), ("aʊ", "ау"), ("ɔɪ", "ой"), ("ʌɪ", "ай"), ("eɪ", "эй"),
+    ("oʊ", "оу"), ("əʊ", "оу"), ("ɪə", "иэ"), ("iə", "иэ"),
+    ("eə", "эа"), ("ʊə", "уэ"),
+]
+# Single IPA symbol → Cyrillic.
+_IPA_SINGLE = {
+    "i": "и", "ɪ": "и", "ᵻ": "и", "ɨ": "и",
+    "e": "э", "ɛ": "э", "æ": "э",
+    "ʌ": "а", "ɑ": "а", "ɐ": "а", "a": "а",
+    "ɒ": "о", "ɔ": "о", "o": "о", "ɵ": "о",
+    "u": "у", "ʊ": "у", "ʉ": "у",
+    "ə": "а", "ɜ": "э", "ɝ": "эр", "ɚ": "эр",
+    "p": "п", "b": "б", "t": "т", "d": "д", "k": "к", "g": "г", "ɡ": "г",
+    "f": "ф", "v": "в", "θ": "т", "ð": "з", "s": "с", "z": "з",
+    "ʃ": "ш", "ʒ": "ж", "h": "х",
+    "m": "м", "n": "н", "ŋ": "нг", "l": "л", "ɫ": "л",
+    "r": "р", "ɹ": "р", "ɾ": "р", "w": "в", "ʍ": "в", "j": "й",
+    " ": "", "ʔ": "", "-": "",
+}
+
+# Cache of word → Cyrillic from espeak (persists across requests).
+_G2P_CACHE: dict[str, str] = {}
+
+
+def _ipa_to_cyrillic(ipa: str) -> str:
+    """Map an espeak IPA string to phonetic Cyrillic."""
+    s = (ipa.replace("ˈ", "").replace("ˌ", "")
+            .replace("ː", "").replace("ˑ", "").replace("ˌ", ""))
+    out: list[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        for seq, cyr in _IPA_SEQS:
+            if s.startswith(seq, i):
+                out.append(cyr)
+                i += len(seq)
+                break
+        else:
+            out.append(_IPA_SINGLE.get(s[i], ""))
+            i += 1
+    return "".join(out)
+
+
+def _espeak_ipa_batch(words: list[str]) -> dict[str, str]:
+    """Resolve word → IPA via espeak-ng in one call (newline-separated stdin).
+
+    Best-effort: returns {} if espeak is missing/errors or its line count
+    doesn't line up with the input (caller then falls back to rule-based)."""
+    if not words:
+        return {}
+    try:
+        proc = subprocess.run(
+            ["espeak-ng", "-v", "en-us", "-q", "--ipa"],
+            input="\n".join(words),
+            capture_output=True, text=True, encoding="utf-8", timeout=10,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return {}
+    if proc.returncode != 0:
+        return {}
+    lines = proc.stdout.split("\n")
+    while lines and lines[-1].strip() == "":
+        lines.pop()
+    lines = [ln.strip() for ln in lines]
+    if len(lines) != len(words):
+        return {}
+    return dict(zip(words, lines))
+
+
+def transliterate_latin(text: str) -> str:
+    """Render Latin words as Cyrillic the TTS can pronounce.
+
+    Per word, in order: curated dictionary → acronym letter-spelling →
+    espeak-ng G2P (any word, via pronunciation) → rule-based phonetic fallback
+    (when espeak is unavailable)."""
+    words = _TRANSLIT_WORD_RE.findall(text)
+    if not words:
+        return text
+
+    resolved: dict[str, str] = {}
+    need_espeak: list[str] = []
+    for w in words:
+        if w in resolved or w in need_espeak:
+            continue
+        low = w.lower()
+        if low in _TRANSLIT_DICT:
+            resolved[w] = _TRANSLIT_DICT[low]
+            continue
+        letters = [c for c in w if c.isalpha()]
+        if w.isupper() and 1 <= len(letters) <= 5:
+            resolved[w] = " ".join(_LETTER_NAMES.get(c.lower(), "") for c in letters).strip()
+            continue
+        if w in _G2P_CACHE:
+            resolved[w] = _G2P_CACHE[w]
+            continue
+        need_espeak.append(w)
+
+    if need_espeak:
+        ipa_map = _espeak_ipa_batch(need_espeak)
+        for w in need_espeak:
+            cyr = _ipa_to_cyrillic(ipa_map[w]) if ipa_map.get(w) else ""
+            if not cyr:
+                cyr = _translit_word(w)  # rule-based fallback
+            _G2P_CACHE[w] = cyr
+            resolved[w] = cyr
+
+    return _TRANSLIT_WORD_RE.sub(
+        lambda m: resolved.get(m.group(0)) or _translit_word(m.group(0)), text
+    )
+
+
 # ── Pre-processing ──
 
 def pre_process(text: str) -> str:
@@ -202,6 +400,9 @@ def pre_process(text: str) -> str:
 # ── Post-processing ──
 
 def post_process(text: str) -> str:
+    # Transliterate first so English words survive as Cyrillic; the strips below
+    # then only remove any residual Latin (e.g. unmapped symbols).
+    text = transliterate_latin(text)
     text = _LATIN_WORD_RE.sub("", text)
     text = _LATIN_CHAR_RE.sub("", text)
     lines = text.split("\n")
@@ -310,7 +511,8 @@ async def normalize_text(
         llm_result = await normalize_via_llm(http, text, config)
         if llm_result is not None:
             text = llm_result
-    text = post_process(text)
+    # post_process now shells out to espeak-ng for G2P — run off the event loop.
+    text = await asyncio.to_thread(post_process, text)
     return text
 
 
