@@ -99,6 +99,9 @@ pub struct SseStreamWriter {
     text_id_counter: u32,
     current_text_id: Option<String>,
     tool_name_map: HashMap<String, String>,
+    // Bug 18: remember the parallel_batch_id emitted with tool-input-start so
+    // tool-input-available can carry the same value for UI grouping.
+    tool_batch_id_map: HashMap<String, Option<ParallelBatchId>>,
     current_agent: String,
 }
 
@@ -108,6 +111,7 @@ impl SseStreamWriter {
             text_id_counter: 0,
             current_text_id: None,
             tool_name_map: HashMap::new(),
+            tool_batch_id_map: HashMap::new(),
             current_agent: initial_agent,
         }
     }
@@ -193,6 +197,9 @@ impl SseStreamWriter {
     ) -> String {
         self.tool_name_map
             .insert(tool_call_id.as_str().to_string(), tool_name.clone());
+        // Bug 18: persist so build_tool_input_available can forward it.
+        self.tool_batch_id_map
+            .insert(tool_call_id.as_str().to_string(), parallel_batch_id);
         self.frame(&SseEvent::ToolInputStart {
             tool_call_id,
             tool_name,
@@ -222,10 +229,17 @@ impl SseStreamWriter {
             .get(tool_call_id.as_str())
             .cloned()
             .unwrap_or_default();
+        // Bug 18: forward the parallel_batch_id recorded at tool-input-start.
+        let parallel_batch_id = self
+            .tool_batch_id_map
+            .get(tool_call_id.as_str())
+            .cloned()
+            .unwrap_or(None);
         self.frame(&SseEvent::ToolInputAvailable {
             tool_call_id,
             tool_name,
             input,
+            parallel_batch_id,
         })
     }
 

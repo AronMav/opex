@@ -125,8 +125,14 @@ const TOOLS_DIR: &str = "tools";
 const IDENTITY_FILES: &[&str] = &["SOUL.md", "IDENTITY.md", "MEMORY.md", "HEARTBEAT.md"];
 
 /// Extract the filename component from a path (e.g. "agents/main/SOUL.md" → "SOUL.md").
-fn file_basename(path: &str) -> &str {
-    Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("")
+///
+/// Returns an error when the path has no basename (e.g. `..`, paths ending with `/`).
+/// An empty basename would silently bypass identity-file protection checks.
+fn file_basename(path: &str) -> anyhow::Result<&str> {
+    Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid file path: no basename for {:?}", path))
 }
 
 /// Check if a resolved path points to a read-only or protected file.
@@ -764,8 +770,9 @@ pub async fn delete_workspace_file(
     if is_read_only(workspace_dir, &path, false) {
         anyhow::bail!("'{filename}' is a protected file and cannot be deleted");
     }
-    // Per-agent identity files cannot be deleted (but can be edited)
-    if IDENTITY_FILES.contains(&file_basename(filename)) {
+    // Per-agent identity files cannot be deleted (but can be edited).
+    // file_basename errors on paths like ".." or trailing-slash — reject those too.
+    if IDENTITY_FILES.contains(&file_basename(filename)?) {
         anyhow::bail!("'{filename}' is a protected file and cannot be deleted");
     }
     if path.is_dir() {
@@ -1091,17 +1098,39 @@ mod tests {
     // file_basename tests
     #[test]
     fn file_basename_from_path() {
-        assert_eq!(file_basename("agents/main/SOUL.md"), "SOUL.md");
+        assert_eq!(file_basename("agents/main/SOUL.md").unwrap(), "SOUL.md");
     }
 
     #[test]
     fn file_basename_bare_filename() {
-        assert_eq!(file_basename("file.txt"), "file.txt");
+        assert_eq!(file_basename("file.txt").unwrap(), "file.txt");
+    }
+
+    // Bug 6: paths where Path::file_name() returns None must return an error, not "".
+    // On all platforms, an empty string and a bare ".." have no basename.
+    #[test]
+    fn file_basename_empty_string_errors() {
+        assert!(
+            file_basename("").is_err(),
+            "empty path has no basename and must error"
+        );
     }
 
     #[test]
-    fn file_basename_empty_string() {
-        assert_eq!(file_basename(""), "");
+    fn file_basename_dotdot_errors() {
+        assert!(
+            file_basename("..").is_err(),
+            "'..' has no basename and must error"
+        );
+    }
+
+    #[test]
+    fn file_basename_nested_dotdot_errors() {
+        // "agents/../.." — the final component is ".." → no basename.
+        assert!(
+            file_basename("agents/../..").is_err(),
+            "path ending in '..' has no basename and must error"
+        );
     }
 
     // agent_dir tests

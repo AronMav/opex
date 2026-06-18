@@ -95,6 +95,11 @@ pub enum SseEvent {
         tool_name: String,
         #[cfg_attr(feature = "ts-gen", ts(type = "unknown"))]
         input: serde_json::Value,
+        // Bug 18: mirrors the parallelBatchId carried by tool-input-start so
+        // the UI can group parallel tool calls consistently.
+        #[serde(skip_serializing_if = "Option::is_none", rename = "parallelBatchId")]
+        #[cfg_attr(feature = "ts-gen", ts(type = "string | null"))]
+        parallel_batch_id: Option<ParallelBatchId>,
     },
     /// Tool execution result. output is opaque String.
     ToolOutputAvailable {

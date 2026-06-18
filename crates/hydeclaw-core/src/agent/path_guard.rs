@@ -18,7 +18,7 @@
 //!   - On Unix, `dunce::canonicalize` is a transparent wrapper around
 //!     `std::fs::canonicalize`, so behaviour is unchanged.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 /// Canonicalize a user-supplied path under `workspace_dir`.
 ///
@@ -68,6 +68,47 @@ pub fn resolve_workspace_path(
                 )
             })?;
             let parent_canon = dunce::canonicalize(parent)?;
+
+            // Bug 11: reject if the canonical parent itself escapes the root
+            // (a symlink in the parent chain could make it resolve to /etc/...).
+            if !parent_canon.starts_with(&root) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "parent path escapes workspace: {}",
+                        parent_canon.display()
+                    ),
+                ));
+            }
+
+            // Bug 11: walk every ancestor of `joined` that is inside the workspace
+            // root and reject if any is a symlink.  We only need to inspect
+            // components between `root` and the leaf; components at or above
+            // `root` were already resolved by `dunce::canonicalize(root)`.
+            let mut cursor = root.clone();
+            for component in joined.components() {
+                // Prefix / RootDir / CurDir / ParentDir were already handled
+                // by earlier guards (dotdot check) or are part of the root.
+                if let Component::Normal(seg) = component {
+                    cursor.push(seg);
+                    // Only inspect components that actually exist on disk.
+                    if cursor.exists() {
+                        let meta = cursor.symlink_metadata().map_err(|e| {
+                            std::io::Error::new(e.kind(), format!("symlink_metadata failed: {e}"))
+                        })?;
+                        if meta.file_type().is_symlink() {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                format!(
+                                    "symlink in path ancestry is not permitted: {}",
+                                    cursor.display()
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+
             let file = joined.file_name().ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -118,5 +159,31 @@ mod tests {
         let bad = Path::new("..");
         let result = resolve_workspace_path(ws.path().to_str().unwrap(), bad);
         assert!(result.is_err(), "dotdot-only path must be rejected");
+    }
+
+    // Bug 11: a symlink directory inside the workspace pointing outside must
+    // be rejected even when the leaf doesn't exist yet (the "parent canon +
+    // reattach" code path).
+    #[cfg(unix)]
+    #[test]
+    fn symlink_parent_dir_blocked() {
+        use std::os::unix::fs::symlink;
+
+        let outside = TempDir::new().unwrap();
+        let ws = TempDir::new().unwrap();
+
+        // Create a subdirectory inside the workspace that is actually a
+        // symlink pointing to a directory outside the workspace.
+        let link_dir = ws.path().join("subdir");
+        symlink(outside.path(), &link_dir).unwrap();
+
+        // Attempt to write a (non-existent) file through the symlinked dir.
+        let probe = Path::new("subdir/secret.txt");
+        let result = resolve_workspace_path(ws.path().to_str().unwrap(), probe);
+        assert!(
+            result.is_err(),
+            "path through symlink dir must be rejected; got: {:?}",
+            result
+        );
     }
 }
