@@ -152,6 +152,110 @@ pub struct YamlCacheConfig {
     pub key_params: Vec<String>,
 }
 
+// ── Security helpers ─────────────────────────────────────────────────────────
+
+/// Maximum characters from an HTTP error response body to include in error messages.
+/// Limits leakage while still providing enough context to diagnose the failure.
+pub(crate) const ERROR_BODY_MAX_CHARS: usize = 200;
+
+/// Hard cap on the number of pages the pagination loop will ever fetch,
+/// regardless of what `max_pages` is configured to.  Prevents DoS via
+/// an artificially large `max_pages` field in a YAML tool definition.
+pub(crate) const PAGINATION_MAX_PAGES_HARD_CAP: usize = 1000;
+
+/// Hard cap on the total accumulated size of all paginated pages (in bytes).
+/// Prevents DoS via a large `limit` combined with many pages.
+pub(crate) const PAGINATION_MAX_TOTAL_BYTES: usize = 50 * 1024 * 1024; // 50 MB
+
+/// Redact common secret patterns from a string before it is included in error
+/// messages or audit logs.  The redacted string is also truncated to
+/// [`ERROR_BODY_MAX_CHARS`] so that large response bodies don't bloat logs.
+///
+/// Patterns redacted (case-insensitive):
+/// - `Bearer <token>`
+/// - `api_key=<value>` / `api-key=<value>` / `api_key: <value>` etc.
+/// - `token=<value>` / `token: <value>` etc.
+pub(crate) fn redact_secrets(body: &str) -> String {
+    // Truncate first (cheaper than running regex on a multi-MB string).
+    let truncated = if body.len() > ERROR_BODY_MAX_CHARS {
+        &body[..ERROR_BODY_MAX_CHARS]
+    } else {
+        body
+    };
+
+    // Simple state-machine redaction — avoids pulling in the `regex` crate
+    // for this hot-path helper (regex already compiled elsewhere but we keep
+    // this dependency-free for portability).
+    let mut result = truncated.to_string();
+
+    // Redact Bearer tokens: "Bearer <token>"
+    result = redact_pattern_after_keyword(&result, "bearer ", is_token_char);
+    // Redact api_key / api-key variants: keyword then optional [ =:"] then value
+    result = redact_pattern_after_keyword(&result, "api_key", is_token_char_or_separator);
+    result = redact_pattern_after_keyword(&result, "api-key", is_token_char_or_separator);
+    // Redact token variants
+    result = redact_pattern_after_keyword(&result, "token", is_token_char_or_separator);
+
+    result
+}
+
+fn is_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')
+}
+
+fn is_token_char_or_separator(c: char) -> bool {
+    // Skip separators (=, :, ", space) before the actual value
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '=' | ':' | '"' | ' ')
+}
+
+/// Replace the value portion following `keyword` (case-insensitive) with `[REDACTED]`.
+/// The value is the contiguous run of characters satisfying `is_value` that follows
+/// the keyword and any optional leading non-alphanumeric separator chars.
+fn redact_pattern_after_keyword(
+    input: &str,
+    keyword: &str,
+    is_value: fn(char) -> bool,
+) -> String {
+    let lower = input.to_lowercase();
+    let mut result = String::with_capacity(input.len());
+    let mut pos = 0usize;
+
+    while pos < input.len() {
+        if let Some(rel) = lower[pos..].find(keyword) {
+            let kw_start = pos + rel;
+            let kw_end = kw_start + keyword.len();
+            result.push_str(&input[pos..kw_end]);
+
+            // Skip separators (=, :, ", space) between keyword and value
+            let rest = &input[kw_end..];
+            let skip = rest.chars().take_while(|&c| !c.is_ascii_alphanumeric()).count();
+            let value_start = kw_end + skip;
+
+            // Find end of value (run of token chars)
+            let value_end = value_start
+                + input[value_start..]
+                    .chars()
+                    .take_while(|&c| is_value(c) && c.is_ascii_alphanumeric())
+                    .map(|c| c.len_utf8())
+                    .sum::<usize>();
+
+            if value_end > value_start {
+                // push separators then redacted value
+                result.push_str(&input[kw_end..value_start]);
+                result.push_str("[REDACTED]");
+                pos = value_end;
+            } else {
+                // Nothing to redact — advance past keyword
+                pos = kw_end;
+            }
+        } else {
+            result.push_str(&input[pos..]);
+            break;
+        }
+    }
+    result
+}
+
 // ── Pagination config ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -692,7 +796,8 @@ impl YamlToolDef {
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let body = resp.text().await.unwrap_or_default();
-                            anyhow::bail!("oauth token endpoint returned {status}: {body}");
+                            // Bug 8: redact secrets from OAuth error body before logging
+                            anyhow::bail!("oauth token endpoint returned {status}: {}", redact_secrets(&body));
                         }
 
                         let json: serde_json::Value = resp.json().await
@@ -956,11 +1061,13 @@ impl YamlToolDef {
 
             // Check if retryable
             if attempt + 1 < max && self.is_retryable(status.as_u16()) {
-                last_err = Some(anyhow::anyhow!("tool '{}' returned HTTP {}: {}", self.name, status, body));
+                // Bug 10: redact secrets from audit/retry error bodies
+                last_err = Some(anyhow::anyhow!("tool '{}' returned HTTP {}: {}", self.name, status, redact_secrets(&body)));
                 continue;
             }
 
-            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, body);
+            // Bug 7: redact secrets from error response bodies
+            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, redact_secrets(&body));
         }
 
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)))
@@ -977,19 +1084,40 @@ impl YamlToolDef {
         injected_headers: &[(String, String)],
     ) -> Result<String> {
         let mut all_results: Vec<serde_json::Value> = Vec::new();
-        let max_pages = pagination.max_pages.unwrap_or(5) as usize;
+
+        // Bug 9: clamp max_pages to the hard cap; warn if the config exceeds it.
+        let configured_max_pages = pagination.max_pages.unwrap_or(5) as usize;
+        let max_pages = if configured_max_pages > PAGINATION_MAX_PAGES_HARD_CAP {
+            tracing::warn!(
+                tool = %self.name,
+                configured = configured_max_pages,
+                capped = PAGINATION_MAX_PAGES_HARD_CAP,
+                "pagination max_pages exceeds hard cap; clamping"
+            );
+            PAGINATION_MAX_PAGES_HARD_CAP
+        } else {
+            configured_max_pages
+        };
+
         let limit = pagination.limit.unwrap_or(50);
         let mut cursor: Option<String> = None;
+        // Bug 9: track accumulated response size to enforce the total-bytes cap.
+        let mut total_bytes: usize = 0;
 
         for page in 0..max_pages {
             let mut page_params = params.clone();
             if let Some(obj) = page_params.as_object_mut() {
                 match pagination.pagination_type.as_str() {
                     "offset" => {
-                        obj.insert(pagination.param.clone(), serde_json::json!(page as u32 * limit));
+                        // Bug 21: use u64 arithmetic to avoid u32 overflow when
+                        // page * limit exceeds 2^32.  After the hard-cap clamp
+                        // (≤1000) this is unreachable in practice, but kept for
+                        // defence-in-depth.
+                        let offset = (page as u64).saturating_mul(u64::from(limit));
+                        obj.insert(pagination.param.clone(), serde_json::json!(offset));
                     }
                     "page" => {
-                        obj.insert(pagination.param.clone(), serde_json::json!(page as u32 + 1));
+                        obj.insert(pagination.param.clone(), serde_json::json!(page as u64 + 1));
                     }
                     "cursor" => {
                         if let Some(ref c) = cursor {
@@ -1007,6 +1135,28 @@ impl YamlToolDef {
 
             // Use a clone without pagination to avoid recursion
             let body = self.execute_single(&page_params, http_client, env_resolver, oauth_context, injected_headers).await?;
+
+            // Bug 9: enforce per-page size contribution to the total-bytes cap.
+            total_bytes += body.len();
+            if total_bytes > PAGINATION_MAX_TOTAL_BYTES {
+                tracing::warn!(
+                    tool = %self.name,
+                    page,
+                    total_bytes,
+                    cap = PAGINATION_MAX_TOTAL_BYTES,
+                    "pagination total size cap reached; returning partial results"
+                );
+                // Still parse and include the current page up to the cap, then stop.
+                let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
+                let items = if let Some(ref rp) = pagination.results_path {
+                    apply_jsonpath(&json, rp).unwrap_or(json.clone())
+                } else {
+                    json.clone()
+                };
+                let items_arr = items.as_array().cloned().unwrap_or_else(|| vec![items]);
+                all_results.extend(items_arr);
+                break;
+            }
 
             // Extract results
             let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
@@ -1069,10 +1219,12 @@ impl YamlToolDef {
                 return Ok(body);
             }
             if attempt + 1 < max && self.is_retryable(status.as_u16()) {
-                last_err = Some(anyhow::anyhow!("HTTP {status}: {body}"));
+                // Bug 10: redact secrets from error bodies surfaced by pagination sub-calls
+                last_err = Some(anyhow::anyhow!("HTTP {status}: {}", redact_secrets(&body)));
                 continue;
             }
-            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, body);
+            // Bug 7: redact secrets from error response bodies
+            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, redact_secrets(&body));
         }
 
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)))
@@ -1125,11 +1277,13 @@ impl YamlToolDef {
 
             let body = resp.text().await.unwrap_or_default();
             if attempt + 1 < max && self.is_retryable(status.as_u16()) {
-                last_err = Some(anyhow::anyhow!("tool '{}' returned HTTP {}: {}", self.name, status, body));
+                // Bug 10: redact secrets from binary-tool error bodies
+                last_err = Some(anyhow::anyhow!("tool '{}' returned HTTP {}: {}", self.name, status, redact_secrets(&body)));
                 continue;
             }
 
-            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, body);
+            // Bug 7: redact secrets from binary-tool error response bodies
+            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, redact_secrets(&body));
         }
 
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)))
@@ -1546,6 +1700,48 @@ mod tests {
         async fn resolve(&self, key: &str) -> Option<String> {
             self.map.get(key).cloned()
         }
+    }
+
+    // ── redact_secrets ───────────────────────────────────────────────────────
+
+    #[test]
+    fn redact_secrets_bearer_token_is_redacted() {
+        // Bug 7/8/10: Bearer tokens in error bodies must be redacted.
+        let input = r#"{"error":"invalid request","Authorization":"Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"}"#;
+        let out = redact_secrets(input);
+        assert!(!out.contains("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"), "raw JWT must not appear: {out}");
+        assert!(out.contains("[REDACTED]"), "must contain [REDACTED]: {out}");
+    }
+
+    #[test]
+    fn redact_secrets_plain_text_untouched() {
+        // Strings with no secret patterns must pass through unchanged (modulo truncation).
+        let input = "error: resource not found, id=12345";
+        let out = redact_secrets(input);
+        assert_eq!(out, input, "plain error text must not be modified");
+    }
+
+    #[test]
+    fn redact_secrets_truncates_long_body() {
+        // Bodies longer than ERROR_BODY_MAX_CHARS must be truncated.
+        let long = "x".repeat(ERROR_BODY_MAX_CHARS + 100);
+        let out = redact_secrets(&long);
+        assert_eq!(out.len(), ERROR_BODY_MAX_CHARS, "output must be truncated to {ERROR_BODY_MAX_CHARS} chars");
+    }
+
+    #[test]
+    fn redact_secrets_short_body_not_truncated() {
+        let input = "short error";
+        let out = redact_secrets(input);
+        assert_eq!(out, input, "short body must not be truncated or modified");
+    }
+
+    #[test]
+    fn redact_secrets_api_key_pattern_redacted() {
+        let input = "invalid api_key abcdef123456 provided";
+        let out = redact_secrets(input);
+        assert!(!out.contains("abcdef123456"), "api_key value must be redacted: {out}");
+        assert!(out.contains("[REDACTED]"), "must contain [REDACTED]: {out}");
     }
 
     // ── apply_jsonpath ───────────────────────────────────────────────────────
