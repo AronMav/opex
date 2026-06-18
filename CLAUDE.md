@@ -186,6 +186,8 @@ lock icon in the Skills UI.
 
 In-process channel adapter: `InProcessChannelManager` manages channel lifecycle. TypeScript code in `channels/` runs as a managed child process (NOT Docker). Communication via internal WebSocket loopback.
 
+**Handshake protocol:** On connection, adapter sends `Ready { adapter_type, version, formatting_prompt? }` FIRST. Core replies with `Config { language, owner_id?, typing_mode }`. Adapter MUST wait for `Config` before sending any `Message` events (to receive language preference). See `ChannelInbound` enum doc comment in `crates/hydeclaw-types/src/channels.rs` for the canonical sequence.
+
 Channel credentials (`bot_token`, `access_token`, `password`, `app_token`) are extracted from the config on create/update and stored in the encrypted vault under key `CHANNEL_CREDENTIALS`, scope = channel UUID string. The JSONB `config` column in `agent_channels` never contains credential values — they are redacted before DB insert and re-injected from vault on `GET ?reveal=true`.
 
 Agent opts in via TOML: `[agent.channel.telegram] enabled = true`

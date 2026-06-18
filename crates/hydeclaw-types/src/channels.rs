@@ -105,6 +105,24 @@ pub struct ChannelActionDto {
     pub context: serde_json::Value,
 }
 
+/// # Channel adapter handshake protocol
+///
+/// On WebSocket connect, the adapter MUST send `Ready { adapter_type, version, formatting_prompt? }` FIRST.
+/// Core replies with `Config { language, owner_id?, typing_mode }`. The adapter MUST wait for the `Config`
+/// message before sending any `Message` events — otherwise the agent has no language preference and may format
+/// replies incorrectly.
+///
+/// ## Handshake sequence (adapter ⇄ core)
+///
+/// 1. Adapter → `Ready { adapter_type, version, formatting_prompt? }`
+/// 2. Core → `Config { language, owner_id?, typing_mode }`
+/// 3. Adapter may then send: `Message`, `AccessCheck`, `PairingCreate` (any time)
+/// 4. Core sends in response: `Chunk`, `Phase`, `Done`, `Error`, `Action` (streaming/result)
+/// 5. Either side may send: `Ping` / `Pong` (heartbeat)
+/// 6. Either side may send: `Cancel(request_id)` to abort an in-flight message
+///
+/// Core also sends `Reload` to force agent re-discovery when configuration changes.
+///
 /// Messages from channel adapter to core.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
