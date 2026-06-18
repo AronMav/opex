@@ -28,6 +28,20 @@ async def test_ffmpeg_denoise_passes_through_unknown_format():
     assert await _ffmpeg_denoise(b"", "mp3", "afftdn") == b""
 
 
+@pytest.mark.asyncio
+async def test_synthesize_retries_once_on_5xx(http_client):
+    """openedai-speech 500s intermittently — one retry must recover the voice."""
+    tts = Qwen3TTS(base_url="http://tts-backend", options={"voice": "nova"})
+    async with respx.mock() as mock:
+        route = mock.post("http://tts-backend/v1/audio/speech")
+        route.side_effect = [
+            httpx.Response(503, text="busy"),
+            httpx.Response(200, content=b"AUDIO"),
+        ]
+        out = await tts.synthesize(http_client, "Привет", voice="nova", response_format="mp3")
+    assert out == b"AUDIO"
+
+
 class _FakeTextProvider:
     """Stand-in for a resolved text provider returned by registry.aget_instance()."""
     def __init__(self):

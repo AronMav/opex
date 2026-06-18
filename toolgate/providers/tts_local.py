@@ -140,9 +140,28 @@ class Qwen3TTS:
         }
         if self.request_timeout is not None:
             kwargs["timeout"] = self.request_timeout
-        resp = await http.post(f"{self.base_url}/v1/audio/speech", **kwargs)
-        resp.raise_for_status()
-        audio = resp.content
+        # openedai-speech's XTTS path intermittently 500s (a masked
+        # `generator_worker` error, usually under concurrency / memory
+        # pressure). One retry recovers it so the voice message still forms.
+        url = f"{self.base_url}/v1/audio/speech"
+        audio = b""
+        for attempt in range(2):
+            last = attempt == 1
+            try:
+                resp = await http.post(url, **kwargs)
+            except (httpx.TransportError, httpx.TimeoutException) as e:
+                if last:
+                    raise
+                log.warning("TTS request error (%s) — retrying once", e)
+                await asyncio.sleep(1.0)
+                continue
+            if resp.status_code >= 500 and not last:
+                log.warning("TTS backend HTTP %s — retrying once", resp.status_code)
+                await asyncio.sleep(1.0)
+                continue
+            resp.raise_for_status()
+            audio = resp.content
+            break
         if self.denoise:
             audio = await _ffmpeg_denoise(audio, response_format, self.denoise)
         return audio
