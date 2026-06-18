@@ -974,7 +974,9 @@ pub async fn handle_tool_discover(
     let draft_dir = std::path::Path::new(workspace_dir)
         .join("tools")
         .join("draft");
-    tokio::fs::create_dir_all(&draft_dir).await.ok();
+    if let Err(e) = tokio::fs::create_dir_all(&draft_dir).await {
+        return format!("Failed to create draft tools directory '{}': {}", draft_dir.display(), e);
+    }
 
     let mut created = Vec::new();
     let mut errors = Vec::new();

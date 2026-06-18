@@ -27,7 +27,13 @@ pub(crate) async fn api_curator_status(
     State(infra): State<InfraServices>,
     State(cfg_svc): State<ConfigServices>,
 ) -> impl IntoResponse {
-    let last = crate::db::curator_runs::last_run(&infra.db).await.ok().flatten();
+    let last = match crate::db::curator_runs::last_run(&infra.db).await {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::error!(error = %e, "curator status DB query failed");
+            None
+        }
+    };
     let (enabled, cron) = {
         let s = cfg_svc.shared_config.read().await;
         (s.curator.enabled, s.curator.cron.clone())

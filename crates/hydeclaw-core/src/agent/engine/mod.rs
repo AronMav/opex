@@ -267,20 +267,32 @@ impl AgentEngine {
     async fn has_tool(&self, name: &str) -> bool {
         let dir = std::path::Path::new(&self.cfg().workspace_dir).join("tools");
         let path = dir.join(format!("{name}.yaml"));
-        let path = if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            path
-        } else {
-            let yml = dir.join(format!("{name}.yml"));
-            if !tokio::fs::try_exists(&yml).await.unwrap_or(false) {
+        let path = match tokio::fs::try_exists(&path).await {
+            Ok(true) => path,
+            Ok(false) => {
+                let yml = dir.join(format!("{name}.yml"));
+                match tokio::fs::try_exists(&yml).await {
+                    Ok(true) => yml,
+                    Ok(false) => return false,
+                    Err(e) => {
+                        tracing::warn!(path = %yml.display(), error = %e, "failed to check tool file existence");
+                        return false;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "failed to check tool file existence");
                 return false;
             }
-            yml
         };
         // Disabled tools should not count as available
-        tokio::fs::read_to_string(&path)
-            .await
-            .map(|c| !c.contains("\nstatus: disabled"))
-            .unwrap_or(false)
+        match tokio::fs::read_to_string(&path).await {
+            Ok(c) => !c.contains("\nstatus: disabled"),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "failed to read tool file for status check");
+                false
+            }
+        }
     }
 
     /// Trim session messages if `max_messages` is configured.

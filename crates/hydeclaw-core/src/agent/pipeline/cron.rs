@@ -222,15 +222,16 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
                     scheduler.remove_dynamic_job(uuid).await.ok();
                     if enabled
                         && let Some(arc) = ctx.state.self_ref.get().and_then(Weak::upgrade)
-                            && current.agent_id == cfg.agent.name {
-                                scheduler.add_dynamic_job(
+                            && current.agent_id == cfg.agent.name
+                                && let Err(e) = scheduler.add_dynamic_job(
                                     uuid, cron_expr, timezone,
                                     task.to_string(), current.agent_id.clone(),
                                     arc, cfg.db.clone(), announce_to, current.silent,
                                     current.jitter_secs, current.run_once, current.run_at,
                                     current.tool_policy.clone(),
-                                ).await.ok();
-                            }
+                                ).await {
+                                    tracing::error!(job_id = %uuid, error = %e, "failed to reschedule cron job");
+                                }
                     format!("Job '{}' updated (id: {}).", name, uuid)
                 }
                 Err(e) => format!("Error updating job: {}", e),
