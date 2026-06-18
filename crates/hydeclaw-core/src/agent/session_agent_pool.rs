@@ -73,11 +73,18 @@ impl Drop for LiveAgent {
 
 // ── SessionAgentPool ─────────────────────────────────────────────────────────
 
+/// Hard cap on the number of session pools kept in-memory at once.
+/// If the global map exceeds this limit, the oldest idle pool is evicted.
+pub const SESSION_AGENT_POOL_MAX: usize = 1000;
+
 /// Pool of always-alive agents for a single session.
 pub struct SessionAgentPool {
     agents: HashMap<String, LiveAgent>,
     #[allow(dead_code)] // retained for diagnostics / future per-pool routing.
     session_id: Uuid,
+    /// Tracks the last time this pool was accessed so the LRU eviction in
+    /// `insert_pool_with_cap` can target the least-recently-used entry.
+    pub last_activity: Instant,
 }
 
 impl SessionAgentPool {
@@ -86,7 +93,13 @@ impl SessionAgentPool {
         Self {
             agents: HashMap::new(),
             session_id,
+            last_activity: Instant::now(),
         }
+    }
+
+    /// Update the last-activity timestamp (call whenever the pool is accessed).
+    pub fn touch(&mut self) {
+        self.last_activity = Instant::now();
     }
 
     /// Returns a reference to the named agent, if present.
@@ -141,6 +154,11 @@ impl SessionAgentPool {
         self.agents.is_empty()
     }
 
+    /// Returns true if all agents in the pool are idle (not processing).
+    pub fn is_all_idle(&self) -> bool {
+        self.agents.values().all(|a| a.is_idle())
+    }
+
     /// Returns true if all agents in this pool have finished (`task_handle.is_finished()`).
     pub fn is_all_finished(&self) -> bool {
         self.agents.values().all(|a| a.task_handle.is_finished())
@@ -189,6 +207,52 @@ pub async fn cleanup_stale_pools(
         tracing::info!(removed, "cleaned up stale session agent pools");
     }
     removed
+}
+
+/// Insert a new `SessionAgentPool` into the global map, enforcing `SESSION_AGENT_POOL_MAX`.
+///
+/// Use this when you do **not** already hold the write lock. For callers that
+/// already hold a write guard (e.g. `agent_tool::ask_spawn_new`) the eviction
+/// logic is inlined directly to avoid a double-lock.
+///
+/// If the map is already at capacity, the **oldest idle** entry (smallest
+/// `last_activity`, all agents idle) is evicted before insertion. If no idle
+/// entry is found, the entry with the smallest `last_activity` is evicted
+/// regardless of agent status (least-recently-used fallback).
+///
+/// Emits `tracing::warn!` when eviction occurs so operators can tune the cap.
+#[allow(dead_code)] // Public API — available for callers that don't hold a write lock.
+pub async fn insert_pool_with_cap(
+    pools: &tokio::sync::RwLock<HashMap<Uuid, SessionAgentPool>>,
+    session_id: Uuid,
+    pool: SessionAgentPool,
+) {
+    let mut pools_write = pools.write().await;
+
+    if pools_write.len() >= SESSION_AGENT_POOL_MAX {
+        // Prefer evicting an idle pool; fall back to LRU if all are busy.
+        let evict_id = pools_write
+            .iter()
+            .filter(|(_, p)| p.is_all_idle())
+            .min_by_key(|(_, p)| p.last_activity)
+            .or_else(|| {
+                pools_write
+                    .iter()
+                    .min_by_key(|(_, p)| p.last_activity)
+            })
+            .map(|(id, _)| *id);
+
+        if let Some(id) = evict_id {
+            pools_write.remove(&id);
+            tracing::warn!(
+                evicted_session = %id,
+                cap = SESSION_AGENT_POOL_MAX,
+                "session agent pool cap reached — evicted oldest idle pool"
+            );
+        }
+    }
+
+    pools_write.insert(session_id, pool);
 }
 
 // ── AgentPoolEntry ────────────────────────────────────────────────────────────
@@ -315,4 +379,66 @@ async fn agent_processing_loop(
         }
     }
     tracing::debug!(agent = %engine.name(), "live agent processing loop exited");
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Build a minimal `SessionAgentPool` with all agents already idle so
+    /// eviction logic can treat it as a candidate.
+    fn idle_pool(session_id: Uuid) -> SessionAgentPool {
+        SessionAgentPool::new(session_id)
+    }
+
+    /// Fill the global pools map to `SESSION_AGENT_POOL_MAX` with idle pools,
+    /// then call `insert_pool_with_cap` for a new session.  The map must still
+    /// have exactly `SESSION_AGENT_POOL_MAX` entries (one was evicted).
+    #[tokio::test]
+    async fn eviction_triggers_at_cap() {
+        let pools: tokio::sync::RwLock<HashMap<Uuid, SessionAgentPool>> =
+            tokio::sync::RwLock::new(HashMap::new());
+
+        // Fill to cap.
+        {
+            let mut w = pools.write().await;
+            for _ in 0..SESSION_AGENT_POOL_MAX {
+                let id = Uuid::new_v4();
+                w.insert(id, idle_pool(id));
+            }
+        }
+        assert_eq!(pools.read().await.len(), SESSION_AGENT_POOL_MAX);
+
+        // Insert one more — should evict the oldest.
+        let new_id = Uuid::new_v4();
+        insert_pool_with_cap(&pools, new_id, idle_pool(new_id)).await;
+
+        let map = pools.read().await;
+        assert_eq!(
+            map.len(),
+            SESSION_AGENT_POOL_MAX,
+            "pool count must remain at cap after eviction"
+        );
+        assert!(
+            map.contains_key(&new_id),
+            "the newly inserted pool must be present"
+        );
+    }
+
+    /// Inserting below the cap must not evict anything.
+    #[tokio::test]
+    async fn no_eviction_below_cap() {
+        let pools: tokio::sync::RwLock<HashMap<Uuid, SessionAgentPool>> =
+            tokio::sync::RwLock::new(HashMap::new());
+
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        insert_pool_with_cap(&pools, id1, idle_pool(id1)).await;
+        insert_pool_with_cap(&pools, id2, idle_pool(id2)).await;
+
+        assert_eq!(pools.read().await.len(), 2);
+    }
 }

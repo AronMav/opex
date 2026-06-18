@@ -36,7 +36,7 @@ impl LlmProvider for MockFailoverProvider {
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
-        _chunk_tx: mpsc::UnboundedSender<String>,
+        _chunk_tx: mpsc::Sender<String>,
         _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         Err(anyhow::Error::new(LlmCallError::Server5xx {
@@ -70,7 +70,7 @@ impl LlmProvider for MockUserCancelProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        _chunk_tx: mpsc::UnboundedSender<String>,
+        _chunk_tx: mpsc::Sender<String>,
         _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         self.chat(messages, tools, _opts).await
@@ -102,7 +102,7 @@ impl LlmProvider for MockAuthErrorProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        _chunk_tx: mpsc::UnboundedSender<String>,
+        _chunk_tx: mpsc::Sender<String>,
         _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         self.chat(messages, tools, _opts).await
@@ -146,7 +146,7 @@ impl LlmProvider for MockSuccessProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        _chunk_tx: mpsc::UnboundedSender<String>,
+        _chunk_tx: mpsc::Sender<String>,
         _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         self.chat(messages, tools, _opts).await
@@ -205,7 +205,7 @@ async fn routing_does_not_fail_over_on_inactivity_timeout() {
             &self,
             messages: &[Message],
             tools: &[ToolDefinition],
-            _chunk_tx: mpsc::UnboundedSender<String>,
+            _chunk_tx: mpsc::Sender<String>,
             _opts: CallOptions,
         ) -> anyhow::Result<LlmResponse> {
             self.chat(messages, tools, _opts).await
@@ -337,7 +337,7 @@ async fn routing_bumps_timeout_counter_on_inactivity_but_does_not_fail_over() {
             &self,
             messages: &[Message],
             tools: &[ToolDefinition],
-            _chunk_tx: mpsc::UnboundedSender<String>,
+            _chunk_tx: mpsc::Sender<String>,
             _opts: CallOptions,
         ) -> anyhow::Result<LlmResponse> {
             self.chat(messages, tools, _opts).await
@@ -417,7 +417,7 @@ async fn routing_fails_over_on_streaming_server_error() {
         ("fallback:mock-success".into(), fallback, 60),
     ]);
 
-    let (tx, _rx) = mpsc::unbounded_channel::<String>();
+    let (tx, _rx) = mpsc::channel::<String>(1024);
     let resp = routing
         .chat_stream(&[], &[], tx, CallOptions::default())
         .await
@@ -455,7 +455,7 @@ impl LlmProvider for CountingFailoverProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        _chunk_tx: mpsc::UnboundedSender<String>,
+        _chunk_tx: mpsc::Sender<String>,
         _opts: CallOptions,
     ) -> anyhow::Result<LlmResponse> {
         self.chat(messages, tools, _opts).await
@@ -558,7 +558,7 @@ async fn routing_with_zero_routes_returns_error_not_panic() {
 async fn routing_with_zero_routes_streaming_returns_error_not_panic() {
     let routing = RoutingProvider::new_for_test(vec![]);
 
-    let (tx, _rx) = mpsc::unbounded_channel::<String>();
+    let (tx, _rx) = mpsc::channel::<String>(1024);
     let err = routing
         .chat_stream(&[], &[], tx, CallOptions::default())
         .await
@@ -589,7 +589,7 @@ async fn unconfigured_provider_returns_classified_auth_error() {
     // retry against another (non-existent) route.
     assert!(!typed.is_failover_worthy());
 
-    let (tx, _rx) = mpsc::unbounded_channel::<String>();
+    let (tx, _rx) = mpsc::channel::<String>(1024);
     let err_stream = p
         .chat_stream(&[], &[], tx, CallOptions::default())
         .await

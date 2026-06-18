@@ -134,7 +134,7 @@ impl LlmProvider for UnconfiguredProvider {
         &self,
         _messages: &[Message],
         _tools: &[ToolDefinition],
-        _chunk_tx: mpsc::UnboundedSender<String>,
+        _chunk_tx: mpsc::Sender<String>,
         _opts: CallOptions,
     ) -> Result<LlmResponse> {
         Err(self.err())
@@ -182,11 +182,14 @@ pub trait LlmProvider: Send + Sync {
 
     /// Streaming chat: sends content chunks via mpsc channel.
     /// Returns the complete `LlmResponse` when done.
+    ///
+    /// The channel is bounded (capacity = 1024) so slow downstream consumers
+    /// provide backpressure instead of allowing unbounded memory growth.
     async fn chat_stream(
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        chunk_tx: mpsc::UnboundedSender<String>,
+        chunk_tx: mpsc::Sender<String>,
         opts: CallOptions,
     ) -> Result<LlmResponse> {
         // Default: fall back to non-streaming and send entire content at once
@@ -194,7 +197,7 @@ pub trait LlmProvider: Send + Sync {
         if response.tool_calls.is_empty() {
             let filtered = super::thinking::strip_thinking(&response.content);
             if !filtered.is_empty() {
-                chunk_tx.send(filtered).ok();
+                chunk_tx.send(filtered).await.ok();
             }
         }
         Ok(response)

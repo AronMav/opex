@@ -17,7 +17,7 @@ pub async fn handle_openai(
     ctx: &CommandContext<'_>,
     executor: &AgentEngine,
     openai_messages: &[crate::gateway::OpenAiMessage],
-    chunk_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    chunk_tx: Option<tokio::sync::mpsc::Sender<String>>,
 ) -> Result<hydeclaw_types::LlmResponse> {
     let cfg = ctx.cfg;
 
@@ -212,7 +212,7 @@ pub async fn handle_openai(
     // Send to chunk consumer if streaming requested (MiniMax sends full response at once)
     if let Some(ref tx) = chunk_tx
         && !final_response.is_empty() {
-            tx.send(final_response.clone()).ok();
+            tx.send(final_response.clone()).await.ok();
         }
 
     Ok(hydeclaw_types::LlmResponse {

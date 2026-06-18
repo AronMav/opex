@@ -951,7 +951,7 @@ mod tests {
                 thinking_blocks: vec![],
             })
         }
-        async fn chat_stream(&self, msgs: &[Message], tools: &[ToolDefinition], _tx: mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+        async fn chat_stream(&self, msgs: &[Message], tools: &[ToolDefinition], _tx: mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
             self.chat(msgs, tools, _opts).await
         }
         fn name(&self) -> &str { "static" }
@@ -1342,7 +1342,7 @@ mod tests {
             &self,
             msgs: &[Message],
             tools: &[ToolDefinition],
-            _tx: mpsc::UnboundedSender<String>,
+            _tx: mpsc::Sender<String>,
             opts: crate::agent::providers::CallOptions,
         ) -> anyhow::Result<LlmResponse> {
             self.chat(msgs, tools, opts).await
@@ -1366,7 +1366,7 @@ mod tests {
             &self,
             msgs: &[Message],
             tools: &[ToolDefinition],
-            _tx: mpsc::UnboundedSender<String>,
+            _tx: mpsc::Sender<String>,
             opts: crate::agent::providers::CallOptions,
         ) -> anyhow::Result<LlmResponse> {
             self.chat(msgs, tools, opts).await
@@ -1417,7 +1417,7 @@ mod tests {
                 &self,
                 msgs: &[Message],
                 tools: &[ToolDefinition],
-                _tx: mpsc::UnboundedSender<String>,
+                _tx: mpsc::Sender<String>,
                 opts: crate::agent::providers::CallOptions,
             ) -> anyhow::Result<LlmResponse> {
                 self.chat(msgs, tools, opts).await

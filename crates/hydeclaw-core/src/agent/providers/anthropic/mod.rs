@@ -205,7 +205,7 @@ impl LlmProvider for AnthropicProvider {
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
-        chunk_tx: mpsc::UnboundedSender<String>,
+        chunk_tx: mpsc::Sender<String>,
         opts: CallOptions,
     ) -> Result<LlmResponse> {
         if !tools.is_empty() {
@@ -213,7 +213,7 @@ impl LlmProvider for AnthropicProvider {
             if response.tool_calls.is_empty() {
                 let filtered = crate::agent::thinking::strip_thinking(&response.content);
                 if !filtered.is_empty() {
-                    chunk_tx.send(filtered).ok();
+                    chunk_tx.send(filtered).await.ok();
                 }
             }
             return Ok(response);
@@ -310,6 +310,7 @@ impl LlmProvider for AnthropicProvider {
                 if let Some(data) = line.strip_prefix("data: ")
                     && let Ok(event) = serde_json::from_str::<serde_json::Value>(data)
                 {
+                    let mut pending_chunks: Vec<String> = Vec::new();
                     process_sse_event(
                         &event,
                         &mut thinking,
@@ -317,9 +318,12 @@ impl LlmProvider for AnthropicProvider {
                         |_| {},
                         |text| {
                             full_content.push_str(&text);
-                            chunk_tx.send(text).ok();
+                            pending_chunks.push(text);
                         },
                     );
+                    for chunk in pending_chunks {
+                        chunk_tx.send(chunk).await.ok();
+                    }
                 }
             }
         }
