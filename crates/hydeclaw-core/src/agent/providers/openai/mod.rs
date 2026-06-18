@@ -123,7 +123,7 @@ impl OpenAiCompatibleProvider {
     /// `new_from_row` builds the scope literally from the row UUID.
     /// Kept public for external consumers as a stable fluent API.
     #[allow(dead_code)]
-    pub fn with_credential_scope(mut self, scope: String) -> Self {
+    pub(super) fn with_credential_scope(mut self, scope: String) -> Self {
         self.credential_scope = Some(scope);
         self
     }
@@ -144,7 +144,7 @@ impl OpenAiCompatibleProvider {
     }
 
     /// Create with round-robin API key rotation.
-    pub fn with_keys(mut self, api_key_names: Vec<String>) -> Self {
+    pub(super) fn with_keys(mut self, api_key_names: Vec<String>) -> Self {
         self.api_key_names = api_key_names;
         self
     }
@@ -153,7 +153,7 @@ impl OpenAiCompatibleProvider {
     /// On each LLM call, resolves the secret and appends `suffix` to form the full URL.
     /// Dead code — kept as example for future secret-backed URL resolution.
     #[allow(dead_code)]
-    pub fn with_base_url_env(mut self, env_name: &str, suffix: &str) -> Self {
+    pub(super) fn with_base_url_env(mut self, env_name: &str, suffix: &str) -> Self {
         self.base_url_env = Some(env_name.to_string());
         self.url_suffix = suffix.to_string();
         self
