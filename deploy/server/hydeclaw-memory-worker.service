@@ -11,8 +11,8 @@ Environment=HTTP_PROXY=http://10.10.1.37:1081
 Environment=HTTPS_PROXY=http://10.10.1.37:1081
 Environment=http_proxy=http://10.10.1.37:1081
 Environment=https_proxy=http://10.10.1.37:1081
-Environment=NO_PROXY=localhost,127.0.0.1,::1,10.10.1.42,deepseek.com,ollama.com,openrouter.ai,together.ai,fal.run,fal.ai
-Environment=no_proxy=localhost,127.0.0.1,::1,10.10.1.42,deepseek.com,ollama.com,openrouter.ai,together.ai,fal.run,fal.ai
+Environment=NO_PROXY=localhost,127.0.0.1,::1,10.10.1.42
+Environment=no_proxy=localhost,127.0.0.1,::1,10.10.1.42
 StandardOutput=append:/home/aronmav/hydeclaw/logs/memory-worker.log
 StandardError=append:/home/aronmav/hydeclaw/logs/memory-worker.log
 Restart=always
