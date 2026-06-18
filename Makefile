@@ -87,7 +87,8 @@ deploy-binary: build-arm64
 	@for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do \
 		BIN=target/$(TARGET)/release/$$CRATE; \
 		if [ -f "$$BIN" ]; then \
-			scp $$BIN $(PI_HOST):$(PI_DIR)/$${CRATE}-aarch64; \
+			scp $$BIN $(PI_HOST):$(PI_DIR)/$${CRATE}-aarch64.new && \
+			ssh $(PI_HOST) "mv -f $(PI_DIR)/$${CRATE}-aarch64.new $(PI_DIR)/$${CRATE}-aarch64" && \
 			echo "  deployed $$CRATE"; \
 		fi; \
 	done
@@ -100,7 +101,8 @@ deploy-binary-otel: build-arm64-otel
 	@for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do \
 		BIN=target/$(TARGET)/release/$$CRATE; \
 		if [ -f "$$BIN" ]; then \
-			scp $$BIN $(PI_HOST):$(PI_DIR)/$${CRATE}-aarch64; \
+			scp $$BIN $(PI_HOST):$(PI_DIR)/$${CRATE}-aarch64.new && \
+			ssh $(PI_HOST) "mv -f $(PI_DIR)/$${CRATE}-aarch64.new $(PI_DIR)/$${CRATE}-aarch64" && \
 			echo "  deployed $$CRATE (otel)"; \
 		fi; \
 	done
