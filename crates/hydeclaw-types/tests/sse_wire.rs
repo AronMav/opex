@@ -117,6 +117,7 @@ fn sse_tool_input_available_fixture() {
         tool_call_id: ToolCallId::from("tc-abc-1".to_string()),
         tool_name: "code_exec".to_string(),
         input: serde_json::json!({"cmd": "ls"}),
+        parallel_batch_id: None,
     };
     write_fixture("tool-input-available", &ev);
 }

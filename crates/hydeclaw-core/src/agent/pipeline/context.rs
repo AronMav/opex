@@ -56,13 +56,23 @@ pub fn format_tool_error(tool_name: &str, error: &str) -> String {
     serde_json::json!({"status": "error", "tool": tool_name, "error": error}).to_string()
 }
 
-/// Truncate a string to `max` chars with "..." suffix, preserving char boundaries.
+/// Truncate a string to `max` *Unicode scalar values* with "..." suffix.
+///
+/// Uses `char`-based counting so multi-byte codepoints (emoji, CJK, …) are
+/// never split mid-sequence.  When `max < 4` there is no room for the
+/// ellipsis, so the first `max` chars are returned as-is.
 pub fn truncate_preview(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...", &s[..s.floor_char_boundary(max)])
-    } else {
-        s.to_string()
+    // Count chars once — O(n) but n is bounded by callers (≤8 typical).
+    let char_count = s.chars().count();
+    if char_count <= max {
+        return s.to_string();
     }
+    if max < 4 {
+        // No room for "..."; return the bare prefix.
+        return s.chars().take(max).collect();
+    }
+    let prefix: String = s.chars().take(max - 3).collect();
+    format!("{}...", prefix)
 }
 
 /// Truncate a tool result to fit within remaining context budget.
@@ -349,4 +359,54 @@ where
     );
 
     Ok((facts_count, new_count))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_preview;
+
+    // Bug 17: emoji must not be split at a byte boundary.
+    #[test]
+    fn truncate_preview_preserves_emoji() {
+        // "hello🔥world" — 11 Unicode scalars; the emoji is 4 bytes.
+        // The old floor_char_boundary(10) could land at byte 9 (inside the
+        // emoji), producing garbled output or a panic.  The new impl counts
+        // chars, so max=10 takes 7 chars then appends "..." — the emoji at
+        // position 5 is included in the prefix and is not split.
+        let s = "hello🔥world";
+        // 11 chars total; max=10 → prefix of 7 chars = "hello🔥w"
+        assert_eq!(truncate_preview(s, 10), "hello🔥w...");
+        // max=6 → prefix of 3 chars = "hel"
+        assert_eq!(truncate_preview(s, 6), "hel...");
+        // max=7 → prefix of 4 chars = "hell"; emoji is not included (char 5)
+        assert_eq!(truncate_preview(s, 7), "hell...");
+        // max=8 → prefix of 5 chars = "hello"; emoji next at position 5 is not split
+        assert_eq!(truncate_preview(s, 8), "hello...");
+        // max=9 → prefix of 6 chars = "hello🔥"; emoji is fully included
+        assert_eq!(truncate_preview(s, 9), "hello🔥...");
+    }
+
+    // Bug 17: when max < 4 no ellipsis, just a bare prefix.
+    #[test]
+    fn truncate_preview_max_less_than_4_no_ellipsis() {
+        let s = "abcdefgh";
+        assert_eq!(truncate_preview(s, 3), "abc");
+        assert_eq!(truncate_preview(s, 0), "");
+        assert_eq!(truncate_preview(s, 1), "a");
+    }
+
+    #[test]
+    fn truncate_preview_short_string_unchanged() {
+        assert_eq!(truncate_preview("hi", 8), "hi");
+    }
+
+    #[test]
+    fn truncate_preview_exact_length_unchanged() {
+        assert_eq!(truncate_preview("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_preview_ascii_truncation() {
+        assert_eq!(truncate_preview("abcdefgh", 5), "ab...");
+    }
 }

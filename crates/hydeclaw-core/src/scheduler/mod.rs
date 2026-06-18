@@ -1375,9 +1375,11 @@ async fn run_heartbeat(
         // Announce heartbeat result to channel (e.g. Telegram DM to owner)
         if let (Some(channel), Some(owner_str)) = (announce_channel, owner_id)
             && let Ok(chat_id) = owner_str.parse::<i64>() {
-                let text = if response.len() > 3500 {
-                    let boundary = response.floor_char_boundary(3500);
-                    format!("{}...", &response[..boundary])
+                // Bug 25: use char-based truncation so multi-byte chars
+                // (emoji, CJK) at the boundary are never split.
+                let text = if response.chars().count() > 3500 {
+                    let prefix: String = response.chars().take(3497).collect();
+                    format!("{}...", prefix)
                 } else {
                     response.clone()
                 };
