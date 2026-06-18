@@ -1,0 +1,17 @@
+[Unit]
+Description=HydeClaw Core
+After=network.target docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/aronmav/hydeclaw
+ExecStart=/home/aronmav/hydeclaw/hydeclaw-core-x86_64
+EnvironmentFile=/home/aronmav/hydeclaw/.env
+Environment=PATH=/home/aronmav/.bun/bin:/home/aronmav/.local/bin:/usr/local/bin:/usr/bin:/bin
+StandardOutput=append:/home/aronmav/hydeclaw/logs/core.log
+StandardError=append:/home/aronmav/hydeclaw/logs/core.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

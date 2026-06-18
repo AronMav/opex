@@ -1,0 +1,16 @@
+[Unit]
+Description=HydeClaw Memory Worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/aronmav/hydeclaw
+ExecStart=/home/aronmav/hydeclaw/hydeclaw-memory-worker-x86_64
+EnvironmentFile=/home/aronmav/hydeclaw/.env
+StandardOutput=append:/home/aronmav/hydeclaw/logs/memory-worker.log
+StandardError=append:/home/aronmav/hydeclaw/logs/memory-worker.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

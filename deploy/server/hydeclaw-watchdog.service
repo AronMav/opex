@@ -1,0 +1,16 @@
+[Unit]
+Description=HydeClaw Watchdog
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/aronmav/hydeclaw
+ExecStart=/home/aronmav/hydeclaw/hydeclaw-watchdog-x86_64
+EnvironmentFile=/home/aronmav/hydeclaw/.env
+StandardOutput=append:/home/aronmav/hydeclaw/logs/watchdog.log
+StandardError=append:/home/aronmav/hydeclaw/logs/watchdog.log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
