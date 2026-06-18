@@ -1,11 +1,14 @@
 -include .deploy.env
-PI_HOST   ?= user@your-server
-PI_DIR    := ~/hydeclaw
-TARGET    := aarch64-unknown-linux-gnu
-BIN       := target/$(TARGET)/release/hydeclaw-core
-AUTH      ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN")
+PI_HOST       ?= user@your-server
+PI_DIR        := ~/hydeclaw
+SERVER_HOST   ?= user@your-server
+SERVER_DIR    ?= ~/hydeclaw
+TARGET        := aarch64-unknown-linux-gnu
+SERVER_TARGET := x86_64-unknown-linux-gnu
+BIN           := target/$(TARGET)/release/hydeclaw-core
+AUTH          ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN")
 
-.PHONY: check test test-db test-db-up test-db-down lint audit build build-arm64 build-arm64-otel ui release gen-types deploy-binary deploy-binary-otel deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
+.PHONY: check test test-db test-db-up test-db-down lint audit build build-arm64 build-arm64-otel build-x86_64 ui release gen-types deploy-binary deploy-binary-otel deploy-binary-server deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
 
 # ── Codegen ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +70,11 @@ build:
 build-arm64:
 	cargo zigbuild --release --target $(TARGET) -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker
 
+# x86_64 production server build (home-lab box). Same workspace, no OpenSSL —
+# all crates pinned to rustls.
+build-x86_64:
+	cargo zigbuild --release --target $(SERVER_TARGET) -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker
+
 # OTel-enabled binary for Pi. Adds OTLP exporter dependency (~3 MB). Use
 # together with `make deploy-jaeger` and `[otel] enabled = true` in
 # hydeclaw.toml. Worker + watchdog stay on the default feature set —
@@ -107,6 +115,20 @@ deploy-binary-otel: build-arm64-otel
 		fi; \
 	done
 	ssh $(PI_HOST) "chmod +x $(PI_DIR)/hydeclaw-*-aarch64; systemctl --user restart hydeclaw-core; echo '  restarted hydeclaw-core (otel build)'"
+
+# Production server (x86_64) deploy. Mirror of deploy-binary but with
+# SERVER_HOST/SERVER_DIR and x86_64 suffix. atomic mv works around the
+# mmap'd-binary scp overwrite issue (see fix(deploy) commit).
+deploy-binary-server: build-x86_64
+	@for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do \
+		BIN=target/$(SERVER_TARGET)/release/$$CRATE; \
+		if [ -f "$$BIN" ]; then \
+			scp $$BIN $(SERVER_HOST):$(SERVER_DIR)/$${CRATE}-x86_64.new && \
+			ssh $(SERVER_HOST) "mv -f $(SERVER_DIR)/$${CRATE}-x86_64.new $(SERVER_DIR)/$${CRATE}-x86_64" && \
+			echo "  deployed $$CRATE"; \
+		fi; \
+	done
+	ssh $(SERVER_HOST) "chmod +x $(SERVER_DIR)/hydeclaw-*-x86_64; for SVC in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
 
 deploy-ui: ui
 	ssh $(PI_HOST) "rm -rf $(PI_DIR)/ui/out"
