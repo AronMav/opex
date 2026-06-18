@@ -8,7 +8,7 @@ SERVER_TARGET := x86_64-unknown-linux-gnu
 BIN           := target/$(TARGET)/release/hydeclaw-core
 AUTH          ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN")
 
-.PHONY: check test test-db test-db-up test-db-down lint audit build build-arm64 build-arm64-otel build-x86_64 ui release gen-types deploy-binary deploy-binary-otel deploy-binary-server deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
+.PHONY: check test test-db test-db-up test-db-down lint audit build build-arm64 build-arm64-otel build-x86_64 ui release gen-types deploy-binary deploy-binary-otel deploy-binary-server deploy-remote remote-build remote-deploy deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
 
 # ── Codegen ──────────────────────────────────────────────────────────────────
 
@@ -116,9 +116,28 @@ deploy-binary-otel: build-arm64-otel
 	done
 	ssh $(PI_HOST) "chmod +x $(PI_DIR)/hydeclaw-*-aarch64; systemctl --user restart hydeclaw-core; echo '  restarted hydeclaw-core (otel build)'"
 
+# ── Remote-build deploy (canonical) ──────────────────────────────────────────
+# Build natively ON the server (i7-8700, 12T, 31GB) — no cross-toolchain.
+# Source lives at ~/hydeclaw-src on the server; this is the canonical
+# workflow now (see project_build_on_server memory). Use deploy-binary-server
+# only if you specifically need to build locally and scp the binary.
+
+# Full remote cycle: git pull → cargo build --release → atomic swap → restart.
+remote-deploy:
+	ssh $(SERVER_HOST) '~/hydeclaw-src/scripts/server-deploy.sh'
+
+# Build only (no swap, no restart). Useful for CI-style verification.
+remote-build:
+	ssh $(SERVER_HOST) 'cd ~/hydeclaw-src && git pull --ff-only && . ~/.cargo/env && cargo build --release -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker'
+
+# Skip rebuild: redeploy from existing target/release on the server.
+deploy-remote: remote-deploy
+
+# ── Legacy: local cross-compile + scp deploy ─────────────────────────────────
 # Production server (x86_64) deploy. Mirror of deploy-binary but with
 # SERVER_HOST/SERVER_DIR and x86_64 suffix. atomic mv works around the
 # mmap'd-binary scp overwrite issue (see fix(deploy) commit).
+# Prefer `make remote-deploy` for normal workflow.
 deploy-binary-server: build-x86_64
 	@for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do \
 		BIN=target/$(SERVER_TARGET)/release/$$CRATE; \

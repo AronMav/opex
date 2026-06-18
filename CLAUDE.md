@@ -26,20 +26,40 @@ cd ui && npm run dev    # dev server (port 3000)
 cd channels && bun test
 ```
 
-## Cross-compilation & Deploy
+## Deploy
+
+**Canonical workflow (since 2026-06-18): build on the production server.**
+HydeClaw runs on `aronmav@188.246.224.118` (x86_64, i7-8700 / 12T / 31GB). Source tree is cloned at `~/hydeclaw-src` on the server. The Pi is retired (kept as cold rollback). Configure both hosts in `.deploy.env` (`SERVER_HOST`, `SERVER_DIR`, optional legacy `PI_HOST`).
 
 ```bash
-make build-arm64        # cargo zigbuild --target aarch64-unknown-linux-gnu
-make deploy             # build + scp binary + restart systemd + deploy UI + migrations
-make deploy-binary      # binary only
-make deploy-ui          # UI only (builds first)
-make doctor             # GET /api/doctor health check on Pi
+make remote-deploy      # git pull on server → cargo build --release → atomic swap + restart
+make remote-build       # build only on server (no swap, no restart) — for CI-style checks
+make doctor             # GET /api/doctor health check
 make logs               # journalctl --user -u hydeclaw-core -f
 ```
 
-**Why zigbuild:** no OpenSSL anywhere — `reqwest` uses `rustls-tls` only. All crates in Cargo.toml use `rustls-tls` feature flags. Never add OpenSSL dependencies.
+`remote-deploy` shells out to `~/hydeclaw-src/scripts/server-deploy.sh`. The script does:
 
-Deploy target: set via `PI_HOST` env var (e.g. `PI_HOST=user@192.168.1.100`).
+1. `git pull --ff-only` in `~/hydeclaw-src`
+2. `cargo build --release -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker`
+3. Atomic mv each binary into `~/hydeclaw/{crate}-x86_64` (`.new` + `mv -f` — overwrite-safe for mmap'd binaries)
+4. `systemctl --user restart` for each of the 3 services
+
+Build time on the server: ~2m 50s cold, ~10–60s incremental.
+
+### Legacy: local cross-compile + scp
+
+Use only when push to remote is undesired or the server is busy.
+
+```bash
+make build-arm64               # cargo zigbuild --target aarch64-unknown-linux-gnu (Pi rollback)
+make build-x86_64              # cargo zigbuild --target x86_64-unknown-linux-gnu (server fallback)
+make deploy-binary             # build aarch64 + scp + restart on PI_HOST (legacy Pi)
+make deploy-binary-server      # build x86_64 + scp + restart on SERVER_HOST (manual server deploy)
+make deploy-binary-otel        # OTel-instrumented aarch64 + Pi deploy
+```
+
+**Why zigbuild for legacy path:** no OpenSSL anywhere — `reqwest` uses `rustls-tls` only. All crates in `Cargo.toml` use `rustls-tls` feature flags. Never add OpenSSL dependencies.
 
 ## Release
 
