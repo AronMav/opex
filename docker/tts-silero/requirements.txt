@@ -1,0 +1,7 @@
+num2words
+ruaccent
+fastapi
+uvicorn[standard]
+soundfile
+omegaconf
+scipy
