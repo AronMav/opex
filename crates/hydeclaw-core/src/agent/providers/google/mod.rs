@@ -140,8 +140,13 @@ impl LlmProvider for GoogleProvider {
         }
 
         if !tools.is_empty() {
+            // Gemini rejects duplicate function names. Dedupe by name, keeping
+            // the first occurrence (this matches the precedence the engine uses
+            // when resolving tool_use → tool dispatch).
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             let fn_decls: Vec<serde_json::Value> = tools
                 .iter()
+                .filter(|t| seen.insert(t.name.clone()))
                 .map(|t| {
                     let mut params = t.input_schema.clone();
                     request::strip_gemini_unsupported_keys(&mut params);
