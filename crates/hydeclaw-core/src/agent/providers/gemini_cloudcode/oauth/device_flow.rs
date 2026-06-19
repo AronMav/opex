@@ -41,17 +41,17 @@ const SLOW_DOWN_INCREMENT_SECS: u64 = 5;
 
 // ── Endpoint resolution (test-overridable) ────────────────────────────────────
 
-fn device_code_endpoint() -> String {
+pub(crate) fn device_code_endpoint() -> String {
     std::env::var("HYDECLAW_GEMINI_TEST_DEVICE_CODE_ENDPOINT")
         .unwrap_or_else(|_| DEVICE_CODE_ENDPOINT.to_string())
 }
 
-fn token_endpoint() -> String {
+pub(crate) fn token_endpoint() -> String {
     std::env::var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT")
         .unwrap_or_else(|_| TOKEN_ENDPOINT.to_string())
 }
 
-fn userinfo_endpoint() -> String {
+pub(crate) fn userinfo_endpoint() -> String {
     std::env::var("HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT")
         .unwrap_or_else(|_| USERINFO_ENDPOINT.to_string())
 }
