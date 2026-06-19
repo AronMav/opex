@@ -1359,6 +1359,7 @@ mod tests {
                 id: "tc_1".into(),
                 name: "mock_tool".to_string(),
                 arguments: serde_json::Value::Null,
+                thought_signature: None,
             }]))
         };
 

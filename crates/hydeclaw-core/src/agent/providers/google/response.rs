@@ -30,6 +30,10 @@ pub(super) struct GeminiPart {
     pub(super) text: Option<String>,
     #[serde(rename = "functionCall")]
     pub(super) function_call: Option<GeminiFunctionCall>,
+    /// Gemini 3.x thinking mode: opaque base64 token attached to functionCall
+    /// parts. Must be echoed back on the next turn in the same part.
+    #[serde(rename = "thoughtSignature", default)]
+    pub(super) thought_signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

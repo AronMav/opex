@@ -85,6 +85,7 @@ fn parse_xml_invoke_blocks(block: &str, out: &mut Vec<hydeclaw_types::ToolCall>)
             )),
             name,
             arguments: serde_json::Value::Object(args),
+            thought_signature: None,
         });
     }
 }

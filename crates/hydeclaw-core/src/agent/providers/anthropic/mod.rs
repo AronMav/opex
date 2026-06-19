@@ -508,6 +508,7 @@ mod tests {
                 id: "call_1".into(),
                 name: "my_tool".to_string(),
                 arguments: serde_json::json!({"key": "value"}),
+                thought_signature: None,
             }]),
             tool_call_id: None,
             thinking_blocks: vec![ThinkingBlock {

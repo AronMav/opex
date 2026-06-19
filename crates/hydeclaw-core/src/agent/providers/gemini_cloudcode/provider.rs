@@ -439,6 +439,7 @@ async fn process_sse_chunk(
                 id: hydeclaw_types::ids::ToolCallId::from(tc.id),
                 name: tc.name,
                 arguments: tc.arguments,
+                thought_signature: None,
             });
         }
         if let Some(fr) = delta.finish_reason {

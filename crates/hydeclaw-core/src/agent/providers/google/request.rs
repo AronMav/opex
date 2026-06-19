@@ -47,12 +47,20 @@ pub(in crate::agent::providers) fn messages_to_gemini_format(messages: &[Message
                     parts.push(serde_json::json!({"text": msg.content}));
                 }
                 for tc in tool_calls {
-                    parts.push(serde_json::json!({
+                    let mut part = serde_json::json!({
                         "functionCall": {
                             "name": tc.name,
                             "args": tc.arguments,
                         }
-                    }));
+                    });
+                    // Echo back thought_signature so Gemini 3.x thinking
+                    // mode can continue its reasoning chain on the next turn.
+                    // The signature lives at the Part level (sibling of
+                    // functionCall), not inside it.
+                    if let Some(ref sig) = tc.thought_signature {
+                        part["thoughtSignature"] = serde_json::Value::String(sig.clone());
+                    }
+                    parts.push(part);
                 }
                 return serde_json::json!({"role": role, "parts": parts});
             }

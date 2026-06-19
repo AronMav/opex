@@ -62,7 +62,8 @@ pub fn translate_gemini_response(resp: Value) -> LlmResponse {
                         .unwrap_or(Value::Object(Default::default()));
                     let id = ToolCallId::from(format!("call_{tool_call_index}"));
                     tool_call_index += 1;
-                    tool_calls.push(ToolCall { id, name, arguments });
+                    tool_calls.push(ToolCall { id, name, arguments,
+ thought_signature: None, });
                 } else if let Some(sig) = part.get("thoughtSignature").and_then(|s| s.as_str()) {
                     thinking_blocks.push(ThinkingBlock {
                         thinking: String::new(),

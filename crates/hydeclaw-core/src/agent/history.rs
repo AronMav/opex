@@ -999,6 +999,7 @@ mod tests {
             id: "call_1".into(),
             name: "get_weather".to_string(),
             arguments: serde_json::json!({"city": "Moscow"}),
+            thought_signature: None,
         };
         let msg = Message {
             role: MessageRole::Assistant,
@@ -1294,6 +1295,7 @@ mod tests {
                     id: hydeclaw_types::ids::ToolCallId::from("tc_1"),
                     name: "workspace_read".into(),
                     arguments: serde_json::json!({}),
+                    thought_signature: None,
                 }]),
                 tool_call_id: None,
                 thinking_blocks: vec![],

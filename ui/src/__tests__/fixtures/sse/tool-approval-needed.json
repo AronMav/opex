@@ -3,8 +3,8 @@
   "approvalId": "00000000-0000-0000-0000-000000000000",
   "toolName": "workspace_write",
   "toolInput": {
-    "path": "/x.txt",
-    "content": "hello"
+    "content": "hello",
+    "path": "/x.txt"
   },
   "timeoutMs": 300000
 }
