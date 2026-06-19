@@ -134,11 +134,15 @@ dirs = { version = "5", optional = true }
 # Optional; activated only for the gemini-cloudcode feature.
 fs2 = { version = "0.4", optional = true }
 
+# Browser launcher for the authorization-code flow CLI wrapper.
+# Optional; activated only for the gemini-cloudcode feature.
+webbrowser = { version = "1", optional = true }
+
 [features]
 default = []
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 ts-gen = ["dep:ts-rs", "dep:inventory", "hydeclaw-types/ts-gen", "hydeclaw-db/ts-gen"]
-gemini-cloudcode = ["dep:dirs", "dep:fs2"]
+gemini-cloudcode = ["dep:dirs", "dep:fs2", "dep:webbrowser"]
 
 # Systemd watchdog (Linux-only)
 [target.'cfg(target_os = "linux")'.dependencies]
