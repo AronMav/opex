@@ -32,9 +32,24 @@ pub(super) fn is_free_tier_quota_error(status: u16, body: &str) -> bool {
 /// Caching (`tokio::sync::Mutex<Option<ProjectContext>>`) lives in `GeminiCloudCodeProvider`
 /// (Module 3) — this function is stateless and side-effect-free for testability.
 pub async fn ensure_project_ctx(
+    #[cfg_attr(test, allow(unused_variables))]
     access_token: &str,
+    #[cfg_attr(test, allow(unused_variables))]
     stored_project_id: Option<&str>,
 ) -> Result<ProjectContext, CodeAssistError> {
+    #[cfg(test)]
+    {
+        // In test builds, return a synthetic free-tier context so provider
+        // integration tests don't need a real GCP project or LRO poll.
+        // Per D1: function name is ensure_project_ctx.
+        // Per D3: all ProjectContext fields are String; empty = "not set".
+        Ok(ProjectContext {
+            project_id: "test-project".to_string(),
+            managed_project_id: "managed-test".to_string(),
+            tier_id: FREE_TIER_ID.to_string(),
+        })
+    }
+    #[cfg(not(test))]
     ensure_project_ctx_with_base(access_token, stored_project_id, CODE_ASSIST_ENDPOINT).await
 }
 

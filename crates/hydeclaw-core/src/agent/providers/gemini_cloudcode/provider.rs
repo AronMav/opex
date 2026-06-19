@@ -664,3 +664,456 @@ mod tests {
         );
     }
 }
+
+// ── Integration tests (wiremock) ──────────────────────────────────────────────
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::agent::providers::{ProviderOverrides, TimeoutsConfig, timeouts::ProviderOptions};
+    use crate::secrets::SecretsManager;
+    use serial_test::serial;
+    use std::sync::Arc;
+    use uuid::Uuid;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// Build a provider pointed at a mock server's base URL.
+    fn make_provider(base_url: &str, secrets: Arc<SecretsManager>) -> GeminiCloudCodeProvider {
+        let row = crate::db::providers::ProviderRow {
+            id: Uuid::new_v4(),
+            name: "test".to_string(),
+            category: "llm".to_string(),
+            provider_type: "gemini-cloudcode".to_string(),
+            base_url: Some(base_url.to_string()),
+            default_model: Some("gemini-2.5-pro".to_string()),
+            options: serde_json::Value::Object(Default::default()),
+            enabled: true,
+            notes: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        GeminiCloudCodeProvider::new_from_row(
+            &row,
+            secrets,
+            TimeoutsConfig::default(),
+            tokio_util::sync::CancellationToken::new(),
+            ProviderOptions::default(),
+            ProviderOverrides::default(),
+        )
+        .unwrap()
+    }
+
+    /// Minimal fake `generateContent` response body.
+    fn fake_generate_response(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "response": {
+                "candidates": [{
+                    "content": {"parts": [{"text": text}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 5,
+                    "candidatesTokenCount": 3,
+                    "totalTokenCount": 8
+                }
+            }
+        })
+    }
+
+    /// Minimal SSE streaming body: each `part` becomes one SSE event.
+    /// The last part carries `finishReason: "STOP"`; others carry `null`.
+    fn fake_stream_body(parts: &[&str]) -> String {
+        let last = *parts.last().unwrap();
+        parts
+            .iter()
+            .map(|p| {
+                let finish_reason: serde_json::Value = if *p == last {
+                    serde_json::Value::String("STOP".to_string())
+                } else {
+                    serde_json::Value::Null
+                };
+                let json = serde_json::json!({
+                    "response": {
+                        "candidates": [{
+                            "content": {"parts": [{"text": p}]},
+                            "finishReason": finish_reason
+                        }],
+                        "usageMetadata": null
+                    }
+                });
+                format!("data: {}\n\n", json)
+            })
+            .collect()
+    }
+
+    // ── chat_returns_translated_response ──────────────────────────────────────
+
+    #[tokio::test]
+    #[serial(gemini_cloudcode_test_token)]
+    async fn chat_returns_translated_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:generateContent"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(fake_generate_response("Hello!")),
+            )
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "test-token") };
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let provider = make_provider(&server.uri(), secrets);
+
+        let msgs = vec![hydeclaw_types::Message {
+            role: hydeclaw_types::MessageRole::User,
+            content: "Hi".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let result = provider.chat(&msgs, &[], CallOptions::default()).await;
+        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+
+        let resp = result.expect("chat must succeed");
+        assert_eq!(resp.content, "Hello!");
+        assert_eq!(resp.provider.as_deref(), Some("gemini-cloudcode"));
+        assert!(resp.usage.is_some());
+    }
+
+    // ── chat_lazy_loads_project_ctx_on_first_call ─────────────────────────────
+
+    #[tokio::test]
+    #[serial(gemini_cloudcode_test_token)]
+    async fn chat_lazy_loads_project_ctx_on_first_call() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:generateContent"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(fake_generate_response("ok")),
+            )
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let provider = make_provider(&server.uri(), secrets);
+
+        // project_ctx starts as None.
+        {
+            let guard = provider.project_ctx.lock().await;
+            assert!(guard.is_none(), "project_ctx must start as None");
+        }
+
+        let msgs = vec![hydeclaw_types::Message {
+            role: hydeclaw_types::MessageRole::User,
+            content: "test".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let _ = provider.chat(&msgs, &[], CallOptions::default()).await;
+        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+
+        // After the first call, project_ctx must be populated.
+        let guard = provider.project_ctx.lock().await;
+        assert!(guard.is_some(), "project_ctx must be populated after first call");
+    }
+
+    // ── chat_propagates_429_as_quota_error ────────────────────────────────────
+
+    #[tokio::test]
+    #[serial(gemini_cloudcode_test_token)]
+    async fn chat_propagates_429_as_quota_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:generateContent"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .set_body_string("Quota exceeded per-user-per-day limit"),
+            )
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let provider = make_provider(&server.uri(), secrets);
+
+        let msgs = vec![hydeclaw_types::Message {
+            role: hydeclaw_types::MessageRole::User,
+            content: "q".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let result = provider.chat(&msgs, &[], CallOptions::default()).await;
+        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+
+        let err = result.expect_err("429 quota must be an error");
+        let is_quota = err
+            .downcast_ref::<super::super::code_assist::types::CodeAssistError>()
+            .map(|e| {
+                matches!(
+                    e,
+                    super::super::code_assist::types::CodeAssistError::FreeTierQuotaExhausted {
+                        ..
+                    }
+                )
+            })
+            .unwrap_or(false);
+        assert!(is_quota, "expected FreeTierQuotaExhausted, got {err}");
+    }
+
+    // ── chat_stream_yields_chunks_in_order ────────────────────────────────────
+
+    #[tokio::test]
+    #[serial(gemini_cloudcode_test_token)]
+    async fn chat_stream_yields_chunks_in_order() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:streamGenerateContent"))
+            .and(query_param("alt", "sse"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(fake_stream_body(&["Hello", ", ", "world"]))
+                    .append_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let provider = make_provider(&server.uri(), secrets);
+
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let msgs = vec![hydeclaw_types::Message {
+            role: hydeclaw_types::MessageRole::User,
+            content: "hi".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let resp = provider
+            .chat_stream(&msgs, &[], tx, CallOptions::default())
+            .await
+            .expect("chat_stream must succeed");
+        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+
+        // Collect all chunks sent during streaming.
+        let mut chunks = Vec::new();
+        while let Ok(c) = rx.try_recv() {
+            chunks.push(c);
+        }
+        let joined: String = chunks.join("");
+        assert_eq!(joined, "Hello, world", "chunks must join to full text in order");
+        assert!(resp.finish_reason.is_some());
+    }
+
+    // ── chat_stream_handles_cancellation_mid_flight ───────────────────────────
+
+    #[tokio::test]
+    #[serial(gemini_cloudcode_test_token)]
+    async fn chat_stream_handles_cancellation_mid_flight() {
+        use tokio_util::sync::CancellationToken;
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:streamGenerateContent"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(fake_stream_body(&["partial text"]))
+                    .append_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let cancel = CancellationToken::new();
+        let row = crate::db::providers::ProviderRow {
+            id: Uuid::new_v4(),
+            name: "test".to_string(),
+            category: "llm".to_string(),
+            provider_type: "gemini-cloudcode".to_string(),
+            base_url: Some(server.uri()),
+            default_model: Some("gemini-2.5-pro".to_string()),
+            options: serde_json::Value::Object(Default::default()),
+            enabled: true,
+            notes: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let provider = GeminiCloudCodeProvider::new_from_row(
+            &row,
+            secrets,
+            TimeoutsConfig { stream_inactivity_secs: 30, ..TimeoutsConfig::default() },
+            cancel.clone(),
+            ProviderOptions::default(),
+            ProviderOverrides::default(),
+        )
+        .unwrap();
+
+        let (tx, _rx) = mpsc::channel::<String>(64);
+        let msgs = vec![hydeclaw_types::Message {
+            role: hydeclaw_types::MessageRole::User,
+            content: "q".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+
+        // Cancel immediately before calling chat_stream.
+        cancel.cancel();
+        let result = provider.chat_stream(&msgs, &[], tx, CallOptions::default()).await;
+        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+
+        // Must return either UserCancelled or succeed with partial data if the
+        // full response arrived before cancellation was observed.
+        match result {
+            Err(e) => {
+                let is_cancelled = e
+                    .downcast_ref::<LlmCallError>()
+                    .map(|e| matches!(e, LlmCallError::UserCancelled { .. }))
+                    .unwrap_or(false);
+                assert!(is_cancelled, "expected UserCancelled error, got {e}");
+            }
+            Ok(_) => {
+                // Acceptable: the full response arrived before cancellation fired.
+            }
+        }
+    }
+
+    // ── chat_stream_recovers_from_transient_5xx ───────────────────────────────
+
+    #[tokio::test(start_paused = true)]
+    #[serial(gemini_cloudcode_test_token)]
+    async fn chat_stream_recovers_from_transient_5xx() {
+        let server = MockServer::start().await;
+        // First request → 503.
+        Mock::given(method("POST"))
+            .and(path("/v1internal:streamGenerateContent"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("overloaded"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Second request → 200 success.
+        Mock::given(method("POST"))
+            .and(path("/v1internal:streamGenerateContent"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(fake_stream_body(&["recovered"]))
+                    .append_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let provider = make_provider(&server.uri(), secrets);
+
+        let (tx, mut rx) = mpsc::channel::<String>(64);
+        let msgs = vec![hydeclaw_types::Message {
+            role: hydeclaw_types::MessageRole::User,
+            content: "test".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+        let result = provider.chat_stream(&msgs, &[], tx, CallOptions::default()).await;
+        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+
+        result.expect("must succeed after 503 retry");
+        let mut all = String::new();
+        while let Ok(c) = rx.try_recv() {
+            all.push_str(&c);
+        }
+        assert_eq!(all, "recovered");
+    }
+
+    // ── chat_refreshes_token_if_near_expiry ───────────────────────────────────
+
+    #[tokio::test]
+    #[serial(gemini_cloudcode_test_token, oauth_creds_path)]
+    async fn chat_refreshes_token_if_near_expiry() {
+        use crate::agent::providers::gemini_cloudcode::oauth::storage::save_credentials;
+        use crate::agent::providers::gemini_cloudcode::oauth::types::GoogleCredentials;
+
+        // Token endpoint mock — must receive exactly one refresh call.
+        let token_server = MockServer::start().await;
+        let fresh_token = "fresh-access-token-xyz";
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": fresh_token,
+                "expires_in": 3600,
+                "token_type": "Bearer"
+            })))
+            .expect(1)
+            .mount(&token_server)
+            .await;
+
+        // Code Assist mock — receives the generateContent call after refresh.
+        let ca_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1internal:generateContent"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(fake_generate_response("ok")),
+            )
+            .mount(&ca_server)
+            .await;
+
+        // Redirect the token endpoint and credentials path to test-isolated locations.
+        let storage_dir = tempfile::tempdir().expect("tempdir");
+        let creds_path = storage_dir.path().join("google_oauth.json");
+
+        unsafe {
+            std::env::set_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT", format!("{}/token", token_server.uri()));
+            std::env::set_var("HYDECLAW_OAUTH_CREDENTIALS_PATH", &creds_path);
+        }
+
+        // Seed expired credentials so the refresh fires on first chat() call.
+        // expires_ms is 1 ms in the past → is_near_expiry returns true.
+        let expired_creds = GoogleCredentials {
+            refresh: "test-refresh||".to_string(),
+            access: "stale-token".to_string(),
+            expires_ms: (chrono::Utc::now() - chrono::Duration::milliseconds(1))
+                .timestamp_millis(),
+            email: "test@example.com".to_string(),
+        };
+        save_credentials(&expired_creds).expect("save_credentials must succeed");
+
+        let secrets = Arc::new(SecretsManager::new_noop());
+        let provider = make_provider(&ca_server.uri(), secrets);
+        let msgs = vec![hydeclaw_types::Message {
+            role: hydeclaw_types::MessageRole::User,
+            content: "q".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }];
+
+        let result = provider.chat(&msgs, &[], CallOptions::default()).await;
+
+        unsafe {
+            std::env::remove_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT");
+            std::env::remove_var("HYDECLAW_OAUTH_CREDENTIALS_PATH");
+        }
+
+        result.expect("chat must succeed after token refresh");
+        // Wiremock verifies the .expect(1) on drop — exactly one refresh call fired.
+        assert_eq!(
+            ca_server.received_requests().await.unwrap().len(),
+            1,
+            "exactly one generateContent call must have been made"
+        );
+    }
+}
