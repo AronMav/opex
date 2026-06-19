@@ -277,4 +277,35 @@ mod tests {
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "my_tool");
     }
+
+    #[test]
+    fn golden_fixture_text_only() {
+        let raw = include_str!("tests/fixtures/code_assist_response_text_only.json");
+        let resp: serde_json::Value = serde_json::from_str(raw).expect("fixture must be valid JSON");
+        let result = translate_gemini_response(resp);
+        assert!(!result.content.is_empty(), "text-only fixture must have non-empty content");
+        assert!(result.tool_calls.is_empty(), "text-only fixture must have no tool calls");
+        assert!(result.thinking_blocks.is_empty(), "text-only fixture must have no thinking blocks");
+        assert_eq!(result.finish_reason.as_deref(), Some("stop"));
+    }
+
+    #[test]
+    fn golden_fixture_with_tool_calls() {
+        let raw = include_str!("tests/fixtures/code_assist_response_with_tool_calls.json");
+        let resp: serde_json::Value = serde_json::from_str(raw).expect("fixture must be valid JSON");
+        let result = translate_gemini_response(resp);
+        assert!(!result.tool_calls.is_empty(), "tool-call fixture must have at least one tool call");
+        let tc = &result.tool_calls[0];
+        assert!(!tc.name.is_empty(), "tool call must have a non-empty name");
+        assert!(tc.arguments.is_object(), "tool call arguments must be a JSON object");
+    }
+
+    #[test]
+    fn golden_fixture_with_thinking() {
+        let raw = include_str!("tests/fixtures/code_assist_response_with_thinking.json");
+        let resp: serde_json::Value = serde_json::from_str(raw).expect("fixture must be valid JSON");
+        let result = translate_gemini_response(resp);
+        assert!(!result.thinking_blocks.is_empty(), "thinking fixture must have at least one thinking block");
+        assert!(!result.thinking_blocks[0].signature.is_empty(), "thinking block must have a signature");
+    }
 }

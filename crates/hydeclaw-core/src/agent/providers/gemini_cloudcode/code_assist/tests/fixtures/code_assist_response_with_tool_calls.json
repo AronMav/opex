@@ -1,0 +1,30 @@
+{
+  "response": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "functionCall": {
+                "name": "searxng_search",
+                "args": {
+                  "query": "Rust ownership model documentation",
+                  "num_results": 5
+                }
+              }
+            }
+          ]
+        },
+        "finishReason": "STOP",
+        "index": 0,
+        "safetyRatings": []
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 24,
+      "candidatesTokenCount": 18,
+      "totalTokenCount": 42
+    }
+  }
+}
