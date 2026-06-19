@@ -1,6 +1,6 @@
 ---
 name: web-search
-description: Web search strategy — when to use the primary search engine and when to use Brave
+description: Web search strategy — when to use the primary Ollama Cloud search and when to use Brave
 triggers:
   - search
   - find online
@@ -26,14 +26,14 @@ last_used_at: "2026-05-02T16:00:00.201292506+00:00"
 
 | Need | Tool | Why |
 |------|------|-----|
-| General web search | `search_web` (SearXNG) | Primary, aggregates multiple engines |
-| Fresh news / broader index | `search_web_fresh` (Brave) | When SearXNG misses recent content |
+| General web search | `search_web` (Ollama Cloud) | Primary, returns results with page-content snippets |
+| Fresh news / broader index | `search_web_fresh` (Brave) | When search_web misses recent content |
 | Quick factual answer | `duckduckgo_search` | Instant answers, definitions, no API key |
 | Deep page content extraction | `tavily_search` | Returns clean page text for analysis |
 
 ## Strategy
 
-Start with `search_web` — fast private search engine.
+Start with `search_web` — Ollama Cloud web search (returns title/url/content snippets).
 
 Switch to `search_web_fresh` if:
 - search_web returned few results or irrelevant ones

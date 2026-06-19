@@ -30,24 +30,6 @@ services:
   # ═══════════════════════════════════════════════════
   # Tools (always on)
   # ═══════════════════════════════════════════════════
-  searxng:
-    image: searxng/searxng:latest
-    mem_limit: ${SEARXNG_MEM_LIMIT:-256m}
-    cpus: ${SEARXNG_CPUS:-0.5}
-    ports:
-      - "127.0.0.1:8080:8080"
-    volumes:
-      - ./config/searxng:/etc/searxng
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-    healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1" ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks: [ hydeclaw ]
-    restart: unless-stopped
-
   browser-renderer:
     image: browser-renderer:latest
     mem_limit: ${BROWSER_RENDERER_MEM_LIMIT:-1g}

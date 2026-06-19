@@ -438,7 +438,6 @@ pub(crate) async fn api_container_restart(
     // Database and security-sensitive containers are intentionally excluded.
     const RESTART_ALLOWED: &[&str] = &[
         "browser-renderer",
-        "searxng",
         "mcp-summarize",
         "mcp-stock-analysis",
         "mcp-weather",

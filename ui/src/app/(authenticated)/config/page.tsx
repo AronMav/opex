@@ -311,7 +311,7 @@ export default function ConfigPage() {
         )}
 
         {config && (() => {
-          const serviceKeys = new Set(["toolgate_url", "public_url", "tts_proxy_url", "searxng_url", "tools", "mcp", "tools_count", "mcp_count", "memory", "subagents", "database", "gateway", "typing", "agent_tool", "curator", "backup"]);
+          const serviceKeys = new Set(["toolgate_url", "public_url", "tts_proxy_url", "tools", "mcp", "tools_count", "mcp_count", "memory", "subagents", "database", "gateway", "typing", "agent_tool", "curator", "backup"]);
           const sections: Record<string, Record<string, unknown>> = {};
           const topLevel: Record<string, unknown> = {};
           for (const [key, val] of Object.entries(config)) {

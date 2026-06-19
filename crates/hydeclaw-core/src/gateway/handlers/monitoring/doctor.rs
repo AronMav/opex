@@ -1,5 +1,5 @@
-//! `/api/doctor` — composite health check (16 sub-checks: database,
-//! toolgate, browser-renderer, searxng, secrets, channels, agents,
+//! `/api/doctor` — composite health check (15 sub-checks: database,
+//! toolgate, browser-renderer, secrets, channels, agents,
 //! tool-health, migrations, pgvector, memory-worker, providers,
 //! security-audit, network, backup, disk).
 //!
@@ -361,29 +361,6 @@ pub(crate) async fn api_doctor(
     )
     .await
     .unwrap_or_else(|_| CheckResult::timeout("browser_renderer"));
-
-    // ── 4. SearXNG check ──────────────────────────────────────────────────
-    let sx_http = http.clone();
-    let searxng_check = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        async move {
-            let start = std::time::Instant::now();
-            let ok = sx_http.get("http://localhost:8080/healthz").send().await
-                .map(|r| r.status().is_success()).unwrap_or(false);
-            let ms = start.elapsed().as_millis() as u64;
-            if ok {
-                CheckResult::ok("searxng reachable", ms)
-            } else {
-                CheckResult::warn(
-                    "searxng not reachable",
-                    ms,
-                    Some("start searxng container if web search tools are needed".into()),
-                )
-            }
-        },
-    )
-    .await
-    .unwrap_or_else(|_| CheckResult::timeout("searxng"));
 
     // ── 5. Secrets check ──────────────────────────────────────────────────
     let mut missing_critical: Vec<String> = Vec::new();
@@ -769,7 +746,6 @@ pub(crate) async fn api_doctor(
         &memory_worker_check,
         &disk_check,
         &browser_renderer_check,
-        &searxng_check,
         &secrets_check,
         &channels_check,
         &agents_check,
@@ -791,7 +767,6 @@ pub(crate) async fn api_doctor(
             "memory_worker": memory_worker_check,
             "disk": disk_check,
             "browser_renderer": browser_renderer_check,
-            "searxng": searxng_check,
             "secrets": secrets_check,
             "channels": channels_check,
             "agents": agents_check,

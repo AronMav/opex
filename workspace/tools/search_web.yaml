@@ -1,26 +1,25 @@
 name: search_web
-description: "Web search via SearXNG — a private meta-search engine that aggregates multiple sources. Use as the primary search tool."
-endpoint: "http://localhost:8080/search"
-method: GET
+description: "Web search via Ollama Cloud — returns relevant web results with page-content snippets. Use as the primary search tool."
+endpoint: "https://ollama.com/api/web_search"
+method: POST
 parallel: true
 parameters:
-  q:
+  query:
     type: string
     required: true
-    location: query
+    location: body
     description: "Search query"
-  language:
-    type: string
+  max_results:
+    type: integer
     required: false
-    location: query
-    description: "Result language (ru, en)"
-    default: "ru"
-  format:
-    type: string
-    required: false
-    location: query
-    description: "Response format"
-    default: "json"
+    location: body
+    description: "Maximum number of results (default 5, up to 10)"
+    default: 5
+body_template: |
+  {"query": "{{query}}", "max_results": {{max_results}}}
+auth:
+  type: bearer_env
+  key: OLLAMA_API_KEY
 response_transform: "$.results"
 
 status: verified
