@@ -34,7 +34,7 @@ in_process_timeout = "2m"
 
 [docker]
 compose_file = "docker/docker-compose.yml"
-rebuild_allowed = ["browser-renderer", "searxng"]
+rebuild_allowed = ["browser-renderer"]
 rebuild_timeout_secs = 300
 
 # ═══ Native managed processes (spawned by Core, not Docker) ═══

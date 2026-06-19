@@ -85,7 +85,7 @@ const STATUS_LABEL: Record<CheckStatus, string> = {
 
 const CHECK_GROUPS: { titleKey: string; keys: string[] }[] = [
   { titleKey: "doctor.group_infrastructure", keys: ["database", "migrations", "pgvector", "memory_worker", "disk", "backup"] },
-  { titleKey: "doctor.group_services", keys: ["toolgate", "browser_renderer", "searxng", "channels"] },
+  { titleKey: "doctor.group_services", keys: ["toolgate", "browser_renderer", "channels"] },
   { titleKey: "doctor.group_providers", keys: ["providers"] },
   { titleKey: "doctor.group_security", keys: ["security_audit", "secrets"] },
   { titleKey: "doctor.group_agents", keys: ["agents", "tool_health"] },
