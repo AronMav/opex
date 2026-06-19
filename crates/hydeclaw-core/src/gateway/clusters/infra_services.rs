@@ -61,6 +61,90 @@ impl InfraServices {
         }
     }
 
+    /// Construct a minimal `InfraServices` for unit tests with no arguments.
+    /// Uses an inline `NullMemory` stub — avoids requiring callers to import a stub.
+    #[cfg(test)]
+    pub fn test_new() -> Self {
+        struct NullMemory;
+
+        #[async_trait::async_trait]
+        impl crate::agent::memory_service::MemoryService for NullMemory {
+            fn is_available(&self) -> bool {
+                false
+            }
+
+            async fn search(
+                &self,
+                _q: &str,
+                _l: usize,
+                _e: &[String],
+                _a: &str,
+            ) -> anyhow::Result<(Vec<crate::memory::MemoryResult>, String)> {
+                Ok((vec![], String::new()))
+            }
+
+            async fn index(
+                &self,
+                _c: &str,
+                _s: &str,
+                _p: bool,
+                _sc: &str,
+                _a: &str,
+            ) -> anyhow::Result<String> {
+                Ok(String::new())
+            }
+
+            async fn index_batch(
+                &self,
+                _items: &[(String, String, bool, String)],
+                _a: &str,
+            ) -> anyhow::Result<Vec<String>> {
+                Ok(vec![])
+            }
+
+            async fn load_pinned(
+                &self,
+                _a: &str,
+                _b: u32,
+            ) -> anyhow::Result<(String, Vec<String>)> {
+                Ok((String::new(), vec![]))
+            }
+
+            async fn get(
+                &self,
+                _id: Option<&str>,
+                _src: Option<&str>,
+                _l: usize,
+            ) -> anyhow::Result<Vec<crate::memory::MemoryChunk>> {
+                Ok(vec![])
+            }
+
+            async fn delete(&self, _id: &str) -> anyhow::Result<bool> {
+                Ok(false)
+            }
+
+            async fn recent(
+                &self,
+                _l: i64,
+            ) -> anyhow::Result<Vec<crate::memory::MemoryResult>> {
+                Ok(vec![])
+            }
+
+            async fn wipe_agent_memory(&self, _a: &str) -> anyhow::Result<u64> {
+                Ok(0)
+            }
+
+            async fn enqueue_reindex_task(
+                &self,
+                _p: serde_json::Value,
+            ) -> anyhow::Result<uuid::Uuid> {
+                Ok(uuid::Uuid::nil())
+            }
+        }
+
+        Self::test_with_memory(NullMemory)
+    }
+
     /// Construct a minimal `InfraServices` for unit tests.
     /// Accepts any `MemoryService` impl (e.g. `NullMemory` or `MockMemoryService`).
     /// Metrics registry is a fresh empty `MetricsRegistry`.
@@ -192,5 +276,12 @@ mod tests {
         use crate::agent::memory_service::mock::MockMemoryService;
         let infra = InfraServices::test_with_memory(MockMemoryService::available());
         assert!(infra.memory_store.is_available());
+    }
+
+    // PgPool::connect_lazy requires a Tokio context.
+    #[tokio::test]
+    async fn infra_services_test_new_is_sync() {
+        let infra = InfraServices::test_new();
+        assert!(infra.container_manager.is_none());
     }
 }

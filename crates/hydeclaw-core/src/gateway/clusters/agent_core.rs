@@ -114,6 +114,28 @@ impl AgentCore {
 
     // ── Test helpers ─────────────────────────────────────────────────────────
 
+    /// Construct a minimal `AgentCore` for unit tests that require a sync constructor.
+    /// Must be called from within a tokio runtime context (e.g. inside `#[tokio::test]`).
+    /// Prefer `test_empty().await` when the async form is sufficient.
+    ///
+    /// `Scheduler::new_noop()` is async; we drive it synchronously via
+    /// `block_in_place` so the caller's signature stays `fn` rather than `async fn`.
+    #[cfg(test)]
+    pub fn test_new() -> Self {
+        let scheduler = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(crate::scheduler::Scheduler::new_noop())
+        });
+        Self {
+            map: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            deps: Arc::new(tokio::sync::RwLock::new(AgentDeps::test_new())),
+            session_pools: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+            session_tool_state: Arc::new(dashmap::DashMap::new()),
+            tools: ToolRegistry::empty(),
+            scheduler,
+        }
+    }
+
     /// Construct a minimal `AgentCore` for unit tests (no DB, no scheduler running).
     #[cfg(test)]
     pub async fn test_empty() -> Self {
@@ -170,5 +192,13 @@ mod tests {
         let core = AgentCore::test_empty().await;
         let core2 = core.clone();
         assert!(Arc::ptr_eq(&core.map, &core2.map));
+    }
+
+    // block_in_place requires the multi-threaded runtime.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_core_test_new_is_sync() {
+        // Verify the sync test_new() exists and produces an empty core.
+        // (Separate from test_empty() which is async.)
+        let _core = AgentCore::test_new();
     }
 }
