@@ -37,6 +37,7 @@ drivers:
     - { driver: elevenlabs,    label: "ElevenLabs",                    requires_key: true }
     - { driver: edge,          label: "Microsoft Edge TTS (free)",     requires_key: false }
     - { driver: qwen3-tts,     label: "Local Qwen3-TTS",               requires_key: false }
+    - { driver: silero,        label: "Local Silero TTS (Russian)",    requires_key: false }
     - { driver: fish-audio,    label: "Fish Audio (Russian voices)",   requires_key: true }
     - { driver: murf,          label: "Murf AI",                       requires_key: true }
     - { driver: mimo,          label: "Xiaomi MiMo TTS",               requires_key: true }
