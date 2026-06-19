@@ -355,8 +355,34 @@ pub(crate) const PROVIDER_TYPES: &[ProviderTypeMeta] = &[
     },
 ];
 
+/// Metadata for the `gemini-cloudcode` provider. Declared as a separate
+/// feature-gated const (instead of a `PROVIDER_TYPES` element) because
+/// Rust stable does not support per-element `#[cfg]` inside a const array
+/// literal. Helper functions (`resolve_chat_url`, `default_base_url_for_type`)
+/// check this const with a feature-gated early return before the main scan.
+#[cfg(feature = "gemini-cloudcode")]
+pub(crate) const GEMINI_CLOUD_CODE_META: ProviderTypeMeta = ProviderTypeMeta {
+    id: "gemini-cloudcode",
+    name: "Google Gemini (Code Assist OAuth)",
+    chat_path: "", // provider builds URLs internally from base_url
+    default_base_url: "https://cloudcode-pa.googleapis.com",
+    default_secret_name: "", // OAuth-based, no env secret
+    requires_api_key: false,
+    supports_model_listing: false, // static model list for MVP
+    models_provider: None,
+    default_models: &["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-pro-preview"],
+};
+
 /// Build full chat completions URL from `base_url` + provider's `chat_path`.
 pub fn resolve_chat_url(provider_type: &str, base_url: &str) -> String {
+    // Feature-gated early return: gemini-cloudcode uses an empty chat_path,
+    // so the caller's base_url is used as-is (same logic as the empty-path
+    // branch below, but avoids splicing a cfg-gated entry into PROVIDER_TYPES).
+    #[cfg(feature = "gemini-cloudcode")]
+    if provider_type == GEMINI_CLOUD_CODE_META.id {
+        return base_url.to_string();
+    }
+
     let chat_path = PROVIDER_TYPES.iter()
         .find(|pt| pt.id == provider_type)
         .map_or("/v1/chat/completions", |pt| pt.chat_path);
@@ -369,7 +395,33 @@ pub fn resolve_chat_url(provider_type: &str, base_url: &str) -> String {
 /// Default base URL for a provider type (from `PROVIDER_TYPES`).
 #[allow(dead_code)] // Public API surface — kept for stability across plugin boundaries.
 pub fn default_base_url_for_type(provider_type: &str) -> &'static str {
+    // Feature-gated early return: gemini-cloudcode is not in PROVIDER_TYPES.
+    #[cfg(feature = "gemini-cloudcode")]
+    if provider_type == GEMINI_CLOUD_CODE_META.id {
+        return GEMINI_CLOUD_CODE_META.default_base_url;
+    }
+
     PROVIDER_TYPES.iter()
         .find(|pt| pt.id == provider_type)
         .map_or("", |pt| pt.default_base_url)
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, feature = "gemini-cloudcode"))]
+mod tests {
+    use super::*;
+
+    // ── registry::tests::gemini_cloudcode_in_provider_types ─────────────────
+    #[test]
+    fn gemini_cloudcode_in_provider_types() {
+        let entry = &GEMINI_CLOUD_CODE_META;
+        assert_eq!(entry.id, "gemini-cloudcode");
+        assert_eq!(entry.name, "Google Gemini (Code Assist OAuth)");
+        assert_eq!(entry.default_base_url, "https://cloudcode-pa.googleapis.com");
+        assert!(!entry.requires_api_key, "gemini-cloudcode uses OAuth, not an API key");
+        assert!(!entry.supports_model_listing, "model listing is static in MVP");
+        assert!(entry.default_models.contains(&"gemini-2.5-pro"));
+        assert!(entry.default_models.contains(&"gemini-2.5-flash"));
+    }
 }
