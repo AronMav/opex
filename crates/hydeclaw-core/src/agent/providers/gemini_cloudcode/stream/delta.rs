@@ -29,7 +29,6 @@ pub struct SynthesizedToolCall {
     pub name: String,
     /// Full args JSON (Gemini sends the complete object in one chunk).
     pub arguments: serde_json::Value,
-    thought_signature: None,
 }
 
 /// Gemini-specific streaming usage bag.
@@ -110,8 +109,7 @@ pub fn events_to_deltas(events: Vec<GeminiStreamEvent>) -> Vec<DeltaChunk> {
                         let id = Uuid::new_v4().to_string();
                         chunks.push(DeltaChunk {
                             text: String::new(),
-                            tool_call: Some(SynthesizedToolCall { id, name, arguments: args,
- thought_signature: None, }),
+                            tool_call: Some(SynthesizedToolCall { id, name, arguments: args }),
                             finish_reason: None,
                             usage: None,
                         });
