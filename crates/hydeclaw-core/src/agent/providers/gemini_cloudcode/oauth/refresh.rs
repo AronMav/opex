@@ -26,8 +26,26 @@ pub(crate) fn is_near_expiry(expires_ms: i64) -> bool {
 /// Get a valid access token, refreshing if necessary.
 ///
 /// Delegates to `get_valid_access_token_at` with the canonical `TOKEN_ENDPOINT`.
+///
+/// **Test seam:** set `HYDECLAW_GEMINI_TEST_ACCESS_TOKEN` to bypass the entire
+/// OAuth flow and return a synthetic token. This is guarded by `#[cfg(test)]`
+/// so it has zero production effect.
+///
+/// **Test endpoint override:** set `HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT` to
+/// redirect refresh calls to a wiremock server. Works at runtime (no cfg guard)
+/// so integration tests can exercise the real refresh path against a mock.
 pub async fn get_valid_access_token(force_refresh: bool) -> Result<String, OauthError> {
-    get_valid_access_token_at(force_refresh, TOKEN_ENDPOINT).await
+    #[cfg(test)]
+    {
+        if let Ok(tok) = std::env::var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN")
+            && !tok.is_empty()
+        {
+            return Ok(tok);
+        }
+    }
+    let endpoint = std::env::var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT")
+        .unwrap_or_else(|_| TOKEN_ENDPOINT.to_string());
+    get_valid_access_token_at(force_refresh, &endpoint).await
 }
 
 /// Internal variant that accepts an explicit token endpoint URL.
