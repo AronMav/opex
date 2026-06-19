@@ -27,8 +27,10 @@ if [[ "${1:-}" != "--skip-build" ]]; then
     echo "==> git pull"
     git -C "${SRC_DIR}" pull --ff-only
 
-    echo "==> cargo build --release"
-    (cd "${SRC_DIR}" && cargo build --release -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker)
+    echo "==> cargo build --release (with gemini-cloudcode feature)"
+    (cd "${SRC_DIR}" && cargo build --release \
+        --features hydeclaw-core/gemini-cloudcode \
+        -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker)
 fi
 
 echo "==> atomic swap binaries"
