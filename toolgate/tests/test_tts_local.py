@@ -129,8 +129,8 @@ def test_all_tts_providers_accept_registry_kwarg():
     router contract. The router passes registry= to provider.synthesize() for any TTS
     capability — providers that don't use it must still accept it gracefully."""
     import inspect
-    from providers import tts_local, tts_openai, tts_elevenlabs, tts_edge, tts_fish_audio, tts_murf
-    for mod in [tts_local, tts_openai, tts_elevenlabs, tts_edge, tts_fish_audio, tts_murf]:
+    from providers import tts_local, tts_openai, tts_elevenlabs, tts_edge, tts_fish_audio, tts_murf, tts_silero
+    for mod in [tts_local, tts_openai, tts_elevenlabs, tts_edge, tts_fish_audio, tts_murf, tts_silero]:
         cls = next(c for n, c in inspect.getmembers(mod, inspect.isclass) if hasattr(c, "synthesize"))
         sig = inspect.signature(cls.synthesize)
         assert "registry" in sig.parameters, \
