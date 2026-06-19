@@ -1165,6 +1165,16 @@ mod tests {
     }
 
     #[test]
+    fn tts_drivers_include_silero() {
+        let drivers = MEDIA_DRIVERS_JSON.get("drivers").expect("drivers root key");
+        let tts = drivers.get("tts").and_then(|v| v.as_array()).expect("tts list");
+        assert!(
+            tts.iter().any(|d| d.get("driver").and_then(|v| v.as_str()) == Some("silero")),
+            "silero driver must be present in media-drivers.yaml tts list"
+        );
+    }
+
+    #[test]
     fn media_drivers_yaml_parses_with_expected_capabilities() {
         // Forces LazyLock initialization — would panic on bad YAML.
         let drivers = MEDIA_DRIVERS_JSON.get("drivers").expect("drivers root key");
