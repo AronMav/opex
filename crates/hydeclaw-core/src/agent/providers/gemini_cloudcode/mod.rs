@@ -10,6 +10,6 @@
 pub mod oauth;
 pub mod code_assist;
 pub mod stream;
-// NOTE: Modules 3–4 append their mod declarations here:
-//   pub mod provider; ← Module 3 (Task 2+)
+pub mod provider;
+// NOTE: Module 4 appends its mod declaration here:
 //   pub mod ui_api;   ← Module 4
