@@ -46,7 +46,8 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
     from providers.stt_google import GoogleSTT
     from providers.stt_mistral import MistralSTT
     from providers.stt_assemblyai import AssemblyAISTT
-    
+    from providers.stt_mimo import MiMoSTT
+
     # Vision providers
     from providers.vision_local import OllamaVision
     from providers.vision_openai import OpenAIVision
@@ -55,7 +56,8 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
     from providers.vision_replicate import ReplicateVision
     from providers.vision_qwen import QwenVision
     from providers.vision_cloudsight import CloudSightVision
-    
+    from providers.vision_mimo import MiMoVision
+
     # TTS providers
     from providers.tts_openai import OpenAITTS
     from providers.tts_elevenlabs import ElevenLabsTTS
@@ -63,7 +65,8 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
     from providers.tts_local import Qwen3TTS
     from providers.tts_fish_audio import FishAudioTTS
     from providers.tts_murf import MurfTTS
-    
+    from providers.tts_mimo import MiMoTTS
+
     # ImageGen providers
     from providers.imagegen_openai import OpenAIImageGen
     from providers.imagegen_runware import RunwareImageGen
@@ -84,6 +87,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
         ("stt", "google"): GoogleSTT,
         ("stt", "mistral"): MistralSTT,
         ("stt", "assemblyai"): AssemblyAISTT,
+        ("stt", "mimo"): MiMoSTT,
         # Vision
         ("vision", "ollama"): OllamaVision,
         ("vision", "openai"): OpenAIVision,
@@ -92,6 +96,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
         ("vision", "replicate"): ReplicateVision,
         ("vision", "qwen"): QwenVision,
         ("vision", "cloudsight"): CloudSightVision,
+        ("vision", "mimo"): MiMoVision,
         # TTS
         ("tts", "openai"): OpenAITTS,
         ("tts", "elevenlabs"): ElevenLabsTTS,
@@ -99,6 +104,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
         ("tts", "qwen3-tts"): Qwen3TTS,
         ("tts", "fish-audio"): FishAudioTTS,
         ("tts", "murf"): MurfTTS,
+        ("tts", "mimo"): MiMoTTS,
         # ImageGen
         ("imagegen", "openai"): OpenAIImageGen,
         ("imagegen", "runware"): RunwareImageGen,

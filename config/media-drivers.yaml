@@ -20,6 +20,7 @@ drivers:
     - { driver: google,        label: "Google Gemini",                 requires_key: true }
     - { driver: mistral,       label: "Mistral (Voxtral)",             requires_key: true }
     - { driver: assemblyai,    label: "AssemblyAI (100+ langs)",       requires_key: true }
+    - { driver: mimo,          label: "Xiaomi MiMo ASR",               requires_key: true }
 
   vision:
     - { driver: ollama,        label: "Local Ollama",                  requires_key: false }
@@ -29,6 +30,7 @@ drivers:
     - { driver: replicate,     label: "Replicate (Moondream/LLaVA)",   requires_key: true }
     - { driver: qwen,          label: "Qwen2-VL (Alibaba)",            requires_key: true }
     - { driver: cloudsight,    label: "CloudSight",                    requires_key: true }
+    - { driver: mimo,          label: "Xiaomi MiMo Vision",            requires_key: true }
 
   tts:
     - { driver: openai,        label: "OpenAI TTS",                    requires_key: true }
@@ -37,6 +39,7 @@ drivers:
     - { driver: qwen3-tts,     label: "Local Qwen3-TTS",               requires_key: false }
     - { driver: fish-audio,    label: "Fish Audio (Russian voices)",   requires_key: true }
     - { driver: murf,          label: "Murf AI",                       requires_key: true }
+    - { driver: mimo,          label: "Xiaomi MiMo TTS",               requires_key: true }
 
   imagegen:
     - { driver: openai,        label: "OpenAI (DALL-E / GPT Image)",   requires_key: true }
