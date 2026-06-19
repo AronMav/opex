@@ -4,6 +4,7 @@
 
 pub mod client_creds;
 pub mod pkce;
+pub mod storage;
 pub mod types;
 
 // OAuth endpoint constants.
