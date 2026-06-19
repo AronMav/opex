@@ -88,11 +88,25 @@ pub(in crate::agent::providers) fn strip_empty_required(value: &mut serde_json::
 /// so the REST `google` provider can also send `tool_definitions` without
 /// 400 errors on schemas produced by upstream agents (e.g. MCP tools).
 pub(in crate::agent::providers) fn strip_gemini_unsupported_keys(value: &mut serde_json::Value) {
+    // Gemini accepts only a minimal JSON-Schema subset (per Google's docs).
+    // Drop everything outside that subset to avoid INVALID_ARGUMENT 400s.
+    // Allowed: type, format, description, nullable, enum, properties,
+    // required, items, minimum, maximum, minItems, maxItems.
     const FORBIDDEN: &[&str] = &[
-        "$defs", "$ref", "$schema",
-        "additionalProperties",
-        "examples", "default",
+        "$defs", "$ref", "$schema", "$id", "$anchor", "$comment",
+        "additionalProperties", "patternProperties", "propertyNames",
+        "examples", "default", "const",
         "oneOf", "anyOf", "allOf", "not",
+        "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+        "pattern", "contentEncoding", "contentMediaType",
+        "dependencies", "dependentRequired", "dependentSchemas",
+        "contains", "minContains", "maxContains",
+        "if", "then", "else",
+        "unevaluatedItems", "unevaluatedProperties",
+        "readOnly", "writeOnly", "deprecated",
+        "title", "examples",
+        "minLength", "maxLength",  // Gemini ignores; some bindings 400 on them
+        "discriminator",
     ];
     if let Some(obj) = value.as_object_mut() {
         obj.retain(|k, _| !FORBIDDEN.contains(&k.as_str()));
