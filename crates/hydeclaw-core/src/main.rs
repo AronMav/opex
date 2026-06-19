@@ -736,7 +736,7 @@ async fn main() -> Result<()> {
 
     let shutdown_bg_tasks = state.channels.bg_tasks.clone();
     axum::serve(listener, gateway::router(state)?.into_make_service_with_connect_info::<std::net::SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(cfg.shutdown.drain_timeout_secs + 20))
         .await?;
 
     // Signal background tasks to stop. They select on bg_shutdown.cancelled()
@@ -1394,7 +1394,7 @@ fn setup_sighup_handler(state: gateway::AppState) {
     });
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(hard_timeout_secs: u64) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -1417,10 +1417,15 @@ async fn shutdown_signal() {
         () = terminate => tracing::info!("received SIGTERM"),
     }
 
-    // Safety net: force-exit after 15s if graceful shutdown hangs
-    tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-        tracing::warn!("hard shutdown: 15s timeout exceeded");
+    // Safety net: force-exit only if graceful shutdown GENUINELY hangs. This
+    // budget MUST exceed the graceful path (drain_timeout_secs + managed-process
+    // stop ~10s); otherwise it fires during every normal shutdown and the
+    // process exits 1, making systemd log a spurious FAILURE on each restart
+    // (and force-killing teardown mid-flight, which can trip the tracing span
+    // registry). Caller passes `drain_timeout_secs + 20` (≈50s default).
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(hard_timeout_secs)).await;
+        tracing::warn!(hard_timeout_secs, "hard shutdown: graceful drain exceeded budget — forcing exit");
         std::process::exit(1);
     });
 }
