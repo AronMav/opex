@@ -47,8 +47,14 @@ impl OpenAiCompatibleProvider {
         }
 
         if !tools.is_empty() {
+            // Some OpenAI-compatible backends (e.g. Xiaomi MiMo) reject any
+            // tools array containing duplicate function names with HTTP 400.
+            // Dedupe by name, keeping the first occurrence — matches the
+            // engine's precedence when resolving tool_use → tool dispatch.
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             let tools_json: Vec<serde_json::Value> = tools
                 .iter()
+                .filter(|t| seen.insert(t.name.clone()))
                 .map(|t| {
                     serde_json::json!({
                         "type": "function",
