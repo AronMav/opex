@@ -11,5 +11,6 @@ pub mod oauth;
 pub mod code_assist;
 pub mod stream;
 pub mod provider;
+pub(crate) use provider::GeminiCloudCodeProvider;
 // NOTE: Module 4 appends its mod declaration here:
 //   pub mod ui_api;   ← Module 4

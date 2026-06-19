@@ -244,3 +244,36 @@ async fn build_provider_openai_silently_ignores_prompt_cache_override() {
     // construction with a non-default override.
     let _ = provider;
 }
+
+// ── factory::tests::dispatches_gemini_cloudcode_to_provider ─────────────────
+#[cfg(feature = "gemini-cloudcode")]
+#[tokio::test]
+async fn dispatches_gemini_cloudcode_to_provider() {
+    use super::*;
+    use crate::db::providers::ProviderRow;
+    use crate::secrets::SecretsManager;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    // Per D9: construct ProviderRow with ALL fields.
+    let row = ProviderRow {
+        id: Uuid::new_v4(),
+        name: "gcloud".to_string(),
+        category: "llm".to_string(),
+        provider_type: "gemini-cloudcode".to_string(),
+        base_url: None,
+        default_model: Some("gemini-2.5-pro".to_string()),
+        options: serde_json::Value::Object(Default::default()),
+        enabled: true,
+        notes: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let secrets = Arc::new(SecretsManager::new_noop());
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let overrides = ProviderOverrides::default();
+
+    let result = build_provider(&row, secrets, &TimeoutsConfig::default(), cancel, overrides);
+    let provider = result.expect("build_provider must succeed for gemini-cloudcode");
+    assert_eq!(provider.name(), "gemini-cloudcode");
+}
