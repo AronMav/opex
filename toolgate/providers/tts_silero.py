@@ -64,7 +64,7 @@ class SileroTTS:
                 continue
             resp.raise_for_status()
             return resp.content
-        return b""
+        raise RuntimeError("Silero TTS: retry loop exhausted without a response")
 
     async def list_voices(self, http: httpx.AsyncClient) -> dict:
         return {"voices": SILERO_SPEAKERS, "default": self.default_voice}

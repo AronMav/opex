@@ -52,6 +52,7 @@ async def test_synthesize_retries_once_on_5xx(http_client):
         ]
         out = await tts.synthesize(http_client, "Привет", voice="kseniya")
     assert out == b"AUDIO"
+    assert len(route.calls) == 2  # one 5xx + one success — proves the retry fired
 
 
 @pytest.mark.asyncio
