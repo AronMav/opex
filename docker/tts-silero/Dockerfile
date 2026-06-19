@@ -11,6 +11,11 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
+# espeak-ng: English->Cyrillic G2P used by normalize.transliterate_latin.
+# Separate layer (after pip) so the heavy torch layer stays cached.
+RUN apt-get update && apt-get install -y --no-install-recommends espeak-ng \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY normalize.py server.py /app/
 WORKDIR /app
 EXPOSE 8000
