@@ -32,3 +32,6 @@ pub(crate) mod notifications;
 pub(crate) mod csp;
 pub(crate) mod uploads_serve;
 pub(crate) mod workspace_files;
+
+#[cfg(feature = "gemini-cloudcode")]
+pub(crate) mod google_auth;
