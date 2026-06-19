@@ -130,11 +130,15 @@ inventory = { version = "0.3", optional = true }
 # Optional so it is excluded from all non-gemini builds.
 dirs = { version = "5", optional = true }
 
+# Cross-process file locking for credential storage (gemini-cloudcode oauth).
+# Optional; activated only for the gemini-cloudcode feature.
+fs2 = { version = "0.4", optional = true }
+
 [features]
 default = []
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 ts-gen = ["dep:ts-rs", "dep:inventory", "hydeclaw-types/ts-gen", "hydeclaw-db/ts-gen"]
-gemini-cloudcode = ["dep:dirs"]
+gemini-cloudcode = ["dep:dirs", "dep:fs2"]
 
 # Systemd watchdog (Linux-only)
 [target.'cfg(target_os = "linux")'.dependencies]
