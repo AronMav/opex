@@ -10,6 +10,7 @@ pub mod schema;
 pub mod request;
 pub mod response;
 pub mod project;
+pub mod quota;
 
 pub use types::{
     CODE_ASSIST_ENDPOINT, FREE_TIER_ID, LEGACY_TIER_ID,
@@ -19,6 +20,7 @@ pub use schema::sanitize_gemini_tool_parameters;
 pub use request::{build_gemini_request, wrap_code_assist_request};
 pub use response::translate_gemini_response;
 pub use project::ensure_project_ctx;
+pub use quota::{QuotaBucket, retrieve_user_quota};
 
 #[cfg(test)]
 mod integration {
