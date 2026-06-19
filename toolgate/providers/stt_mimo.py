@@ -46,6 +46,12 @@ class MiMoSTT:
                          model: str | None = None) -> str:
         mime = _mime_from_filename(filename)
         b64 = base64.b64encode(audio_bytes).decode("ascii")
+        # MiMo ASR officially supports only zh, en, auto. Map anything
+        # else (e.g. ru, fr, de) to "auto" so the request is accepted —
+        # the model still detects and transcribes other languages.
+        lang = (language or "auto").lower()
+        if lang not in ("zh", "en", "auto"):
+            lang = "auto"
         resp = await http.post(
             f"{self.base_url}/v1/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -58,7 +64,7 @@ class MiMoSTT:
                         "input_audio": {"data": f"data:{mime};base64,{b64}"},
                     }],
                 }],
-                "asr_options": {"language": language or "auto"},
+                "asr_options": {"language": lang},
             },
             timeout=self._request_timeout,
         )
