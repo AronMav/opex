@@ -105,10 +105,9 @@ pub fn build_provider(
         }
         #[cfg(feature = "gemini-cloudcode")]
         "gemini-cloudcode" => {
-            let provider =
-                super::gemini_cloudcode::provider::GeminiCloudCodeProvider::new_from_row(
-                    row, secrets, *timeouts, cancel, opts, overrides,
-                )?;
+            let provider = crate::agent::providers::GeminiCloudCodeProvider::new_from_row(
+                row, secrets, *timeouts, cancel, opts, overrides,
+            )?;
             Ok(Box::new(provider))
         }
         "claude-cli" | "gemini-cli" | "codex-cli" => {

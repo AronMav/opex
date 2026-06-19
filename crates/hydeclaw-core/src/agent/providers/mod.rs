@@ -28,6 +28,8 @@ use crate::secrets::SecretsManager;
 // Feature-gated provider implementations.
 #[cfg(feature = "gemini-cloudcode")]
 pub mod gemini_cloudcode;
+#[cfg(feature = "gemini-cloudcode")]
+pub(crate) use gemini_cloudcode::GeminiCloudCodeProvider;
 
 // Concrete provider implementations.
 mod openai;
