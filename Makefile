@@ -8,7 +8,7 @@ SERVER_TARGET := x86_64-unknown-linux-gnu
 BIN           := target/$(TARGET)/release/hydeclaw-core
 AUTH          ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN")
 
-.PHONY: check test test-db test-db-up test-db-down lint audit build build-arm64 build-arm64-otel build-x86_64 ui release gen-types deploy-binary deploy-binary-otel deploy-binary-server deploy-remote remote-build remote-deploy deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean
+.PHONY: check test test-gemini test-db test-db-up test-db-down lint audit build build-arm64 build-arm64-otel build-x86_64 ui release gen-types deploy-binary deploy-binary-otel deploy-binary-server deploy-remote remote-build remote-deploy deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean llvm-cov
 
 # ── Codegen ──────────────────────────────────────────────────────────────────
 
@@ -21,7 +21,16 @@ check:
 	cargo check --all-targets
 
 test:
-	cargo test
+	cargo test --features gemini-cloudcode
+
+# Run only the gemini_cloudcode oauth subtree (useful during isolated OAuth development).
+test-gemini:
+	cargo test -p hydeclaw-core --features gemini-cloudcode gemini_cloudcode::
+
+# Coverage report — requires cargo-llvm-cov (`cargo install cargo-llvm-cov`).
+# Generates an HTML report and opens it in the default browser.
+llvm-cov:
+	cargo llvm-cov --features gemini-cloudcode --html --open
 
 # ── DB-backed integration tests (sqlx::test) ──────────────────────────────────
 # `test-db-up` boots an isolated Postgres on 127.0.0.1:5433 (separate from the

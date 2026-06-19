@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(oauth_creds_path)]
     fn roundtrip() {
         with_tmp_path(|_| {
             let original = test_creds("roundtrip@example.com");
@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(oauth_creds_path)]
     fn load_returns_none_when_absent() {
         with_tmp_path(|creds_path| {
             assert!(!creds_path.exists(), "file should not exist yet");
@@ -294,7 +294,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    #[serial]
+    #[serial(oauth_creds_path)]
     fn file_has_0600_perms() {
         use std::os::unix::fs::PermissionsExt;
         with_tmp_path(|creds_path| {
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(oauth_creds_path)]
     fn clear_credentials_removes_file() {
         with_tmp_path(|creds_path| {
             save_credentials(&test_creds("clear@example.com")).expect("save");
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(oauth_creds_path)]
     fn load_returns_none_after_clear() {
         with_tmp_path(|_| {
             save_credentials(&test_creds("clearthenload@example.com")).expect("save");
@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
+    #[serial(oauth_creds_path)]
     fn atomic_replace_on_partial_write() {
         // Verify that after a successful save + a failed overwrite (simulated
         // by writing corrupt JSON to tmp then bailing), the original is intact.

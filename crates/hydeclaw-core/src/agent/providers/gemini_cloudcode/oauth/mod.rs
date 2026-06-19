@@ -1,3 +1,15 @@
+//! # Acceptance criteria (D20)
+//!
+//! CI passes when:
+//! 1. `make test` compiles and runs `gemini_cloudcode::` tests (feature flag included).
+//! 2. `make llvm-cov` shows ≥80% line coverage for each file in this subtree.
+//! 3. The no-token-log grep returns zero matches:
+//!    ```sh
+//!    rg -n 'access_token|refresh_token' \
+//!        crates/hydeclaw-core/src/agent/providers/gemini_cloudcode/ \
+//!      | rg -v '(redact|#\[cfg\(test\)\]|pub |struct |fn |let |field|json\[|\.get\(|"access_token"|"refresh_token")'
+//!    ```
+
 // Module 1 Task 1: OAuth foundation types.
 // Constants are used by later tasks (Modules 2–4); suppress dead_code until wired up.
 #![allow(dead_code)]
