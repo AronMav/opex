@@ -8,8 +8,8 @@
 //! Modules 2–4 amend this file to add their own submodule declarations.
 
 pub mod oauth;
-// NOTE: Modules 2–4 append their mod declarations here:
-//   pub mod code_assist;  ← Module 2
-//   pub mod stream;       ← Module 3
-//   pub mod provider;     ← Module 3
-//   pub mod ui_api;       ← Module 4
+pub mod code_assist;
+// NOTE: Modules 3–4 append their mod declarations here:
+//   pub mod stream;   ← Module 3
+//   pub mod provider; ← Module 3
+//   pub mod ui_api;   ← Module 4
