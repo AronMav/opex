@@ -82,6 +82,32 @@ pub(in crate::agent::providers) fn strip_empty_required(value: &mut serde_json::
     }
 }
 
+/// Recursively repair JSON-Schema quirks Gemini's API rejects:
+///   * `type: "array"` without `items` → add `items: { "type": "string" }` fallback
+///   * `required: [name]` where `name` ∉ `properties` → drop the unknown name
+pub(in crate::agent::providers) fn repair_gemini_schema_quirks(value: &mut serde_json::Value) {
+    if let Some(obj) = value.as_object_mut() {
+        // Rule 1: array without items.
+        if obj.get("type").and_then(|v| v.as_str()) == Some("array") && !obj.contains_key("items") {
+            obj.insert("items".to_string(), serde_json::json!({"type": "string"}));
+        }
+        // Rule 2: required references unknown property.
+        if let (Some(props), Some(req)) = (
+            obj.get("properties").and_then(|v| v.as_object()).cloned(),
+            obj.get_mut("required").and_then(|v| v.as_array_mut()),
+        ) {
+            req.retain(|r| r.as_str().is_some_and(|s| props.contains_key(s)));
+        }
+        for v in obj.values_mut() {
+            repair_gemini_schema_quirks(v);
+        }
+    } else if let Some(arr) = value.as_array_mut() {
+        for v in arr.iter_mut() {
+            repair_gemini_schema_quirks(v);
+        }
+    }
+}
+
 /// Recursively strip JSON-Schema keys Gemini's API rejects:
 /// `$defs`, `$ref`, `$schema`, `additionalProperties`, `examples`, `default`.
 /// Mirrors the sanitization done by `gemini_cloudcode::code_assist::schema`
