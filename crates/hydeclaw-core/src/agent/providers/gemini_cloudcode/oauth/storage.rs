@@ -114,6 +114,20 @@ where
     }
 }
 
+// ── Convenience lock wrapper ───────────────────────────────────────────────────
+
+/// Acquire the credentials-file lock, execute `f`, release the lock.
+///
+/// Thin wrapper around `with_lock` that resolves the credentials path internally.
+/// Used by `refresh.rs` so callers don't need to manage paths directly.
+pub(crate) fn with_credentials_lock<F, T>(f: F) -> Result<T, OauthError>
+where
+    F: FnOnce() -> Result<T, OauthError>,
+{
+    let path = credentials_path();
+    with_lock(&path, f)
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Load credentials from the credentials file.
@@ -177,6 +191,22 @@ fn save_credentials_locked(
     fs::rename(&tmp_path, path)?;
 
     Ok(())
+}
+
+/// Write credentials directly to the given path without locking.
+///
+/// Used by `refresh.rs` (Pass 3) and by tests that need to pre-populate a
+/// specific file. Callers must ensure they hold the cross-process lock themselves
+/// (or use `save_credentials` which acquires it automatically).
+///
+/// Named with leading `_` to signal "lock not included"; `#[allow(dead_code)]`
+/// suppresses unused-item warnings when only tests use this in non-test builds.
+#[allow(dead_code)]
+pub(crate) fn _save_to_path(
+    creds: &GoogleCredentials,
+    path: &Path,
+) -> Result<(), OauthError> {
+    save_credentials_locked(creds, path)
 }
 
 /// Remove the credentials file. No-op if the file does not exist.
