@@ -301,3 +301,10 @@ async def test_refresh_sends_if_none_match_after_first_call(monkeypatch):
     registry._last_fetch = time.monotonic() - 31
     await registry._refresh()
     assert seen_headers[1].get("If-None-Match") == '"abc"'
+
+
+def test_silero_driver_registered():
+    """The silero TTS driver must resolve to SileroTTS in the driver map."""
+    from registry import get_driver_map
+    from providers.tts_silero import SileroTTS
+    assert get_driver_map()[("tts", "silero")] is SileroTTS
