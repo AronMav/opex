@@ -103,6 +103,14 @@ pub fn build_provider(
             )?;
             Ok(Box::new(provider))
         }
+        #[cfg(feature = "gemini-cloudcode")]
+        "gemini-cloudcode" => {
+            let provider =
+                super::gemini_cloudcode::provider::GeminiCloudCodeProvider::new_from_row(
+                    row, secrets, *timeouts, cancel, opts, overrides,
+                )?;
+            Ok(Box::new(provider))
+        }
         "claude-cli" | "gemini-cli" | "codex-cli" => {
             anyhow::bail!(
                 "build_provider: CLI provider_type `{}` requires a CliContext; use build_cli_provider instead",
