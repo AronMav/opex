@@ -144,6 +144,7 @@ impl LlmProvider for GoogleProvider {
                 .iter()
                 .map(|t| {
                     let mut params = t.input_schema.clone();
+                    request::strip_gemini_unsupported_keys(&mut params);
                     strip_empty_required(&mut params);
                     serde_json::json!({
                         "name": t.name,

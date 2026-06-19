@@ -81,3 +81,27 @@ pub(in crate::agent::providers) fn strip_empty_required(value: &mut serde_json::
         }
     }
 }
+
+/// Recursively strip JSON-Schema keys Gemini's API rejects:
+/// `$defs`, `$ref`, `$schema`, `additionalProperties`, `examples`, `default`.
+/// Mirrors the sanitization done by `gemini_cloudcode::code_assist::schema`
+/// so the REST `google` provider can also send `tool_definitions` without
+/// 400 errors on schemas produced by upstream agents (e.g. MCP tools).
+pub(in crate::agent::providers) fn strip_gemini_unsupported_keys(value: &mut serde_json::Value) {
+    const FORBIDDEN: &[&str] = &[
+        "$defs", "$ref", "$schema",
+        "additionalProperties",
+        "examples", "default",
+        "oneOf", "anyOf", "allOf", "not",
+    ];
+    if let Some(obj) = value.as_object_mut() {
+        obj.retain(|k, _| !FORBIDDEN.contains(&k.as_str()));
+        for v in obj.values_mut() {
+            strip_gemini_unsupported_keys(v);
+        }
+    } else if let Some(arr) = value.as_array_mut() {
+        for v in arr.iter_mut() {
+            strip_gemini_unsupported_keys(v);
+        }
+    }
+}
