@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod client_creds;
+pub mod device_flow;
 pub mod flow;
 pub mod pkce;
 pub mod refresh;
