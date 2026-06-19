@@ -1,8 +1,23 @@
 //! Streaming SSE chunk handling for OpenAI-compatible chat completions.
 //! Accumulates `delta`-shaped chunks into a final `LlmResponse`.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use super::response::ChatUsage;
+
+/// Treat an explicit JSON `null` as `T::default()`.
+///
+/// `#[serde(default)]` alone handles a MISSING field, but not an explicit
+/// `"field": null`. Some OpenAI-compatible backends (e.g. Xiaomi MiMo) emit
+/// `"tool_calls": null` on every streaming chunk instead of omitting the field,
+/// which makes our `Vec<…>`-typed deserialization fail with
+/// `invalid type: null, expected a sequence`.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    T: Default + Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
 
 /// Internal buffer for usage data captured across streaming chunks.
 ///
@@ -52,7 +67,7 @@ pub(super) struct StreamDelta {
     pub(super) content: Option<String>,
     /// DeepSeek extended thinking — must be captured and passed back on subsequent turns.
     pub(super) reasoning_content: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub(super) tool_calls: Vec<StreamToolCallDelta>,
 }
 
