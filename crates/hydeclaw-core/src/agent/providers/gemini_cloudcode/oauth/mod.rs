@@ -5,6 +5,7 @@
 pub mod client_creds;
 pub mod flow;
 pub mod pkce;
+pub mod refresh;
 pub mod storage;
 pub mod types;
 
