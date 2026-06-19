@@ -25,6 +25,10 @@ use tokio::sync::mpsc;
 
 use crate::secrets::SecretsManager;
 
+// Feature-gated provider implementations.
+#[cfg(feature = "gemini-cloudcode")]
+pub mod gemini_cloudcode;
+
 // Concrete provider implementations.
 mod openai;
 pub(crate) use openai::OpenAiCompatibleProvider;
