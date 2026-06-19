@@ -3,7 +3,7 @@
  * Port of crates/hydeclaw-channel/src/channels/telegram.rs
  */
 
-import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
+import { Bot, Context, InlineKeyboard } from "grammy";
 import type { Message } from "grammy/types";
 import type { BridgeHandle, OutboundAction, UserEntry } from "../bridge";
 import type { ChannelDriver } from "../session";
@@ -16,6 +16,46 @@ import * as path from "path";
 /** Builds reply_parameters with allow_sending_without_reply for resilient replies */
 function safeReplyParams(messageId: number | undefined): { message_id: number; allow_sending_without_reply: true } | undefined {
   return messageId ? { message_id: messageId, allow_sending_without_reply: true } : undefined;
+}
+
+/**
+ * Upload a file to Telegram via a manual multipart POST.
+ *
+ * grammy's `InputFile` upload streams the multipart body without a
+ * Content-Length (chunked transfer-encoding). The egress HTTP proxy (xray)
+ * stalls on chunked request bodies — small requests and Content-Length'd
+ * uploads pass, but a chunked file upload hangs forever, so `onAction` never
+ * resolves and the 30s action timeout fires ("voice didn't form"). Building the
+ * body as a `FormData` whose file part is a `Blob` gives a known total size →
+ * Bun's fetch sends Content-Length instead of chunked → the proxy forwards it.
+ * Mirrors `curl -F`, which works through the same proxy.
+ *
+ * `undefined` fields are skipped so we never append empty/stream parts.
+ */
+export async function tgUpload(
+  apiRoot: string,
+  token: string,
+  method: string,
+  fileField: string,
+  filename: string,
+  contentType: string,
+  buffer: Buffer,
+  fields: Record<string, string | undefined>,
+): Promise<void> {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) form.append(key, value);
+  }
+  form.append(fileField, new Blob([buffer], { type: contentType }), filename);
+
+  const resp = await fetch(`${apiRoot}/bot${token}/${method}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new Error(`telegram ${method} failed (${resp.status}): ${body.slice(0, 200)}`);
+  }
 }
 
 const QUEUE_FILE = path.join(process.cwd(), ".pending-queue.json");
@@ -497,7 +537,7 @@ export function createTelegramDriver(
       await bot.stop();
     },
     onAction: async (action: OutboundAction) => {
-      await executeAction(bot, action.actionId, action.action, strings);
+      await executeAction(bot, action.actionId, action.action, apiUrl ?? "https://api.telegram.org", strings);
     },
   };
 }
@@ -936,6 +976,7 @@ async function executeAction(
   bot: Bot,
   actionId: string,
   actionDto: ChannelActionDto,
+  apiRoot: string,
   strings?: Strings,
 ): Promise<void> {
   // ChannelActionDto.params/.context are `unknown` (S6 codegen). Narrow once
@@ -1020,29 +1061,32 @@ async function executeAction(
       }
 
       case "send_voice": {
-        // Core sends raw bytes as base64 (Pi-NAT-friendly: Telegram's bot API
-        // accepts InputFile uploads, so we don't depend on a public URL).
-        // grammy's InputFile is required — passing a web `File` ends up coerced
-        // to a string and Telegram returns "wrong remote file identifier".
+        // Core sends raw bytes as base64. Upload via tgUpload (FormData + Blob,
+        // Content-Length) rather than grammy's InputFile — the latter streams
+        // the body chunked and the egress proxy stalls on it (see tgUpload doc).
         const audioBase64 = action.params.audio_base64 as string | undefined;
         if (!audioBase64) break;
         const buffer = Buffer.from(audioBase64, "base64");
-        await bot.api.sendVoice(chatId, new InputFile(buffer, "voice.ogg"), {
+        const rp = safeReplyParams(messageId);
+        await tgUpload(apiRoot, bot.token, "sendVoice", "voice", "voice.ogg", "audio/ogg", buffer, {
+          chat_id: String(chatId),
           caption: action.params.caption as string | undefined,
-          reply_parameters: safeReplyParams(messageId),
+          reply_parameters: rp ? JSON.stringify(rp) : undefined,
         });
         break;
       }
 
       case "send_photo": {
-        // Same byte-upload contract as send_voice — Core saves to /uploads/ for
-        // UI delivery and additionally streams base64 over the bridge for chats.
+        // Same Content-Length upload contract as send_voice (tgUpload avoids the
+        // chunked-multipart proxy stall). Core also saves to /uploads/ for the UI.
         const imageBase64 = action.params.image_base64 as string | undefined;
         if (!imageBase64) break;
         const buffer = Buffer.from(imageBase64, "base64");
-        await bot.api.sendPhoto(chatId, new InputFile(buffer, "photo.png"), {
+        const rp = safeReplyParams(messageId);
+        await tgUpload(apiRoot, bot.token, "sendPhoto", "photo", "photo.png", "image/png", buffer, {
+          chat_id: String(chatId),
           caption: action.params.caption as string | undefined,
-          reply_parameters: safeReplyParams(messageId),
+          reply_parameters: rp ? JSON.stringify(rp) : undefined,
         });
         break;
       }
