@@ -2,6 +2,8 @@
 // Constants are used by later tasks (Modules 2–4); suppress dead_code until wired up.
 #![allow(dead_code)]
 
+pub mod client_creds;
+pub mod pkce;
 pub mod types;
 
 // OAuth endpoint constants.

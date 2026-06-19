@@ -126,11 +126,15 @@ tracing-opentelemetry = { workspace = true, optional = true }
 ts-rs = { version = "12", optional = true, features = ["chrono-impl", "serde-json-impl", "uuid-impl"] }
 inventory = { version = "0.3", optional = true }
 
+# Cross-platform home-dir lookup (gemini-cloudcode oauth scrape tier).
+# Optional so it is excluded from all non-gemini builds.
+dirs = { version = "5", optional = true }
+
 [features]
 default = []
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 ts-gen = ["dep:ts-rs", "dep:inventory", "hydeclaw-types/ts-gen", "hydeclaw-db/ts-gen"]
-gemini-cloudcode = []
+gemini-cloudcode = ["dep:dirs"]
 
 # Systemd watchdog (Linux-only)
 [target.'cfg(target_os = "linux")'.dependencies]
