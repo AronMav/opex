@@ -1,5 +1,6 @@
 name: tts-service
 type: external
-url: http://your-tts-host:8880/v1
+url: http://localhost:8088
 max_concurrent: 1
-ui_path: http://your-tts-host:8880/docs
+healthcheck: /health
+ui_path: http://localhost:8088/docs
