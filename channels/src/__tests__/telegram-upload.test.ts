@@ -13,7 +13,7 @@ test("tgUpload posts a FormData (Blob file part) to {apiRoot}/bot{token}/{method
     const i = init as RequestInit;
     captured = { url: String(url), method: i.method, body: i.body };
     return new Response('{"ok":true}', { status: 200 });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     await tgUpload(
       "https://api.telegram.org",
@@ -46,7 +46,7 @@ test("tgUpload posts a FormData (Blob file part) to {apiRoot}/bot{token}/{method
 test("tgUpload throws on a non-ok Telegram response", async () => {
   const orig = globalThis.fetch;
   globalThis.fetch = (async () =>
-    new Response("Bad Request: chat not found", { status: 400 })) as typeof fetch;
+    new Response("Bad Request: chat not found", { status: 400 })) as unknown as typeof fetch;
   let threw: Error | null = null;
   try {
     await tgUpload(

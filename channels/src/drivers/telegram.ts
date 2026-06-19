@@ -46,7 +46,10 @@ export async function tgUpload(
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) form.append(key, value);
   }
-  form.append(fileField, new Blob([buffer], { type: contentType }), filename);
+  // `new Uint8Array(buffer)` copies into a plain ArrayBuffer-backed view so it
+  // satisfies `BlobPart` under strict tsc (a Node `Buffer`'s backing store is
+  // `ArrayBufferLike`, which tsc rejects). Runtime behaviour is identical.
+  form.append(fileField, new Blob([new Uint8Array(buffer)], { type: contentType }), filename);
 
   const resp = await fetch(`${apiRoot}/bot${token}/${method}`, {
     method: "POST",
