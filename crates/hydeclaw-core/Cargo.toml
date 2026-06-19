@@ -130,6 +130,7 @@ inventory = { version = "0.3", optional = true }
 default = []
 otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 ts-gen = ["dep:ts-rs", "dep:inventory", "hydeclaw-types/ts-gen", "hydeclaw-db/ts-gen"]
+gemini-cloudcode = []
 
 # Systemd watchdog (Linux-only)
 [target.'cfg(target_os = "linux")'.dependencies]

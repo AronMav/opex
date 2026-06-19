@@ -10,6 +10,7 @@ mod metrics;
 pub mod net;
 mod oauth;
 mod process_manager;
+mod redact;
 mod scheduler;
 mod secrets;
 mod mcp;
