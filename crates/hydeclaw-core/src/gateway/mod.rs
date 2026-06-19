@@ -126,6 +126,9 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::workspace_files::routes()) // /workspace-files/{*path}?sig=&exp=
         .merge(handlers::workspace::routes());      // /api/workspace/*
 
+    #[cfg(feature = "gemini-cloudcode")]
+    let app = app.merge(handlers::google_auth::routes()); // /api/auth/google/*
+
     // Auth middleware — REQUIRED. Refuse to start without a token.
     // `.set(...).ok()` is idempotent: second router construction (tests,
     // hot-reload) keeps the original Arc — no allocation delta.
