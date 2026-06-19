@@ -560,6 +560,7 @@ mod tests {
                 id: id.into(),
                 name: name.to_string(),
                 arguments: serde_json::json!({}),
+                thought_signature: None,
             })
             .collect();
         Message {

@@ -64,6 +64,7 @@ impl MockTurn {
                 id: hydeclaw_types::ids::ToolCallId::from(id.into()),
                 name: name.into(),
                 arguments,
+                thought_signature: None,
             }],
             finish_reason: Some("tool_calls".to_string()),
         }

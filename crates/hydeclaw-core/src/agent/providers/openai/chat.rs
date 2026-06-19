@@ -123,6 +123,7 @@ impl OpenAiCompatibleProvider {
                     id: hydeclaw_types::ids::ToolCallId::from(tc.id),
                     name: tool_name,
                     arguments,
+                    thought_signature: None,
                 }
             })
             .collect();

@@ -99,6 +99,7 @@ fn rewrite_one(
         id: tc.id.clone(),
         name: inner_name.to_string(),
         arguments: inner_args,
+        thought_signature: None,
     })
 }
 
@@ -117,6 +118,7 @@ mod tests {
             id: hydeclaw_types::ids::ToolCallId::new(format!("call_{name}")),
             name: name.to_string(),
             arguments: args,
+            thought_signature: None,
         }
     }
 

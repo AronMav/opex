@@ -55,6 +55,12 @@ pub struct ToolCall {
     pub id: ToolCallId,
     pub name: String,
     pub arguments: serde_json::Value,
+    /// Gemini 3.x thinking mode: each `functionCall` part carries an opaque
+    /// `thought_signature` (base64 string) that the model expects to receive
+    /// back on the next turn. Other providers leave it `None`. Persisted in
+    /// `messages.tool_calls` JSONB; round-trips through history reconstruction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 // ── Tasks ──
@@ -573,6 +579,7 @@ mod tests {
             id: "call-abc123".into(),
             name: "get_weather".into(),
             arguments: json!({"city": "Samara", "units": "metric"}),
+            thought_signature: None,
         };
         let json = serde_json::to_string(&tc).unwrap();
         let back: ToolCall = serde_json::from_str(&json).unwrap();
@@ -592,6 +599,7 @@ mod tests {
                 "options": {"limit": 10, "filters": ["a", "b"]},
                 "flag": true
             }),
+            thought_signature: None,
         };
         let json = serde_json::to_string(&tc).unwrap();
         let back: ToolCall = serde_json::from_str(&json).unwrap();
@@ -610,6 +618,7 @@ mod tests {
                     id: "tc-1".into(),
                     name: "search".into(),
                     arguments: json!({"q": "rust"}),
+                    thought_signature: None,
                 },
             ]),
             tool_call_id: None,
@@ -656,6 +665,7 @@ mod tests {
                     id: "tc-llm".into(),
                     name: "memory".into(),
                     arguments: json!({"query": "test"}),
+                    thought_signature: None,
                 },
             ],
             usage: Some(TokenUsage {

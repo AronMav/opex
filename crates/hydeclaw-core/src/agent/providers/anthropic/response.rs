@@ -60,6 +60,7 @@ pub(in crate::agent::providers) fn parse_anthropic_response(api_resp: AnthropicR
                     id: hydeclaw_types::ids::ToolCallId::from(id),
                     name,
                     arguments: input,
+                    thought_signature: None,
                 });
             }
             AnthropicContentBlock::Other => {}

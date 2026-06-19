@@ -258,6 +258,7 @@ mod tests {
                 id: ToolCallId::from(id.to_string()),
                 name: name.to_string(),
                 arguments: json!({"q": "test"}),
+                thought_signature: None,
             })
             .collect();
         Message {

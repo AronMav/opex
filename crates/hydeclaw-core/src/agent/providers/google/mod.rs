@@ -214,6 +214,7 @@ impl LlmProvider for GoogleProvider {
                                     id: hydeclaw_types::ids::ToolCallId::new(format!("call_{i}")),
                                     name: fc.name,
                                     arguments: fc.args.unwrap_or(serde_json::Value::Object(Default::default())),
+                                    thought_signature: part.thought_signature,
                                 });
                             }
                         }

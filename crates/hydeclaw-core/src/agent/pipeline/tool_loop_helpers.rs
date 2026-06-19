@@ -109,6 +109,7 @@ mod tests {
             id: id.into(),
             name: name.to_string(),
             arguments: serde_json::Value::Null,
+            thought_signature: None,
         }
     }
 

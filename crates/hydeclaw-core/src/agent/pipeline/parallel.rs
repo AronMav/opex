@@ -1101,6 +1101,7 @@ mod sequential_enrichment_tests {
             id: ToolCallId::from(id.to_string()),
             name: name.to_string(),
             arguments: serde_json::json!({"input": "hello"}),
+            thought_signature: None,
         }
     }
 
@@ -1247,6 +1248,7 @@ mod loop_key_tests {
             id: "test".into(),
             name: name.to_string(),
             arguments: args,
+            thought_signature: None,
         }
     }
 
