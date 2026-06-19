@@ -1,0 +1,24 @@
+{
+  "response": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "The Rust ownership model ensures memory safety without a garbage collector. Each value has exactly one owner, and when the owner goes out of scope the value is dropped."
+            }
+          ]
+        },
+        "finishReason": "STOP",
+        "index": 0,
+        "safetyRatings": []
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 18,
+      "candidatesTokenCount": 37,
+      "totalTokenCount": 55
+    }
+  }
+}

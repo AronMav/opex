@@ -1,0 +1,27 @@
+{
+  "response": {
+    "candidates": [
+      {
+        "content": {
+          "role": "model",
+          "parts": [
+            {
+              "thoughtSignature": "CoIBCgIYAhKBAQoFdGhpbmsCGAESe0kgbmVlZCB0byBhbmFseXplIHRoZSBwcm9ibGVtIGNhcmVmdWxseS4gVGhlIHVzZXIgaXMgYXNraW5nIGFib3V0IFJ1c3Qgb3duZXJzaGlwLCB3aGljaCBpcyBhIGNvcmUgY29uY2VwdC4="
+            },
+            {
+              "text": "Rust's ownership system is one of its most distinctive features. It enforces memory safety at compile time through three rules: each value has one owner, ownership can be transferred (moved), and when the owner goes out of scope the value is freed."
+            }
+          ]
+        },
+        "finishReason": "STOP",
+        "index": 0,
+        "safetyRatings": []
+      }
+    ],
+    "usageMetadata": {
+      "promptTokenCount": 18,
+      "candidatesTokenCount": 62,
+      "totalTokenCount": 80
+    }
+  }
+}
