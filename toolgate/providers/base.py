@@ -93,3 +93,15 @@ class EmbeddingProvider(Protocol):
         texts: list[str],
         model: str | None = None,
     ) -> list[list[float]]: ...
+
+
+@runtime_checkable
+class WebSearchProvider(Protocol):
+    name: str
+
+    async def search(
+        self,
+        http: httpx.AsyncClient,
+        query: str,
+        max_results: int = 5,
+    ) -> list[dict]: ...

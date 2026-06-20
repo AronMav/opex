@@ -97,7 +97,7 @@ async def test_health_reports_degraded_and_capabilities(monkeypatch):
     body = resp.json()
     assert body["degraded"] is True
     assert body["loaded_providers"] == 0
-    assert set(body["capabilities"].keys()) == {"stt", "tts", "vision", "imagegen", "embedding"}
+    assert set(body["capabilities"].keys()) == {"stt", "tts", "vision", "imagegen", "embedding", "websearch"}
     assert all(v is False for v in body["capabilities"].values())
 
 
