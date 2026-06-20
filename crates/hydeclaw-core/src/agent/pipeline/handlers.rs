@@ -47,10 +47,12 @@ pub async fn handle_workspace_write(
             let url = crate::uploads::mint_workspace_file_url(&rel_for_url, &key, ttl_secs);
             let mime = crate::uploads::guess_mime_from_extension(filename);
             let marker_json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
+            let sec_note = crate::tools::code_smell::warning_for(filename, &content);
             format!(
-                "Successfully updated {} ({}B)\n{}{}",
+                "Successfully updated {} ({}B){}\n{}{}",
                 filename,
                 content.len(),
+                sec_note,
                 crate::agent::engine::FILE_PREFIX,
                 marker_json,
             )
@@ -160,9 +162,11 @@ pub async fn handle_workspace_edit(
             let url = crate::uploads::mint_workspace_file_url(&rel_for_url, &key, ttl_secs);
             let mime = crate::uploads::guess_mime_from_extension(filename);
             let marker_json = serde_json::json!({"url": url, "mediaType": mime}).to_string();
+            let sec_note = crate::tools::code_smell::warning_for(filename, new_text);
             format!(
-                "Successfully edited '{}'\n{}{}",
+                "Successfully edited '{}'{}\n{}{}",
                 filename,
+                sec_note,
                 crate::agent::engine::FILE_PREFIX,
                 marker_json,
             )
