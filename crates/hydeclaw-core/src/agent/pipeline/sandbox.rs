@@ -28,6 +28,18 @@ pub async fn handle_code_exec(
     if code.is_empty() {
         return "Error: 'code' is required".to_string();
     }
+
+    // Pre-exec guard: block dangerous commands on the host path (full FS),
+    // warn but allow in the isolated Docker sandbox.
+    let is_host = is_base && sandbox.is_none();
+    let warn_prefix = match crate::tools::command_security::command_action(
+        crate::tools::command_security::scan_command(code),
+        is_host,
+    ) {
+        crate::tools::command_security::CmdAction::Block(msg) => return msg,
+        crate::tools::command_security::CmdAction::Warn(prefix) => prefix,
+        crate::tools::command_security::CmdAction::Allow => String::new(),
+    };
     let language = args
         .get("language")
         .and_then(|v| v.as_str())
@@ -112,7 +124,7 @@ pub async fn handle_code_exec(
     if after.truncated {
         out.push_str("\n⚠️ Artifact snapshot truncated — some created/modified files may not appear above (limit: 200 files / 100 MB).");
     }
-    out
+    format!("{warn_prefix}{out}")
 }
 
 // ── Host code execution (base agents only) ──────────────────────────────────

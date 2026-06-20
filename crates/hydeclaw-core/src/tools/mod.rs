@@ -1,3 +1,4 @@
+pub mod command_security;
 pub mod content_security;
 pub mod embedding;
 pub mod mcp_workspace;
