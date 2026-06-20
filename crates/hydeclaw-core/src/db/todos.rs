@@ -174,7 +174,7 @@ mod tests {
         sid
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn replace_then_list_roundtrip(pool: PgPool) -> sqlx::Result<()> {
         let sid = seed_session(&pool).await;
         let items = vec![
@@ -187,7 +187,7 @@ mod tests {
         Ok(())
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn merge_upserts_by_id(pool: PgPool) -> sqlx::Result<()> {
         let sid = seed_session(&pool).await;
         replace_todos(&pool, sid, &[TodoItem { id: "1".into(), content: "a".into(), status: "pending".into() }]).await.unwrap();
