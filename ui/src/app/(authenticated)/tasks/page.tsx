@@ -488,7 +488,7 @@ export default function CronPage() {
                 <div>
                   <label className="text-xs text-muted-foreground">{t("cron.tool_allow")}</label>
                   <Textarea
-                    placeholder={"memory_search\nsearxng_search"}
+                    placeholder={"memory_search\nsearch_web"}
                     value={toolPolicyAllow}
                     onChange={(e) => setToolPolicyAllow(e.target.value)}
                     rows={3}
