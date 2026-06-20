@@ -10,12 +10,15 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from playwright.async_api import async_playwright, Browser, Page
 
+from automation_actions import dispatch_action
+
 browser: Browser | None = None
 pw_instance = None
 
 # ── Session management ────────────────────────────────────────────────────────
 sessions: dict[str, Page] = {}
 session_last_used: dict[str, float] = {}
+session_dialog: dict[str, dict] = {}
 SESSION_TTL = 300  # 5 minutes idle timeout
 CLEANUP_INTERVAL = 30  # seconds
 
@@ -48,6 +51,22 @@ def get_session_page(session_id: str) -> Page:
         raise HTTPException(404, f"Session {session_id} not found")
     touch_session(session_id)
     return sessions[session_id]
+
+
+def _make_dialog_handler(sid: str):
+    """JS-dialog handler: by default accept dialogs (recording the message) so
+    automation never hangs. `set_dialog` can switch to dismiss / set prompt text."""
+    async def _handler(dialog):
+        st = session_dialog.setdefault(sid, {"accept": True, "prompt_text": None, "last": None})
+        st["last"] = dialog.message
+        try:
+            if st.get("accept", True):
+                await dialog.accept(st.get("prompt_text") or "")
+            else:
+                await dialog.dismiss()
+        except Exception:
+            pass
+    return _handler
 
 
 @asynccontextmanager
@@ -201,6 +220,13 @@ class AutomationRequest(BaseModel):
     timeout: int = Field(default=10, ge=1, le=60)
     fields: dict | None = None
     full_page: bool = False
+    key: str | None = None
+    dx: int | None = None
+    dy: int | None = None
+    to: str | None = None
+    to_selector: str | None = None
+    accept: bool | None = None
+    prompt_text: str | None = None
 
 
 @app.post("/automation")
@@ -216,6 +242,8 @@ async def automation(req: AutomationRequest):
             user_agent=DEFAULT_USER_AGENT,
         )
         sessions[sid] = page
+        page.on("dialog", _make_dialog_handler(sid))
+        session_dialog[sid] = {"accept": True, "prompt_text": None, "last": None}
         touch_session(sid)
         return {"session_id": sid, "status": "created"}
 
@@ -225,87 +253,16 @@ async def automation(req: AutomationRequest):
 
     page = get_session_page(req.session_id)
 
-    # ── navigate ──────────────────────────────────────────────────────────
-    if action == "navigate":
-        if not req.url:
-            raise HTTPException(400, "url is required")
-        await page.goto(req.url, wait_until="domcontentloaded", timeout=req.timeout * 1000)
-        title = await page.title() or ""
-        return {"status": "navigated", "url": req.url, "title": title}
-
-    # ── click ─────────────────────────────────────────────────────────────
-    if action == "click":
-        if not req.selector:
-            raise HTTPException(400, "selector is required")
-        await page.click(req.selector, timeout=req.timeout * 1000)
-        return {"status": "clicked", "selector": req.selector}
-
-    # ── type ──────────────────────────────────────────────────────────────
-    if action == "type":
-        if not req.selector or req.text is None:
-            raise HTTPException(400, "selector and text are required")
-        await page.fill(req.selector, req.text)
-        return {"status": "typed", "selector": req.selector}
-
-    # ── fill (multiple fields) ────────────────────────────────────────────
-    if action == "fill":
-        if not req.fields:
-            raise HTTPException(400, "fields dict is required")
-        for sel, val in req.fields.items():
-            await page.fill(sel, str(val))
-        return {"status": "filled", "fields_count": len(req.fields)}
-
-    # ── screenshot ────────────────────────────────────────────────────────
-    if action == "screenshot":
-        png_bytes = await page.screenshot(full_page=req.full_page)
-        return Response(content=png_bytes, media_type="image/png")
-
-    # ── wait ──────────────────────────────────────────────────────────────
-    if action == "wait":
-        if not req.selector:
-            raise HTTPException(400, "selector is required")
-        await page.wait_for_selector(req.selector, timeout=req.timeout * 1000)
-        return {"status": "found", "selector": req.selector}
-
-    # ── text ──────────────────────────────────────────────────────────────
-    if action == "text":
-        if req.selector:
-            el = await page.query_selector(req.selector)
-            if not el:
-                return {"text": "", "error": f"Selector '{req.selector}' not found"}
-            text = await el.inner_text()
-        else:
-            text = await page.inner_text("body")
-        # Truncate
-        if len(text) > 8000:
-            text = text[:8000] + "..."
-        return {"text": text}
-
-    # ── evaluate ──────────────────────────────────────────────────────────
-    if action == "evaluate":
-        if not req.js:
-            raise HTTPException(400, "js is required")
-        result = await page.evaluate(req.js)
-        return {"result": result}
-
-    # ── content (full HTML + text) ────────────────────────────────────────
-    if action == "content":
-        html = await page.content()
-        text = await page.inner_text("body")
-        if len(html) > 50000:
-            html = html[:50000] + "..."
-        if len(text) > 8000:
-            text = text[:8000] + "..."
-        return {"html": html, "text": text, "url": page.url}
-
-    # ── close ─────────────────────────────────────────────────────────────
+    # ── close (local: pops session state) ─────────────────────────────────
     if action == "close":
         sessions.pop(req.session_id, None)
         session_last_used.pop(req.session_id, None)
+        session_dialog.pop(req.session_id, None)
         await page.close()
         return {"status": "closed", "session_id": req.session_id}
 
-    raise HTTPException(400, f"Unknown action: {action}")
+    # All other actions are handled by the testable dispatcher.
+    return await dispatch_action(page, req, req.session_id, session_dialog)
 
 
 @app.get("/health")
