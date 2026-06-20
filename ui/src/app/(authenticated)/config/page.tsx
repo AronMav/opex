@@ -56,7 +56,7 @@ function getFieldDescription(
 
 const ALL_ALERT_EVENTS = ["down", "restart", "recovery", "resource"] as const;
 const ALERT_EVENT_LABELS: Record<string, string> = {
-  down: "Service down", restart: "Restart", recovery: "Recovery", resource: "Resource alert",
+  down: "config.alert_service_down", restart: "config.alert_restart", recovery: "config.alert_recovery", resource: "config.alert_resource",
 };
 
 export default function ConfigPage() {
@@ -537,9 +537,9 @@ export default function ConfigPage() {
                 <div className="neu-flat p-4 md:p-5">
                   <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
                     <Wrench className="h-4 w-4 text-primary" />
-                    <h3 className="text-sm font-semibold text-foreground">curator</h3>
+                    <h3 className="text-sm font-semibold text-foreground">{t("config.section_curator")}</h3>
                     <div className="ml-auto flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">{curatorEnabled ? "enabled" : "disabled"}</span>
+                      <span className="text-xs text-muted-foreground">{curatorEnabled ? t("common.enabled") : t("common.disabled")}</span>
                       <Switch checked={curatorEnabled} onCheckedChange={setCuratorEnabled} />
                     </div>
                   </div>
@@ -565,7 +565,7 @@ export default function ConfigPage() {
                     <Field label="agent_name" labelClassName="font-mono text-xs">
                       <Select value={editCuratorAgent} onValueChange={setEditCuratorAgent}>
                         <SelectTrigger className="h-9 font-mono text-sm">
-                          <SelectValue placeholder="Select agent…" />
+                          <SelectValue placeholder={t("config.select_agent")} />
                         </SelectTrigger>
                         <SelectContent>
                           {agents.map((a) => (
@@ -584,13 +584,13 @@ export default function ConfigPage() {
                 <div className="neu-flat p-4 md:p-5">
                   <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
                     <Bell className="h-4 w-4 text-primary" />
-                    <h3 className="text-sm font-semibold text-foreground">alerting</h3>
+                    <h3 className="text-sm font-semibold text-foreground">{t("config.section_alerting")}</h3>
                   </div>
                   <div className="space-y-4">
                     <div className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Channels</p>
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("config.section_channels")}</p>
                       {alertChannels.length === 0 ? (
-                        <p className="text-xs text-muted-foreground italic">No channels configured</p>
+                        <p className="text-xs text-muted-foreground italic">{t("config.no_channels")}</p>
                       ) : (
                         <div className="flex flex-col gap-1.5">
                           {alertChannels.map((ch) => {
@@ -611,7 +611,7 @@ export default function ConfigPage() {
                       )}
                     </div>
                     <div className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Events</p>
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("config.section_events")}</p>
                       <div className="flex flex-col gap-1.5">
                         {ALL_ALERT_EVENTS.map((event) => {
                           const selected = alertSettings.alert_events.includes(event);
@@ -619,7 +619,7 @@ export default function ConfigPage() {
                             <Button key={event} variant={selected ? "default" : "outline"} size="sm"
                               onClick={() => toggleAlertEvent(event)}
                               className="w-full justify-start text-xs">
-                              {ALERT_EVENT_LABELS[event] ?? event}
+                              {t(ALERT_EVENT_LABELS[event] as TranslationKey)}
                             </Button>
                           );
                         })}

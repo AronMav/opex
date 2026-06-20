@@ -21,6 +21,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import type { AgentDetail } from "@/types/api";
 
@@ -166,7 +167,7 @@ export default function AccessPage() {
       setRemoveTarget(null);
       await loadAccess(agents);
     } catch (e) {
-      toast.error(`Failed to revoke: ${e}`);
+      toast.error(t("access.revoke_error", { error: String(e) }));
     }
   };
 
@@ -196,7 +197,13 @@ export default function AccessPage() {
 
       {error && <ErrorBanner error={error} />}
 
-      {!agentsLoading && agents.length === 0 ? (
+      {agentsLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-20 rounded-xl" />
+          ))}
+        </div>
+      ) : !agentsLoading && agents.length === 0 ? (
         <EmptyState icon={ShieldAlert} text={t("access.no_agents")} height="h-40" />
       ) : (
         <div className="space-y-3">

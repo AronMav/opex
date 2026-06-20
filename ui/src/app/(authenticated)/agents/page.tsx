@@ -18,7 +18,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { AgentInfo, AgentDetail, ChannelRow, SecretInfo, Provider } from "@/types/api";
-import { Settings, LogOut, Bot } from "lucide-react";
+import { Settings, LogOut, Bot, Search } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -287,6 +287,7 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [agentSearch, setAgentSearch] = useState("");
   const [error, setError] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editName, setEditName] = useState<string | null>(null);
@@ -307,8 +308,7 @@ export default function AgentsPage() {
     try {
       const data = await apiGet<{ voices: { id: string; name: string; description?: string }[] }>("/api/tts/voices");
       setVoices(data.voices || []);
-    } catch (e) {
-      console.warn("[agents] failed to load voices:", e);
+    } catch {
       setVoices([]);
     }
   }, []);
@@ -322,8 +322,7 @@ export default function AgentsPage() {
       const data = await apiGet<{ tools: string[] }>("/api/tool-definitions");
       setToolNames((data.tools || []).sort());
       toolsLoadedRef.current = true;
-    } catch (e) {
-      console.warn("[agents] failed to load tools:", e);
+    } catch {
       setToolNames([]);
     }
   }, []);
@@ -337,8 +336,7 @@ export default function AgentsPage() {
       const data = await apiGet<{ secrets: SecretInfo[] }>("/api/secrets");
       setSecretNames((data.secrets || []).map((s) => s.name).sort());
       secretsLoadedRef.current = true;
-    } catch (e) {
-      console.warn("[agents] failed to load secrets:", e);
+    } catch {
       setSecretNames([]);
     }
   }, []);
@@ -378,8 +376,7 @@ export default function AgentsPage() {
     try {
       const data = await apiGet<ChannelRow[]>(`/api/agents/${name}/channels`);
       setChannels(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.warn("[agents] failed to load channels:", e);
+    } catch {
       setChannels([]);
     }
   }, []);
@@ -548,13 +545,25 @@ export default function AgentsPage() {
             {t("agents.subtitle")}
           </span>
         </div>
-        <Button
-          size="lg"
-          onClick={openCreate}
-          className="w-full md:w-auto font-semibold"
-        >
-          {t("agents.new_agent")}
-        </Button>
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1 md:w-48">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+            <input
+              type="text"
+              value={agentSearch}
+              onChange={(e) => setAgentSearch(e.target.value)}
+              placeholder={t("chat.search_sessions")}
+              className="w-full h-9 pl-8 pr-3 rounded-lg border border-border bg-background text-sm text-foreground outline-none focus:border-primary/40 transition-colors placeholder:text-muted-foreground/40"
+            />
+          </div>
+          <Button
+            size="lg"
+            onClick={openCreate}
+            className="shrink-0 font-semibold"
+          >
+            {t("agents.new_agent")}
+          </Button>
+        </div>
       </div>
 
       {error && <ErrorBanner error={error} />}
@@ -569,7 +578,7 @@ export default function AgentsPage() {
         <EmptyState icon={Bot} text={t("agents.no_active_agents")} height="h-64" className="rounded-2xl" />
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {agents.map((a) => (
+          {agents.filter((a) => !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase())).map((a) => (
             <div key={a.name} className="group neu-card neu-hover p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col">
               <div className="flex items-start gap-3 mb-4 min-w-0">
                 <div className="relative shrink-0">

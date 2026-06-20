@@ -20,7 +20,7 @@ import {
 import {
   BookOpen, Wrench, Zap, Trash2, RefreshCw, Tag,
   Plus, Pencil, ArrowLeft, Save, FileText, History, Archive, ArchiveRestore,
-  Lock, LockOpen,
+  Lock, LockOpen, Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -55,23 +55,24 @@ type StateFilter = "all" | "active" | "stale" | "archived";
 // ── State badge helper ─────────────────────────────────────────────────────
 
 function StateBadge({ state }: { state: SkillEntry["state"] }) {
+  const { t } = useTranslation();
   if (state === "active") {
     return (
       <Badge className="text-[10px] px-1.5 py-0 bg-green-500/15 text-green-700 dark:text-green-400 border-green-500/30 shrink-0">
-        active
+        {t("skills.state_active")}
       </Badge>
     );
   }
   if (state === "stale") {
     return (
       <Badge className="text-[10px] px-1.5 py-0 bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30 shrink-0">
-        stale
+        {t("skills.state_stale")}
       </Badge>
     );
   }
   return (
     <Badge className="text-[10px] px-1.5 py-0 bg-muted text-muted-foreground border-border/60 shrink-0">
-      archived
+      {t("skills.state_archived")}
     </Badge>
   );
 }
@@ -79,6 +80,7 @@ function StateBadge({ state }: { state: SkillEntry["state"] }) {
 // ── Curator decision badge ─────────────────────────────────────────────────
 
 function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefined }) {
+  const { t } = useTranslation();
   if (!decision || decision.action === "archive") return null;
 
   if (decision.action === "reject") {
@@ -87,7 +89,7 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
         title={decision.reason ?? ""}
         className="text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20 shrink-0 cursor-help"
       >
-        Curator: rejected
+        {t("skills.curator_rejected")}
       </Badge>
     );
   }
@@ -101,7 +103,7 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
         title={decision.reason ?? ""}
         className="text-[10px] px-1.5 py-0 bg-muted text-muted-foreground border-border/50 shrink-0 cursor-help"
       >
-        Curator: fixed · {date}
+        {t("skills.curator_fixed")} · {date}
       </Badge>
     );
   }
@@ -112,9 +114,10 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
 // ── Pin badge ──────────────────────────────────────────────────────────────
 
 function PinBadge() {
+  const { t } = useTranslation();
   return (
     <Badge className="text-[10px] px-1.5 py-0 bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20 shrink-0">
-      pinned
+      {t("skills.badge_pinned")}
     </Badge>
   );
 }
@@ -122,6 +125,7 @@ function PinBadge() {
 // ── Skill history sheet ────────────────────────────────────────────────────
 
 function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose: () => void }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading } = useSkillVersions(skillName);
   const versions = data?.versions ?? [];
@@ -153,7 +157,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
         <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
           <SheetHeader className="mb-4">
             <SheetTitle className="font-mono text-sm">{skillName}</SheetTitle>
-            <SheetDescription>Version history — click a version to view content</SheetDescription>
+            <SheetDescription>{t("skills.version_description")}</SheetDescription>
           </SheetHeader>
 
           {isLoading ? (
@@ -163,7 +167,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
               ))}
             </div>
           ) : versions.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">No version history yet.</p>
+            <p className="text-sm text-muted-foreground py-8 text-center">{t("skills.no_versions")}</p>
           ) : (
             <div className="space-y-2">
               {versions.map((v) => {
@@ -210,7 +214,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                             onClick={() => setConfirmRestore(v.id)}
                           >
                             <ArchiveRestore className="h-3 w-3 mr-1" />
-                            Restore
+                            {t("skills.restore")}
                           </Button>
                         </div>
                         <pre className="p-3 text-[11px] font-mono text-foreground/80 overflow-x-auto max-h-80 overflow-y-auto bg-muted/10 whitespace-pre-wrap break-words">
@@ -227,7 +231,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
           {curatorHistory.length > 0 && (
             <div className="mt-6">
               <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-                Curator History
+                {t("skills.curator_history")}
               </h3>
               <div className="space-y-1.5">
                 {curatorHistory.map((d) => (
@@ -263,14 +267,13 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
       <AlertDialog open={!!confirmRestore} onOpenChange={(o) => { if (!o) setConfirmRestore(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Restore this version?</AlertDialogTitle>
+            <AlertDialogTitle>{t("skills.restore_confirm_title")}</AlertDialogTitle>
             <AlertDialogDescription>
-              The current skill content will be saved as a snapshot before being replaced.
-              You can undo by restoring from history again.
+              {t("skills.restore_confirm_desc")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => confirmRestore && handleRestore(confirmRestore)}
             >
@@ -286,6 +289,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
 // ── Curator widget ─────────────────────────────────────────────────────────
 
 function CuratorWidget() {
+  const { t } = useTranslation();
   const { data: status } = useCuratorStatus();
   const qc = useQueryClient();
   const [running, setRunning] = useState(false);
@@ -298,7 +302,7 @@ function CuratorWidget() {
     setRunning(true);
     try {
       await apiPost("/api/curator/run");
-      toast.success("Curator run started");
+      toast.success(t("skills.curator_run_started"));
       qc.invalidateQueries({ queryKey: qk.curatorStatus });
       qc.invalidateQueries({ queryKey: qk.curatorRuns });
     } catch (e) {
@@ -311,14 +315,14 @@ function CuratorWidget() {
   return (
     <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
       <div className="flex flex-col xs:flex-row xs:items-center gap-1 xs:gap-3 text-sm min-w-0">
-        <span className="font-medium shrink-0">Curator</span>
+        <span className="font-medium shrink-0">{t("skills.curator_label")}</span>
         <span className="text-muted-foreground text-xs truncate">
-          Last run: {lastRun} &middot; {status.last_phase1} transitions &middot; {status.last_phase2} repairs &middot; {status.last_phase3} LLM
+          {t("skills.curator_last_run", { time: lastRun })} &middot; {status.last_phase1} transitions &middot; {status.last_phase2} repairs &middot; {status.last_phase3} LLM
         </span>
       </div>
       <Button size="sm" variant="outline" onClick={runNow} disabled={running} className="shrink-0 self-end sm:self-auto">
         <RefreshCw className={`h-3 w-3 ${running ? "animate-spin" : ""}`} />
-        Run now
+        {t("skills.curator_run_now")}
       </Button>
     </div>
   );
@@ -334,6 +338,7 @@ export default function SkillsPage() {
   const { data: curatorDecisions } = useCuratorDecisions();
 
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
+  const [skillSearch, setSkillSearch] = useState("");
   const [deletePending, setDeletePending] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [archivePending, setArchivePending] = useState<string | null>(null);
@@ -345,9 +350,10 @@ export default function SkillsPage() {
   const [form, setForm] = useState<SkillForm>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
 
-  const skills = stateFilter === "all"
+  const skills = (stateFilter === "all"
     ? allSkills
-    : allSkills.filter((s) => s.state === stateFilter);
+    : allSkills.filter((s) => s.state === stateFilter)
+  ).filter((s) => !skillSearch || s.name.toLowerCase().includes(skillSearch.toLowerCase()));
 
   const handleDelete = async (skillName: string) => {
     setDeletePending(skillName);
@@ -581,7 +587,7 @@ export default function SkillsPage() {
       </div>
 
       {/* State filter */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 flex-wrap">
         {STATE_FILTERS.map((f) => (
           <Button
             key={f.value}
@@ -598,6 +604,18 @@ export default function SkillsPage() {
             )}
           </Button>
         ))}
+      </div>
+
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+        <input
+          type="text"
+          value={skillSearch}
+          onChange={(e) => setSkillSearch(e.target.value)}
+          placeholder={t("chat.search_sessions")}
+          className="w-full h-9 pl-8 pr-3 rounded-lg border border-border bg-background text-sm text-foreground outline-none focus:border-primary/40 transition-colors placeholder:text-muted-foreground/40"
+        />
       </div>
 
       {/* Curator widget */}

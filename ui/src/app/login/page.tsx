@@ -6,7 +6,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { useTranslation } from "@/hooks/use-translation";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Bot } from "lucide-react";
+import { Bot, Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -15,6 +15,7 @@ export default function LoginPage() {
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showToken, setShowToken] = useState(false);
 
   // URL-based token login removed for security:
   // tokens in URLs leak via browser history, nginx logs, and Referer headers.
@@ -64,15 +65,26 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="space-y-2">
-              <Input
-                type="password"
-                placeholder={t("login.enter_token")}
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                autoFocus
-                disabled={loading}
-                className="h-12 border-border bg-background font-mono text-sm placeholder:text-muted-foreground/50 focus:border-primary/40 rounded-xl neu-inset"
-              />
+              <div className="relative">
+                <Input
+                  type={showToken ? "text" : "password"}
+                  placeholder={t("login.enter_token")}
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  autoFocus
+                  disabled={loading}
+                  className="h-12 border-border bg-background font-mono text-sm placeholder:text-muted-foreground/50 focus:border-primary/40 rounded-xl neu-inset pr-12"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowToken((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                  aria-label={t("login.show_token")}
+                  tabIndex={-1}
+                >
+                  {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
 
             {error && (
