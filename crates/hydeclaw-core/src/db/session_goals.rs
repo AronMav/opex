@@ -53,7 +53,8 @@ pub async fn upsert(db: &PgPool, session_id: Uuid, goal_text: &str, max_turns: i
         "INSERT INTO session_goals (session_id, goal_text, status, turn_count, max_turns)
          VALUES ($1, $2, 'active', 0, $3)
          ON CONFLICT (session_id) DO UPDATE SET goal_text = EXCLUDED.goal_text,
-           status = 'active', turn_count = 0, max_turns = EXCLUDED.max_turns, updated_at = now()",
+           status = 'active', turn_count = 0, max_turns = EXCLUDED.max_turns,
+           last_verdict = NULL, consecutive_judge_failures = 0, updated_at = now()",
     )
     .bind(session_id)
     .bind(goal_text)
@@ -167,6 +168,26 @@ mod tests {
         assert_eq!(get(&pool, sid).await.unwrap().unwrap().status, "done");
         clear(&pool, sid).await.unwrap();
         assert!(get(&pool, sid).await.unwrap().is_none());
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn upsert_resets_verdict_and_failures(pool: PgPool) -> sqlx::Result<()> {
+        let sid = seed_session(&pool).await;
+        upsert(&pool, sid, "g1", 5).await.unwrap();
+        record_verdict(&pool, sid, "continue", true).await.unwrap();
+        bump_turn(&pool, sid).await.unwrap();
+        let before = get(&pool, sid).await.unwrap().unwrap();
+        assert_eq!(before.consecutive_judge_failures, 1);
+        assert_eq!(before.last_verdict.as_deref(), Some("continue"));
+        // Re-setting the goal must start fresh counters.
+        upsert(&pool, sid, "g2", 9).await.unwrap();
+        let after = get(&pool, sid).await.unwrap().unwrap();
+        assert_eq!(after.goal_text, "g2");
+        assert_eq!(after.turn_count, 0);
+        assert_eq!(after.max_turns, 9);
+        assert_eq!(after.consecutive_judge_failures, 0);
+        assert_eq!(after.last_verdict, None);
         Ok(())
     }
 }
