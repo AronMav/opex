@@ -1,3 +1,8 @@
+# Toolgate (media hub: STT/Vision/TTS/ImageGen/Embeddings) base URL.
+# Read by the web media endpoints (api_media_transcribe / describe / imagegen);
+# without it those return 503 "… not configured" even though toolgate is running.
+toolgate_url = "http://localhost:9011"
+
 [gateway]
 listen = "0.0.0.0:18789"
 auth_token_env = "HYDECLAW_AUTH_TOKEN"
