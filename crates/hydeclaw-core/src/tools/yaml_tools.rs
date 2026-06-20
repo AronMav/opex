@@ -2557,6 +2557,49 @@ graphql:
         assert_eq!(parsed["description"], "Weekly sync");
     }
 
+    #[tokio::test]
+    async fn search_web_body_template_omits_optional_params_when_absent() {
+        // Regression: search_web.yaml body_template must not leak literal {{max_results}}
+        // or {{provider}} when the model omits those optional params.
+        use std::collections::HashMap;
+        let resolver = MapResolver { map: HashMap::new() };
+        let mut params = serde_json::Map::new();
+        params.insert("query".to_string(), serde_json::Value::String("rust".to_string()));
+        // max_results and provider intentionally absent.
+
+        let template = r#"{"query": "{{query}}"{{#if max_results}}, "max_results": {{max_results}}{{/if}}{{#if provider}}, "provider": "{{provider}}"{{/if}}}"#;
+        let rendered = render_body_template(template, &params, Some(&resolver)).await;
+
+        assert!(
+            !rendered.contains("{{"),
+            "literal template leak in rendered body: {rendered}"
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&rendered)
+            .unwrap_or_else(|e| panic!("rendered body is not valid JSON: {e} — got: {rendered}"));
+        assert_eq!(parsed["query"], "rust");
+        assert!(parsed.get("provider").is_none(), "provider should be absent, was: {:?}", parsed.get("provider"));
+        assert!(parsed.get("max_results").is_none(), "max_results should be absent, was: {:?}", parsed.get("max_results"));
+    }
+
+    #[tokio::test]
+    async fn search_web_body_template_includes_all_params_when_present() {
+        use std::collections::HashMap;
+        let resolver = MapResolver { map: HashMap::new() };
+        let mut params = serde_json::Map::new();
+        params.insert("query".to_string(), serde_json::Value::String("rust".to_string()));
+        params.insert("max_results".to_string(), serde_json::Value::Number(10.into()));
+        params.insert("provider".to_string(), serde_json::Value::String("searxng".to_string()));
+
+        let template = r#"{"query": "{{query}}"{{#if max_results}}, "max_results": {{max_results}}{{/if}}{{#if provider}}, "provider": "{{provider}}"{{/if}}}"#;
+        let rendered = render_body_template(template, &params, Some(&resolver)).await;
+
+        let parsed: serde_json::Value = serde_json::from_str(&rendered)
+            .unwrap_or_else(|e| panic!("rendered body is not valid JSON: {e} — got: {rendered}"));
+        assert_eq!(parsed["query"], "rust");
+        assert_eq!(parsed["max_results"], 10);
+        assert_eq!(parsed["provider"], "searxng");
+    }
+
     // ── YAML cache dispatch (wiremock-driven) ───────────────────────────────
     //
     // Verify the cache decisions that `engine_dispatch::execute_tool_call_inner`

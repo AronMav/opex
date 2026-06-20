@@ -20,9 +20,8 @@ parameters:
     required: false
     location: body
     description: "Active web-search provider name (omit for the highest-priority one)"
-    default: ""
 body_template: |
-  {"query": "{{query}}", "max_results": {{max_results}}, "provider": "{{provider}}"}
+  {"query": "{{query}}"{{#if max_results}}, "max_results": {{max_results}}{{/if}}{{#if provider}}, "provider": "{{provider}}"{{/if}}}
 response_transform: "$.results"
 
 status: verified
