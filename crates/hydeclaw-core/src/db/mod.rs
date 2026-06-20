@@ -11,6 +11,7 @@ pub use hydeclaw_db::usage;
 pub mod access;
 pub mod audit_queue;
 pub mod audit;
+pub mod channel_voice_modes;
 pub mod compaction;
 pub mod curator_runs;
 pub mod github;
