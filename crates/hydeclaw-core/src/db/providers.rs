@@ -204,18 +204,6 @@ pub async fn set_provider_active_list(
     tx.commit().await
 }
 
-/// Single-active convenience: Some(name) → one row at priority 100; None → clear all.
-pub async fn set_provider_active(
-    db: &PgPool,
-    capability: &str,
-    provider_name: Option<&str>,
-) -> sqlx::Result<()> {
-    match provider_name {
-        Some(name) => set_provider_active_list(db, capability, &[(name.to_string(), 100)]).await,
-        None => set_provider_active_list(db, capability, &[]).await,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,7 +235,7 @@ mod tests {
         assert_eq!(get_active_providers(&pool, "websearch").await.unwrap(), vec![("ws-b".into(), 1)]);
 
         // clear
-        set_provider_active(&pool, "websearch", None).await.unwrap();
+        set_provider_active_list(&pool, "websearch", &[]).await.unwrap();
         assert!(get_active_providers(&pool, "websearch").await.unwrap().is_empty());
         assert_eq!(get_provider_active(&pool, "websearch").await.unwrap(), None);
     }
