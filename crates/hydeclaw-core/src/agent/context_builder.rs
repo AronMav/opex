@@ -126,6 +126,8 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     /// Returns (`pinned_text`, `pinned_ids`)
     async fn build_memory_context(&self, budget_tokens: u32) -> (String, Vec<String>);
     async fn store_pinned_chunk_ids(&self, ids: Vec<String>);
+    /// Render this session's TODO list as a context block, or `None` if empty.
+    async fn session_todo_block(&self, session_id: Uuid) -> Option<String>;
 
     // Workspace
     fn workspace_dir(&self) -> &str;
@@ -433,6 +435,12 @@ impl ContextBuilder for DefaultContextBuilder {
             system_prompt.push_str(&pinned_text);
         }
         deps.store_pinned_chunk_ids(pinned_ids).await;
+
+        // Session TODO list (persists across turns and context compaction)
+        if let Some(todo_block) = deps.session_todo_block(session_id).await {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&todo_block);
+        }
 
         tracing::info!(
             agent = %deps.agent_name(),

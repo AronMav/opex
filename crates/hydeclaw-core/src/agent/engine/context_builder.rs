@@ -178,6 +178,16 @@ impl AgentEngine {
 
 #[async_trait::async_trait]
 impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
+    async fn session_todo_block(&self, session_id: Uuid) -> Option<String> {
+        let items = crate::db::todos::list_todos(&self.cfg().db, session_id)
+            .await
+            .unwrap_or_default();
+        if items.is_empty() {
+            return None;
+        }
+        Some(crate::db::todos::format_for_injection(&items))
+    }
+
     async fn session_resume(&self, sid: Uuid) -> Result<Uuid> {
         SessionManager::new(self.cfg().db.clone()).resume(sid).await
     }
