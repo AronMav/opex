@@ -498,7 +498,38 @@ impl AgentEngine {
         if let crate::agent::hooks::HookAction::Block(reason) = action {
             anyhow::bail!("blocked by hook: {}", reason);
         }
+        // Fresh session (cron RPC semantics).
+        self.run_isolated_pipeline(msg, None, true).await
+    }
 
+    /// Run ONE autonomous goal turn that CONTINUES an existing session (history
+    /// loaded) and returns the final assistant text. Used by the `/goal` driver.
+    pub async fn run_goal_turn(&self, session_id: Uuid, prompt: &str) -> Result<String> {
+        let msg = IncomingMessage {
+            user_id: "system".to_string(),
+            context: serde_json::Value::Null,
+            text: Some(prompt.to_string()),
+            attachments: vec![],
+            agent_id: self.cfg().agent.name.clone(),
+            channel: crate::agent::channel_kind::channel::CRON.to_string(),
+            timestamp: chrono::Utc::now(),
+            formatting_prompt: None,
+            tool_policy_override: None,
+            leaf_message_id: None,
+            user_message_id: None,
+        };
+        self.run_isolated_pipeline(&msg, Some(session_id), false).await
+    }
+
+    /// Shared RPC-style pipeline body: `NoopSink`, cron behaviour layers, returns the
+    /// final assistant text. `handle_isolated_via_pipeline` calls it with a fresh
+    /// session; `run_goal_turn` resumes an existing one.
+    async fn run_isolated_pipeline(
+        &self,
+        msg: &IncomingMessage,
+        resume_session_id: Option<Uuid>,
+        force_new_session: bool,
+    ) -> Result<String> {
         let mut s = sink::NoopSink::new();
         let cancel = tokio_util::sync::CancellationToken::new();
 
@@ -506,8 +537,8 @@ impl AgentEngine {
             self,
             BootstrapContext {
                 msg,
-                resume_session_id: None,
-                force_new_session: true,
+                resume_session_id,
+                force_new_session,
             },
             &mut s,
         )
