@@ -274,8 +274,10 @@ mod tests {
         assert!(matches!(next_action(&row("active", 1, 20, 0), Verdict::Continue), DriverAction::Continue));
         // 3rd consecutive parse fail (cjf already 2 → becomes 3) → pause
         assert!(matches!(next_action(&row("active", 1, 20, 2), Verdict::ParseFail), DriverAction::Pause(_)));
-        // budget exhausted → pause
+        // budget exhausted + continue → pause
         assert!(matches!(next_action(&row("active", 20, 20, 0), Verdict::Continue), DriverAction::Pause(_)));
+        // Done wins even on the budget-exhausting turn (Done checked before budget)
+        assert!(matches!(next_action(&row("active", 20, 20, 0), Verdict::Done), DriverAction::Done));
     }
 }
 ```
@@ -354,12 +356,12 @@ pub enum DriverAction { Continue, Done, Pause(&'static str) }
 
 /// Decide what the driver does after a turn, given the (just-reloaded) row and the judge verdict.
 /// `consecutive_judge_failures` in `row` is the value BEFORE this verdict is recorded.
+/// `Done` is checked BEFORE the budget so a goal completed on the budget-exhausting turn
+/// is reported as done, not paused.
 pub fn next_action(row: &GoalRow, verdict: Verdict) -> DriverAction {
-    if !row.budget_left() {
-        return DriverAction::Pause("budget");
-    }
     match verdict {
         Verdict::Done => DriverAction::Done,
+        _ if !row.budget_left() => DriverAction::Pause("budget"),
         Verdict::Continue => DriverAction::Continue,
         Verdict::ParseFail => {
             if row.consecutive_judge_failures + 1 >= 3 {
