@@ -69,14 +69,6 @@ pub async fn merge_todos(db: &PgPool, session_id: Uuid, items: &[TodoItem]) -> R
     Ok(())
 }
 
-pub async fn clear_todos(db: &PgPool, session_id: Uuid) -> Result<()> {
-    sqlx::query("DELETE FROM session_todos WHERE session_id = $1")
-        .bind(session_id)
-        .execute(db)
-        .await?;
-    Ok(())
-}
-
 const MAX_ITEMS: usize = 256;
 const MAX_CONTENT_CHARS: usize = 4000;
 const VALID_STATUSES: &[&str] = &["pending", "in_progress", "done", "cancelled"];
@@ -203,15 +195,6 @@ mod tests {
         let got = list_todos(&pool, sid).await.unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].status, "done");
-        Ok(())
-    }
-
-    #[sqlx::test]
-    async fn clear_removes_all(pool: PgPool) -> sqlx::Result<()> {
-        let sid = seed_session(&pool).await;
-        replace_todos(&pool, sid, &[TodoItem { id: "1".into(), content: "a".into(), status: "pending".into() }]).await.unwrap();
-        clear_todos(&pool, sid).await.unwrap();
-        assert!(list_todos(&pool, sid).await.unwrap().is_empty());
         Ok(())
     }
 }
