@@ -3,6 +3,7 @@
 
 use crate::db::session_goals::GoalRow;
 
+pub mod driver;
 pub mod pool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

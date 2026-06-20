@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 /// (channel, chat_id) the driver delivers to; `None` for web sessions.
-pub type GoalTarget = Option<(String, String)>;
+pub type GoalTarget = Option<(String, i64)>;
 
 pub struct GoalDriverHandle {
     pub cancel: CancellationToken,
