@@ -31,7 +31,7 @@ import {
   ShieldCheck, Check, X,
   type LucideProps,
 } from "lucide-react";
-import type { StatusInfo, StatsInfo, UsageResponse, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry, CuratorRun } from "@/types/api";
+import type { StatusInfo, StatsInfo, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry, CuratorRun } from "@/types/api";
 import type { LogEntry } from "@/types/api";
 import type { WsLog } from "@/types/ws";
 import type { TranslationKey } from "@/i18n/types";
@@ -1221,7 +1221,7 @@ function MonitorPageInner() {
               </div>
             ) : (
               <>
-                <div className="mb-8 md:mb-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
                   <div className="flex flex-col gap-1">
                     <h2 className="font-display text-lg font-bold tracking-tight">{t("usage.title")}</h2>
                     <span className="text-sm text-muted-foreground">{t("usage.subtitle")}</span>

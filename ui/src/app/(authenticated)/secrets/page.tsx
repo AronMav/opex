@@ -7,6 +7,8 @@ import { formatDate } from "@/lib/format";
 import { useTranslation } from "@/hooks/use-translation";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -171,36 +173,41 @@ export default function SecretsPage() {
             <span className="text-sm font-semibold text-foreground">{t("secrets.add_secret")}</span>
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <Input
-              placeholder={t("secrets.name_placeholder")}
-              className="font-mono text-sm h-11"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-            />
-            <Input
-              type="password"
-              placeholder={t("secrets.value_placeholder")}
-              className="font-mono text-sm h-11"
-              value={newValue}
-              onChange={(e) => setNewValue(e.target.value)}
-            />
-            <Input
-              placeholder={t("secrets.description_placeholder")}
-              className="text-sm h-11"
-              value={newDesc}
-              onChange={(e) => setNewDesc(e.target.value)}
-            />
-            <Select value={newScope} onValueChange={setNewScope}>
-              <SelectTrigger className="text-sm h-11">
-                <SelectValue placeholder={t("secrets.scope_global")} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__global__">{t("secrets.scope_global")}</SelectItem>
-                {agents.map((a) => (
-                  <SelectItem key={a.name} value={a.name}>{a.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Field label={t("secrets.name_placeholder")}>
+              <Input
+                className="font-mono text-sm h-11"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
+            </Field>
+            <Field label={t("secrets.value_placeholder")}>
+              <Input
+                type="password"
+                className="font-mono text-sm h-11"
+                value={newValue}
+                onChange={(e) => setNewValue(e.target.value)}
+              />
+            </Field>
+            <Field label={t("secrets.description_placeholder")}>
+              <Input
+                className="text-sm h-11"
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+              />
+            </Field>
+            <Field label={t("secrets.scope_global")}>
+              <Select value={newScope} onValueChange={setNewScope}>
+                <SelectTrigger className="text-sm h-11">
+                  <SelectValue placeholder={t("secrets.scope_global")} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__global__">{t("secrets.scope_global")}</SelectItem>
+                  {agents.map((a) => (
+                    <SelectItem key={a.name} value={a.name}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
             <Button onClick={addSecret} disabled={isLoading || mutating || !newName.trim() || !newValue.trim()} className="h-11 font-semibold md:col-span-2">
               {t("common.add")}
             </Button>
@@ -208,9 +215,7 @@ export default function SecretsPage() {
         </div>
 
         {secrets.length === 0 ? (
-          <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-border bg-muted/10">
-            <p className="font-mono text-sm text-muted-foreground/40 uppercase tracking-wider">{t("common.no_records_found")}</p>
-          </div>
+          <EmptyState icon={KeyRound} text={t("common.no_records_found")} height="h-40" />
         ) : (
           <div className="space-y-3 pb-8">
             {secrets.map((s) => (
@@ -299,31 +304,35 @@ export default function SecretsPage() {
             <p className="text-sm text-muted-foreground mt-1">{editTarget}</p>
           </DialogHeader>
           <div className="space-y-3 py-4">
-            <Input
-              type="password"
-              placeholder={t("secrets.new_value_placeholder")}
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              className="font-mono text-sm h-12"
-              autoFocus
-            />
-            <Input
-              placeholder={t("secrets.description_placeholder")}
-              value={editDesc}
-              onChange={(e) => setEditDesc(e.target.value)}
-              className="text-sm h-10"
-            />
-            <Select value={editScope || "__global__"} onValueChange={(v) => setEditScope(v === "__global__" ? "" : v)}>
-              <SelectTrigger className="text-sm h-10">
-                <SelectValue placeholder={t("secrets.scope_global")} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__global__">{t("secrets.scope_global")}</SelectItem>
-                {agents.map((a) => (
-                  <SelectItem key={a.name} value={a.name}>{a.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Field label={t("secrets.new_value_placeholder")}>
+              <Input
+                type="password"
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value)}
+                className="font-mono text-sm h-12"
+                autoFocus
+              />
+            </Field>
+            <Field label={t("secrets.description_placeholder")}>
+              <Input
+                value={editDesc}
+                onChange={(e) => setEditDesc(e.target.value)}
+                className="text-sm h-10"
+              />
+            </Field>
+            <Field label={t("secrets.scope_global")}>
+              <Select value={editScope || "__global__"} onValueChange={(v) => setEditScope(v === "__global__" ? "" : v)}>
+                <SelectTrigger className="text-sm h-10">
+                  <SelectValue placeholder={t("secrets.scope_global")} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__global__">{t("secrets.scope_global")}</SelectItem>
+                  {agents.map((a) => (
+                    <SelectItem key={a.name} value={a.name}>{a.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
           </div>
           {editValidation && <p className="text-xs text-destructive px-1">{editValidation}</p>}
           <DialogFooter className="gap-2">

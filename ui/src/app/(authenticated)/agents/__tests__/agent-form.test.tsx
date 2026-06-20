@@ -379,7 +379,7 @@ describe("AgentEditDialog UI", () => {
     render(<AgentEditDialog {...props} />);
 
     expect(
-      screen.getByText(/only letters, numbers, hyphens and underscores allowed/i)
+      screen.getByText(/agents\.name_invalid/i)
     ).toBeInTheDocument();
   });
 });

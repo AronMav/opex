@@ -13,6 +13,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Field } from "@/components/ui/field";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
@@ -470,10 +471,7 @@ export default function SkillsPage() {
           </div>
 
           <div className="rounded-xl border border-border/60 bg-card/50 p-6 space-y-5">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
-                {t("skills.field_name")} <span className="text-destructive">*</span>
-              </label>
+            <Field label={`${t("skills.field_name")} *`} labelClassName="text-xs">
               <Input
                 type="text"
                 value={form.name}
@@ -482,23 +480,19 @@ export default function SkillsPage() {
                 placeholder="e.g. research-task"
                 className="font-mono max-w-md"
               />
-            </div>
+            </Field>
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-muted-foreground">{t("skills.field_description")}</label>
+            <Field label={t("skills.field_description")} labelClassName="text-xs">
               <Input
                 type="text"
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
                 placeholder={t("skills.description_placeholder")}
               />
-            </div>
+            </Field>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
-                  {t("skills.field_triggers")} <span className="text-muted-foreground/50 font-normal">({t("skills.triggers_hint")})</span>
-                </label>
+              <Field label={`${t("skills.field_triggers")} (${t("skills.triggers_hint")})`} labelClassName="text-xs">
                 <Textarea
                   value={form.triggers}
                   onChange={(e) => setForm((f) => ({ ...f, triggers: e.target.value }))}
@@ -506,11 +500,8 @@ export default function SkillsPage() {
                   rows={4}
                   className="resize-none font-mono"
                 />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-muted-foreground">
-                  {t("skills.field_tools_required")} <span className="text-muted-foreground/50 font-normal">({t("skills.tools_hint")})</span>
-                </label>
+              </Field>
+              <Field label={`${t("skills.field_tools_required")} (${t("skills.tools_hint")})`} labelClassName="text-xs">
                 <Textarea
                   value={form.tools_required}
                   onChange={(e) => setForm((f) => ({ ...f, tools_required: e.target.value }))}
@@ -518,24 +509,19 @@ export default function SkillsPage() {
                   rows={4}
                   className="resize-none font-mono"
                 />
-              </div>
+              </Field>
             </div>
 
-            <div className="flex flex-col gap-1.5 max-w-48">
-              <label className="text-xs font-medium text-muted-foreground">{t("skills.field_priority")}</label>
+            <Field label={t("skills.field_priority")} hint={t("skills.priority_hint")} labelClassName="text-xs" className="max-w-48">
               <Input
                 type="number"
                 value={form.priority}
                 onChange={(e) => setForm((f) => ({ ...f, priority: e.target.value }))}
                 min={0}
               />
-              <p className="text-xs text-muted-foreground/60">{t("skills.priority_hint")}</p>
-            </div>
+            </Field>
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
-                {t("skills.field_instructions")} <span className="text-muted-foreground/50 font-normal">({t("skills.instructions_hint")})</span>
-              </label>
+            <Field label={`${t("skills.field_instructions")} (${t("skills.instructions_hint")})`} labelClassName="text-xs">
               <Textarea
                 value={form.instructions}
                 onChange={(e) => setForm((f) => ({ ...f, instructions: e.target.value }))}
@@ -543,7 +529,7 @@ export default function SkillsPage() {
                 rows={14}
                 className="resize-y font-mono"
               />
-            </div>
+            </Field>
           </div>
 
           <div className="mt-4 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3">

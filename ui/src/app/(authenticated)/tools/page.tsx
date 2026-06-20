@@ -132,7 +132,7 @@ type EditView =
 /* ── Page ────────────────────────────────────────────────────────── */
 
 export default function ToolsPage() {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const qc = useQueryClient();
 
   const { data: services = [], isLoading: servicesLoading, error: servicesError } = useTools();
@@ -603,7 +603,7 @@ parameters:
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
       <div>
         {/* Header */}
-        <div className="mb-8 md:mb-10 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+        <div className="mb-8 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
           <div className="flex flex-col gap-1">
             <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("tools.title")}</h2>
             <span className="text-sm text-muted-foreground">{t("tools.subtitle")}</span>

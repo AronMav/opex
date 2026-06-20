@@ -18,8 +18,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { AgentInfo, AgentDetail, ChannelRow, SecretInfo, Provider } from "@/types/api";
-import { Settings, LogOut } from "lucide-react";
+import { Settings, LogOut, Bot } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 import { PROVIDERS, FALLBACK_MODELS } from "./RoutingRulesEditor";
 import {
   AgentEditDialog,
@@ -539,7 +541,7 @@ export default function AgentsPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-      <div className="mb-8 md:mb-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h2 className="font-display text-lg font-bold tracking-tight">{t("agents.title")}</h2>
           <span className="text-sm text-muted-foreground">
@@ -560,13 +562,11 @@ export default function AgentsPage() {
       {loading ? (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-64 rounded-xl border border-border bg-muted/20 animate-pulse" />
+            <Skeleton key={i} className="h-64 rounded-xl" />
           ))}
         </div>
       ) : agents.length === 0 ? (
-        <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-muted/10">
-          <p className="font-mono text-sm uppercase tracking-wider text-muted-foreground/70">{t("agents.no_active_agents")}</p>
-        </div>
+        <EmptyState icon={Bot} text={t("agents.no_active_agents")} height="h-64" className="rounded-2xl" />
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
           {agents.map((a) => (
@@ -575,7 +575,10 @@ export default function AgentsPage() {
                 <div className="relative shrink-0">
                   <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-primary/20 bg-muted/50 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
                     {a.icon_url ? (
-                      <img src={a.icon_url} alt={a.name} loading="lazy" className="h-full w-full object-cover" />
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element -- agent icons are tiny avatars from arbitrary sources (uploads, data URIs, external); next/Image's optimisation pipeline adds no value at this size */}
+                        <img src={a.icon_url} alt={a.name} loading="lazy" className="h-full w-full object-cover" />
+                      </>
                     ) : (
                       <span className="font-mono text-lg font-black text-primary/80 group-hover:text-primary transition-colors">
                         {a.name.charAt(0).toUpperCase()}

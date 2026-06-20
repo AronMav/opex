@@ -178,7 +178,7 @@ export function ChatComposer() {
     if (cmd.startsWith("/think:")) { store.setThinkingLevel(parseInt(cmd.split(":")[1])); return; }
     // /reset and other commands are sent as messages — backend (engine_commands.rs) handles them
     store.sendMessage(cmd);
-  }, [currentAgent]);
+  }, []);
 
   const handleSlashClose = useCallback(() => {
     setSlashQuery(null);
@@ -380,11 +380,11 @@ export function ChatComposer() {
           {pendingMessage && (
             <div className="flex items-center gap-2 px-4 pt-2 pb-1 text-xs text-muted-foreground border-b border-border/30">
               <span className="flex-1 truncate">
-                В очереди: «{pendingMessage.content.slice(0, 60)}{pendingMessage.content.length > 60 ? "…" : ""}»
+                {t("chat.queue_prefix", { content: `${pendingMessage.content.slice(0, 60)}${pendingMessage.content.length > 60 ? "…" : ""}` })}
               </span>
               <button
                 type="button"
-                aria-label="Отменить очередь"
+                aria-label={t("chat.cancel_queue")}
                 onClick={() => useChatStore.getState().clearPending()}
                 className="shrink-0 rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
               >
@@ -446,22 +446,22 @@ export function ChatComposer() {
                   type="button"
                   aria-label={
                     voice.state === "recording"
-                      ? `Стоп ${formatElapsed(voice.elapsed)}`
-                      : "Голосовой ввод"
+                      ? t("chat.stop_recording", { elapsed: formatElapsed(voice.elapsed) })
+                      : t("chat.voice_input")
                   }
                   title={
                     voice.state === "recording"
-                      ? `Запись: ${formatElapsed(voice.elapsed)}`
+                      ? t("chat.recording", { elapsed: formatElapsed(voice.elapsed) })
                       : voice.state === "transcribing"
-                        ? "Распознавание…"
-                        : "Записать голос"
+                        ? t("chat.transcribing")
+                        : t("chat.record_voice")
                   }
                   disabled={voice.state === "transcribing"}
                   onClick={handleMicClick}
                   className={cn(
                     "rounded p-3 md:p-2 transition-colors",
                     voice.state === "recording"
-                      ? "text-red-500 animate-pulse ring-2 ring-red-500/40 rounded-full"
+                      ? "text-destructive animate-pulse ring-2 ring-destructive/40 rounded-full"
                       : voice.state === "transcribing"
                         ? "text-muted-foreground/30 cursor-not-allowed"
                         : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50",
@@ -507,8 +507,8 @@ export function ChatComposer() {
               <Button
                 type="submit"
                 size="icon"
-                aria-label={isStreaming ? "Отправить — прервёт текущую генерацию" : t("chat.send")}
-                title={isStreaming ? "Отправить — прервёт текущую генерацию" : undefined}
+                aria-label={isStreaming ? t("chat.send_interrupt") : t("chat.send")}
+                title={isStreaming ? t("chat.send_interrupt") : undefined}
                 disabled={(!hasInput && attachments.length === 0) || isUploading}
                 className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-primary/30 bg-primary/15 text-primary hover:bg-primary/25 hover:border-primary/50 shadow-sm disabled:opacity-30 disabled:shadow-none group/send animate-in fade-in zoom-in-90"
               >

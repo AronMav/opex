@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Field } from "@/components/ui/field";
+import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -74,12 +76,12 @@ const ALL_CAPABILITIES = ["stt", "tts", "vision", "imagegen", "embedding"] as co
 
 /** Category-specific badge colors — intentionally distinct per capability */
 const CATEGORY_BADGE_CLASS: Record<ProviderCategory, string> = {
-  text: "bg-amber-500/10 text-amber-600 border-amber-500/20",
-  stt: "bg-blue-500/10 text-blue-500 border-blue-500/20",
-  tts: "bg-green-500/10 text-green-500 border-green-500/20",
-  vision: "bg-purple-500/10 text-purple-500 border-purple-500/20",
-  imagegen: "bg-orange-500/10 text-orange-500 border-orange-500/20",
-  embedding: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
+  text: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+  stt: "bg-blue-500/10 text-blue-500 dark:text-blue-400 border-blue-500/20",
+  tts: "bg-success/10 text-success border-success/20",
+  vision: "bg-purple-500/10 text-purple-500 dark:text-purple-400 border-purple-500/20",
+  imagegen: "bg-orange-500/10 text-orange-500 dark:text-orange-400 border-orange-500/20",
+  embedding: "bg-cyan-500/10 text-cyan-500 dark:text-cyan-400 border-cyan-500/20",
 };
 
 const CAPABILITY_BADGE_CLASS: Record<string, string> = {
@@ -451,9 +453,7 @@ export default function ProvidersPage() {
           <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
       ) : providers.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border/60 p-8 text-center text-muted-foreground text-sm">
-          {t("providers.empty")}
-        </div>
+        <EmptyState icon={Zap} text={t("providers.empty")} height="h-48" />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {providers.map((provider) => {
@@ -467,7 +467,7 @@ export default function ProvidersPage() {
             return (
               <div
                 key={provider.id}
-                className="rounded-xl border border-border/60 bg-card/50 p-5 space-y-4"
+                className="neu-card neu-hover p-5 space-y-4"
               >
                 {/* Header */}
                 <div className="flex items-start gap-3">
@@ -609,20 +609,18 @@ export default function ProvidersPage() {
             {dialogCategory === "text" && (
               <>
                 {/* Name */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t("providers.field_name")} <span className="text-destructive">*</span>
-                  </label>
+                <Field
+                  label={t("providers.field_name") + " *"}
+                  labelClassName="text-xs"
+                  hint={t("providers.field_name_hint")}
+                >
                   <Input
                     placeholder="my-openai"
                     value={form.name}
                     onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                     className="font-mono text-sm"
                   />
-                  <p className="text-[11px] text-muted-foreground/60">
-                    {t("providers.field_name_hint")}
-                  </p>
-                </div>
+                </Field>
 
                 {/* Provider Type */}
                 <div className="space-y-1.5">
@@ -655,12 +653,15 @@ export default function ProvidersPage() {
                 </div>
 
                 {/* API Key */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t("providers.field_api_key")} {selectedType?.requires_api_key !== false
-                      ? <span className="text-destructive">*</span>
-                      : <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>}
-                  </label>
+                <Field
+                  label={
+                    t("providers.field_api_key") +
+                    (selectedType?.requires_api_key !== false
+                      ? " *"
+                      : ` (${t("providers.optional")})`)
+                  }
+                  labelClassName="text-xs"
+                >
                   <Input
                     type="password"
                     placeholder={isEditing && dialog.editing?.has_api_key ? t("providers.field_api_key_keep") : t("providers.field_api_key_placeholder")}
@@ -668,12 +669,12 @@ export default function ProvidersPage() {
                     onChange={(e) => setApiKeyValue(e.target.value)}
                     className="font-mono text-sm"
                   />
-                  {isEditing && dialog.editing?.api_key && (
-                    <p className="text-[11px] text-muted-foreground/60 font-mono">
-                      {t("providers.field_api_key_current", { key: dialog.editing.api_key })}
-                    </p>
-                  )}
-                </div>
+                </Field>
+                {isEditing && dialog.editing?.api_key && (
+                  <p className="text-[11px] text-muted-foreground/60 font-mono">
+                    {t("providers.field_api_key_current", { key: dialog.editing.api_key })}
+                  </p>
+                )}
 
                 {/* Default Model */}
                 <div className="space-y-1.5">
@@ -747,21 +748,18 @@ export default function ProvidersPage() {
 
                 {/* Base URL — hidden for CLI providers */}
                 {!isCli && (
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-muted-foreground">
-                      {t("providers.field_base_url")}{" "}
-                      <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>
-                    </label>
+                  <Field
+                    label={`${t("providers.field_base_url")} (${t("providers.optional")})`}
+                    labelClassName="text-xs"
+                    hint={t("providers.field_url_hint")}
+                  >
                     <Input
                       placeholder={form.provider_type ? defaultUrlFor(form.provider_type) || "https://..." : "https://..."}
                       value={form.base_url ?? ""}
                       onChange={(e) => setForm((f) => ({ ...f, base_url: e.target.value }))}
                       className="font-mono text-sm"
                     />
-                    <p className="text-[11px] text-muted-foreground/60">
-                      {t("providers.field_url_hint")}
-                    </p>
-                  </div>
+                  </Field>
                 )}
 
                 {/* Timeouts — hidden for CLI providers */}
@@ -839,7 +837,7 @@ export default function ProvidersPage() {
                     {testResult && (
                       <div className={`rounded-lg border p-3 text-xs space-y-1 ${
                         testResult.response_ok
-                          ? "bg-green-500/10 border-green-500/20 text-green-600 dark:text-green-400"
+                          ? "bg-success/10 border-success/20 text-success"
                           : "bg-destructive/10 border-destructive/20 text-destructive"
                       }`}>
                         {testResult.response_ok ? (
@@ -871,18 +869,17 @@ export default function ProvidersPage() {
                 )}
 
                 {/* Notes */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t("providers.field_notes")}{" "}
-                    <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>
-                  </label>
+                <Field
+                  label={`${t("providers.field_notes")} (${t("providers.optional")})`}
+                  labelClassName="text-xs"
+                >
                   <Textarea
                     placeholder={t("providers.field_notes_placeholder")}
                     value={form.notes ?? ""}
                     onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                     className="text-sm resize-none h-16"
                   />
-                </div>
+                </Field>
               </>
             )}
 
@@ -890,20 +887,18 @@ export default function ProvidersPage() {
             {dialogCategory !== "" && dialogCategory !== "text" && (
               <>
                 {/* Name */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t("providers.field_name")} <span className="text-destructive">*</span>
-                  </label>
+                <Field
+                  label={t("providers.field_name") + " *"}
+                  labelClassName="text-xs"
+                  hint={t("providers.media_name_hint")}
+                >
                   <Input
                     placeholder="local-whisper"
                     value={form.name}
                     onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                     className="font-mono text-sm"
                   />
-                  <p className="text-[11px] text-muted-foreground/60">
-                    {t("providers.media_name_hint")}
-                  </p>
-                </div>
+                </Field>
 
                 {/* Provider Type / Driver */}
                 <div className="space-y-1.5">
@@ -937,32 +932,30 @@ export default function ProvidersPage() {
                 </div>
 
                 {/* Base URL */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t("providers.field_base_url")}{" "}
-                    <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>
-                  </label>
+                <Field
+                  label={`${t("providers.field_base_url")} (${t("providers.optional")})`}
+                  labelClassName="text-xs"
+                >
                   <Input
                     placeholder="http://192.168.1.132:8300/v1"
                     value={form.base_url ?? ""}
                     onChange={(e) => setForm((f) => ({ ...f, base_url: e.target.value }))}
                     className="font-mono text-sm"
                   />
-                </div>
+                </Field>
 
                 {/* Model */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t("providers.field_model_short")}{" "}
-                    <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>
-                  </label>
+                <Field
+                  label={`${t("providers.field_model_short")} (${t("providers.optional")})`}
+                  labelClassName="text-xs"
+                >
                   <Input
                     placeholder="Systran/faster-whisper-large-v3"
                     value={form.default_model ?? ""}
                     onChange={(e) => setForm((f) => ({ ...f, default_model: e.target.value }))}
                     className="font-mono text-sm"
                   />
-                </div>
+                </Field>
 
                 {/* Voice (TTS only) */}
                 {dialogCategory === "tts" && (
@@ -1051,18 +1044,17 @@ export default function ProvidersPage() {
                 </div>
 
                 {/* Notes */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t("providers.field_notes")}{" "}
-                    <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>
-                  </label>
+                <Field
+                  label={`${t("providers.field_notes")} (${t("providers.optional")})`}
+                  labelClassName="text-xs"
+                >
                   <Textarea
                     placeholder={t("providers.field_notes_placeholder")}
                     value={form.notes ?? ""}
                     onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                     className="text-sm resize-none h-16"
                   />
-                </div>
+                </Field>
 
                 {/* Timeouts (request_secs is the main TTS knob — long synth +
                     voice-clone warmup can exceed the 120s default) */}

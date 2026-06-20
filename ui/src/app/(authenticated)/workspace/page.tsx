@@ -189,7 +189,7 @@ export default function WorkspacePage() {
                 !f.is_dir && selectedFile.endsWith(f.name) && selectedFile === (currentPath ? `${currentPath}/${f.name}` : f.name)
                   ? "bg-primary/20 text-primary font-bold shadow-sm"
                   : f.is_dir
-                    ? "text-info/80 hover:bg-info/10"
+                    ? "text-primary/80 hover:bg-primary/10"
                     : CORE_FILES.includes(f.name)
                       ? "text-primary hover:bg-primary/5"
                       : "text-muted-foreground hover:bg-muted/50"

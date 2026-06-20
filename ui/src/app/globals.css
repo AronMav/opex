@@ -41,7 +41,6 @@
 
   --color-success: var(--success);
   --color-warning: var(--warning);
-  --color-info: var(--info);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -79,7 +78,6 @@
   --ring: #4a7cff;
   --success: #22c55e;
   --warning: #f59e0b;
-  --info: #4a7cff;
 
   --sidebar: #cdd3df;
   --sidebar-foreground: #1a1f2e;
@@ -117,7 +115,6 @@
 
   --success: #3fb950;
   --warning: #d29922;
-  --info: #6b9eff;
 
   --sidebar: #161d2c;
   --sidebar-foreground: #dde2ea;

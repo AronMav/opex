@@ -6,12 +6,14 @@
 import React, { useRef, useEffect, useCallback } from "react";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import type { UseMessageSearch } from "./hooks/use-message-search";
+import { useTranslation } from "@/hooks/use-translation";
 
 interface SearchBarProps {
   search: UseMessageSearch;
 }
 
 export function SearchBar({ search }: SearchBarProps) {
+  const { t } = useTranslation();
   const { query, matches, activeIndex, setQuery, close, next, prev } = search;
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -42,9 +44,9 @@ export function SearchBar({ search }: SearchBarProps) {
 
   const counterText =
     matches.length === 0 && query
-      ? "0 результатов"
+      ? t("chat.search_no_results")
       : matches.length > 0
-        ? `${activeIndex + 1} / ${matches.length}`
+        ? t("chat.search_counter", { current: activeIndex + 1, total: matches.length })
         : "";
 
   return (
@@ -55,9 +57,9 @@ export function SearchBar({ search }: SearchBarProps) {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Поиск по сообщениям…"
+        placeholder={t("chat.search_messages")}
         className="flex-1 min-w-0 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/50"
-        aria-label="Поиск по сообщениям"
+        aria-label={t("chat.search_messages")}
       />
       {counterText && (
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
@@ -68,7 +70,7 @@ export function SearchBar({ search }: SearchBarProps) {
         type="button"
         onClick={prev}
         disabled={matches.length === 0}
-        aria-label="Предыдущий результат"
+        aria-label={t("chat.search_prev")}
         className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30"
       >
         <ChevronUp className="h-3.5 w-3.5" />
@@ -77,7 +79,7 @@ export function SearchBar({ search }: SearchBarProps) {
         type="button"
         onClick={next}
         disabled={matches.length === 0}
-        aria-label="Следующий результат"
+        aria-label={t("chat.search_next")}
         className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30"
       >
         <ChevronDown className="h-3.5 w-3.5" />
@@ -85,7 +87,7 @@ export function SearchBar({ search }: SearchBarProps) {
       <button
         type="button"
         onClick={close}
-        aria-label="Закрыть поиск"
+        aria-label={t("chat.search_close")}
         className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
       >
         <X className="h-3.5 w-3.5" />

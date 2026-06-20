@@ -20,6 +20,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Field } from "@/components/ui/field";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   Select,
   SelectContent,
@@ -258,7 +261,7 @@ export default function ChannelsPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-        <div className="mb-8 md:mb-10">
+        <div className="mb-8">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex flex-col gap-1">
               <h2 className="font-display text-lg font-bold tracking-tight text-foreground">
@@ -278,15 +281,11 @@ export default function ChannelsPage() {
         {loading ? (
           <div className="space-y-4">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-20 rounded-xl border border-border bg-muted/20 animate-pulse" />
+              <Skeleton key={i} className="h-20 rounded-xl" />
             ))}
           </div>
         ) : channels.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-            <Radio className="h-12 w-12 mb-3 opacity-30" />
-            <p className="text-sm font-medium">{t("channels.empty")}</p>
-            <p className="text-xs mt-1 opacity-60">{t("channels.empty_hint")}</p>
-          </div>
+          <EmptyState icon={Radio} text={t("channels.empty")} hint={<p className="text-xs mt-1 opacity-60">{t("channels.empty_hint")}</p>} height="h-48" />
         ) : (
           <div className="space-y-6">
             {Object.entries(grouped).map(([agentName, agentChannels]) => (
@@ -377,8 +376,7 @@ export default function ChannelsPage() {
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-2">
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">{t("channels.agent")}</label>
+              <Field label={t("channels.agent")} labelClassName="text-xs">
                 <Select value={formAgent} onValueChange={setFormAgent}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -387,10 +385,9 @@ export default function ChannelsPage() {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+              </Field>
               {!editingChannel && (
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">{t("channels.type")}</label>
+                <Field label={t("channels.type")} labelClassName="text-xs">
                   <Select value={formType} onValueChange={setFormType}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -407,24 +404,23 @@ export default function ChannelsPage() {
                       })}
                     </SelectContent>
                   </Select>
-                </div>
+                </Field>
               )}
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">{t("channels.display_name")}</label>
+              <Field label={t("channels.display_name")} labelClassName="text-xs">
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
                   placeholder={t("channels.placeholder_name")}
                   className="font-mono text-sm"
                 />
-              </div>
+              </Field>
               {/* Dynamic config fields based on channel type */}
               {(CHANNEL_CONFIG_FIELDS[formType] || []).map((field) => (
-                <div key={field.key} className="space-y-1.5">
-                  <label className="text-xs font-medium text-muted-foreground">
-                    {t(field.labelKey as Parameters<typeof t>[0])}
-                    {field.required && <span className="text-destructive ml-0.5">*</span>}
-                  </label>
+                <Field
+                  key={field.key}
+                  label={`${t(field.labelKey as Parameters<typeof t>[0])}${field.required ? " *" : ""}`}
+                  labelClassName="text-xs"
+                >
                   <Input
                     type={field.type || "text"}
                     value={formConfig[field.key] || ""}
@@ -432,24 +428,22 @@ export default function ChannelsPage() {
                     placeholder={editingChannel && field.type === "password" ? t("channels.bot_token_keep") : field.placeholder}
                     className="font-mono text-sm"
                   />
-                </div>
+                </Field>
               ))}
               {(formType === "telegram" || formType === "discord") && (
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">{t("channels.typing_mode")}</label>
-                <Select value={formConfig["typing_mode"] || "instant"} onValueChange={(v) => setFormConfig({ ...formConfig, typing_mode: v })}>
-                  <SelectTrigger className="font-mono text-sm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="instant">{t("channels.typing_instant")}</SelectItem>
-                    <SelectItem value="thinking">{t("channels.typing_thinking")}</SelectItem>
-                    <SelectItem value="message">{t("channels.typing_message")}</SelectItem>
-                    <SelectItem value="never">{t("channels.typing_never")}</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-[11px] text-muted-foreground/50">{t("channels.typing_hint")}</p>
-              </div>
+                <Field label={t("channels.typing_mode")} hint={t("channels.typing_hint")} labelClassName="text-xs">
+                  <Select value={formConfig["typing_mode"] || "instant"} onValueChange={(v) => setFormConfig({ ...formConfig, typing_mode: v })}>
+                    <SelectTrigger className="font-mono text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="instant">{t("channels.typing_instant")}</SelectItem>
+                      <SelectItem value="thinking">{t("channels.typing_thinking")}</SelectItem>
+                      <SelectItem value="message">{t("channels.typing_message")}</SelectItem>
+                      <SelectItem value="never">{t("channels.typing_never")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
               )}
             </div>
             <DialogFooter>

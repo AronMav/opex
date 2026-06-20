@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CronSchedulePicker } from "@/components/ui/cron-schedule-picker";
+import { Field } from "@/components/ui/field";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +35,7 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { ChannelRow, Provider, RoutingRule } from "@/types/api";
+import type { ChannelRow, RoutingRule } from "@/types/api";
 import { ChevronDown, Bot, ExternalLink, Link2, Camera, RefreshCw, Settings, Wrench, Zap, Archive, Clock, Radio } from "lucide-react";
 import { RoutingRulesEditor } from "./RoutingRulesEditor";
 import { useProviders, useProviderModels } from "@/lib/queries";
@@ -182,13 +183,10 @@ export function AgentEditDialog({
   discoveredModels,
   fetchModels,
   toolNames,
-  secretNames,
-  voices,
+  // secretNames, voices, channelSaving, onOpenChannelDialog, onRestartChannel,
+  // onDeleteChannelRequest — accepted but no longer consumed here after the
+  // channels tab refactor; kept in the interface for caller-side stability.
   channels,
-  channelSaving,
-  onOpenChannelDialog,
-  onRestartChannel,
-  onDeleteChannelRequest,
   editingBase,
 }: AgentEditDialogProps) {
   const { t } = useTranslation();
@@ -286,7 +284,10 @@ export function AgentEditDialog({
                       }}
                     >
                       {form.iconUrl ? (
-                        <img src={form.iconUrl} alt={t("agents.icon_alt")} className="h-10 w-10 rounded-lg object-cover border border-border group-hover:border-primary/50 transition-colors" />
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element -- agent icons are tiny avatars from arbitrary sources (uploads, data URIs, external); next/Image's optimisation pipeline adds no value at 40×40 */}
+                          <img src={form.iconUrl} alt={t("agents.icon_alt")} className="h-10 w-10 rounded-lg object-cover border border-border group-hover:border-primary/50 transition-colors" />
+                        </>
                       ) : (
                         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted/50 border border-border text-muted-foreground group-hover:border-primary/50 transition-colors">
                           <Bot className="h-4 w-4" />
@@ -297,18 +298,20 @@ export function AgentEditDialog({
                       </div>
                     </button>
                   </div>
-                  <Field label={t("agents.field_name")} className="flex-1">
+                  <div className="flex-1 space-y-2">
+                    <label htmlFor="agent-edit-name" className="text-xs font-medium text-muted-foreground ml-1">{t("agents.field_name")}</label>
                     <Input
+                      id="agent-edit-name"
                       value={form.name}
                       placeholder="my-agent-01"
                       className="bg-background border-border font-mono text-sm h-8"
                       onChange={(e) => upd({ name: e.target.value })}
                     />
                     {!isValidAgentName && (
-                      <p className="text-sm text-red-500 mt-1">Only letters, numbers, hyphens and underscores allowed</p>
+                      <p className="text-sm text-destructive mt-1">{t("agents.name_invalid")}</p>
                     )}
-                  </Field>
-                  <Field label={t("agents.field_language")} className="w-full sm:w-36 sm:shrink-0">
+                  </div>
+                  <Field label={t("agents.field_language")} className="w-full sm:w-36 sm:shrink-0" labelClassName="text-xs">
                     <Select value={form.language} onValueChange={(v) => upd({ language: v })}>
                       <SelectTrigger className="w-full bg-background border-border text-sm h-8">
                         <SelectValue />
@@ -324,7 +327,7 @@ export function AgentEditDialog({
                   </Field>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Field label={t("agents.field_provider")}>
+                  <Field label={t("agents.field_provider")} labelClassName="text-xs">
                     <Select
                       value={form.providerConnection || "__none__"}
                       onValueChange={(v) => {
@@ -355,9 +358,10 @@ export function AgentEditDialog({
                       </SelectContent>
                     </Select>
                   </Field>
-                  <Field label={t("agents.field_model")}>
+                  <div className="space-y-2">
+                    <label htmlFor="agent-edit-model" className="text-xs font-medium text-muted-foreground ml-1">{t("agents.field_model")}</label>
                     {providerModelsLoading && (
-                      <span className="text-xs text-muted-foreground animate-pulse mb-1">{t("agents.loading_models")}</span>
+                      <span className="text-xs text-muted-foreground animate-pulse mb-1 block">{t("agents.loading_models")}</span>
                     )}
                     {(() => {
                       const models = providerModels;
@@ -370,7 +374,7 @@ export function AgentEditDialog({
                                 value={isCustom ? "__custom__" : form.model}
                                 onValueChange={(v) => { upd({ model: v === "__custom__" ? "" : v }); }}
                               >
-                                <SelectTrigger className="bg-background border-border font-mono text-sm h-8">
+                                <SelectTrigger id="agent-edit-model" className="bg-background border-border font-mono text-sm h-8">
                                   <SelectValue placeholder={t("agents.model_placeholder")} />
                                 </SelectTrigger>
                                 <SelectContent className="border-border max-h-60">
@@ -392,7 +396,7 @@ export function AgentEditDialog({
                       }
                       return (
                         <div className="flex gap-2">
-                          <Input value={form.model} placeholder="model-name" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ model: e.target.value })} />
+                          <Input id="agent-edit-model" value={form.model} placeholder="model-name" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ model: e.target.value })} />
                           {selectedProvider && (
                             <Button variant="outline" size="sm" className="shrink-0 h-8 text-xs" onClick={() => refetchModels()} disabled={providerModelsLoading}>
                               <RefreshCw className={`h-3.5 w-3.5 ${providerModelsLoading ? "animate-spin" : ""}`} />
@@ -402,14 +406,14 @@ export function AgentEditDialog({
                         </div>
                       );
                     })()}
-                  </Field>
-                  <Field label={t("agents.field_temperature")}>
+                  </div>
+                  <Field label={t("agents.field_temperature")} labelClassName="text-xs">
                     <Input type="number" step="0.1" min="0" max="2" value={form.temperature} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ temperature: e.target.value })} />
                   </Field>
-                  <Field label={t("agents.field_max_tokens")}>
+                  <Field label={t("agents.field_max_tokens")} labelClassName="text-xs">
                     <Input type="number" step="256" min="256" max="65536" value={form.maxTokens} placeholder="Auto" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxTokens: e.target.value })} />
                   </Field>
-                  <Field label={t("agents.field_fallback_provider")}>
+                  <Field label={t("agents.field_fallback_provider")} labelClassName="text-xs">
                     <Select value={form.fallbackProvider || "__none__"} onValueChange={(v) => upd({ fallbackProvider: v === "__none__" ? "" : v })}>
                       <SelectTrigger className="w-full bg-background border-border text-sm h-8">
                         <SelectValue placeholder={t("agents.field_fallback_provider")} />
@@ -428,7 +432,7 @@ export function AgentEditDialog({
                       </SelectContent>
                     </Select>
                   </Field>
-                  <Field label={t("agents.field_tts_provider")}>
+                  <Field label={t("agents.field_tts_provider")} labelClassName="text-xs">
                     <Select value={form.ttsProvider || "__none__"} onValueChange={(v) => upd({ ttsProvider: v === "__none__" ? "" : v })}>
                       <SelectTrigger className="w-full bg-background border-border text-sm h-8">
                         <SelectValue placeholder={t("agents.field_tts_provider")} />
@@ -452,10 +456,10 @@ export function AgentEditDialog({
                       </SelectContent>
                     </Select>
                   </Field>
-                  <Field label={t("agents.field_top_k_tools")}>
+                  <Field label={t("agents.field_top_k_tools")} labelClassName="text-xs">
                     <Input type="number" step="1" min="1" max="50" value={form.maxToolsInContext} placeholder={t("agents.placeholder_all")} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxToolsInContext: e.target.value })} />
                   </Field>
-                  <Field label={t("agents.field_daily_budget")}>
+                  <Field label={t("agents.field_daily_budget")} labelClassName="text-xs">
                     <Input type="number" step="10000" min="0" value={form.dailyBudgetTokens} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ dailyBudgetTokens: e.target.value })} />
                   </Field>
                 </div>
@@ -470,10 +474,10 @@ export function AgentEditDialog({
                       <Switch checked={form.toolsAllowAll} onCheckedChange={(v) => upd({ toolsAllowAll: v })} className="data-[state=checked]:bg-primary" />
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <Field label={t("agents.field_allowed")}>
+                      <Field label={t("agents.field_allowed")} labelClassName="text-xs">
                         <ToolMultiSelect tools={toolNames} selected={form.toolsAllow.split(",").map((s) => s.trim()).filter(Boolean)} onChange={(v) => upd({ toolsAllow: v.join(", ") })} placeholder={t("common.select_tools_placeholder")} />
                       </Field>
-                      <Field label={t("agents.field_denied")}>
+                      <Field label={t("agents.field_denied")} labelClassName="text-xs">
                         <ToolMultiSelect tools={toolNames} selected={form.toolsDeny.split(",").map((s) => s.trim()).filter(Boolean)} onChange={(v) => upd({ toolsDeny: v.join(", ") })} placeholder={t("common.select_tools_placeholder")} />
                       </Field>
                     </div>
@@ -498,7 +502,8 @@ export function AgentEditDialog({
                 <SwitchSection title={t("agents.section_approval")} enabled={form.approvalEnabled} onToggle={(v) => upd({ approvalEnabled: v })}>
                   <div className="space-y-2">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <Field label={t("agents.approval_categories")}>
+                      <div className="space-y-2">
+                        <label className="text-xs font-medium text-muted-foreground ml-1">{t("agents.approval_categories")}</label>
                         <div className="flex flex-col gap-1.5">
                           {(["system", "destructive", "external"] as const).map((cat) => (
                             <label key={cat} className="flex items-center gap-2 text-xs cursor-pointer">
@@ -513,13 +518,12 @@ export function AgentEditDialog({
                             </label>
                           ))}
                         </div>
-                      </Field>
-                      <Field label={t("agents.approval_timeout")}>
+                      </div>
+                      <Field label={t("agents.approval_timeout")} labelClassName="text-xs" hint={t("agents.approval_timeout_hint")}>
                         <Input type="number" min="30" max="3600" step="30" value={form.approvalTimeout} className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ approvalTimeout: e.target.value })} />
-                        <span className="text-[10px] text-muted-foreground">{t("agents.approval_timeout_hint")}</span>
                       </Field>
                     </div>
-                    <Field label={t("agents.approval_specific_tools")}>
+                    <Field label={t("agents.approval_specific_tools")} labelClassName="text-xs">
                       <ToolMultiSelect tools={toolNames} selected={form.approvalRequireFor} onChange={(v) => upd({ approvalRequireFor: v })} placeholder={t("agents.approval_tools_placeholder")} />
                     </Field>
                   </div>
@@ -540,7 +544,8 @@ export function AgentEditDialog({
                         </>
                       )}
                     </p>
-                    <Field label={t("agents.tool_dispatcher_core_extra")}>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-muted-foreground ml-1">{t("agents.tool_dispatcher_core_extra")}</label>
                       <p className="text-[10px] text-muted-foreground -mt-1 mb-1 leading-snug">
                         {t("agents.tool_dispatcher_core_extra_hint")}
                       </p>
@@ -550,8 +555,8 @@ export function AgentEditDialog({
                         placeholder={t("agents.tool_dispatcher_core_extra_placeholder")}
                         suggestions={toolNames}
                       />
-                    </Field>
-                    <Field label={t("agents.tool_dispatcher_promotion_max")}>
+                    </div>
+                    <Field label={t("agents.tool_dispatcher_promotion_max")} labelClassName="text-xs" hint={t("agents.tool_dispatcher_promotion_max_hint")}>
                       <Input
                         type="number"
                         step="1"
@@ -561,9 +566,6 @@ export function AgentEditDialog({
                         className="bg-background border-border font-mono text-sm h-8"
                         onChange={(e) => upd({ toolDispatcherPromotionMax: e.target.value })}
                       />
-                      <span className="text-[10px] text-muted-foreground">
-                        {t("agents.tool_dispatcher_promotion_max_hint")}
-                      </span>
                     </Field>
                   </div>
                 </SwitchSection>
@@ -574,19 +576,18 @@ export function AgentEditDialog({
                 <SwitchSection title={t("agents.section_tool_loop")} enabled={form.tlEnabled} onToggle={(v) => upd({ tlEnabled: v })}>
                   <div className="space-y-2">
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <Field label={t("agents.field_tl_max_iterations")}>
+                    <Field label={t("agents.field_tl_max_iterations")} labelClassName="text-xs" hint={t("agents.hint_tl_max_iterations")}>
                         <Input type="number" step="1" min="0" max="10000" className="bg-background border-border font-mono text-sm h-8" value={form.tlMaxIterations} onChange={(e) => upd({ tlMaxIterations: e.target.value })} />
-                        <span className="text-[10px] text-muted-foreground">{t("agents.hint_tl_max_iterations")}</span>
                       </Field>
-                      <Field label={t("agents.field_tl_warn_threshold")}>
+                      <Field label={t("agents.field_tl_warn_threshold")} labelClassName="text-xs">
                         <Input type="number" step="1" min="1" className="bg-background border-border font-mono text-sm h-8" value={form.tlWarnThreshold} onChange={(e) => upd({ tlWarnThreshold: e.target.value })} />
                       </Field>
-                      <Field label={t("agents.field_tl_break_threshold")}>
+                      <Field label={t("agents.field_tl_break_threshold")} labelClassName="text-xs">
                         <Input type="number" step="1" min="1" className="bg-background border-border font-mono text-sm h-8" value={form.tlBreakThreshold} onChange={(e) => upd({ tlBreakThreshold: e.target.value })} />
                       </Field>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <Field label={t("agents.field_max_auto_continues")}>
+                      <Field label={t("agents.field_max_auto_continues")} labelClassName="text-xs">
                         <Input type="number" step="1" min="0" max="20" className="bg-background border-border font-mono text-sm h-8" value={form.tlMaxAutoContinues} onChange={(e) => upd({ tlMaxAutoContinues: e.target.value })} />
                       </Field>
                     </div>
@@ -606,16 +607,15 @@ export function AgentEditDialog({
                       <span className="text-xs font-medium text-muted-foreground">{t("agents.hooks_log_all")}</span>
                       <Switch checked={form.hooksLogAll} onCheckedChange={(v) => upd({ hooksLogAll: v })} className="data-[state=checked]:bg-primary" />
                     </div>
-                    <Field label={t("agents.hooks_block_tools")}>
+                    <Field label={t("agents.hooks_block_tools")} labelClassName="text-xs">
                       <Input value={form.hooksBlockTools} placeholder="tool1, tool2" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ hooksBlockTools: e.target.value })} />
                     </Field>
                   </div>
                 </SwitchSection>
                 <SwitchSection title={t("agents.section_skills")} enabled={form.srEnabled} onToggle={(v) => upd({ srEnabled: v })}>
                   <div className="space-y-2">
-                    <Field label={t("agents.field_sr_min_tool_calls")}>
+                    <Field label={t("agents.field_sr_min_tool_calls")} labelClassName="text-xs" hint={t("agents.hint_sr_min_tool_calls")}>
                       <Input type="number" step="1" min="1" max="100" className="bg-background border-border font-mono text-sm h-8" value={form.srMinToolCalls} onChange={(e) => upd({ srMinToolCalls: e.target.value })} />
-                      <span className="text-[10px] text-muted-foreground">{t("agents.hint_sr_min_tool_calls")}</span>
                     </Field>
                   </div>
                 </SwitchSection>
@@ -625,7 +625,7 @@ export function AgentEditDialog({
             <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "session" ? "" : "opacity-0 pointer-events-none select-none"}`}>
                 <SwitchSection title={t("agents.section_session")} enabled={form.sessionEnabled} onToggle={(v) => upd({ sessionEnabled: v })}>
                   <div className="space-y-2">
-                    <Field label={t("agents.field_dm_scope")}>
+                    <Field label={t("agents.field_dm_scope")} labelClassName="text-xs">
                       <Select value={form.sessionDmScope} onValueChange={(v) => upd({ sessionDmScope: v })}>
                         <SelectTrigger className="w-full bg-background border-border text-sm h-8"><SelectValue /></SelectTrigger>
                         <SelectContent className="border-border">
@@ -637,16 +637,16 @@ export function AgentEditDialog({
                       </Select>
                     </Field>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <Field label={t("agents.field_ttl_days")}>
+                      <Field label={t("agents.field_ttl_days")} labelClassName="text-xs">
                         <Input type="number" step="1" min="0" className="bg-background border-border font-mono text-sm h-8" value={form.sessionTtlDays} onChange={(e) => upd({ sessionTtlDays: e.target.value })} />
                       </Field>
-                      <Field label={t("agents.field_max_messages")}>
+                      <Field label={t("agents.field_max_messages")} labelClassName="text-xs">
                         <Input type="number" step="1" min="0" className="bg-background border-border font-mono text-sm h-8" value={form.sessionMaxMessages} onChange={(e) => upd({ sessionMaxMessages: e.target.value })} />
                       </Field>
-                      <Field label={t("agents.field_prune_tool_output")}>
+                      <Field label={t("agents.field_prune_tool_output")} labelClassName="text-xs">
                         <Input type="number" step="1" min="0" value={form.sessionPruneToolOutput} placeholder="Off" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ sessionPruneToolOutput: e.target.value })} />
                       </Field>
-                      <Field label={t("agents.field_max_history")}>
+                      <Field label={t("agents.field_max_history")} labelClassName="text-xs">
                         <Input type="number" step="1" min="0" value={form.maxHistoryMessages} placeholder="Unlimited" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ maxHistoryMessages: e.target.value })} />
                       </Field>
                     </div>
@@ -654,7 +654,7 @@ export function AgentEditDialog({
                 </SwitchSection>
                 <SwitchSection title={t("agents.section_access")} enabled={form.accessEnabled} onToggle={(v) => upd({ accessEnabled: v })}>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Field label={t("agents.field_access_mode")}>
+                    <Field label={t("agents.field_access_mode")} labelClassName="text-xs">
                       <Select value={form.accessMode} onValueChange={(v) => upd({ accessMode: v })}>
                         <SelectTrigger className="bg-background border-border text-sm h-8"><SelectValue /></SelectTrigger>
                         <SelectContent>
@@ -664,7 +664,7 @@ export function AgentEditDialog({
                       </Select>
                     </Field>
                     {form.accessMode === "restricted" && (
-                      <Field label={t("agents.field_access_owner_id")}>
+                      <Field label={t("agents.field_access_owner_id")} labelClassName="text-xs">
                         <Input value={form.accessOwnerId} placeholder="Telegram User ID" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ accessOwnerId: e.target.value })} />
                       </Field>
                     )}
@@ -676,7 +676,7 @@ export function AgentEditDialog({
             <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "schedule" ? "" : "opacity-0 pointer-events-none select-none"}`}>
               <SwitchSection title={t("agents.section_schedule")} enabled={form.hbEnabled} onToggle={(v) => upd({ hbEnabled: v })}>
                 <CronSchedulePicker value={form.hbCron} onChange={(v) => upd({ hbCron: v })} timezone={form.hbTimezone || "UTC"} onTimezoneChange={(v) => upd({ hbTimezone: v })} />
-                <Field label={t("agents.field_announce_to")}>
+                <Field label={t("agents.field_announce_to")} labelClassName="text-xs">
                   <Select value={form.hbAnnounceTo || "__none__"} onValueChange={(v) => upd({ hbAnnounceTo: v === "__none__" ? "" : v })}>
                     <SelectTrigger className="w-full bg-background border-border text-sm h-8"><SelectValue /></SelectTrigger>
                     <SelectContent className="border-border">
@@ -767,7 +767,7 @@ export function ChannelDialog({
           <DialogTitle className="text-sm font-bold">{channelDialogId ? t("agents.channel_edit") : t("agents.channel_add_dialog")}</DialogTitle>
         </DialogHeader>
         <div className="px-5 py-4 space-y-4">
-          <Field label={t("agents.channel_field_type")}>
+          <Field label={t("agents.channel_field_type")} labelClassName="text-xs">
             <Select
               value={channelForm.channel_type}
               onValueChange={(v) => setChannelForm((f) => ({ ...f, channel_type: v }))}
@@ -781,7 +781,7 @@ export function ChannelDialog({
               </SelectContent>
             </Select>
           </Field>
-          <Field label={t("agents.channel_field_display_name")}>
+          <Field label={t("agents.channel_field_display_name")} labelClassName="text-xs">
             <Input
               value={channelForm.display_name}
               placeholder={t("agents.channel_placeholder_name")}
@@ -789,7 +789,7 @@ export function ChannelDialog({
               onChange={(e) => setChannelForm((f) => ({ ...f, display_name: e.target.value }))}
             />
           </Field>
-          <Field label={t("agents.channel_field_bot_token")}>
+          <Field label={t("agents.channel_field_bot_token")} labelClassName="text-xs">
             <Input
               type="password"
               value={channelForm.bot_token}
@@ -798,7 +798,7 @@ export function ChannelDialog({
               onChange={(e) => setChannelForm((f) => ({ ...f, bot_token: e.target.value }))}
             />
           </Field>
-          <Field label={t("agents.channel_field_api_url")}>
+          <Field label={t("agents.channel_field_api_url")} labelClassName="text-xs">
             <Input
               value={channelForm.api_url}
               placeholder="http://localhost:8081"
@@ -863,21 +863,6 @@ export function DeleteChannelDialog({
 
 // --- Helper components ---
 
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-2">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
-      {children}
-    </div>
-  );
-}
-
 function SwitchSection({
   title,
   enabled,
@@ -902,23 +887,6 @@ function SwitchSection({
         />
       </div>
       {enabled && <div className="animate-in fade-in duration-200">{children}</div>}
-    </div>
-  );
-}
-
-function Field({
-  label,
-  children,
-  className,
-}: {
-  label: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={`flex flex-col gap-1.5 ${className ?? ""}`}>
-      <label className="text-xs font-medium text-muted-foreground">{label}</label>
-      {children}
     </div>
   );
 }
@@ -989,6 +957,7 @@ function TagInput({
   placeholder?: string;
   suggestions?: string[];
 }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState("");
   const datalistId = useMemo(
     () => `taginput-${Math.random().toString(36).slice(2, 10)}`,
@@ -1016,7 +985,7 @@ function TagInput({
             type="button"
             onClick={() => onChange(values.filter((x) => x !== v))}
             className="rounded-full hover:bg-muted text-muted-foreground hover:text-foreground h-4 w-4 inline-flex items-center justify-center text-xs leading-none"
-            aria-label={`Remove ${v}`}
+            aria-label={t("common.remove", { item: v })}
           >
             ×
           </button>
