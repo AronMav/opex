@@ -42,11 +42,14 @@ New `crates/hydeclaw-core/src/tools/command_security.rs`:
   - reverse shell: `bash -i >& /dev/tcp/`, `/dev/tcp/`, `nc -e`, `ncat -e`
   - persistence: `>> ~/.ssh/authorized_keys`, `>> /root/.ssh/authorized_keys`, crontab injection (`crontab -` piped)
 
-Hook in `handle_code_exec` (`agent/pipeline/sandbox.rs`, after `code` is read):
+Hook in `handle_code_exec` (`agent/pipeline/sandbox.rs`, right after `code` is read).
+The host vs sandbox path is decided by `is_host = is_base && sandbox.is_none()` (the same
+predicate the function already uses at the run site) — both `is_base` and `sandbox` are
+parameters of `handle_code_exec`.
 - Compute `scan_command(code)`.
 - If `Dangerous(label)`:
-  - **host path** (base agent / `execute_host_code`): **block** — return `"⛔ code_exec blocked: dangerous command pattern '{label}'. Refusing to run on the host."` without executing.
-  - **sandbox path** (Docker, isolated): **warn** — run as normal but prepend `"⚠ security: command matched '{label}' (ran in the isolated sandbox)."` to the result.
+  - **host path** (`is_host == true`): **block** — return `"⛔ code_exec blocked: dangerous command pattern '{label}'. Refusing to run on the host."` without executing.
+  - **sandbox path** (`is_host == false`, Docker, isolated): **warn** — run as normal but prepend `"⚠ security: command matched '{label}' (ran in the isolated sandbox)."` to the result.
 - `None`: unchanged.
 
 ### Tests (local, no IO)
@@ -86,10 +89,16 @@ SSRF blocks private IPs, but there is no way for the operator to block the agent
 - New `crates/hydeclaw-core/src/tools/url_policy.rs`:
   - `pub fn host_blocked(host: &str, globs: &[String]) -> bool` — case-insensitive glob match (`*.evil.tld` matches `a.evil.tld` and `evil.tld`; exact match otherwise). A tiny dependency-free glob (prefix/suffix/`*`) — no new crate.
   - `pub fn url_blocked(url: &str, globs: &[String]) -> bool` — parse host from url, delegate to `host_blocked` (returns false on unparseable url — SSRF already guards scheme).
-- Applied to **agent-controlled** web fetches only (NOT admin-set YAML endpoints):
-  - `browser_action` navigate (`agent/pipeline/handlers.rs`, next to the existing `validate_url_scheme`).
-  - `web_fetch` handler (wherever it validates/fetches the agent-supplied URL).
-  - On block: refuse with `"⛔ blocked by domain policy: {host}"`.
+- Applied to **agent-controlled** web fetches only (NOT admin-set YAML endpoints).
+  The check lives in the **tool handlers** (which have `deps.cfg.app_config.security` —
+  the `ph::` functions do not receive config), checking `args["url"]` before delegating:
+  - `BrowserActionHandler::handle` (`agent/tool_handlers/comms.rs`) — only when
+    `args["url"]` is present (the `navigate` action).
+  - `WebFetchHandler::handle` (`agent/tool_handlers/web.rs`) — `args["url"]`.
+  - On block: return `"⛔ blocked by domain policy: {host}"` without delegating.
+- **v1 limitation (noted, not fixed):** the `workspace/tools/browser.yaml` YAML alias
+  reaches the browser-renderer via the internal-endpoint YAML path and bypasses this
+  handler-level check; the primary `browser_action` system tool is covered.
 
 ### Tests (local)
 `host_blocked`/`url_blocked`: `*.evil.tld` matches sub + apex; non-match passes; empty blocklist → never blocks; case-insensitive; unparseable url → false. Integration (server): with a configured blocklist, a browser_action/web_fetch to a blocked host is refused.
@@ -102,7 +111,9 @@ SSRF blocks private IPs, but there is no way for the operator to block the agent
 - `crates/hydeclaw-core/src/tools/url_policy.rs` (new) — C
 - `crates/hydeclaw-core/src/tools/mod.rs` — declare the 3 modules
 - `crates/hydeclaw-core/src/agent/pipeline/sandbox.rs` — A hook
-- `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` — B hook (write/edit) + C hook (browser_action, web_fetch)
+- `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` — B hook (write/edit)
+- `crates/hydeclaw-core/src/agent/tool_handlers/comms.rs` — C hook (BrowserActionHandler)
+- `crates/hydeclaw-core/src/agent/tool_handlers/web.rs` — C hook (WebFetchHandler)
 - `crates/hydeclaw-core/src/config/mod.rs` — `SecurityConfig` + `AppConfig.security`
 
 ## Error handling
