@@ -45,6 +45,16 @@ def test_router_503_when_no_active_provider():
     r = TestClient(_app_with_registry(Reg())).post("/v1/search", json={"query": "q"})
     assert r.status_code == 503 and r.json()["error"] == "no_websearch_provider"
 
+def test_router_bad_max_results_falls_back_to_default():
+    from fastapi.testclient import TestClient
+    class Prov:
+        async def search(self, http, query, max_results): return []
+    class Reg:
+        async def aget_active(self, cap): return Prov()
+        async def aget_instance(self, name): return Prov()
+    r = TestClient(_app_with_registry(Reg())).post("/v1/search", json={"query": "q", "max_results": "abc"})
+    assert r.status_code == 200
+
 def test_router_body_provider_uses_instance_override():
     from fastapi.testclient import TestClient
     class Prov:
