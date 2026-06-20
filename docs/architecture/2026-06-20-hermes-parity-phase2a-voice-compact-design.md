@@ -80,16 +80,17 @@ text-suppression mode is deferred; the CHECK constraint can be widened later.)
 - `set_voice_mode(db, channel, chat_id, mode) -> Result<()>` (upsert).
 
 ### Semantics — `/voice` slash command
-Handled in `agent/pipeline/commands.rs` (`handle_command`). The command reads the
-channel + chat from the incoming message (`msg.channel`, `msg.context["chat_id"]`):
+Handled in `agent/pipeline/commands.rs` (`handle_command`, which already receives
+`msg: &IncomingMessage` and a `CommandContext` carrying `db`). The handler reads the
+channel + chat directly from the message (`msg.channel`, `msg.context["chat_id"]`) and
+writes via `ctx.db` — **no `CommandContext` change is needed**:
 - `/voice on` → set mode `on`; reply "Voice replies enabled for this chat."
 - `/voice off` → set mode `off`; reply "Voice replies disabled."
 - `/voice` or `/voice status` → report current mode.
 - No `chat_id` in context (e.g. web UI) → reply that `/voice` only applies to chat channels.
 
-`CommandContext` is extended with the channel + chat_id (threaded from the incoming
-message) so the handler can scope the write. A pure `parse_voice_command(arg) ->
-VoiceCmd` helper (Status | Set(mode)) is unit-tested without DB.
+A pure `parse_voice_command(arg) -> VoiceCmd` helper (`Status | Set("on"|"off")`) is
+unit-tested without DB.
 
 ### Auto-TTS hook
 After the pipeline produces the final assistant text for a **channel** turn, if the
@@ -97,14 +98,20 @@ chat's mode is `on`, synthesize speech and send it as a voice message — withou
 touching the transport-agnostic `finalize`:
 
 - Hook location: the channel entry path (`handle_with_status` in
-  `agent/engine/run.rs`), **after** `pipeline::execute` returns the final text.
-- Synthesis: `POST {toolgate_url}/v1/audio/speech` with the final text (same endpoint
-  the TTS YAML tool uses), returning audio bytes.
-- Delivery: emit a `send_voice` `ChannelAction` (the mechanism in
-  `agent/pipeline/channel_actions.rs`) through the channel action sender the channel
-  sink already holds.
+  `agent/engine/run.rs`), **after** `pipeline::execute` returns `outcome` (the final
+  text is `outcome.final_text`; channel + chat come from `msg`). This is past the
+  slash-command early-exit, so it only fires on real assistant turns.
+- Channel router: obtained from `self.state().channel_router`
+  (`AgentState.channel_router: Option<ChannelActionRouter>`) — the **same** mechanism the
+  TTS YAML tool and approval buttons already use (`router.send(action)`). It is NOT a
+  parameter of `handle_with_status`.
+- Synthesis + delivery: reuse the existing TTS channel-action path
+  (`POST {toolgate_url}/v1/audio/speech` → save to uploads → `send_voice` `ChannelAction`
+  via the router) rather than reimplementing it (DRY). Factor the synth+send logic the
+  TTS YAML tool uses into a reusable helper if needed.
 - Failures are non-fatal: log a warning and continue (never block the text reply).
-- Skip when the final text is empty or the turn was interrupted/failed.
+- Skip when the final text is empty, the chat mode is `off`, or the turn was
+  interrupted/failed (`outcome.status` not a successful completion).
 
 ### Files
 - `migrations/055_channel_voice_modes.sql` (new)
