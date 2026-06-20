@@ -58,7 +58,7 @@ function parseUserMessageParts(content: string): MessagePart[] {
 /**
  * Sort consecutive runs of tool parts back into their declared order.
  * Parallel tool calls complete (and are saved to DB) in execution order, not
- * declaration order — so search_web_fresh may appear before agents_list even
+ * declaration order — so search_web may appear before agents_list even
  * when agents_list was declared first in tool_calls[].
  * Text / file / rich-card parts are left in place as separators between groups.
  */

@@ -62,7 +62,7 @@ pub async fn run_subagent_with_session(
     let ws_prompt =
         workspace::load_workspace_prompt(&cfg.workspace_dir, &cfg.agent.name).await?;
     let capabilities = workspace::CapabilityFlags {
-        has_search: executor.has_tool("search_web").await || executor.has_tool("search_web_fresh").await,
+        has_search: executor.has_tool("search_web").await,
         has_memory: cfg.memory_store.is_available(),
         has_message_actions: ctx.state.channel_router.is_some(),
         has_cron: cfg.scheduler.is_some(),

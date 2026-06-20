@@ -66,7 +66,7 @@ pub async fn handle_openai(
         };
 
         let capabilities = workspace::CapabilityFlags {
-            has_search: executor.has_tool("search_web").await || executor.has_tool("search_web_fresh").await,
+            has_search: executor.has_tool("search_web").await,
             has_memory: cfg.memory_store.is_available(),
             has_message_actions: false, // no channel adapter in API mode
             has_cron: cfg.scheduler.is_some(),

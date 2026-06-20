@@ -40,7 +40,7 @@ For questions requiring information from multiple sources.
 
 #### 2. Gather information
 - Start with `search_web` for the overall picture
-- Use `search_web_fresh` for current data and news
+- Use `search_web` for current data and news
 - Check `memory(action="search")` — you may have researched this topic before
 - Make 3-5 different queries with varying phrasings
 
@@ -83,7 +83,7 @@ For questions requiring information from multiple sources.
 - Never present single-source information as fact
 - Always note when sources disagree
 - Prefer recent sources over old ones
-- Use `search_web_fresh` for time-sensitive topics
+- Use `search_web` for time-sensitive topics
 - Save key findings to `memory(action="index")` for future reference
 - Do not generate facts — if not found, say so
 - Keep search queries short and precise (3-5 words)
