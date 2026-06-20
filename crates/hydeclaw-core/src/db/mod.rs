@@ -20,6 +20,7 @@ pub mod providers;
 pub mod skill_repairs;
 pub mod curator_decisions;
 pub mod skill_versions;
+pub mod todos;
 pub mod tool_audit;
 pub mod tool_quality;
 pub mod upload_migration;
