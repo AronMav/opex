@@ -158,6 +158,26 @@ pub fn mint_uploads_url(base: &str, id: uuid::Uuid, key: &[u8; 32], ttl_secs: u6
     url.replacen("/uploads/", "/api/uploads/", 1)
 }
 
+/// Base prefix for upload URLs that are rendered **in the same-origin web UI**
+/// (chat `__file__:` markers, `*_ready` notifications, client-upload and
+/// agent-icon responses). Always empty, so the minted URL is **root-relative**
+/// (`/api/uploads/{id}?sig=…&exp=…`).
+///
+/// A root-relative URL resolves against whatever origin served the page, so it
+/// works no matter how (or whether) `gateway.public_url` is configured. Using
+/// the configured absolute base here was the root cause of a mixed-content /
+/// `ERR_NAME_NOT_RESOLVED` failure: when `public_url` was left at its
+/// placeholder (`http://your-server:18789`) on an HTTPS deployment, the browser
+/// blocked the cross-origin insecure request and audio/image playback silently
+/// failed. The HMAC signature is over `"uploads:{id}:{exp}"` (host-independent),
+/// so dropping the host does not affect verification.
+///
+/// `public_url` is still required where an **absolute** URL is mandatory —
+/// OAuth redirect URIs and CORS origins (see `oauth.rs`, `gateway/mod.rs`).
+pub fn web_uploads_base() -> &'static str {
+    ""
+}
+
 /// Verify a signed `/api/uploads/{id}` URL. Inputs: the id parsed from the
 /// path, the signature and expiry from the query, and the same key used to
 /// mint. Returns `Ok(())` on success.
@@ -451,6 +471,21 @@ mod tests {
         let id = uuid::Uuid::new_v4();
         let url = mint_uploads_url("http://h", id, &key, 60);
         assert!(url.starts_with(&format!("http://h/api/uploads/{id}?sig=")), "{url}");
+        let (sig, exp) = parse_url_qs(&url);
+        assert!(verify_uploads_url(id, &sig, exp, &key).is_ok());
+    }
+
+    #[test]
+    fn web_uploads_base_yields_root_relative_verifiable_url() {
+        // Regression guard for the mixed-content bug: media rendered in the web
+        // UI must use a root-relative URL (no scheme/host) so it resolves
+        // against the page origin regardless of gateway.public_url. The signed
+        // payload is host-independent, so verification still succeeds.
+        let key = [13u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let url = mint_uploads_url(web_uploads_base(), id, &key, 60);
+        assert!(url.starts_with("/api/uploads/"), "must be root-relative: {url}");
+        assert!(!url.contains("://"), "must carry no scheme/host: {url}");
         let (sig, exp) = parse_url_qs(&url);
         assert!(verify_uploads_url(id, &sig, exp, &key).is_ok());
     }

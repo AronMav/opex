@@ -6,29 +6,13 @@ use std::sync::Arc;
 
 use super::CommandContext;
 use crate::agent::channel_actions::ChannelAction;
-use crate::config::AppConfig;
 use crate::secrets::SecretsManager;
 use crate::tools::yaml_tools::OAuthContext;
 use crate::oauth::OAuthManager;
 
-/// Build the public base URL for signed `/api/uploads/{id}` links.
-/// Mirrors the pattern in `gateway/handlers/agents/icon.rs::public_base` and
-/// `gateway/handlers/media.rs:87-92`. Falls back to `http://localhost:{port}`
-/// when `[gateway] public_url` is not set, so background tasks (which have no
-/// State extractor) can still mint URLs that point at the same host.
-pub(crate) fn public_base_for_uploads(app_config: &AppConfig) -> String {
-    if let Some(ref pu) = app_config.gateway.public_url {
-        pu.trim_end_matches('/').to_string()
-    } else {
-        let port = app_config
-            .gateway
-            .listen
-            .rsplit(':')
-            .next()
-            .unwrap_or("18789");
-        format!("http://localhost:{port}")
-    }
-}
+// Upload links rendered in the web UI use a root-relative base
+// (`crate::uploads::web_uploads_base()`) so they resolve against the page origin
+// and never depend on `gateway.public_url`. See that function for the rationale.
 
 /// Build a `SecretsEnvResolver` for YAML tool env resolution.
 pub(crate) fn make_resolver(
@@ -216,14 +200,13 @@ async fn execute_inline_for_ui(
     };
 
     let upload_key = ctx.tex.secrets.get_upload_hmac_key();
-    let base_url = public_base_for_uploads(&ctx.cfg.app_config);
     let (url, media_type) = match save_binary_to_uploads(
         &ctx.cfg.db,
         ctx.cfg.app_config.cleanup.uploads_retention_days,
         &bytes,
         kind.upload_hint(),
         &upload_key,
-        &base_url,
+        crate::uploads::web_uploads_base(),
     )
     .await
     {

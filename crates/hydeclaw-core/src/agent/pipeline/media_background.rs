@@ -325,9 +325,10 @@ impl BackgroundMediaTask {
             channel_router: ctx.state.channel_router.clone(),
             ui_event_tx:    ctx.state.ui_event_tx.clone(),
             bg_tasks:       ctx.state.bg_tasks.clone(),
-            base_url:       crate::agent::pipeline::channel_actions::public_base_for_uploads(
-                &ctx.cfg.app_config,
-            ),
+            // Root-relative: the upload URL is only ever rendered in the
+            // same-origin web UI (`__file__:` marker + `*_ready` notify), so it
+            // must not depend on `gateway.public_url`. See web_uploads_base().
+            base_url:       crate::uploads::web_uploads_base().to_string(),
             db:             ctx.cfg.db.clone(),
             upload_key:     ctx.tex.secrets.get_upload_hmac_key(),
             retention_days: ctx.cfg.app_config.cleanup.uploads_retention_days,

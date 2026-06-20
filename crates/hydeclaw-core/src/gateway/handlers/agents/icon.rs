@@ -11,7 +11,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use serde::{Deserialize, Serialize};
 
-use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices, InfraServices};
+use crate::gateway::clusters::{AgentCore, AuthServices, InfraServices};
 use crate::gateway::state::AppState;
 use crate::uploads::{HISTORICAL_URL_TTL_SECS, mint_uploads_url};
 
@@ -55,28 +55,11 @@ pub(crate) struct IconJsonPayload {
     data_base64: String,
 }
 
-/// Build the public base URL for signed URLs, mirroring `media.rs:87-92`.
-fn public_base(cfg: &ConfigServices) -> String {
-    if let Some(ref pu) = cfg.config.gateway.public_url {
-        pu.trim_end_matches('/').to_string()
-    } else {
-        let port = cfg
-            .config
-            .gateway
-            .listen
-            .rsplit(':')
-            .next()
-            .unwrap_or("18789");
-        format!("http://localhost:{port}")
-    }
-}
-
 /// Shared validation + upsert + URL mint. Both PUT (multipart) and POST/json
 /// route into this so they cannot drift apart.
 async fn store_icon(
     infra: &InfraServices,
     auth: &AuthServices,
-    cfg: &ConfigServices,
     agent_name: &str,
     mime: &str,
     data: &[u8],
@@ -107,9 +90,15 @@ async fn store_icon(
         }
     };
 
+    // Root-relative URL — rendered in the same-origin web UI, so it must not
+    // depend on gateway.public_url (see crate::uploads::web_uploads_base()).
     let key = auth.secrets.get_upload_hmac_key();
-    let base = public_base(cfg);
-    let icon_url = mint_uploads_url(&base, id, &key, HISTORICAL_URL_TTL_SECS);
+    let icon_url = mint_uploads_url(
+        crate::uploads::web_uploads_base(),
+        id,
+        &key,
+        HISTORICAL_URL_TTL_SECS,
+    );
     (StatusCode::OK, Json(IconResponse { icon_url })).into_response()
 }
 
@@ -117,7 +106,6 @@ pub(crate) async fn api_put_agent_icon(
     State(agents): State<AgentCore>,
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
-    State(cfg): State<ConfigServices>,
     Path(name): Path<String>,
     mut multipart: Multipart,
 ) -> axum::response::Response {
@@ -151,7 +139,7 @@ pub(crate) async fn api_put_agent_icon(
         None => return (StatusCode::BAD_REQUEST, "missing 'image' field").into_response(),
     };
     let mime = mime.unwrap_or_else(|| "application/octet-stream".to_string());
-    store_icon(&infra, &auth, &cfg, &name, &mime, &data).await
+    store_icon(&infra, &auth, &name, &mime, &data).await
 }
 
 /// JSON variant for agent self-service: `{mime, data_base64}`.
@@ -161,7 +149,6 @@ pub(crate) async fn api_post_agent_icon_json(
     State(agents): State<AgentCore>,
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
-    State(cfg): State<ConfigServices>,
     Path(name): Path<String>,
     Json(payload): Json<IconJsonPayload>,
 ) -> axum::response::Response {
@@ -180,7 +167,7 @@ pub(crate) async fn api_post_agent_icon_json(
                 .into_response();
         }
     };
-    store_icon(&infra, &auth, &cfg, &name, &payload.mime, &data).await
+    store_icon(&infra, &auth, &name, &payload.mime, &data).await
 }
 
 pub(crate) async fn api_delete_agent_icon(
