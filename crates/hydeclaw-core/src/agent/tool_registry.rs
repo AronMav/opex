@@ -23,6 +23,9 @@ pub struct ToolDeps<'a> {
     pub workspace_dir:       &'a str,
     pub agent_name:          &'a str,
     pub agent_base:          bool,
+    /// Current session id, if the tool call is bound to a session. `None` for
+    /// session-less contexts (e.g. some cron/isolated paths).
+    pub session_id:          Option<uuid::Uuid>,
     pub db:                  &'a PgPool,
     pub http_client:         &'a reqwest::Client,
     pub ssrf_client:         &'a reqwest::Client,
@@ -90,6 +93,7 @@ impl<'a> ToolDeps<'a> {
             workspace_dir:       &cfg.workspace_dir,
             agent_name:          &cfg.agent.name,
             agent_base:          cfg.agent.base,
+            session_id,
             db:                  &cfg.db,
             http_client:         engine.http_client(),
             ssrf_client:         engine.ssrf_http_client(),
@@ -130,6 +134,7 @@ impl<'a> ToolDeps<'a> {
             workspace_dir:       self.workspace_dir,
             agent_name:          self.agent_name,
             agent_base:          self.agent_base,
+            session_id:          self.session_id,
             db:                  self.db,
             http_client:         self.http_client,
             ssrf_client:         self.ssrf_client,
