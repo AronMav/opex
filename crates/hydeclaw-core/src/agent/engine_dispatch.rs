@@ -235,6 +235,20 @@ impl AgentEngine {
                     return body;
                 }
 
+                // Domain blocklist for agent-supplied URLs in YAML tools (e.g. the
+                // `browser` / `screenshot_web` aliases that reach internal renderers
+                // via the internal-endpoint path, bypassing the system
+                // web_fetch/browser_action handler check).
+                if let Some(u) = arguments.get("url").and_then(|v| v.as_str())
+                    && (u.starts_with("http://") || u.starts_with("https://"))
+                    && crate::tools::url_policy::url_blocked(
+                        u,
+                        &self.cfg().app_config.security.blocked_domains,
+                    )
+                {
+                    return format!("⛔ blocked by domain policy: {u}");
+                }
+
                 let resolver = self.make_resolver();
                 let oauth_ctx = self.make_oauth_context();
                 let client = if crate::tools::ssrf::is_internal_endpoint(&yaml_tool.endpoint) {
