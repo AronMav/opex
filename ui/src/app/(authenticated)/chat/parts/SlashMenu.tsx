@@ -5,6 +5,7 @@ import { useTranslation } from "@/hooks/use-translation";
 const SLASH_COMMAND_KEYS = [
   { cmd: "/new",     key: "chat.slash_new" },
   { cmd: "/reset",   key: "chat.slash_reset" },
+  { cmd: "/compact", key: "chat.slash_compact" },
   { cmd: "/stop",    key: "chat.slash_stop" },
   { cmd: "/think:0", key: "chat.slash_think_off" },
   { cmd: "/think:1", key: "chat.slash_think_min" },
