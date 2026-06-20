@@ -871,14 +871,14 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
     if ctx.browser_renderer_url != "disabled" {
         tools.push(ToolDefinition {
             name: "browser_action".to_string(),
-            description: "Interact with web pages via headless browser. Workflow: create_session → navigate → actions (click/type/screenshot/etc.) → close. Sessions auto-expire after 5 min idle.".to_string(),
+            description: "Interact with web pages via headless browser. Workflow: create_session → navigate → actions (click/type/scroll/hover/drag/back/press/screenshot/etc.) → close. scroll is required for dynamic pages (infinite scroll, dropdowns). JS dialogs are auto-accepted by default; use set_dialog to change. Sessions auto-expire after 5 min idle.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["create_session", "navigate", "click", "type", "fill", "screenshot", "wait", "text", "evaluate", "content", "close"],
-                        "description": "Action to perform. Start with create_session, end with close."
+                        "enum": ["create_session", "navigate", "click", "type", "fill", "screenshot", "wait", "text", "evaluate", "content", "scroll", "hover", "drag", "back", "press", "set_dialog", "close"],
+                        "description": "Action to perform. Start with create_session, end with close. scroll/hover/drag/back/press operate on the current page."
                     },
                     "session_id": {
                         "type": "string",
@@ -911,7 +911,14 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                     "fields": {
                         "type": "object",
                         "description": "Map of selector→value for fill action (bulk form fill)."
-                    }
+                    },
+                    "key": { "type": "string", "description": "Keyboard key for press action (e.g. 'Enter', 'Escape', 'Tab')." },
+                    "dx": { "type": "integer", "description": "Horizontal scroll delta in pixels (scroll action)." },
+                    "dy": { "type": "integer", "description": "Vertical scroll delta in pixels (scroll action). Positive = down." },
+                    "to": { "type": "string", "enum": ["top", "bottom"], "description": "Scroll target shortcut (scroll action)." },
+                    "to_selector": { "type": "string", "description": "Target CSS selector for drag action." },
+                    "accept": { "type": "boolean", "description": "set_dialog: accept (true) or dismiss (false) future JS dialogs." },
+                    "prompt_text": { "type": "string", "description": "set_dialog: text to enter for window.prompt() dialogs." }
                 },
                 "required": ["action"]
             }),
