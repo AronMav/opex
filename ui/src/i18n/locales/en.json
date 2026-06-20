@@ -1017,6 +1017,12 @@
   "providers.cap_vision": "Vision",
   "providers.cap_imagegen": "ImageGen",
   "providers.cap_embedding": "Embedding",
+  "providers.cap_websearch": "Web Search",
+  "providers.websearch_hint": "Only the highest-priority provider is currently used.",
+  "providers.group_hint": "Only the highest-priority provider is currently used.",
+  "providers.priority_label": "Priority",
+  "providers.active_toggle": "Active",
+  "providers.set_active_error": "Failed to update active providers: {{error}}",
 
   "integrations.title": "Integrations",
   "integrations.subtitle": "Connect external services to agents via OAuth 2.0",

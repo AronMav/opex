@@ -355,6 +355,7 @@ export interface CreateProviderInput {
 export interface ProviderActiveRow {
   capability: string;
   provider_name: string | null;
+  priority: number;
 }
 
 export interface MediaDriverInfo {

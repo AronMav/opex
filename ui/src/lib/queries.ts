@@ -536,7 +536,7 @@ export function useDeleteProvider() {
 export function useSetProviderActive() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (data: { capability: string; provider_name: string | null }) =>
+    mutationFn: (data: { capability: string; providers: { provider_name: string; priority: number }[] }) =>
       apiPut("/api/provider-active", data),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.providerActive }),
     onError: (e: Error) => toast.error(e.message),
