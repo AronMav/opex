@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef, useId } from "react";
 import { apiPost, apiGet, apiDelete } from "@/lib/api";
 import { toast } from "sonner";
 import { useTranslation } from "@/hooks/use-translation";
 import type { TranslationKey } from "@/i18n/types";
 import { Button } from "@/components/ui/button";
+import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -115,10 +115,15 @@ const STEPS: { key: Step; labelKey: TranslationKey; icon: typeof Key }[] = [
 
 export default function SetupPage() {
   const { t } = useTranslation();
-  const router = useRouter();
   const [step, setStep] = useState<Step>("requirements");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // ── Stable ids for manually-associated (compound) fields ──────────────
+  const providerTypeId = useId();
+  const baseUrlId = useId();
+  const modelId = useId();
+  const langId = useId();
 
   // ── Provider types from API ───────────────────────────────────────────
   const [providerTypes, setProviderTypes] = useState<ProviderTypeInfo[]>([]);
@@ -153,7 +158,9 @@ export default function SetupPage() {
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [defaultModel, setDefaultModel] = useState("");
-  const [providerName, setProviderName] = useState("");
+  // `providerName` was tracked here for a flow that no longer reads it; we
+  // still call the API and treat the response, but the local mirror is
+  // dead state.
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [testCallStatus, setTestCallStatus] = useState<"idle" | "testing" | "ok" | "fail">("idle");
@@ -207,7 +214,7 @@ export default function SetupPage() {
         step, providerType, defaultModel, baseUrl, agentName, agentLang,
       }));
     } catch { /* ignore */ }
-  }, [step, providerType, defaultModel, baseUrl, agentName, agentLang]);
+  }, [restored, step, providerType, defaultModel, baseUrl, agentName, agentLang]);
 
   const currentIdx = STEPS.findIndex((s) => s.key === step);
 
@@ -269,7 +276,6 @@ export default function SetupPage() {
         base_url: baseUrl.trim() || undefined,
         enabled: true,
       });
-      setProviderName(created.name ?? name);
       providerNameRef.current = created.name ?? name;
 
       // WIZ-02: validate key with test call
@@ -561,10 +567,10 @@ export default function SetupPage() {
 
               {/* Provider Type */}
               <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground">{t("setup.provider")}</label>
+                <label htmlFor={providerTypeId} className="text-sm font-medium text-muted-foreground">{t("setup.provider")}</label>
                 {providerTypes.length > 0 ? (
                   <Select value={providerType} onValueChange={handleProviderTypeChange}>
-                    <SelectTrigger className="text-sm w-full">
+                    <SelectTrigger id={providerTypeId} className="text-sm w-full">
                       <SelectValue placeholder="Select provider..." />
                     </SelectTrigger>
                     <SelectContent>
@@ -588,6 +594,7 @@ export default function SetupPage() {
                   </Select>
                 ) : (
                   <Input
+                    id={providerTypeId}
                     value={providerType}
                     onChange={(e) => setProviderType(e.target.value)}
                     className="font-mono text-sm"
@@ -598,8 +605,7 @@ export default function SetupPage() {
 
               {/* API Key */}
               {providerType && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">{t("setup.api_key")}</label>
+                <Field label={t("setup.api_key")}>
                   <Input
                     type="password"
                     value={apiKeyValue}
@@ -607,14 +613,15 @@ export default function SetupPage() {
                     className="font-mono text-sm"
                     placeholder={selectedTypeInfo?.requires_api_key === false ? "(optional)" : "sk-... / key-..."}
                   />
-                </div>
+                </Field>
               )}
 
               {/* Base URL */}
               {providerType && (
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">{t("setup.base_url")} <span className="text-xs text-muted-foreground/60">({t("common.optional")})</span></label>
+                  <label htmlFor={baseUrlId} className="text-sm font-medium text-muted-foreground">{t("setup.base_url")} <span className="text-xs text-muted-foreground/60">({t("common.optional")})</span></label>
                   <Input
+                    id={baseUrlId}
                     value={baseUrl}
                     onChange={(e) => setBaseUrl(e.target.value)}
                     className="font-mono text-sm"
@@ -626,7 +633,7 @@ export default function SetupPage() {
               {/* Model */}
               {providerType && (
                 <div className="space-y-1.5">
-                  <label className="text-sm font-medium text-muted-foreground">
+                  <label htmlFor={modelId} className="text-sm font-medium text-muted-foreground">
                     {t("setup.model")} <span className="text-destructive">*</span>
                   </label>
                   {discoveredModels.length > 0 ? (
@@ -635,7 +642,7 @@ export default function SetupPage() {
                         value={discoveredModels.includes(defaultModel) ? defaultModel : ""}
                         onValueChange={setDefaultModel}
                       >
-                        <SelectTrigger className="font-mono text-sm">
+                        <SelectTrigger id={modelId} className="font-mono text-sm">
                           <SelectValue placeholder="Select model..." />
                         </SelectTrigger>
                         <SelectContent>
@@ -657,6 +664,7 @@ export default function SetupPage() {
                   ) : (
                     <div className="flex gap-2">
                       <Input
+                        id={modelId}
                         value={defaultModel}
                         onChange={(e) => setDefaultModel(e.target.value)}
                         className="font-mono text-sm"
@@ -718,19 +726,18 @@ export default function SetupPage() {
                 {t("setup.create_first_agent")}
               </p>
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">{t("setup.name")}</label>
+                <Field label={t("setup.name")}>
                   <Input
                     value={agentName}
                     onChange={(e) => setAgentName(e.target.value)}
                     className="font-mono text-sm"
                     placeholder="Hyde"
                   />
-                </div>
+                </Field>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">{t("setup.language")}</label>
+                  <label htmlFor={langId} className="text-sm font-medium text-muted-foreground">{t("setup.language")}</label>
                   <Select value={agentLang} onValueChange={setAgentLang}>
-                    <SelectTrigger className="text-sm w-full">
+                    <SelectTrigger id={langId} className="text-sm w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -799,8 +806,7 @@ export default function SetupPage() {
               <p className="text-sm text-muted-foreground">
                 {t("setup.connect_telegram_bot")}
               </p>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground">{t("setup.bot_name")}</label>
+              <Field label={t("setup.bot_name")}>
                 <Input
                   value={botDisplayName}
                   onChange={(e) => setBotDisplayName(e.target.value)}
@@ -808,9 +814,8 @@ export default function SetupPage() {
                   placeholder={`${agentName || "Agent"} Telegram`}
                   disabled={skipChannel}
                 />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground">{t("setup.bot_token")}</label>
+              </Field>
+              <Field label={t("setup.bot_token")}>
                 <Input
                   type="password"
                   value={botToken}
@@ -820,7 +825,7 @@ export default function SetupPage() {
                   disabled={skipChannel}
                   onKeyDown={(e) => e.key === "Enter" && doStep3()}
                 />
-              </div>
+              </Field>
               <div className="flex gap-3">
                 <Button onClick={doStep3} disabled={loading || (!botToken.trim() && !skipChannel)} className="flex-1">
                   {loading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}

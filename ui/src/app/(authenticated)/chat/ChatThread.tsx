@@ -5,6 +5,7 @@ import type { ErrorInfo, ReactNode } from "react";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
 import { useVisualViewport } from "@/hooks/use-visual-viewport";
 import { useSessionMessages } from "@/lib/queries";
+import { useTranslation } from "@/hooks/use-translation";
 
 import type { SessionRow } from "@/types/api";
 
@@ -44,7 +45,7 @@ interface ChatThreadProps {
 
 // ── Thread Error Boundary ────────────────────────────────────────────────────
 
-interface ThreadErrorBoundaryProps { children: ReactNode; onRetry?: () => void }
+interface ThreadErrorBoundaryProps { children: ReactNode; onRetry?: () => void; retryLabel?: string }
 interface ThreadErrorBoundaryState { error: string | null }
 
 class ThreadErrorBoundary extends Component<ThreadErrorBoundaryProps, ThreadErrorBoundaryState> {
@@ -67,7 +68,7 @@ class ThreadErrorBoundary extends Component<ThreadErrorBoundaryProps, ThreadErro
             className="px-4 py-2 text-sm rounded-lg border border-border bg-card hover:bg-muted transition-colors"
             onClick={() => this.setState({ error: null })}
           >
-            Retry
+            {this.props.retryLabel || "Retry"}
           </button>
         </div>
       );
@@ -86,6 +87,7 @@ export function ChatThread({
   onClearError,
   onRetry,
 }: ChatThreadProps) {
+  const { t } = useTranslation();
   const keyboardHeight = useVisualViewport();
   const storeAgent = useChatStore((s) => s.currentAgent);
   const currentAgent = agent || storeAgent;
@@ -259,7 +261,7 @@ export function ChatThread({
   }
 
   return (
-    <ThreadErrorBoundary>
+    <ThreadErrorBoundary retryLabel={t("chat.retry")}>
     <div
       className="flex flex-1 flex-col min-h-0 relative"
       style={keyboardHeight > 0 ? { paddingBottom: keyboardHeight } : undefined}

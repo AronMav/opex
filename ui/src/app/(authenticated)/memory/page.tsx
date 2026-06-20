@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Markdown } from "@/components/ui/markdown";
 import { Brain, Search, Trash2, Pin, PinOff, ChevronLeft, ChevronRight, ExternalLink, ArrowLeft, Copy, Check, X, MessageSquare, FileText } from "lucide-react";
@@ -61,7 +62,7 @@ function DocumentFullView({ id, onBack }: { id: string; onBack: () => void }) {
           {copied ? t("common.copied") : t("common.copy")}
         </Button>
       </div>
-      {error && <p className="text-red-500 text-center py-4">{error}</p>}
+      {error && <p className="text-destructive text-center py-4">{error}</p>}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-li:my-0.5 prose-pre:my-3">
           <Markdown>{content || ""}</Markdown>
@@ -110,8 +111,8 @@ export default function MemoryPage() {
       const res = await apiGet<{ documents: MemoryDocument[]; total: number }>(`/api/memory/documents?${params.toString()}`);
       setChunks(res.documents);
       setTotal(res.total);
-    } catch (err: any) {
-      setError(err.message || "Failed to fetch memory");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch memory");
     } finally {
       setLoading(false);
     }
@@ -128,8 +129,8 @@ export default function MemoryPage() {
       setChunks(prev => prev.filter((c) => c.id !== deleteTarget));
       setDeleteTarget(null);
       qc.invalidateQueries({ queryKey: qk.memoryStats });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -139,8 +140,8 @@ export default function MemoryPage() {
       await apiPatch(`/api/memory/documents/${doc.id}`, { pinned: newPinned });
       setChunks(chunks.map((c) => (c.id === doc.id ? { ...c, pinned: newPinned } : c)));
       qc.invalidateQueries({ queryKey: qk.memoryStats });
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -214,9 +215,10 @@ export default function MemoryPage() {
               {query && (
                 <button
                   onClick={() => setQuery("")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  aria-label={t("common.clear")}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground"
                 >
-                  <X className="h-3 w-3" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
@@ -231,16 +233,13 @@ export default function MemoryPage() {
                 ))}
               </div>
             ) : chunks.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-20 text-muted-foreground border-2 border-dashed rounded-3xl bg-muted/10">
-                <Brain className="h-10 w-10 mb-4 opacity-20" />
-                <p className="text-sm">{t("memory.nothing_found")}</p>
-              </div>
+              <EmptyState icon={Brain} text={t("memory.nothing_found")} height="h-64" className="rounded-3xl" />
             ) : (
               <div className="grid gap-3">
                 {chunks.map((doc) => (
                   <div
                     key={doc.id}
-                    className="group relative flex flex-col p-4 bg-card hover:bg-muted/30 border border-border/50 rounded-2xl transition-all duration-200 shadow-sm"
+                    className="group relative flex flex-col p-4 neu-card neu-hover transition-all duration-200"
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1 min-w-0">
@@ -269,14 +268,14 @@ export default function MemoryPage() {
                             {doc.created_at ? new Date(doc.created_at).toLocaleDateString(locale) : ""}
                           </span>
                           {doc.scope === "shared" && (
-                            <Badge variant="secondary" className="h-4 text-[9px] px-1 py-0 bg-blue-500/10 text-blue-400 border-none">
+                            <Badge variant="secondary" className="h-4 text-[9px] px-1 py-0 bg-primary/10 text-primary border-none">
                               shared
                             </Badge>
                           )}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                         <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => router.push(`/memory?doc=${doc.id}`)}>
                           <ExternalLink className="h-3 w-3 mr-1.5" /> {t("memory.show_full_document")}
                         </Button>

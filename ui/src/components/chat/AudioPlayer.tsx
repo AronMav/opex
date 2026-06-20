@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Play, Pause } from "lucide-react";
+import { useTranslation } from "@/hooks/use-translation";
 
 // Single visual language for both shape AND progress: a bar waveform built
 // from the actual audio buffer (RMS per bucket), where bars to the left of
@@ -74,6 +75,7 @@ async function decodeBars(src: string, signal: AbortSignal): Promise<number[] | 
 }
 
 export function AudioPlayer({ src }: { src: string }) {
+  const { t } = useTranslation();
   const audioRef = useRef<HTMLAudioElement>(null);
   const barsRef = useRef<HTMLDivElement>(null);
 
@@ -82,6 +84,9 @@ export function AudioPlayer({ src }: { src: string }) {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  // Tracked in state (not read from audioRef during render) so React re-renders
+  // when the streaming buffer extends. See react-hooks/refs lint rule.
+  const [seekableEnd, setSeekableEnd] = useState(0);
   const [error, setError] = useState(false);
 
   // ── Decode bars once per src ──────────────────────────────────────────────
@@ -100,8 +105,11 @@ export function AudioPlayer({ src }: { src: string }) {
 
   // ── Audio handlers ────────────────────────────────────────────────────────
   const handleDurationUpdate = useCallback(() => {
-    const d = audioRef.current?.duration;
+    const a = audioRef.current;
+    if (!a) return;
+    const d = a.duration;
     if (d && isFinite(d) && d > 0) setDuration(d);
+    if (a.seekable?.length) setSeekableEnd(a.seekable.end(0));
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -112,13 +120,8 @@ export function AudioPlayer({ src }: { src: string }) {
   }, [playing]);
 
   // Streaming WAVs (TTS) sometimes report Infinity for duration — fall back
-  // to seekable.end(0) which the browser fills in once the buffer is loaded.
-  const seekMax =
-    duration > 0
-      ? duration
-      : audioRef.current?.seekable?.length
-        ? audioRef.current.seekable.end(0)
-        : 0;
+  // to seekable.end (tracked in state, updated by audio events).
+  const seekMax = duration > 0 ? duration : seekableEnd;
   const canSeek = seekMax > 0 && !error;
   const progress = seekMax > 0 ? Math.min(1, currentTime / seekMax) : 0;
 
@@ -239,7 +242,7 @@ export function AudioPlayer({ src }: { src: string }) {
         <button
           onClick={togglePlay}
           disabled={error}
-          aria-label={playing ? "Пауза" : "Играть"}
+          aria-label={playing ? t("chat.audio_pause") : t("chat.audio_play")}
           className="relative flex-shrink-0 w-9 h-9 rounded-xl flex items-center justify-center focus:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 transition-transform duration-100 active:scale-95"
           style={{ background: "var(--primary)" }}
         >
@@ -266,7 +269,7 @@ export function AudioPlayer({ src }: { src: string }) {
           ref={barsRef}
           role="slider"
           tabIndex={canSeek ? 0 : -1}
-          aria-label="Перемотка по волне"
+          aria-label={t("chat.audio_seek")}
           aria-valuemin={0}
           aria-valuemax={seekMax > 0 ? Math.round(seekMax) : 0}
           aria-valuenow={Math.round(currentTime)}

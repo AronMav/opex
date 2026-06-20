@@ -15,6 +15,7 @@ import { useTranslation } from "@/hooks/use-translation";
 import { formatDate } from "@/lib/format";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Field } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -43,7 +44,7 @@ const emptyForm = { name: "", agent: "", prompt_prefix: "", webhook_type: "gener
 
 export default function WebhooksPage() {
   const { t, locale } = useTranslation();
-  const { data: webhooks = [], isLoading, error } = useWebhooks();
+  const { data: webhooks = [], error } = useWebhooks();
   const { data: agents = [] } = useAgents();
   const createWebhook = useCreateWebhook();
   const updateWebhook = useUpdateWebhook();
@@ -300,17 +301,15 @@ export default function WebhooksPage() {
           </DialogHeader>
           <div className="p-6 space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground ml-1">{t("webhooks.field_name")}</label>
+              <Field label={t("webhooks.field_name")}>
                 <Input
                   placeholder="my-webhook"
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   className="font-mono text-sm h-11"
                 />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground ml-1">{t("webhooks.field_agent")}</label>
+              </Field>
+              <Field label={t("webhooks.field_agent")}>
                 <Select value={form.agent} onValueChange={(v) => setForm({ ...form, agent: v })}>
                   <SelectTrigger className="font-mono text-sm h-11 w-full">
                     <SelectValue placeholder={t("webhooks.select_agent")} />
@@ -321,10 +320,9 @@ export default function WebhooksPage() {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+              </Field>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground ml-1">{t("webhooks.field_type")}</label>
+            <Field label={t("webhooks.field_type")}>
               <Select value={form.webhook_type} onValueChange={(v) => setForm({ ...form, webhook_type: v as "generic" | "github" })}>
                 <SelectTrigger className="font-mono text-sm h-11 w-full">
                   <SelectValue />
@@ -334,18 +332,16 @@ export default function WebhooksPage() {
                   <SelectItem value="github" className="font-mono">GitHub (HMAC-SHA256)</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+            </Field>
             {form.webhook_type === "github" && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground ml-1">{t("webhooks.field_event_filter")}</label>
+              <Field label={t("webhooks.field_event_filter")} hint={t("webhooks.event_filter_hint")}>
                 <Input
                   value={form.event_filter}
                   placeholder="push, pull_request, issues"
                   onChange={(e) => setForm({ ...form, event_filter: e.target.value })}
                   className="font-mono text-sm h-11"
                 />
-                <span className="text-xs text-muted-foreground ml-1">{t("webhooks.event_filter_hint")}</span>
-              </div>
+              </Field>
             )}
             {form.name.trim() && (
               <div className="space-y-1.5">
@@ -369,15 +365,14 @@ export default function WebhooksPage() {
                 </p>
               </div>
             )}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground ml-1">{t("webhooks.field_prompt_prefix")}</label>
+            <Field label={t("webhooks.field_prompt_prefix")}>
               <Textarea
                 placeholder={t("webhooks.prompt_prefix_placeholder")}
                 value={form.prompt_prefix}
                 onChange={(e) => setForm({ ...form, prompt_prefix: e.target.value })}
                 className="font-mono text-sm min-h-[100px] resize-y"
               />
-            </div>
+            </Field>
           </div>
           <DialogFooter className="p-6 border-t border-border/50 gap-3">
             <Button variant="ghost" onClick={() => setFormOpen(false)}>{t("common.cancel")}</Button>

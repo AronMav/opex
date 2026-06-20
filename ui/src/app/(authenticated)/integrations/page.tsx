@@ -7,6 +7,7 @@ import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
 import {
   Select,
   SelectContent,
@@ -387,7 +388,7 @@ export default function IntegrationsPage() {
     } else if (error) {
       setToast({ msg: t("integrations.oauth_error", { error: decodeURIComponent(error) }), type: "err" });
     }
-  }, [searchParams, queryClient]);
+  }, [searchParams, queryClient, t]);
 
   // Data queries
   const { data: accounts = [], isLoading: accountsLoading } = useOAuthAccounts();
@@ -512,11 +513,11 @@ export default function IntegrationsPage() {
 
       {/* Agent selector */}
       <div className="mb-6 flex items-center gap-3">
-        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider shrink-0">
+        <label htmlFor="integrations-agent-select" className="text-xs font-medium text-muted-foreground uppercase tracking-wider shrink-0">
           {t("integrations.agent_label")}
         </label>
         <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-          <SelectTrigger className="h-8 w-48 text-xs font-mono">
+          <SelectTrigger id="integrations-agent-select" className="h-8 w-48 text-xs font-mono">
             <SelectValue placeholder={t("integrations.select_agent")} />
           </SelectTrigger>
           <SelectContent>
@@ -547,8 +548,7 @@ export default function IntegrationsPage() {
             </p>
             <div className="grid gap-3">
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">{t("integrations.provider")}</label>
+                <Field label={t("integrations.provider")} labelClassName="text-xs">
                   <Select
                     value={addForm.provider}
                     onValueChange={(v) => setAddForm((f) => ({ ...f, provider: v as Provider }))}
@@ -564,28 +564,25 @@ export default function IntegrationsPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">{t("integrations.display_name")}</label>
+                </Field>
+                <Field label={t("integrations.display_name")} labelClassName="text-xs">
                   <Input
                     className="h-9 text-xs"
                     placeholder={t("integrations.display_name_placeholder")}
                     value={addForm.displayName}
                     onChange={(e) => setAddForm((f) => ({ ...f, displayName: e.target.value }))}
                   />
-                </div>
+                </Field>
               </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block font-mono">{t("integrations.client_id")}</label>
+              <Field label={t("integrations.client_id")} labelClassName="text-xs font-mono">
                 <Input
                   className="h-9 font-mono text-xs"
                   placeholder={t("integrations.client_id")}
                   value={addForm.clientId}
                   onChange={(e) => setAddForm((f) => ({ ...f, clientId: e.target.value }))}
                 />
-              </div>
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block font-mono">{t("integrations.client_secret")}</label>
+              </Field>
+              <Field label={t("integrations.client_secret")} labelClassName="text-xs font-mono">
                 <Input
                   type="password"
                   className="h-9 font-mono text-xs"
@@ -593,7 +590,7 @@ export default function IntegrationsPage() {
                   value={addForm.clientSecret}
                   onChange={(e) => setAddForm((f) => ({ ...f, clientSecret: e.target.value }))}
                 />
-              </div>
+              </Field>
               <div>
                 <p className="text-xs text-muted-foreground mb-1.5">{t("integrations.redirect_uri_hint")}</p>
                 <div className="flex items-center gap-2 neu-inset rounded-lg px-3 py-2">

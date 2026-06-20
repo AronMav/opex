@@ -9,6 +9,19 @@ const eslintConfig = defineConfig([
     rules: {
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/purity": "off",
+      "react-hooks/preserve-manual-memoization": "warn",
+      "react-hooks/refs": "warn",
+    },
+  },
+  // Relax type-strictness rules in test files (mocks, fixtures, dynamic requires)
+  {
+    files: ["**/__tests__/**", "**/__e2e__/**", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
+    rules: {
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-require-imports": "off",
+      "react-hooks/globals": "off",
+      "react-hooks/preserve-manual-memoization": "off",
+      "react-hooks/refs": "off",
     },
   },
   // Override default ignores of eslint-config-next.

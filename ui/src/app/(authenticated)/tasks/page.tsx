@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { apiGet } from "@/lib/api";
 import {
   useCronJobs,
@@ -34,12 +34,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { useAuthStore } from "@/stores/auth-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
 import { useQueryClient } from "@tanstack/react-query";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Field } from "@/components/ui/field";
 import { Clock, Play, Power, PowerOff, Trash2, Edit3, Plus, ChevronDown, ChevronUp, History } from "lucide-react";
-import type { CronJob, CronRun, ChannelRow } from "@/types/api";
+import type { CronJob, ChannelRow } from "@/types/api";
 
 const emptyJob = { name: "", agent: "", cron: "", timezone: "Europe/Samara", task: "", silent: false, announce_to: null as { channel: string; chat_id: number } | null, jitter_secs: 0, run_once: false, run_at: null as string | null, run_at_local: "" };
 
@@ -48,7 +50,7 @@ import { isValidCron } from "@/lib/cron";
 export default function CronPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { data: jobs = [], isLoading: loading, error } = useCronJobs();
+  const { data: jobs = [], error } = useCronJobs();
   const [actionError, setActionError] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -69,15 +71,8 @@ export default function CronPage() {
 
   const { data: runs = [], isLoading: runsLoading } = useCronRuns(expandedJob);
 
-  const expandedJobRef = useRef(expandedJob);
-  expandedJobRef.current = expandedJob;
-
   const toggleHistory = useCallback((jobId: string) => {
-    if (expandedJobRef.current === jobId) {
-      setExpandedJob(null);
-    } else {
-      setExpandedJob(jobId);
-    }
+    setExpandedJob((prev) => (prev === jobId ? null : jobId));
   }, []);
 
   // Auto-refresh when a cron job completes
@@ -120,10 +115,14 @@ export default function CronPage() {
     const tool_policy = allow.length > 0 || deny.length > 0 ? { allow, deny } : undefined;
     try {
       if (editId) {
-        const { run_at_local, ...payload } = form;
+        // `run_at_local` is a UI-only helper, not part of the API payload.
+        const { run_at_local: _unused, ...payload } = form;
+        void _unused;
         await updateJob.mutateAsync({ id: editId, ...payload, tool_policy });
       } else {
-        const { run_at_local, ...payload } = form;
+        // `run_at_local` is a UI-only helper, not part of the API payload.
+        const { run_at_local: _unused, ...payload } = form;
+        void _unused;
         await createJob.mutateAsync({ ...payload, tool_policy });
       }
       setFormOpen(false);
@@ -165,7 +164,7 @@ export default function CronPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-        <div className="mb-8 md:mb-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex flex-col gap-1">
             <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("cron.title")}</h2>
             <span className="text-sm text-muted-foreground">
@@ -343,12 +342,10 @@ export default function CronPage() {
           <ScrollArea className="max-h-[60vh] sm:max-h-[70vh]">
           <div className="p-6 space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground ml-1">{t("cron.field_name")}</label>
+              <Field label={t("cron.field_name")}>
                 <Input placeholder="daily_report" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="font-mono text-sm h-11" />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground ml-1">{t("cron.field_agent")}</label>
+              </Field>
+              <Field label={t("cron.field_agent")}>
                 <Select value={form.agent} onValueChange={(v) => setForm({ ...form, agent: v })} disabled={!!editId}>
                   <SelectTrigger className="font-mono text-sm h-11 w-full">
                     <SelectValue placeholder={t("cron.select_agent")} />
@@ -359,7 +356,7 @@ export default function CronPage() {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+              </Field>
             </div>
             {/* Run once toggle */}
             <div className="flex items-center justify-between pt-2">
@@ -373,8 +370,7 @@ export default function CronPage() {
               />
             </div>
             {form.run_once ? (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground ml-1">{t("tasks.run_datetime")}</label>
+              <Field label={t("tasks.run_datetime")}>
                 <Input
                   type="datetime-local"
                   value={form.run_at_local ?? ""}
@@ -385,10 +381,9 @@ export default function CronPage() {
                   })}
                   className="font-mono text-sm h-11"
                 />
-              </div>
+              </Field>
             ) : (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground ml-1">{t("cron.field_schedule")}</label>
+              <Field label={t("cron.field_schedule")}>
                 <CronSchedulePicker
                   value={form.cron}
                   onChange={(v) => setForm({ ...form, cron: v })}
@@ -396,10 +391,9 @@ export default function CronPage() {
                   onTimezoneChange={(v) => setForm({ ...form, timezone: v })}
                   showDescription={false}
                 />
-              </div>
+              </Field>
             )}
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground ml-1">{t("tasks.start_jitter")}</label>
+            <Field label={t("tasks.start_jitter")} hint={t("tasks.jitter_hint")}>
               <Input
                 type="number"
                 min={0}
@@ -409,19 +403,15 @@ export default function CronPage() {
                 onChange={(e) => setForm({ ...form, jitter_secs: parseInt(e.target.value) || 0 })}
                 className="font-mono text-sm h-11"
               />
-              <p className="text-xs text-muted-foreground/60 ml-1">
-                {t("tasks.jitter_hint")}
-              </p>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-muted-foreground ml-1">{t("cron.field_task")}</label>
+            </Field>
+            <Field label={t("cron.field_task")}>
               <Textarea
                 placeholder={t("cron.task_placeholder")}
                 value={form.task}
                 onChange={(e) => setForm({ ...form, task: e.target.value })}
                 className="font-mono text-sm min-h-[120px] resize-y"
               />
-            </div>
+            </Field>
 
             {/* Silent mode toggle */}
             <div className="flex items-center justify-between pt-2">
@@ -464,8 +454,7 @@ export default function CronPage() {
                   </SelectContent>
                 </Select>
                 {form.announce_to?.channel && (
-                  <div className="space-y-1">
-                    <label className="text-xs font-medium text-muted-foreground">{t("tasks.chat_id")}</label>
+                  <Field label={t("tasks.chat_id")} labelClassName="text-xs">
                     <Input
                       type="number"
                       value={form.announce_to?.chat_id || ""}
@@ -473,41 +462,38 @@ export default function CronPage() {
                       placeholder="123456789"
                       className="font-mono text-sm h-9"
                     />
-                  </div>
+                  </Field>
                 )}
               </div>
             )}
 
             {/* Tool Policy - collapsible */}
-            <details className="group border-t border-border/30 pt-3">
-              <summary className="cursor-pointer text-sm font-medium text-muted-foreground py-1 select-none list-none flex items-center gap-1">
+            <Collapsible className="group border-t border-border/30 pt-3">
+              <CollapsibleTrigger className="cursor-pointer text-sm font-medium text-muted-foreground py-1 select-none flex items-center gap-1 w-full">
                 <span>{t("cron.tool_policy")}</span>
                 <span className="text-xs opacity-60 ml-1">({t("common.optional")})</span>
-              </summary>
-              <div className="mt-2 space-y-3">
-                <div>
-                  <label className="text-xs text-muted-foreground">{t("cron.tool_allow")}</label>
+              </CollapsibleTrigger>
+              <CollapsibleContent className="mt-2 space-y-3">
+                <Field label={t("cron.tool_allow")} hint={t("cron.tool_policy_hint")} labelClassName="text-xs">
                   <Textarea
                     placeholder={"memory_search\nsearch_web"}
                     value={toolPolicyAllow}
                     onChange={(e) => setToolPolicyAllow(e.target.value)}
                     rows={3}
-                    className="mt-1 font-mono text-xs"
+                    className="font-mono text-xs"
                   />
-                  <p className="text-xs text-muted-foreground/60 mt-1">{t("cron.tool_policy_hint")}</p>
-                </div>
-                <div>
-                  <label className="text-xs text-muted-foreground">{t("cron.tool_deny")}</label>
+                </Field>
+                <Field label={t("cron.tool_deny")} labelClassName="text-xs">
                   <Textarea
                     placeholder={"workspace_write\ncode_exec"}
                     value={toolPolicyDeny}
                     onChange={(e) => setToolPolicyDeny(e.target.value)}
                     rows={3}
-                    className="mt-1 font-mono text-xs"
+                    className="font-mono text-xs"
                   />
-                </div>
-              </div>
-            </details>
+                </Field>
+              </CollapsibleContent>
+            </Collapsible>
           </div>
           </ScrollArea>
           <DialogFooter className="p-6 border-t border-border/50 gap-3">

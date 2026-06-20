@@ -20,6 +20,7 @@ import {
   RefreshCw,
   ChevronDown,
 } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 import type { AgentDetail } from "@/types/api";
 
@@ -196,9 +197,7 @@ export default function AccessPage() {
       {error && <ErrorBanner error={error} />}
 
       {!agentsLoading && agents.length === 0 ? (
-        <div className="flex h-40 items-center justify-center rounded-xl border border-dashed border-border bg-muted/10">
-          <p className="font-mono text-sm text-muted-foreground/40 uppercase tracking-wider">{t("access.no_agents")}</p>
-        </div>
+        <EmptyState icon={ShieldAlert} text={t("access.no_agents")} height="h-40" />
       ) : (
         <div className="space-y-3">
           {agents.map((agent) => {

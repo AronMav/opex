@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { CronSchedulePicker } from "@/components/ui/cron-schedule-picker";
 import type { CronPreset } from "@/lib/cron";
 import { Archive, Download, RefreshCw, Plus, RotateCcw, Trash2, Settings2 } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { apiDelete } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -303,11 +304,7 @@ export default function BackupsPage() {
         {combinedError && <ErrorBanner error={combinedError} className="mt-6" />}
 
         {backups.length === 0 ? (
-          <div className="mt-6 flex h-40 items-center justify-center rounded-xl border border-dashed border-border bg-muted/10">
-            <p className="font-mono text-sm text-muted-foreground/40 uppercase tracking-wider">
-              {t("backups.empty")}
-            </p>
-          </div>
+          <EmptyState icon={Archive} text={t("backups.empty")} height="h-40" className="mt-6" />
         ) : (
           <div className="mt-6 space-y-3 pb-8">
             {backups.map((b) => (
