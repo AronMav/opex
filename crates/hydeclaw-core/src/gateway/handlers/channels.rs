@@ -35,6 +35,11 @@ const CREDENTIAL_KEYS: &[&str] = &[
     "verify_token",
 ];
 
+/// Channel types accepted by `POST /api/agents/{name}/channels`.
+/// Must stay in sync with the drivers registered in `channels/src/index.ts`.
+pub(crate) const SUPPORTED_CHANNEL_TYPES: &[&str] =
+    &["telegram", "discord", "matrix", "irc", "slack", "whatsapp", "email"];
+
 // ── Channel management ────────────────────────────────────────────────────────
 
 /// Invalidate channel info cache on the agent engine after CRUD operations.
@@ -119,9 +124,8 @@ pub(crate) async fn api_channel_create(
     Path(agent_name): Path<String>,
     Json(body): Json<ChannelCreateBody>,
 ) -> impl IntoResponse {
-    const SUPPORTED: &[&str] = &["telegram", "discord", "matrix", "irc", "slack", "whatsapp"];
-    if !SUPPORTED.contains(&body.channel_type.as_str()) {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("unknown channel_type: {}. Supported: {}", body.channel_type, SUPPORTED.join(", "))}))).into_response();
+    if !SUPPORTED_CHANNEL_TYPES.contains(&body.channel_type.as_str()) {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("unknown channel_type: {}. Supported: {}", body.channel_type, SUPPORTED_CHANNEL_TYPES.join(", "))}))).into_response();
     }
 
     let config = if body.config.is_null() { serde_json::json!({}) } else { body.config };
@@ -723,6 +727,14 @@ pub async fn migrate_credentials_to_vault(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn email_is_a_supported_channel_type() {
+        assert!(SUPPORTED_CHANNEL_TYPES.contains(&"email"), "email must be accepted");
+        for t in ["telegram", "discord", "matrix", "irc", "slack", "whatsapp"] {
+            assert!(SUPPORTED_CHANNEL_TYPES.contains(&t), "{t} must remain supported");
+        }
+    }
 
     #[test]
     fn extract_returns_none_when_no_credentials() {
