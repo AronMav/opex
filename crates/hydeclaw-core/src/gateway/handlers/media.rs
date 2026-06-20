@@ -136,15 +136,11 @@ pub(crate) async fn api_media_upload(
         }
     };
 
-    let base = if let Some(ref pu) = cfg.config.gateway.public_url {
-        pu.trim_end_matches('/').to_string()
-    } else {
-        let port = cfg.config.gateway.listen.rsplit(':').next().unwrap_or("18789");
-        format!("http://localhost:{port}")
-    };
+    // Root-relative URL — rendered in the same-origin web UI, so it must not
+    // depend on gateway.public_url (see crate::uploads::web_uploads_base()).
     let key = auth.secrets.get_upload_hmac_key();
     let url = crate::uploads::mint_uploads_url(
-        &base,
+        crate::uploads::web_uploads_base(),
         id,
         &key,
         cfg.config.uploads.signed_url_ttl_secs,
