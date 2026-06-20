@@ -96,6 +96,41 @@ describe("buildActiveListAfterToggle — active toggle sends providers array", (
   });
 });
 
+// ── group_hint visibility predicate (I-1 regression) ─────────────────────────
+
+describe("group_hint predicate — shown for non-websearch capability groups only", () => {
+  const hintVisible = (cap: string) =>
+    (ALL_CAPABILITIES as readonly string[]).includes(cap) && cap !== "websearch";
+
+  it("returns false for websearch (websearch legitimately allows multiple active providers)", () => {
+    expect(hintVisible("websearch")).toBe(false);
+  });
+
+  it("returns true for stt", () => {
+    expect(hintVisible("stt")).toBe(true);
+  });
+
+  it("returns true for tts", () => {
+    expect(hintVisible("tts")).toBe(true);
+  });
+
+  it("returns true for vision", () => {
+    expect(hintVisible("vision")).toBe(true);
+  });
+
+  it("returns true for imagegen", () => {
+    expect(hintVisible("imagegen")).toBe(true);
+  });
+
+  it("returns true for embedding", () => {
+    expect(hintVisible("embedding")).toBe(true);
+  });
+
+  it("returns false for text (not in ALL_CAPABILITIES)", () => {
+    expect(hintVisible("text")).toBe(false);
+  });
+});
+
 // ── buildProviderBody (existing tests, regression) ───────────────────────────
 
 const BASE_FORM: CreateProviderInput = {
