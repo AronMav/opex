@@ -107,6 +107,9 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
     // MCP
     async fn mcp_tool_definitions(&self) -> Vec<ToolDefinition>;
 
+    // Providers
+    async fn active_websearch_providers(&self) -> Vec<(String, i32)>;
+
     // Capabilities
     async fn has_tool(&self, name: &str) -> bool;
     fn memory_is_available(&self) -> bool;
@@ -574,6 +577,10 @@ impl ContextBuilder for DefaultContextBuilder {
 
             let mut all_tools = deps.filter_tools_by_policy(tool_list);
 
+            // Augment search_web description with live active-provider list.
+            let ws_providers = deps.active_websearch_providers().await;
+            augment_search_web_description(&mut all_tools, &ws_providers);
+
             if dispatcher_enabled {
                 // Partition: keep only static core ∪ core_extra ∪ promoted.
                 // Everything else is reachable via the `tool_use` dispatcher,
@@ -679,6 +686,27 @@ pub mod mock {
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
+
+/// Augment the `search_web` tool's `description` with the live active-provider
+/// list (priority-ordered, lowest number = highest priority). No-op when
+/// `search_web` is not present in `tools` (e.g. denied by policy).
+pub(crate) fn augment_search_web_description(
+    tools: &mut [hydeclaw_types::ToolDefinition],
+    ws: &[(String, i32)],
+) {
+    let Some(t) = tools.iter_mut().find(|t| t.name == "search_web") else { return };
+    let listed = if ws.is_empty() {
+        "\nNo web-search provider is currently active.".to_string()
+    } else {
+        let names: Vec<String> = ws.iter().map(|(n, p)| format!("{n} (priority {p})")).collect();
+        format!(
+            "\nActive providers (highest priority first): {}. Default = {}.",
+            names.join(", "),
+            ws[0].0
+        )
+    };
+    t.description.push_str(&listed);
+}
 
 /// Check whether the user message shares a non-trivial token (≥3 chars, not a stop word)
 /// with the candidate tool's name or description. Used by trigger-hint logic as a
@@ -818,5 +846,46 @@ mod tests {
     fn mock_context_builder_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<MockContextBuilder>();
+    }
+
+    #[test]
+    fn augments_search_web_with_active_providers() {
+        use hydeclaw_types::ToolDefinition;
+        let mut tools = vec![ToolDefinition {
+            name: "search_web".into(),
+            description: "Web search.".into(),
+            input_schema: serde_json::json!({}),
+        }];
+        augment_search_web_description(
+            &mut tools,
+            &[("ws-ollama".into(), 5), ("ws-brave".into(), 10)],
+        );
+        assert!(tools[0].description.contains("ws-ollama (priority 5)"));
+        assert!(tools[0].description.contains("Default = ws-ollama"));
+    }
+
+    #[test]
+    fn augment_search_web_no_providers() {
+        use hydeclaw_types::ToolDefinition;
+        let mut tools = vec![ToolDefinition {
+            name: "search_web".into(),
+            description: "Web search.".into(),
+            input_schema: serde_json::json!({}),
+        }];
+        augment_search_web_description(&mut tools, &[]);
+        assert!(tools[0].description.contains("No web-search provider is currently active."));
+    }
+
+    #[test]
+    fn augment_search_web_noop_when_tool_absent() {
+        use hydeclaw_types::ToolDefinition;
+        let mut tools = vec![ToolDefinition {
+            name: "duckduckgo_search".into(),
+            description: "DDG.".into(),
+            input_schema: serde_json::json!({}),
+        }];
+        augment_search_web_description(&mut tools, &[("ws-ollama".into(), 1)]);
+        // description of duckduckgo_search must be unchanged
+        assert_eq!(tools[0].description, "DDG.");
     }
 }

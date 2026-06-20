@@ -1,6 +1,6 @@
 name: search_web
-description: "Web search via Ollama Cloud — returns relevant web results with page-content snippets. Use as the primary search tool."
-endpoint: "https://ollama.com/api/web_search"
+description: "Web search. Returns results with page-content snippets. Optional `provider` selects a specific active web-search provider; omit to use the highest-priority one."
+endpoint: "http://localhost:9011/v1/search"
 method: POST
 parallel: true
 parameters:
@@ -13,13 +13,16 @@ parameters:
     type: integer
     required: false
     location: body
-    description: "Maximum number of results (default 5, up to 10)"
+    description: "Maximum number of results (default 5)"
     default: 5
+  provider:
+    type: string
+    required: false
+    location: body
+    description: "Active web-search provider name (omit for the highest-priority one)"
+    default: ""
 body_template: |
-  {"query": "{{query}}", "max_results": {{max_results}}}
-auth:
-  type: bearer_env
-  key: OLLAMA_API_KEY
+  {"query": "{{query}}", "max_results": {{max_results}}, "provider": "{{provider}}"}
 response_transform: "$.results"
 
 status: verified
