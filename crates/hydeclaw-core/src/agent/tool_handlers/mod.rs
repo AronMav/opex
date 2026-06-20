@@ -9,6 +9,7 @@ mod comms;
 mod secrets_tool;
 mod session;
 mod tool_use;
+mod todo;
 
 use workspace::*;
 use memory::*;
@@ -21,6 +22,7 @@ use comms::*;
 use secrets_tool::*;
 use session::*;
 use tool_use::*;
+use todo::*;
 
 use crate::agent::tool_registry::SystemToolRegistry;
 
@@ -50,6 +52,7 @@ impl SystemToolRegistry {
         r.register("session",          SessionHandler);
         r.register("agents_list",      AgentsListHandler);
         r.register("browser_action",   BrowserActionHandler);
+        r.register("todo",             TodoHandler);
         r.register("code_exec",        CodeExecHandler);
         r.register("git",              GitToolHandler);
         r.register("canvas",           CanvasHandler);

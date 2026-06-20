@@ -260,6 +260,49 @@ async fn br_post(
         .map_err(|e| format!("invalid JSON from browser-renderer: {e} — raw: {text}"))
 }
 
+// ── Todo handler ────────────────────────────────────────────────
+
+/// Session-scoped structured task list. `mode=read` returns the list;
+/// `mode=write` upserts (`strategy=merge`, default) or overwrites (`replace`).
+pub async fn handle_todo(
+    db: &sqlx::PgPool,
+    session_id: Option<uuid::Uuid>,
+    args: &serde_json::Value,
+) -> String {
+    use crate::db::todos;
+    let Some(sid) = session_id else {
+        return "Error: the todo tool requires an active session".to_string();
+    };
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("read");
+    match mode {
+        "read" => match todos::list_todos(db, sid).await {
+            Ok(items) if items.is_empty() => "TODO list is empty.".to_string(),
+            Ok(items) => todos::format_for_injection(&items),
+            Err(e) => format!("Error reading todos: {e}"),
+        },
+        "write" => {
+            let items = match todos::parse_items(args) {
+                Ok(i) => i,
+                Err(e) => return format!("Error: {e}"),
+            };
+            let strategy = args.get("strategy").and_then(|v| v.as_str()).unwrap_or("merge");
+            let res = if strategy == "replace" {
+                todos::replace_todos(db, sid, &items).await
+            } else {
+                todos::merge_todos(db, sid, &items).await
+            };
+            match res {
+                Ok(()) => match todos::list_todos(db, sid).await {
+                    Ok(all) => format!("Updated. Current list:\n{}", todos::format_for_injection(&all)),
+                    Err(e) => format!("Saved, but failed to re-read: {e}"),
+                },
+                Err(e) => format!("Error writing todos: {e}"),
+            }
+        }
+        other => format!("Error: unknown mode '{other}' (use 'read' or 'write')"),
+    }
+}
+
 // ── Media helpers ───────────────────────────────────────────────
 
 /// Save binary data to the `uploads` table (owner_type='tool_output') and

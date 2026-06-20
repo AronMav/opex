@@ -841,6 +841,32 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         }),
     });
 
+    tools.push(ToolDefinition {
+        name: "todo".to_string(),
+        description: "Maintain a structured task list for THIS session. It persists across turns and survives context compression. Use mode=read to see the list and mode=write to upsert items. Plan multi-step work here and update statuses as you go.".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "mode": { "type": "string", "enum": ["read", "write"], "description": "read = return current list; write = upsert items" },
+                "strategy": { "type": "string", "enum": ["merge", "replace"], "description": "write only: merge (upsert by id, default) or replace (overwrite whole list)" },
+                "items": {
+                    "type": "array",
+                    "description": "write only: the tasks",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": { "type": "string", "description": "stable task identifier" },
+                            "content": { "type": "string", "description": "task description (max 4000 chars)" },
+                            "status": { "type": "string", "enum": ["pending", "in_progress", "done", "cancelled"] }
+                        },
+                        "required": ["id", "content", "status"]
+                    }
+                }
+            },
+            "required": ["mode"]
+        }),
+    });
+
     // Browser automation (conditional on browser-renderer availability)
     if ctx.browser_renderer_url != "disabled" {
         tools.push(ToolDefinition {
