@@ -325,7 +325,7 @@ export function ChatComposer() {
   };
 
   return (
-    <div className="shrink-0 w-full p-3 md:p-4 border-t border-border/50 bg-background/80 backdrop-blur-sm">
+    <div className="shrink-0 w-full p-3 md:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-border/50 bg-background/80 backdrop-blur-sm">
       <div className="mx-auto max-w-4xl">
         <form
           ref={formRef}
@@ -497,7 +497,8 @@ export function ChatComposer() {
                 <Button
                   type="button"
                   size="icon"
-                  aria-label={t("chat.slash_stop")}
+                  aria-label={t("chat.stop_and_keep")}
+                  title={t("chat.stop_and_keep")}
                   onClick={() => useChatStore.getState().stopStream()}
                   className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-destructive/30 bg-destructive/15 text-destructive hover:bg-destructive/25 hover:border-destructive/50 shadow-sm animate-in fade-in zoom-in-90"
                 >

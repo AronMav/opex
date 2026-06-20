@@ -26,6 +26,19 @@ vi.mock("@/components/ui/tooltip", () => ({
   ),
 }));
 
+vi.mock("@/hooks/use-translation", () => ({
+  useTranslation: () => ({
+    t: (key: string, params?: Record<string, unknown>) => {
+      if (key === "chat.context_tokens") return `${params?.tokens} / ${params?.limit} tokens (${params?.pct}%)`;
+      if (key === "chat.context_remaining") return `Remaining: ${params?.remaining}`;
+      if (key === "chat.context_stale") return "· updates after response";
+      if (key === "chat.context_almost_full") return "Context almost full";
+      return key;
+    },
+    locale: "en",
+  }),
+}));
+
 import { ContextBar } from "../ContextBar";
 
 const MODEL = "claude-opus-4"; // 200k limit per model-limits.ts
@@ -147,12 +160,12 @@ describe("ContextBar — tooltip breakdown", () => {
 
   it("shows generating hint when isGenerating is true", () => {
     render(<ContextBar tokens={50000} model={MODEL} isGenerating={true} />);
-    expect(getTooltipText()).toContain("обновится");
+    expect(getTooltipText()).toContain("updates after response");
   });
 
   it("hides generating hint when isGenerating is false", () => {
     render(<ContextBar tokens={50000} model={MODEL} isGenerating={false} />);
-    expect(getTooltipText()).not.toContain("обновится");
+    expect(getTooltipText()).not.toContain("updates after response");
   });
 });
 
@@ -176,7 +189,7 @@ describe("ContextBar — progress bar ratio", () => {
 
   it("shows alert text above 95% but not below", () => {
     render(<ContextBar tokens={150_000} model={MODEL} />);
-    expect(screen.queryByText(/Контекст почти заполнен/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Context almost full/)).not.toBeInTheDocument();
   });
 });
 

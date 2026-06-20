@@ -320,7 +320,7 @@ export function AudioPlayer({ src }: { src: string }) {
 
       {error && (
         <p className="mt-1 text-[11px]" style={{ color: "var(--destructive)" }}>
-          Не удалось воспроизвести аудио
+          {t("chat.audio_play_error")}
         </p>
       )}
 

@@ -50,19 +50,17 @@ export type CodeBlockProps = {
   className?: string
   language?: string
   showLineNumbers?: boolean
-  isStreaming?: boolean
 } & React.HTMLProps<HTMLDivElement>
 
-function CodeBlock({ children, className, language, isStreaming = false, ...props }: CodeBlockProps) {
+function CodeBlock({ children, className, language, ...props }: CodeBlockProps) {
   const codeRef = useRef<HTMLDivElement>(null)
   const [codeText, setCodeText] = useState("")
 
   useEffect(() => {
-    if (isStreaming) return // Skip during streaming — no copy button needed for partial code
     if (codeRef.current) {
-      setCodeText(codeRef.current.textContent || "")
+      setCodeText(codeRef.current.textContent || "");
     }
-  }, [isStreaming, children])
+  }, [children])
 
   return (
     <div
@@ -73,7 +71,7 @@ function CodeBlock({ children, className, language, isStreaming = false, ...prop
       )}
       {...props}
     >
-      {codeText && !isStreaming && <CodeBlockHeader language={language} code={codeText} />}
+      {codeText && <CodeBlockHeader language={language} code={codeText} />}
       <div ref={codeRef}>{children}</div>
     </div>
   )

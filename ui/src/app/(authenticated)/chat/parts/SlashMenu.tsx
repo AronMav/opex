@@ -45,10 +45,17 @@ export function SlashMenu({ query, onSelect, onClose }: Props) {
   if (filtered.length === 0) return null;
 
   return (
-    <div className="absolute bottom-full mb-2 left-0 z-50 w-72 rounded-xl border border-border bg-card shadow-lg overflow-hidden">
+    <div
+      role="listbox"
+      aria-label={t("chat.slash_stop")}
+      className="absolute bottom-full mb-2 left-0 z-50 w-72 rounded-xl border border-border bg-card shadow-lg overflow-hidden"
+    >
       {filtered.map((item, i) => (
         <button
           key={item.cmd}
+          role="option"
+          aria-selected={i === activeIdx}
+          id={`slash-option-${i}`}
           className={`w-full flex items-center gap-3 px-3 py-2 text-sm text-left hover:bg-muted/50 transition-colors ${i === activeIdx ? "bg-muted/50" : ""}`}
           onMouseDown={(e) => { e.preventDefault(); onSelect(item.cmd); }}
         >

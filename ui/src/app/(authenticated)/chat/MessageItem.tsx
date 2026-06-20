@@ -33,6 +33,7 @@ import {
 import { StepGroup } from "@/components/chat/StepGroup";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { abortReasonLabel } from "@/components/chat/abort-reason-label";
+import { useSwipeGesture } from "@/hooks/use-swipe-gesture";
 
 
 // ── Parts render cache (PERF-03) ───────────────────────────────────────────
@@ -163,9 +164,21 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
   const isSending = message.status === "sending";
   const isFailed = message.status === "failed";
 
+  // Swipe right to edit (mobile)
+  const swipeHandlers = useSwipeGesture({
+    onSwipeRight: () => {
+      // Trigger edit via the message actions - find and click the edit button
+      const el = document.querySelector(`[data-msg-id="${message.id}"] [data-action="edit"]`) as HTMLButtonElement | null;
+      el?.click();
+    },
+    threshold: 80,
+  });
+
   return (
     <div
       data-role={isAgentSender ? "agent-sender" : "user"}
+      data-msg-id={message.id}
+      {...swipeHandlers}
       className={cn(
         "group flex gap-3 py-5 md:py-6 border-t border-border/30 dark:border-border/20 first:border-t-0",
         isAgentSender && "bg-muted/20 dark:bg-muted/10 rounded-lg px-3",
@@ -259,10 +272,21 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
   // undefined / "complete" / "aborted" / "failed".
   const isComplete = (message.status as string | undefined) !== "streaming";
 
+  // Swipe left to regenerate (mobile)
+  const { regenerate } = useChatActions();
+  const swipeHandlers = useSwipeGesture({
+    onSwipeLeft: () => {
+      if (isComplete) regenerate();
+    },
+    threshold: 80,
+  });
+
   return (
     <div
       data-role="assistant"
+      data-msg-id={message.id}
       data-testid={isComplete ? "message-complete" : undefined}
+      {...swipeHandlers}
       className={cn(
         "group flex gap-3",
         continuesPrevious

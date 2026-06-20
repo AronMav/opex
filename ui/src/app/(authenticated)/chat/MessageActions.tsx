@@ -23,11 +23,7 @@ import {
   Send,
   MoreHorizontal,
 } from "lucide-react";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { toast } from "sonner";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -317,6 +313,7 @@ function EditButton({ message }: { message: ChatMessage }) {
     <Button
       variant="ghost"
       size="icon-sm"
+      data-action="edit"
       onClick={handleStartEdit}
       className="rounded-full text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50"
       title={t("chat.edit_tooltip")}
@@ -391,8 +388,8 @@ export function MessageActions({
             <ExportMarkdownButton message={message} />
           </div>
           <div className="md:hidden">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
+            <Sheet>
+              <SheetTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon-sm"
@@ -401,13 +398,16 @@ export function MessageActions({
                 >
                   <MoreHorizontal className="h-3.5 w-3.5" />
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <SpeakButton message={message} />
-                <FeedbackButtons message={message} />
-                <ExportMarkdownButton message={message} />
-              </DropdownMenuContent>
-            </DropdownMenu>
+              </SheetTrigger>
+              <SheetContent side="bottom" className="rounded-t-xl px-4 pb-8">
+                <SheetTitle className="sr-only">{t("chat.more_actions")}</SheetTitle>
+                <div className="flex items-center justify-around gap-2 pt-2">
+                  <SpeakButton message={message} />
+                  <FeedbackButtons message={message} />
+                  <ExportMarkdownButton message={message} />
+                </div>
+              </SheetContent>
+            </Sheet>
           </div>
         </>
       )}
