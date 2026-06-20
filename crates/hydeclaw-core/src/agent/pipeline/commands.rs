@@ -14,6 +14,21 @@ use crate::agent::providers::LlmProvider;
 use crate::config::CompactionConfig;
 use crate::db::sessions;
 
+/// Parsed `/voice` argument.
+pub enum VoiceCmd {
+    Status,
+    Set(&'static str),
+}
+
+/// Map a `/voice` argument to an action. Unknown args fall back to `Status`.
+pub fn parse_voice_command(arg: &str) -> VoiceCmd {
+    match arg.trim().to_lowercase().as_str() {
+        "on" => VoiceCmd::Set("on"),
+        "off" => VoiceCmd::Set("off"),
+        _ => VoiceCmd::Status,
+    }
+}
+
 // ── CommandContext ──────────────────────────────────────────────────────────
 
 /// All dependencies needed by slash command handlers, passed explicitly instead of via `&self`.
@@ -251,6 +266,42 @@ where
                 localization::fmt(s.think_level, &[label, &new_level.to_string()])
             ))
         }
+        "/voice" => {
+            let chat_id = msg
+                .context
+                .get("chat_id")
+                .map(|v| v.to_string().trim_matches('"').to_string())
+                .filter(|c| !c.is_empty() && c != "null");
+            let Some(chat_id) = chat_id else {
+                return Some(Ok(
+                    "/voice only applies to chat channels (Telegram, etc.).".to_string(),
+                ));
+            };
+            let channel = msg.channel.as_str();
+            match parse_voice_command(args) {
+                VoiceCmd::Set(mode) => {
+                    if let Err(e) =
+                        crate::db::channel_voice_modes::set_voice_mode(ctx.db, channel, &chat_id, mode).await
+                    {
+                        return Some(Ok(format!("Failed to set voice mode: {e}")));
+                    }
+                    let reply = if mode == "on" {
+                        "Voice replies enabled for this chat. Each reply will also be sent as audio. /voice off to disable."
+                    } else {
+                        "Voice replies disabled for this chat."
+                    };
+                    Some(Ok(reply.to_string()))
+                }
+                VoiceCmd::Status => {
+                    let mode = crate::db::channel_voice_modes::get_voice_mode(ctx.db, channel, &chat_id)
+                        .await
+                        .unwrap_or_else(|_| "off".to_string());
+                    Some(Ok(format!(
+                        "Voice mode for this chat: {mode}. Use /voice on or /voice off."
+                    )))
+                }
+            }
+        }
         "/usage" => {
             let session_id = match sessions::find_active_session(
                 ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
@@ -359,5 +410,19 @@ where
             ))
         }
         _ => None, // Unknown command — pass to LLM
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_voice_command_maps_args() {
+        assert!(matches!(parse_voice_command("on"), VoiceCmd::Set("on")));
+        assert!(matches!(parse_voice_command("off"), VoiceCmd::Set("off")));
+        assert!(matches!(parse_voice_command(""), VoiceCmd::Status));
+        assert!(matches!(parse_voice_command("status"), VoiceCmd::Status));
+        assert!(matches!(parse_voice_command("garbage"), VoiceCmd::Status));
     }
 }
