@@ -306,7 +306,20 @@ Expected: PASS (4 tests).
             )
 ```
 
-Do the **same** in `handle_workspace_edit`'s success arm — locate its success `format!(...)` that returns `"Successfully …\n{FILE_PREFIX}{marker_json}"` and insert `{sec_note}` (computed from its filename + the new content) before the `\n{FILE_PREFIX}` the same way. (Read the edit handler's success arm and mirror the write change; the edit handler has the post-edit content available as the variable it wrote.)
+In `handle_workspace_edit`'s `Ok(())` arm (which has `new_text` — the snippet the agent
+just inserted — and a different success string), scan `new_text` and insert the note
+before the marker:
+
+```rust
+            let sec_note = crate::tools::code_smell::warning_for(filename, new_text);
+            format!(
+                "Successfully edited '{}'{}\n{}{}",
+                filename,
+                sec_note,
+                crate::agent::engine::FILE_PREFIX,
+                marker_json,
+            )
+```
 
 - [ ] **Step 7: Verify compile + tests**
 
