@@ -30,9 +30,9 @@ function DocumentFullView({ id, onBack }: { id: string; onBack: () => void }) {
   useEffect(() => {
     apiGet<{ content: string }>(`/api/memory/documents/${id}`)
       .then((res) => setContent(res.content))
-      .catch((err) => setError(err.message || "Failed to load document"))
+      .catch((err) => setError(err.message || t("memory.doc_load_error")))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, t]);
 
   const handleCopy = () => {
     if (content) {
@@ -112,11 +112,11 @@ export default function MemoryPage() {
       setChunks(res.documents);
       setTotal(res.total);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to fetch memory");
+      setError(err instanceof Error ? err.message : t("memory.fetch_error"));
     } finally {
       setLoading(false);
     }
-  }, [offset, debouncedQuery]);
+  }, [offset, debouncedQuery, t]);
 
   useEffect(() => {
     fetchChunks();
@@ -295,10 +295,13 @@ export default function MemoryPage() {
 
           {/* Pagination */}
           {chunks.length > 0 && (
-            <div className="mt-6 flex justify-center gap-3 shrink-0">
+            <div className="mt-6 flex items-center justify-center gap-3 shrink-0">
               <Button variant="outline" size="sm" onClick={prev} disabled={offset === 0 || loading} className="text-xs w-24">
                 <ChevronLeft className="h-3.5 w-3.5 mr-1" /> {t("common.back")}
               </Button>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {Math.floor(offset / limit) + 1} / {Math.max(1, Math.ceil(total / limit))}
+              </span>
               <Button variant="outline" size="sm" onClick={next} disabled={offset + limit >= total || loading} className="text-xs w-24">
                 {t("common.forward")} <ChevronRight className="h-3.5 w-3.5 ml-1" />
               </Button>

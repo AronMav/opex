@@ -15,6 +15,7 @@ import { useTranslation } from "@/hooks/use-translation";
 import { formatDate } from "@/lib/format";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Field } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,7 +45,7 @@ const emptyForm = { name: "", agent: "", prompt_prefix: "", webhook_type: "gener
 
 export default function WebhooksPage() {
   const { t, locale } = useTranslation();
-  const { data: webhooks = [], error } = useWebhooks();
+  const { data: webhooks = [], isLoading, error } = useWebhooks();
   const { data: agents = [] } = useAgents();
   const createWebhook = useCreateWebhook();
   const updateWebhook = useUpdateWebhook();
@@ -172,7 +173,13 @@ export default function WebhooksPage() {
 
       {errorMessage && <ErrorBanner error={errorMessage} />}
 
-      {webhooks.length === 0 ? (
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-28 rounded-xl" />
+          ))}
+        </div>
+      ) : webhooks.length === 0 ? (
         <EmptyState icon={Webhook} text={t("webhooks.no_webhooks")} />
       ) : (
         <div className="space-y-3 pb-8">
@@ -328,8 +335,8 @@ export default function WebhooksPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="generic" className="font-mono">Generic (Bearer token)</SelectItem>
-                  <SelectItem value="github" className="font-mono">GitHub (HMAC-SHA256)</SelectItem>
+                  <SelectItem value="generic" className="font-mono">{t("webhooks.type_generic")}</SelectItem>
+                  <SelectItem value="github" className="font-mono">{t("webhooks.type_github")}</SelectItem>
                 </SelectContent>
               </Select>
             </Field>

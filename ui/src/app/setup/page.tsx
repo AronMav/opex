@@ -571,7 +571,7 @@ export default function SetupPage() {
                 {providerTypes.length > 0 ? (
                   <Select value={providerType} onValueChange={handleProviderTypeChange}>
                     <SelectTrigger id={providerTypeId} className="text-sm w-full">
-                      <SelectValue placeholder="Select provider..." />
+                      <SelectValue placeholder={t("setup.select_provider")} />
                     </SelectTrigger>
                     <SelectContent>
                       {[...providerTypes].sort((a, b) => {
@@ -611,7 +611,7 @@ export default function SetupPage() {
                     value={apiKeyValue}
                     onChange={(e) => setApiKeyValue(e.target.value)}
                     className="font-mono text-sm"
-                    placeholder={selectedTypeInfo?.requires_api_key === false ? "(optional)" : "sk-... / key-..."}
+                    placeholder={selectedTypeInfo?.requires_api_key === false ? t("setup.optional_hint") : "sk-... / key-..."}
                   />
                 </Field>
               )}
@@ -643,7 +643,7 @@ export default function SetupPage() {
                         onValueChange={setDefaultModel}
                       >
                         <SelectTrigger id={modelId} className="font-mono text-sm">
-                          <SelectValue placeholder="Select model..." />
+                          <SelectValue placeholder={t("setup.select_model")} />
                         </SelectTrigger>
                         <SelectContent>
                           {discoveredModels.map((m) => (
@@ -668,7 +668,7 @@ export default function SetupPage() {
                         value={defaultModel}
                         onChange={(e) => setDefaultModel(e.target.value)}
                         className="font-mono text-sm"
-                        placeholder={fallbackModels.length > 0 ? fallbackModels[0] : "model-name"}
+                        placeholder={fallbackModels.length > 0 ? fallbackModels[0] : t("setup.model_placeholder")}
                       />
                       {selectedTypeInfo && (
                         <Button

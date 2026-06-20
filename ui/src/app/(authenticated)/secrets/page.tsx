@@ -6,6 +6,7 @@ import { apiGet } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { useTranslation } from "@/hooks/use-translation";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -129,9 +130,9 @@ export default function SecretsPage() {
       setDeleteTarget(null);
       setDeleteTargetScope("");
     } catch (e) {
-      toast.error(`Failed to delete secret: ${e}`);
+      toast.error(t("secrets.delete_error", { error: String(e) }));
     }
-  }, [deleteTarget, deleteTargetScope, deleteSecret]);
+  }, [deleteTarget, deleteTargetScope, deleteSecret, t]);
 
   useEffect(() => {
     if (!revealedSecret) return;
@@ -214,7 +215,13 @@ export default function SecretsPage() {
           </div>
         </div>
 
-        {secrets.length === 0 ? (
+        {isLoading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-20 rounded-xl" />
+            ))}
+          </div>
+        ) : secrets.length === 0 ? (
           <EmptyState icon={KeyRound} text={t("common.no_records_found")} height="h-40" />
         ) : (
           <div className="space-y-3 pb-8">

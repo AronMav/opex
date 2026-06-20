@@ -398,7 +398,7 @@ export default function CronPage() {
                 type="number"
                 min={0}
                 max={3600}
-                placeholder="0 — no jitter"
+                placeholder={t("tasks.no_jitter_hint")}
                 value={form.jitter_secs ?? 0}
                 onChange={(e) => setForm({ ...form, jitter_secs: parseInt(e.target.value) || 0 })}
                 className="font-mono text-sm h-11"

@@ -1148,5 +1148,52 @@
   "providers.timeout_error": "must be >= {{lo}} and <= {{hi}}",
   "providers.max_retries_section": "Retry",
   "providers.max_retries_label": "Max retries (1–10)",
-  "providers.max_retries_error": "must be between 1 and 10"
+  "providers.max_retries_error": "must be between 1 and 10",
+
+  "config.section_curator": "Curator",
+  "config.section_alerting": "Alerting",
+  "config.section_channels": "Channels",
+  "config.section_events": "Events",
+  "config.no_channels": "No channels configured",
+  "config.select_agent": "Select agent…",
+  "config.alert_service_down": "Service down",
+  "config.alert_restart": "Restart",
+  "config.alert_recovery": "Recovery",
+  "config.alert_resource": "Resource alert",
+
+  "skills.state_active": "active",
+  "skills.state_stale": "stale",
+  "skills.state_archived": "archived",
+  "skills.badge_pinned": "pinned",
+  "skills.curator_rejected": "Curator: rejected",
+  "skills.curator_fixed": "Curator: fixed",
+  "skills.no_versions": "No version history yet.",
+  "skills.restore": "Restore",
+  "skills.restore_confirm_title": "Restore this version?",
+  "skills.restore_confirm_desc": "The current skill content will be saved as a snapshot before being replaced. You can undo by restoring from history again.",
+  "skills.curator_history": "Curator History",
+  "skills.curator_label": "Curator",
+  "skills.curator_last_run": "Last run: {{time}}",
+  "skills.curator_run_now": "Run now",
+  "skills.curator_run_started": "Curator run started",
+  "skills.version_description": "Version history — click a version to view content",
+
+  "secrets.delete_error": "Failed to delete secret: {{error}}",
+
+  "memory.doc_load_error": "Failed to load document",
+  "memory.fetch_error": "Failed to fetch memory",
+
+  "webhooks.type_generic": "Generic (Bearer token)",
+  "webhooks.type_github": "GitHub (HMAC-SHA256)",
+
+  "access.revoke_error": "Failed to revoke: {{error}}",
+
+  "tasks.no_jitter_hint": "0 — no jitter",
+
+  "setup.select_provider": "Select provider...",
+  "setup.select_model": "Select model...",
+  "setup.model_placeholder": "model-name",
+  "setup.optional_hint": "(optional)",
+
+  "login.show_token": "Show token"
 }
