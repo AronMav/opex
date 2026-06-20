@@ -1,0 +1,125 @@
+import sys
+import types
+from types import SimpleNamespace
+
+import pytest
+
+# Stub playwright so importing app-side modules never needs a real browser.
+sys.modules.setdefault("playwright", types.ModuleType("playwright"))
+sys.modules.setdefault("playwright.async_api", types.ModuleType("playwright.async_api"))
+
+from automation_actions import dispatch_action  # noqa: E402
+
+
+class FakeEl:
+    def __init__(self):
+        self.scrolled = False
+
+    async def scroll_into_view_if_needed(self):
+        self.scrolled = True
+
+
+class FakeKeyboard:
+    def __init__(self, p):
+        self.p = p
+
+    async def press(self, key):
+        self.p.calls.append(("kb_press", key))
+
+
+class FakeMouse:
+    def __init__(self, p):
+        self.p = p
+
+    async def wheel(self, dx, dy):
+        self.p.calls.append(("wheel", dx, dy))
+
+
+class FakePage:
+    def __init__(self):
+        self.calls = []
+        self.url = "http://example.test/"
+        self.keyboard = FakeKeyboard(self)
+        self.mouse = FakeMouse(self)
+
+    async def hover(self, sel, timeout=None):
+        self.calls.append(("hover", sel))
+
+    async def drag_and_drop(self, a, b, timeout=None):
+        self.calls.append(("drag", a, b))
+
+    async def go_back(self, **kw):
+        self.calls.append(("back",))
+
+    async def press(self, sel, key, timeout=None):
+        self.calls.append(("press", sel, key))
+
+    async def query_selector(self, sel):
+        return FakeEl()
+
+    async def evaluate(self, js):
+        self.calls.append(("evaluate", js))
+        return None
+
+
+def req(**kw):
+    base = dict(action=None, session_id="s1", url=None, selector=None, text=None,
+                js=None, timeout=10, fields=None, full_page=False, key=None,
+                dx=None, dy=None, to=None, to_selector=None, accept=None, prompt_text=None)
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.asyncio
+async def test_hover():
+    p = FakePage()
+    await dispatch_action(p, req(action="hover", selector="#b"), "s1", {})
+    assert ("hover", "#b") in p.calls
+
+
+@pytest.mark.asyncio
+async def test_drag():
+    p = FakePage()
+    await dispatch_action(p, req(action="drag", selector="#a", to_selector="#b"), "s1", {})
+    assert ("drag", "#a", "#b") in p.calls
+
+
+@pytest.mark.asyncio
+async def test_back():
+    p = FakePage()
+    await dispatch_action(p, req(action="back"), "s1", {})
+    assert ("back",) in p.calls
+
+
+@pytest.mark.asyncio
+async def test_press_with_and_without_selector():
+    p = FakePage()
+    await dispatch_action(p, req(action="press", selector="#i", key="Enter"), "s1", {})
+    assert ("press", "#i", "Enter") in p.calls
+    await dispatch_action(p, req(action="press", key="Escape"), "s1", {})
+    assert ("kb_press", "Escape") in p.calls
+
+
+@pytest.mark.asyncio
+async def test_scroll_bottom_default():
+    p = FakePage()
+    await dispatch_action(p, req(action="scroll"), "s1", {})
+    assert any(c[0] == "evaluate" and "scrollHeight" in c[1] for c in p.calls)
+
+
+@pytest.mark.asyncio
+async def test_set_dialog_updates_state():
+    p = FakePage()
+    store = {"s1": {"accept": True, "prompt_text": None, "last": "hi"}}
+    out = await dispatch_action(p, req(action="set_dialog", accept=False, prompt_text="ok"), "s1", store)
+    assert store["s1"]["accept"] is False
+    assert store["s1"]["prompt_text"] == "ok"
+    assert out["last_dialog"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_unknown_action_raises():
+    from fastapi import HTTPException
+    p = FakePage()
+    with pytest.raises(HTTPException):
+        await dispatch_action(p, req(action="bogus"), "s1", {})
