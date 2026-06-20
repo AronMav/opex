@@ -13,7 +13,6 @@ pub type GoalTarget = Option<(String, i64)>;
 pub struct GoalDriverHandle {
     pub cancel: CancellationToken,
     pub join: JoinHandle<()>,
-    pub target: GoalTarget,
 }
 
 pub type GoalDriverPool = Arc<DashMap<Uuid, GoalDriverHandle>>;

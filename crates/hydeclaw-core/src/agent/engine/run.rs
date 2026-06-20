@@ -162,6 +162,13 @@ impl AgentEngine {
         // returning Err, panic via `?`), the early-return would close the sink
         // without Finish — frontend then loops trying to resume a finalized
         // session. Wrap the pipeline so Finish is guaranteed on every exit.
+        // Serialize this user turn against an active goal driver (no-op when none).
+        let _goal_guard = match (self.cfg().goal_pool.as_ref(), self.cfg().goal_locks.as_ref()) {
+            (Some(p), Some(l)) if crate::agent::goal::pool::is_running(p, session_id) => {
+                Some(crate::agent::goal::pool::goal_lock(l, session_id).lock_owned().await)
+            }
+            _ => None,
+        };
         let pipeline_result: anyhow::Result<()> = async {
             let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &BehaviourLayers::none()).await?;
             let fin_ctx = finalize::finalize_context_from_engine(
@@ -342,6 +349,16 @@ impl AgentEngine {
             )
             .await;
         }
+
+        // Serialize this user turn against an active goal driver for the session
+        // (no-op when no goal is running). Prevents the autonomous loop and a real
+        // user turn from executing on the same session concurrently.
+        let _goal_guard = match (self.cfg().goal_pool.as_ref(), self.cfg().goal_locks.as_ref()) {
+            (Some(p), Some(l)) if crate::agent::goal::pool::is_running(p, session_id) => {
+                Some(crate::agent::goal::pool::goal_lock(l, session_id).lock_owned().await)
+            }
+            _ => None,
+        };
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &BehaviourLayers::none()).await?;
