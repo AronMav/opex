@@ -1,5 +1,5 @@
 """SearXNG web search provider (requires JSON format enabled on the instance)."""
-import httpx, logging
+import logging
 from providers.base import resolve_request_timeout
 log = logging.getLogger(__name__)
 

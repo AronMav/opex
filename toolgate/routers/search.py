@@ -10,7 +10,10 @@ router = APIRouter()
 async def web_search(request: Request):
     body = await request.json()
     query = body.get("query")
-    max_results = int(body.get("max_results") or 5)
+    try:
+        max_results = int(body.get("max_results") or 5)
+    except (TypeError, ValueError):
+        max_results = 5
     provider_name = body.get("provider") or None
     if not query:
         return JSONResponse(status_code=400, content={"error": "query is required"})
