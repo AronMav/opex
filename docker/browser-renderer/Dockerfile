@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 COPY app.py .
+COPY automation_actions.py .
 
 EXPOSE 9020
 
