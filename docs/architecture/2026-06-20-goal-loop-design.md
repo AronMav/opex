@@ -82,17 +82,28 @@ In `agent/pipeline/commands.rs` (`handle_command`, which has `ctx.db` + `msg`):
 
 Pure parsers: `parse_goal_command(arg) -> GoalCmd` (`Set(text) | Status | Pause | Resume
 | Clear`) and `parse_subgoal_command(arg) -> SubgoalCmd` (`Add(text) | List | Remove(n)`),
-unit-tested without DB. Starting/stopping the driver goes through the `GoalDriverPool`
-handle on `AppState` (Component 3).
+unit-tested without DB. To start/stop the driver, the slash `CommandContext` is extended
+with read access to `cfg.agent_map` and `cfg.goal_pool` (both live on `AgentConfig`); the
+handler resolves its own `Arc<AgentEngine>` from `agent_map.get(agent_name)` and calls
+`goal_pool.start(arc, session_id)` / `goal_pool.stop(session_id)` (Component 3).
 
 ---
 
 ## Component 3 — Goal driver (`agent/goal/`)
 
-**`GoalDriverPool`** stored in `AppState` (mirrors `session_pools: SessionPoolsMap`):
-`DashMap<Uuid, GoalDriverHandle>` where `GoalDriverHandle` holds a
-`tokio_util::sync::CancellationToken` + the `JoinHandle`. API: `start(engine_ctx,
-session_id)`, `stop(session_id)`, `is_running(session_id)`.
+**`GoalDriverPool`** stored on **`AgentConfig`** (alongside the existing
+`session_pools` and `agent_map` — NOT a separate `AppState`, which the slash-command
+path cannot reach): `DashMap<Uuid, GoalDriverHandle>` where `GoalDriverHandle` holds a
+`tokio_util::sync::CancellationToken` + the `JoinHandle`. API: `start(engine:
+Arc<AgentEngine>, session_id)`, `stop(session_id)`, `is_running(session_id)`.
+
+**Engine acquisition (verified against `session_agent_pool.rs`):** the driver needs an
+owned `Arc<AgentEngine>` to outlive the request that starts it — exactly like
+`spawn_live_agent(engine: Arc<AgentEngine>, …)`. The Arc comes from the existing
+**`cfg.agent_map`** registry (`agent_map.get(agent_name)`), the same source the `agent`
+tool uses to spawn `LiveAgent`s. So `/goal`'s handler resolves
+`cfg.agent_map.get(agent_name)` → `Arc<AgentEngine>` and calls `goal_pool.start(arc,
+session_id)`, which `tokio::spawn`s `run_goal_driver(arc, session_id, cancel)`.
 
 **Driver task** (`agent/goal/driver.rs::run_goal_driver`):
 ```text
@@ -140,11 +151,12 @@ New thin adapter on `AgentEngine` (`agent/engine/run.rs`), analogous to
 ## Component 5 — Delivery
 
 `deliver(session, text)` routes by how the session is reachable:
-- **Channel session** (session row has a channel + a resolvable chat_id): send a
-  `send_message` `ChannelAction` via `self.state().channel_router` targeting the session's
-  channel, with `context = {chat_id}` from the session's last inbound context. (The chat
-  target is resolved once when the goal starts and stored on the driver, or re-read from
-  the latest message's context.)
+- **Channel session** (session row `channel` is a real channel + a resolvable chat_id):
+  reuse the existing send path the `message` tool uses — `send_message` `ChannelAction`
+  via `self.state().channel_router` (cf. `pipeline::channel_actions::handle_message_action`
+  / `send_channel_message`), `target_channel = session channel`, `context = {chat_id}`.
+  Resolve `(channel, chat_id)` once at goal start from the session's latest inbound
+  message context (`messages.context`) and store it on the `GoalDriverHandle`.
 - **Web session** (no channel): the turn is already persisted by `finalize`; additionally
   broadcast a `ui_event` (`{type: "goal-turn", sessionId, messageId}`) on
   `state.ui_event_tx` so an open chat view can append the new message. The chat-store gains
@@ -164,10 +176,20 @@ When a real user message arrives for a session that has an active goal:
   and, if set, waits until the user turn finishes (lock released) before judging again —
   so if the user's own message completed the goal, the next judge says `done`.
 
-For v1 the simplest correct mechanism is the **shared per-session lock**: the driver
-acquires the session lock for each `run_goal_turn`, so it can never overlap a user turn;
-the user's messages always get the lock first when contended. The explicit `preempt`
-flag is an optimization layered on top if needed.
+**Serialization mechanism (v1) — the main implementation risk.** A per-session-UUID
+goal lock — `DashMap<Uuid, Arc<tokio::sync::Mutex<()>>>` on `AgentConfig` (NOT the
+channel-WS `session_locks`, which is gateway-scoped and keyed by `SessionKey`). The lock
+is acquired by:
+- `run_goal_turn` (always — it only runs for goal sessions), and
+- the user-message entry points (`handle_with_status`, `handle_sse_inner`) **only when
+  the session has an active goal** (a cheap `goal_pool.is_running(session_id)` check up
+  front), so non-goal traffic pays nothing.
+
+This guarantees a user turn and an autonomous turn never overlap on the same session, and
+contended user messages take the lock between driver iterations. The driver re-reads the
+`GoalRow` after each turn, so if the user's own message advanced or completed the goal,
+the next judge reflects it. This per-entry-point lock acquisition is the most invasive
+part of the change and the primary thing to verify in code review.
 
 ---
 
