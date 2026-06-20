@@ -27,9 +27,9 @@ from config import (
     ProvidersConfig,
     _aload_config_from_api,
 )
-from providers.base import STTProvider, VisionProvider, TTSProvider, ImageGenProvider, EmbeddingProvider
+from providers.base import STTProvider, VisionProvider, TTSProvider, ImageGenProvider, EmbeddingProvider, WebSearchProvider
 
-Provider = STTProvider | VisionProvider | TTSProvider | ImageGenProvider | EmbeddingProvider
+Provider = STTProvider | VisionProvider | TTSProvider | ImageGenProvider | EmbeddingProvider | WebSearchProvider
 
 log = logging.getLogger("toolgate.registry")
 
@@ -80,6 +80,11 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
     from providers.embedding_ollama import OllamaEmbedding
     from providers.embedding_openai import OpenAIEmbedding
 
+    # WebSearch providers
+    from providers.websearch_searxng import SearxngWebSearch
+    from providers.websearch_ollama import OllamaWebSearch
+    from providers.websearch_brave import BraveWebSearch
+
     return {
         # STT
         ("stt", "whisper-local"): LocalWhisperSTT,
@@ -118,6 +123,10 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
         # Embedding
         ("embedding", "ollama"): OllamaEmbedding,
         ("embedding", "openai"): OpenAIEmbedding,
+        # WebSearch
+        ("websearch", "searxng"): SearxngWebSearch,
+        ("websearch", "ollama"): OllamaWebSearch,
+        ("websearch", "brave"): BraveWebSearch,
     }
 
 
@@ -133,7 +142,7 @@ def get_driver_map() -> dict[tuple[str, str], type]:
 # config/media-drivers.yaml — that file is the single source of truth, served to
 # the admin UI by Core via GET /api/media-drivers. Toolgate only needs the
 # capability names internally; do NOT mirror driver metadata here.
-CAPABILITIES = ["stt", "vision", "tts", "imagegen", "embedding"]
+CAPABILITIES = ["stt", "vision", "tts", "imagegen", "embedding", "websearch"]
 
 # Utility services (no provider abstraction, always available)
 UTILITY_SERVICES = [

@@ -53,3 +53,8 @@ drivers:
   embedding:
     - { driver: ollama,        label: "Ollama Embedding",              requires_key: false }
     - { driver: openai,        label: "OpenAI Embedding",              requires_key: true }
+
+  websearch:
+    - { driver: searxng, label: "SearXNG (self-hosted)",        requires_key: false }
+    - { driver: ollama,  label: "Ollama Cloud Web Search",      requires_key: true }
+    - { driver: brave,   label: "Brave Search API",             requires_key: true }
