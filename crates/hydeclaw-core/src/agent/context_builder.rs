@@ -260,7 +260,7 @@ impl ContextBuilder for DefaultContextBuilder {
         let user_text = msg.text.clone().unwrap_or_default();
 
         let capabilities = crate::agent::workspace::CapabilityFlags {
-            has_search: deps.has_tool("search_web").await || deps.has_tool("search_web_fresh").await,
+            has_search: deps.has_tool("search_web").await,
             has_memory: deps.memory_is_available(),
             has_message_actions: deps.channel_router_present(),
             has_cron: deps.scheduler_present(),

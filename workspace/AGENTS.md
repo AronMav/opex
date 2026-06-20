@@ -52,7 +52,7 @@ Before creating: `cron(action="list")` → if same purpose exists, remove first.
 
 1. Answer from knowledge → answer directly
 2. Need past context → `memory(action="search")`
-3. Need current info → `search_web` / `search_web_fresh`
+3. Need current info → `search_web`
 4. Multi-step → plan, execute, report
 5. Tool fails → retry once, then tell user
 

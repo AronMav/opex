@@ -247,8 +247,8 @@ describe("convertHistory — parallel tool results sorted by declared order", ()
         content: "",
         tool_calls: [
           { id: "call_00_agents", name: "agents_list",    arguments: {} },
-          { id: "call_01_search", name: "search_web_fresh", arguments: {} },
-          { id: "call_02_search", name: "search_web_fresh", arguments: {} },
+          { id: "call_01_search", name: "search_web", arguments: {} },
+          { id: "call_02_search", name: "search_web", arguments: {} },
         ] as any,
         created_at: "2026-04-29T10:50:15Z",
       }),

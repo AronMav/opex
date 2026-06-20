@@ -24,7 +24,6 @@ triggers:
 priority: 9
 tools_required:
   - search_web
-  - search_web_fresh
 state: active
 ---
 
@@ -52,7 +51,7 @@ state: active
 
 ### Data Sources
 
-- `search_web_fresh` for current quotes and news
+- `search_web` for current quotes and news
 - `search_web` for historical data and analytics
 - MOEX, Investing.com, SmartLab — primary sources for Russian market
 - Yahoo Finance, Finviz — for international markets

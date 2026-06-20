@@ -15,7 +15,6 @@ triggers:
 priority: 6
 tools_required:
   - search_web
-  - search_web_fresh
 state: active
 ---
 
@@ -30,7 +29,7 @@ state: active
 
 #### 2. Gather from multiple sources
 Make 3-5 search queries with different phrasings:
-- `search_web_fresh` — primary source (fresh results)
+- `search_web` — primary source (fresh results)
 - Vary queries: general → specific → alternative phrasings
 - For finance: add names of key indexes/companies
 - For technology: add names of technologies/companies
