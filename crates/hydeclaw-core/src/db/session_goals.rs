@@ -25,8 +25,11 @@ impl GoalRow {
     }
 }
 
+/// Column tuple returned by the `get` query (factored out to satisfy clippy::type_complexity).
+type GoalRowTuple = (String, String, i32, i32, serde_json::Value, Option<String>, i32);
+
 pub async fn get(db: &PgPool, session_id: Uuid) -> Result<Option<GoalRow>> {
-    let row: Option<(String, String, i32, i32, serde_json::Value, Option<String>, i32)> = sqlx::query_as(
+    let row: Option<GoalRowTuple> = sqlx::query_as(
         "SELECT goal_text, status, turn_count, max_turns, subgoals, last_verdict, consecutive_judge_failures
          FROM session_goals WHERE session_id = $1",
     )

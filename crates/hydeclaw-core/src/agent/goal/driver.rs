@@ -13,8 +13,8 @@ use crate::agent::engine::AgentEngine;
 /// Spawn the per-session goal driver (mirror of `session_agent_pool::spawn_live_agent`).
 pub fn spawn_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: GoalTarget) -> GoalDriverHandle {
     let cancel = CancellationToken::new();
-    let join = tokio::spawn(run_goal_driver(engine, session_id, target.clone(), cancel.clone()));
-    GoalDriverHandle { cancel, join, target }
+    let join = tokio::spawn(run_goal_driver(engine, session_id, target, cancel.clone()));
+    GoalDriverHandle { cancel, join }
 }
 
 async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: GoalTarget, cancel: CancellationToken) {
