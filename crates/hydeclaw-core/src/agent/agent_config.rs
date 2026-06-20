@@ -45,6 +45,10 @@ pub struct AgentConfig {
     pub scheduler: Option<Arc<Scheduler>>,
     pub agent_map: Option<AgentMap>,
     pub session_pools: Option<SessionPoolsMap>,
+    /// Per-session `/goal` autonomous-loop driver registry + the goal/user
+    /// serialization lock. `None` for engines created outside `AgentCore`.
+    pub goal_pool: Option<crate::agent::goal::pool::GoalDriverPool>,
+    pub goal_locks: Option<crate::agent::goal::pool::GoalLocks>,
     /// Per-session tool dispatcher state map (describe cache, call counts,
     /// promoted system extensions). `None` for engines created outside of
     /// `AgentCore` (e.g. some test helpers).

@@ -3,6 +3,8 @@
 
 use crate::db::session_goals::GoalRow;
 
+pub mod pool;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Done,
