@@ -163,6 +163,7 @@ impl AgentEngine {
             compaction_provider: self.cfg().compaction_provider.as_deref(),
             thinking_level: &self.state().thinking_level,
             memory_store: self.cfg().memory_store.as_ref(),
+            engine_arc: self.state().self_ref.get().and_then(|w| w.upgrade()),
         };
 
         crate::agent::pipeline::commands::handle_command(
