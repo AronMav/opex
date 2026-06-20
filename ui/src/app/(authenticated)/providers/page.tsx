@@ -232,12 +232,6 @@ export default function ProvidersPage() {
     return rows[0]?.provider_name ?? null;
   };
 
-  /** Returns all active rows for a capability sorted by priority (ascending). */
-  const getActiveRowsSorted = (capability: string) =>
-    active
-      .filter((a) => a.capability === capability && a.provider_name)
-      .sort((a, b) => a.priority - b.priority);
-
   const providersForCapability = (cap: string) => {
     return providers.filter((p) => p.type === cap);
   };
@@ -477,7 +471,7 @@ export default function ProvidersPage() {
             const capProviders = providersForCapability(cap);
             if (capProviders.length === 0) return null;
 
-            const activeRows = getActiveRowsSorted(cap);
+            const activeRows = sortActiveRows(active, cap);
             const activeNames = new Set(activeRows.map((r) => r.provider_name).filter(Boolean) as string[]);
 
             // Sort: active first (by priority), then inactive alphabetically
@@ -501,7 +495,7 @@ export default function ProvidersPage() {
                     {CATEGORY_ICONS[cap]}
                     {capLabel(cap)}
                   </span>
-                  {isCapabilityGroup && (
+                  {isCapabilityGroup && cap !== "websearch" && (
                     <span className="text-[11px] text-muted-foreground/60">
                       {t("providers.group_hint")}
                     </span>
@@ -645,7 +639,7 @@ export default function ProvidersPage() {
                                   onChange={(e) => setDraftPriorityFor(cap, provider.name, Number(e.target.value))}
                                   onBlur={(e) => applyPriority(Number(e.target.value))}
                                   onKeyDown={(e) => {
-                                    if (e.key === "Enter") applyPriority(draftPrio);
+                                    if (e.key === "Enter") applyPriority(Number(e.currentTarget.value));
                                   }}
                                 />
                               </label>

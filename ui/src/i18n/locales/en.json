@@ -1018,7 +1018,6 @@
   "providers.cap_imagegen": "ImageGen",
   "providers.cap_embedding": "Embedding",
   "providers.cap_websearch": "Web Search",
-  "providers.websearch_hint": "Only the highest-priority provider is currently used.",
   "providers.group_hint": "Only the highest-priority provider is currently used.",
   "providers.priority_label": "Priority",
   "providers.active_toggle": "Active",

@@ -1018,7 +1018,6 @@
   "providers.cap_imagegen": "Генерация",
   "providers.cap_embedding": "Эмбеддинг",
   "providers.cap_websearch": "Веб-поиск",
-  "providers.websearch_hint": "Используется только провайдер с наивысшим приоритетом.",
   "providers.group_hint": "Используется только провайдер с наивысшим приоритетом.",
   "providers.priority_label": "Приоритет",
   "providers.active_toggle": "Активен",
