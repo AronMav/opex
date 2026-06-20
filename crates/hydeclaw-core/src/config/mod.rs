@@ -67,6 +67,19 @@ pub struct AppConfig {
     /// across all agents via `Arc<ToolExecutionContext>`.
     #[serde(default)]
     pub tools_cache: ToolCacheConfig,
+    /// Agent web-fetch guardrails (domain blocklist).
+    #[serde(default)]
+    pub security: SecurityConfig,
+}
+
+// ── SecurityConfig ────────────────────────────────────────────────────────────
+
+/// Operator-configurable web-fetch guardrails for agents.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+pub struct SecurityConfig {
+    /// Glob domains the agent may not fetch (e.g. "*.evil.tld"). Empty = no policy.
+    #[serde(default)]
+    pub blocked_domains: Vec<String>,
 }
 
 // ── UploadsConfig (Phase 64 SEC-03) ───────────────────────────────────────────
