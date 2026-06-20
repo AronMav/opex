@@ -12,6 +12,7 @@ pub mod hooks;
 // facade can expose it to integration tests without cascading engine.rs.
 pub mod stream_event;
 pub mod engine;
+pub mod goal;
 // Phase 62 RES-01: sole engine-side send surface (text-delta droppable,
 // everything else never dropped per CONTEXT.md locked decisions).
 pub mod engine_event_sender;
