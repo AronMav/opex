@@ -48,6 +48,7 @@ import {
   Eye,
   Image as ImageIcon,
   Brain,
+  Search,
 } from "lucide-react";
 import type { Provider, CreateProviderInput, ProviderOptions } from "@/types/api";
 import { apiGet, apiPost } from "@/lib/api";
@@ -65,14 +66,10 @@ import {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const ALL_CATEGORIES = ["text", "stt", "tts", "vision", "imagegen", "embedding"] as const;
+export const ALL_CATEGORIES = ["text", "stt", "tts", "vision", "imagegen", "embedding", "websearch"] as const;
 type ProviderCategory = typeof ALL_CATEGORIES[number];
 
-const ALL_CAPABILITIES = ["stt", "tts", "vision", "imagegen", "embedding"] as const;
-
-/** Capabilities that require toolgate restart when active provider changes */
-
-
+export const ALL_CAPABILITIES = ["stt", "tts", "vision", "imagegen", "embedding", "websearch"] as const;
 
 /** Category-specific badge colors — intentionally distinct per capability */
 const CATEGORY_BADGE_CLASS: Record<ProviderCategory, string> = {
@@ -82,6 +79,7 @@ const CATEGORY_BADGE_CLASS: Record<ProviderCategory, string> = {
   vision: "bg-purple-500/10 text-purple-500 dark:text-purple-400 border-purple-500/20",
   imagegen: "bg-orange-500/10 text-orange-500 dark:text-orange-400 border-orange-500/20",
   embedding: "bg-cyan-500/10 text-cyan-500 dark:text-cyan-400 border-cyan-500/20",
+  websearch: "bg-teal-500/10 text-teal-600 dark:text-teal-400 border-teal-500/20",
 };
 
 const CAPABILITY_BADGE_CLASS: Record<string, string> = {
@@ -95,6 +93,7 @@ const CATEGORY_ICONS: Record<ProviderCategory, React.ReactNode> = {
   vision: <Eye className="h-3.5 w-3.5" />,
   imagegen: <ImageIcon className="h-3.5 w-3.5" />,
   embedding: <Brain className="h-3.5 w-3.5" />,
+  websearch: <Search className="h-3.5 w-3.5" />,
 };
 
 const CAPABILITY_ICONS: Record<string, React.ReactNode> = {
@@ -114,6 +113,32 @@ const EMPTY_FORM: CreateProviderInput = {
 type DialogState =
   | { open: false }
   | { open: true; category: ProviderCategory | ""; editing: Provider | null };
+
+// ── Active-list helpers (extracted for testability) ──────────────────────────
+
+/** Returns rows for a capability sorted ascending by priority. */
+export function sortActiveRows(
+  active: { capability: string; provider_name: string | null; priority: number }[],
+  capability: string,
+): { provider_name: string; priority: number }[] {
+  return active
+    .filter((a) => a.capability === capability && a.provider_name)
+    .sort((a, b) => a.priority - b.priority)
+    .map((a) => ({ provider_name: a.provider_name as string, priority: a.priority }));
+}
+
+/** Builds the next active list after toggling a provider on/off. */
+export function buildActiveListAfterToggle(
+  currentRows: { provider_name: string; priority: number }[],
+  providerName: string,
+  isCurrentlyActive: boolean,
+  draftPriority: number,
+): { provider_name: string; priority: number }[] {
+  if (isCurrentlyActive) {
+    return currentRows.filter((r) => r.provider_name !== providerName);
+  }
+  return [...currentRows, { provider_name: providerName, priority: draftPriority }];
+}
 
 // ── Build provider body (extracted for testability) ──────────────────────────
 
@@ -145,7 +170,7 @@ export default function ProvidersPage() {
     const key: Record<string, string> = {
       text: "providers.cap_text", stt: "providers.cap_stt", tts: "providers.cap_tts",
       vision: "providers.cap_vision", imagegen: "providers.cap_imagegen",
-      embedding: "providers.cap_embedding",
+      embedding: "providers.cap_embedding", websearch: "providers.cap_websearch",
     };
     return key[cap] ? t(key[cap] as Parameters<typeof t>[0]) : cap;
   };
@@ -184,13 +209,52 @@ export default function ProvidersPage() {
   // Delete state
   const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null);
 
+  // Per-capability draft priority overrides: cap → { providerName → priority }
+  const [draftPriority, setDraftPriority] = useState<Record<string, Record<string, number>>>({});
+
+  const getDraftPriority = (cap: string, providerName: string, fallback: number): number =>
+    draftPriority[cap]?.[providerName] ?? fallback;
+
+  const setDraftPriorityFor = (cap: string, providerName: string, value: number) => {
+    setDraftPriority((prev) => ({
+      ...prev,
+      [cap]: { ...(prev[cap] ?? {}), [providerName]: value },
+    }));
+  };
+
   // ── Active helpers ────────────────────────────────────────────────────────
 
-  const getActiveName = (capability: string) =>
-    active.find((a) => a.capability === capability)?.provider_name ?? null;
+  /** Returns the primary (lowest priority number) active provider for a capability. */
+  const getActiveName = (capability: string) => {
+    const rows = active
+      .filter((a) => a.capability === capability && a.provider_name)
+      .sort((a, b) => a.priority - b.priority);
+    return rows[0]?.provider_name ?? null;
+  };
+
+  /** Returns all active rows for a capability sorted by priority (ascending). */
+  const getActiveRowsSorted = (capability: string) =>
+    active
+      .filter((a) => a.capability === capability && a.provider_name)
+      .sort((a, b) => a.priority - b.priority);
 
   const providersForCapability = (cap: string) => {
     return providers.filter((p) => p.type === cap);
+  };
+
+  // ── Per-capability group active mutation helper ───────────────────────────
+
+  const setCapabilityActive = (
+    capability: string,
+    next: { provider_name: string; priority: number }[],
+  ) => {
+    setActive.mutate(
+      { capability, providers: next },
+      {
+        onSuccess: () => toast.success(t("providers.active_updated", { capability: capLabel(capability) })),
+        onError: (e: Error) => toast.error(t("providers.set_active_error", { error: e.message })),
+      },
+    );
   };
 
   // ── LLM helpers ────────────────────────────────────────────────────────────
@@ -400,54 +464,7 @@ export default function ProvidersPage() {
         </div>
       </div>
 
-      {/* Active Providers */}
-      {providers.length > 0 && (
-        <div className="rounded-xl border border-border/60 bg-card/50 p-5 space-y-3">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{t("providers.active_providers")}</p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {ALL_CAPABILITIES.map((cap) => {
-              const capProviders = providersForCapability(cap);
-              if (capProviders.length === 0) return null;
-              const activeName = getActiveName(cap);
-              return (
-                <div key={cap} className="flex items-center gap-2 min-w-0">
-                  <span className={`inline-flex items-center justify-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border min-w-[5.5rem] shrink-0 ${CAPABILITY_BADGE_CLASS[cap] ?? "bg-muted text-muted-foreground border-border"}`}>
-                    {CAPABILITY_ICONS[cap]}
-                    {capLabel(cap)}
-                  </span>
-                  <Select
-                    value={activeName ?? "__none__"}
-                    onValueChange={(v) => {
-                      const name = v === "__none__" ? null : v;
-                      setActive.mutate({ capability: cap, provider_name: name }, {
-                        onSuccess: () => {
-                          toast.success(t("providers.active_updated", { capability: capLabel(cap) }));
-                        },
-                      });
-                    }}
-                  >
-                    <SelectTrigger className="h-7 text-xs font-mono flex-1 min-w-0 truncate">
-                      <SelectValue placeholder={t("providers.none")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__" className="text-xs text-muted-foreground">
-                        {t("providers.none")}
-                      </SelectItem>
-                      {capProviders.map((p) => (
-                        <SelectItem key={p.name} value={p.name} className="text-xs font-mono">
-                          {p.name}{p.default_model ? ` (${p.default_model})` : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Provider grid */}
+      {/* Per-capability provider groups */}
       {isLoading ? (
         <div className="flex justify-center py-12">
           <RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -455,110 +472,211 @@ export default function ProvidersPage() {
       ) : providers.length === 0 ? (
         <EmptyState icon={Zap} text={t("providers.empty")} height="h-48" />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {providers.map((provider) => {
-            const cap = provider.type as ProviderCategory;
+        <div className="flex flex-col gap-6">
+          {ALL_CATEGORIES.map((cap) => {
+            const capProviders = providersForCapability(cap);
+            if (capProviders.length === 0) return null;
+
+            const activeRows = getActiveRowsSorted(cap);
+            const activeNames = new Set(activeRows.map((r) => r.provider_name).filter(Boolean) as string[]);
+
+            // Sort: active first (by priority), then inactive alphabetically
+            const sorted = [
+              ...activeRows
+                .map((r) => capProviders.find((p) => p.name === r.provider_name))
+                .filter((p): p is Provider => !!p),
+              ...capProviders
+                .filter((p) => !activeNames.has(p.name))
+                .sort((a, b) => a.name.localeCompare(b.name)),
+            ];
+
             const badgeClass = CATEGORY_BADGE_CLASS[cap] ?? "bg-muted text-muted-foreground border-border";
-            const typeLabel = provider.type === "text"
-              ? (providerTypes.find((pt) => pt.id === provider.provider_type)?.name ?? provider.provider_type)
-              : provider.provider_type;
-            const isActive = getActiveName(provider.type) === provider.name;
+            const isCapabilityGroup = (ALL_CAPABILITIES as readonly string[]).includes(cap);
 
             return (
-              <div
-                key={provider.id}
-                className="neu-card neu-hover p-5 space-y-4"
-              >
-                {/* Header */}
-                <div className="flex items-start gap-3">
-                  <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-muted/50 border border-border/60 text-muted-foreground shrink-0">
-                    {CATEGORY_ICONS[cap] ?? <Link2 className="h-4 w-4" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <p className="font-semibold text-sm font-mono truncate">
-                        {provider.name}
-                      </p>
-                      {isActive && (
-                        <span className="text-[9px] font-bold px-1 py-0 rounded bg-primary/10 text-primary border border-primary/20">
-                          {t("providers.active_badge")}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                      <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0 rounded border ${badgeClass}`}>
-                        {capLabel(cap)}
-                      </span>
-                      <Badge
-                        variant="secondary"
-                        className="text-[10px] px-1.5 py-0 font-mono"
-                      >
-                        {typeLabel}
-                      </Badge>
-                      {provider.default_model && (
-                        <span className="text-[11px] text-muted-foreground font-mono truncate">
-                          {provider.default_model}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Base URL */}
-                {provider.base_url && (
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 font-mono truncate">
-                    <Globe className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{provider.base_url}</span>
-                  </div>
-                )}
-
-                {/* API key status */}
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground/70">
-                  <Key className="h-3 w-3 shrink-0" />
-                  <span className="font-mono truncate">
-                    {provider.api_key ?? (provider.has_api_key ? t("providers.api_key_configured") : t("providers.api_key_not_set"))}
+              <div key={cap} className="space-y-3">
+                {/* Group header */}
+                <div className="flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${badgeClass}`}>
+                    {CATEGORY_ICONS[cap]}
+                    {capLabel(cap)}
                   </span>
+                  {isCapabilityGroup && (
+                    <span className="text-[11px] text-muted-foreground/60">
+                      {t("providers.group_hint")}
+                    </span>
+                  )}
                 </div>
 
-                {/* Notes */}
-                {provider.notes && (
-                  <p className="text-[11px] text-muted-foreground/60 truncate">
-                    {provider.notes}
-                  </p>
-                )}
+                {/* Provider cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {sorted.map((provider) => {
+                    const isActive = activeNames.has(provider.name);
+                    const activeRow = activeRows.find((r) => r.provider_name === provider.name);
+                    const currentPriority = activeRow?.priority ?? 10;
+                    const draftPrio = getDraftPriority(cap, provider.name, currentPriority);
 
-                {/* Enabled badge for non-text */}
-                {provider.type !== "text" && (
-                  <div>
-                    <Badge
-                      variant="secondary"
-                      className={`text-[10px] px-1.5 py-0 ${provider.enabled ? "text-green-600" : "text-muted-foreground"}`}
-                    >
-                      {provider.enabled ? t("providers.status_enabled") : t("providers.status_disabled")}
-                    </Badge>
-                  </div>
-                )}
+                    const typeLabel = cap === "text"
+                      ? (providerTypes.find((pt) => pt.id === provider.provider_type)?.name ?? provider.provider_type)
+                      : provider.provider_type;
 
-                {/* Actions */}
-                <div className="flex items-center gap-2 pt-1 border-t border-border/30">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1 h-7 text-xs"
-                    onClick={() => openEdit(provider)}
-                  >
-                    <Pencil className="h-3 w-3" />
-                    {t("common.edit")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 text-xs text-destructive hover:text-destructive"
-                    onClick={() => setDeleteTarget(provider)}
-                    aria-label={t("common.delete")}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
+                    const toggleActive = () => {
+                      if (isActive) {
+                        // Remove from active list
+                        const next = activeRows
+                          .filter((r) => r.provider_name !== provider.name)
+                          .map((r) => ({ provider_name: r.provider_name as string, priority: r.priority }));
+                        setCapabilityActive(cap, next);
+                      } else {
+                        // Add with draft priority
+                        const next = [
+                          ...activeRows.map((r) => ({ provider_name: r.provider_name as string, priority: r.priority })),
+                          { provider_name: provider.name, priority: draftPrio },
+                        ];
+                        setCapabilityActive(cap, next);
+                      }
+                    };
+
+                    const applyPriority = (newPrio: number) => {
+                      if (!isActive) return;
+                      const next = activeRows.map((r) =>
+                        r.provider_name === provider.name
+                          ? { provider_name: provider.name, priority: newPrio }
+                          : { provider_name: r.provider_name as string, priority: r.priority },
+                      );
+                      setCapabilityActive(cap, next);
+                    };
+
+                    return (
+                      <div
+                        key={provider.id}
+                        className={`neu-card neu-hover p-5 space-y-4 ${isActive ? "ring-1 ring-primary/30" : ""}`}
+                      >
+                        {/* Header */}
+                        <div className="flex items-start gap-3">
+                          <div className="flex items-center justify-center h-9 w-9 rounded-lg bg-muted/50 border border-border/60 text-muted-foreground shrink-0">
+                            {CATEGORY_ICONS[cap] ?? <Link2 className="h-4 w-4" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <p className="font-semibold text-sm font-mono truncate">
+                                {provider.name}
+                              </p>
+                              {isActive && (
+                                <span className="text-[9px] font-bold px-1 py-0 rounded bg-primary/10 text-primary border border-primary/20">
+                                  {t("providers.active_badge")}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                              <Badge
+                                variant="secondary"
+                                className="text-[10px] px-1.5 py-0 font-mono"
+                              >
+                                {typeLabel}
+                              </Badge>
+                              {provider.default_model && (
+                                <span className="text-[11px] text-muted-foreground font-mono truncate">
+                                  {provider.default_model}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Base URL */}
+                        {provider.base_url && (
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 font-mono truncate">
+                            <Globe className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{provider.base_url}</span>
+                          </div>
+                        )}
+
+                        {/* API key status */}
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground/70">
+                          <Key className="h-3 w-3 shrink-0" />
+                          <span className="font-mono truncate">
+                            {provider.api_key ?? (provider.has_api_key ? t("providers.api_key_configured") : t("providers.api_key_not_set"))}
+                          </span>
+                        </div>
+
+                        {/* Notes */}
+                        {provider.notes && (
+                          <p className="text-[11px] text-muted-foreground/60 truncate">
+                            {provider.notes}
+                          </p>
+                        )}
+
+                        {/* Enabled badge for non-text */}
+                        {cap !== "text" && (
+                          <div>
+                            <Badge
+                              variant="secondary"
+                              className={`text-[10px] px-1.5 py-0 ${provider.enabled ? "text-green-600" : "text-muted-foreground"}`}
+                            >
+                              {provider.enabled ? t("providers.status_enabled") : t("providers.status_disabled")}
+                            </Badge>
+                          </div>
+                        )}
+
+                        {/* Active + Priority controls (capabilities only, not text) */}
+                        {isCapabilityGroup && (
+                          <div className="flex items-center gap-2 pt-1 border-t border-border/30">
+                            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={isActive}
+                                onChange={toggleActive}
+                                className="rounded border-border accent-primary"
+                                aria-label={t("providers.active_toggle")}
+                              />
+                              <span className="text-xs text-muted-foreground">{t("providers.active_toggle")}</span>
+                            </label>
+                            {isActive && (
+                              <label className="flex items-center gap-1.5 ml-auto">
+                                <span className="text-xs text-muted-foreground shrink-0">{t("providers.priority_label")}</span>
+                                <input
+                                  type="number"
+                                  aria-label={t("providers.priority_label")}
+                                  value={draftPrio}
+                                  min={1}
+                                  max={100}
+                                  className="w-14 rounded border border-border bg-background px-1.5 py-0.5 text-xs font-mono text-center"
+                                  onChange={(e) => setDraftPriorityFor(cap, provider.name, Number(e.target.value))}
+                                  onBlur={(e) => applyPriority(Number(e.target.value))}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") applyPriority(draftPrio);
+                                  }}
+                                />
+                              </label>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Edit / Delete actions */}
+                        <div className="flex items-center gap-2 border-t border-border/30 pt-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1 h-7 text-xs"
+                            onClick={() => openEdit(provider)}
+                          >
+                            <Pencil className="h-3 w-3" />
+                            {t("common.edit")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs text-destructive hover:text-destructive"
+                            onClick={() => setDeleteTarget(provider)}
+                            aria-label={t("common.delete")}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             );
