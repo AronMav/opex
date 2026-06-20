@@ -50,7 +50,7 @@ export function SearchBar({ search }: SearchBarProps) {
         : "";
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 bg-muted/20 animate-in slide-in-from-top-1 duration-150">
+    <div role="search" className="flex items-center gap-2 px-3 py-2 border-b border-border/50 bg-muted/20 animate-in slide-in-from-top-1 duration-150">
       <input
         ref={inputRef}
         type="text"

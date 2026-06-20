@@ -57,6 +57,11 @@
 :root {
   --radius: 0.75rem;
 
+  /* Animation timing tokens */
+  --chat-duration-fast: 150ms;
+  --chat-duration-normal: 250ms;
+  --chat-duration-slow: 400ms;
+
   --background: #dde3ee;
   --foreground: #1a1f2e;
   --card: #eaeff7;

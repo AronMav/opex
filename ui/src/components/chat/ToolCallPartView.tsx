@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useState, useMemo } from "react";
+import { memo, useState, useMemo, useEffect, useRef } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { ChevronRight, FileText, Wrench, Check, X, Clock } from "lucide-react";
@@ -28,6 +28,67 @@ function toolDetail(toolName: string, args: Record<string, unknown>): string | n
   return null;
 }
 
+// ── Elapsed time display ─────────────────────────────────────────────────────
+function useElapsed(isRunning: boolean): number {
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(Date.now());
+
+  useEffect(() => {
+    if (!isRunning) return;
+    startRef.current = Date.now();
+    setElapsed(0);
+    const interval = setInterval(() => {
+      setElapsed(Date.now() - startRef.current);
+    }, 100);
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  return elapsed;
+}
+
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
+}
+
+// ── Syntax-highlighted tool output ───────────────────────────────────────────
+function HighlightedOutput({ code, language }: { code: string; language?: string }) {
+  const [html, setHtml] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!code || code.length > 5000) {
+      setHtml(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { codeToHtml } = await import("shiki");
+        const result = await codeToHtml(code, {
+          lang: language || "text",
+          theme: document.documentElement.classList.contains("dark") ? "github-dark" : "github-light",
+        });
+        if (!cancelled) setHtml(result);
+      } catch {
+        if (!cancelled) setHtml(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [code, language]);
+
+  if (!html) {
+    return <pre className="max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{code}</pre>;
+  }
+
+  return (
+    <div
+      className="max-h-[300px] overflow-auto px-3 pb-2.5 [&>pre]:bg-transparent [&>pre]:px-0 [&>pre]:py-0 [&>pre]:text-[11px] [&>pre]:leading-relaxed"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
 export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args, result, status }: {
   toolName: string;
   args: Record<string, unknown>;
@@ -42,6 +103,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
   const hasContent = isComplete || hasError || isDenied;
 
   const detail = useMemo(() => toolDetail(toolName, args), [toolName, args]);
+  const elapsed = useElapsed(isRunning);
 
   const inputDisplay = useMemo(
     () => args && Object.keys(args).length > 0 ? JSON.stringify(args, null, 2) : null,
@@ -58,6 +120,17 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
       ? { text: resultRaw, truncated: false, hiddenChars: 0 }
       : truncateOutput(resultRaw, TOOL_OUTPUT_MAX_CHARS);
 
+  // Detect language for syntax highlighting
+  const resultLanguage = useMemo(() => {
+    if (toolName === "code_exec") {
+      const lang = args.language ?? args.lang;
+      if (typeof lang === "string") return lang;
+    }
+    if (resultRaw.includes("<?xml") || resultRaw.includes("<html")) return "html";
+    if (resultRaw.startsWith("{") || resultRaw.startsWith("[")) return "json";
+    return undefined;
+  }, [toolName, args, resultRaw]);
+
   const canExpand = hasContent || !!inputDisplay;
 
   return (
@@ -66,6 +139,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
         <button
           type="button"
           disabled={!canExpand}
+          aria-label={`${toolName}${detail ? `: ${detail}` : ""} — ${isRunning ? t("chat.tool_running") : isComplete ? t("chat.tool_result") : hasError ? t("chat.tool_error") : isDenied ? t("chat.tool_denied") : ""}`}
           className="flex w-full items-center gap-2 rounded-xl border border-border/60 bg-card/50 px-2.5 py-1.5 text-left transition-colors hover:border-border disabled:cursor-default dark:bg-card/30 dark:hover:bg-card/50"
         >
           {/* tool type icon */}
@@ -80,6 +154,13 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           {detail && (
             <span className="text-[10px] text-muted-foreground/50 flex-1 truncate">
               {detail}
+            </span>
+          )}
+
+          {/* elapsed time */}
+          {isRunning && elapsed > 0 && (
+            <span className="text-[10px] text-muted-foreground/40 font-mono tabular-nums shrink-0">
+              {formatElapsed(elapsed)}
             </span>
           )}
 
@@ -134,12 +215,13 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
                   </button>
                 )}
               </div>
-              <pre className={[
-                "max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap",
-                hasError || isDenied ? "text-destructive/80" : "text-success/90",
-              ].join(" ")}>
-                {resultDisplay}
-              </pre>
+              {hasError || isDenied ? (
+                <pre className="max-h-[300px] overflow-auto px-3 pb-2.5 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-destructive/80">
+                  {resultDisplay}
+                </pre>
+              ) : (
+                <HighlightedOutput code={resultDisplay} language={resultLanguage} />
+              )}
             </div>
           )}
         </div>

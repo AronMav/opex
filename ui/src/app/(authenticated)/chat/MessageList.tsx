@@ -81,7 +81,7 @@ function ScrollToBottomButton({
       size="icon-lg"
       onClick={onClick}
       aria-label={ariaLabel}
-      className="absolute bottom-4 right-6 z-10 rounded-full shadow-lg transition-all duration-150 ease-out"
+      className="absolute bottom-[max(1rem,calc(1rem+env(safe-area-inset-bottom)))] right-6 z-10 rounded-full shadow-lg transition-all duration-150 ease-out"
     >
       <ChevronDown className="h-5 w-5" />
       {isStreaming && (

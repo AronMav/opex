@@ -763,7 +763,6 @@ export default function ChatPage() {
         <div className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-4 border-b border-border/50 bg-background/90 backdrop-blur-sm px-6 lg:flex">
           <div className="flex items-center gap-3">
             {agentSelector}
-            <ParticipantBar sessionId={activeSessionId} currentAgent={currentAgent} />
             <ChatCanvasTabs />
           </div>
           <ContextBar
@@ -787,7 +786,6 @@ export default function ChatPage() {
         {/* Mobile/tablet floating actions — visible below lg */}
         <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-center gap-1.5 px-3 py-2 bg-background/90 backdrop-blur-sm border-b border-border/30 lg:hidden">
           {agentSelector}
-          <ParticipantBar sessionId={activeSessionId} currentAgent={currentAgent} />
           <ChatCanvasTabs />
           <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
             <SheetTrigger asChild>

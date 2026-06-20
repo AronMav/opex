@@ -3,29 +3,35 @@ import type { SessionRow } from "@/types/api";
 
 const BCP47: Record<string, string> = { ru: "ru-RU", en: "en-US" };
 
-export function formatDate(iso: string, locale = "ru"): string {
-  return new Date(iso).toLocaleDateString(BCP47[locale] || "ru-RU", {
+export function formatDate(iso: string, locale = "en"): string {
+  return new Date(iso).toLocaleDateString(BCP47[locale] || "en-US", {
     day: "numeric",
     month: "short",
     year: "numeric",
   });
 }
 
-export function relativeTime(ts: number | string, locale = "ru"): string {
+const RELATIVE_TIME_STRINGS: Record<string, { now: string; yesterday: string }> = {
+  ru: { now: "сейчас", yesterday: "вчера" },
+  en: { now: "now", yesterday: "yesterday" },
+};
+
+export function relativeTime(ts: number | string, locale = "en"): string {
   const d = typeof ts === "string" ? new Date(ts) : new Date(ts);
   const diff = Date.now() - d.getTime();
-  if (diff < 60_000) return locale === "ru" ? "сейчас" : "now";
+  const strings = RELATIVE_TIME_STRINGS[locale] ?? RELATIVE_TIME_STRINGS.en;
+  if (diff < 60_000) return strings.now;
   if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m`;
   if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h`;
   const yesterday = new Date(Date.now() - 86400_000);
-  if (d.toDateString() === yesterday.toDateString()) return locale === "ru" ? "вчера" : "yesterday";
-  return d.toLocaleDateString(BCP47[locale] || "ru-RU", { day: "numeric", month: "short" });
+  if (d.toDateString() === yesterday.toDateString()) return strings.yesterday;
+  return d.toLocaleDateString(BCP47[locale] || "en-US", { day: "numeric", month: "short" });
 }
 
-export function formatMessageTime(iso: string, locale = "ru"): string {
+export function formatMessageTime(iso: string, locale = "en"): string {
   const d = new Date(iso);
   const now = new Date();
-  const hhmm = d.toLocaleTimeString(BCP47[locale] || "ru-RU", {
+  const hhmm = d.toLocaleTimeString(BCP47[locale] || "en-US", {
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -61,7 +67,7 @@ export function sessionToMarkdown(
   lines.push(``);
   lines.push(`**Agent:** ${agentName}  `);
   lines.push(`**Session:** \`${session.id}\`  `);
-  lines.push(`**Date:** ${new Date(session.started_at).toLocaleString("ru")}  `);
+  lines.push(`**Date:** ${new Date(session.started_at).toLocaleString()}  `);
   lines.push(``);
   lines.push(`---`);
   lines.push(``);

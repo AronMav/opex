@@ -4,6 +4,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { assertToken } from "@/lib/api";
+import { useTranslation } from "@/hooks/use-translation";
 
 export type VoiceRecorderState = "idle" | "recording" | "transcribing" | "error";
 
@@ -19,6 +20,7 @@ export interface UseVoiceRecorder {
 const MAX_RECORDING_SECS = 5 * 60; // 5 minutes
 
 export function useVoiceRecorder(): UseVoiceRecorder {
+  const { t } = useTranslation();
   const [state, setState] = useState<VoiceRecorderState>("idle");
   const [elapsed, setElapsed] = useState(0);
 
@@ -62,7 +64,7 @@ export function useVoiceRecorder(): UseVoiceRecorder {
     // Check for secure context (required by getUserMedia in most browsers).
     if (typeof window !== "undefined" && !window.isSecureContext && window.location.hostname !== "localhost") {
       const { toast } = await import("sonner");
-      toast.error("Требуется HTTPS для доступа к микрофону");
+      toast.error(t("chat.voice_requires_https"));
       return;
     }
 
@@ -71,7 +73,7 @@ export function useVoiceRecorder(): UseVoiceRecorder {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
       const { toast } = await import("sonner");
-      toast.error("Нет доступа к микрофону");
+      toast.error(t("chat.voice_no_permission"));
       return;
     }
 
@@ -101,10 +103,10 @@ export function useVoiceRecorder(): UseVoiceRecorder {
     // Auto-stop at 5 min.
     autoStopTimerRef.current = setTimeout(async () => {
       const { toast } = await import("sonner");
-      toast.info("Запись автоматически остановлена (5 минут)");
+      toast.info(t("chat.voice_auto_stopped"));
       // stop() is safe to call multiple times.
     }, MAX_RECORDING_SECS * 1000);
-  }, [state]);
+  }, [state, t]);
 
   const stop = useCallback(async (): Promise<string> => {
     if (state !== "recording") return "";
@@ -152,12 +154,12 @@ export function useVoiceRecorder(): UseVoiceRecorder {
       return text;
     } catch (err) {
       const { toast } = await import("sonner");
-      toast.error(`Не удалось распознать речь: ${err instanceof Error ? err.message : "ошибка"}`);
+      toast.error(t("chat.voice_recognize_error", { error: err instanceof Error ? err.message : "unknown" }));
       setState("idle");
       setElapsed(0);
       return "";
     }
-  }, [state, clearTimers, stopTracks]);
+  }, [state, clearTimers, stopTracks, t]);
 
   return { state, elapsed, start, stop };
 }

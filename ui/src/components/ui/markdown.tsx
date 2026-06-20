@@ -103,7 +103,7 @@ function createComponents(isStreamingCode = false): Partial<Components> {
       const lineCount = codeStr ? codeStr.split('\n').length : 0
 
       return (
-        <CodeBlock className={className} language={language} isStreaming={isStreamingCode}>
+        <CodeBlock className={className} language={language}>
           <CodeBlockCode
             code={codeStr}
             language={language}

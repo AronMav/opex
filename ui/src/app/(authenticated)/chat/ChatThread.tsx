@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Component, useEffect, useMemo, useRef } from "react";
+import React, { Component, useEffect, useMemo, useRef, useState } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
 import { useVisualViewport } from "@/hooks/use-visual-viewport";
@@ -24,6 +24,7 @@ import { EmptyState } from "./EmptyState";
 import { ReadOnlyFooter } from "./read-only/ReadOnlyFooter";
 import { ErrorBanner } from "./error/ErrorBanner";
 import { ChatComposer } from "./composer/ChatComposer";
+import { ShortcutHelp } from "@/components/chat/ShortcutHelp";
 import { useEngineRunning } from "./hooks/use-engine-running";
 import { useRenderMessages } from "./hooks/use-render-messages";
 import { useIsLive } from "./hooks/use-is-live";
@@ -101,6 +102,20 @@ export function ChatThread({
   // "Running" = active connection phase OR WS push reports the session active.
   // DB run_status is no longer consulted in the hot path (spec I3).
   const engineRunning = useEngineRunning(currentAgent);
+
+  // ── Keyboard shortcut help (Ctrl+/) ─────────────────────────────────────────
+  const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === "/") {
+        e.preventDefault();
+        setShortcutHelpOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   // Derived booleans from message source hooks
   const isLive = useIsLive(currentAgent);
@@ -315,6 +330,9 @@ export function ChatThread({
       ) : (
         <ChatComposer />
       )}
+
+      {/* Keyboard shortcut help overlay */}
+      <ShortcutHelp open={shortcutHelpOpen} onOpenChange={setShortcutHelpOpen} />
     </div>
     </ThreadErrorBoundary>
   );

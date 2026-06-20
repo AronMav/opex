@@ -5,6 +5,7 @@
 
 import React from "react";
 import { getContextLimit } from "@/lib/model-limits";
+import { useTranslation } from "@/hooks/use-translation";
 import {
   Tooltip,
   TooltipContent,
@@ -29,7 +30,7 @@ function formatK(n: number): string {
 }
 
 function formatNum(n: number): string {
-  return n.toLocaleString("ru-RU");
+  return n.toLocaleString();
 }
 
 // Shorten model ID to a readable label: "claude-sonnet-4-6" → "sonnet-4-6"
@@ -46,6 +47,7 @@ export function ContextBar({
   reasoningTokens,
   isGenerating = false,
 }: ContextBarProps) {
+  const { t } = useTranslation();
   // Backend-provided limit is the single source of truth; fall back to static table.
   const limit = modelContextLimit ?? (model ? getContextLimit(model) : null);
 
@@ -65,8 +67,8 @@ export function ContextBar({
   if (hasUsage) {
     const remaining = Math.max(0, limit! - tokens!);
     const pctUsed = Math.round(ratio * 100);
-    tooltipLines.push(`${formatNum(tokens!)} / ${formatNum(limit!)} токенов (${pctUsed}%)`);
-    tooltipLines.push(`Остаток: ${formatNum(remaining)}`);
+    tooltipLines.push(t("chat.context_tokens", { tokens: formatNum(tokens!), limit: formatNum(limit!), pct: pctUsed }));
+    tooltipLines.push(t("chat.context_remaining", { remaining: formatNum(remaining) }));
 
     const hasCacheDetails =
       (cacheCreationTokens != null && cacheCreationTokens > 0) ||
@@ -85,7 +87,7 @@ export function ContextBar({
 
     if (isGenerating) {
       tooltipLines.push("");
-      tooltipLines.push("· обновится после ответа");
+      tooltipLines.push(t("chat.context_stale"));
     }
   }
 
@@ -119,7 +121,7 @@ export function ContextBar({
                 </div>
                 {ratio > 0.95 && !isGenerating && (
                   <span className="text-[10px] text-destructive font-medium whitespace-nowrap">
-                    Контекст почти заполнен
+                    {t("chat.context_almost_full")}
                   </span>
                 )}
               </>
