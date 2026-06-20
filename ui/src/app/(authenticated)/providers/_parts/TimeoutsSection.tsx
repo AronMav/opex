@@ -24,6 +24,7 @@ type Props = {
 
 export function TimeoutsSection({ value, onChange }: Props) {
   const { t } = useTranslation();
+  const baseId = React.useId();
 
   const fields: Array<[keyof TimeoutsConfig, string]> = [
     ["connect_secs", t("providers.timeout_connect")],
@@ -43,25 +44,29 @@ export function TimeoutsSection({ value, onChange }: Props) {
       <legend className="text-sm font-medium">
         {t("providers.timeouts_section")}
       </legend>
-      {fields.map(([k, label]) => (
-        <label key={k} className="flex items-center justify-between gap-4">
-          <span className="text-sm">{label}</span>
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              aria-label={label}
-              value={value[k] ?? DEFAULTS[k]}
-              onChange={(e) => onChange({ ...value, [k]: Number(e.target.value) })}
-              className="w-24 rounded border bg-background px-2 py-1 text-sm"
-              min={BOUNDS[k][0]}
-              max={BOUNDS[k][1]}
-            />
-            {errors[k] && (
-              <span className="text-xs text-destructive">{errors[k]}</span>
-            )}
-          </div>
-        </label>
-      ))}
+      {fields.map(([k, label]) => {
+        const fid = `${baseId}-${k}`;
+        return (
+          <label key={k} htmlFor={fid} className="flex items-center justify-between gap-4">
+            <span className="text-sm">{label}</span>
+            <div className="flex items-center gap-2">
+              <input
+                id={fid}
+                type="number"
+                aria-label={label}
+                value={value[k] ?? DEFAULTS[k]}
+                onChange={(e) => onChange({ ...value, [k]: Number(e.target.value) })}
+                className="w-24 rounded border bg-background px-2 py-1 text-sm"
+                min={BOUNDS[k][0]}
+                max={BOUNDS[k][1]}
+              />
+              {errors[k] && (
+                <span className="text-xs text-destructive">{errors[k]}</span>
+              )}
+            </div>
+          </label>
+        );
+      })}
     </fieldset>
   );
 }
