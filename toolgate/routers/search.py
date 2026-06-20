@@ -32,6 +32,7 @@ async def web_search(request: Request):
         http = request.app.state.http_client
         results = await provider.search(http, query, max_results)
         return {"results": results}
-    except Exception as e:
+    except Exception:
+        # Log full detail server-side; return a generic message (no internal detail leak).
         log.exception("web search failed")
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        return JSONResponse(status_code=502, content={"error": "web search failed"})

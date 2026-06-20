@@ -13,7 +13,9 @@ search:
     - json
 
 server:
-  secret_key: "hydeclaw-searxng-secret-change-me"
+  # Sentinel replaced at boot by the SEARXNG_SECRET env (wired from SEARXNG_SECRET_KEY in docker-compose).
+  # No real secret is committed; set SEARXNG_SECRET_KEY in the server .env for a unique value.
+  secret_key: "ultrasecretkey"
   limiter: false
   image_proxy: false
   port: 8080
