@@ -186,6 +186,8 @@ pub async fn start_agent_from_config(
         scheduler: Some(agents.scheduler.clone()),
         agent_map: Some(agents.map.clone()),
         session_pools: Some(agents.session_pools.clone()),
+        goal_pool: Some(crate::agent::goal::pool::new_pool()),
+        goal_locks: Some(crate::agent::goal::pool::new_locks()),
         session_tool_state: Some(agents.session_tool_state.clone()),
         audit_queue: deps.audit_queue.clone(),
         metrics: infra.metrics.clone(),
