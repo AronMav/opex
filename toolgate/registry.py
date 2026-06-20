@@ -47,6 +47,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
     from providers.stt_mistral import MistralSTT
     from providers.stt_assemblyai import AssemblyAISTT
     from providers.stt_mimo import MiMoSTT
+    from providers.stt_openrouter import OpenRouterSTT
 
     # Vision providers
     from providers.vision_local import OllamaVision
@@ -89,6 +90,7 @@ def _build_driver_map() -> dict[tuple[str, str], type]:
         ("stt", "mistral"): MistralSTT,
         ("stt", "assemblyai"): AssemblyAISTT,
         ("stt", "mimo"): MiMoSTT,
+        ("stt", "openrouter"): OpenRouterSTT,
         # Vision
         ("vision", "ollama"): OllamaVision,
         ("vision", "openai"): OpenAIVision,

@@ -21,6 +21,7 @@ drivers:
     - { driver: mistral,       label: "Mistral (Voxtral)",             requires_key: true }
     - { driver: assemblyai,    label: "AssemblyAI (100+ langs)",       requires_key: true }
     - { driver: mimo,          label: "Xiaomi MiMo ASR",               requires_key: true }
+    - { driver: openrouter,    label: "OpenRouter (Whisper / GPT-4o)",  requires_key: true }
 
   vision:
     - { driver: ollama,        label: "Local Ollama",                  requires_key: false }
