@@ -286,6 +286,7 @@
   "chat.more_actions": "More actions",
   "chat.slash_new": "Start a new chat",
   "chat.slash_reset": "Reset session",
+  "chat.slash_compact": "Compress conversation history",
   "chat.slash_stop": "Stop generation",
   "chat.slash_think_off": "Thinking: off",
   "chat.slash_think_min": "Thinking: minimal",

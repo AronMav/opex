@@ -286,6 +286,7 @@
   "chat.more_actions": "Ещё",
   "chat.slash_new": "Начать новый чат",
   "chat.slash_reset": "Сбросить сессию",
+  "chat.slash_compact": "Сжать историю разговора",
   "chat.slash_stop": "Остановить генерацию",
   "chat.slash_think_off": "Режим думы: выкл",
   "chat.slash_think_min": "Режим думы: минимум",
