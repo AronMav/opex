@@ -208,6 +208,50 @@ impl AgentEngine {
         Ok(session_id)
     }
 
+    /// If the chat has voice mode `on`, dispatch the final assistant text as a
+    /// voice message by reusing the `synthesize_speech` YAML tool's channel-action
+    /// path (background TTS → `send_voice`). Best-effort: never blocks or fails the turn.
+    async fn maybe_auto_tts(&self, msg: &IncomingMessage, final_text: &str) {
+        if final_text.trim().is_empty() {
+            return;
+        }
+        let chat_id = match msg.context.get("chat_id") {
+            Some(v) => v.to_string().trim_matches('"').to_string(),
+            None => return, // web/UI turn — no chat to voice
+        };
+        if chat_id.is_empty() || chat_id == "null" {
+            return;
+        }
+        let mode = crate::db::channel_voice_modes::get_voice_mode(&self.cfg().db, &msg.channel, &chat_id)
+            .await
+            .unwrap_or_else(|_| "off".to_string());
+        if mode != "on" {
+            return;
+        }
+        let tool = match crate::tools::yaml_tools::find_yaml_tool(&self.cfg().workspace_dir, "synthesize_speech").await {
+            Some(t) => t,
+            None => {
+                tracing::warn!("auto-tts: synthesize_speech tool not found");
+                return;
+            }
+        };
+        let Some(ca) = tool.channel_action.clone() else {
+            tracing::warn!("auto-tts: synthesize_speech has no channel_action");
+            return;
+        };
+        let ctx = crate::agent::pipeline::CommandContext {
+            cfg: self.cfg(),
+            state: self.state(),
+            tex: self.tex(),
+            subagent_depth: 0,
+        };
+        let args = serde_json::json!({ "text": final_text, "_context": msg.context });
+        let result =
+            crate::agent::pipeline::channel_actions::execute_yaml_channel_action(&ctx, &tool, &args, &ca)
+                .await;
+        tracing::debug!(channel = %msg.channel, "auto-tts dispatched: {result}");
+    }
+
     /// Handle with optional status callback for real-time phase updates.
     /// `chunk_tx` — optional channel for streaming response chunks to the caller.
     ///
@@ -321,6 +365,9 @@ impl AgentEngine {
         let result =
             finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await;
         self.maybe_trim_session(session_id).await;
+        if let Ok(ref final_text) = result {
+            self.maybe_auto_tts(msg, final_text).await;
+        }
         result
     }
 
