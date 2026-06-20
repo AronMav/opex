@@ -18,6 +18,7 @@ pub mod github;
 pub mod outbound;
 pub mod pending;
 pub mod providers;
+pub mod session_goals;
 pub mod skill_repairs;
 pub mod curator_decisions;
 pub mod skill_versions;
