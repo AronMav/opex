@@ -44,6 +44,36 @@ pub struct CommandContext<'a> {
     pub compaction_provider: Option<&'a dyn LlmProvider>,
     pub thinking_level: &'a AtomicU8,
     pub memory_store: &'a dyn MemoryService,
+    /// Owned engine `Arc` (resolved from `state.self_ref`) so `/goal` can spawn a
+    /// background driver that outlives the request. `None` when no self-ref is set.
+    pub engine_arc: Option<std::sync::Arc<crate::agent::engine::AgentEngine>>,
+}
+
+/// Spawn (replacing any existing) the goal driver for a session. Returns false when
+/// no engine ref / goal pool is available.
+fn start_goal_driver(
+    ctx: &CommandContext<'_>,
+    session_id: uuid::Uuid,
+    target: crate::agent::goal::pool::GoalTarget,
+) -> bool {
+    let Some(engine) = ctx.engine_arc.clone() else {
+        return false;
+    };
+    let Some(pool) = engine.cfg().goal_pool.clone() else {
+        return false;
+    };
+    crate::agent::goal::pool::stop(&pool, session_id);
+    let handle = crate::agent::goal::driver::spawn_goal_driver(engine, session_id, target);
+    pool.insert(session_id, handle);
+    true
+}
+
+fn stop_goal_driver(ctx: &CommandContext<'_>, session_id: uuid::Uuid) {
+    if let Some(engine) = ctx.engine_arc.as_ref()
+        && let Some(pool) = engine.cfg().goal_pool.clone()
+    {
+        crate::agent::goal::pool::stop(&pool, session_id);
+    }
 }
 
 // ── handle_command ─────────────────────────────────────────────────────────
@@ -409,6 +439,112 @@ where
                 localization::fmt(s.memory_header, &[&mode, &results.len().to_string(), &lines.join("\n\n")])
             ))
         }
+        "/goal" => {
+            use crate::agent::goal::{parse_goal_command, GoalCmd};
+            let session_id = match sessions::find_active_session(
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+            )
+            .await
+            {
+                Ok(Some(sid)) => sid,
+                _ => return Some(Ok("No active session for this chat.".to_string())),
+            };
+            // Channel sessions carry a chat_id; web sessions don't (driver delivers via ui_event).
+            let target: crate::agent::goal::pool::GoalTarget = msg
+                .context
+                .get("chat_id")
+                .and_then(|v| v.as_i64())
+                .map(|cid| (msg.channel.clone(), cid));
+            match parse_goal_command(args) {
+                GoalCmd::Set(text) => {
+                    let max_turns = 20;
+                    if let Err(e) = crate::db::session_goals::upsert(ctx.db, session_id, &text, max_turns).await {
+                        return Some(Ok(format!("Failed to set goal: {e}")));
+                    }
+                    if !start_goal_driver(ctx, session_id, target) {
+                        return Some(Ok("Goal saved, but the autonomous driver could not start here.".to_string()));
+                    }
+                    Some(Ok(format!(
+                        "🎯 Goal set: {text}\nWorking on it autonomously (max {max_turns} turns). /goal status · /goal pause · /goal clear."
+                    )))
+                }
+                GoalCmd::Status => match crate::db::session_goals::get(ctx.db, session_id).await {
+                    Ok(Some(g)) => Some(Ok(format!(
+                        "🎯 Goal: {}\nStatus: {} ({}/{} turns){}",
+                        g.goal_text,
+                        g.status,
+                        g.turn_count,
+                        g.max_turns,
+                        if g.subgoals.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\nSubgoals: {}", g.subgoals.join("; "))
+                        }
+                    ))),
+                    _ => Some(Ok("No goal set. Use /goal <text>.".to_string())),
+                },
+                GoalCmd::Pause => {
+                    let _ = crate::db::session_goals::set_status(ctx.db, session_id, "paused").await;
+                    stop_goal_driver(ctx, session_id);
+                    Some(Ok("⏸ Goal paused. /goal resume to continue.".to_string()))
+                }
+                GoalCmd::Resume => {
+                    let _ = crate::db::session_goals::set_status(ctx.db, session_id, "active").await;
+                    if !start_goal_driver(ctx, session_id, target) {
+                        return Some(Ok("Could not resume the autonomous driver here.".to_string()));
+                    }
+                    Some(Ok("▶ Goal resumed.".to_string()))
+                }
+                GoalCmd::Clear => {
+                    stop_goal_driver(ctx, session_id);
+                    let _ = crate::db::session_goals::clear(ctx.db, session_id).await;
+                    Some(Ok("🗑 Goal cleared.".to_string()))
+                }
+            }
+        }
+        "/subgoal" => {
+            use crate::agent::goal::{parse_subgoal_command, SubgoalCmd};
+            let session_id = match sessions::find_active_session(
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+            )
+            .await
+            {
+                Ok(Some(sid)) => sid,
+                _ => return Some(Ok("No active session.".to_string())),
+            };
+            let Ok(Some(mut g)) = crate::db::session_goals::get(ctx.db, session_id).await else {
+                return Some(Ok("No active goal — set one with /goal <text>.".to_string()));
+            };
+            match parse_subgoal_command(args) {
+                SubgoalCmd::Add(t) => {
+                    g.subgoals.push(t);
+                    let _ = crate::db::session_goals::set_subgoals(ctx.db, session_id, &g.subgoals).await;
+                    Some(Ok(format!("Added subgoal. {} total.", g.subgoals.len())))
+                }
+                SubgoalCmd::List => {
+                    if g.subgoals.is_empty() {
+                        Some(Ok("No subgoals.".to_string()))
+                    } else {
+                        Some(Ok(g
+                            .subgoals
+                            .iter()
+                            .enumerate()
+                            .map(|(i, s)| format!("{}. {s}", i + 1))
+                            .collect::<Vec<_>>()
+                            .join("\n")))
+                    }
+                }
+                SubgoalCmd::Remove(n) => {
+                    if n >= 1 && n <= g.subgoals.len() {
+                        g.subgoals.remove(n - 1);
+                        let _ = crate::db::session_goals::set_subgoals(ctx.db, session_id, &g.subgoals).await;
+                        Some(Ok(format!("Removed subgoal {n}. {} left.", g.subgoals.len())))
+                    } else {
+                        Some(Ok(format!("No subgoal #{n}.")))
+                    }
+                }
+            }
+        }
         _ => None, // Unknown command — pass to LLM
     }
 }
@@ -416,6 +552,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn goal_and_subgoal_parsers() {
+        use crate::agent::goal::{parse_goal_command, parse_subgoal_command, GoalCmd, SubgoalCmd};
+        assert!(matches!(parse_goal_command("pause"), GoalCmd::Pause));
+        assert!(matches!(parse_subgoal_command("remove 1"), SubgoalCmd::Remove(1)));
+    }
 
     #[test]
     fn parse_voice_command_maps_args() {
