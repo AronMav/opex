@@ -41,7 +41,7 @@ const assistantWithTool: ChatMessage = {
     {
       type: "tool",
       toolCallId: "tc-1",
-      toolName: "searxng_search",
+      toolName: "search_web",
       state: "output-available",
       input: { query: "test" },
       output: "Search results here",
