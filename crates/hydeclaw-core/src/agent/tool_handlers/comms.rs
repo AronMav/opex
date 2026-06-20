@@ -346,6 +346,11 @@ pub struct BrowserActionHandler;
 #[async_trait]
 impl SystemToolHandler for BrowserActionHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
+        if let Some(u) = args.get("url").and_then(|v| v.as_str())
+            && crate::tools::url_policy::url_blocked(u, &deps.cfg.app_config.security.blocked_domains)
+        {
+            return format!("⛔ blocked by domain policy: {u}");
+        }
         ph::handle_browser_action(
             deps.http_client,
             &crate::agent::pipeline::canvas::browser_renderer_url(),
