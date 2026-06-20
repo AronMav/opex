@@ -37,8 +37,8 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
-const VALID_TYPES: &[&str] = &["text", "stt", "tts", "vision", "imagegen", "embedding"];
-const VALID_CAPABILITIES: &[&str] = &["stt", "tts", "vision", "imagegen", "embedding"];
+const VALID_TYPES: &[&str] = &["text", "stt", "tts", "vision", "imagegen", "embedding", "websearch"];
+const VALID_CAPABILITIES: &[&str] = &["stt", "tts", "vision", "imagegen", "embedding", "websearch"];
 
 static NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^[a-zA-Z0-9_-]+$").expect("valid regex pattern")
@@ -48,7 +48,7 @@ static NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// `provider_active` rows are surfaced to toolgate. Toolgate caches the config
 /// for 30s with an ETag conditional GET (see `api_media_config_export`), so
 /// provider-active changes propagate within 30s automatically.
-const MEDIA_CAPABILITIES: &[&str] = &["stt", "tts", "vision", "imagegen", "embedding"];
+const MEDIA_CAPABILITIES: &[&str] = &["stt", "tts", "vision", "imagegen", "embedding", "websearch"];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -344,16 +344,23 @@ pub(crate) async fn api_update_provider(
                 }
             }
 
-            // If type changed, clear provider_active entries that referenced this provider by name.
+            // If type changed, drop this provider from any active set it belonged to,
+            // preserving the other (priority-ordered) entries in those capabilities.
             if let Some(ref old) = old_provider
                 && old.category != p.category
             {
-                // Clear active binding for old capabilities that referenced this provider
                 let active = providers::list_provider_active(&infra.db).await.unwrap_or_default();
-                for a in active {
-                    if a.provider_name.as_deref() == Some(&p.name) {
-                        let _ = providers::set_provider_active(&infra.db, &a.capability, None).await;
-                    }
+                let affected: std::collections::HashSet<String> = active.iter()
+                    .filter(|a| a.provider_name == p.name)
+                    .map(|a| a.capability.clone())
+                    .collect();
+                for cap in affected {
+                    let remaining: Vec<(String, i32)> = providers::get_active_providers(&infra.db, &cap)
+                        .await.unwrap_or_default()
+                        .into_iter()
+                        .filter(|(n, _)| n != &p.name)
+                        .collect();
+                    let _ = providers::set_provider_active_list(&infra.db, &cap, &remaining).await;
                 }
             }
 
@@ -362,12 +369,9 @@ pub(crate) async fn api_update_provider(
             // default_model, api_key, provider_type, name) has changed. Any such
             // change requires `embedder.reset()` so that the next embed call
             // re-probes the dim / provider_display / freshly-resolved key.
-            let active_embedding_name = providers::list_provider_active(&infra.db)
+            let active_embedding_name = providers::get_provider_active(&infra.db, "embedding")
                 .await
-                .unwrap_or_default()
-                .into_iter()
-                .find(|a| a.capability == "embedding")
-                .and_then(|a| a.provider_name);
+                .unwrap_or_default(); // Result<Option<String>> -> Option<String>
             let is_active_embedding = active_embedding_name.as_deref() == Some(&p.name)
                 || old_provider.as_ref().is_some_and(|old| {
                     active_embedding_name.as_deref() == Some(&old.name)
@@ -423,7 +427,7 @@ pub(crate) async fn api_delete_provider(
             .await
             .unwrap_or_default()
             .iter()
-            .any(|a| a.capability == "embedding" && a.provider_name.as_deref() == Some(name.as_str()))
+            .any(|a| a.capability == "embedding" && a.provider_name == *name)
     } else {
         false
     };
@@ -545,9 +549,18 @@ pub(crate) async fn api_list_provider_active(State(infra): State<InfraServices>)
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct ActiveEntry {
+    pub provider_name: String,
+    #[serde(default = "default_priority")]
+    pub priority: i32,
+}
+fn default_priority() -> i32 { 100 }
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct SetProviderActiveInput {
     pub capability: String,
-    pub provider_name: Option<String>,
+    pub provider_name: Option<String>,        // legacy single-value form
+    pub providers: Option<Vec<ActiveEntry>>,  // new priority-ordered list
 }
 
 pub(crate) async fn api_set_provider_active(
@@ -559,14 +572,13 @@ pub(crate) async fn api_set_provider_active(
             "error": format!("invalid capability '{}', must be one of: {}", input.capability, VALID_CAPABILITIES.join(", "))
         }))).into_response();
     }
-    match providers::set_provider_active(
-        &infra.db,
-        &input.capability,
-        input.provider_name.as_deref(),
-    )
-    .await
-    {
-        Ok(row) => {
+    let entries: Vec<(String, i32)> = match (input.providers, input.provider_name) {
+        (Some(list), _) => list.into_iter().map(|e| (e.provider_name, e.priority)).collect(),
+        (None, Some(name)) => vec![(name, 100)],
+        (None, None) => vec![], // clear
+    };
+    match providers::set_provider_active_list(&infra.db, &input.capability, &entries).await {
+        Ok(()) => {
             // Toolgate caches config 30s with ETag conditional GET — provider
             // changes propagate within 30s automatically.
             if input.capability == "embedding"
@@ -574,7 +586,10 @@ pub(crate) async fn api_set_provider_active(
             {
                 tracing::error!(error = %err, "failed to reset embedder after provider switch");
             }
-            (StatusCode::OK, Json(json!(row))).into_response()
+            let rows = providers::get_active_providers(&infra.db, &input.capability)
+                .await.unwrap_or_default();
+            (StatusCode::OK, Json(json!({ "capability": input.capability, "providers": rows
+                .into_iter().map(|(n, p)| json!({"provider_name": n, "priority": p})).collect::<Vec<_>>() }))).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
     }
@@ -588,13 +603,11 @@ pub(crate) async fn api_set_provider_active(
 pub(crate) async fn build_media_config(infra: &InfraServices, auth: &AuthServices) -> Value {
     // Collect all media-type providers
     let mut all_providers = Vec::new();
-    for media_type in &["stt", "tts", "vision", "imagegen", "embedding"] {
+    for media_type in &["stt", "tts", "vision", "imagegen", "embedding", "websearch"] {
         if let Ok(rows) = providers::list_providers_by_type(&infra.db, media_type).await {
             all_providers.extend(rows);
         }
     }
-
-    let active_rows = providers::list_provider_active(&infra.db).await.unwrap_or_default();
 
     let mut provider_map = serde_json::Map::new();
     for p in &all_providers {
@@ -616,12 +629,17 @@ pub(crate) async fn build_media_config(infra: &InfraServices, auth: &AuthService
         );
     }
 
-    let mut active_map = serde_json::Map::new();
+    let active_rows = providers::list_provider_active(&infra.db).await.unwrap_or_default();
+    let mut top: std::collections::HashMap<String, (String, i32)> = std::collections::HashMap::new();
     for a in active_rows {
-        // Only include media capabilities
-        if MEDIA_CAPABILITIES.contains(&a.capability.as_str()) {
-            active_map.insert(a.capability, json!(a.provider_name));
-        }
+        if !MEDIA_CAPABILITIES.contains(&a.capability.as_str()) { continue; }
+        top.entry(a.capability.clone())
+            .and_modify(|cur| if a.priority < cur.1 { *cur = (a.provider_name.clone(), a.priority); })
+            .or_insert((a.provider_name.clone(), a.priority));
+    }
+    let mut active_map = serde_json::Map::new();
+    for (cap, (name, _)) in top {
+        active_map.insert(cap, json!(name));
     }
 
     json!({
@@ -1152,6 +1170,7 @@ mod tests {
         assert!(VALID_TYPES.contains(&"text"));
         assert!(VALID_TYPES.contains(&"stt"));
         assert!(VALID_TYPES.contains(&"embedding"));
+        assert!(VALID_TYPES.contains(&"websearch"));
         assert!(!VALID_TYPES.contains(&"audio"));
     }
 
@@ -1159,6 +1178,7 @@ mod tests {
     fn valid_capabilities_complete() {
         assert!(VALID_CAPABILITIES.contains(&"stt"));
         assert!(VALID_CAPABILITIES.contains(&"embedding"));
+        assert!(VALID_CAPABILITIES.contains(&"websearch"));
         assert!(!VALID_CAPABILITIES.contains(&"graph_extraction"));
         assert!(!VALID_CAPABILITIES.contains(&"compaction"));
         assert!(!VALID_CAPABILITIES.contains(&"text"));
@@ -1220,11 +1240,13 @@ mod tests {
     fn provider_active_row_serializes() {
         let row = crate::db::providers::ProviderActiveRow {
             capability: "stt".into(),
-            provider_name: Some("whisper-local".into()),
+            provider_name: "whisper-local".into(),
+            priority: 100,
         };
         let json = serde_json::to_value(&row).unwrap();
         assert_eq!(json["capability"], "stt");
         assert_eq!(json["provider_name"], "whisper-local");
+        assert_eq!(json["priority"], 100);
     }
 
     #[test]
@@ -1314,6 +1336,7 @@ mod tests {
     fn capability_validation() {
         assert!(is_valid_capability("stt"));
         assert!(is_valid_capability("embedding"));
+        assert!(is_valid_capability("websearch"));
         assert!(!is_valid_capability("graph_extraction"));
         assert!(!is_valid_capability("compaction"));
         assert!(!is_valid_capability("text"));

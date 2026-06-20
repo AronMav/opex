@@ -55,7 +55,8 @@ pub const CAPABILITY_COMPACTION: &str = "compaction";
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct ProviderActiveRow {
     pub capability: String,
-    pub provider_name: Option<String>,
+    pub provider_name: String,
+    pub priority: i32,
 }
 
 // ── CRUD ─────────────────────────────────────────────────────────────────────
@@ -152,36 +153,67 @@ pub async fn delete_provider(db: &PgPool, id: Uuid) -> sqlx::Result<bool> {
 // ── Active ───────────────────────────────────────────────────────────────────
 
 pub async fn list_provider_active(db: &PgPool) -> sqlx::Result<Vec<ProviderActiveRow>> {
-    sqlx::query_as::<_, ProviderActiveRow>("SELECT * FROM provider_active ORDER BY capability")
-        .fetch_all(db)
-        .await
-}
-
-pub async fn set_provider_active(
-    db: &PgPool,
-    capability: &str,
-    provider_name: Option<&str>,
-) -> sqlx::Result<ProviderActiveRow> {
     sqlx::query_as::<_, ProviderActiveRow>(
-        r"INSERT INTO provider_active (capability, provider_name)
-           VALUES ($1, $2)
-           ON CONFLICT (capability) DO UPDATE SET provider_name = EXCLUDED.provider_name
-           RETURNING *",
+        "SELECT capability, provider_name, priority FROM provider_active ORDER BY capability, priority ASC",
     )
-    .bind(capability)
-    .bind(provider_name)
-    .fetch_one(db)
+    .fetch_all(db)
     .await
 }
 
+/// All active providers for a capability, highest priority first.
+pub async fn get_active_providers(db: &PgPool, capability: &str) -> sqlx::Result<Vec<(String, i32)>> {
+    sqlx::query_as::<_, (String, i32)>(
+        "SELECT provider_name, priority FROM provider_active
+         WHERE capability = $1 ORDER BY priority ASC, provider_name",
+    )
+    .bind(capability)
+    .fetch_all(db)
+    .await
+}
+
+/// Top-priority active provider name for a capability (single-active accessor).
 pub async fn get_provider_active(db: &PgPool, capability: &str) -> sqlx::Result<Option<String>> {
-    sqlx::query_scalar::<_, Option<String>>(
-        "SELECT provider_name FROM provider_active WHERE capability = $1",
+    sqlx::query_scalar::<_, String>(
+        "SELECT provider_name FROM provider_active
+         WHERE capability = $1 ORDER BY priority ASC LIMIT 1",
     )
     .bind(capability)
     .fetch_optional(db)
     .await
-    .map(std::option::Option::flatten)
+}
+
+/// Replace the entire active set for a capability in one transaction.
+pub async fn set_provider_active_list(
+    db: &PgPool,
+    capability: &str,
+    entries: &[(String, i32)],
+) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("DELETE FROM provider_active WHERE capability = $1")
+        .bind(capability)
+        .execute(&mut *tx)
+        .await?;
+    for (name, priority) in entries {
+        sqlx::query("INSERT INTO provider_active (capability, provider_name, priority) VALUES ($1, $2, $3)")
+            .bind(capability)
+            .bind(name)
+            .bind(priority)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await
+}
+
+/// Single-active convenience: Some(name) → one row at priority 100; None → clear all.
+pub async fn set_provider_active(
+    db: &PgPool,
+    capability: &str,
+    provider_name: Option<&str>,
+) -> sqlx::Result<()> {
+    match provider_name {
+        Some(name) => set_provider_active_list(db, capability, &[(name.to_string(), 100)]).await,
+        None => set_provider_active_list(db, capability, &[]).await,
+    }
 }
 
 #[cfg(test)]
@@ -192,6 +224,32 @@ mod tests {
     #[test]
     fn compaction_capability_name() {
         assert_eq!(CAPABILITY_COMPACTION, "compaction");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn active_priority_roundtrip(pool: sqlx::PgPool) {
+        // seed two providers so the FK is satisfied
+        for (n, t) in [("ws-a", "websearch"), ("ws-b", "websearch")] {
+            sqlx::query("INSERT INTO providers (name, type, provider_type, enabled) VALUES ($1,$2,$3,true)")
+                .bind(n).bind(t).bind("searxng").execute(&pool).await.unwrap();
+        }
+        set_provider_active_list(&pool, "websearch", &[("ws-b".into(), 10), ("ws-a".into(), 5)])
+            .await.unwrap();
+
+        let ordered = get_active_providers(&pool, "websearch").await.unwrap();
+        assert_eq!(ordered, vec![("ws-a".into(), 5), ("ws-b".into(), 10)]);
+
+        // top priority
+        assert_eq!(get_provider_active(&pool, "websearch").await.unwrap(), Some("ws-a".into()));
+
+        // replace semantics
+        set_provider_active_list(&pool, "websearch", &[("ws-b".into(), 1)]).await.unwrap();
+        assert_eq!(get_active_providers(&pool, "websearch").await.unwrap(), vec![("ws-b".into(), 1)]);
+
+        // clear
+        set_provider_active(&pool, "websearch", None).await.unwrap();
+        assert!(get_active_providers(&pool, "websearch").await.unwrap().is_empty());
+        assert_eq!(get_provider_active(&pool, "websearch").await.unwrap(), None);
     }
 
     /// Documents the data-loss risk in migration 003_unified_providers.sql.
