@@ -206,18 +206,21 @@ deploy-jaeger: jaeger-up deploy-binary-otel
 	@echo "Observability deploy complete. Tail spans with jaeger UI."
 
 # ── Remote ───────────────────────────────────────────────────────────────────
+# Operational targets point at the live SERVER_HOST. The Pi is out of the
+# ecosystem (no longer deployed to), so these no longer reference PI_HOST —
+# pointing them at the dead Pi made `make doctor/logs/restart/status` useless.
 
 doctor:
-	@ssh $(PI_HOST) "curl -sf -H 'Authorization: Bearer $(AUTH)' http://localhost:18789/api/doctor | python3 -m json.tool"
+	@ssh $(SERVER_HOST) "curl -sf -H 'Authorization: Bearer $(AUTH)' http://localhost:18789/api/doctor | python3 -m json.tool"
 
 logs:
-	ssh $(PI_HOST) "journalctl --user -u hydeclaw-core -f --no-pager"
+	ssh $(SERVER_HOST) "journalctl --user -u hydeclaw-core -f --no-pager"
 
 restart:
-	ssh $(PI_HOST) "systemctl --user restart hydeclaw-core"
+	ssh $(SERVER_HOST) "systemctl --user restart hydeclaw-core"
 
 status:
-	ssh $(PI_HOST) "systemctl --user status hydeclaw-core --no-pager"
+	ssh $(SERVER_HOST) "systemctl --user status hydeclaw-core --no-pager"
 
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 
