@@ -837,6 +837,7 @@ impl Scheduler {
         job_id: Uuid,
         agent_name: String,
         goal_text: String,
+        announce_to: Option<serde_json::Value>,
     ) {
         const CRON_GOAL_MAX_TURNS: i32 = 20;
         let channel = crate::agent::channel_kind::channel::CRON;
@@ -857,7 +858,8 @@ impl Scheduler {
             tracing::warn!(job = %job_id, "cron-goal: engine has no goal pool");
             return;
         };
-        let handle = crate::agent::goal::driver::spawn_goal_driver(engine, session_id, None);
+        let target = cron_goal_target(&announce_to);
+        let handle = crate::agent::goal::driver::spawn_goal_driver(engine, session_id, target);
         pool.insert(session_id, handle);
         tracing::info!(job = %job_id, session = %session_id, "cron-goal driver started");
     }
@@ -893,6 +895,10 @@ impl Scheduler {
                 .to_std()
                 .unwrap_or(std::time::Duration::ZERO);
 
+            // Cloned before `announce_to`/`autonomous_goal` are consumed into `msg`
+            // below, so the one-shot cron-goal branch (inside the spawn) can use them.
+            let autonomous_goal_once = autonomous_goal.clone();
+            let announce_to_goal = announce_to.clone();
             let fmt_prompt = engine.formatting_prompt().await;
             let msg = hydeclaw_types::IncomingMessage {
                 user_id: "system".to_string(),
@@ -915,6 +921,16 @@ impl Scheduler {
 
             tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
+
+                // One-shot cron-goal: spawn a durable goal-driven session, drop the
+                // now-consumed job, and return — bypassing the one-shot run. The
+                // goal driver continues autonomously and survives crashes via
+                // resume_autonomous_goals.
+                if let Some(goal_text) = autonomous_goal_once {
+                    Self::bootstrap_cron_goal(engine2.clone(), db2.clone(), db_id, agent_name2.to_string(), goal_text, announce_to_goal).await;
+                    let _ = sqlx::query("DELETE FROM scheduled_jobs WHERE id = $1").bind(db_id).execute(&db2).await;
+                    return;
+                }
 
                 let run_id: Option<uuid::Uuid> = match sqlx::query_scalar(
                     "INSERT INTO cron_runs (job_id, agent_id) VALUES ($1, $2) RETURNING id",
@@ -1015,7 +1031,7 @@ impl Scheduler {
                 // and tracks its own status; resume_autonomous_goals re-drives it
                 // after a crash.
                 if let Some(goal_text) = autonomous_goal {
-                    Self::bootstrap_cron_goal(engine.clone(), db.clone(), db_id, agent_name.to_string(), goal_text).await;
+                    Self::bootstrap_cron_goal(engine.clone(), db.clone(), db_id, agent_name.to_string(), goal_text, announce_to.clone()).await;
                     return;
                 }
 
@@ -1679,6 +1695,16 @@ pub fn timezone_offset_hours(tz: &str) -> i32 {
 /// 5-field input (no seconds field) gets `"0 "` prepended so it fires at
 /// :00 of every matching minute. 6-field or other length: returned unchanged
 /// (parsing will succeed-or-fail downstream).
+/// Derive the goal driver's delivery target from a cron job's `announce_to`
+/// (`{"channel": "telegram", "chat_id": 123}`). Returns `None` (the driver then
+/// delivers via `ui_event`) when the channel or chat_id is absent or malformed.
+fn cron_goal_target(announce_to: &Option<serde_json::Value>) -> crate::agent::goal::pool::GoalTarget {
+    let a = announce_to.as_ref()?;
+    let channel = a.get("channel").and_then(|v| v.as_str())?;
+    let chat_id = a.get("chat_id").and_then(|v| v.as_i64())?;
+    Some((channel.to_string(), chat_id))
+}
+
 fn normalize_cron_to_6field(cron_expr: &str) -> String {
     let raw = cron_expr.trim();
     let fields: Vec<&str> = raw.split_whitespace().collect();
@@ -1743,6 +1769,27 @@ pub fn convert_cron_to_utc(cron: &str, timezone: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cron_goal_target_resolves_channel_and_chat() {
+        use serde_json::json;
+        assert_eq!(
+            cron_goal_target(&Some(json!({"channel": "telegram", "chat_id": 123}))),
+            Some(("telegram".to_string(), 123)),
+            "full announce_to → channel delivery target"
+        );
+        assert_eq!(cron_goal_target(&None), None, "no announce_to → ui_event");
+        assert_eq!(
+            cron_goal_target(&Some(json!({"chat_id": 123}))),
+            None,
+            "missing channel → ui_event"
+        );
+        assert_eq!(
+            cron_goal_target(&Some(json!({"channel": "telegram"}))),
+            None,
+            "missing chat_id → ui_event"
+        );
+    }
 
     // ── timezone_offset_hours ──────────────────────────────────────────
 
