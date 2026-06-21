@@ -41,6 +41,53 @@ pub const AUTO_CONTINUE_NUDGE: &str =
     "[system] You described remaining steps but didn't execute them. \
      Continue and complete the task using tools.";
 
+/// Tool result injected when the interrupted-verify guard blocks a batch on an
+/// autonomous re-drive. Worded as an `Error:`-style result the model reads and
+/// acts on (verify the prior effect, then decide whether to repeat).
+pub const INTERRUPTED_VERIFY_BLOCK_RESULT: &str =
+    "Error: blocked by the interrupted-verify guard. The previous turn was \
+     interrupted before this tool's result was recorded, so this action may have \
+     ALREADY taken effect. Do NOT blindly repeat it — first verify the current \
+     state with a read-only check (read the file, list the directory/process, \
+     inspect the result), then decide whether the action still needs to run.";
+
+/// System tools whose side-effects are NOT idempotent: re-running them after a
+/// crash-interrupted turn risks double-applying (run code twice, delete/rename a
+/// path again, start a second process). Gated by the interrupted-verify guard.
+/// Committed tool results are already replay-safe via the cache; this list only
+/// matters for the narrow window where a result was lost before persistence.
+pub const NON_IDEMPOTENT_TOOLS: &[&str] =
+    &["code_exec", "process_start", "workspace_delete", "workspace_rename"];
+
+/// Whether `name` is a non-idempotent system tool — see [`NON_IDEMPOTENT_TOOLS`].
+pub fn is_non_idempotent_tool(name: &str) -> bool {
+    NON_IDEMPOTENT_TOOLS.contains(&name)
+}
+
+/// True when the most recent tool result in the context is an un-cleared
+/// `[interrupted:verify]` marker — a prior tool call whose outcome is unknown
+/// because the turn crashed before its result was recorded. "Cleared" simply
+/// means a later real tool result superseded it (so only the LAST tool result
+/// is examined).
+pub fn last_tool_result_is_interrupted_verify(messages: &[hydeclaw_types::Message]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .find(|m| m.role == hydeclaw_types::MessageRole::Tool)
+        .is_some_and(|m| m.content.starts_with(crate::db::sessions::INTERRUPTED_VERIFY_TAG))
+}
+
+/// The interrupted-verify guard decision: block this batch when the last tool
+/// outcome is an un-cleared `[interrupted:verify]` marker AND the batch includes
+/// a non-idempotent tool. (Layer presence is checked separately by the caller.)
+pub fn should_block_interrupted_batch(
+    messages: &[hydeclaw_types::Message],
+    tool_calls: &[hydeclaw_types::ToolCall],
+) -> bool {
+    last_tool_result_is_interrupted_verify(messages)
+        && tool_calls.iter().any(|tc| is_non_idempotent_tool(&tc.name))
+}
+
 // ── Individual layer policies ────────────────────────────────────────────────
 
 /// Switch the live LLM provider to a fallback after N consecutive failures.
@@ -167,6 +214,27 @@ pub struct ToolPolicyOverride {
 #[derive(Clone)]
 pub struct ForcedFinalCallPolicy;
 
+/// Guard the autonomous re-drive path from blindly repeating a non-idempotent
+/// tool whose prior outcome is unknown.
+///
+/// **Trigger.** Engaged only on autonomous (cron / goal re-drive) turns
+/// (`for_cron`). [`should_block_interrupted_batch`] returns true: the most recent
+/// tool result is an un-cleared `[interrupted:verify]` marker AND the model's
+/// current batch includes a tool in [`NON_IDEMPOTENT_TOOLS`].
+///
+/// **Action.** `execute()` refuses to dispatch the batch; it injects
+/// [`INTERRUPTED_VERIFY_BLOCK_RESULT`] as the result for every call in the batch
+/// and continues, forcing the model to verify before repeating. Bounded to a
+/// single checkpoint: the injected result is no longer an `[interrupted:verify]`
+/// marker, so the guard does not fire again on the next iteration.
+///
+/// **Why a layer.** Defense-in-depth ON TOP of committed-result cache-replay
+/// (a persisted `role='tool'` is never re-executed). It covers only the narrow
+/// window where a non-idempotent tool's result was lost before persistence. The
+/// interactive path leaves it `None` — a human is present to judge.
+#[derive(Clone)]
+pub struct InterruptedVerifyGuardPolicy;
+
 // ── Composite ────────────────────────────────────────────────────────────────
 
 /// Bundle of opt-in behaviour layers passed to `pipeline::execute`.
@@ -186,6 +254,7 @@ pub struct BehaviourLayers {
     pub session_recovery: Option<SessionRecoveryPolicy>,
     pub tool_policy_override: Option<ToolPolicyOverride>,
     pub forced_final_call: Option<ForcedFinalCallPolicy>,
+    pub interrupted_verify_guard: Option<InterruptedVerifyGuardPolicy>,
 }
 
 impl BehaviourLayers {
@@ -229,6 +298,8 @@ impl BehaviourLayers {
             }),
             tool_policy_override: None,
             forced_final_call: None,
+            // A human is present on interactive turns — no auto-block needed.
+            interrupted_verify_guard: None,
         }
     }
 
@@ -258,6 +329,9 @@ impl BehaviourLayers {
             }),
             tool_policy_override,
             forced_final_call: Some(ForcedFinalCallPolicy),
+            // Autonomous re-drive: block a blind repeat of a non-idempotent tool
+            // whose prior outcome was lost to a crash (defense-in-depth).
+            interrupted_verify_guard: Some(InterruptedVerifyGuardPolicy),
         }
     }
 }
@@ -300,6 +374,7 @@ mod tests {
         assert!(a.session_recovery.is_none() && b.session_recovery.is_none());
         assert!(a.tool_policy_override.is_none() && b.tool_policy_override.is_none());
         assert!(a.forced_final_call.is_none() && b.forced_final_call.is_none());
+        assert!(a.interrupted_verify_guard.is_none() && b.interrupted_verify_guard.is_none());
     }
 
     /// `LayerRuntimeState::default()` is the zero state every iteration
@@ -363,6 +438,74 @@ mod tests {
         assert!(layers.tool_policy_override.is_none());
 
         assert!(layers.forced_final_call.is_some());
+        assert!(layers.interrupted_verify_guard.is_some(), "autonomous turns arm the verify guard");
+    }
+
+    #[test]
+    fn for_interactive_leaves_verify_guard_off() {
+        let loop_config = crate::agent::tool_loop::ToolLoopConfig::default();
+        let layers = BehaviourLayers::for_interactive(&loop_config, "hi".to_string());
+        assert!(layers.interrupted_verify_guard.is_none(), "a human is present — no auto-block");
+    }
+
+    // ── interrupted-verify guard logic ──
+
+    use hydeclaw_types::{Message, MessageRole, ToolCall};
+
+    fn tool_msg(content: &str) -> Message {
+        Message {
+            role: MessageRole::Tool,
+            content: content.to_string(),
+            tool_calls: None,
+            tool_call_id: Some(hydeclaw_types::ids::ToolCallId::new("c1".to_string())),
+            thinking_blocks: vec![],
+            db_id: None,
+        }
+    }
+
+    fn call(name: &str) -> ToolCall {
+        ToolCall {
+            id: hydeclaw_types::ids::ToolCallId::new(format!("call_{name}")),
+            name: name.to_string(),
+            arguments: serde_json::json!({}),
+            thought_signature: None,
+        }
+    }
+
+    #[test]
+    fn is_non_idempotent_tool_matches_the_set() {
+        for t in NON_IDEMPOTENT_TOOLS {
+            assert!(is_non_idempotent_tool(t), "{t} should be non-idempotent");
+        }
+        for t in ["workspace_write", "workspace_read", "memory", "agent", "search_web"] {
+            assert!(!is_non_idempotent_tool(t), "{t} should NOT be gated");
+        }
+    }
+
+    #[test]
+    fn last_tool_result_interrupted_verify_examines_only_the_last_result() {
+        let marker = crate::db::sessions::INTERRUPTED_TOOL_RESULT;
+        // No tool messages → false.
+        assert!(!last_tool_result_is_interrupted_verify(&[]));
+        // Last tool result IS the marker → true.
+        assert!(last_tool_result_is_interrupted_verify(&[tool_msg(marker)]));
+        // Last tool result is a normal result → false.
+        assert!(!last_tool_result_is_interrupted_verify(&[tool_msg("ok, done")]));
+        // Marker SUPERSEDED by a later real result → cleared → false.
+        assert!(!last_tool_result_is_interrupted_verify(&[tool_msg(marker), tool_msg("verified: file absent")]));
+    }
+
+    #[test]
+    fn should_block_only_when_marker_present_and_batch_non_idempotent() {
+        let marker = crate::db::sessions::INTERRUPTED_TOOL_RESULT;
+        // Marker present + non-idempotent tool → block.
+        assert!(should_block_interrupted_batch(&[tool_msg(marker)], &[call("code_exec")]));
+        // Marker present but batch is all idempotent → no block.
+        assert!(!should_block_interrupted_batch(&[tool_msg(marker)], &[call("workspace_read")]));
+        // No marker (normal last result) even with a non-idempotent tool → no block.
+        assert!(!should_block_interrupted_batch(&[tool_msg("ok")], &[call("code_exec")]));
+        // Mixed batch with at least one non-idempotent tool + marker → block.
+        assert!(should_block_interrupted_batch(&[tool_msg(marker)], &[call("workspace_read"), call("workspace_delete")]));
     }
 
     /// When `tool_policy_override` is the wrong shape (e.g. a JSON
