@@ -1004,8 +1004,21 @@ pub(crate) async fn api_retry_session(
         Err(e) => return ApiError::Internal(e.to_string()).into_response(),
     };
 
-    // 3. Cleanup: delete empty assistant messages and the last user message
-    //    (handle_sse will re-save it, so we remove to avoid duplicates)
+    // 3. Increment retry count FIRST (atomic guard against concurrent
+    //    double-retry). R-RETRY fix: this MUST happen before any destructive
+    //    delete. Previously the handler deleted the last user message and empty
+    //    assistant rows BEFORE this guard, so a lost race (Ok(None) → 409) left
+    //    the user's last turn permanently deleted with no retry executed and no
+    //    rollback. Guarding first means a 409 returns with the transcript intact.
+    let retry_count = match sessions::increment_retry_count(&infra.db, id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return ApiError::Conflict("session not in running state (concurrent retry?)".into()).into_response(),
+        Err(e) => return ApiError::Internal(e.to_string()).into_response(),
+    };
+
+    // 4. Cleanup: delete empty assistant messages and the last user message
+    //    (handle_sse will re-save it, so we remove to avoid duplicates). Safe to
+    //    delete now that we won the atomic retry guard above.
     if let Ok(deleted) = sessions::delete_empty_assistant_messages(&infra.db, id).await
         && deleted > 0 {
         tracing::info!(session_id = %id, deleted, "cleaned up empty assistant messages before retry");
@@ -1019,13 +1032,6 @@ pub(crate) async fn api_retry_session(
     .bind(id)
     .execute(&infra.db)
     .await;
-
-    // 4. Increment retry count (atomic guard against concurrent double-retry)
-    let retry_count = match sessions::increment_retry_count(&infra.db, id).await {
-        Ok(Some(c)) => c,
-        Ok(None) => return ApiError::Conflict("session not in running state (concurrent retry?)".into()).into_response(),
-        Err(e) => return ApiError::Internal(e.to_string()).into_response(),
-    };
 
     tracing::info!(session_id = %id, agent = %session.agent_id, retry_count, "retrying stuck session");
 
