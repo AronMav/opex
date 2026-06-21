@@ -81,6 +81,7 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
                 .unwrap_or(cfg.default_timezone.as_str());
             let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
             let announce_to = args.get("announce_to").cloned();
+            let autonomous_goal = args.get("autonomous_goal").and_then(|v| v.as_str()).map(String::from);
             let target_agent = if cfg.agent.base {
                 args.get("agent").and_then(|v| v.as_str()).unwrap_or(&cfg.agent.name).to_string()
             } else {
@@ -99,8 +100,8 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
 
             // Insert into DB
             let row = match sqlx::query_scalar::<_, Uuid>(
-                "INSERT INTO scheduled_jobs (agent_id, name, cron_expr, timezone, task_message, announce_to) \
-                 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                "INSERT INTO scheduled_jobs (agent_id, name, cron_expr, timezone, task_message, announce_to, autonomous_goal) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
             )
             .bind(&target_agent)
             .bind(name)
@@ -108,6 +109,7 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
             .bind(timezone)
             .bind(task)
             .bind(&announce_to)
+            .bind(&autonomous_goal)
             .fetch_one(&cfg.db)
             .await
             {
@@ -123,7 +125,7 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
                         row, cron_expr, timezone,
                         task.to_string(), target_agent.clone(),
                         arc, cfg.db.clone(), announce_to, false, 0, false, None, None,
-                        None, // autonomous_goal: create-time cron-goals are a follow-up; load picks it up on restart
+                        autonomous_goal,
                     ).await {
                         Ok(()) => true,
                         Err(e) => {
@@ -195,6 +197,23 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
             let task = args.get("task").and_then(|v| v.as_str()).unwrap_or(&current.task_message);
             let enabled = args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(current.enabled);
             let announce_to = args.get("announce_to").cloned().or(current.announce_to);
+            // `autonomous_goal`: a provided string sets it; absent keeps the
+            // stored value. Resolve it now (reading the column on keep, since
+            // ScheduledJob doesn't carry it) so the live reschedule below
+            // preserves goal-driven behaviour — mirrors the API update handler.
+            // A COALESCE-only UPDATE would leave the rescheduled in-memory job
+            // goalless until the next restart, diverging DB from runtime.
+            let autonomous_goal: Option<String> = match args.get("autonomous_goal").and_then(|v| v.as_str()) {
+                Some(g) => Some(g.to_string()),
+                None => sqlx::query_scalar::<_, Option<String>>(
+                    "SELECT autonomous_goal FROM scheduled_jobs WHERE id = $1",
+                )
+                .bind(uuid)
+                .fetch_one(&cfg.db)
+                .await
+                .ok()
+                .flatten(),
+            };
 
             // Validate cron if changed
             if args.get("cron").is_some() {
@@ -206,7 +225,7 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
 
             match sqlx::query(
                 "UPDATE scheduled_jobs SET name = $2, cron_expr = $3, timezone = $4, task_message = $5, \
-                 enabled = $6, announce_to = $7 WHERE id = $1",
+                 enabled = $6, announce_to = $7, autonomous_goal = $8 WHERE id = $1",
             )
             .bind(uuid)
             .bind(name)
@@ -215,6 +234,7 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
             .bind(task)
             .bind(enabled)
             .bind(&announce_to)
+            .bind(&autonomous_goal)
             .execute(&cfg.db)
             .await
             {
@@ -230,7 +250,7 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
                                     arc, cfg.db.clone(), announce_to, current.silent,
                                     current.jitter_secs, current.run_once, current.run_at,
                                     current.tool_policy.clone(),
-                                    None, // autonomous_goal: load path activates it on restart
+                                    autonomous_goal,
                                 ).await {
                                     tracing::error!(job_id = %uuid, error = %e, "failed to reschedule cron job");
                                 }

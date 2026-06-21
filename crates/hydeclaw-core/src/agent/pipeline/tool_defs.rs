@@ -355,6 +355,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                     "job_id": { "type": "string", "description": "Job UUID (for remove/history/run)" },
                     "limit": { "type": "integer", "description": "Max results (default 10)" },
                     "announce_to": { "type": "object", "description": "Delivery target: {\"channel\": \"telegram\", \"chat_id\": 123}" },
+                    "autonomous_goal": { "type": "string", "description": "Optional. If set, this (recurring) job runs as a durable goal-driven session — re-driven to completion after a crash — instead of a one-shot task." },
                     "agent": { "type": "string", "description": "Target agent name (default: self)" }
                 },
                 "required": ["action"]
