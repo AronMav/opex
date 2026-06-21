@@ -212,6 +212,49 @@ pub async fn set_next_redrive_at(db: &PgPool, session_id: Uuid, secs: i64) -> Re
     Ok(())
 }
 
+/// An interrupted interactive (`origin='goal'`) goal whose owner should be
+/// nudged to `/goal resume`. These are NEVER auto-redriven — that would
+/// silently continue a human's live chat — so the resumer notifies instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterruptedInteractiveGoal {
+    pub session_id: Uuid,
+    pub agent_id: String,
+    pub user_id: String,
+    pub goal_text: String,
+}
+
+/// List interactive (`origin='goal'`) goals still `active` within the staleness
+/// window. At a cold boot every in-memory goal driver is gone, so any still-active
+/// interactive goal has a lost driver. Unlike cron goals (`list_redrivable`),
+/// these must NOT be auto-continued; the caller notifies the owner to
+/// `/goal resume` and pauses the goal (so it is not re-notified on the next boot).
+pub async fn list_interrupted_interactive_goals(
+    db: &PgPool,
+    staleness_secs: i64,
+) -> Result<Vec<InterruptedInteractiveGoal>> {
+    let rows: Vec<(Uuid, String, String, String)> = sqlx::query_as(
+        "SELECT g.session_id, s.agent_id, s.user_id, g.goal_text
+         FROM session_goals g
+         JOIN sessions s ON s.id = g.session_id
+         WHERE g.status = 'active'
+           AND g.origin = 'goal'
+           AND s.last_message_at > now() - ($1 * interval '1 second')
+         ORDER BY s.last_message_at",
+    )
+    .bind(staleness_secs)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(session_id, agent_id, user_id, goal_text)| InterruptedInteractiveGoal {
+            session_id,
+            agent_id,
+            user_id,
+            goal_text,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +428,48 @@ mod tests {
             list_redrivable(&pool, 21_600, 3).await.unwrap().is_empty(),
             "future next_redrive_at gates the row out of the redrivable set"
         );
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_interrupted_interactive_goals_selects_only_active_origin_goal(pool: PgPool) -> sqlx::Result<()> {
+        async fn seed(pool: &PgPool, status: &str, origin: &str, age_secs: i64, goal: &str, user: &str) -> Uuid {
+            let sid = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO sessions (id, agent_id, user_id, channel, last_message_at)
+                 VALUES ($1, 'Agent', $2, 'telegram', now() - ($3 * interval '1 second'))",
+            )
+            .bind(sid)
+            .bind(user)
+            .bind(age_secs)
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO session_goals (session_id, goal_text, status, origin) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(sid)
+            .bind(goal)
+            .bind(status)
+            .bind(origin)
+            .execute(pool)
+            .await
+            .unwrap();
+            sid
+        }
+
+        let want = seed(&pool, "active", "goal", 60, "fix the bug", "alice").await; // eligible
+        let _cron = seed(&pool, "active", "cron", 60, "cron task", "bob").await; // origin=cron → excluded
+        let _paused = seed(&pool, "paused", "goal", 60, "paused goal", "carol").await; // already notified/paused → excluded
+        let _done = seed(&pool, "done", "goal", 60, "done goal", "dave").await; // completed → excluded
+        let _stale = seed(&pool, "active", "goal", 100_000, "old goal", "erin").await; // outside window → excluded
+
+        let got = list_interrupted_interactive_goals(&pool, 21_600).await.unwrap(); // 6h window
+        let ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
+        assert_eq!(ids, vec![want], "only the active interactive goal within the window is listed");
+        assert_eq!(got[0].goal_text, "fix the bug");
+        assert_eq!(got[0].user_id, "alice");
+        assert_eq!(got[0].agent_id, "Agent");
         Ok(())
     }
 }
