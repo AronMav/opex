@@ -211,6 +211,28 @@ pub(super) async fn run_converter(
         // Safety net: abort if client gone for 10+ minutes (runaway engine protection)
         if client_gone_since.is_some_and(|t| t.elapsed().as_secs() > 600) {
             tracing::warn!("SSE client gone for 10min, aborting runaway engine");
+            // R-CONTINUITY: pre-mark the session 'interrupted' BEFORE the hard
+            // abort, exactly like the cancel-grace branch above. Otherwise the
+            // engine task's SessionLifecycleGuard::Drop marks it 'failed' — a
+            // misleading "error" state for what is really just a transport
+            // disconnect, and (pre-R-CONTINUITY) one that blocked 4h reuse.
+            // The atomic `WHERE run_status='running'` claim means the guard's
+            // later Drop sees 'interrupted' and no-ops (Ok(false)).
+            if let Some(sid) = session_uuid
+                && let Err(e) = crate::db::sessions::cleanup_session_terminated(
+                    &db,
+                    sid,
+                    "interrupted",
+                    "client_gone_runaway",
+                )
+                .await
+            {
+                tracing::warn!(
+                    session_id = %sid,
+                    error = %e,
+                    "failed to mark session interrupted before runaway hard-abort"
+                );
+            }
             engine_handle.abort();
             break;
         }

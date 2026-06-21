@@ -284,11 +284,33 @@ async fn channel_ws_loop(
     drop(out_tx);
     let _ = writer_handle.await;
 
-    // Abort any remaining in-flight tasks.
+    // Tear down remaining in-flight tasks COOPERATIVELY (R-CHANNEL). A WS
+    // disconnect / adapter restart must not hard-abort live turns — that drops
+    // each turn's SessionLifecycleGuard while Running and marks the session
+    // 'failed'. Instead: signal every turn's cancel token (so execute() returns
+    // Interrupted → finalize marks 'interrupted'), give them one SHARED bounded
+    // grace window to wind down, then abort only the stragglers.
     {
-        let mut g = inflight.lock().await;
-        for (_, im) in g.drain() {
-            im.join_handle.abort();
+        let drained: Vec<_> = {
+            let mut g = inflight.lock().await;
+            g.drain().map(|(_, im)| im).collect()
+        };
+        if !drained.is_empty() {
+            for im in &drained {
+                im.cancel.cancel();
+            }
+            let mut joins: Vec<_> = drained.into_iter().map(|im| im.join_handle).collect();
+            let grace = std::time::Duration::from_secs(15);
+            let _ = tokio::time::timeout(
+                grace,
+                futures_util::future::join_all(joins.iter_mut()),
+            )
+            .await;
+            for j in &joins {
+                if !j.is_finished() {
+                    j.abort();
+                }
+            }
         }
     }
 

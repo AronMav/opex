@@ -47,7 +47,10 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
                 break;
             }
             let prompt = continuation_prompt(&row.goal_text, &row.subgoals);
-            match engine.run_goal_turn(session_id, &prompt).await {
+            // Pass the driver's cancel token so `/goal stop` breaks a long
+            // in-flight turn cooperatively (execute() observes it) instead of
+            // the turn being hard-aborted by pool::stop and guard-dropped.
+            match engine.run_goal_turn(session_id, &prompt, cancel.clone()).await {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!(session = %session_id, error = %e, "goal turn failed; fail-open continue");
@@ -55,6 +58,11 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
                 }
             }
         };
+        // After the turn, stop promptly if a cancel arrived during it — avoids
+        // a wasted judge/deliver cycle on a goal the user just stopped.
+        if cancel.is_cancelled() {
+            break;
+        }
         let _ = crate::db::session_goals::bump_turn(&db, session_id).await;
         if !text.trim().is_empty() {
             deliver(&engine, &target, session_id, &text).await;
