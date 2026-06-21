@@ -422,8 +422,12 @@ pub struct LimitsConfig {
     pub max_requests_per_minute: u32,
     #[serde(default = "default_max_tool_concurrency")]
     pub max_tool_concurrency: u32,
-    /// Maximum time (seconds) for a single request (LLM loop + tool calls).
-    /// 0 = no limit. Default: 180 (3 minutes).
+    /// Maximum time (seconds) for a single channel request (LLM loop + tool
+    /// calls) before the dispatcher gives up on the turn. 0 = no limit.
+    /// Default: 300 (5 minutes). R-TIMEOUT: raised from 180 so core no longer
+    /// kills the turn BEFORE the channel adapter's own 300s wait (bridge.ts) —
+    /// the previous asymmetry meant tool-heavy / proxied-LLM turns were dropped
+    /// (and the session marked terminal) while the adapter was still waiting.
     #[serde(default = "default_request_timeout")]
     pub request_timeout_secs: u64,
     /// Phase 64 SEC-04: cap for POST /api/restore request body size in megabytes.
@@ -444,7 +448,7 @@ pub struct LimitsConfig {
 
 fn default_max_requests() -> u32 { 300 }
 fn default_max_tool_concurrency() -> u32 { 10 }
-fn default_request_timeout() -> u64 { 180 }
+fn default_request_timeout() -> u64 { 300 }
 fn default_max_restore_size_mb() -> u64 { 500 }
 fn default_max_sessions_per_agent() -> u32 { 500 }
 
@@ -1940,7 +1944,7 @@ prompt_cache = true
         let cfg = LimitsConfig::default();
         assert_eq!(cfg.max_requests_per_minute, 300);
         assert_eq!(cfg.max_tool_concurrency, 10);
-        assert_eq!(cfg.request_timeout_secs, 180);
+        assert_eq!(cfg.request_timeout_secs, 300);
         // Phase 64 SEC-04: new [limits] key — default 500 MB.
         assert_eq!(cfg.max_restore_size_mb, 500);
     }
