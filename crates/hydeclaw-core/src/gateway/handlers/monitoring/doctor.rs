@@ -21,6 +21,27 @@ use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices, InfraSer
 
 // ── Provider reachability check ───────────────────────────────────────────────
 
+/// Whether a provider's reachability probe should use the direct (non-SSRF)
+/// HTTP client. Provider `base_url`s are admin-configured (Providers page) and
+/// trusted; the SSRF resolver blocks loopback HOSTNAMES (`localhost` →
+/// 127.0.0.1), false-flagging healthy local providers (e.g. a self-hosted TTS on
+/// `http://localhost:8088`). This operator-only probe reads only the status code,
+/// so a direct client for local endpoints carries no exfiltration risk. External
+/// endpoints keep the SSRF-guarded client (Phase 64 SEC-01). Private IP-literal
+/// hosts (e.g. `http://10.0.0.5:8000`) keep the SSRF client too — they already
+/// bypass the resolver since an IP literal needs no DNS resolution.
+fn probe_uses_direct_client(base_url: &str) -> bool {
+    base_url.starts_with("http://localhost") || base_url.starts_with("http://127.")
+}
+
+/// Whether the probe's HTTP status means the provider is reachable. ANY response
+/// proves reachability; 2xx / 401 / 403 / 404 / 405 are acceptable (external APIs
+/// and non-OpenAI local providers legitimately answer 404/405 to `/v1/models`).
+/// Other statuses (4xx/5xx) mean the server is up but unhealthy → caller warns.
+fn probe_status_reachable(status: u16) -> bool {
+    (200..300).contains(&status) || matches!(status, 401 | 403 | 404 | 405)
+}
+
 async fn check_provider_reachability(infra: &InfraServices, auth: &AuthServices) -> CheckResult {
     let start = std::time::Instant::now();
     let providers = match crate::db::providers::list_providers(&infra.db).await {
@@ -43,7 +64,15 @@ async fn check_provider_reachability(infra: &InfraServices, auth: &AuthServices)
         };
     }
 
+    // External providers go through the SSRF-guarded client (SEC-01). Local,
+    // admin-configured providers (loopback hostnames) use a direct client so the
+    // SSRF resolver does not false-flag a healthy `http://localhost:…` provider.
     let http = crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(3));
+    let direct_http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
 
     let mut results = serde_json::Map::new();
     let mut any_error = false;
@@ -70,12 +99,11 @@ async fn check_provider_reachability(infra: &InfraServices, auth: &AuthServices)
              Some("add API key in Providers page".to_string()))
         } else {
             let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
-            match http.get(&url).send().await {
-                Ok(r) if r.status().is_success()
-                    || r.status().as_u16() == 401
-                    || r.status().as_u16() == 403
-                    || (!is_local && (r.status().as_u16() == 404 || r.status().as_u16() == 405)) => {
-                    // Server responded — reachable. External APIs may not support GET /v1/models.
+            let client = if probe_uses_direct_client(base_url) { &direct_http } else { &http };
+            match client.get(&url).send().await {
+                Ok(r) if probe_status_reachable(r.status().as_u16()) => {
+                    // Any response proves reachability; non-OpenAI providers (e.g. a
+                    // local TTS) legitimately answer 404/405 to GET /v1/models.
                     ("ok", format!("{} reachable", p.name), None)
                 }
                 Ok(r) => {
@@ -845,5 +873,28 @@ mod tests {
         for (re, _) in &pats {
             assert!(!re.is_match(s), "pattern false-positive: {}", re.as_str());
         }
+    }
+
+    #[test]
+    fn probe_status_reachable_accepts_any_response_including_404() {
+        use super::probe_status_reachable;
+        // A response — any response — proves the endpoint is reachable. 404/405
+        // are legitimate for non-OpenAI providers (e.g. a TTS) hit at /v1/models.
+        for ok in [200u16, 204, 401, 403, 404, 405] {
+            assert!(probe_status_reachable(ok), "status {ok} must count as reachable");
+        }
+        // Server up but unhealthy / wrong → not reachable-ok (caller warns).
+        for bad in [400u16, 429, 500, 502, 503] {
+            assert!(!probe_status_reachable(bad), "status {bad} must not count as reachable");
+        }
+    }
+
+    #[test]
+    fn probe_uses_direct_client_only_for_loopback() {
+        use super::probe_uses_direct_client;
+        assert!(probe_uses_direct_client("http://localhost:8088"), "localhost loopback → direct client");
+        assert!(probe_uses_direct_client("http://127.0.0.1:8088"), "127.0.0.1 loopback → direct client");
+        assert!(!probe_uses_direct_client("https://openrouter.ai/api/v1"), "external → SSRF client");
+        assert!(!probe_uses_direct_client("http://10.10.1.42:8000"), "private IP literal → keep SSRF client");
     }
 }
