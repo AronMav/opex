@@ -6,11 +6,13 @@ import { useChannels, useActiveChannels } from "@/lib/queries";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "@/hooks/use-translation";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import { useAuthStore } from "@/stores/auth-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
 import type { ChannelRow } from "@/types/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CircularLoader } from "@/components/ui/loader";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -38,7 +40,6 @@ import {
   Pencil,
   Wifi,
   WifiOff,
-  Loader2,
   Bot,
   Send,
   Gamepad2,
@@ -261,20 +262,16 @@ export default function ChannelsPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-        <div className="mb-8">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex flex-col gap-1">
-              <h2 className="font-display text-lg font-bold tracking-tight text-foreground">
-                {t("channels.title")}
-              </h2>
-              <span className="text-sm text-muted-foreground">{t("channels.subtitle")}</span>
-            </div>
+        <PageHeader
+          title={t("channels.title")}
+          description={t("channels.subtitle")}
+          actions={
             <Button size="sm" onClick={openCreate} className="gap-1.5 w-full md:w-auto">
               <Plus className="h-3.5 w-3.5" />
               {t("channels.add")}
             </Button>
-          </div>
-        </div>
+          }
+        />
 
         {error && <ErrorBanner error={`${error}`} />}
 
@@ -451,7 +448,7 @@ export default function ChannelsPage() {
                 {t("common.cancel")}
               </Button>
               <Button onClick={handleSave} disabled={saving || !formName.trim()}>
-                {saving && <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />}
+                {saving && <CircularLoader size="sm" className="h-3.5 w-3.5 mr-1.5" />}
                 {t("common.save")}
               </Button>
             </DialogFooter>

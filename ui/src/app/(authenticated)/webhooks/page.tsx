@@ -14,6 +14,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "@/hooks/use-translation";
 import { formatDate } from "@/lib/format";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Field } from "@/components/ui/field";
@@ -158,18 +159,18 @@ export default function WebhooksPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("webhooks.title")}</h2>
-          <p className="text-sm text-muted-foreground mt-1">{t("webhooks.subtitle")}</p>
-        </div>
-        <Button
-          onClick={openCreate}
-          className="w-full md:w-auto h-11 px-6 text-sm font-semibold transition-all duration-200 active:scale-95"
-        >
-          <Plus className="mr-2 h-4 w-4" /> {t("webhooks.new_webhook")}
-        </Button>
-      </div>
+      <PageHeader
+        title={t("webhooks.title")}
+        description={t("webhooks.subtitle")}
+        actions={
+          <Button
+            onClick={openCreate}
+            className="w-full md:w-auto h-11 px-6 text-sm font-semibold transition-all duration-200 active:scale-95"
+          >
+            <Plus className="mr-2 h-4 w-4" /> {t("webhooks.new_webhook")}
+          </Button>
+        }
+      />
 
       {errorMessage && <ErrorBanner error={errorMessage} />}
 
@@ -214,7 +215,7 @@ export default function WebhooksPage() {
                     </Badge>
                   )}
                   <Badge variant="outline" className="text-[10px] font-mono">
-                    {w.webhook_type === "github" ? "GitHub" : "Generic"}
+                    {w.webhook_type === "github" ? t("webhooks.type_github") : t("webhooks.type_generic")}
                   </Badge>
                   <Badge
                     variant={w.enabled ? "default" : "secondary"}

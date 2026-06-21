@@ -5,7 +5,7 @@ import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
 import { useAuthStore } from "@/stores/auth-store";
 
-export function EmptyState() {
+export function ChatWelcomeScreen() {
   const { t } = useTranslation();
   const currentAgent = useChatStore((s) => s.currentAgent);
   const agentIcons = useAuthStore((s) => s.agentIcons);

@@ -6,6 +6,7 @@ import { apiGet } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { useTranslation } from "@/hooks/use-translation";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -152,19 +153,15 @@ export default function SecretsPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("secrets.title")}</h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              {t("secrets.subtitle")}
-            </p>
-          </div>
-          <div className="flex gap-2">
+        <PageHeader
+          title={t("secrets.title")}
+          description={t("secrets.subtitle")}
+          actions={
             <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isLoading || mutating}>
               <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} /> {t("common.refresh")}
             </Button>
-          </div>
-        </div>
+          }
+        />
 
         {(error || actionError) && <ErrorBanner error={error ? `${error}` : actionError} />}
 

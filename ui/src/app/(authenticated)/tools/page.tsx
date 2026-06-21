@@ -8,6 +8,7 @@ import { useTranslation } from "@/hooks/use-translation";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -603,27 +604,26 @@ parameters:
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
       <div>
         {/* Header */}
-        <div className="mb-8 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-          <div className="flex flex-col gap-1">
-            <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("tools.title")}</h2>
-            <span className="text-sm text-muted-foreground">{t("tools.subtitle")}</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={startCreateService}>
-              <Plus className="h-3.5 w-3.5" /> {t("tools.add_service")}
-            </Button>
-            <Button variant="outline" size="sm" onClick={startCreateMcp}>
-              <Plus className="h-3.5 w-3.5" /> {t("tools.add_mcp")}
-            </Button>
-            <Button variant="outline" size="sm" onClick={startCreateYaml}>
-              <Plus className="h-3.5 w-3.5" /> {t("tools.add_yaml")}
-            </Button>
-            <Button variant="outline" size="sm" onClick={invalidateAll} disabled={loading} aria-label={t("common.refresh")}>
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            </Button>
-            {/* Graph view toggle removed — tools are now grouped under services */}
-          </div>
-        </div>
+        <PageHeader
+          title={t("tools.title")}
+          description={t("tools.subtitle")}
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" onClick={startCreateService}>
+                <Plus className="h-3.5 w-3.5" /> {t("tools.add_service")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={startCreateMcp}>
+                <Plus className="h-3.5 w-3.5" /> {t("tools.add_mcp")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={startCreateYaml}>
+                <Plus className="h-3.5 w-3.5" /> {t("tools.add_yaml")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={invalidateAll} disabled={loading} aria-label={t("common.refresh")}>
+                <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              </Button>
+            </div>
+          }
+        />
 
         {errorMsg && <ErrorBanner error={errorMsg} />}
 

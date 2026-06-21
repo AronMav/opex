@@ -18,7 +18,6 @@ import type {
   ChatState,
   ChatStore,
 } from "./chat-types";
-import { getLiveMessages } from "./chat-types";
 import { getCachedHistoryMessages } from "./chat-history";
 import { mergeLiveOverlay } from "./chat-overlay-dedup";
 
@@ -58,49 +57,6 @@ export const selectSelectedBranches = (agent: string) =>
 
 // ── Message selectors ────────────────────────────────────────────────────────
 
-/**
- * Resolve the currently-visible message list for an agent. Delegates to the
- * appropriate source: live stream buffer or React-Query-cached history rows.
- * NOTE: returns a fresh array — callers that just want a single message should
- * prefer the single-message selector below, which is O(n) lookup but returns
- * the stable object reference stored in the buffer.
- */
-export const selectVisibleMessages = (agent: string) =>
-  (s: ChatStoreState): ChatMessage[] => {
-    const st = s.agents[agent];
-    if (!st) return [];
-    if (st.messageSource.mode === "live") return getLiveMessages(st.messageSource);
-    if (st.messageSource.mode === "finishing") return getLiveMessages(st.messageSource);
-    if (st.messageSource.mode === "history") {
-      return getCachedHistoryMessages(st.activeSessionId, st.selectedBranches);
-    }
-    return [];
-  };
-
-/**
- * Find a message by id in the currently-visible message list for an agent.
- *
- * Returns the stable object reference stored in the buffer — two calls with
- * the same underlying message return the same reference, so `React.memo`
- * default shallow prop comparison will NOT trigger a re-render unless the
- * message actually changed.
- */
-export const selectMessageById = (agent: string, messageId: string) =>
-  (s: ChatStoreState): ChatMessage | undefined => {
-    const st = s.agents[agent];
-    if (!st) return undefined;
-    if (st.messageSource.mode === "live") {
-      return st.messageSource.messages.find((m) => m.id === messageId);
-    }
-    if (st.messageSource.mode === "finishing") {
-      return st.messageSource.messages.find((m) => m.id === messageId);
-    }
-    if (st.messageSource.mode === "history") {
-      const msgs = getCachedHistoryMessages(st.activeSessionId, st.selectedBranches);
-      return msgs.find((m) => m.id === messageId);
-    }
-    return undefined;
-  };
 
 // ── Action selectors (stable references via Zustand) ─────────────────────────
 

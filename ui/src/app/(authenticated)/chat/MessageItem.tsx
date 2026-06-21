@@ -11,12 +11,12 @@ import {
 } from "@/stores/chat-selectors";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTranslation } from "@/hooks/use-translation";
-import type { ChatMessage, MessagePart, ToolPart, ToolPartState, ApprovalPart } from "@/stores/chat-store";
+import type { ChatMessage, MessagePart } from "@/stores/chat-store";
 import { findSiblings, getCachedRawMessages } from "@/stores/chat-store";
 import { formatMessageTime } from "@/lib/format";
 import { BranchNavigator } from "./BranchNavigator";
 import { cn } from "@/lib/utils";
-import { AlertCircle, ChevronRight } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 // Collapsible removed — tool grouping disabled
 import { CompressionDivider } from "@/components/chat/CompressionDivider";
 import { CometLoader } from "@/components/ui/loader";
@@ -27,10 +27,8 @@ import { ToolCallPartView } from "@/components/chat/ToolCallPartView";
 import { FileDataPartView } from "@/components/chat/FileDataPartView";
 import {
   RoleAvatar,
-  SourceUrlDataPartView,
   RichCardDataPartView,
 } from "./avatar/RoleAvatar";
-import { StepGroup } from "@/components/chat/StepGroup";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
 import { abortReasonLabel } from "@/components/chat/abort-reason-label";
 import { useSwipeGesture } from "@/hooks/use-swipe-gesture";
@@ -50,8 +48,6 @@ const _partsRenderCache = new WeakMap<ChatMessage, ReactNode[]>();
 // ── Tool status mapping ─────────────────────────────────────────────────────
 
 import { mapToolPartState } from "@/lib/tool-state";
-// Re-export for backward compatibility
-export { mapToolPartState } from "@/lib/tool-state";
 
 // ── Empty part view (loading indicator for empty assistant messages) ─────────
 
@@ -61,15 +57,13 @@ function EmptyPartView() {
 
 // ── Part renderer dispatch ──────────────────────────────────────────────────
 
-function renderPart(part: MessagePart, index: number, _meta?: { stepGroupToolIds?: Set<string>; parts?: MessagePart[] }) {
+function renderPart(part: MessagePart, index: number) {
   switch (part.type) {
     case "text":
       return <TextPart key={`text-${index}`} text={part.text} />;
     case "reasoning":
       return <ReasoningPart key={`reasoning-${index}`} text={part.text} />;
     case "tool": {
-      // Skip standalone tool parts that are inside a step group (dedup)
-      if (_meta?.stepGroupToolIds?.has(part.toolCallId)) return null;
       return (
         <ToolCallPartView
           key={`tool-${part.toolCallId}`}
@@ -82,20 +76,10 @@ function renderPart(part: MessagePart, index: number, _meta?: { stepGroupToolIds
     }
     case "file":
       return <FileDataPartView key={`file-${part.url}`} data={{ url: part.url, mediaType: part.mediaType }} />;
-    case "source-url":
-      return <SourceUrlDataPartView key={`src-${part.url}`} data={{ url: part.url, title: part.title }} />;
     case "rich-card":
       // Skip agent-turn rich cards — AgentTransitionDivider in MessageList replaces this
       if (part.cardType === "agent-turn") return null;
       return <RichCardDataPartView key={`card-${part.cardType}-${index}`} data={{ cardType: part.cardType, ...part.data }} />;
-    case "step-group":
-      return (
-        <StepGroup
-          key={`step-${part.stepId}`}
-          stepGroup={part}
-          isLastGroup={!_meta?.parts?.slice(index + 1).some(p => p.type === "step-group")}
-        />
-      );
     case "approval":
       return <ApprovalCard key={`approval-${part.approvalId}`} part={part} />;
     case "compression-divider":
@@ -114,19 +98,9 @@ function renderPart(part: MessagePart, index: number, _meta?: { stepGroupToolIds
 // ── Parts rendering (no grouping — each part rendered individually) ────────
 
 function renderAllParts(parts: MessagePart[]) {
-  // Collect tool IDs inside step groups to avoid double-rendering
-  const stepGroupToolIds = new Set<string>();
-  for (const p of parts) {
-    if (p.type === "step-group") {
-      for (const tp of p.toolParts) stepGroupToolIds.add(tp.toolCallId);
-    }
-  }
-  const meta = { stepGroupToolIds, parts };
-
   return parts
     .filter(p => !(p.type === "text" && p.text.trim().length === 0))
-    .filter(p => !(p.type === "tool" && stepGroupToolIds.has(p.toolCallId)))
-    .map((part, i) => renderPart(part, i, meta));
+    .map((part, i) => renderPart(part, i));
 }
 
 // ── User message ────────────────────────────────────────────────────────────

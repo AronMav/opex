@@ -1,21 +1,4 @@
-import type { RichCardPart } from "@/stores/chat-store";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
-
-export function RichCard({ part }: { part: RichCardPart }) {
-  const { cardType, data } = part;
-
-  return (
-    <div style={{ contentVisibility: "auto", containIntrinsicSize: "0 200px" }}>
-      {cardType === "table" && <TableCard data={data} />}
-      {cardType === "metric" && <MetricCard data={data} />}
-      {cardType !== "table" && cardType !== "metric" && (
-        <pre className="rounded-lg border bg-muted/30 p-4 text-sm font-mono whitespace-pre-wrap overflow-auto">
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      )}
-    </div>
-  );
-}
 
 export function TableCard({ data }: { data: Record<string, unknown> }) {
   const title = data.title as string | undefined;

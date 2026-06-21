@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -178,7 +179,7 @@ function GmailSection({
                 <p className="font-mono text-xs font-semibold truncate">{trigger.email_address}</p>
                 {trigger.watch_expiry && (
                   <p className="text-[11px] text-muted-foreground">
-                    {t("integrations.watch_expiry", { date: new Date(trigger.watch_expiry).toLocaleDateString(locale) })}
+                    {t("integrations.watch_expiry", { date: new Date(trigger.watch_expiry).toLocaleDateString(locale === "en" ? "en-US" : "ru-RU") })}
                   </p>
                 )}
               </div>
@@ -486,14 +487,10 @@ export default function IntegrationsPage() {
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
       {/* Page header */}
-      <div className="mb-8 flex flex-col gap-1">
-        <h2 className="font-display text-lg font-bold tracking-tight text-foreground">
-          {t("integrations.title")}
-        </h2>
-        <span className="text-sm text-muted-foreground">
-          {t("integrations.subtitle")}
-        </span>
-      </div>
+      <PageHeader
+        title={t("integrations.title")}
+        description={t("integrations.subtitle")}
+      />
 
       {/* Toast */}
       {toast && (
@@ -700,9 +697,9 @@ export default function IntegrationsPage() {
               {account.connected_at && (
                 <div className="border-t border-border/60 mx-5 px-0 py-2">
                   <span className="text-[11px] text-muted-foreground">
-                    {t("integrations.connected_at", { date: new Date(account.connected_at).toLocaleDateString(locale) })}
+                    {t("integrations.connected_at", { date: new Date(account.connected_at).toLocaleDateString(locale === "en" ? "en-US" : "ru-RU") })}
                     {account.expires_at && (
-                      <> · {t("integrations.expires_at", { date: new Date(account.expires_at).toLocaleDateString(locale) })}</>
+                      <> · {t("integrations.expires_at", { date: new Date(account.expires_at).toLocaleDateString(locale === "en" ? "en-US" : "ru-RU") })}</>
                     )}
                   </span>
                 </div>

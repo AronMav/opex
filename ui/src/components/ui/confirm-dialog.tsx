@@ -19,7 +19,8 @@ interface ConfirmDialogProps {
   title: string;
   description: string;
   confirmLabel?: string;
-  variant?: "destructive" | "default";
+  cancelLabel?: string;
+  variant?: "destructive" | "default" | "success" | "warning";
 }
 
 export function ConfirmDialog({
@@ -29,6 +30,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  cancelLabel,
   variant = "destructive",
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
@@ -44,12 +46,9 @@ export function ConfirmDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-4">
-          <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={onConfirm}
-            className={variant === "destructive" ? "bg-destructive text-destructive-foreground hover:bg-destructive/90" : ""}
-          >
-            {confirmLabel ?? t("common.delete")}
+          <AlertDialogCancel>{cancelLabel ?? t("common.cancel")}</AlertDialogCancel>
+          <AlertDialogAction variant={variant} onClick={onConfirm}>
+            {confirmLabel ?? (variant === "destructive" ? t("common.delete") : t("common.confirm"))}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

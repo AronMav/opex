@@ -3,6 +3,8 @@
 import React, { useState } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -72,7 +74,7 @@ export default function ProvidersPage() {
   };
 
   // Unified hooks
-  const { data: providers = [], isLoading, refetch } = useProviders();
+  const { data: providers = [], isLoading, error, refetch } = useProviders();
   const { data: providerTypes = [] } = useProviderTypes();
   const { data: active = [] } = useProviderActive();
   const { data: driversMap = {} } = useMediaDrivers();
@@ -307,26 +309,24 @@ export default function ProvidersPage() {
   return (
     <div className="flex flex-col gap-8 p-4 md:p-6 lg:p-8 selection:bg-primary/20">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="font-display text-lg font-bold tracking-tight">
-            {t("providers.title")}
-          </h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            {t("providers.subtitle")}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5">
-            <RefreshCw className="h-4 w-4" />
-            {t("common.refresh")}
-          </Button>
-          <Button size="sm" onClick={openCreate} className="gap-1.5">
-            <Plus className="h-4 w-4" />
-            {t("providers.add")}
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title={t("providers.title")}
+        description={t("providers.subtitle")}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5">
+              <RefreshCw className="h-4 w-4" />
+              {t("common.refresh")}
+            </Button>
+            <Button size="sm" onClick={openCreate} className="gap-1.5">
+              <Plus className="h-4 w-4" />
+              {t("providers.add")}
+            </Button>
+          </div>
+        }
+      />
+
+      {error && <ErrorBanner error={String(error)} />}
 
       {/* Per-capability provider groups */}
       {isLoading ? (

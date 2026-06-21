@@ -42,6 +42,18 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
 
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
+  --color-highlight: var(--highlight);
+  --color-highlight-active: var(--highlight-active);
+  --color-cron: var(--cron);
+
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -84,6 +96,18 @@
   --success: #22c55e;
   --warning: #f59e0b;
 
+  --chart-1: #4a7cff;
+  --chart-2: #22c55e;
+  --chart-3: #f59e0b;
+  --chart-4: #ec4899;
+  --chart-5: #a855f7;
+  --chart-6: #06b6d4;
+  --chart-7: #f97316;
+  --chart-8: #6366f1;
+  --highlight: #facc15;
+  --highlight-active: #fde047;
+  --cron: #f97316;
+
   --sidebar: #cdd3df;
   --sidebar-foreground: #1a1f2e;
   --sidebar-primary: #4a7cff;
@@ -120,6 +144,18 @@
 
   --success: #3fb950;
   --warning: #d29922;
+
+  --chart-1: #6b9eff;
+  --chart-2: #3fb950;
+  --chart-3: #d29922;
+  --chart-4: #f472b6;
+  --chart-5: #c084fc;
+  --chart-6: #22d3ee;
+  --chart-7: #fb923c;
+  --chart-8: #818cf8;
+  --highlight: #facc15;
+  --highlight-active: #fde047;
+  --cron: #fb923c;
 
   --sidebar: #161d2c;
   --sidebar-foreground: #dde2ea;
@@ -184,45 +220,9 @@
   0%, 100% { transform: scaleY(0.35); opacity: 0.45; }
   50%       { transform: scaleY(1);   opacity: 1; }
 }
-@keyframes spinner-fade {
-  0% { opacity: 1; }
-  100% { opacity: 0; }
-}
-@keyframes thin-pulse {
-  0%, 100% { transform: scale(0.8); opacity: 0.5; }
-  50% { transform: scale(1); opacity: 1; }
-}
 @keyframes pulse-dot {
   0%, 100% { transform: scale(0.6); opacity: 0.5; }
   50% { transform: scale(1); opacity: 1; }
-}
-@keyframes bounce-dots {
-  0%, 80%, 100% { transform: translateY(0); }
-  40% { transform: translateY(-6px); }
-}
-@keyframes typing {
-  0%, 60%, 100% { opacity: 0.3; }
-  30% { opacity: 1; }
-}
-@keyframes wave {
-  0%, 100% { transform: scaleY(0.5); }
-  50% { transform: scaleY(1); }
-}
-@keyframes wave-bars {
-  0%, 100% { transform: scaleY(0.4); }
-  50% { transform: scaleY(1); }
-}
-@keyframes blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-@keyframes text-blink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-@keyframes shimmer {
-  0% { background-position: 200% center; }
-  100% { background-position: -200% center; }
 }
 @keyframes loading-dots {
   0%, 100% { opacity: 0; }

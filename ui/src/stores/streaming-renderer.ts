@@ -4,6 +4,7 @@
 
 import { scheduleReconnect } from "./stream/stream-reconnect";
 import { processSSEStream } from "./stream/stream-processor";
+import { MAX_RECONNECT_ATTEMPTS } from "./chat-types";
 import { apiPatch, apiPost, assertToken } from "@/lib/api";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
@@ -30,7 +31,6 @@ interface StoreAccess {
 }
 
 // ── Reconnect constants (SSE-02) ─────────────────────────────────────────────
-const MAX_RECONNECT_ATTEMPTS = 6;
 const RECONNECT_DELAY_BASE_MS = 1000;
 
 // ── Factory ────────────────────────────────────────────────────────────────
@@ -64,14 +64,6 @@ export function createStreamingRenderer(store: StoreAccess) {
   }
 
   // ── Internal helpers ────────────────────────────────────────────────────
-
-  function ensure(agent: string): AgentState {
-    const s = store.get().agents[agent];
-    if (s) return s;
-    const fresh = emptyAgentState();
-    store.set((draft: any) => { draft.agents[agent] = fresh; });
-    return fresh;
-  }
 
   function update(agent: string, patch: Partial<AgentState>) {
     store.set((draft: any) => {

@@ -123,6 +123,52 @@ export async function apiDelete(path: string): Promise<void> {
   if (!resp.ok) throw new Error(await extractError(resp));
 }
 
+/** Like apiFetch but does NOT set Content-Type — caller controls headers (FormData, blob, etc.). */
+export async function apiFetchRaw(path: string, init?: RequestInit): Promise<Response> {
+  if (redirecting) throw new Error("Session expired");
+  const token = getToken();
+  if (!token) {
+    handleUnauthorized();
+    throw new Error("Session expired");
+  }
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string>),
+  };
+  headers["Authorization"] = `Bearer ${token}`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  try {
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, controller.signal])
+      : controller.signal;
+    const resp = await fetch(path, { ...init, headers, signal });
+    if (resp.status === 401) {
+      handleUnauthorized();
+      throw new Error("Session expired");
+    }
+    if (resp.status === 429) {
+      throw new Error("Too many failed attempts. Try again later.");
+    }
+    return resp;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** GET that returns a Blob (media, file downloads). */
+export async function apiGetBlob(path: string, extraHeaders?: Record<string, string>): Promise<Blob> {
+  const resp = await apiFetchRaw(path, { method: "GET", headers: extraHeaders });
+  if (!resp.ok) throw new Error(await extractError(resp));
+  return resp.blob();
+}
+
+/** POST with FormData (file uploads). Does NOT set Content-Type. */
+export async function apiPostFormData<T>(path: string, formData: FormData, extraHeaders?: Record<string, string>): Promise<T> {
+  const resp = await apiFetchRaw(path, { method: "POST", body: formData, headers: extraHeaders });
+  if (!resp.ok) throw new Error(await extractError(resp));
+  return resp.json();
+}
+
 export async function decideApproval(
   approvalId: string,
   action: "approved" | "rejected",

@@ -8,7 +8,6 @@ import {
   useChatStore,
   isActivePhase,
   getInitialAgent,
-  getLastSessionId,
 } from "@/stores/chat-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
 import { useHotkey } from "@/hooks/use-hotkey";
@@ -40,13 +39,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Avatar, AvatarImage, AvatarFallback, AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
-import {
   Plus,
   Clock,
   Search,
@@ -65,13 +57,12 @@ import { CompactChainBanner } from "@/components/chat/CompactChainBanner";
 import { useCanvasStore } from "@/stores/canvas-store";
 import { useSessions, useAgents, qk } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
-import { inviteAgent, assertToken } from "@/lib/api";
-import type { SessionRow, AgentInfo } from "@/types/api";
+import { assertToken } from "@/lib/api";
+import type { SessionRow } from "@/types/api";
 import { TaskPlanPanel } from "@/components/TaskPlanPanel";
 
 const EMPTY_SESSIONS: SessionRow[] = [];
 const EMPTY_ACTIVE: string[] = [];
-const EMPTY_MESSAGE_SOURCE = { mode: "new-chat" as const };
 
 export default function ChatPage() {
   const { t, locale } = useTranslation();
@@ -93,8 +84,6 @@ export default function ChatPage() {
   const sessionsTotal = sessionsData?.total ?? sessions.length;
   const activeSessionId = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionId ?? null);
   const activeSessionIds = useChatStore((s) => s.agents[s.currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE);
-  const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? EMPTY_MESSAGE_SOURCE);
-  const viewingHistory = messageSource.mode === "history";
   const streamError = useChatStore((s) => s.agents[s.currentAgent]?.streamError ?? null);
   const isStreaming = isActivePhase(useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle"));
   const contextTokensLive = useChatStore((s) => s.agents[s.currentAgent]?.contextTokens ?? null);
@@ -104,7 +93,6 @@ export default function ChatPage() {
     return sessions.find((s) => s.id === activeSessionId)?.last_input_tokens ?? null;
   }, [contextTokensLive, sessions, activeSessionId]);
   const contextTokens = activeSessionLastTokens;
-  const contextOutputTokens = useChatStore((s) => s.agents[s.currentAgent]?.contextOutputTokens ?? null);
   const cacheReadTokens = useChatStore((s) => s.agents[s.currentAgent]?.cacheReadTokens ?? null);
   const cacheCreationTokens = useChatStore((s) => s.agents[s.currentAgent]?.cacheCreationTokens ?? null);
   const reasoningTokens = useChatStore((s) => s.agents[s.currentAgent]?.reasoningTokens ?? null);
@@ -507,8 +495,6 @@ export default function ChatPage() {
     [sessions, sessionFilter],
   );
 
-  const agentIcons = useAuthStore((s) => s.agentIcons);
-
   // ── Session sidebar ──
   const sessionList = (
     <div className="flex h-full flex-col bg-sidebar">
@@ -595,43 +581,34 @@ export default function ChatPage() {
                 const isSelected = selectedSessions.has(s.id);
                 const displayTitle = s.title || s.user_id || t("chat.no_title");
                 return (
-                  <div className="group relative pb-1.5">
+                  <div className="group relative pb-1.5 flex items-stretch gap-1">
+                    <button
+                      onClick={() => toggleSessionSelection(s.id)}
+                      className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer ${
+                        isSelected
+                          ? "bg-primary border-primary"
+                          : "border-border/60 bg-transparent hover:border-primary/40"
+                      }`}
+                      role="checkbox"
+                      aria-checked={isSelected}
+                      aria-label={t("chat.select_session")}
+                    >
+                      {isSelected && (
+                        <svg className="h-3.5 w-3.5 md:h-2.5 md:w-2.5 text-primary-foreground" viewBox="0 0 10 10" fill="none">
+                          <path d="M2 5l2.5 2.5L8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </button>
                     <button
                       onClick={() => handleSelectSession(s)}
-                      className={`relative flex w-full flex-col gap-1.5 rounded-lg px-4 py-3 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background pr-10 ${
-                        isSelected
-                          ? "bg-primary/10 ring-1 ring-primary/20"
-                          : activeSessionId === s.id
-                          ? "bg-accent shadow-inner"
-                          : "hover:bg-accent/40"
+                      className={`relative flex w-full flex-col gap-1.5 rounded-lg px-4 py-3 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
+                        activeSessionId === s.id
+                        ? "bg-accent shadow-inner"
+                        : "hover:bg-accent/40"
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1 min-w-0 flex-1">
-                          <span
-                            className={`shrink-0 h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors mr-1 flex items-center justify-center cursor-pointer ${
-                              isSelected
-                                ? "bg-primary border-primary"
-                                : "border-border/60 bg-transparent hover:border-primary/40"
-                            }`}
-                            role="checkbox"
-                            aria-checked={isSelected}
-                            tabIndex={0}
-                            onClick={(e) => { e.stopPropagation(); toggleSessionSelection(s.id); }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                toggleSessionSelection(s.id);
-                              }
-                            }}
-                          >
-                            {isSelected && (
-                              <svg className="h-3.5 w-3.5 md:h-2.5 md:w-2.5 text-primary-foreground" viewBox="0 0 10 10" fill="none">
-                                <path d="M2 5l2.5 2.5L8 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                              </svg>
-                            )}
-                          </span>
                           <span
                             className={`font-display text-xs font-bold uppercase tracking-tight shrink-0 ${
                               activeSessionId === s.id
@@ -852,14 +829,6 @@ export default function ChatPage() {
 
     </ChatRuntimeProvider>
   );
-}
-
-// ── Participant bar (multi-agent sessions) ─────────────────────────────────
-
-export function ParticipantBar({ sessionId: _sessionId, currentAgent: _currentAgent }: { sessionId: string | null; currentAgent: string }) {
-  // Participant bar hidden — agents are now session-scoped via the `agent` tool (polling model).
-  return null;
-
 }
 
 // ── Chat / Canvas tab switching ────────────────────────────────────────────

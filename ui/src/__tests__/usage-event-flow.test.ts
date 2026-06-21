@@ -104,7 +104,6 @@ describe("processSSEStream — case 'usage' writes AgentState fields", () => {
     useChatStore.setState({
       agents: {},
       currentAgent: AGENT,
-      _selectCounter: {},
       sessionParticipants: {},
     });
   });
@@ -225,7 +224,6 @@ describe("processSSEStream — case 'usage' writes AgentState fields", () => {
         Peer: emptyAgentState(),
       },
       currentAgent: AGENT,
-      _selectCounter: {},
       sessionParticipants: {},
     });
 
