@@ -167,13 +167,11 @@ impl AgentEngine {
         // returning Err, panic via `?`), the early-return would close the sink
         // without Finish — frontend then loops trying to resume a finalized
         // session. Wrap the pipeline so Finish is guaranteed on every exit.
-        // Serialize this user turn against an active goal driver (no-op when none).
-        let _goal_guard = match (self.cfg().goal_pool.as_ref(), self.cfg().goal_locks.as_ref()) {
-            (Some(p), Some(l)) if crate::agent::goal::pool::is_running(p, session_id) => {
-                Some(crate::agent::goal::pool::goal_lock(l, session_id).lock_owned().await)
-            }
-            _ => None,
-        };
+        // Serialize this user turn against the goal driver (no-op when the engine
+        // has no goal infrastructure). Acquired unconditionally — independent of
+        // pool membership — to close the driver spawn-window TOCTOU (FIX C2).
+        let _goal_guard =
+            crate::agent::goal::pool::user_turn_goal_guard(self.cfg().goal_locks.as_ref(), session_id).await;
         // Interactive layers: fallback provider + session-corruption recovery
         // (no-op without a configured fallback). Stops a recoverable provider
         // outage / corrupt-context error from failing the live web turn.
@@ -363,15 +361,13 @@ impl AgentEngine {
             .await;
         }
 
-        // Serialize this user turn against an active goal driver for the session
-        // (no-op when no goal is running). Prevents the autonomous loop and a real
-        // user turn from executing on the same session concurrently.
-        let _goal_guard = match (self.cfg().goal_pool.as_ref(), self.cfg().goal_locks.as_ref()) {
-            (Some(p), Some(l)) if crate::agent::goal::pool::is_running(p, session_id) => {
-                Some(crate::agent::goal::pool::goal_lock(l, session_id).lock_owned().await)
-            }
-            _ => None,
-        };
+        // Serialize this user turn against the goal driver for the session.
+        // Acquired unconditionally — independent of pool membership — so the
+        // autonomous loop and a real user turn never execute on the same session
+        // concurrently, even in the driver spawn window before it joins the pool
+        // (FIX C2). No-op when the engine has no goal infrastructure.
+        let _goal_guard =
+            crate::agent::goal::pool::user_turn_goal_guard(self.cfg().goal_locks.as_ref(), session_id).await;
 
         // `cancel` is supplied by the caller (channel dispatcher) so a request
         // timeout / WS disconnect / `/stop` can break this turn COOPERATIVELY —
