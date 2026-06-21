@@ -113,6 +113,50 @@ pub async fn clear(db: &PgPool, session_id: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// A crashed autonomous (cron) goal eligible for re-drive on startup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)] // consumed by resume_autonomous_goals() — wired in the next Phase-1 slice
+pub struct RedrivableGoal {
+    pub session_id: Uuid,
+    pub agent_id: String,
+}
+
+/// List autonomous (origin='cron') goals whose owning session was interrupted by
+/// a crash and is eligible for re-drive: still `active`, within the retry budget
+/// (`retry_count < max_retries`), past any backoff gate, and newer than
+/// `staleness_secs`.
+///
+/// CRITICAL scope boundary: `origin='cron' AND run_status='interrupted'` ensures
+/// a `/goal` attached to a live interactive chat session (`origin='goal'`) is
+/// NEVER selected — it must not be auto-continued into a human's conversation.
+#[allow(dead_code)] // consumed by resume_autonomous_goals() — wired in the next Phase-1 slice
+pub async fn list_redrivable(
+    db: &PgPool,
+    staleness_secs: i64,
+    max_retries: i32,
+) -> Result<Vec<RedrivableGoal>> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT g.session_id, s.agent_id
+         FROM session_goals g
+         JOIN sessions s ON s.id = g.session_id
+         WHERE g.status = 'active'
+           AND g.origin = 'cron'
+           AND s.run_status = 'interrupted'
+           AND s.retry_count < $2
+           AND (g.next_redrive_at IS NULL OR g.next_redrive_at <= now())
+           AND s.last_message_at > now() - ($1 * interval '1 second')
+         ORDER BY s.last_message_at",
+    )
+    .bind(staleness_secs)
+    .bind(max_retries)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(session_id, agent_id)| RedrivableGoal { session_id, agent_id })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +232,46 @@ mod tests {
         assert_eq!(after.max_turns, 9);
         assert_eq!(after.consecutive_judge_failures, 0);
         assert_eq!(after.last_verdict, None);
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn list_redrivable_selects_only_crashed_cron_goals(pool: PgPool) -> sqlx::Result<()> {
+        async fn seed(pool: &PgPool, run_status: &str, origin: &str, retry: i32, age_secs: i64) -> Uuid {
+            let sid = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO sessions (id, agent_id, user_id, channel, run_status, retry_count, last_message_at)
+                 VALUES ($1, 'Agent', 'u', 'CRON', $2, $3, now() - ($4 * interval '1 second'))",
+            )
+            .bind(sid)
+            .bind(run_status)
+            .bind(retry)
+            .bind(age_secs)
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO session_goals (session_id, goal_text, status, origin)
+                 VALUES ($1, 'g', 'active', $2)",
+            )
+            .bind(sid)
+            .bind(origin)
+            .execute(pool)
+            .await
+            .unwrap();
+            sid
+        }
+
+        let want = seed(&pool, "interrupted", "cron", 0, 60).await; // eligible
+        let _interactive = seed(&pool, "interrupted", "goal", 0, 60).await; // origin=goal → excluded
+        let _done = seed(&pool, "done", "cron", 0, 60).await; // not crashed → excluded
+        let _exhausted = seed(&pool, "interrupted", "cron", 3, 60).await; // retry_count >= max → excluded
+        let _stale = seed(&pool, "interrupted", "cron", 0, 100_000).await; // older than window → excluded
+
+        let got = list_redrivable(&pool, 21_600, 3).await.unwrap(); // 6h window, max_retries = 3
+        let ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
+        assert_eq!(ids, vec![want], "only the crashed cron goal within budget+window is redrivable");
+        assert_eq!(got[0].agent_id, "Agent");
         Ok(())
     }
 }
