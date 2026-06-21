@@ -6,7 +6,6 @@ import { apiGet, apiPut, apiDelete } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { getLangFromFilename } from "@/components/workspace/code-editor";
@@ -168,7 +167,7 @@ export default function WorkspacePage() {
           <FilePlus className="h-4 w-4" />
         </Button>
       </div>
-      <ScrollArea className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
         <div className="p-2 space-y-0.5">
           {currentPath && (
             <button
@@ -221,7 +220,7 @@ export default function WorkspacePage() {
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 

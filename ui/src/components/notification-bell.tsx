@@ -8,7 +8,6 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useNotificationStore } from "@/stores/notification-store";
 import {
   useNotifications,
@@ -241,7 +240,7 @@ export function NotificationBell() {
           </div>
         </div>
         {/* List */}
-        <ScrollArea className="max-h-96">
+        <div className="max-h-96 overflow-y-auto overscroll-contain">
           {notifications.length === 0 ? (
             <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
               {t("notifications.empty")}
@@ -276,7 +275,7 @@ export function NotificationBell() {
               </button>
             ))
           )}
-        </ScrollArea>
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );
