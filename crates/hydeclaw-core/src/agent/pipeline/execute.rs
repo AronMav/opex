@@ -768,6 +768,61 @@ pub async fn execute<S: EventSink>(
         // T6: above takes ToolCallId via ToolCall.id (newtype). No conversion
         // needed — tc.id is already typed.
 
+        // 9b. Interrupted-verify guard (autonomous re-drive only). If the most
+        //     recent tool outcome is an un-cleared [interrupted:verify] marker AND
+        //     this batch includes a non-idempotent tool, the prior side-effect may
+        //     already have happened — refuse to auto-dispatch and inject a verify
+        //     nudge as the result for every call instead, then continue. Bounded:
+        //     the injected result is not an [interrupted:verify] marker, so the
+        //     guard won't fire again next iteration. Defense-in-depth atop the
+        //     committed-result cache-replay (a persisted role='tool' never re-runs).
+        if layers.interrupted_verify_guard.is_some()
+            && crate::agent::pipeline::behaviour::should_block_interrupted_batch(
+                &messages,
+                &response.tool_calls,
+            )
+        {
+            tracing::warn!(
+                session = %session_id,
+                tools = response.tool_calls.len(),
+                "interrupted-verify guard: refusing to auto-repeat batch after a lost tool result"
+            );
+            for tc in &response.tool_calls {
+                let _ = sink
+                    .emit(PipelineEvent::Stream(StreamEvent::ToolResult {
+                        id: tc.id.clone(),
+                        result: crate::agent::pipeline::behaviour::INTERRUPTED_VERIFY_BLOCK_RESULT
+                            .to_string(),
+                    }))
+                    .await;
+                let blocked_id = Uuid::new_v4();
+                crate::agent::pipeline::parallel::spawn_persist_tool_message(
+                    &engine.cfg().db,
+                    blocked_id,
+                    session_id,
+                    agent_name.as_str(),
+                    tc.id.as_str(),
+                    crate::agent::pipeline::behaviour::INTERRUPTED_VERIFY_BLOCK_RESULT,
+                    Some(last_msg_id),
+                    parallel_batch_id,
+                );
+                last_msg_id = blocked_id;
+                messages.push(Message {
+                    role: MessageRole::Tool,
+                    content: crate::agent::pipeline::behaviour::INTERRUPTED_VERIFY_BLOCK_RESULT
+                        .to_string(),
+                    tool_calls: None,
+                    tool_call_id: Some(tc.id.clone()),
+                    thinking_blocks: vec![],
+                    db_id: None,
+                });
+                context_chars += crate::agent::pipeline::behaviour::INTERRUPTED_VERIFY_BLOCK_RESULT
+                    .chars()
+                    .count();
+            }
+            continue;
+        }
+
         // 10. Execute tool batch via ToolExecutor (loop detection inside execute_batch)
         //
         // Pass `persist_ctx` so each tool result is persisted via a detached

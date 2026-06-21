@@ -838,7 +838,7 @@ fn spawn_persist_message_row(
 /// turns. Written atomically into `messages.parallel_batch_id` (m047) by
 /// the main INSERT in `save_message_ex_with_id` (D3 fix, 2026-05-13).
 #[allow(clippy::too_many_arguments)]
-fn spawn_persist_tool_message(
+pub(crate) fn spawn_persist_tool_message(
     db: &sqlx::PgPool,
     id: Uuid,
     session_id: Uuid,
