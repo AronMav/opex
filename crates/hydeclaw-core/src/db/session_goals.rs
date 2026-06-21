@@ -64,6 +64,45 @@ pub async fn upsert(db: &PgPool, session_id: Uuid, goal_text: &str, max_turns: i
     Ok(())
 }
 
+/// Bootstrap a cron-owned goal: supersede any prior ACTIVE goal for the same
+/// cron job (so a re-firing job never has two live drivers), then insert/refresh
+/// the `origin='cron'` goal for `session_id`. One transaction.
+pub async fn upsert_cron_goal(
+    db: &PgPool,
+    session_id: Uuid,
+    cron_job_id: Uuid,
+    goal_text: &str,
+    max_turns: i32,
+) -> Result<()> {
+    let mut tx = db.begin().await?;
+    // Supersede this job's prior in-flight goal(s) on other sessions.
+    sqlx::query(
+        "UPDATE session_goals SET status = 'cleared', updated_at = now()
+         WHERE cron_job_id = $1 AND status = 'active' AND session_id <> $2",
+    )
+    .bind(cron_job_id)
+    .bind(session_id)
+    .execute(&mut *tx)
+    .await?;
+    // Insert/refresh the new run's goal.
+    sqlx::query(
+        "INSERT INTO session_goals (session_id, goal_text, status, turn_count, max_turns, origin, cron_job_id)
+         VALUES ($1, $2, 'active', 0, $3, 'cron', $4)
+         ON CONFLICT (session_id) DO UPDATE SET goal_text = EXCLUDED.goal_text,
+           status = 'active', turn_count = 0, max_turns = EXCLUDED.max_turns,
+           origin = 'cron', cron_job_id = EXCLUDED.cron_job_id,
+           last_verdict = NULL, consecutive_judge_failures = 0, updated_at = now()",
+    )
+    .bind(session_id)
+    .bind(goal_text)
+    .bind(max_turns)
+    .bind(cron_job_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn set_status(db: &PgPool, session_id: Uuid, status: &str) -> Result<()> {
     sqlx::query("UPDATE session_goals SET status = $2, updated_at = now() WHERE session_id = $1")
         .bind(session_id)
@@ -285,6 +324,28 @@ mod tests {
         let ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
         assert_eq!(ids, vec![want], "only the crashed cron goal within budget+window is redrivable");
         assert_eq!(got[0].agent_id, "Agent");
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn upsert_cron_goal_supersedes_prior_active_for_same_job(pool: PgPool) -> sqlx::Result<()> {
+        let job = Uuid::new_v4();
+        let s1 = seed_session(&pool).await;
+        let s2 = seed_session(&pool).await;
+
+        upsert_cron_goal(&pool, s1, job, "g1", 5).await.unwrap();
+        assert_eq!(get(&pool, s1).await.unwrap().unwrap().status, "active", "first cron goal active");
+
+        // Same job re-fires on a fresh session → the prior in-flight goal is superseded.
+        upsert_cron_goal(&pool, s2, job, "g2", 5).await.unwrap();
+        assert_eq!(get(&pool, s1).await.unwrap().unwrap().status, "cleared", "prior cron goal superseded");
+        assert_eq!(get(&pool, s2).await.unwrap().unwrap().status, "active", "new cron goal active");
+
+        // A different job must NOT supersede this job's active goal.
+        let other_job = Uuid::new_v4();
+        let s3 = seed_session(&pool).await;
+        upsert_cron_goal(&pool, s3, other_job, "g3", 5).await.unwrap();
+        assert_eq!(get(&pool, s2).await.unwrap().unwrap().status, "active", "different job does not supersede");
         Ok(())
     }
 
