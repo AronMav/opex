@@ -37,7 +37,12 @@ impl AgentEngine {
         if let crate::agent::hooks::HookAction::Block(reason) = action {
             anyhow::bail!("blocked by hook: {}", reason);
         }
-        let _cancel_guard = self.state.register_request();
+        // R-DRAIN: register the REAL pipeline cancel token (not an orphan) and
+        // hold the RAII guard for the whole turn so graceful-shutdown
+        // `cancel_all_requests` propagates into `execute()` and the request is
+        // unregistered on every exit path (fixes the active_requests leak +
+        // always-full drain timeout).
+        let _req_guard = self.state.register_request_guarded(cancel.clone());
 
         // Publish the event sender so approval_manager can broadcast tool-approval
         // requests while the SSE stream is live. Cleared after finalize so idle
@@ -169,8 +174,13 @@ impl AgentEngine {
             }
             _ => None,
         };
+        // Interactive layers: fallback provider + session-corruption recovery
+        // (no-op without a configured fallback). Stops a recoverable provider
+        // outage / corrupt-context error from failing the live web turn.
+        let interactive_layers =
+            BehaviourLayers::for_interactive(&self.tool_loop_config(), msg.text.clone().unwrap_or_default());
         let pipeline_result: anyhow::Result<()> = async {
-            let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &BehaviourLayers::none()).await?;
+            let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await?;
             let fin_ctx = finalize::finalize_context_from_engine(
                 self,
                 session_id,
@@ -268,6 +278,7 @@ impl AgentEngine {
         msg: &IncomingMessage,
         status_tx: Option<tokio::sync::mpsc::UnboundedSender<ProcessingPhase>>,
         chunk_tx: Option<tokio::sync::mpsc::Sender<String>>,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<String> {
         self.cfg().approval_manager.prune_stale().await;
 
@@ -277,7 +288,9 @@ impl AgentEngine {
         if let crate::agent::hooks::HookAction::Block(reason) = action {
             anyhow::bail!("blocked by hook: {}", reason);
         }
-        let _cancel_guard = self.state.register_request();
+        // R-DRAIN: register the caller's real cancel token + RAII guard (see
+        // handle_sse). Graceful shutdown can now interrupt a live channel turn.
+        let _req_guard = self.state.register_request_guarded(cancel.clone());
 
         let mut s = sink::ChannelStatusSink::new(status_tx, chunk_tx);
 
@@ -360,8 +373,17 @@ impl AgentEngine {
             _ => None,
         };
 
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &BehaviourLayers::none()).await?;
+        // `cancel` is supplied by the caller (channel dispatcher) so a request
+        // timeout / WS disconnect / `/stop` can break this turn COOPERATIVELY —
+        // execute() observes the token, returns Interrupted, and finalize marks
+        // the session 'interrupted' (resumable) instead of the dispatcher
+        // hard-aborting the task and the guard Drop marking it 'failed'.
+        // Same interactive layers as the SSE path — channel turns equally need
+        // fallback + session-corruption recovery so a recoverable error doesn't
+        // fail the turn and (with R-CONTINUITY) keeps the conversation alive.
+        let interactive_layers =
+            BehaviourLayers::for_interactive(&self.tool_loop_config(), msg.text.clone().unwrap_or_default());
+        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await?;
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
@@ -467,7 +489,9 @@ impl AgentEngine {
         }
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &BehaviourLayers::none()).await?;
+        let interactive_layers =
+            BehaviourLayers::for_interactive(&self.tool_loop_config(), msg.text.clone().unwrap_or_default());
+        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await?;
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
@@ -515,13 +539,24 @@ impl AgentEngine {
         if let crate::agent::hooks::HookAction::Block(reason) = action {
             anyhow::bail!("blocked by hook: {}", reason);
         }
-        // Fresh session (cron RPC semantics).
-        self.run_isolated_pipeline(msg, None, true).await
+        // Fresh session (cron RPC semantics). Cron has no external cancel
+        // token, so pass a fresh (never-cancelled) one.
+        self.run_isolated_pipeline(msg, None, true, tokio_util::sync::CancellationToken::new()).await
     }
 
     /// Run ONE autonomous goal turn that CONTINUES an existing session (history
     /// loaded) and returns the final assistant text. Used by the `/goal` driver.
-    pub async fn run_goal_turn(&self, session_id: Uuid, prompt: &str) -> Result<String> {
+    ///
+    /// `cancel` is the driver's cancellation token (R-GOAL): when `/goal stop`
+    /// fires, it propagates into `execute()` so a long in-flight turn breaks
+    /// cooperatively and reaches `finalize` (marking the session `interrupted`,
+    /// not `failed` via a hard task abort).
+    pub async fn run_goal_turn(
+        &self,
+        session_id: Uuid,
+        prompt: &str,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<String> {
         let msg = IncomingMessage {
             user_id: "system".to_string(),
             context: serde_json::Value::Null,
@@ -535,7 +570,7 @@ impl AgentEngine {
             leaf_message_id: None,
             user_message_id: None,
         };
-        self.run_isolated_pipeline(&msg, Some(session_id), false).await
+        self.run_isolated_pipeline(&msg, Some(session_id), false, cancel).await
     }
 
     /// Shared RPC-style pipeline body: `NoopSink`, cron behaviour layers, returns the
@@ -546,9 +581,9 @@ impl AgentEngine {
         msg: &IncomingMessage,
         resume_session_id: Option<Uuid>,
         force_new_session: bool,
+        cancel: tokio_util::sync::CancellationToken,
     ) -> Result<String> {
         let mut s = sink::NoopSink::new();
-        let cancel = tokio_util::sync::CancellationToken::new();
 
         let boot = bootstrap::bootstrap(
             self,

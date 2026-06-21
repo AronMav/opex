@@ -189,9 +189,47 @@ pub struct BehaviourLayers {
 }
 
 impl BehaviourLayers {
-    /// All layers off. Used by the SSE chat path.
+    /// All layers off. Equivalent to `default()`. Interactive paths now use
+    /// [`Self::for_interactive`] (fallback + session-recovery) and cron uses
+    /// [`Self::for_cron`], so this "everything off" constructor is only
+    /// referenced by tests — hence `#[cfg(test)]` to keep `-D warnings` clean.
+    #[cfg(test)]
     pub fn none() -> Self {
         Self::default()
+    }
+
+    /// Layers for interactive paths (SSE web chat, channel adapters, plain
+    /// streaming). Enables ONLY the two layers that stop a recoverable
+    /// provider/transport hiccup from killing a live user session:
+    ///
+    ///   * `fallback_provider` — fail over to the configured fallback after N
+    ///     consecutive LLM errors, exactly as cron does. No-op when the agent
+    ///     has no `fallback_provider` configured (`create_fallback_provider`
+    ///     returns `None`), so this is behaviour-preserving by default.
+    ///   * `session_recovery` — rebuild the message list once on a
+    ///     `SessionCorruption` error ("roles must alternate", orphan tool_use)
+    ///     instead of failing the turn (and forking a fresh session).
+    ///
+    /// Deliberately leaves `auto_continue`, `forced_final_call`, and
+    /// `tool_policy_override` OFF — those alter interactive UX (the user is
+    /// meant to see the iteration-limit Finish and raw turn boundaries) and
+    /// remain cron-only. Before this, interactive callers used
+    /// `BehaviourLayers::none()`, so a single non-retryable LLM error or a
+    /// primary-provider outage failed the web/channel turn that an identical
+    /// cron run would have survived.
+    pub fn for_interactive(
+        loop_config: &crate::agent::tool_loop::ToolLoopConfig,
+        user_text: String,
+    ) -> Self {
+        Self {
+            fallback_provider: Some(FallbackPolicy::from_loop_config(loop_config)),
+            auto_continue: None,
+            session_recovery: Some(SessionRecoveryPolicy {
+                original_user_text: user_text,
+            }),
+            tool_policy_override: None,
+            forced_final_call: None,
+        }
     }
 
     /// Populates the layer set used by `handle_isolated_via_pipeline`

@@ -87,7 +87,9 @@ impl Drop for ProcessingGuard {
 impl AgentEngine {
     /// Handle an incoming message: build context, call LLM, execute tools, return response.
     pub async fn handle(&self, msg: &IncomingMessage) -> Result<String> {
-        self.handle_with_status(msg, None, None).await
+        // No external canceller for this convenience wrapper — pass a fresh,
+        // never-cancelled token.
+        self.handle_with_status(msg, None, None, tokio_util::sync::CancellationToken::new()).await
     }
 
 }

@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 /// Cluster-state bundle. Cheap to clone — every field is `Arc`-backed.
 #[derive(Clone)]
@@ -69,9 +70,14 @@ pub(super) enum OutboundMsg {
 }
 
 /// One in-flight message tracked by the dispatcher so a `Cancel` for ANY
-/// request_id can abort it (not just the currently-foregrounded one).
+/// request_id can stop it (not just the currently-foregrounded one).
 pub(super) struct InflightMessage {
     pub join_handle: JoinHandle<()>,
+    /// Per-turn cancellation token wired into `handle_with_status` → `execute`.
+    /// R-CHANNEL: cancelling it stops the turn COOPERATIVELY (engine reaches
+    /// finalize → session marked 'interrupted'), as opposed to a hard
+    /// `join_handle.abort()` which guard-drops the session to 'failed'.
+    pub cancel: CancellationToken,
 }
 
 /// Concurrent registry: `request_id` → in-flight task.

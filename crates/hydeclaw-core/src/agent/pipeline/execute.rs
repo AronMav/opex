@@ -178,6 +178,20 @@ pub async fn execute<S: EventSink>(
             });
         }
 
+        // R-WATCHDOG heartbeat: refresh `activity_at` at the top of every
+        // iteration. The watchdog reaps 'running' sessions whose
+        // COALESCE(activity_at, last_message_at) is older than the per-agent
+        // inactivity threshold; previously ONLY streaming TextDelta flushes
+        // touched it (upsert_streaming_append), so a long silent step — a slow
+        // LLM with delayed first token, a long tool chain, a subagent that
+        // emits no text — starved the heartbeat and a perfectly live session
+        // was killed as 'timeout'. Debounced to 10s in the DB and gated on
+        // run_status='running', so it's near-free and cannot resurrect a
+        // terminal session. Gives each iteration a full threshold window.
+        crate::db::sessions::touch_session_activity(&engine.cfg().db, session_id)
+            .await
+            .ok();
+
         // 2. Pre-allocate the UUID this iteration's row will eventually be
         //    persisted under. Frontend uses this id to open a fresh live
         //    ChatMessage; once the row is saved (intermediate via
@@ -781,6 +795,16 @@ pub async fn execute<S: EventSink>(
                 assistant_message_id: assistant_msg_id,
             });
         }
+
+        // R-WATCHDOG heartbeat (second touch): refresh `activity_at` right
+        // before dispatching the tool batch. When the LLM call already took
+        // >10s, the iteration-top touch is now stale, so this gives the tool
+        // batch (which may include long tools / approval waits) its own fresh
+        // watchdog window. Debounced — coalesces with the top touch when the
+        // LLM call was fast.
+        crate::db::sessions::touch_session_activity(&engine.cfg().db, session_id)
+            .await
+            .ok();
 
         let persist_ctx = crate::agent::pipeline::parallel::ToolPersistCtx {
             agent_name: agent_name.as_str(),

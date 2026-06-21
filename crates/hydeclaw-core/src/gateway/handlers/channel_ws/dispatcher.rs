@@ -49,6 +49,14 @@ pub(super) async fn dispatch_message(
     let agent_name_for_task = agent_name.clone();
     let inflight_for_cleanup = inflight.clone();
 
+    // R-CHANNEL: per-turn cooperative cancel token. Stored in the registry and
+    // wired into `handle_with_status` → `execute`, so a request-timeout, a
+    // `Cancel`/`/stop`, or a WS teardown stops the turn through finalize
+    // (session marked 'interrupted', resumable) instead of a hard task abort
+    // (which guard-drops the session to 'failed').
+    let turn_cancel = tokio_util::sync::CancellationToken::new();
+    let turn_cancel_for_task = turn_cancel.clone();
+
     // Hold the inflight lock across spawn+insert so a Cancel for this
     // request_id arriving in the reader CANNOT race the registration: we
     // only release after the JoinHandle is in the registry.
@@ -93,14 +101,46 @@ pub(super) async fn dispatch_message(
             }
         });
 
-        // Run the engine with optional request timeout.
-        let engine_fut = engine.handle_with_status(&incoming, Some(status_tx), Some(chunk_tx));
+        // Run the engine with optional request timeout. R-CHANNEL: on timeout
+        // we DON'T drop the future (that hard-cancels at the await point →
+        // SessionLifecycleGuard::Drop marks 'failed'). Instead we pin it,
+        // signal the cooperative cancel token, and give the engine a bounded
+        // grace to reach finalize (marking 'interrupted'). Only a turn that
+        // ignores the token past the grace falls back to the timeout error
+        // (future dropped at scope end).
+        let engine_fut = engine.handle_with_status(
+            &incoming,
+            Some(status_tx),
+            Some(chunk_tx),
+            turn_cancel_for_task.clone(),
+        );
         let result = if timeout_secs > 0 {
-            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), engine_fut).await {
+            // Box::pin so we can re-poll across the cooperative grace and, if the
+            // turn wedges past it, explicitly `drop` the future — releasing the
+            // status/chunk senders it owns so the forwarders below can exit
+            // (a plain stack-pin can't be dropped early, which would hang here).
+            let mut fut = Box::pin(engine_fut);
+            let dur = std::time::Duration::from_secs(timeout_secs);
+            match tokio::time::timeout(dur, &mut fut).await {
                 Ok(r) => r,
-                Err(_) => Err(anyhow::anyhow!(
-                    "Request timed out after {timeout_secs}s. The task was too complex or an external service was slow.",
-                )),
+                Err(_) => {
+                    // Timeout: cancel cooperatively and give the engine a bounded
+                    // grace to reach finalize (marking 'interrupted') instead of
+                    // dropping the future (which would guard-drop 'failed').
+                    turn_cancel_for_task.cancel();
+                    const TIMEOUT_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+                    match tokio::time::timeout(TIMEOUT_GRACE, &mut fut).await {
+                        Ok(r) => r,
+                        Err(_) => {
+                            // Wedged past grace (ignored the token): drop the
+                            // future to release its senders, then report timeout.
+                            drop(fut);
+                            Err(anyhow::anyhow!(
+                                "Request timed out after {timeout_secs}s. The task was too complex or an external service was slow.",
+                            ))
+                        }
+                    }
+                }
             }
         } else {
             engine_fut.await
@@ -125,15 +165,28 @@ pub(super) async fn dispatch_message(
 
     // Register inside the held lock, then release. Cancel arriving before
     // this point would block on the same lock and find the entry afterwards.
-    inflight_guard.insert(req_id_for_task, InflightMessage { join_handle });
+    inflight_guard.insert(req_id_for_task, InflightMessage { join_handle, cancel: turn_cancel });
     drop(inflight_guard);
 }
 
-/// Abort the in-flight task for `request_id` (if any). The reader is
-/// responsible for emitting any user-visible cancellation frame.
+/// Stop the in-flight task for `request_id` (if any) COOPERATIVELY. The reader
+/// is responsible for emitting any user-visible cancellation frame.
+///
+/// R-CHANNEL: cancels the turn's token (so `execute` returns Interrupted and
+/// finalize marks the session 'interrupted', resumable) rather than calling
+/// `join_handle.abort()` (which drops the lifecycle guard → session 'failed').
+/// A detached backstop hard-aborts only if the turn ignores the token past the
+/// grace window (sync wedge — code_exec, std::sync::Mutex contention).
 pub(super) async fn cancel(request_id: &str, inflight: &InflightRegistry) -> bool {
     if let Some(entry) = inflight.lock().await.remove(request_id) {
-        entry.join_handle.abort();
+        let InflightMessage { mut join_handle, cancel } = entry;
+        cancel.cancel();
+        tokio::spawn(async move {
+            const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
+            if tokio::time::timeout(CANCEL_GRACE, &mut join_handle).await.is_err() {
+                join_handle.abort();
+            }
+        });
         true
     } else {
         false
@@ -153,20 +206,31 @@ mod tests {
         assert!(!cancel("never-registered", &inflight).await);
     }
 
-    /// Cancel for a registered request_id aborts the task and returns true.
+    /// Cancel for a registered request_id signals the cooperative token,
+    /// removes the entry, and returns true. R-CHANNEL: it must NOT hard-abort —
+    /// the token is cancelled so the engine can finalize 'interrupted'; the
+    /// task self-completes (here, by observing the token).
     #[tokio::test]
-    async fn cancel_aborts_registered_task() {
+    async fn cancel_signals_token_and_removes_entry() {
+        use tokio_util::sync::CancellationToken;
         let inflight: InflightRegistry =
             Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
         let req_id = "req-1".to_string();
 
-        // Spawn a task that would otherwise run forever.
-        let h = tokio::spawn(async {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        // A well-behaved turn observes the cancel token and returns promptly.
+        let token = CancellationToken::new();
+        let token_for_task = token.clone();
+        let h = tokio::spawn(async move {
+            token_for_task.cancelled().await;
         });
-        inflight.lock().await.insert(req_id.clone(), InflightMessage { join_handle: h });
+        inflight
+            .lock()
+            .await
+            .insert(req_id.clone(), InflightMessage { join_handle: h, cancel: token.clone() });
 
         assert!(cancel(&req_id, &inflight).await);
         assert!(inflight.lock().await.is_empty());
+        // The cooperative token was signalled (engine would observe it).
+        assert!(token.is_cancelled(), "cancel() must signal the turn token");
     }
 }
