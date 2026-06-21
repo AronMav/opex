@@ -88,6 +88,10 @@ pub(crate) struct CreateCronRequest {
     run_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
     tool_policy: Option<serde_json::Value>,
+    /// When set, this (recurring) cron job runs as a durable goal-driven session
+    /// — re-driven to completion after a crash — instead of a one-shot task.
+    #[serde(default)]
+    autonomous_goal: Option<String>,
 }
 
 pub(crate) async fn api_create_cron(
@@ -140,8 +144,8 @@ pub(crate) async fn api_create_cron(
 
     let silent = req.silent.unwrap_or(false);
     let result = sqlx::query_scalar::<_, uuid::Uuid>(
-        "INSERT INTO scheduled_jobs (agent_id, name, cron_expr, timezone, task_message, announce_to, silent, jitter_secs, run_once, run_at, tool_policy) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+        "INSERT INTO scheduled_jobs (agent_id, name, cron_expr, timezone, task_message, announce_to, silent, jitter_secs, run_once, run_at, tool_policy, autonomous_goal) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
     )
     .bind(&req.agent)
     .bind(&req.name)
@@ -154,6 +158,7 @@ pub(crate) async fn api_create_cron(
     .bind(req.run_once)
     .bind(req.run_at)
     .bind(&req.tool_policy)
+    .bind(&req.autonomous_goal)
     .fetch_one(&infra.db)
     .await;
 
@@ -177,7 +182,7 @@ pub(crate) async fn api_create_cron(
                         req.run_once,
                         req.run_at,
                         req.tool_policy,
-                        None, // autonomous_goal: load path activates it on restart
+                        req.autonomous_goal,
                     )
                     .await
                 {
