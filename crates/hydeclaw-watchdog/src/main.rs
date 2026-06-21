@@ -251,8 +251,15 @@ async fn main() -> anyhow::Result<()> {
                             let sid = s.get("id").and_then(|v| v.as_str()).unwrap_or("");
                             let agent = s.get("agent_id").and_then(|v| v.as_str()).unwrap_or("?");
                             tracing::warn!(session_id = sid, agent, "retrying stuck session");
+                            // R-RETRY fix: the retry endpoint requires `?agent=`
+                            // (IDOR hardening, commit 1b716207). Without it every
+                            // POST returned 400 and the auto-retry feature was
+                            // silently dead. `agent` comes from the stuck-session
+                            // row's agent_id, so verify_session_agent will match.
+                            // `.query()` URL-encodes the value correctly.
                             match http
                                 .post(format!("{}/api/sessions/{}/retry", core_url, sid))
+                                .query(&[("agent", agent)])
                                 .header("Authorization", format!("Bearer {}", auth_token))
                                 .send()
                                 .await
