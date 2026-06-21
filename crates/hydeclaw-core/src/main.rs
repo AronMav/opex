@@ -721,6 +721,13 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             resume_autonomous_goals(resume_state, resume_db).await;
         });
+        // Sibling sweep: interactive `/goal` sessions are never auto-redriven —
+        // their owners are notified to `/goal resume` instead (disjoint by origin).
+        let notify_state = state.clone();
+        let notify_db = db_pool.clone();
+        tokio::spawn(async move {
+            notify_interrupted_interactive_goals(notify_state, notify_db).await;
+        });
     }
 
     // ── mDNS: advertise _hydeclaw._tcp.local. ──
@@ -920,6 +927,50 @@ async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
         }
     }
     tracing::info!(started, "autonomous goal re-drive sweep complete");
+}
+
+/// Notify owners of interactive (`/goal`) sessions whose autonomous driver was
+/// lost to a restart. Unlike cron goals these are NEVER auto-redriven — doing so
+/// would silently continue a human's live chat (`list_redrivable` enforces the
+/// `origin='cron'` boundary). Instead the owner gets a notification prompting
+/// `/goal resume`, and the goal is paused so it is not re-notified next boot and
+/// lands in the state `/goal resume` reactivates.
+async fn notify_interrupted_interactive_goals(state: gateway::AppState, db: sqlx::PgPool) {
+    const STALENESS_SECS: i64 = 6 * 3600;
+
+    let goals = match crate::db::session_goals::list_interrupted_interactive_goals(&db, STALENESS_SECS).await {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!(error = %e, "notify_interrupted_interactive_goals: list failed");
+            return;
+        }
+    };
+    if goals.is_empty() {
+        return;
+    }
+    let ui_event_tx = &state.channels.ui_event_tx;
+    let mut notified = 0usize;
+    for g in &goals {
+        let snippet: String = g.goal_text.chars().take(80).collect();
+        let body = format!("Your goal \"{snippet}\" was interrupted by a restart. Send /goal resume to continue.");
+        let data = serde_json::json!({
+            "sessionId": g.session_id.to_string(),
+            "agentId": g.agent_id,
+            "userId": g.user_id,
+        });
+        if let Err(e) = crate::gateway::notify(
+            &db, ui_event_tx, "goal_interrupted", "Goal interrupted", &body, data,
+        ).await {
+            // Leave status='active' so a later boot retries the notification.
+            tracing::warn!(session = %g.session_id, error = %e, "goal-interrupted notify failed");
+            continue;
+        }
+        if let Err(e) = crate::db::session_goals::set_status(&db, g.session_id, "paused").await {
+            tracing::warn!(session = %g.session_id, error = %e, "goal-interrupted pause failed");
+        }
+        notified += 1;
+    }
+    tracing::info!(notified, total = goals.len(), "interrupted interactive goals notified");
 }
 
 /// Load HYDECLAW_MASTER_KEY from environment or auto-generate and save to .env.
