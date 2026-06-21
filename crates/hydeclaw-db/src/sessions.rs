@@ -75,11 +75,12 @@ pub fn dm_scope_keys<'a>(
 /// Look up the most recent active DM session for `(agent, user, channel)`
 /// after applying `dm_scope`, or `None` if none qualifies.
 ///
-/// "Active" means `last_message_at > now() - 4h` AND `run_status` is one of
-/// `{NULL, 'running', 'done'}`. Sessions in soft-terminal states
-/// (`'failed'`, `'interrupted'`, `'timeout'`, `'cancelled'`) are excluded —
-/// their context is potentially polluted, and silently picking up a
-/// poisoned conversation surprises users.
+/// "Active" means `last_message_at > now() - 4h`, regardless of `run_status`
+/// (R-CONTINUITY fix). Soft-terminal sessions (`'failed'`, `'interrupted'`,
+/// `'timeout'`, `'cancelled'`) are NO LONGER excluded: a live user message
+/// reuses them (see `get_or_create_session`), so the mirror — which must land
+/// in exactly the session a live message would — has to resolve them too.
+/// Re-entry repairs orphan tool calls / streaming rows, so reuse is safe.
 ///
 /// Returns `(session_id, parsed_run_status)`. The status is parsed via
 /// `SessionStatus::parse` so callers can hand it to `ReentryMode::classify`.
@@ -98,7 +99,6 @@ pub async fn resolve_active_dm_session(
         "SELECT id, run_status FROM sessions \
          WHERE agent_id = $1 AND user_id = $2 AND channel = $3 \
            AND last_message_at > now() - interval '4 hours' \
-           AND (run_status IS NULL OR run_status IN ('running', 'done')) \
          ORDER BY last_message_at DESC LIMIT 1",
     )
     .bind(agent_id)
@@ -147,16 +147,23 @@ pub async fn get_or_create_session(
         .execute(&mut *tx)
         .await?;
 
-    // Same filter as resolve_active_dm_session — soft-terminal statuses are
-    // skipped so a fresh row is inserted on miss instead of resurrecting a
-    // poisoned context. The `was_new` boolean disambiguates existing-vs-new
-    // for ReentryMode classification.
+    // Same filter as resolve_active_dm_session: reuse the most-recent session
+    // for this (agent,user,channel) within the 4h window REGARDLESS of
+    // soft-terminal status (R-CONTINUITY fix). Previously failed/interrupted/
+    // timeout/cancelled rows were excluded, so any non-clean turn-end silently
+    // forked a fresh, context-less session on the user's next message — the
+    // dominant cause of "the agent forgot the conversation", especially on
+    // channels (Telegram/Discord) which never supply a resume_session_id.
+    // Re-entry repairs orphan tool calls + streaming rows (bootstrap calls
+    // cleanup_session_streaming_messages + insert_synthetic_tool_results), so
+    // reusing a soft-terminal row no longer "poisons" the next turn. Explicit
+    // "New Chat" still uses create_new_session for a guaranteed-fresh row.
+    // The `was_new` boolean disambiguates existing-vs-new for ReentryMode.
     let row: (Uuid, Option<String>, bool) = sqlx::query_as(
         "WITH existing AS ( \
            SELECT id, run_status FROM sessions \
            WHERE agent_id = $1 AND user_id = $2 AND channel = $3 \
              AND last_message_at > now() - interval '4 hours' \
-             AND (run_status IS NULL OR run_status IN ('running', 'done')) \
            ORDER BY last_message_at DESC LIMIT 1 \
          ), inserted AS ( \
            INSERT INTO sessions (agent_id, user_id, channel, participants) \
@@ -182,7 +189,17 @@ pub async fn get_or_create_session(
         crate::ReentryMode::NewSession
     } else {
         let parsed = run_status_str.as_deref().and_then(SessionStatus::parse);
-        crate::ReentryMode::classify(parsed)
+        match parsed {
+            // Soft-terminal reuse (failed/interrupted/timeout/cancelled): the
+            // user is continuing the conversation, so treat it like an explicit
+            // resume — claim_session_for_reentry allows any→running and the
+            // loop detector warms from the prior timeline. Mirrors the resume
+            // path in context_builder (`Some(_) => ExplicitResume`).
+            Some(s) if s.is_terminal() && s != SessionStatus::Done => {
+                crate::ReentryMode::ExplicitResume
+            }
+            other => crate::ReentryMode::classify(other),
+        }
     };
     Ok((id, mode))
 }
@@ -1775,7 +1792,8 @@ pub async fn insert_assistant_partial(
 /// Delegates session lookup to `resolve_active_dm_session` so mirrors land
 /// in exactly the session a live Telegram message would land in. This means:
 /// - Soft-terminal sessions (`failed`/`interrupted`/`timeout`/`cancelled`)
-///   are skipped — mirroring into a poisoned session would compound damage.
+///   within the 4h window ARE reused now (R-CONTINUITY) — a live message
+///   would continue them, so the mirror lands there too for consistency.
 /// - Stale sessions older than the 4h horizon are skipped — the cron should
 ///   not silently resurrect a closed conversation.
 ///
@@ -2080,13 +2098,20 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn mirror_skips_failed_session(pool: sqlx::PgPool) {
+    async fn mirror_reuses_failed_session(pool: sqlx::PgPool) {
+        // R-CONTINUITY: a live message now reuses a failed session within 4h,
+        // so the mirror must land there too (it tracks where a live message
+        // would go). Previously the mirror skipped soft-terminal sessions.
         let sid = super::create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         super::set_session_run_status(&pool, sid, "failed").await.unwrap();
 
         let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", "hello cron")
             .await.unwrap();
-        assert!(!inserted, "mirror must not write into a failed session");
+        assert!(inserted, "mirror must write into the reused (soft-terminal) session");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages WHERE session_id = $1 AND is_mirror = true"
+        ).bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -2426,26 +2451,36 @@ mod resolve_active_dm_session_tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn resolve_skips_failed_session(pool: sqlx::PgPool) {
+    async fn resolve_reuses_failed_session(pool: sqlx::PgPool) {
+        // R-CONTINUITY: soft-terminal sessions within 4h ARE now reused so the
+        // conversation continues instead of forking a fresh, context-less one.
         let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         set_session_run_status(&pool, sid, "failed").await.unwrap();
 
         let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
             .await
             .unwrap();
-        assert!(got.is_none(), "failed sessions must NOT be reused");
+        assert_eq!(
+            got,
+            Some((sid, Some(SessionStatus::Failed))),
+            "failed session must be reused for continuity"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn resolve_skips_interrupted_timeout_cancelled(pool: sqlx::PgPool) {
-        for status in ["interrupted", "timeout", "cancelled"] {
-            let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
+    async fn resolve_reuses_interrupted_timeout_cancelled(pool: sqlx::PgPool) {
+        for (status, parsed) in [
+            ("interrupted", SessionStatus::Interrupted),
+            ("timeout", SessionStatus::Timeout),
+            ("cancelled", SessionStatus::Cancelled),
+        ] {
+            let sid = create_new_session(&pool, "agent", &format!("u_{status}"), "telegram").await.unwrap();
             set_session_run_status(&pool, sid, status).await.unwrap();
 
-            let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+            let got = resolve_active_dm_session(&pool, "agent", &format!("u_{status}"), "telegram", "per-channel-peer")
                 .await
                 .unwrap();
-            assert!(got.is_none(), "{status} sessions must NOT be reused");
+            assert_eq!(got, Some((sid, Some(parsed))), "{status} session must be reused");
         }
     }
 
@@ -2503,19 +2538,22 @@ mod get_or_create_with_mode_tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn failed_session_creates_fresh_one(pool: sqlx::PgPool) {
+    async fn failed_session_reused_as_explicit_resume(pool: sqlx::PgPool) {
+        // R-CONTINUITY: a failed session within 4h is reused (not forked) and
+        // classified ExplicitResume so the claim allows soft-terminal→running
+        // and the loop detector warms from the prior timeline.
         let old = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         set_session_run_status(&pool, old, "failed").await.unwrap();
 
         let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
             .await
             .unwrap();
-        assert_ne!(got_sid, old, "must create a NEW session, not reuse failed");
-        assert_eq!(mode, ReentryMode::NewSession);
+        assert_eq!(got_sid, old, "failed session must be reused for continuity");
+        assert_eq!(mode, ReentryMode::ExplicitResume);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn interrupted_timeout_cancelled_create_fresh(pool: sqlx::PgPool) {
+    async fn interrupted_timeout_cancelled_reused_as_explicit_resume(pool: sqlx::PgPool) {
         for status in ["interrupted", "timeout", "cancelled"] {
             let old = create_new_session(&pool, "agent", &format!("u_{status}"), "telegram").await.unwrap();
             set_session_run_status(&pool, old, status).await.unwrap();
@@ -2523,8 +2561,8 @@ mod get_or_create_with_mode_tests {
             let (got_sid, mode) = get_or_create_session(&pool, "agent", &format!("u_{status}"), "telegram", "per-channel-peer")
                 .await
                 .unwrap();
-            assert_ne!(got_sid, old, "{status} must create a NEW session");
-            assert_eq!(mode, ReentryMode::NewSession);
+            assert_eq!(got_sid, old, "{status} session must be reused for continuity");
+            assert_eq!(mode, ReentryMode::ExplicitResume, "{status} → ExplicitResume");
         }
     }
 }
