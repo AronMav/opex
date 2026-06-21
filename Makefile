@@ -1,14 +1,10 @@
 -include .deploy.env
-PI_HOST       ?= user@your-server
-PI_DIR        := ~/hydeclaw
 SERVER_HOST   ?= user@your-server
 SERVER_DIR    ?= ~/hydeclaw
-TARGET        := aarch64-unknown-linux-gnu
 SERVER_TARGET := x86_64-unknown-linux-gnu
-BIN           := target/$(TARGET)/release/hydeclaw-core
 AUTH          ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN")
 
-.PHONY: check test test-gemini test-db test-db-up test-db-down lint audit build build-arm64 build-arm64-otel build-x86_64 ui release gen-types deploy-binary deploy-binary-otel deploy-binary-server deploy-remote remote-build remote-deploy deploy-ui deploy-migrations deploy-prompts deploy deploy-docker deploy-jaeger jaeger-up jaeger-down doctor clean llvm-cov
+.PHONY: check test test-gemini test-db test-db-up test-db-down lint audit build build-x86_64 ui release gen-types deploy-binary-server deploy-remote remote-build remote-deploy doctor logs restart status clean llvm-cov
 
 # ── Codegen ──────────────────────────────────────────────────────────────────
 
@@ -33,7 +29,7 @@ llvm-cov:
 	cargo llvm-cov --features gemini-cloudcode --html --open
 
 # ── DB-backed integration tests (sqlx::test) ──────────────────────────────────
-# `test-db-up` boots an isolated Postgres on 127.0.0.1:5433 (separate from the
+# `test-db-up` boots an isolated Postgres on 127.0.0.1:5434 (separate from the
 # dev `postgres` service on 5432). `test-db` runs the full suite against it
 # with DATABASE_URL pointed at the test instance — sqlx::test creates one
 # ephemeral DB per test and drops it on success.
@@ -76,54 +72,16 @@ audit:
 build:
 	cargo build --release
 
-build-arm64:
-	cargo zigbuild --release --target $(TARGET) -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker
-
 # x86_64 production server build (home-lab box). Same workspace, no OpenSSL —
 # all crates pinned to rustls.
 build-x86_64:
 	cargo zigbuild --release --target $(SERVER_TARGET) -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker
-
-# OTel-enabled binary for Pi. Adds OTLP exporter dependency (~3 MB). Use
-# together with `make deploy-jaeger` and `[otel] enabled = true` in
-# hydeclaw.toml. Worker + watchdog stay on the default feature set —
-# they don't have hot paths worth tracing yet.
-build-arm64-otel:
-	cargo zigbuild --release --target $(TARGET) -p hydeclaw-core --features otel
-	cargo zigbuild --release --target $(TARGET) -p hydeclaw-watchdog -p hydeclaw-memory-worker
 
 ui:
 	cd ui && npm run build
 
 release:
 	bash release.sh --all
-
-# ── Deploy to Pi ─────────────────────────────────────────────────────────────
-
-deploy-binary: build-arm64
-	@for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do \
-		BIN=target/$(TARGET)/release/$$CRATE; \
-		if [ -f "$$BIN" ]; then \
-			scp $$BIN $(PI_HOST):$(PI_DIR)/$${CRATE}-aarch64.new && \
-			ssh $(PI_HOST) "mv -f $(PI_DIR)/$${CRATE}-aarch64.new $(PI_DIR)/$${CRATE}-aarch64" && \
-			echo "  deployed $$CRATE"; \
-		fi; \
-	done
-	ssh $(PI_HOST) "chmod +x $(PI_DIR)/hydeclaw-*-aarch64; for SVC in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
-
-# OTel-instrumented binary deploy. Pair with `make deploy-jaeger` and set
-# `[otel] enabled = true` in hydeclaw.toml on Pi. Core service must be
-# restarted with OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 (default).
-deploy-binary-otel: build-arm64-otel
-	@for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do \
-		BIN=target/$(TARGET)/release/$$CRATE; \
-		if [ -f "$$BIN" ]; then \
-			scp $$BIN $(PI_HOST):$(PI_DIR)/$${CRATE}-aarch64.new && \
-			ssh $(PI_HOST) "mv -f $(PI_DIR)/$${CRATE}-aarch64.new $(PI_DIR)/$${CRATE}-aarch64" && \
-			echo "  deployed $$CRATE (otel)"; \
-		fi; \
-	done
-	ssh $(PI_HOST) "chmod +x $(PI_DIR)/hydeclaw-*-aarch64; systemctl --user restart hydeclaw-core; echo '  restarted hydeclaw-core (otel build)'"
 
 # ── Remote-build deploy (canonical) ──────────────────────────────────────────
 # Build natively ON the server (i7-8700, 12T, 31GB) — no cross-toolchain.
@@ -143,10 +101,10 @@ remote-build:
 deploy-remote: remote-deploy
 
 # ── Legacy: local cross-compile + scp deploy ─────────────────────────────────
-# Production server (x86_64) deploy. Mirror of deploy-binary but with
-# SERVER_HOST/SERVER_DIR and x86_64 suffix. atomic mv works around the
-# mmap'd-binary scp overwrite issue (see fix(deploy) commit).
-# Prefer `make remote-deploy` for normal workflow.
+# x86_64 production server deploy: build locally + scp the binaries. atomic mv
+# works around the mmap'd-binary scp overwrite issue (see fix(deploy) commit).
+# Prefer `make remote-deploy` for the normal workflow; use this only when a
+# push-to-remote build is undesired or the server is busy.
 deploy-binary-server: build-x86_64
 	@for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do \
 		BIN=target/$(SERVER_TARGET)/release/$$CRATE; \
@@ -158,57 +116,8 @@ deploy-binary-server: build-x86_64
 	done
 	ssh $(SERVER_HOST) "chmod +x $(SERVER_DIR)/hydeclaw-*-x86_64; for SVC in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
 
-deploy-ui: ui
-	ssh $(PI_HOST) "rm -rf $(PI_DIR)/ui/out"
-	cd ui && tar cf - out | ssh $(PI_HOST) "mkdir -p $(PI_DIR)/ui && cd $(PI_DIR)/ui && tar xf -"
-
-deploy-migrations:
-	scp migrations/*.sql $(PI_HOST):$(PI_DIR)/migrations/
-
-# Channel formatting prompts — read at startup by `channels/src/formatting.ts`
-# to populate per-channel system-prompt augmentation. They live under
-# `workspace/` (which is intentionally a writable agent-state directory and
-# therefore not part of the binary deploy), but these specific files are
-# code-owned (tracked in git, edited by developers, not the agent). Sync
-# them on every `deploy` so the channels Bun process can find them.
-deploy-prompts:
-	ssh $(PI_HOST) "mkdir -p $(PI_DIR)/workspace/prompts/formatting"
-	scp workspace/prompts/formatting/*.md $(PI_HOST):$(PI_DIR)/workspace/prompts/formatting/
-
-deploy-docker:
-	@echo "Syncing docker/ source to Pi (excludes workspace files)..."
-	rsync -av --delete \
-		--exclude '__pycache__' --exclude '*.pyc' --exclude 'node_modules' \
-		docker/ $(PI_HOST):$(PI_DIR)/docker/
-	ssh $(PI_HOST) "cd $(PI_DIR)/docker && docker compose up -d --build"
-
-deploy: deploy-binary deploy-ui deploy-migrations deploy-prompts deploy-docker
-	@echo "Full deploy complete. Checking health..."
-	@sleep 5
-	@ssh $(PI_HOST) "curl -sf -H 'Authorization: Bearer $(AUTH)' http://localhost:18789/api/doctor | python3 -m json.tool"
-
-# ── Observability ────────────────────────────────────────────────────────────
-# `jaeger-up` boots Jaeger all-in-one on Pi (OTLP receiver + UI). Pair with
-# `make deploy-binary-otel` and `[otel] enabled = true` in hydeclaw.toml.
-# UI: ssh tunnel `ssh -L 16686:127.0.0.1:16686 $(PI_HOST)`, then open
-# http://localhost:16686.
-
-jaeger-up:
-	scp docker/docker-compose.observability.yml $(PI_HOST):$(PI_DIR)/docker/
-	ssh $(PI_HOST) "cd $(PI_DIR)/docker && docker compose -f docker-compose.observability.yml up -d"
-	@echo "Jaeger UI: ssh -L 16686:127.0.0.1:16686 $(PI_HOST)  →  http://localhost:16686"
-
-jaeger-down:
-	ssh $(PI_HOST) "cd $(PI_DIR)/docker && docker compose -f docker-compose.observability.yml down"
-
-# Convenience: full observability rollout — binary + jaeger + restart.
-deploy-jaeger: jaeger-up deploy-binary-otel
-	@echo "Observability deploy complete. Tail spans with jaeger UI."
-
-# ── Remote ───────────────────────────────────────────────────────────────────
-# Operational targets point at the live SERVER_HOST. The Pi is out of the
-# ecosystem (no longer deployed to), so these no longer reference PI_HOST —
-# pointing them at the dead Pi made `make doctor/logs/restart/status` useless.
+# ── Remote ops ───────────────────────────────────────────────────────────────
+# Operational targets run against the live SERVER_HOST.
 
 doctor:
 	@ssh $(SERVER_HOST) "curl -sf -H 'Authorization: Bearer $(AUTH)' http://localhost:18789/api/doctor | python3 -m json.tool"
