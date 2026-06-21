@@ -18,6 +18,19 @@ use crate::session_status::SessionStatus;
 /// `'complete'`) do NOT count toward the bind budget.
 pub const MAX_PARAMS_PER_QUERY: usize = 32767;
 
+/// Machine-readable tag prefixing every synthetic tool result written for a tool
+/// call interrupted before its result could be recorded (process restart or
+/// interactive cancel). The dispatcher (durable-resumption Phase 3) matches this
+/// prefix to require verify-before-redo for non-idempotent tools. Kept as the
+/// leading substring of [`INTERRUPTED_TOOL_RESULT`].
+pub const INTERRUPTED_VERIFY_TAG: &str = "[interrupted:verify]";
+
+/// Canonical synthetic body for an interrupted tool call. Single source of truth
+/// shared by the startup sweep, the per-id repair, and the read-path transcript
+/// repair so the tag and wording stay consistent. Cause-agnostic so it reads
+/// sensibly for both a process restart and an interactive cancel.
+pub const INTERRUPTED_TOOL_RESULT: &str = "[interrupted:verify] This tool call was interrupted before its result was recorded; it may or may not have completed its side effect (file write, message send, code execution, etc.). Verify the current state before repeating the action.";
+
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
@@ -1161,7 +1174,7 @@ pub async fn insert_synthetic_tool_results_tx(
             q = q
                 .bind(synthetic_id)
                 .bind(session_id)
-                .bind("[interrupted] Tool execution was interrupted (process restart). Result unavailable.")
+                .bind(INTERRUPTED_TOOL_RESULT)
                 .bind(*call_id);
         }
 
@@ -1188,7 +1201,7 @@ pub async fn insert_missing_tool_results(
         )
         .bind(synthetic_id)
         .bind(session_id)
-        .bind("[interrupted] Tool execution was interrupted (process restart). Result unavailable.")
+        .bind(INTERRUPTED_TOOL_RESULT)
         .bind(call_id)
         .execute(db)
         .await?;
