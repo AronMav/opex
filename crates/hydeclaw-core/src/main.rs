@@ -711,6 +711,18 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&cfg.gateway.listen).await?;
     tracing::info!(addr = %cfg.gateway.listen, "gateway listening");
 
+    // Durable re-drive of crashed autonomous cron goals — detached AFTER bind so
+    // a hung provider can never block the listener (R-LOOP-class outage). The
+    // startup sweep above (cleanup_interrupted_sessions) has already repaired the
+    // transcripts these drivers will replay.
+    {
+        let resume_state = state.clone();
+        let resume_db = db_pool.clone();
+        tokio::spawn(async move {
+            resume_autonomous_goals(resume_state, resume_db).await;
+        });
+    }
+
     // ── mDNS: advertise _hydeclaw._tcp.local. ──
     let _mdns_daemon = setup_mdns(&cfg);
 
@@ -835,6 +847,79 @@ async fn cleanup_interrupted_sessions(db_pool: &sqlx::PgPool) {
             }
         }
     }
+}
+
+/// Durable re-drive of crashed autonomous (cron) goal runs (durable-resumption
+/// Phase 1). MUST run detached AFTER the listener binds so a hung provider can
+/// never wedge the gateway bind (the R-LOOP outage class). For each crashed
+/// `origin='cron'` goal it resolves the owning engine, atomically claims it
+/// (`interrupted → running` + retry budget via `claim_redrive`), sets a backoff
+/// gate, and spawns the goal driver. Interactive `/goal` runs (`origin='goal'`)
+/// are never selected — `list_redrivable` enforces that scope boundary.
+async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
+    const STALENESS_SECS: i64 = 6 * 3600;
+    const MAX_RETRIES: i32 = 3;
+    const MAX_PER_BOOT: usize = 5;
+
+    if std::env::var("HYDECLAW_DISABLE_REDRIVE").is_ok() {
+        tracing::info!("autonomous goal re-drive disabled via HYDECLAW_DISABLE_REDRIVE");
+        return;
+    }
+
+    let redrivable = match crate::db::session_goals::list_redrivable(&db, STALENESS_SECS, MAX_RETRIES).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "resume_autonomous_goals: list_redrivable failed");
+            return;
+        }
+    };
+    if redrivable.is_empty() {
+        return;
+    }
+    let total = redrivable.len();
+    if total > MAX_PER_BOOT {
+        tracing::warn!(
+            total,
+            cap = MAX_PER_BOOT,
+            "more crashed cron goals than the per-boot cap; the remainder re-drive on a later boot"
+        );
+    }
+    tracing::info!(total, "resuming crashed autonomous cron goals");
+
+    let mut started = 0usize;
+    for rg in redrivable.into_iter().take(MAX_PER_BOOT) {
+        let Some(engine) = state.agents.get_engine(&rg.agent_id).await else {
+            tracing::warn!(session = %rg.session_id, agent = %rg.agent_id, "re-drive: agent engine not resolvable, skipping");
+            continue;
+        };
+        let Some(pool) = engine.cfg().goal_pool.clone() else {
+            continue;
+        };
+        if crate::agent::goal::pool::is_running(&pool, rg.session_id) {
+            continue; // a live driver already owns this session
+        }
+        match crate::db::sessions::claim_redrive(&db, rg.session_id, MAX_RETRIES).await {
+            Ok(Some(retry)) => {
+                // Exponential backoff so a crash-looping goal is not retried on every boot.
+                let backoff_secs = 60i64.saturating_mul(1i64 << (retry.clamp(0, 8) as u32));
+                if let Err(e) = crate::db::session_goals::set_next_redrive_at(&db, rg.session_id, backoff_secs).await {
+                    tracing::warn!(session = %rg.session_id, error = %e, "re-drive: set_next_redrive_at failed");
+                }
+                // GoalTarget None → ui_event delivery; channel-target resolution is a follow-up slice.
+                let handle = crate::agent::goal::driver::spawn_goal_driver(engine.clone(), rg.session_id, None);
+                pool.insert(rg.session_id, handle);
+                started += 1;
+                tracing::info!(session = %rg.session_id, agent = %rg.agent_id, retry, "autonomous goal re-drive started");
+            }
+            Ok(None) => {
+                tracing::debug!(session = %rg.session_id, "re-drive: claim skipped (raced or budget exhausted)");
+            }
+            Err(e) => {
+                tracing::warn!(session = %rg.session_id, error = %e, "re-drive: claim_redrive failed");
+            }
+        }
+    }
+    tracing::info!(started, "autonomous goal re-drive sweep complete");
 }
 
 /// Load HYDECLAW_MASTER_KEY from environment or auto-generate and save to .env.

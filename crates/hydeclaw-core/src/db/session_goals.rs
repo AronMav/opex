@@ -115,7 +115,6 @@ pub async fn clear(db: &PgPool, session_id: Uuid) -> Result<()> {
 
 /// A crashed autonomous (cron) goal eligible for re-drive on startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)] // consumed by resume_autonomous_goals() — wired in the next Phase-1 slice
 pub struct RedrivableGoal {
     pub session_id: Uuid,
     pub agent_id: String,
@@ -129,7 +128,6 @@ pub struct RedrivableGoal {
 /// CRITICAL scope boundary: `origin='cron' AND run_status='interrupted'` ensures
 /// a `/goal` attached to a live interactive chat session (`origin='goal'`) is
 /// NEVER selected — it must not be auto-continued into a human's conversation.
-#[allow(dead_code)] // consumed by resume_autonomous_goals() — wired in the next Phase-1 slice
 pub async fn list_redrivable(
     db: &PgPool,
     staleness_secs: i64,
@@ -155,6 +153,21 @@ pub async fn list_redrivable(
         .into_iter()
         .map(|(session_id, agent_id)| RedrivableGoal { session_id, agent_id })
         .collect())
+}
+
+/// Set the resumer backoff gate: this goal will not be re-driven again until
+/// `secs` from now. Applied after each re-drive attempt so a crash-looping goal
+/// backs off instead of being retried on every boot.
+pub async fn set_next_redrive_at(db: &PgPool, session_id: Uuid, secs: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE session_goals SET next_redrive_at = now() + ($2 * interval '1 second'), updated_at = now()
+         WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .bind(secs)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -272,6 +285,37 @@ mod tests {
         let ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
         assert_eq!(ids, vec![want], "only the crashed cron goal within budget+window is redrivable");
         assert_eq!(got[0].agent_id, "Agent");
+        Ok(())
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn set_next_redrive_at_gates_list_redrivable(pool: PgPool) -> sqlx::Result<()> {
+        let sid = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, run_status, retry_count, last_message_at)
+             VALUES ($1, 'Agent', 'u', 'CRON', 'interrupted', 0, now())",
+        )
+        .bind(sid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO session_goals (session_id, goal_text, status, origin) VALUES ($1, 'g', 'active', 'cron')",
+        )
+        .bind(sid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Eligible before any backoff gate.
+        assert_eq!(list_redrivable(&pool, 21_600, 3).await.unwrap().len(), 1, "eligible before backoff");
+
+        // After a future backoff gate, the resumer must skip it.
+        set_next_redrive_at(&pool, sid, 3_600).await.unwrap();
+        assert!(
+            list_redrivable(&pool, 21_600, 3).await.unwrap().is_empty(),
+            "future next_redrive_at gates the row out of the redrivable set"
+        );
         Ok(())
     }
 }
