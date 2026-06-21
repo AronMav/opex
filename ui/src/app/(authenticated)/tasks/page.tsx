@@ -35,7 +35,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { useAuthStore } from "@/stores/auth-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
@@ -339,7 +338,7 @@ export default function CronPage() {
               {editId ? t("cron.editing_task") : t("cron.new_task_dialog")}
             </DialogTitle>
           </DialogHeader>
-          <ScrollArea className="max-h-[60vh] sm:max-h-[70vh]">
+          <div className="max-h-[60vh] sm:max-h-[70vh] overflow-y-auto overscroll-contain">
           <div className="p-6 space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label={t("cron.field_name")}>
@@ -495,7 +494,7 @@ export default function CronPage() {
               </CollapsibleContent>
             </Collapsible>
           </div>
-          </ScrollArea>
+          </div>
           <DialogFooter className="p-6 border-t border-border/50 gap-3">
             <Button variant="ghost" onClick={() => setFormOpen(false)}>{t("common.cancel")}</Button>
             <Button onClick={saveJob} disabled={mutating || !form.name.trim() || (!form.run_once && (!form.cron.trim() || !isValidCron(form.cron))) || (form.run_once && !form.run_at)}>

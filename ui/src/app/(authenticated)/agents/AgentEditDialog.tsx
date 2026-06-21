@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { CronSchedulePicker } from "@/components/ui/cron-schedule-picker";
 import { Field } from "@/components/ui/field";
 import {
@@ -237,7 +236,7 @@ export function AgentEditDialog({
         </DialogHeader>
         <div className="border-t border-border bg-muted/5" />
 
-        <ScrollArea className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           <div className="px-5 py-3"><div className="grid">
 
             {/* ── General tab ── */}
@@ -722,7 +721,7 @@ export function AgentEditDialog({
             </div>
 
           </div></div>
-        </ScrollArea>
+        </div>
 
         <DialogFooter className="px-5 py-3 border-t border-border bg-muted/20">
           <div className="flex gap-3 w-full justify-end">
