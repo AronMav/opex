@@ -474,62 +474,32 @@ impl ContextBuilder for DefaultContextBuilder {
             messages.push(crate::agent::engine::row_to_message(row));
         }
 
-        // Transcript repair — differential append scoped to last dangling assistant (ENG-01)
-        if let Some(last_idx) = messages.iter().rposition(|m| {
-            m.role == hydeclaw_types::MessageRole::Assistant
-                && m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty())
-        }) {
-            let has_results = messages[last_idx + 1..]
-                .iter()
-                .any(|m| m.role == hydeclaw_types::MessageRole::Tool);
-            if !has_results {
-                let all_call_ids: Vec<hydeclaw_types::ids::ToolCallId> = messages[last_idx]
-                    .tool_calls
-                    .as_ref()
-                    .map(|tcs| tcs.iter().map(|tc| tc.id.clone()).collect())
-                    .unwrap_or_default();
+        // FIX H4: drop orphan tool results (a committed result whose parent
+        // assistant row was lost in a crash — the two are persisted by
+        // independent detached tasks) before any other repair, so the provider
+        // never sees a tool message with no declaring assistant call.
+        drop_orphan_tool_results(&mut messages);
 
-                let existing_ids: std::collections::HashSet<&str> = messages[last_idx + 1..]
-                    .iter()
-                    .filter(|m| m.role == hydeclaw_types::MessageRole::Tool)
-                    .filter_map(|m| m.tool_call_id.as_ref().map(|id| id.as_str()))
-                    .collect();
-                let missing_ids: Vec<hydeclaw_types::ids::ToolCallId> = all_call_ids
-                    .into_iter()
-                    .filter(|id| !existing_ids.contains(id.as_str()))
-                    .collect();
-
-                if !missing_ids.is_empty() {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        count = missing_ids.len(),
-                        "dangling tool calls detected — inserting synthetic results"
-                    );
-
-                    // Persist via the DB layer using owned String form — the DB
-                    // layer keeps Option<String> at the row boundary.
-                    let missing_ids_str: Vec<String> = missing_ids
-                        .iter()
-                        .map(|id| id.as_str().to_string())
-                        .collect();
-                    if let Err(e) = deps
-                        .session_insert_missing_tool_results(session_id, &missing_ids_str)
-                        .await
-                    {
-                        tracing::warn!(error = %e, "failed to insert synthetic tool results");
-                    }
-
-                    for call_id in missing_ids {
-                        messages.push(hydeclaw_types::Message {
-                            role: hydeclaw_types::MessageRole::Tool,
-                            content: "[interrupted] Tool execution was interrupted (process restart). Result unavailable.".to_string(),
-                            tool_calls: None,
-                            tool_call_id: Some(call_id),
-                            thinking_blocks: vec![],
-            db_id: None,
-                        });
-                    }
-                }
+        // Transcript repair — differential append scoped to the last dangling
+        // assistant block (ENG-01). FIX C3: `repair_dangling_tool_calls` diffs
+        // every tool_call_id, so PARTIAL parallel batches (some sibling results
+        // committed, one orphaned by a crash) are also repaired — a previous
+        // `has_results` gate skipped repair whenever any sibling result existed,
+        // leaving the orphan dangling and risking a re-issued non-idempotent tool.
+        let missing_tool_results = repair_dangling_tool_calls(&mut messages);
+        if !missing_tool_results.is_empty() {
+            tracing::warn!(
+                session_id = %session_id,
+                count = missing_tool_results.len(),
+                "dangling tool calls detected — inserting synthetic results"
+            );
+            // Persist via the DB layer using owned String form — the DB layer
+            // keeps Option<String> at the row boundary.
+            if let Err(e) = deps
+                .session_insert_missing_tool_results(session_id, &missing_tool_results)
+                .await
+            {
+                tracing::warn!(error = %e, "failed to insert synthetic tool results");
             }
         }
 
@@ -793,6 +763,99 @@ fn prune_old_tool_outputs(messages: &[hydeclaw_types::Message], keep_turns: usiz
         .collect()
 }
 
+/// Repair a dangling assistant-with-tool-calls block by synthesising
+/// `[interrupted:verify]` tool results for tool calls that have no matching result.
+///
+/// Operates on the LAST assistant-with-tool-calls block; appends synthetic `Tool`
+/// messages in place and returns the synthesised `tool_call_id`s (owned) so the
+/// caller can persist them via the DB layer.
+fn repair_dangling_tool_calls(messages: &mut Vec<hydeclaw_types::Message>) -> Vec<String> {
+    use hydeclaw_types::MessageRole;
+    let Some(last_idx) = messages.iter().rposition(|m| {
+        m.role == MessageRole::Assistant
+            && m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty())
+    }) else {
+        return Vec::new();
+    };
+
+    // FIX C3: diff EVERY tool_call_id unconditionally. The previous
+    // `if !has_results` gate skipped repair whenever any sibling result existed,
+    // so a partially-persisted parallel batch (some results committed, one
+    // orphaned by a crash) left the orphan dangling. When all results are
+    // present, `missing_ids` is empty and this is a no-op (hot path unaffected).
+    let all_call_ids: Vec<hydeclaw_types::ids::ToolCallId> = messages[last_idx]
+        .tool_calls
+        .as_ref()
+        .map(|tcs| tcs.iter().map(|tc| tc.id.clone()).collect())
+        .unwrap_or_default();
+
+    let existing_ids: std::collections::HashSet<&str> = messages[last_idx + 1..]
+        .iter()
+        .filter(|m| m.role == MessageRole::Tool)
+        .filter_map(|m| m.tool_call_id.as_ref().map(|id| id.as_str()))
+        .collect();
+
+    let missing_ids: Vec<hydeclaw_types::ids::ToolCallId> = all_call_ids
+        .into_iter()
+        .filter(|id| !existing_ids.contains(id.as_str()))
+        .collect();
+
+    if missing_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let missing_ids_str: Vec<String> =
+        missing_ids.iter().map(|id| id.as_str().to_string()).collect();
+
+    for call_id in missing_ids {
+        messages.push(hydeclaw_types::Message {
+            role: MessageRole::Tool,
+            content: crate::db::sessions::INTERRUPTED_TOOL_RESULT.to_string(),
+            tool_calls: None,
+            tool_call_id: Some(call_id),
+            thinking_blocks: vec![],
+            db_id: None,
+        });
+    }
+
+    missing_ids_str
+}
+
+/// Drop tool-result messages whose `tool_call_id` is declared by NO assistant
+/// message. Mirror of [`repair_dangling_tool_calls`] (which handles the opposite:
+/// a declared call with no result).
+///
+/// FIX H4: the assistant-with-tool-calls row and each tool result are persisted
+/// by independent detached tasks (deliberately, to survive parent-task
+/// cancellation — see `pipeline::execute`). A crash can commit a tool-result row
+/// while losing its parent assistant row. On reload such an "orphan" result has
+/// no matching assistant `tool_call`, which makes the provider reject the whole
+/// turn (e.g. 400). Removing it on the read path keeps the transcript valid
+/// without changing the cancellation-safe detached persistence.
+fn drop_orphan_tool_results(messages: &mut Vec<hydeclaw_types::Message>) {
+    use hydeclaw_types::MessageRole;
+    // Every tool_call_id declared by any assistant message. Owned String set so
+    // the immutable borrow is released before the mutable `retain` below.
+    let declared: std::collections::HashSet<String> = messages
+        .iter()
+        .filter(|m| m.role == MessageRole::Assistant)
+        .filter_map(|m| m.tool_calls.as_ref())
+        .flat_map(|tcs| tcs.iter().map(|tc| tc.id.as_str().to_string()))
+        .collect();
+
+    messages.retain(|m| {
+        if m.role != MessageRole::Tool {
+            return true;
+        }
+        // A tool result is valid only if some assistant declared its call id.
+        // Tool messages without an id are left untouched (not this fix's concern).
+        match m.tool_call_id.as_ref() {
+            Some(id) => declared.contains(id.as_str()),
+            None => true,
+        }
+    });
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -800,6 +863,205 @@ mod tests {
     use super::mock::MockContextBuilder;
     use super::*;
     use chrono::Utc;
+
+    // ── FIX C3: dangling tool-call repair (partial parallel batches) ──
+
+    fn dangling_tool_call(id: &str) -> hydeclaw_types::ToolCall {
+        hydeclaw_types::ToolCall {
+            id: hydeclaw_types::ids::ToolCallId::new(id),
+            name: "noop".to_string(),
+            arguments: serde_json::json!({}),
+            thought_signature: None,
+        }
+    }
+
+    fn repair_msg(
+        role: hydeclaw_types::MessageRole,
+        tool_call_id: Option<&str>,
+        tool_calls: Option<Vec<hydeclaw_types::ToolCall>>,
+    ) -> Message {
+        Message {
+            role,
+            content: String::new(),
+            tool_calls,
+            tool_call_id: tool_call_id.map(hydeclaw_types::ids::ToolCallId::new),
+            thinking_blocks: vec![],
+            db_id: None,
+        }
+    }
+
+    fn tool_result_count(messages: &[Message]) -> usize {
+        messages
+            .iter()
+            .filter(|m| m.role == hydeclaw_types::MessageRole::Tool)
+            .count()
+    }
+
+    #[test]
+    fn repair_dangling_tool_calls_repairs_partial_parallel_batch() {
+        // Assistant emitted a 3-call parallel batch [A,B,C]; results for A and B
+        // committed before a crash, C orphaned. The repair must synthesise ONLY C.
+        let mut messages = vec![
+            repair_msg(hydeclaw_types::MessageRole::User, None, None),
+            repair_msg(
+                hydeclaw_types::MessageRole::Assistant,
+                None,
+                Some(vec![
+                    dangling_tool_call("A"),
+                    dangling_tool_call("B"),
+                    dangling_tool_call("C"),
+                ]),
+            ),
+            repair_msg(hydeclaw_types::MessageRole::Tool, Some("A"), None),
+            repair_msg(hydeclaw_types::MessageRole::Tool, Some("B"), None),
+        ];
+
+        let repaired = repair_dangling_tool_calls(&mut messages);
+
+        assert_eq!(
+            repaired,
+            vec!["C".to_string()],
+            "only the orphaned call C should be synthesised"
+        );
+        let c_results = messages
+            .iter()
+            .filter(|m| {
+                m.role == hydeclaw_types::MessageRole::Tool
+                    && m.tool_call_id.as_ref().map(|i| i.as_str()) == Some("C")
+            })
+            .count();
+        assert_eq!(c_results, 1, "orphaned tool_call C must get exactly one synthetic result");
+        assert_eq!(
+            tool_result_count(&messages),
+            3,
+            "A + B (real) + C (synthetic) = 3 tool results, no duplicates"
+        );
+    }
+
+    #[test]
+    fn repair_dangling_tool_calls_noop_when_all_committed() {
+        // Hot path: every tool_call already has a result → no synthetic rows.
+        let mut messages = vec![
+            repair_msg(hydeclaw_types::MessageRole::User, None, None),
+            repair_msg(
+                hydeclaw_types::MessageRole::Assistant,
+                None,
+                Some(vec![dangling_tool_call("A"), dangling_tool_call("B")]),
+            ),
+            repair_msg(hydeclaw_types::MessageRole::Tool, Some("A"), None),
+            repair_msg(hydeclaw_types::MessageRole::Tool, Some("B"), None),
+        ];
+
+        let repaired = repair_dangling_tool_calls(&mut messages);
+
+        assert!(repaired.is_empty(), "no synthetic results when every call has a result");
+        assert_eq!(
+            tool_result_count(&messages),
+            2,
+            "hot path must not add or duplicate tool results"
+        );
+    }
+
+    #[test]
+    fn repair_dangling_tool_calls_repairs_full_dangling_batch() {
+        // Original case (zero committed results) must still repair every call.
+        let mut messages = vec![
+            repair_msg(hydeclaw_types::MessageRole::User, None, None),
+            repair_msg(
+                hydeclaw_types::MessageRole::Assistant,
+                None,
+                Some(vec![dangling_tool_call("A"), dangling_tool_call("B")]),
+            ),
+        ];
+
+        let mut repaired = repair_dangling_tool_calls(&mut messages);
+        repaired.sort();
+
+        assert_eq!(
+            repaired,
+            vec!["A".to_string(), "B".to_string()],
+            "all dangling calls synthesised when no results exist"
+        );
+        assert_eq!(tool_result_count(&messages), 2);
+    }
+
+    fn tool_result_ids(messages: &[Message]) -> Vec<&str> {
+        messages
+            .iter()
+            .filter(|m| m.role == hydeclaw_types::MessageRole::Tool)
+            .filter_map(|m| m.tool_call_id.as_ref().map(|i| i.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn drop_orphan_tool_results_removes_result_with_no_declaring_assistant() {
+        // A crash committed a tool result for "Z" but lost its parent assistant
+        // row. The orphan ("Z" declared by no assistant) must be dropped while
+        // the properly-declared result "A" is kept. (FIX H4 — mirror of C3.)
+        let mut messages = vec![
+            repair_msg(hydeclaw_types::MessageRole::User, None, None),
+            repair_msg(
+                hydeclaw_types::MessageRole::Assistant,
+                None,
+                Some(vec![dangling_tool_call("A")]),
+            ),
+            repair_msg(hydeclaw_types::MessageRole::Tool, Some("A"), None),
+            repair_msg(hydeclaw_types::MessageRole::Tool, Some("Z"), None),
+        ];
+
+        drop_orphan_tool_results(&mut messages);
+
+        assert_eq!(
+            tool_result_ids(&messages),
+            vec!["A"],
+            "orphan result Z (no declaring assistant) dropped, declared result A kept"
+        );
+    }
+
+    #[test]
+    fn drop_orphan_tool_results_keeps_all_declared() {
+        // Hot path: every tool result has a declaring assistant → nothing dropped.
+        let mut messages = vec![
+            repair_msg(
+                hydeclaw_types::MessageRole::Assistant,
+                None,
+                Some(vec![dangling_tool_call("A"), dangling_tool_call("B")]),
+            ),
+            repair_msg(hydeclaw_types::MessageRole::Tool, Some("A"), None),
+            repair_msg(hydeclaw_types::MessageRole::Tool, Some("B"), None),
+        ];
+
+        drop_orphan_tool_results(&mut messages);
+
+        assert_eq!(tool_result_ids(&messages), vec!["A", "B"], "declared results untouched");
+    }
+
+    #[test]
+    fn repair_dangling_synthetic_text_carries_verify_tag() {
+        // The synthetic result must carry the machine-readable [interrupted:verify]
+        // prefix so the dispatcher (Phase 3) can require verify-before-redo for
+        // non-idempotent tools. (Phase 0 tagging)
+        let mut messages = vec![repair_msg(
+            hydeclaw_types::MessageRole::Assistant,
+            None,
+            Some(vec![dangling_tool_call("A")]),
+        )];
+
+        repair_dangling_tool_calls(&mut messages);
+
+        let synthetic = messages
+            .iter()
+            .find(|m| {
+                m.role == hydeclaw_types::MessageRole::Tool
+                    && m.tool_call_id.as_ref().map(|i| i.as_str()) == Some("A")
+            })
+            .expect("synthetic result for A");
+        assert!(
+            synthetic.content.starts_with("[interrupted:verify]"),
+            "synthetic text must carry the [interrupted:verify] machine-tag, got: {}",
+            synthetic.content
+        );
+    }
 
     fn make_incoming_message() -> IncomingMessage {
         IncomingMessage {
