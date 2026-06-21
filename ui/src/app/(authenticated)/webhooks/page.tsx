@@ -404,7 +404,7 @@ export default function WebhooksPage() {
 
       {/* Secret reveal dialog */}
       <Dialog open={!!createdSecret} onOpenChange={(o) => { if (!o) setCreatedSecret(null); }}>
-        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-lg">
+        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-lg max-h-[90vh] overflow-y-auto overscroll-contain">
           <DialogHeader className="p-6 border-b border-border/50">
             <DialogTitle className="text-base font-bold text-foreground">
               {t("webhooks.secret_created_title")}

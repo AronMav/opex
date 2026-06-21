@@ -348,7 +348,7 @@ export default function SecretsPage() {
 
       {/* Reveal secret dialog */}
       <Dialog open={!!revealedSecret} onOpenChange={(o) => { if (!o) setRevealedSecret(null); }}>
-        <DialogContent className="rounded-xl border-border bg-card max-w-[95vw] sm:max-w-md">
+        <DialogContent className="rounded-xl border-border bg-card max-w-[95vw] sm:max-w-md max-h-[90vh] overflow-y-auto overscroll-contain">
           <DialogHeader>
             <DialogTitle className="text-base font-bold text-foreground">{t("secrets.reveal_title")}</DialogTitle>
             <p className="text-sm text-muted-foreground mt-1">{revealedSecret?.name}</p>

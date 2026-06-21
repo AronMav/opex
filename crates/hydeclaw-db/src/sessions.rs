@@ -1184,15 +1184,41 @@ pub async fn insert_missing_tool_results(
 /// Also handles old sessions with orphaned streaming messages (no `run_status` set).
 /// Returns count so caller can loop in batches.
 pub async fn cleanup_interrupted_sessions(db: &PgPool) -> Result<usize> {
-    // Find sessions that were 'running' when the process died (batched)
+    // Step 0 (R-LOOP fix): repair orphaned `status='streaming'` rows that belong
+    // to sessions which are NOT 'running' (terminal `done`/`failed`/… or NULL).
+    //
+    // The per-session repair below uses `cleanup_session_terminated`, whose
+    // step-1 claim is `WHERE run_status = 'running'`. For a session that is
+    // already terminal yet still carries a leftover streaming row (e.g. the SSE
+    // converter was killed after the engine's `guard.done()` but before
+    // `finalize_streaming_message` deleted the placeholder), that claim matches
+    // 0 rows and rolls back — the streaming row is never cleared. Such a row
+    // keeps matching the batch SELECT every iteration, so the main.rs wrapper
+    // loops forever and the gateway never binds its listener (total outage).
+    //
+    // Clearing these rows directly here (idempotent — they become 'interrupted'
+    // so they stop matching) guarantees the batch loop converges. `IS DISTINCT
+    // FROM 'running'` also covers NULL run_status (old pre-run_status rows).
+    if let Err(e) = sqlx::query(
+        "UPDATE messages SET status = 'interrupted',
+                content = COALESCE(NULLIF(content, ''), '[interrupted]')
+         WHERE status = 'streaming'
+           AND session_id IN (
+               SELECT id FROM sessions WHERE run_status IS DISTINCT FROM 'running'
+           )"
+    )
+    .execute(db)
+    .await
+    {
+        tracing::warn!(error = %e, "failed to repair orphaned streaming rows on terminal sessions");
+    }
+
+    // Find sessions that were 'running' when the process died (batched). After
+    // step 0, the only sessions still carrying a 'streaming' row are 'running'
+    // ones, so this single predicate covers both shapes the old `OR EXISTS`
+    // clause did — without re-matching terminal sessions forever.
     let interrupted = sqlx::query_scalar::<_, Uuid>(
-        "SELECT DISTINCT s.id FROM sessions s
-         WHERE s.run_status = 'running'
-            OR EXISTS (
-                SELECT 1 FROM messages m
-                WHERE m.session_id = s.id AND m.status = 'streaming'
-            )
-         LIMIT 100"
+        "SELECT id FROM sessions WHERE run_status = 'running' LIMIT 100"
     )
     .fetch_all(db)
     .await?;
@@ -2292,6 +2318,60 @@ mod tests {
             "SELECT event_type FROM session_timeline WHERE session_id = $1 ORDER BY id DESC LIMIT 1"
         ).bind(s).fetch_one(&pool).await.unwrap();
         assert_eq!(event_type, "interrupted");
+    }
+
+    /// R-LOOP regression: a TERMINAL session ('done'/'failed') that still
+    /// carries an orphaned `status='streaming'` message must NOT cause
+    /// `cleanup_interrupted_sessions` to keep returning a non-zero count
+    /// forever (the startup infinite-loop that prevented the gateway from
+    /// booting). The streaming row is repaired to 'interrupted' and the
+    /// second call returns 0.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn cleanup_interrupted_sessions_converges_on_terminal_streaming_leftover(
+        pool: sqlx::PgPool,
+    ) {
+        let s = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+        // Simulate the catastrophic state: session is already terminal ('done')
+        // but a streaming placeholder leaked (converter killed before delete).
+        super::set_session_run_status(&pool, s, "done").await.unwrap();
+        sqlx::query(
+            "INSERT INTO messages (session_id, role, content, status)
+             VALUES ($1, 'assistant', 'leftover', 'streaming')",
+        )
+        .bind(s)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // First sweep repairs the orphan streaming row (step 0). It returns 0
+        // because the session is NOT 'running' (the only batch-counted shape).
+        let first = super::cleanup_interrupted_sessions(&pool).await.unwrap();
+
+        // The streaming row must have been cleared so it stops matching.
+        let leftover: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages WHERE session_id = $1 AND status = 'streaming'",
+        )
+        .bind(s)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(leftover, 0, "orphan streaming row must be repaired, not left to loop");
+
+        // Session status must NOT be clobbered back to running/interrupted —
+        // a 'done' session stays 'done'.
+        let status: String = sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+            .bind(s)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "done", "terminal status preserved");
+
+        // Convergence: a subsequent sweep finds nothing (loop would terminate).
+        let second = super::cleanup_interrupted_sessions(&pool).await.unwrap();
+        assert_eq!(second, 0, "second sweep returns 0 — startup loop converges");
+        // First sweep also returned 0 (no 'running' sessions), proving the
+        // batch loop in main.rs breaks immediately instead of spinning.
+        assert_eq!(first, 0);
     }
 }
 
