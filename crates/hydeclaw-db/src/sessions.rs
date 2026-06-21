@@ -1035,6 +1035,28 @@ pub async fn increment_retry_count(db: &PgPool, session_id: Uuid) -> Result<Opti
     Ok(row.map(|(c,)| c))
 }
 
+/// Atomically claim a crashed autonomous (cron) session for re-drive: flip
+/// `interrupted` → `running` AND charge one retry, enforcing the budget in the
+/// SAME statement. Returns the new `retry_count` on success, or `None` when
+/// another worker already claimed it (status no longer `interrupted`) or the
+/// budget is exhausted (`retry_count >= max_retries`). This single-statement
+/// claim is the per-session mutual exclusion for the startup resumer.
+///
+/// Mirror of [`increment_retry_count`] for the re-drive case — that one matches
+/// only `running`/`done`, so it cannot claim an interrupted session.
+pub async fn claim_redrive(db: &PgPool, session_id: Uuid, max_retries: i32) -> Result<Option<i32>> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        "UPDATE sessions SET retry_count = retry_count + 1, run_status = 'running' \
+         WHERE id = $1 AND run_status = 'interrupted' AND retry_count < $2 \
+         RETURNING retry_count",
+    )
+    .bind(session_id)
+    .bind(max_retries)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(c,)| c))
+}
+
 /// Mark a session as permanently failed after max retries exhausted.
 pub async fn mark_session_failed(db: &PgPool, session_id: Uuid) -> Result<()> {
     sqlx::query("UPDATE sessions SET run_status = 'failed' WHERE id = $1")
@@ -2199,6 +2221,38 @@ mod tests {
             "SELECT COUNT(*) FROM messages WHERE session_id = $1 AND role = 'tool'"
         ).bind(session_id).fetch_one(&pool).await.unwrap();
         assert_eq!(count, 0, "rollback must discard synthetic results");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn claim_redrive_flips_interrupted_to_running_and_charges_retry(pool: sqlx::PgPool) {
+        let sid = super::create_new_session(&pool, "a", "u", "CRON").await.unwrap();
+        super::set_session_run_status(&pool, sid, "interrupted").await.unwrap();
+
+        let got = super::claim_redrive(&pool, sid, 3).await.unwrap();
+        assert_eq!(got, Some(1), "first claim flips status and charges retry 1");
+
+        let status: String = sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "running", "claim flips interrupted -> running");
+
+        // A now-running session can no longer be claimed (single-claim guarantee).
+        let again = super::claim_redrive(&pool, sid, 3).await.unwrap();
+        assert_eq!(again, None, "a running session cannot be re-claimed for re-drive");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn claim_redrive_respects_budget(pool: sqlx::PgPool) {
+        let sid = super::create_new_session(&pool, "a", "u", "CRON").await.unwrap();
+        super::set_session_run_status(&pool, sid, "interrupted").await.unwrap();
+        sqlx::query("UPDATE sessions SET retry_count = 3 WHERE id = $1")
+            .bind(sid).execute(&pool).await.unwrap();
+
+        let got = super::claim_redrive(&pool, sid, 3).await.unwrap();
+        assert_eq!(got, None, "budget exhausted (retry_count >= max_retries) -> no claim");
+
+        let status: String = sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "interrupted", "exhausted claim leaves status untouched");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
