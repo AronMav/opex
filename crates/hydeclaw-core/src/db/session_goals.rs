@@ -159,14 +159,17 @@ pub struct RedrivableGoal {
     pub agent_id: String,
 }
 
-/// List autonomous (origin='cron') goals whose owning session was interrupted by
-/// a crash and is eligible for re-drive: still `active`, within the retry budget
+/// List autonomous (origin='cron') goals whose owning session crashed and is
+/// eligible for re-drive: still `active`, within the retry budget
 /// (`retry_count < max_retries`), past any backoff gate, and newer than
 /// `staleness_secs`.
 ///
-/// CRITICAL scope boundary: `origin='cron' AND run_status='interrupted'` ensures
-/// a `/goal` attached to a live interactive chat session (`origin='goal'`) is
-/// NEVER selected — it must not be auto-continued into a human's conversation.
+/// `run_status IN ('interrupted','done')` covers BOTH crash shapes for a cron
+/// goal: `interrupted` = crashed mid-turn; `done` = crashed BETWEEN turns (the
+/// last turn finalized, but the in-memory driver was lost). The `origin='cron'`
+/// filter keeps this safe — a `/goal` on a live interactive session
+/// (`origin='goal'`) is NEVER selected, so a human's `done` chat is never
+/// auto-continued.
 pub async fn list_redrivable(
     db: &PgPool,
     staleness_secs: i64,
@@ -178,7 +181,7 @@ pub async fn list_redrivable(
          JOIN sessions s ON s.id = g.session_id
          WHERE g.status = 'active'
            AND g.origin = 'cron'
-           AND s.run_status = 'interrupted'
+           AND s.run_status IN ('interrupted', 'done')
            AND s.retry_count < $2
            AND (g.next_redrive_at IS NULL OR g.next_redrive_at <= now())
            AND s.last_message_at > now() - ($1 * interval '1 second')
@@ -314,16 +317,21 @@ mod tests {
             sid
         }
 
-        let want = seed(&pool, "interrupted", "cron", 0, 60).await; // eligible
+        let want_interrupted = seed(&pool, "interrupted", "cron", 0, 60).await; // mid-turn crash
+        let want_done = seed(&pool, "done", "cron", 0, 60).await; // crashed BETWEEN turns (driver lost)
         let _interactive = seed(&pool, "interrupted", "goal", 0, 60).await; // origin=goal → excluded
-        let _done = seed(&pool, "done", "cron", 0, 60).await; // not crashed → excluded
         let _exhausted = seed(&pool, "interrupted", "cron", 3, 60).await; // retry_count >= max → excluded
         let _stale = seed(&pool, "interrupted", "cron", 0, 100_000).await; // older than window → excluded
 
         let got = list_redrivable(&pool, 21_600, 3).await.unwrap(); // 6h window, max_retries = 3
-        let ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
-        assert_eq!(ids, vec![want], "only the crashed cron goal within budget+window is redrivable");
-        assert_eq!(got[0].agent_id, "Agent");
+        let mut ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
+        ids.sort();
+        let mut expected = vec![want_interrupted, want_done];
+        expected.sort();
+        assert_eq!(
+            ids, expected,
+            "both interrupted (mid-turn) and done (between-turns) cron goals are redrivable"
+        );
         Ok(())
     }
 
