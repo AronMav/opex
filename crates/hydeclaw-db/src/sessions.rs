@@ -1047,7 +1047,7 @@ pub async fn increment_retry_count(db: &PgPool, session_id: Uuid) -> Result<Opti
 pub async fn claim_redrive(db: &PgPool, session_id: Uuid, max_retries: i32) -> Result<Option<i32>> {
     let row: Option<(i32,)> = sqlx::query_as(
         "UPDATE sessions SET retry_count = retry_count + 1, run_status = 'running' \
-         WHERE id = $1 AND run_status = 'interrupted' AND retry_count < $2 \
+         WHERE id = $1 AND run_status IN ('interrupted', 'done') AND retry_count < $2 \
          RETURNING retry_count",
     )
     .bind(session_id)
@@ -2238,6 +2238,22 @@ mod tests {
         // A now-running session can no longer be claimed (single-claim guarantee).
         let again = super::claim_redrive(&pool, sid, 3).await.unwrap();
         assert_eq!(again, None, "a running session cannot be re-claimed for re-drive");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn claim_redrive_also_claims_done_session(pool: sqlx::PgPool) {
+        // A cron goal that crashed BETWEEN turns leaves the session 'done' (the
+        // last turn finalized) while the goal is still active — the in-memory
+        // driver is lost. Re-drive must claim it, not only 'interrupted' ones.
+        let sid = super::create_new_session(&pool, "a", "u", "CRON").await.unwrap();
+        super::set_session_run_status(&pool, sid, "done").await.unwrap();
+
+        let got = super::claim_redrive(&pool, sid, 3).await.unwrap();
+        assert_eq!(got, Some(1), "a 'done' cron session (driver lost between turns) is claimable");
+
+        let status: String = sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(status, "running", "claim flips done -> running");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
