@@ -29,7 +29,7 @@ cd channels && bun test
 ## Deploy
 
 **Canonical workflow (since 2026-06-18): build on the production server.**
-HydeClaw runs on `aronmav@188.246.224.118` (x86_64, i7-8700 / 12T / 31GB). Source tree is cloned at `~/hydeclaw-src` on the server. The Pi is retired (kept as cold rollback). Configure both hosts in `.deploy.env` (`SERVER_HOST`, `SERVER_DIR`, optional legacy `PI_HOST`).
+HydeClaw runs on `aronmav@188.246.224.118` (x86_64, i7-8700 / 12T / 31GB). Source tree is cloned at `~/hydeclaw-src` on the server. The Pi is out of the ecosystem (no longer deployed to); all Pi-specific make targets / `PI_HOST` config were removed. Configure the server in `.deploy.env` (`SERVER_HOST`, `SERVER_DIR`).
 
 ```bash
 make remote-deploy      # git pull on server → cargo build --release → atomic swap + restart
@@ -52,11 +52,8 @@ Build time on the server: ~2m 50s cold, ~10–60s incremental.
 Use only when push to remote is undesired or the server is busy.
 
 ```bash
-make build-arm64               # cargo zigbuild --target aarch64-unknown-linux-gnu (Pi rollback)
 make build-x86_64              # cargo zigbuild --target x86_64-unknown-linux-gnu (server fallback)
-make deploy-binary             # build aarch64 + scp + restart on PI_HOST (legacy Pi)
 make deploy-binary-server      # build x86_64 + scp + restart on SERVER_HOST (manual server deploy)
-make deploy-binary-otel        # OTel-instrumented aarch64 + Pi deploy
 ```
 
 **Why zigbuild for legacy path:** no OpenSSL anywhere — `reqwest` uses `rustls-tls` only. All crates in `Cargo.toml` use `rustls-tls` feature flags. Never add OpenSSL dependencies.
@@ -76,11 +73,11 @@ make deploy-binary-otel        # OTel-instrumented aarch64 + Pi deploy
 - `update.sh` — one-command updater (`~/hydeclaw/update.sh hydeclaw-v0.2.0.tar.gz`)
 - `uninstall.sh` — complete removal
 
-**Paths on Pi:**
+**Install paths (server, x86_64):**
 
-- Binary: `~/hydeclaw/hydeclaw-core-aarch64`
-- Watchdog: `~/hydeclaw/hydeclaw-watchdog-aarch64`
-- Memory worker: `~/hydeclaw/hydeclaw-memory-worker-aarch64`
+- Binary: `~/hydeclaw/hydeclaw-core-x86_64`
+- Watchdog: `~/hydeclaw/hydeclaw-watchdog-x86_64`
+- Memory worker: `~/hydeclaw/hydeclaw-memory-worker-x86_64`
 - UI static: `~/hydeclaw/ui/out/`
 - Config: `~/hydeclaw/config/`
 - Workspace: `~/hydeclaw/workspace/`
@@ -369,7 +366,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 ### Constraints
 
 - **Tech stack**: Rust + rustls-tls only, никакого OpenSSL
-- **Deploy target**: ARM64 (Raspberry Pi), single binary
+- **Deploy target**: x86_64 home-lab server (Pi out of the ecosystem), single binary
 - **Backward compat**: исправления не должны ломать API контракты или миграции
 <!-- GSD:project-end -->
 
@@ -455,7 +452,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - In production: via systemd `EnvironmentFile=`
 - `config/hydeclaw.toml` - Server, database, limits, Docker, memory, managed processes
 - `config/agents/{Name}.toml` - Individual agent configuration (case-sensitive filename)
-- `Makefile` - Cross-compilation targets (`make check`, `make test`, `make build-arm64`)
+- `Makefile` - Build/deploy targets (`make check`, `make test`, `make build-x86_64`, `make remote-deploy`)
 - `release.sh` - Multi-architecture release build (aarch64 + x86_64)
 - `Cargo.toml` workspace with 4 crates
 - `Cargo.lock` - Locked dependency versions
@@ -482,8 +479,8 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Python 3.x runtime for toolgate (native process, not Docker)
 - Docker daemon (for MCP containers on-demand, browser-renderer, searxng)
 - nginx (for static UI serving post-build)
-- Linux aarch64 (Raspberry Pi, ARM servers) - via `make build-arm64` (zigbuild)
-- Linux x86_64
+- Linux x86_64 (home-lab server) - primary deploy target via `make remote-deploy`
+- Linux aarch64 - distribution archives only via `release.sh --all` (no longer a deploy target; Pi retired)
 - macOS (Intel/Apple Silicon) - cross-compilation untested
 - Windows (WSL2 required)
 <!-- GSD:stack-end -->
