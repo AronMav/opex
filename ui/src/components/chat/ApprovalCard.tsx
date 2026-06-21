@@ -108,11 +108,11 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
   const inputDisplay = JSON.stringify(part.toolInput, null, 2);
 
   return (
-    <div className="rounded-lg border border-warning/40 bg-card/50 p-4">
+    <div className="rounded-lg border border-warning/40 bg-card/50 p-4" role="status" aria-label={t("chat.approval_awaiting")}>
       {/* Header row */}
       <Collapsible>
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-warning animate-pulse shadow-lg shadow-warning/30 shrink-0" />
+          <div className="w-2 h-2 rounded-full bg-warning animate-pulse shadow-lg shadow-warning/30 shrink-0" aria-hidden="true" />
           <span className="font-mono text-xs font-semibold tracking-tight text-foreground truncate">
             {part.toolName}
           </span>

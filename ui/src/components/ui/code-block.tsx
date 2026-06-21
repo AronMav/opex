@@ -34,7 +34,7 @@ function CodeBlockHeader({ language, code }: { language?: string; code: string }
         className="flex items-center gap-1 rounded px-2 py-1.5 md:px-1.5 md:py-0.5 min-h-[44px] md:min-h-0 hover:bg-muted/50 hover:text-foreground transition-colors"
       >
         {copied ? (
-          <Check className="h-3.5 w-3.5 text-green-500" />
+          <Check className="h-3.5 w-3.5 text-success" />
         ) : (
           <><Copy className="h-3.5 w-3.5" /> <span>{t("common.copy")}</span></>
         )}

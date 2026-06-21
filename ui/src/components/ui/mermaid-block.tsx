@@ -2,7 +2,9 @@
 import DOMPurify from "dompurify"
 import { Maximize2, Minimize2, RotateCcw, ZoomIn, ZoomOut } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
+import { useTheme } from "next-themes"
 import { useTranslation } from "@/hooks/use-translation"
+import { Skeleton } from "@/components/ui/skeleton"
 
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 3
@@ -10,6 +12,7 @@ const ZOOM_STEP = 0.25
 
 export function MermaidBlock({ code }: { code: string }) {
   const { t } = useTranslation()
+  const { resolvedTheme } = useTheme()
   const [svgHtml, setSvgHtml] = useState("")
   const [error, setError] = useState("")
   const [zoom, setZoom] = useState(1)
@@ -20,7 +23,7 @@ export function MermaidBlock({ code }: { code: string }) {
     ;(async () => {
       try {
         const mermaid = (await import("mermaid")).default
-        const isDark = document.documentElement.classList.contains("dark")
+        const isDark = resolvedTheme === "dark"
         mermaid.initialize({
           startOnLoad: false,
           theme: isDark ? "dark" : "neutral",
@@ -52,7 +55,7 @@ export function MermaidBlock({ code }: { code: string }) {
       }
     })()
     return () => { cancelled = true }
-  }, [code])
+  }, [code, resolvedTheme])
 
   const handleZoomIn = useCallback(() => setZoom(z => Math.min(z + ZOOM_STEP, MAX_ZOOM)), [])
   const handleZoomOut = useCallback(() => setZoom(z => Math.max(z - ZOOM_STEP, MIN_ZOOM)), [])
@@ -71,7 +74,7 @@ export function MermaidBlock({ code }: { code: string }) {
   }, [])
 
   if (error) return <pre className="text-xs text-destructive">{error}</pre>
-  if (!svgHtml) return <div className="h-24 animate-pulse rounded bg-muted" />
+  if (!svgHtml) return <Skeleton className="h-24 w-full rounded" />
 
   const containerClass = expanded
     ? "fixed inset-4 z-50 flex flex-col rounded-lg border border-border bg-background shadow-2xl"

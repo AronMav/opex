@@ -5,6 +5,8 @@ import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useTranslation } from "@/hooks/use-translation";
 import type { TranslationKey } from "@/i18n/types";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
+import { Input } from "@/components/ui/input";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import {
@@ -538,33 +540,31 @@ export default function AgentsPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-      <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h2 className="font-display text-lg font-bold tracking-tight">{t("agents.title")}</h2>
-          <span className="text-sm text-muted-foreground">
-            {t("agents.subtitle")}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 md:w-48">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
-            <input
-              type="text"
-              value={agentSearch}
-              onChange={(e) => setAgentSearch(e.target.value)}
-              placeholder={t("chat.search_sessions")}
-              className="w-full h-9 pl-8 pr-3 rounded-lg border border-border bg-background text-sm text-foreground outline-none focus:border-primary/40 transition-colors placeholder:text-muted-foreground/40"
-            />
+      <PageHeader
+        title={t("agents.title")}
+        description={t("agents.subtitle")}
+        actions={
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1 md:w-48">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+              <Input
+                type="text"
+                value={agentSearch}
+                onChange={(e) => setAgentSearch(e.target.value)}
+                placeholder={t("chat.search_sessions")}
+                className="w-full h-9 pl-8 pr-3"
+              />
+            </div>
+            <Button
+              size="lg"
+              onClick={openCreate}
+              className="shrink-0 font-semibold"
+            >
+              {t("agents.new_agent")}
+            </Button>
           </div>
-          <Button
-            size="lg"
-            onClick={openCreate}
-            className="shrink-0 font-semibold"
-          >
-            {t("agents.new_agent")}
-          </Button>
-        </div>
-      </div>
+        }
+      />
 
       {error && <ErrorBanner error={error} />}
 

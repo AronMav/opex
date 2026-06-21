@@ -12,7 +12,9 @@ import {
 } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
+import { CircularLoader } from "@/components/ui/loader";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -164,20 +166,18 @@ export default function CronPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-        <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex flex-col gap-1">
-            <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("cron.title")}</h2>
-            <span className="text-sm text-muted-foreground">
-              {t("cron.subtitle")}
-            </span>
-          </div>
-          <Button
-            onClick={openCreate}
-            className="w-full md:w-auto h-11 px-6 text-sm font-semibold transition-all duration-200 active:scale-95"
-          >
-            <Plus className="mr-2 h-4 w-4" /> {t("cron.new_task")}
-          </Button>
-        </div>
+        <PageHeader
+          title={t("cron.title")}
+          description={t("cron.subtitle")}
+          actions={
+            <Button
+              onClick={openCreate}
+              className="w-full md:w-auto h-11 px-6 text-sm font-semibold transition-all duration-200 active:scale-95"
+            >
+              <Plus className="mr-2 h-4 w-4" /> {t("cron.new_task")}
+            </Button>
+          }
+        />
 
         {errorMessage && <ErrorBanner error={errorMessage} />}
 
@@ -286,7 +286,7 @@ export default function CronPage() {
                     <h4 className="text-xs font-semibold text-muted-foreground mb-3 uppercase tracking-wider">{t("cron.recent_runs")}</h4>
                     {runsLoading ? (
                       <div className="h-16 flex items-center justify-center">
-                        <div className="h-4 w-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                        <CircularLoader size="sm" />
                       </div>
                     ) : runs.length === 0 ? (
                       <p className="text-xs text-muted-foreground/60 text-center py-4">{t("cron.no_runs")}</p>

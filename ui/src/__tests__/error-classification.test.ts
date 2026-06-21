@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyStreamError } from "@/app/(authenticated)/chat/error/ErrorBanner";
+import { classifyError as classifyStreamError } from "@/components/ui/error-banner";
 
 describe("classifyStreamError", () => {
   // ── connection_lost ───────────────────────────────────────────────────────

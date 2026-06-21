@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useRef, useState, useEffect, useMemo, type ReactNode } from "react";
-import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
+import React, { useEffect, useMemo, type ReactNode } from "react";
+import { Virtuoso } from "react-virtuoso";
 import { useChatStore } from "@/stores/chat-store";
 import type { ChatMessage } from "@/stores/chat-store";
 import { Button } from "@/components/ui/button";
-import { CometLoader } from "@/components/ui/loader";
+import { CometLoader, CircularLoader } from "@/components/ui/loader";
 
 import { MessageItem } from "./MessageItem";
 import { useChatAutoscroll } from "./use-chat-autoscroll";
@@ -111,7 +111,7 @@ function VirtuosoHeader({
   if (isLoadingHistory) {
     return (
       <div className="flex justify-center py-3">
-        <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+        <CircularLoader size="sm" />
       </div>
     );
   }
@@ -233,7 +233,7 @@ export function MessageList({
         />
       </>
     ),
-  }), [hiddenCount, onLoadEarlier, turnLimitMessage, setSentinelEl]);
+  }), [hiddenCount, onLoadEarlier, isLoadingHistory, turnLimitMessage, setSentinelEl]);
 
   if (isLoadingHistory && messages.length === 0) {
     return (

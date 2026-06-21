@@ -186,7 +186,6 @@ vi.mock("@/components/ui/markdown", () => ({
 // ── Mock: rich-card ────────────────────────────────────────────────────────
 
 vi.mock("@/components/ui/rich-card", () => ({
-  RichCard: ({ part }: { part: unknown }) => <div data-testid="rich-card">{JSON.stringify(part)}</div>,
   TableCard: ({ data }: { data: unknown }) => <div data-testid="table-card">{JSON.stringify(data)}</div>,
   MetricCard: ({ data }: { data: unknown }) => <div data-testid="metric-card">{JSON.stringify(data)}</div>,
 }));
@@ -274,9 +273,9 @@ describe("MessageItem", () => {
       agentId: "Bot",
     };
     const { container } = render(<MessageItem message={msg} />);
-    // BarsLoader renders an SVG element
-    const svg = container.querySelector("svg");
-    expect(svg).toBeInTheDocument();
+    // CometLoader renders an sr-only "Loading" label
+    const liveLabel = container.querySelector('[class*="sr-only"]');
+    expect(liveLabel).toBeInTheDocument();
   });
 
   it("renders inter-agent user message with agent sender name (REND-03)", () => {

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
 import { apiGet, apiPut, apiDelete } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -282,7 +283,7 @@ export default function WorkspacePage() {
         </div>
       </div>
 
-      {error && <div className="m-4 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm font-mono rounded-lg">{error}</div>}
+      {error && <ErrorBanner error={error} className="m-4" />}
 
       <div className="flex min-h-0 flex-1 relative">
         {/* Desktop Sidebar */}

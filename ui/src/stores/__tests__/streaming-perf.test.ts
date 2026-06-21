@@ -249,7 +249,10 @@ vi.mock("@/components/ui/collapsible", () => ({
 }));
 
 vi.mock("@/components/ui/loader", () => ({
-  BarsLoader: () => null,
+  CometLoader: () => null,
+  CircularLoader: () => null,
+  PulseDotLoader: () => null,
+  Loader: () => null,
 }));
 
 vi.mock("lucide-react", () => {

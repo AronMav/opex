@@ -18,6 +18,7 @@ export const SESSIONS_PAGE_SIZE = 40;
 export const MESSAGES_HISTORY_LIMIT = 100;
 export const MAX_INPUT_LENGTH = 32_000;
 export const STREAM_THROTTLE_MS = 50;
+export const MAX_RECONNECT_ATTEMPTS = 6;
 
 // ── Message types (replaces AI SDK UIMessage dependency) ────────────────────
 
@@ -35,12 +36,6 @@ export interface FilePart {
   type: "file";
   url: string;
   mediaType: string;
-}
-
-export interface SourceUrlPart {
-  type: "source-url";
-  url: string;
-  title?: string;
 }
 
 export type ToolPartState =
@@ -66,15 +61,6 @@ export interface RichCardPart {
   data: Record<string, unknown>;
 }
 
-export interface StepGroupPart {
-  type: "step-group";
-  stepId: string;
-  toolParts: ToolPart[];
-  finishReason?: string;
-  /** True while step is still receiving events */
-  isStreaming: boolean;
-}
-
 export interface ApprovalPart {
   type: "approval";
   approvalId: string;
@@ -97,10 +83,8 @@ export type MessagePart =
   | TextPart
   | ReasoningPart
   | FilePart
-  | SourceUrlPart
   | ToolPart
   | RichCardPart
-  | StepGroupPart
   | ApprovalPart
   | CompressionDividerPart;
 
@@ -289,8 +273,6 @@ export interface ChatStore {
   loadEarlierMessages: (agent: string) => void;
   loadPreviousMessages: (agent: string) => Promise<void>;
   exportSession: () => Promise<void>;
-
-  _selectCounter: Record<string, number>;
 }
 
 /** Alias for ChatStore — used in selector signatures for clarity. */
@@ -310,7 +292,7 @@ export function emptyAgentState(): AgentState {
     turnLimitMessage: null,
     streamGeneration: 0,
     reconnectAttempt: 0,
-    maxReconnectAttempts: 3,
+    maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS,
     isLlmReconnecting: false,
     lastEventId: null,
     selectedBranches: {},

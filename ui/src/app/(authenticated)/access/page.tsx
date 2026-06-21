@@ -12,6 +12,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatDate } from "@/lib/format";
 import { useTranslation } from "@/hooks/use-translation";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import {
   ShieldCheck,
   UserX,
@@ -176,24 +177,24 @@ export default function AccessPage() {
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
       {/* Header */}
-      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("access.title")}</h2>
-          <p className="text-sm text-muted-foreground mt-1">{t("access.subtitle")}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {totalPending > 0 && (
-            <Badge variant="outline" className="text-xs border-warning/50 text-warning bg-warning/5 gap-1">
-              <ShieldAlert className="h-3 w-3" />
-              {totalPending} {t("access.pending_approvals")}
-            </Badge>
-          )}
-          <Button variant="outline" size="sm" onClick={() => { refetch(); loadAccess(agents); }} disabled={agentsLoading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${agentsLoading ? "animate-spin" : ""}`} />
-            {t("common.refresh")}
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title={t("access.title")}
+        description={t("access.subtitle")}
+        actions={
+          <div className="flex items-center gap-2">
+            {totalPending > 0 && (
+              <Badge variant="outline-warning" className="text-xs gap-1">
+                <ShieldAlert className="h-3 w-3" />
+                {totalPending} {t("access.pending_approvals")}
+              </Badge>
+            )}
+            <Button variant="outline" size="sm" onClick={() => { refetch(); loadAccess(agents); }} disabled={agentsLoading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${agentsLoading ? "animate-spin" : ""}`} />
+              {t("common.refresh")}
+            </Button>
+          </div>
+        }
+      />
 
       {error && <ErrorBanner error={error} />}
 

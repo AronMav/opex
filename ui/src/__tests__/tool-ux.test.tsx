@@ -95,7 +95,7 @@ vi.mock("@tanstack/react-query", async () => {
 
 // ── Import under test ─────────────────────────────────────────────────────
 
-import { mapToolPartState } from "@/app/(authenticated)/chat/MessageItem";
+import { mapToolPartState } from "@/lib/tool-state";
 import { ToolCallPartView, TOOL_OUTPUT_MAX_CHARS } from "@/components/chat/ToolCallPartView";
 
 // ── TOOL-01 tests ──────────────────────────────────────────────────────────

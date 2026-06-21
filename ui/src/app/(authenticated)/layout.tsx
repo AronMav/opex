@@ -14,6 +14,8 @@ import { toast } from "sonner";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { QueryProvider } from "@/providers/query-provider";
+import { CircularLoader } from "@/components/ui/loader";
+import { Badge } from "@/components/ui/badge";
 import { Bot } from "lucide-react";
 
 export default function AuthenticatedLayout({
@@ -104,7 +106,7 @@ export default function AuthenticatedLayout({
         label: t("chat.approve"),
         onClick: () => {
           apiPost(`/api/approvals/${approvalId}/resolve`, { status: "approved", resolved_by: "ui" }).catch(() => {
-            toast.error(t("chat.approval_error"));
+            toast.error(t("chat.approval_resolve_error"));
           });
         },
       },
@@ -112,7 +114,7 @@ export default function AuthenticatedLayout({
         label: t("chat.reject"),
         onClick: () => {
           apiPost(`/api/approvals/${approvalId}/resolve`, { status: "rejected", resolved_by: "ui" }).catch(() => {
-            toast.error(t("chat.approval_error"));
+            toast.error(t("chat.approval_resolve_error"));
           });
         },
       },
@@ -123,7 +125,7 @@ export default function AuthenticatedLayout({
     return (
       <div className="flex h-dvh items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
-          <div className="h-10 w-10 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <CircularLoader size="lg" />
           <span className="text-sm text-muted-foreground">{t("common.loading")}</span>
         </div>
       </div>
@@ -149,12 +151,12 @@ export default function AuthenticatedLayout({
             </div>
           </div>
 
-          <div className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 border ${connected ? "border-success/20 bg-success/5 text-success" : "border-destructive/20 bg-destructive/5 text-destructive"}`}>
+          <Badge variant={connected ? "outline-success" : "outline-destructive"} className="gap-1.5">
             <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-success" : "bg-destructive"}`} />
             <span className="font-mono text-[9px] font-bold uppercase tracking-tight leading-none">
               {connected ? t("common.live") : t("common.offline")}
             </span>
-          </div>
+          </Badge>
         </div>
 
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-y-auto">

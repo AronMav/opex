@@ -13,23 +13,17 @@ import type { SessionRow } from "@/types/api";
 // infinite useEffect loop when activeSessionIds is absent during WS reconnect).
 const EMPTY_ACTIVE_IDS: string[] = [];
 
-// ── Re-exports for backward compatibility ────────────────────────────────────
-export { ToolCallPartView } from "@/components/chat/ToolCallPartView";
-export { FileDataPartView } from "@/components/chat/FileDataPartView";
-
 import { MessageList, MessageSkeleton } from "./MessageList";
 import { SearchBar } from "./SearchBar";
 import { ReconnectingIndicator } from "@/components/chat/ReconnectingIndicator";
-import { EmptyState } from "./EmptyState";
+import { ChatWelcomeScreen as EmptyState } from "./ChatWelcomeScreen";
 import { ReadOnlyFooter } from "./read-only/ReadOnlyFooter";
-import { ErrorBanner } from "./error/ErrorBanner";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { ChatComposer } from "./composer/ChatComposer";
 import { ShortcutHelp } from "@/components/chat/ShortcutHelp";
 import { useEngineRunning } from "./hooks/use-engine-running";
 import { useRenderMessages } from "./hooks/use-render-messages";
-import { useIsLive } from "./hooks/use-is-live";
-import { useIsReplayingHistory } from "./hooks/use-is-replaying-history";
-import { useLiveHasContent } from "./hooks/use-live-has-content";
+import { selectIsLive, selectIsReplayingHistory, selectLiveHasContent } from "@/stores/chat-selectors";
 import { useMessageSearch } from "./hooks/use-message-search";
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -95,7 +89,7 @@ export function ChatThread({
   const activeSessionId = useChatStore((s) => s.agents[currentAgent]?.activeSessionId ?? null);
   const connectionPhase = useChatStore((s) => s.agents[currentAgent]?.connectionPhase ?? "idle");
   const reconnectAttempt = useChatStore((s) => s.agents[currentAgent]?.reconnectAttempt ?? 0);
-  const maxReconnectAttempts = useChatStore((s) => s.agents[currentAgent]?.maxReconnectAttempts ?? 3);
+  const maxReconnectAttempts = useChatStore((s) => s.agents[currentAgent]?.maxReconnectAttempts ?? 6);
   const isLlmReconnecting = useChatStore((s) => s.agents[currentAgent]?.isLlmReconnecting ?? false);
   const activeSessionIds = useChatStore((s) => s.agents[currentAgent]?.activeSessionIds ?? EMPTY_ACTIVE_IDS);
 
@@ -118,9 +112,9 @@ export function ChatThread({
   }, []);
 
   // Derived booleans from message source hooks
-  const isLive = useIsLive(currentAgent);
-  const isHistory = useIsReplayingHistory(currentAgent);
-  const liveHasContent = useLiveHasContent(currentAgent);
+  const isLive = useChatStore((s) => selectIsLive(s, currentAgent));
+  const isHistory = useChatStore((s) => selectIsReplayingHistory(s, currentAgent));
+  const liveHasContent = useChatStore((s) => selectLiveHasContent(s, currentAgent));
 
   // Bootstrap: on session change, if WS already marked this session active
   // (e.g. WS snapshot arrived before localStorage restored activeSessionId),

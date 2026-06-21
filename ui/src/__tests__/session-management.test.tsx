@@ -184,14 +184,13 @@ vi.mock("@/components/ui/markdown", () => ({
 }));
 
 vi.mock("@/components/ui/rich-card", () => ({
-  RichCard: ({ part }: { part: unknown }) => <div data-testid="rich-card">{JSON.stringify(part)}</div>,
   TableCard: ({ data }: { data: unknown }) => <div data-testid="table-card">{JSON.stringify(data)}</div>,
   MetricCard: ({ data }: { data: unknown }) => <div data-testid="metric-card">{JSON.stringify(data)}</div>,
 }));
 
 // ── Import component under test ────────────────────────────────────────────
 
-import { ParticipantBar } from "@/app/(authenticated)/chat/page";
+// (ParticipantBar was removed — agents are session-scoped via `agent` tool)
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -201,64 +200,6 @@ describe("Session Management (SESS)", () => {
     vi.clearAllMocks();
     mockSessionsRef.current = { sessions: [] };
     mockAgentsRef.current = [] as Array<{ name: string; model: string }>;
-  });
-
-  // ── SESS-01: ParticipantBar renders avatar chips ─────────────────────────
-
-  describe("SESS-01: ParticipantBar renders participant avatars", () => {
-    it("renders nothing for sessions (ParticipantBar is hidden in this version)", () => {
-      mockSessionsRef.current = {
-        sessions: [{
-          id: "s1",
-          agent_id: "Agent1",
-          user_id: "user1",
-          channel: "web",
-          started_at: "2026-01-01T00:00:00Z",
-          last_message_at: "2026-01-01T00:01:00Z",
-          title: "Test session",
-          run_status: null,
-          metadata: null,
-          participants: ["Agent1", "Claude"],
-        }],
-      };
-      mockAgentsRef.current = [
-        { name: "Agent1", model: "gpt-4" },
-        { name: "Claude", model: "claude-3" },
-      ];
-
-      const { container } = render(<ParticipantBar sessionId="s1" currentAgent="Agent1" />);
-      expect(container.innerHTML).toBe("");
-    });
-  });
-
-  // ── SESS-02: Invite flow via (+) button ──────────────────────────────────
-
-  describe("SESS-02: ParticipantBar invite flow", () => {
-    it("shows nothing even when uninvited agents available (ParticipantBar is hidden)", () => {
-      mockSessionsRef.current = {
-        sessions: [{
-          id: "s1",
-          agent_id: "Agent1",
-          user_id: "user1",
-          channel: "web",
-          started_at: "2026-01-01T00:00:00Z",
-          last_message_at: "2026-01-01T00:01:00Z",
-          title: "Test",
-          run_status: null,
-          metadata: null,
-          participants: ["Agent1", "Claude"],
-        }],
-      };
-      // Sage is not a participant yet
-      mockAgentsRef.current = [
-        { name: "Agent1", model: "gpt-4" },
-        { name: "Claude", model: "claude-3" },
-        { name: "Sage", model: "gpt-4" },
-      ];
-
-      const { container } = render(<ParticipantBar sessionId="s1" currentAgent="Agent1" />);
-      expect(container.innerHTML).toBe("");
-    });
   });
 
   // ── SESS-03: Sessions query includes currentAgent ────────────────────────

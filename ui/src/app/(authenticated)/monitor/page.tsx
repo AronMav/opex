@@ -28,7 +28,7 @@ import {
   Activity, Clock, Brain, Bot, User, Wrench, Zap, RefreshCw, Calendar, Database,
   CheckCircle2, XCircle, HeartPulse, AlertTriangle, Stethoscope,
   BarChart3, Cpu, ArrowUpRight, ArrowDownRight, DollarSign,
-  ShieldCheck, Check, X,
+  ShieldCheck, Check, X, ChevronRight,
   type LucideProps,
 } from "lucide-react";
 import type { StatusInfo, StatsInfo, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry, CuratorRun } from "@/types/api";
@@ -1162,9 +1162,7 @@ function MonitorPageInner() {
                         <span className="ml-auto text-xs text-muted-foreground/40">
                           {new Date(e.created_at).toLocaleDateString(locale === "en" ? "en-US" : "ru-RU")}
                         </span>
-                        <span className="text-muted-foreground/40 transition-transform" style={{ transform: expandedId === e.id ? "rotate(90deg)" : "rotate(0)" }}>
-                          ▶
-                        </span>
+                        <ChevronRight className="text-muted-foreground/40 transition-transform h-3 w-3" style={{ transform: expandedId === e.id ? "rotate(90deg)" : "rotate(0)" }} />
                       </button>
 
                       {expandedId === e.id && (

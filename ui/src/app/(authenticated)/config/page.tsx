@@ -5,6 +5,7 @@ import { apiGet, apiPost, apiPut } from "@/lib/api";
 import { useTranslation } from "@/hooks/use-translation";
 import type { TranslationKey } from "@/i18n/types";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -17,7 +18,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useAgents } from "@/lib/queries";
-import { Settings, Gauge, Box, GitBranch, Keyboard, Loader2, RotateCcw, Save, Timer, Wrench, Bell } from "lucide-react";
+import { Settings, Gauge, Box, GitBranch, Keyboard, RotateCcw, Save, Timer, Wrench, Bell } from "lucide-react";
+import { CircularLoader } from "@/components/ui/loader";
 import { toast } from "sonner";
 
 interface ConfigData {
@@ -282,25 +284,21 @@ export default function ConfigPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-        <div className="mb-8">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex flex-col gap-1">
-              <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("config.title")}</h2>
-              <span className="text-sm text-muted-foreground">
-                {t("config.subtitle")}
-              </span>
-            </div>
+        <PageHeader
+          title={t("config.title")}
+          description={t("config.subtitle")}
+          actions={
             <Button
               variant="destructive"
               onClick={restartCore}
               disabled={restarting}
               className="w-full md:w-auto shrink-0"
             >
-              {restarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+              {restarting ? <CircularLoader size="sm" className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}
               {t("config.restart_core")}
             </Button>
-          </div>
-        </div>
+          }
+        />
 
         {error && <ErrorBanner error={error} />}
 
@@ -446,7 +444,7 @@ export default function ConfigPage() {
                         disabled={savingFields}
                         className="gap-1.5"
                       >
-                        {savingFields ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                        {savingFields ? <CircularLoader size="sm" className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
                         {t("common.save")}
                       </Button>
                     </div>
@@ -529,7 +527,7 @@ export default function ConfigPage() {
                       disabled={savingAgentTool}
                       className="gap-1.5"
                     >
-                      {savingAgentTool ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      {savingAgentTool ? <CircularLoader size="sm" className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
                       {t("common.save")}
                     </Button>
                   </div>
@@ -575,7 +573,7 @@ export default function ConfigPage() {
                       </Select>
                     </Field>
                     <Button size="sm" onClick={saveCuratorFields} disabled={savingCurator} className="gap-1.5">
-                      {savingCurator ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      {savingCurator ? <CircularLoader size="sm" className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
                       {t("common.save")}
                     </Button>
                   </div>
@@ -626,7 +624,7 @@ export default function ConfigPage() {
                       </div>
                     </div>
                     <Button size="sm" onClick={saveAlertSettings} disabled={alertSaving} className="gap-1.5">
-                      {alertSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                      {alertSaving ? <CircularLoader size="sm" className="h-3.5 w-3.5" /> : <Save className="h-3.5 w-3.5" />}
                       {t("common.save")}
                     </Button>
                   </div>

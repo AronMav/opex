@@ -6,6 +6,7 @@ import { getToken, apiGet, apiPut } from "@/lib/api";
 import { formatDate, formatBytes } from "@/lib/format";
 import { useTranslation } from "@/hooks/use-translation";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
@@ -269,35 +270,31 @@ export default function BackupsPage() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-        <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h2 className="font-display text-lg font-bold tracking-tight text-foreground">
-              {t("backups.title")}
-            </h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              {t("backups.subtitle")}
-            </p>
-          </div>
-          <div className="grid grid-cols-2 md:flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refetch()}
-              disabled={isLoading || mutating}
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-              {t("common.refresh")}
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => createBackup.mutate()}
-              disabled={isLoading || mutating}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              {createBackup.isPending ? t("backups.creating") : t("backups.create")}
-            </Button>
-          </div>
-        </div>
+        <PageHeader
+          title={t("backups.title")}
+          description={t("backups.subtitle")}
+          actions={
+            <div className="grid grid-cols-2 md:flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refetch()}
+                disabled={isLoading || mutating}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+                {t("common.refresh")}
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => createBackup.mutate()}
+                disabled={isLoading || mutating}
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                {createBackup.isPending ? t("backups.creating") : t("backups.create")}
+              </Button>
+            </div>
+          }
+        />
 
         <BackupSettings />
 

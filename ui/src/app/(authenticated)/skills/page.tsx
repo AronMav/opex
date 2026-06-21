@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -125,7 +126,7 @@ function PinBadge() {
 // ── Skill history sheet ────────────────────────────────────────────────────
 
 function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose: () => void }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading } = useSkillVersions(skillName);
   const versions = data?.versions ?? [];
@@ -189,7 +190,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                           </span>
                         )}
                         <span className="text-xs text-muted-foreground ml-auto shrink-0">
-                          {relativeTime(v.created_at)}
+                          {relativeTime(v.created_at, locale)}
                         </span>
                       </div>
                       {v.trigger_reason && (
@@ -253,7 +254,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                         <p className="text-xs text-foreground/70 truncate">{d.reason}</p>
                       )}
                       <p className="text-[10px] text-muted-foreground/60 mt-0.5">
-                        {relativeTime(d.decided_at)}
+                        {relativeTime(d.decided_at, locale)}
                       </p>
                     </div>
                   </div>
@@ -289,14 +290,14 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
 // ── Curator widget ─────────────────────────────────────────────────────────
 
 function CuratorWidget() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { data: status } = useCuratorStatus();
   const qc = useQueryClient();
   const [running, setRunning] = useState(false);
 
   if (!status?.enabled) return null;
 
-  const lastRun = status.last_run_at ? relativeTime(status.last_run_at) : "never";
+  const lastRun = status.last_run_at ? relativeTime(status.last_run_at, locale) : "never";
 
   const runNow = async () => {
     setRunning(true);
@@ -331,7 +332,7 @@ function CuratorWidget() {
 // ── Main page ──────────────────────────────────────────────────────────────
 
 export default function SkillsPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const qc = useQueryClient();
   const { data, isLoading: loading, error } = useSkills();
   const allSkills: SkillEntry[] = Array.isArray(data) ? data : [];
@@ -564,27 +565,27 @@ export default function SkillsPage() {
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6 lg:p-8 selection:bg-primary/20">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h2 className="font-display text-lg font-bold tracking-tight">{t("skills.title")}</h2>
-          <span className="text-sm text-muted-foreground">{t("skills.subtitle")}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => qc.invalidateQueries({ queryKey: qk.skills })}
-            disabled={loading}
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            {t("common.refresh")}
-          </Button>
-          <Button size="sm" onClick={openNew}>
-            <Plus className="h-3.5 w-3.5" />
-            {t("skills.new_skill")}
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title={t("skills.title")}
+        description={t("skills.subtitle")}
+        actions={
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => qc.invalidateQueries({ queryKey: qk.skills })}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+              {t("common.refresh")}
+            </Button>
+            <Button size="sm" onClick={openNew}>
+              <Plus className="h-3.5 w-3.5" />
+              {t("skills.new_skill")}
+            </Button>
+          </div>
+        }
+      />
 
       {/* State filter */}
       <div className="flex items-center gap-1.5 flex-wrap">
@@ -609,12 +610,12 @@ export default function SkillsPage() {
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
-        <input
+        <Input
           type="text"
           value={skillSearch}
           onChange={(e) => setSkillSearch(e.target.value)}
           placeholder={t("chat.search_sessions")}
-          className="w-full h-9 pl-8 pr-3 rounded-lg border border-border bg-background text-sm text-foreground outline-none focus:border-primary/40 transition-colors placeholder:text-muted-foreground/40"
+          className="w-full h-9 pl-8 pr-3"
         />
       </div>
 
@@ -648,7 +649,7 @@ export default function SkillsPage() {
                 {/* Header */}
                 <div className="flex items-start gap-3">
                   <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-primary/10 border border-primary/20 shrink-0">
-                    <BookOpen className="h-4.5 w-4.5 text-primary" />
+                    <BookOpen className="h-4 w-4 text-primary" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -714,7 +715,7 @@ export default function SkillsPage() {
                     </span>
                     {skill.last_used_at && (
                       <span className="text-xs text-muted-foreground/50 shrink-0">
-                        &middot; used {relativeTime(skill.last_used_at)}
+                        &middot; used {relativeTime(skill.last_used_at, locale)}
                       </span>
                     )}
                   </div>

@@ -273,7 +273,7 @@ export function AudioPlayer({ src }: { src: string }) {
           aria-valuemin={0}
           aria-valuemax={seekMax > 0 ? Math.round(seekMax) : 0}
           aria-valuenow={Math.round(currentTime)}
-          aria-valuetext={`${formatTime(currentTime)} из ${formatTime(seekMax)}`}
+          aria-valuetext={`${formatTime(currentTime)} / ${formatTime(seekMax)}`}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}

@@ -46,7 +46,7 @@ describe("chat store — streaming via sendMessage", () => {
   const AGENT = "TestAgent";
 
   beforeEach(() => {
-    useChatStore.setState({ agents: {}, currentAgent: AGENT, _selectCounter: {}, sessionParticipants: {} });
+    useChatStore.setState({ agents: {}, currentAgent: AGENT, sessionParticipants: {} });
   });
 
   afterEach(() => {

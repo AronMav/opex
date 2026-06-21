@@ -265,7 +265,7 @@ export default function MemoryPage() {
                             ID: {doc.id.split("-")[0]}
                           </span>
                           <span className="text-[10px] text-muted-foreground/60">
-                            {doc.created_at ? new Date(doc.created_at).toLocaleDateString(locale) : ""}
+                            {doc.created_at ? new Date(doc.created_at).toLocaleDateString(locale === "en" ? "en-US" : "ru-RU") : ""}
                           </span>
                           {doc.scope === "shared" && (
                             <Badge variant="secondary" className="h-4 text-[9px] px-1 py-0 bg-primary/10 text-primary border-none">
