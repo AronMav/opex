@@ -177,6 +177,7 @@ pub(crate) async fn api_create_cron(
                         req.run_once,
                         req.run_at,
                         req.tool_policy,
+                        None, // autonomous_goal: load path activates it on restart
                     )
                     .await
                 {
@@ -338,6 +339,7 @@ pub(crate) async fn api_update_cron(
                             run_once,
                             run_at,
                             tool_policy,
+                            None, // autonomous_goal: load path activates it on restart
                         )
                         .await
                         .ok();

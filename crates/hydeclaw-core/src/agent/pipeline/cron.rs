@@ -123,6 +123,7 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
                         row, cron_expr, timezone,
                         task.to_string(), target_agent.clone(),
                         arc, cfg.db.clone(), announce_to, false, 0, false, None, None,
+                        None, // autonomous_goal: create-time cron-goals are a follow-up; load picks it up on restart
                     ).await {
                         Ok(()) => true,
                         Err(e) => {
@@ -229,6 +230,7 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
                                     arc, cfg.db.clone(), announce_to, current.silent,
                                     current.jitter_secs, current.run_once, current.run_at,
                                     current.tool_policy.clone(),
+                                    None, // autonomous_goal: load path activates it on restart
                                 ).await {
                                     tracing::error!(job_id = %uuid, error = %e, "failed to reschedule cron job");
                                 }

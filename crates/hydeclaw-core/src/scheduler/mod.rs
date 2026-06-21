@@ -826,6 +826,42 @@ impl Scheduler {
         Ok(())
     }
 
+    /// Bootstrap a durable cron-goal: create a fresh CRON session, attach an
+    /// `origin='cron'` goal (superseding this job's prior in-flight goal so a
+    /// re-firing job never runs two drivers), and spawn the goal driver. The
+    /// driver runs autonomously; `resume_autonomous_goals` re-drives it if the
+    /// process crashes mid-run.
+    async fn bootstrap_cron_goal(
+        engine: Arc<AgentEngine>,
+        db: PgPool,
+        job_id: Uuid,
+        agent_name: String,
+        goal_text: String,
+    ) {
+        const CRON_GOAL_MAX_TURNS: i32 = 20;
+        let channel = crate::agent::channel_kind::channel::CRON;
+        let session_id = match crate::db::sessions::create_new_session(&db, &agent_name, "system", channel).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(job = %job_id, error = %e, "cron-goal: failed to create session");
+                return;
+            }
+        };
+        if let Err(e) =
+            crate::db::session_goals::upsert_cron_goal(&db, session_id, job_id, &goal_text, CRON_GOAL_MAX_TURNS).await
+        {
+            tracing::warn!(job = %job_id, session = %session_id, error = %e, "cron-goal: failed to upsert goal");
+            return;
+        }
+        let Some(pool) = engine.cfg().goal_pool.clone() else {
+            tracing::warn!(job = %job_id, "cron-goal: engine has no goal pool");
+            return;
+        };
+        let handle = crate::agent::goal::driver::spawn_goal_driver(engine, session_id, None);
+        pool.insert(session_id, handle);
+        tracing::info!(job = %job_id, session = %session_id, "cron-goal driver started");
+    }
+
     /// Add a dynamic job from the database.
     #[allow(clippy::too_many_arguments)]
     pub async fn add_dynamic_job(
@@ -843,6 +879,7 @@ impl Scheduler {
         run_once: bool,
         run_at: Option<chrono::DateTime<chrono::Utc>>,
         tool_policy: Option<serde_json::Value>,
+        autonomous_goal: Option<String>,
     ) -> Result<()> {
         // Normalize 5-field cron to 6-field by prepending "0 " for seconds
         let cron_6field = normalize_cron_to_6field(cron_expr);
@@ -964,12 +1001,24 @@ impl Scheduler {
             let ui_tx = ui_tx.clone();
             let locks = locks.clone();
             let tool_policy = tool_policy_clone.clone();
+            let autonomous_goal = autonomous_goal.clone();
             Box::pin(async move {
                 if jitter_ms_max > 0 {
                     use rand::Rng;
                     let delay_ms = rand::rng().random_range(0u64..jitter_ms_max);
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 }
+
+                // Cron-goal: spawn a durable goal-driven session and return,
+                // bypassing the one-shot machinery (agent lock / cron_runs /
+                // handle_isolated). The goal driver self-serializes via goal_lock
+                // and tracks its own status; resume_autonomous_goals re-drives it
+                // after a crash.
+                if let Some(goal_text) = autonomous_goal {
+                    Self::bootstrap_cron_goal(engine.clone(), db.clone(), db_id, agent_name.to_string(), goal_text).await;
+                    return;
+                }
+
                 // Per-agent lock: queue if already running, drop only after 30 min wait.
                 let agent_lock = Self::agent_lock_for(&locks, &agent_name).await;
                 let _guard = if let Ok(g) = agent_lock.try_lock() {
@@ -1216,14 +1265,14 @@ impl Scheduler {
         db: &PgPool,
         engines: &std::collections::HashMap<String, Arc<AgentEngine>>,
     ) -> Result<usize> {
-        let rows = sqlx::query_as::<_, (Uuid, String, String, String, String, Option<serde_json::Value>, bool, i32, bool, Option<chrono::DateTime<chrono::Utc>>, Option<serde_json::Value>)>(
-            "SELECT id, agent_id, cron_expr, timezone, task_message, announce_to, silent, jitter_secs, run_once, run_at, tool_policy FROM scheduled_jobs WHERE enabled = true AND run_once = false",
+        let rows = sqlx::query_as::<_, (Uuid, String, String, String, String, Option<serde_json::Value>, bool, i32, bool, Option<chrono::DateTime<chrono::Utc>>, Option<serde_json::Value>, Option<String>)>(
+            "SELECT id, agent_id, cron_expr, timezone, task_message, announce_to, silent, jitter_secs, run_once, run_at, tool_policy, autonomous_goal FROM scheduled_jobs WHERE enabled = true AND run_once = false",
         )
         .fetch_all(db)
         .await?;
 
         let mut count = 0;
-        for (id, agent_id, cron_expr, timezone, task_message, announce_to, silent, jitter_secs, run_once, run_at, tool_policy) in rows {
+        for (id, agent_id, cron_expr, timezone, task_message, announce_to, silent, jitter_secs, run_once, run_at, tool_policy, autonomous_goal) in rows {
             if let Some(engine) = engines.get(&agent_id) {
                 match self
                     .add_dynamic_job(
@@ -1240,6 +1289,7 @@ impl Scheduler {
                         run_once,
                         run_at,
                         tool_policy,
+                        autonomous_goal,
                     )
                     .await
                 {
@@ -1275,6 +1325,7 @@ impl Scheduler {
                     engine.clone(), db.clone(), job.announce_to.clone(),
                     job.silent, job.jitter_secs, job.run_once, job.run_at,
                     job.tool_policy.clone(),
+                    None, // run_once recovery: cron-goals via this path are a follow-up
                 ).await {
                     Ok(()) => { count += 1; },
                     Err(e) => tracing::warn!(job_id = %job.id, error = %e, "failed to recover one-shot task"),
