@@ -228,6 +228,9 @@ pub(crate) struct UpdateCronRequest {
     /// None = not provided (keep current), Some(None) = explicit null (clear), Some(Some(v)) = new value
     #[serde(default, deserialize_with = "deserialize_nullable_field")]
     tool_policy: Option<Option<serde_json::Value>>,
+    /// None = not provided (keep current), Some(None) = clear, Some(Some(v)) = new value.
+    #[serde(default, deserialize_with = "deserialize_nullable_field")]
+    autonomous_goal: Option<Option<String>>,
 }
 
 pub(crate) async fn api_update_cron(
@@ -283,6 +286,18 @@ pub(crate) async fn api_update_cron(
         Some(Some(v)) => Some(v),               // new value
         None => current.tool_policy,            // not provided → keep current
     };
+    // ScheduledJob doesn't carry autonomous_goal, so "keep current" reads it directly.
+    let autonomous_goal: Option<String> = match req.autonomous_goal {
+        Some(None) => None,                     // explicit null → clear
+        Some(Some(v)) => Some(v),               // new value
+        None => sqlx::query_scalar::<_, Option<String>>(
+            "SELECT autonomous_goal FROM scheduled_jobs WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&infra.db)
+        .await
+        .unwrap_or(None), // not provided → keep current
+    };
 
     // Validate tool names in policy (prevent path traversal / invalid names)
     if let Some(ref policy_json) = tool_policy
@@ -305,7 +320,7 @@ pub(crate) async fn api_update_cron(
 
     let result = sqlx::query(
         "UPDATE scheduled_jobs SET name = $2, cron_expr = $3, timezone = $4, task_message = $5, enabled = $6, \
-         silent = $7, announce_to = $8, jitter_secs = $9, run_once = $10, run_at = $11, tool_policy = $12 WHERE id = $1",
+         silent = $7, announce_to = $8, jitter_secs = $9, run_once = $10, run_at = $11, tool_policy = $12, autonomous_goal = $13 WHERE id = $1",
     )
     .bind(id)
     .bind(&name)
@@ -319,6 +334,7 @@ pub(crate) async fn api_update_cron(
     .bind(run_once)
     .bind(run_at)
     .bind(&tool_policy)
+    .bind(&autonomous_goal)
     .execute(&infra.db)
     .await;
 
@@ -344,7 +360,7 @@ pub(crate) async fn api_update_cron(
                             run_once,
                             run_at,
                             tool_policy,
-                            None, // autonomous_goal: load path activates it on restart
+                            autonomous_goal,
                         )
                         .await
                         .ok();
