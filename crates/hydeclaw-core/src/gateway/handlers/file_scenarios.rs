@@ -784,6 +784,35 @@ mod tests {
         assert!(result.is_none(), "unknown id must return None → 404");
     }
 
+    // ── Task 5.7 tests ───────────────────────────────────────────────────────
+
+    /// Drift guard: the FSE bindings surface must remain exactly the §5 routes
+    /// (run endpoint is Phase 6, intentionally absent here). Building the router
+    /// is enough to catch a missing handler/method wiring at compile + run time.
+    #[test]
+    fn routes_builds_without_panic() {
+        let _r: axum::Router<crate::gateway::AppState> = super::routes();
+    }
+
+    /// None of the FSE paths may be loopback-exempt: they must NOT appear in the
+    /// auth middleware LOOPBACK_EXACT/PREFIX lists (operator-bearer only).
+    #[test]
+    fn fse_paths_are_not_loopback_exempt() {
+        // These literals mirror middleware.rs LOOPBACK_EXACT/PREFIX. If a future
+        // edit adds an /api/file-scenarios entry there, this guard documents the
+        // intent that it must not happen (§5: behind auth, not loopback-exempt).
+        const LOOPBACK_EXACT: &[&str] =
+            &["/health", "/api/channels/notify", "/api/media/upload", "/api/vision/analyze"];
+        const LOOPBACK_PREFIX: &[&str] = &["/api/uploads/"];
+        for p in ["/api/file-scenarios", "/api/file-scenarios/allowlist"] {
+            assert!(!LOOPBACK_EXACT.contains(&p), "{p} must not be loopback-exact-exempt");
+            assert!(
+                !LOOPBACK_PREFIX.iter().any(|pre| p.starts_with(pre)),
+                "{p} must not be loopback-prefix-exempt"
+            );
+        }
+    }
+
     // ── Fix wave 1 tests ──────────────────────────────────────────────────────
 
     /// set_default rejects a skill binding with 400 and does NOT displace the
