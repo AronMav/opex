@@ -12,9 +12,11 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod dispatch;
+pub mod dispatch_seam;
 pub mod outcome;
 pub mod rewrite;
 pub mod sniff;
 
 pub use dispatch::{resolve, BuiltinAction};
+pub use dispatch_seam::{dispatch_attachments, PendingAlternative, ScenarioChoice};
 pub use outcome::{FSE_DEFAULT_ALLOWLIST, ScenarioOutcome, ScenarioStatus};
