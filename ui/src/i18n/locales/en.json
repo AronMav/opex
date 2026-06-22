@@ -1216,5 +1216,13 @@
   "file_scenarios.default_not_allowlisted": "Only allowlisted tool actions (transcribe, describe, extract_document, save) can be set as default.",
   "file_scenarios.default_not_skill": "Skill scenarios can't be the automatic default; they appear as a selectable option.",
   "file_scenarios.allowlist_title": "Default-eligibility domain",
-  "file_scenarios.allowlist_hint": "Only tool actions in this closed list can be set as the automatic default. Enable or disable each action to control which defaults are permitted."
+  "file_scenarios.allowlist_hint": "Only tool actions in this closed list can be set as the automatic default. Enable or disable each action to control which defaults are permitted.",
+  "file_scenarios.title": "File Scenarios",
+  "file_scenarios.subtitle": "Manage file-type bindings and default-action allowlist",
+  "file_scenarios.add": "+ Add Scenario",
+  "file_scenarios.empty": "No file scenarios configured yet. Add one to handle incoming files automatically.",
+  "file_scenarios.save_error": "Failed to save scenario: {{error}}",
+  "file_scenarios.delete_title": "Delete scenario?",
+  "file_scenarios.delete_description": "This will remove the binding. Any in-flight file processing using it will fall back to defaults.",
+  "nav.file_scenarios": "File Scenarios"
 }
