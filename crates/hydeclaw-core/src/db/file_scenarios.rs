@@ -1,5 +1,9 @@
 //! `file_scenarios` table CRUD. See docs/superpowers/specs/2026-06-22-file-scenario-engine-design.md §4.1.
 
+// All public items in this module are forward-interface consumed by Phase 5
+// (bindings CRUD API / HTTP routes). Remove this allow once Phase 5 lands.
+#![allow(dead_code)]
+
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
