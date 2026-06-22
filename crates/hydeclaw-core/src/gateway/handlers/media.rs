@@ -17,7 +17,10 @@ pub(crate) fn routes() -> Router<AppState> {
             Router::new()
                 .route("/api/media/upload", post(api_media_upload))
                 .route("/api/media/transcribe", post(api_media_transcribe))
-                .layer(axum::extract::DefaultBodyLimit::max(20 * 1024 * 1024)) // 20 MB
+                // Transport ceiling = DB backstop (50 MB). The authoritative
+                // per-request cap is enforced in api_media_upload from
+                // cfg.uploads.max_upload_bytes (the configurable SoT).
+                .layer(axum::extract::DefaultBodyLimit::max(crate::db::uploads::MAX_UPLOAD_BYTES))
         )
 }
 
@@ -108,9 +111,16 @@ pub(crate) async fn api_media_upload(
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("read: {e}")}))).into_response(),
     };
 
-    // 20 MB hard cap (the route layer also enforces DefaultBodyLimit).
-    if data.len() > 20 * 1024 * 1024 {
-        return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({"error": "file too large (max 20MB)"}))).into_response();
+    // Authoritative per-request cap: the configurable [uploads] max_upload_bytes
+    // (the route-layer DefaultBodyLimit is the coarse transport backstop).
+    let max_bytes = usize::try_from(cfg.config.uploads.max_upload_bytes).unwrap_or(usize::MAX);
+    if data.len() > max_bytes {
+        let max_mb = max_bytes / (1024 * 1024);
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({"error": format!("file too large (max {max_mb}MB)")})),
+        )
+            .into_response();
     }
 
     let retention_days = cfg.config.cleanup.uploads_retention_days;
