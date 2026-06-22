@@ -1090,6 +1090,19 @@ pub async fn sweep_orphan_tool_results(db: &PgPool) -> Result<u64> {
     Ok(result.rows_affected())
 }
 
+/// Stamp the originating channel `chat_id` on a session (idempotent). Called on
+/// each channel turn so an interrupted interactive `/goal` can be channel-pushed
+/// (e.g. Telegram) instead of only surfacing in the UI bell. No-op for web
+/// sessions (they have no chat_id, so this is never called for them).
+pub async fn set_session_chat_id(db: &PgPool, session_id: Uuid, chat_id: i64) -> Result<()> {
+    sqlx::query("UPDATE sessions SET chat_id = $2 WHERE id = $1")
+        .bind(session_id)
+        .bind(chat_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 /// Mark a session as permanently failed after max retries exhausted.
 pub async fn mark_session_failed(db: &PgPool, session_id: Uuid) -> Result<()> {
     sqlx::query("UPDATE sessions SET run_status = 'failed' WHERE id = $1")
@@ -2338,6 +2351,19 @@ mod tests {
         )
         .bind(sid).fetch_all(&pool).await.unwrap();
         assert_eq!(remaining, vec!["X".to_string(), "Z".to_string()], "declared + interrupted-verify results survive");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn set_session_chat_id_roundtrips(pool: sqlx::PgPool) {
+        let sid = super::create_new_session(&pool, "a", "u", "telegram").await.unwrap();
+        let before: Option<i64> = sqlx::query_scalar("SELECT chat_id FROM sessions WHERE id = $1")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(before, None, "new session has no chat_id");
+
+        super::set_session_chat_id(&pool, sid, 123_456).await.unwrap();
+        let after: Option<i64> = sqlx::query_scalar("SELECT chat_id FROM sessions WHERE id = $1")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(after, Some(123_456), "chat_id is persisted");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

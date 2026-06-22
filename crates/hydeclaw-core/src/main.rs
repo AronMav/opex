@@ -980,6 +980,25 @@ async fn notify_interrupted_interactive_goals(state: gateway::AppState, db: sqlx
             tracing::warn!(session = %g.session_id, error = %e, "goal-interrupted notify failed");
             continue;
         }
+        // Best-effort channel-push (e.g. Telegram) when the session has a persisted
+        // chat_id. The UI bell above is the reliable path; at early boot the channel
+        // adapter may not be connected yet, so a push failure only logs.
+        if let Some(chat_id) = g.chat_id
+            && let Some(engine) = state.agents.get_engine(&g.agent_id).await
+        {
+            let cctx = crate::agent::pipeline::CommandContext {
+                cfg: engine.cfg(),
+                state: engine.state(),
+                tex: engine.tex(),
+                subagent_depth: 0,
+            };
+            if let Err(e) =
+                crate::agent::pipeline::channel_actions::send_channel_message(&cctx, &g.channel, chat_id, &body).await
+            {
+                tracing::debug!(session = %g.session_id, channel = %g.channel, error = %e,
+                    "goal-interrupted channel-push failed (UI bell still delivered)");
+            }
+        }
         if let Err(e) = crate::db::session_goals::set_status(&db, g.session_id, "paused").await {
             tracing::warn!(session = %g.session_id, error = %e, "goal-interrupted pause failed");
         }

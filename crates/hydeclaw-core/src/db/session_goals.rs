@@ -221,6 +221,10 @@ pub struct InterruptedInteractiveGoal {
     pub agent_id: String,
     pub user_id: String,
     pub goal_text: String,
+    /// Originating channel (e.g. "telegram"); "ui"/web for non-channel sessions.
+    pub channel: String,
+    /// Persisted channel chat_id for channel-push; `None` for web sessions.
+    pub chat_id: Option<i64>,
 }
 
 /// List interactive (`origin='goal'`) goals still `active` within the staleness
@@ -232,8 +236,8 @@ pub async fn list_interrupted_interactive_goals(
     db: &PgPool,
     staleness_secs: i64,
 ) -> Result<Vec<InterruptedInteractiveGoal>> {
-    let rows: Vec<(Uuid, String, String, String)> = sqlx::query_as(
-        "SELECT g.session_id, s.agent_id, s.user_id, g.goal_text
+    let rows: Vec<(Uuid, String, String, String, String, Option<i64>)> = sqlx::query_as(
+        "SELECT g.session_id, s.agent_id, s.user_id, g.goal_text, s.channel, s.chat_id
          FROM session_goals g
          JOIN sessions s ON s.id = g.session_id
          WHERE g.status = 'active'
@@ -246,11 +250,13 @@ pub async fn list_interrupted_interactive_goals(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(session_id, agent_id, user_id, goal_text)| InterruptedInteractiveGoal {
+        .map(|(session_id, agent_id, user_id, goal_text, channel, chat_id)| InterruptedInteractiveGoal {
             session_id,
             agent_id,
             user_id,
             goal_text,
+            channel,
+            chat_id,
         })
         .collect())
 }
@@ -464,12 +470,21 @@ mod tests {
         let _done = seed(&pool, "done", "goal", 60, "done goal", "dave").await; // completed → excluded
         let _stale = seed(&pool, "active", "goal", 100_000, "old goal", "erin").await; // outside window → excluded
 
+        // Persist a chat_id on the eligible session so the channel-push path is exercised.
+        sqlx::query("UPDATE sessions SET chat_id = 99001 WHERE id = $1")
+            .bind(want)
+            .execute(&pool)
+            .await
+            .unwrap();
+
         let got = list_interrupted_interactive_goals(&pool, 21_600).await.unwrap(); // 6h window
         let ids: Vec<Uuid> = got.iter().map(|r| r.session_id).collect();
         assert_eq!(ids, vec![want], "only the active interactive goal within the window is listed");
         assert_eq!(got[0].goal_text, "fix the bug");
         assert_eq!(got[0].user_id, "alice");
         assert_eq!(got[0].agent_id, "Agent");
+        assert_eq!(got[0].channel, "telegram", "channel surfaced for push routing");
+        assert_eq!(got[0].chat_id, Some(99001), "persisted chat_id surfaced for channel-push");
         Ok(())
     }
 }

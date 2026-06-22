@@ -143,6 +143,16 @@ pub async fn bootstrap<S: EventSink>(
         }
     }
 
+    // Persist the originating channel chat_id (if any) so an interactive `/goal`
+    // interrupted by a restart can be channel-pushed on the next boot, not only
+    // surfaced in the UI bell. Best-effort: web/UI sessions carry no chat_id, and
+    // a failed stamp must never break the turn.
+    if let Some(chat_id) = ctx.msg.context.get("chat_id").and_then(|v| v.as_i64())
+        && let Err(e) = crate::db::sessions::set_session_chat_id(&engine.cfg().db, session_id, chat_id).await
+    {
+        tracing::warn!(session_id = %session_id, error = %e, "failed to stamp session chat_id (non-fatal)");
+    }
+
     // Clean up any streaming message left by a previous crashed run.
     // Runs after build_context; startup cleanup_interrupted_sessions() handles the immediate
     // post-crash case, this call handles re-entry within the same process lifetime.
