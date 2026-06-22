@@ -55,8 +55,9 @@ fn run_save(input: &DispatchInput<'_>) -> ScenarioOutcome {
 }
 
 /// `transcribe` built-in — downloads the audio via localhost then POSTs to
-/// toolgate `/transcribe` (multipart). Mirrors `auto_transcribe_audio` but
-/// returns a deterministic envelope instead of mutating prompt text.
+/// toolgate `/transcribe` (multipart). Mirrors the former inline auto-transcribe
+/// call (removed in Phase 3); returns a deterministic envelope instead of
+/// mutating prompt text.
 async fn run_transcribe(input: &DispatchInput<'_>) -> ScenarioOutcome {
     let local_url = uploads_local_url(&input.attachment.url, input.gateway_listen);
     let bytes = match input.http_client.get(&local_url).send().await {
