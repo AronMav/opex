@@ -69,7 +69,7 @@ pub async fn list_enabled_for_match_type(
 /// Test whether a `match_type` pattern matches `sniffed_mime`.
 /// `mime_family` is the part before `/` in `sniffed_mime` (pre-computed by caller).
 fn mime_glob_matches(pattern: &str, sniffed_mime: &str, mime_family: &str) -> bool {
-    if pattern == "*" {
+    if pattern == "*" || pattern == "*/*" {
         return true;
     }
     if let Some(family) = pattern.strip_suffix("/*") {
@@ -199,6 +199,33 @@ mod tests {
     use uuid::Uuid;
 
     use super::{create, get_by_id, insert_outcome, list, set_default};
+
+    // ── Pure unit tests for mime_glob_matches (no DB) ────────────────────────
+
+    #[test]
+    fn mime_glob_universal_wildcard() {
+        use super::mime_glob_matches;
+        // "*" and "*/*" must both match any mime
+        assert!(mime_glob_matches("*", "image/png", "image"), "* matches image/png");
+        assert!(mime_glob_matches("*/*", "image/png", "image"), "*/* matches image/png");
+        assert!(mime_glob_matches("*/*", "audio/mpeg", "audio"), "*/* matches audio/mpeg");
+        assert!(mime_glob_matches("*/*", "application/pdf", "application"), "*/* matches application/pdf");
+    }
+
+    #[test]
+    fn mime_glob_family_wildcard() {
+        use super::mime_glob_matches;
+        assert!(mime_glob_matches("image/*", "image/png", "image"), "image/* matches image/png");
+        assert!(mime_glob_matches("image/*", "image/jpeg", "image"), "image/* matches image/jpeg");
+        assert!(!mime_glob_matches("image/*", "audio/mpeg", "audio"), "image/* does NOT match audio/mpeg");
+    }
+
+    #[test]
+    fn mime_glob_exact_match() {
+        use super::mime_glob_matches;
+        assert!(mime_glob_matches("application/pdf", "application/pdf", "application"), "exact match works");
+        assert!(!mime_glob_matches("application/pdf", "image/png", "image"), "exact match rejects wrong mime");
+    }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn create_then_get_round_trip(pool: PgPool) {
