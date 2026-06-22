@@ -13,9 +13,11 @@ use std::fmt;
 /// The four built-in deterministic action names. `save` is the rowless
 /// universal fallback; it is listed here so dispatch + validation share one
 /// closed set (design §4.2, §4.6).
+#[allow(dead_code)] // Phase 5+: consumed by binding-write validator and HTTP route handlers
 pub const FSE_DEFAULT_ALLOWLIST: &[&str] = &["transcribe", "describe", "extract_document", "save"];
 
 /// Reasons a binding write or allowlist amend is rejected.
+#[allow(dead_code)] // Phase 5+: returned by validators, matched in HTTP handlers
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AllowlistError {
     /// `executor=tool` + `is_default=true` whose `action_ref` is not an
@@ -47,6 +49,7 @@ impl std::error::Error for AllowlistError {}
 
 /// True if `name` is one of the four built-in action names (constant
 /// membership, independent of the operator toggle).
+#[allow(dead_code)] // private helper; used by the three pub validators below
 fn is_constant_member(name: &str) -> bool {
     FSE_DEFAULT_ALLOWLIST.contains(&name)
 }
@@ -60,6 +63,7 @@ fn is_constant_member(name: &str) -> bool {
 /// `enabled_allowlist` is the operator-editable subset of the constant
 /// (from `get_enabled_allowlist`). A default binding is accepted only if its
 /// `action_ref` is BOTH a constant member AND currently enabled.
+#[allow(dead_code)] // Phase 5+: called by POST/PUT /api/file-scenarios HTTP handlers
 pub fn validate_binding_write(
     executor: &str,
     action_ref: &str,
@@ -83,6 +87,7 @@ pub fn validate_binding_write(
 /// cannot 0-click-run a non-built-in action"). Fail-closed: an empty toggle
 /// or a non-member yields `false` and the dispatcher must resolve to
 /// `ScenarioStatus::Unsupported`.
+#[allow(dead_code)] // Phase 5+: called by FSE dispatcher before every 0-click auto-run
 pub fn is_allowed_for_autorun(action_ref: &str, enabled_allowlist: &[String]) -> bool {
     is_constant_member(action_ref) && enabled_allowlist.iter().any(|m| m == action_ref)
 }
@@ -91,6 +96,9 @@ pub fn is_allowed_for_autorun(action_ref: &str, enabled_allowlist: &[String]) ->
 /// members of `FSE_DEFAULT_ALLOWLIST`; any other name is rejected (design
 /// §4.6, mirroring `providers.rs:570` `VALID_CAPABILITIES`). It can therefore
 /// never admit `code_exec` / raw-URL / a YAML tool.
+///
+/// An empty slice is accepted and means all auto-run is operator-disabled.
+#[allow(dead_code)] // Phase 5+: called by PUT /api/file-scenarios/allowlist HTTP handler
 pub fn validate_allowlist_toggle(members: &[String]) -> Result<(), AllowlistError> {
     for m in members {
         if !is_constant_member(m) {
@@ -151,5 +159,12 @@ mod tests {
         let err = validate_allowlist_toggle(&["transcribe".into(), "code_exec".into()]).unwrap_err();
         assert!(matches!(err, AllowlistError::UnknownMember(ref a) if a == "code_exec"));
         assert!(validate_allowlist_toggle(&["transcribe".into(), "save".into()]).is_ok());
+    }
+
+    #[test]
+    fn toggle_accepts_empty_slice() {
+        // An empty allowlist is valid: it means the operator has disabled all
+        // auto-run; no unknown members to reject.
+        assert!(validate_allowlist_toggle(&[]).is_ok());
     }
 }
