@@ -140,6 +140,15 @@ pub struct MetricsRegistry {
     /// "5xx", "network", "schema_pre_stream", or "untyped".
     llm_failover_total: RwLock<HashMap<(String, String, String), AtomicU64>>,
 
+    /// (agent, event) → counter for autonomous-resumption lifecycle events:
+    /// cron-goal re-drive and interactive-`/goal` crash notification. `event` is
+    /// drawn from a small fixed vocabulary (e.g. "cron_redrive_started",
+    /// "cron_redrive_skipped_live", "cron_redrive_claim_raced",
+    /// "cron_redrive_list_failed", "interactive_goal_notified"). Cardinality is
+    /// bounded by the finite agent set × that vocabulary — no runtime guard
+    /// needed. Raw counter (no OTel mirror), like `sse_events_dropped`.
+    redrive_events: RwLock<HashMap<(String, String), AtomicU64>>,
+
     /// Feature-gated OTel instruments. Populated by
     /// [`MetricsRegistry::install_otel_instruments`] after the global
     /// `MeterProvider` is set. `None` on `--no-default-features`.
@@ -160,6 +169,7 @@ impl MetricsRegistry {
             unique_series: AtomicU64::new(0),
             llm_timeout_total: RwLock::new(HashMap::new()),
             llm_failover_total: RwLock::new(HashMap::new()),
+            redrive_events: RwLock::new(HashMap::new()),
             #[cfg(feature = "otel")]
             otel_instruments: std::sync::OnceLock::new(),
         }
@@ -207,6 +217,37 @@ impl MetricsRegistry {
     /// Snapshot all dropped-event counters. Used by /api/health/dashboard.
     pub fn snapshot_sse_drops(&self) -> HashMap<(String, String), u64> {
         let read = self.sse_events_dropped.read().expect("metrics RwLock poisoned");
+        read.iter()
+            .map(|(k, v)| (k.clone(), v.load(Ordering::Relaxed)))
+            .collect()
+    }
+
+    /// Record an autonomous-resumption lifecycle event (`event`) for `agent`.
+    /// Safe to call from any task. See the `redrive_events` field doc for the
+    /// event vocabulary. Use `"-"` as `agent` when no agent is in scope (e.g. a
+    /// failed `list_redrivable` query).
+    pub fn record_redrive_event(&self, agent: &str, event: &str) {
+        let key = (agent.to_string(), event.to_string());
+        // Fast path: existing key → shared read lock + atomic inc.
+        {
+            let read = self.redrive_events.read().expect("metrics RwLock poisoned");
+            if let Some(counter) = read.get(&key) {
+                counter.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        // Slow path: insert new key under write lock (re-check after upgrade).
+        let mut write = self.redrive_events.write().expect("metrics RwLock poisoned");
+        write
+            .entry(key)
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Snapshot all autonomous-resumption lifecycle counters, keyed by
+    /// `(agent, event)`. Used by `/api/health/dashboard`.
+    pub fn snapshot_redrive_events(&self) -> HashMap<(String, String), u64> {
+        let read = self.redrive_events.read().expect("metrics RwLock poisoned");
         read.iter()
             .map(|(k, v)| (k.clone(), v.load(Ordering::Relaxed)))
             .collect()
@@ -1007,6 +1048,12 @@ pub fn build_dashboard_body_with_snapshot(
         ka.cmp(&kb)
     });
 
+    // Autonomous-resumption lifecycle counters: {agent: {event: count}}.
+    let mut redrive_events: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+    for ((agent, event), count) in registry.snapshot_redrive_events() {
+        redrive_events.entry(agent).or_default().insert(event, count);
+    }
+
     serde_json::json!({
         "version": env!("CARGO_PKG_VERSION"),
         "active_agents": snap.active_agents,
@@ -1025,6 +1072,7 @@ pub fn build_dashboard_body_with_snapshot(
         "csp_violations_overflow": registry.csp_violations_overflow_count(),
         "llm_timeout_total": llm_timeouts,
         "llm_failover_total": llm_failovers,
+        "redrive_events_total": redrive_events,
         // CACHE-03: prompt-caching aggregates from usage_log.
         "cache_read_tokens_24h": snap.cache_read_tokens_24h,
         "cache_creation_tokens_24h": snap.cache_creation_tokens_24h,
@@ -1054,6 +1102,25 @@ mod tests {
         let snap = reg.snapshot_sse_drops();
         assert_eq!(snap.get(&("agent-a".to_string(), "text-delta".to_string())), Some(&3));
         assert_eq!(snap.get(&("agent-b".to_string(), "finish".to_string())), Some(&1));
+    }
+
+    #[test]
+    fn redrive_events_counter_accumulates() {
+        let reg = MetricsRegistry::new();
+        assert!(reg.snapshot_redrive_events().is_empty());
+        reg.record_redrive_event("Hyde", "cron_redrive_started");
+        reg.record_redrive_event("Hyde", "cron_redrive_started");
+        reg.record_redrive_event("Alma", "interactive_goal_notified");
+        let snap = reg.snapshot_redrive_events();
+        assert_eq!(
+            snap.get(&("Hyde".to_string(), "cron_redrive_started".to_string())),
+            Some(&2)
+        );
+        assert_eq!(
+            snap.get(&("Alma".to_string(), "interactive_goal_notified".to_string())),
+            Some(&1)
+        );
+        assert_eq!(snap.len(), 2);
     }
 
     #[test]

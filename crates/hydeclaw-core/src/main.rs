@@ -873,10 +873,12 @@ async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
         return;
     }
 
+    let metrics = state.infra.metrics.clone();
     let redrivable = match crate::db::session_goals::list_redrivable(&db, STALENESS_SECS, MAX_RETRIES).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, "resume_autonomous_goals: list_redrivable failed");
+            metrics.record_redrive_event("-", "cron_redrive_list_failed");
             return;
         }
     };
@@ -903,6 +905,7 @@ async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
             continue;
         };
         if crate::agent::goal::pool::is_running(&pool, rg.session_id) {
+            metrics.record_redrive_event(&rg.agent_id, "cron_redrive_skipped_live");
             continue; // a live driver already owns this session
         }
         match crate::db::sessions::claim_redrive(&db, rg.session_id, MAX_RETRIES).await {
@@ -916,12 +919,15 @@ async fn resume_autonomous_goals(state: gateway::AppState, db: sqlx::PgPool) {
                 let handle = crate::agent::goal::driver::spawn_goal_driver(engine.clone(), rg.session_id, None);
                 pool.insert(rg.session_id, handle);
                 started += 1;
+                metrics.record_redrive_event(&rg.agent_id, "cron_redrive_started");
                 tracing::info!(session = %rg.session_id, agent = %rg.agent_id, retry, "autonomous goal re-drive started");
             }
             Ok(None) => {
+                metrics.record_redrive_event(&rg.agent_id, "cron_redrive_claim_raced");
                 tracing::debug!(session = %rg.session_id, "re-drive: claim skipped (raced or budget exhausted)");
             }
             Err(e) => {
+                metrics.record_redrive_event(&rg.agent_id, "cron_redrive_claim_failed");
                 tracing::warn!(session = %rg.session_id, error = %e, "re-drive: claim_redrive failed");
             }
         }
@@ -968,6 +974,7 @@ async fn notify_interrupted_interactive_goals(state: gateway::AppState, db: sqlx
         if let Err(e) = crate::db::session_goals::set_status(&db, g.session_id, "paused").await {
             tracing::warn!(session = %g.session_id, error = %e, "goal-interrupted pause failed");
         }
+        state.infra.metrics.record_redrive_event(&g.agent_id, "interactive_goal_notified");
         notified += 1;
     }
     tracing::info!(notified, total = goals.len(), "interrupted interactive goals notified");
