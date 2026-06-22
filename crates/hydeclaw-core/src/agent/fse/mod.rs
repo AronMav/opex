@@ -17,7 +17,6 @@ pub use allowlist::{
     AllowlistError, FSE_DEFAULT_ALLOWLIST, is_allowed_for_autorun, validate_allowlist_toggle,
     validate_binding_write,
 };
-#[allow(unused_imports)] // Phase 5+: consumed by GET/PUT /api/file-scenarios/allowlist handlers
 pub use allowlist_store::{get_enabled_allowlist, set_enabled_allowlist};
 pub use seeder::seed_default_file_scenarios;
 

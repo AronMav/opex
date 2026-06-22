@@ -57,6 +57,15 @@ pub(crate) struct SetDefaultBody {
     pub is_default: bool,
 }
 
+/// Body for PUT /api/file-scenarios/allowlist.
+/// Toggles a single member of the closed constant `FSE_DEFAULT_ALLOWLIST`.
+/// `action_ref` values outside that constant are rejected with 400.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SetAllowlistBody {
+    pub action_ref: String,
+    pub enabled: bool,
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -64,6 +73,14 @@ pub(crate) fn routes() -> Router<AppState> {
         .route(
             "/api/file-scenarios",
             get(api_list_file_scenarios).post(api_create_file_scenario),
+        )
+        // NOTE: `/allowlist` is a literal segment and must be registered before `/{id}`
+        // so axum's router does not attempt to parse "allowlist" as a UUID. In axum 0.8
+        // literal routes already take priority over capture routes, but explicit ordering
+        // makes the intent clear.
+        .route(
+            "/api/file-scenarios/allowlist",
+            get(api_get_fse_allowlist).put(api_set_fse_allowlist),
         )
         .route(
             "/api/file-scenarios/{id}",
@@ -386,11 +403,155 @@ pub(crate) async fn api_set_file_scenario_default(
     }
 }
 
+// ── Allowlist handlers ───────────────────────────────────────────────────────
+
+/// Closed-domain check: an allowlist amend may only toggle a member of the
+/// hard-coded `FSE_DEFAULT_ALLOWLIST` constant. Mirrors `providers.rs`
+/// validating against `VALID_CAPABILITIES` — it can never admit `code_exec`
+/// / raw-URL / a YAML tool (§4.6).
+fn is_allowlist_member(name: &str) -> bool {
+    crate::agent::fse::FSE_DEFAULT_ALLOWLIST.contains(&name)
+}
+
+/// GET /api/file-scenarios/allowlist
+///
+/// Returns the full constant `FSE_DEFAULT_ALLOWLIST` (always four members)
+/// annotated with the operator-toggled `enabled` flag for each.
+pub(crate) async fn api_get_fse_allowlist(
+    State(infra): State<InfraServices>,
+) -> impl IntoResponse {
+    let enabled_set = crate::agent::fse::get_enabled_allowlist(&infra.db).await;
+    let members: Vec<serde_json::Value> = crate::agent::fse::FSE_DEFAULT_ALLOWLIST
+        .iter()
+        .map(|m| {
+            let is_enabled = enabled_set.iter().any(|e| e == m);
+            json!({ "action_ref": m, "enabled": is_enabled })
+        })
+        .collect();
+    (StatusCode::OK, Json(json!({ "allowlist": members }))).into_response()
+}
+
+/// PUT /api/file-scenarios/allowlist
+///
+/// Toggles a single member of the closed-domain `FSE_DEFAULT_ALLOWLIST`.
+/// Returns 400 if `action_ref` is not a member of that constant (the toggle
+/// cannot admit arbitrary tool names, YAML tools, or `code_exec`).
+/// Audits `FSE_ALLOWLIST_AMENDED` on success.
+pub(crate) async fn api_set_fse_allowlist(
+    State(infra): State<InfraServices>,
+    Json(body): Json<SetAllowlistBody>,
+) -> impl IntoResponse {
+    // Closed-domain guard: reject any name not in the hard-coded constant.
+    if !is_allowlist_member(&body.action_ref) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "'{}' is not a member of the allowlist; only {} may be toggled",
+                    body.action_ref,
+                    crate::agent::fse::FSE_DEFAULT_ALLOWLIST.join(", ")
+                )
+            })),
+        )
+            .into_response();
+    }
+
+    // Compute the new enabled set: start from current, then apply the toggle.
+    let mut current = crate::agent::fse::get_enabled_allowlist(&infra.db).await;
+    if body.enabled {
+        if !current.iter().any(|m| m == &body.action_ref) {
+            current.push(body.action_ref.clone());
+        }
+    } else {
+        current.retain(|m| m != &body.action_ref);
+    }
+
+    // Persist via the validator-gated store function.
+    match crate::agent::fse::set_enabled_allowlist(&infra.db, &current).await {
+        Ok(()) => {
+            crate::db::audit::audit_spawn(
+                infra.db.clone(),
+                String::new(),
+                crate::db::audit::event_types::FSE_ALLOWLIST_AMENDED,
+                Some("ui".into()),
+                json!({ "action_ref": body.action_ref, "enabled": body.enabled }),
+            );
+            (
+                StatusCode::OK,
+                Json(json!({ "action_ref": body.action_ref, "enabled": body.enabled })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateScenarioBody, SetDefaultBody, UpdateScenarioBody};
+    use super::{CreateScenarioBody, SetAllowlistBody, SetDefaultBody, UpdateScenarioBody, is_allowlist_member};
+
+    // ── Task 5.6 tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn allowlist_membership_is_closed_domain() {
+        // Only the four hard-coded constant members are valid.
+        assert!(is_allowlist_member("transcribe"));
+        assert!(is_allowlist_member("describe"));
+        assert!(is_allowlist_member("extract_document"));
+        assert!(is_allowlist_member("save"));
+        // Anything else — including code_exec / raw-URL / a YAML tool — is rejected.
+        assert!(!is_allowlist_member("code_exec"));
+        assert!(!is_allowlist_member("analyze_image"));
+        assert!(!is_allowlist_member(""));
+    }
+
+    #[test]
+    fn set_allowlist_body_deserializes() {
+        let body: SetAllowlistBody =
+            serde_json::from_value(serde_json::json!({ "action_ref": "describe", "enabled": false })).unwrap();
+        assert_eq!(body.action_ref, "describe");
+        assert!(!body.enabled);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn allowlist_get_returns_all_four_members(pool: sqlx::PgPool) {
+        // Fresh DB: all four members enabled by default.
+        let enabled = crate::agent::fse::get_enabled_allowlist(&pool).await;
+        assert_eq!(enabled.len(), 4, "fresh DB must default to all four members enabled");
+        for name in crate::agent::fse::FSE_DEFAULT_ALLOWLIST {
+            assert!(
+                enabled.iter().any(|m| m == name),
+                "member '{name}' must be in the default enabled set"
+            );
+        }
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn allowlist_set_persists_valid_subset(pool: sqlx::PgPool) {
+        // Disable "save" — only 3 members remain.
+        let subset = vec!["transcribe".to_string(), "describe".to_string(), "extract_document".to_string()];
+        crate::agent::fse::set_enabled_allowlist(&pool, &subset).await.unwrap();
+        let enabled = crate::agent::fse::get_enabled_allowlist(&pool).await;
+        assert_eq!(enabled.len(), 3);
+        assert!(!enabled.iter().any(|m| m == "save"), "save must be disabled");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn allowlist_set_rejects_non_constant_member(pool: sqlx::PgPool) {
+        // "code_exec" is not in FSE_DEFAULT_ALLOWLIST → must be rejected with Err.
+        let bad = vec!["transcribe".to_string(), "code_exec".to_string()];
+        let result = crate::agent::fse::set_enabled_allowlist(&pool, &bad).await;
+        assert!(result.is_err(), "code_exec must be rejected by set_enabled_allowlist");
+        // DB state must be unchanged (full default still in effect).
+        let still_full = crate::agent::fse::get_enabled_allowlist(&pool).await;
+        assert_eq!(still_full.len(), 4, "DB must be unchanged after rejected set");
+    }
 
     #[test]
     fn create_body_deserializes_with_defaults() {
