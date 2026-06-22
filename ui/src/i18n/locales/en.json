@@ -1214,5 +1214,7 @@
   "file_scenarios.is_default": "Set as default",
   "file_scenarios.enabled": "Enabled",
   "file_scenarios.default_not_allowlisted": "Only allowlisted tool actions (transcribe, describe, extract_document, save) can be set as default.",
-  "file_scenarios.default_not_skill": "Skill scenarios can't be the automatic default; they appear as a selectable option."
+  "file_scenarios.default_not_skill": "Skill scenarios can't be the automatic default; they appear as a selectable option.",
+  "file_scenarios.allowlist_title": "Default-eligibility domain",
+  "file_scenarios.allowlist_hint": "Only tool actions in this closed list can be set as the automatic default. Enable or disable each action to control which defaults are permitted."
 }
