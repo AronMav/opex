@@ -455,6 +455,10 @@ pub(super) async fn run_converter(
                 let _ = send_and_buffer!(frame);
                 continue;
             }
+            // Task 6.4 will implement the real SSE emission for this variant.
+            StreamEvent::FileScenarioChips { .. } => {
+                continue;
+            }
             StreamEvent::Error(ref text) => {
                 let err_frame = writer.build_error(text.clone());
                 let _ = send_and_buffer!(err_frame);

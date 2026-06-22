@@ -265,6 +265,18 @@ pub struct UsagePayload {
     pub reasoning_tokens: Option<u32>,
 }
 
+/// A single alternative scenario the user may pick after the default binding ran.
+/// Carried by `StreamEvent::FileScenarioChips` / `SseEvent::FileScenarioChips`.
+/// Full SSE serialisation is added in Task 6.2.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[serde(rename_all = "camelCase")]
+pub struct ScenarioChoice {
+    pub scenario_id: uuid::Uuid,
+    pub label: String,
+    pub executor: String,
+}
+
 impl SseEvent {
     /// Best-effort RichCard mapping. Falls back to `RichCardData::Other`
     /// if card_type is unknown OR data doesn't deserialize into the
