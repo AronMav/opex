@@ -108,7 +108,8 @@ fn two_bindings_no_default_branch_runs_save_and_records_alternatives() {
     let none_arm_start = seam_src
         .rfind("None => {")
         .expect("dispatch_seam.rs must have a `None => {` arm for the no-default case");
-    let none_arm_region = &seam_src[none_arm_start..none_arm_start.min(seam_src.len()) + 500];
+    let end = (none_arm_start + 500).min(seam_src.len());
+    let none_arm_region = &seam_src[none_arm_start..end];
     assert!(
         !none_arm_region.contains("oneshot") && !none_arm_region.contains("recv.await"),
         "web 2+-no-default branch must not block on a user choice \
