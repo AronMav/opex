@@ -1,9 +1,5 @@
 //! `file_scenarios` table CRUD. See docs/superpowers/specs/2026-06-22-file-scenario-engine-design.md §4.1.
 
-// All public items in this module are forward-interface consumed by Phase 5
-// (bindings CRUD API / HTTP routes). Remove this allow once Phase 5 lands.
-#![allow(dead_code)]
-
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
@@ -142,6 +138,9 @@ pub async fn delete(pool: &PgPool, id: Uuid) -> Result<u64> {
 /// Promote `id` to the default for its match_type, clearing the prior default in
 /// one transaction so the `file_scenarios_one_default` partial unique index is
 /// never transiently violated.
+// Phase 5 set-default endpoint (PUT /api/file-scenarios/{id}/default) is
+// the next consumer; keep the allow until that handler lands.
+#[allow(dead_code)]
 pub async fn set_default(pool: &PgPool, id: Uuid) -> Result<()> {
     let mut tx = pool.begin().await?;
     let match_type: String = sqlx::query_scalar("SELECT match_type FROM file_scenarios WHERE id = $1")
@@ -161,6 +160,8 @@ pub async fn set_default(pool: &PgPool, id: Uuid) -> Result<()> {
 }
 
 /// Record a per-file processing outcome. Returns the new row id.
+// Phase 6 dispatch layer is the next consumer; keep the allow until dispatch lands.
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_outcome(
     pool: &PgPool,
