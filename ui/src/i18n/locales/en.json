@@ -1201,6 +1201,7 @@
   "login.show_token": "Show token",
 
   "file_scenarios.default_badge": "default",
+  "file_scenarios.disabled_badge": "Disabled",
   "file_scenarios.set_default": "Set as default",
   "file_scenarios.toggle_enabled": "Toggle enabled"
 }
