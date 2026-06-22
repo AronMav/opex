@@ -30,6 +30,12 @@ pub mod event_types {
     pub const MEMORY_PINNED: &str = "memory_pinned";
     // Rate limiting (reserved for future per-event logging)
     pub const RATE_LIMITED: &str = "rate_limited";
+    // File Scenario Engine — authorization events (see spec §4.6). Kept off
+    // session_timeline (which LoopDetector warm-up scans); home is audit_events.
+    pub const FSE_BINDING_CREATED: &str = "fse_binding_created";
+    pub const FSE_DEFAULT_CHANGED: &str = "fse_default_changed";
+    pub const FSE_ALLOWLIST_AMENDED: &str = "fse_allowlist_amended";
+    pub const FSE_AUTO_RUN: &str = "fse_auto_run";
 }
 
 /// Fire-and-forget audit log helper. Spawns a background task.
@@ -143,7 +149,23 @@ mod tests {
             event_types::MEMORY_DELETED,
             event_types::MEMORY_PINNED,
             event_types::RATE_LIMITED,
+            event_types::FSE_BINDING_CREATED,
+            event_types::FSE_DEFAULT_CHANGED,
+            event_types::FSE_ALLOWLIST_AMENDED,
+            event_types::FSE_AUTO_RUN,
         ]
+    }
+
+    #[test]
+    fn fse_constants_present_and_namespaced() {
+        for c in [
+            event_types::FSE_BINDING_CREATED,
+            event_types::FSE_DEFAULT_CHANGED,
+            event_types::FSE_ALLOWLIST_AMENDED,
+            event_types::FSE_AUTO_RUN,
+        ] {
+            assert!(c.starts_with("fse_"), "FSE event type must be fse_-namespaced: {c}");
+        }
     }
 
     #[test]
