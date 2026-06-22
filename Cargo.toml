@@ -29,6 +29,14 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres",
 
 # HTTP client (rustls — no openssl dependency for cross-compilation)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "charset", "http2", "macos-system-configuration", "stream", "multipart"] }
+
+# Magic-byte file-type sniffing (pure Rust, no OpenSSL/TLS — ARM64-safe).
+# Used by the File Scenario Engine sniffer to avoid trusting channel-provided media_type.
+infer = "0.16"
+# Promote the transitive mime_guess to a direct dep so the sniffer can name it
+# for the extension fallback path.
+mime_guess = "2"
+
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 futures-core = "0.3"

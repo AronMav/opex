@@ -205,6 +205,21 @@ pub(crate) fn extract_urls(text: &str) -> Vec<String> {
         .collect()
 }
 
+// TEMP: removed in Task 3.8 once the real FSE sniffer module exists.
+#[cfg(test)]
+mod infer_dep_smoke {
+    #[test]
+    fn infer_and_mime_guess_are_linkable() {
+        // PNG magic bytes → infer must return image/png.
+        let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let t = infer::get(&png).expect("infer should detect PNG");
+        assert_eq!(t.mime_type(), "image/png");
+        // mime_guess extension fallback.
+        let m = mime_guess::from_path("x.pdf").first_raw();
+        assert_eq!(m, Some("application/pdf"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
