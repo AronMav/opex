@@ -14,7 +14,7 @@ use crate::db::file_scenarios;
 use crate::gateway::AppState;
 use crate::gateway::clusters::InfraServices;
 
-// ── Request body ─────────────────────────────────────────────────────────────
+// ── Request bodies ────────────────────────────────────────────────────────────
 
 fn default_priority() -> i32 {
     100
@@ -37,6 +37,17 @@ pub(crate) struct CreateScenarioBody {
     pub enabled: bool,
 }
 
+/// Partial-update body for PUT /api/file-scenarios/{id}.
+/// Only `label`, `priority`, and `enabled` are mutable post-creation;
+/// `match_type`, `executor`, `action_ref`, and `is_default` are immutable
+/// (structural identity fields).
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateScenarioBody {
+    pub label: Option<String>,
+    pub priority: Option<i32>,
+    pub enabled: Option<bool>,
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 pub(crate) fn routes() -> Router<AppState> {
@@ -45,7 +56,12 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/file-scenarios",
             get(api_list_file_scenarios).post(api_create_file_scenario),
         )
-        .route("/api/file-scenarios/{id}", get(api_get_file_scenario))
+        .route(
+            "/api/file-scenarios/{id}",
+            get(api_get_file_scenario)
+                .put(api_update_file_scenario)
+                .delete(api_delete_file_scenario),
+        )
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -164,11 +180,109 @@ pub(crate) async fn api_get_file_scenario(
     }
 }
 
+pub(crate) async fn api_update_file_scenario(
+    State(infra): State<InfraServices>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateScenarioBody>,
+) -> impl IntoResponse {
+    // Load existing row to merge partial fields and to anchor validation against
+    // the immutable structural fields (executor, action_ref, is_default).
+    let existing = match file_scenarios::get_by_id(&infra.db, id).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response();
+        }
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+        }
+    };
+
+    // Re-validate via the same gate as create. Only label/priority/enabled are
+    // mutable, so structural identity fields (executor, action_ref, is_default)
+    // come verbatim from the existing row — the effective state after the update.
+    let enabled_allowlist = crate::agent::fse::get_enabled_allowlist(&infra.db).await;
+    if let Err(msg) = crate::agent::fse::validate_binding_write(
+        &existing.executor,
+        &existing.action_ref,
+        existing.is_default,
+        &enabled_allowlist,
+    ) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg.to_string() }))).into_response();
+    }
+
+    let eff_label = body.label.as_deref().unwrap_or(&existing.label);
+    let eff_priority = body.priority.unwrap_or(existing.priority);
+    let eff_enabled = body.enabled.unwrap_or(existing.enabled);
+
+    match file_scenarios::update(&infra.db, id, eff_label, eff_priority, eff_enabled).await {
+        Ok(1) => {
+            // Re-fetch to return the updated row.
+            match file_scenarios::get_by_id(&infra.db, id).await {
+                Ok(Some(row)) => {
+                    crate::db::audit::audit_spawn(
+                        infra.db.clone(),
+                        String::new(),
+                        crate::db::audit::event_types::FSE_BINDING_UPDATED,
+                        Some("ui".into()),
+                        json!({
+                            "scenario_id": row.id.to_string(),
+                            "match_type": row.match_type,
+                        }),
+                    );
+                    (StatusCode::OK, Json(row)).into_response()
+                }
+                Ok(None) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": "updated row not found" })),
+                )
+                    .into_response(),
+                Err(e) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+                    .into_response(),
+            }
+        }
+        Ok(0) => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response(),
+        Ok(_) => unreachable!("update by primary key affects at most one row"),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+pub(crate) async fn api_delete_file_scenario(
+    State(infra): State<InfraServices>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match file_scenarios::delete(&infra.db, id).await {
+        Ok(1) => {
+            crate::db::audit::audit_spawn(
+                infra.db.clone(),
+                String::new(),
+                crate::db::audit::event_types::FSE_BINDING_DELETED,
+                Some("ui".into()),
+                json!({ "scenario_id": id.to_string() }),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(0) => (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response(),
+        Ok(_) => unreachable!("delete by primary key affects at most one row"),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
-    use super::CreateScenarioBody;
+    use super::{CreateScenarioBody, UpdateScenarioBody};
 
     #[test]
     fn create_body_deserializes_with_defaults() {
@@ -254,5 +368,85 @@ mod tests {
             rows.iter().any(|r| r.match_type == "image/*" && r.action_ref == "describe"),
             "inserted image/* describe binding must be listed: {rows:?}"
         );
+    }
+
+    // ── Task 5.4 tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn update_body_all_fields_optional() {
+        let body: UpdateScenarioBody = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(body.label.is_none());
+        assert!(body.priority.is_none());
+        assert!(body.enabled.is_none());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn delete_removes_row(pool: sqlx::PgPool) {
+        let id = crate::db::file_scenarios::create(
+            &pool,
+            ".txt",
+            "skill",
+            "summarize-notes",
+            "Summarize",
+            false,
+            100,
+            true,
+            "ui",
+        )
+        .await
+        .unwrap();
+
+        // First delete: row gone → 1 row affected.
+        let affected = crate::db::file_scenarios::delete(&pool, id).await.unwrap();
+        assert_eq!(affected, 1, "first delete must affect exactly one row");
+        assert!(
+            crate::db::file_scenarios::get_by_id(&pool, id).await.unwrap().is_none(),
+            "row must be gone after delete"
+        );
+        // Idempotent: second delete returns 0 rows affected.
+        let again = crate::db::file_scenarios::delete(&pool, id).await.unwrap();
+        assert_eq!(again, 0, "second delete must affect zero rows");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn update_persists_changes(pool: sqlx::PgPool) {
+        let id = crate::db::file_scenarios::create(
+            &pool,
+            "audio/*",
+            "tool",
+            "transcribe",
+            "Transcribe",
+            false,
+            100,
+            true,
+            "ui",
+        )
+        .await
+        .unwrap();
+
+        let affected =
+            crate::db::file_scenarios::update(&pool, id, "Transcribe (updated)", 50, false)
+                .await
+                .unwrap();
+        assert_eq!(affected, 1);
+
+        let row = crate::db::file_scenarios::get_by_id(&pool, id).await.unwrap().unwrap();
+        assert_eq!(row.label, "Transcribe (updated)");
+        assert_eq!(row.priority, 50);
+        assert!(!row.enabled);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn update_unknown_id_returns_zero(pool: sqlx::PgPool) {
+        let affected = crate::db::file_scenarios::update(
+            &pool,
+            uuid::Uuid::new_v4(),
+            "label",
+            100,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(affected, 0, "update of non-existent id must return 0");
     }
 }
