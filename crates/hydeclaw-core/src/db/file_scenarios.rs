@@ -37,6 +37,47 @@ pub async fn list(pool: &PgPool) -> Result<Vec<FileScenarioRow>> {
     Ok(sqlx::query_as::<_, FileScenarioRow>(&sql).fetch_all(pool).await?)
 }
 
+/// Return enabled bindings whose `match_type` glob matches `sniffed_mime`, ordered
+/// by `is_default DESC, priority ASC` (highest-priority default first).
+///
+/// Glob semantics (FSE §4.2):
+/// - `*`        — matches any mime type
+/// - `image/*`  — matches any mime whose family (before `/`) equals `image`
+/// - `audio/*`  — same for audio, video, application, etc.
+/// - anything else is an exact string match (e.g. `application/pdf`)
+///
+/// Only `enabled = true` bindings are returned. Matching is done in Rust after a
+/// full table scan; the table is operator-configured and stays tiny (< 100 rows).
+pub async fn list_enabled_for_match_type(
+    pool: &PgPool,
+    sniffed_mime: &str,
+) -> Result<Vec<FileScenarioRow>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM file_scenarios WHERE enabled = true \
+         ORDER BY is_default DESC, priority ASC, created_at ASC, id ASC"
+    );
+    let all: Vec<FileScenarioRow> = sqlx::query_as::<_, FileScenarioRow>(&sql).fetch_all(pool).await?;
+
+    let mime_family = sniffed_mime.split('/').next().unwrap_or("");
+    let matched = all
+        .into_iter()
+        .filter(|row| mime_glob_matches(&row.match_type, sniffed_mime, mime_family))
+        .collect();
+    Ok(matched)
+}
+
+/// Test whether a `match_type` pattern matches `sniffed_mime`.
+/// `mime_family` is the part before `/` in `sniffed_mime` (pre-computed by caller).
+fn mime_glob_matches(pattern: &str, sniffed_mime: &str, mime_family: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some(family) = pattern.strip_suffix("/*") {
+        return family == mime_family;
+    }
+    pattern == sniffed_mime
+}
+
 pub async fn get_by_id(pool: &PgPool, id: Uuid) -> Result<Option<FileScenarioRow>> {
     let sql = format!("SELECT {SELECT_COLS} FROM file_scenarios WHERE id = $1");
     Ok(sqlx::query_as::<_, FileScenarioRow>(&sql).bind(id).fetch_optional(pool).await?)
