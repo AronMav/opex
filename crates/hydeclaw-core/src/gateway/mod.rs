@@ -28,7 +28,7 @@ pub mod stream_registry;
 pub mod stream_jobs;
 pub mod state;
 pub mod clusters;
-mod handlers;
+pub(crate) mod handlers;
 pub use error::ApiError;
 pub use state::*;
 use middleware::{AuthRateLimiter, auth_middleware, RequestRateLimiter, request_rate_limit_middleware, csp_report_rate_limit_middleware, webhook_rate_limit_middleware};

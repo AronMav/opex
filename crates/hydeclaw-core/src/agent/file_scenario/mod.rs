@@ -13,6 +13,7 @@
 
 pub mod dispatch;
 pub mod outcome;
+pub mod sniff;
 
 pub use dispatch::{resolve, BuiltinAction};
 pub use outcome::{FSE_DEFAULT_ALLOWLIST, ScenarioOutcome, ScenarioStatus};
