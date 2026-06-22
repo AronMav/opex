@@ -377,6 +377,28 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         }
     });
 
+    // file_scenario: base-only constrained authoring of file→action bindings.
+    // Mirrors `cron` (flat verb actions, base-gated). NOT an `agent` action.
+    // Agents may ONLY author executor=skill, is_default=false bindings (§5/§4.6);
+    // the schema deliberately omits is_default / executor / priority so they
+    // cannot even be expressed — the handler + Phase-4 validator enforce it too.
+    if ctx.is_base {
+        tools.push(ToolDefinition {
+            name: "file_scenario".to_string(),
+            description: "Author file-type scenarios (bindings of a file type → a skill). action=create adds a NEW skill-backed option for a file type; action=list shows existing scenarios. You can only bind skills, never make a binding the zero-tap default — operators do that. List first before creating.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["create", "list"] },
+                    "match_type": { "type": "string", "description": "MIME glob (e.g. 'image/*', 'application/pdf') or extension (e.g. '.mp4'). Required for create." },
+                    "action_ref": { "type": "string", "description": "Name of an existing skill to bind. Required for create." },
+                    "label": { "type": "string", "description": "Short menu/chip label shown to the user. Required for create." }
+                },
+                "required": ["action"]
+            }),
+        });
+    }
+
     // ── Tool management (optional group) ────────────────────────────────
     if groups.tool_management {
         tools.extend(vec![
@@ -1213,6 +1235,84 @@ mod tests {
                 "{required:?} must exist in agent tool schema"
             );
         }
+    }
+
+    /// Pin the file_scenario tool action enum so a future edit cannot widen it
+    /// (e.g. add "update"/"delete"/"default") — constrained-authoring guard.
+    #[test]
+    fn file_scenario_action_enum_is_create_list() {
+        let groups = ToolGroups {
+            git: false,
+            tool_management: false,
+            skill_editing: false,
+            session_tools: false,
+        };
+        let ctx = ToolDefsContext {
+            is_base: true,
+            groups: &groups,
+            default_timezone: "UTC",
+            has_sandbox: true,
+            browser_renderer_url: "disabled",
+        };
+        let tools = build_internal_tool_definitions(&ctx);
+        let fs = tools
+            .iter()
+            .find(|t| t.name == "file_scenario")
+            .expect("file_scenario tool present for base agents");
+
+        let actions = fs
+            .input_schema
+            .pointer("/properties/action/enum")
+            .and_then(|v| v.as_array())
+            .expect("action enum present");
+        let names: Vec<&str> = actions.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["create", "list"],
+            "file_scenario action enum drift — must be exactly ['create', 'list']"
+        );
+
+        // Constrained authoring: no is_default / executor-tool params leak into the schema.
+        let props = fs
+            .input_schema
+            .pointer("/properties")
+            .and_then(|v| v.as_object())
+            .expect("file_scenario properties");
+        for forbidden in ["is_default", "executor", "priority"] {
+            assert!(
+                !props.contains_key(forbidden),
+                "{forbidden:?} must NOT be authorable via the file_scenario tool"
+            );
+        }
+        for required in ["match_type", "action_ref", "label"] {
+            assert!(
+                props.contains_key(required),
+                "{required:?} must exist in file_scenario tool schema"
+            );
+        }
+    }
+
+    /// Non-base agents must NOT see the file_scenario tool at all.
+    #[test]
+    fn file_scenario_absent_for_regular_agents() {
+        let groups = ToolGroups {
+            git: false,
+            tool_management: false,
+            skill_editing: false,
+            session_tools: false,
+        };
+        let ctx = ToolDefsContext {
+            is_base: false,
+            groups: &groups,
+            default_timezone: "UTC",
+            has_sandbox: true,
+            browser_renderer_url: "disabled",
+        };
+        let tools = build_internal_tool_definitions(&ctx);
+        assert!(
+            !tools.iter().any(|t| t.name == "file_scenario"),
+            "file_scenario must be base-only"
+        );
     }
 
     #[test]
