@@ -13,19 +13,23 @@ use uuid::Uuid;
 
 /// Which affordance transport to use for FSE post-hoc alternatives.
 /// Telegram → inline buttons; web/UI (channel None or "web") → SSE chips;
-/// every other channel has no send_buttons handler → plain-text note.
+/// every other channel (Discord/Slack/Matrix/IRC) has no working re-run
+/// handler, so affordances are suppressed — the deterministic default already
+/// ran and a misleading "reply to re-run" note would promise an action the
+/// system cannot honor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AffordanceTransport {
     TelegramButtons,
     WebChips,
-    PlainTextNote,
+    /// No working affordance transport for this channel — emit nothing.
+    Suppress,
 }
 
 pub(crate) fn affordance_transport(channel: Option<&str>) -> AffordanceTransport {
     match channel {
         Some("telegram") => AffordanceTransport::TelegramButtons,
         None | Some("web") | Some("ui") => AffordanceTransport::WebChips,
-        Some(_) => AffordanceTransport::PlainTextNote,
+        Some(_) => AffordanceTransport::Suppress,
     }
 }
 
@@ -306,8 +310,10 @@ pub async fn bootstrap<S: EventSink>(
     };
 
     // ── FSE affordance emission ───────────────────────────────────────────────
-    // Emit Telegram inline-keyboard buttons / web SSE chips / plain-text note
-    // for each non-default binding the user may pick (Phase 6 keystone).
+    // Emit Telegram inline-keyboard buttons / web SSE chips for each non-default
+    // binding the user may pick (Phase 6 keystone). Other channels get no
+    // affordance (Suppress) — they have no re-run handler and a text note would
+    // be misleading.
     // Runs after user_message_id is allocated so the web-chip event can anchor
     // to the persisted message row.
     if !pending_alternatives.is_empty() {
@@ -372,28 +378,15 @@ pub async fn bootstrap<S: EventSink>(
                         tracing::warn!(error = ?e, "fse: failed to send FileScenarioChips SSE event");
                     }
                 }
-                AffordanceTransport::PlainTextNote => {
-                    if let Some(router) = engine.channel_router_ref() {
-                        let opts = pending
-                            .alternatives
-                            .iter()
-                            .map(|c| c.label.clone())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
-                        let action = crate::agent::channel_actions::ChannelAction {
-                            name: "send_message".to_string(),
-                            params: serde_json::json!({
-                                "text": format!("Reply to re-run as: {opts}"),
-                            }),
-                            context: ctx.msg.context.clone(),
-                            reply: reply_tx,
-                            target_channel: None,
-                        };
-                        if let Err(e) = router.send(action).await {
-                            tracing::warn!(error = %e, "fse: failed to send plain-text alternatives note");
-                        }
-                    }
+                AffordanceTransport::Suppress => {
+                    // No working re-run handler on this channel (Discord/Slack/Matrix/IRC).
+                    // The deterministic default already ran; emitting a "reply to re-run"
+                    // note would promise an action the system cannot honor, so we stay silent.
+                    tracing::debug!(
+                        channel = %ctx.msg.channel,
+                        upload_id = %pending.upload_id,
+                        "fse: suppressing alternatives note on non-supported channel",
+                    );
                 }
             }
         }
@@ -489,8 +482,9 @@ mod tests {
         assert_eq!(affordance_transport(None), AffordanceTransport::WebChips);
         assert_eq!(affordance_transport(Some("web")), AffordanceTransport::WebChips);
         assert_eq!(affordance_transport(Some("ui")), AffordanceTransport::WebChips);
-        assert_eq!(affordance_transport(Some("discord")), AffordanceTransport::PlainTextNote);
-        assert_eq!(affordance_transport(Some("slack")), AffordanceTransport::PlainTextNote);
+        // Discord/Slack/Matrix/IRC have no FSE re-run handler — suppress to avoid misleading notes.
+        assert_eq!(affordance_transport(Some("discord")), AffordanceTransport::Suppress);
+        assert_eq!(affordance_transport(Some("slack")), AffordanceTransport::Suppress);
     }
 
     #[test]
