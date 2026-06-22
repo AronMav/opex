@@ -522,6 +522,178 @@ mod tests {
         assert!(pending.is_empty(), "no non-default alternatives");
     }
 
+    // ── seeded audio/* → transcribe (Link B: seam routes to built-in) ───────────
+
+    /// Closes the coverage gap identified in Task 9.4 review (Link B):
+    /// proves `dispatch_attachments` performs the DB binding-lookup from
+    /// `seed_default_file_scenarios` AND routes `audio/ogg` through to the
+    /// `transcribe` built-in end-to-end, via the seam's default-binding
+    /// predicate (`is_default && executor == "tool"`).
+    ///
+    /// If the seam's binding-lookup or glob-match for `audio/*` were broken,
+    /// this test would fall into the 0-binding (`save`) branch and the
+    /// `summary_text` assertion would fail — catching the regression.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn seeded_audio_ogg_routes_to_transcribe(pool: sqlx::PgPool) {
+        // 1. Seed the real default bindings (audio/*→transcribe, image/*→describe,
+        //    application/pdf→extract_document) exactly as startup does.
+        crate::agent::fse::seed_default_file_scenarios(&pool)
+            .await
+            .expect("seed must not fail");
+
+        // 2. Wiremock doubles as upload host + toolgate.
+        //    - GET /api/uploads/* → OGG magic bytes (sniff + transcribe download)
+        //    - POST /transcribe   → {"text":"seam ok"}
+        let server = MockServer::start().await;
+        let ogg_bytes: Vec<u8> = b"OggSfakeaudiobytes".to_vec();
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(ogg_bytes))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::path("/transcribe"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": "seam ok"})),
+            )
+            .mount(&server)
+            .await;
+
+        // 3. gateway_listen → mock port so uploads_local_url rewrites correctly.
+        let port = server.address().port();
+        let gateway_listen = format!("0.0.0.0:{port}");
+        let upload_url = format!(
+            "{}/api/uploads/00000000-0000-0000-0000-000000000006?sig=x&exp=1",
+            server.uri()
+        );
+
+        let audio_att = MediaAttachment {
+            url: upload_url.clone(),
+            media_type: MediaType::Audio,
+            file_name: Some("voice.ogg".into()),
+            mime_type: Some("audio/ogg".into()),
+            file_size: None,
+        };
+
+        // 4. Call the seam — the seam must look up the seeded `audio/*→transcribe`
+        //    default binding, find it, and route to the `transcribe` built-in.
+        let client = reqwest::Client::new();
+        let mut enriched = format!("[User sent a voice message: {upload_url}]");
+        let (outcomes, pending) = dispatch_attachments(
+            &client,
+            &gateway_listen,
+            &server.uri(),
+            "ru",
+            &pool,
+            &mut enriched,
+            &[audio_att],
+        )
+        .await;
+
+        // 5. Assertions: seeded audio/* → transcribe must route and succeed.
+        assert_eq!(outcomes.len(), 1, "one outcome per attachment");
+        assert_eq!(
+            outcomes[0].status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::Ok,
+            "seeded audio/*→transcribe must return Ok; reason: {:?}",
+            outcomes[0].reason
+        );
+        assert!(
+            outcomes[0].summary_text.contains("seam ok"),
+            "transcript 'seam ok' must appear in summary_text: {:?}",
+            outcomes[0].summary_text
+        );
+        assert!(pending.is_empty(), "no non-default alternatives for seeded defaults");
+    }
+
+    // ── seeded image/* → describe (Link B: seam routes to built-in) ──────────
+
+    /// Mirrors `seeded_audio_ogg_routes_to_transcribe` for the image path:
+    /// proves the seam's DB binding-lookup finds the `image/*→describe` seeded
+    /// default and routes JPEG bytes through to the `describe` built-in.
+    ///
+    /// If the seam's glob-match for `image/*` were broken (e.g. the predicate
+    /// in `dispatch_seam.rs` line ~159 changed), this would fall to `save` and
+    /// the `summary_text` assertion on "<vision>" would fail.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn seeded_image_jpeg_routes_to_describe(pool: sqlx::PgPool) {
+        // 1. Seed the real default bindings.
+        crate::agent::fse::seed_default_file_scenarios(&pool)
+            .await
+            .expect("seed must not fail");
+
+        // 2. Wiremock doubles as upload host + toolgate.
+        //    - GET /api/uploads/* → JPEG magic bytes (sniff + describe download)
+        //    - POST /describe     → {"description":"seam ok image"}
+        let server = MockServer::start().await;
+        // JPEG SOI marker bytes: FF D8 FF
+        let jpeg_bytes: Vec<u8> = b"\xFF\xD8\xFFfakeimagebytes".to_vec();
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(jpeg_bytes))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::path("/describe"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"description": "seam ok image"})),
+            )
+            .mount(&server)
+            .await;
+
+        // 3. gateway_listen → mock port.
+        let port = server.address().port();
+        let gateway_listen = format!("0.0.0.0:{port}");
+        let upload_url = format!(
+            "{}/api/uploads/00000000-0000-0000-0000-000000000007?sig=x&exp=1",
+            server.uri()
+        );
+
+        let image_att = MediaAttachment {
+            url: upload_url.clone(),
+            media_type: MediaType::Image,
+            file_name: Some("photo.jpg".into()),
+            mime_type: Some("image/jpeg".into()),
+            file_size: None,
+        };
+
+        // 4. Call the seam.
+        let client = reqwest::Client::new();
+        let mut enriched = format!("[User attached an image: {upload_url}]");
+        let (outcomes, pending) = dispatch_attachments(
+            &client,
+            &gateway_listen,
+            &server.uri(),
+            "ru",
+            &pool,
+            &mut enriched,
+            &[image_att],
+        )
+        .await;
+
+        // 5. Assertions: seeded image/*→describe must route and succeed.
+        assert_eq!(outcomes.len(), 1, "one outcome per attachment");
+        assert_eq!(
+            outcomes[0].status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::Ok,
+            "seeded image/*→describe must return Ok; reason: {:?}",
+            outcomes[0].reason
+        );
+        assert!(
+            outcomes[0].summary_text.contains("seam ok image"),
+            "description 'seam ok image' must appear in summary_text: {:?}",
+            outcomes[0].summary_text
+        );
+        assert!(
+            outcomes[0].summary_text.contains("<vision>"),
+            "describe outcome must wrap description in <vision> tags: {:?}",
+            outcomes[0].summary_text
+        );
+        assert!(pending.is_empty(), "no non-default alternatives for seeded defaults");
+    }
+
     // ── download failure → Failed outcome ─────────────────────────────────────
 
     #[sqlx::test(migrations = "../../migrations")]
