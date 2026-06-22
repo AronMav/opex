@@ -10,6 +10,7 @@ mod secrets_tool;
 mod session;
 mod tool_use;
 mod todo;
+mod file_scenario;
 
 use workspace::*;
 use memory::*;
@@ -23,6 +24,7 @@ use secrets_tool::*;
 use session::*;
 use tool_use::*;
 use todo::*;
+use file_scenario::*;
 
 use crate::agent::tool_registry::SystemToolRegistry;
 
@@ -59,6 +61,7 @@ impl SystemToolRegistry {
         r.register("rich_card",        RichCardHandler);
         r.register("process",          ProcessHandler);
         r.register("tool_use",         ToolUseHandler);
+        r.register("file_scenario",    FileScenarioHandler);
         r
     }
 }
