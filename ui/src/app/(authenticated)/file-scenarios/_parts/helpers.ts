@@ -43,12 +43,26 @@ export function buildScenarioBody(form: CreateFileScenarioInput): CreateFileScen
   };
 }
 
-/** True when a row would be a 0-click tool default referencing a non-allowlisted action. */
+/** True when a row would be a 0-click tool default referencing a non-allowlisted action.
+ *
+ * @param enabledAllowlist  The operator's currently-enabled allowlist entries.
+ *   Accepts a `ReadonlySet<string>`, a `readonly string[]`, or any iterable
+ *   of `action_ref` strings where `enabled === true`.
+ *   Defaults to the full static domain (`FSE_ALLOWLIST_MEMBERS`) so existing
+ *   callers that don't yet pass the live set keep their current behaviour.
+ *   Callers that have access to `FileScenarioAllowlistRow[]` should pass
+ *   the set of `action_ref` values where `enabled === true`.
+ */
 export function isAllowlistViolation(
   executor: string,
   is_default: boolean,
   action_ref: string,
+  enabledAllowlist: ReadonlySet<string> | readonly string[] = FSE_ALLOWLIST_MEMBERS,
 ): boolean {
   if (executor !== "tool" || !is_default) return false;
-  return !(FSE_ALLOWLIST_MEMBERS as readonly string[]).includes(action_ref);
+  const set =
+    enabledAllowlist instanceof Set
+      ? enabledAllowlist
+      : new Set(enabledAllowlist);
+  return !set.has(action_ref);
 }
