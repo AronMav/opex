@@ -37,6 +37,11 @@ export function ScenarioRow({
               {t("file_scenarios.default_badge")}
             </Badge>
           )}
+          {!scenario.enabled && (
+            <Badge variant="outline" className="text-[10px]">
+              {t("file_scenarios.disabled_badge")}
+            </Badge>
+          )}
         </div>
         <span className="text-xs text-muted-foreground font-mono truncate">
           {scenario.action_ref}

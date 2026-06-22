@@ -40,4 +40,45 @@ describe("ScenarioRow", () => {
     );
     expect(screen.getByText("file_scenarios.default_badge")).toBeInTheDocument();
   });
+
+  it("shows disabled badge when enabled is false", () => {
+    render(
+      <ScenarioRow scenario={{ ...base, enabled: false }} onToggleDefault={() => {}} onToggleEnabled={() => {}} onEdit={() => {}} onDelete={() => {}} />,
+    );
+    expect(screen.getByText("file_scenarios.disabled_badge")).toBeInTheDocument();
+  });
+
+  it("does not show disabled badge when enabled is true", () => {
+    render(
+      <ScenarioRow scenario={{ ...base, enabled: true }} onToggleDefault={() => {}} onToggleEnabled={() => {}} onEdit={() => {}} onDelete={() => {}} />,
+    );
+    expect(screen.queryByText("file_scenarios.disabled_badge")).not.toBeInTheDocument();
+  });
+
+  it("calls onToggleEnabled with false when switch is toggled for an enabled row", () => {
+    const onToggleEnabled = vi.fn();
+    render(
+      <ScenarioRow scenario={{ ...base, enabled: true }} onToggleDefault={() => {}} onToggleEnabled={onToggleEnabled} onEdit={() => {}} onDelete={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole("switch", { name: /file_scenarios.toggle_enabled/i }));
+    expect(onToggleEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("calls onEdit when edit button is clicked", () => {
+    const onEdit = vi.fn();
+    render(
+      <ScenarioRow scenario={base} onToggleDefault={() => {}} onToggleEnabled={() => {}} onEdit={onEdit} onDelete={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /common.edit/i }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onDelete when delete button is clicked", () => {
+    const onDelete = vi.fn();
+    render(
+      <ScenarioRow scenario={base} onToggleDefault={() => {}} onToggleEnabled={() => {}} onEdit={() => {}} onDelete={onDelete} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /common.delete/i }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
 });
