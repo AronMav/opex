@@ -456,3 +456,61 @@ export interface SessionChainEntry {
 export interface SessionChainResponse {
   chain: SessionChainEntry[];
 }
+
+// ── File Scenario Engine (Phase 8) ────────────────────────────────────────────
+// Source: crates/hydeclaw-core/src/db/file_scenarios.rs (FileScenarioRow)
+// Aligned to serde-serialized JSON (no rename_all, all fields snake_case).
+
+export interface FileScenario {
+  id: string;
+  match_type: string;
+  executor: "tool" | "skill";
+  action_ref: string;
+  label: string;
+  is_default: boolean;
+  priority: number;
+  enabled: boolean;
+  scope: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Body for POST /api/file-scenarios */
+export interface CreateFileScenarioInput {
+  match_type: string;
+  executor: "tool" | "skill";
+  action_ref: string;
+  label: string;
+  is_default?: boolean;
+  priority?: number;
+  enabled?: boolean;
+}
+
+/** Body for PUT /api/file-scenarios/{id} — only label/priority/enabled are mutable */
+export interface UpdateFileScenarioInput {
+  label?: string;
+  priority?: number;
+  enabled?: boolean;
+}
+
+/**
+ * One entry from GET /api/file-scenarios/allowlist.
+ * The allowlist is the closed-domain constant FSE_DEFAULT_ALLOWLIST
+ * (transcribe | describe | extract_document | save), each annotated with the
+ * operator-toggled `enabled` flag.
+ */
+export interface FileScenarioAllowlistRow {
+  action_ref: string;
+  enabled: boolean;
+}
+
+/**
+ * Minimal scenario descriptor for UI choice lists (e.g. binding selectors).
+ * Not a backend DTO — synthesised on the frontend from FileScenario fields.
+ */
+export interface ScenarioChoice {
+  scenario_id: string;
+  label: string;
+  executor: "tool" | "skill";
+}
