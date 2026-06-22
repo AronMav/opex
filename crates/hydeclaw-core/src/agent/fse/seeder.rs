@@ -11,27 +11,70 @@ use sqlx::PgPool;
 
 use super::allowlist::FSE_DEFAULT_ALLOWLIST;
 
-/// The three deterministic default tool-bindings. Each reproduces today's
-/// behavior (audio→transcribe, image→describe) plus the one intentional new
-/// default (document→extract_document, design §3.3/§7). `priority = 100` is
-/// the table default; `created_by = 'system'` is the audit tag.
-const DEFAULT_BINDINGS: &[(&str, &str, &str)] = &[
-    // (match_type, action_ref, label)
-    ("audio/*", "transcribe", "Transcribe audio"),
-    ("image/*", "describe", "Describe image"),
-    ("application/pdf", "extract_document", "Extract document text"),
-];
+/// One default binding row. Pure data — no DB, no async — so the guard test
+/// can assert the action names without a live Postgres instance.
+#[allow(dead_code)] // fields consumed by reconcile_tests (cfg(test)) and future Phase 5+ callers
+pub(crate) struct SeedRow {
+    pub match_type: &'static str,
+    /// Built-in ACTION name from the in-core dispatch table
+    /// (`FSE_DEFAULT_ALLOWLIST`). Must NOT be a YAML-tool alias
+    /// (`transcribe_audio`, `analyze_image`, …) — the dispatch table only
+    /// recognises the canonical names; a YAML alias would fail-closed to
+    /// `ScenarioStatus::Unsupported` at run time.
+    pub action_ref: &'static str,
+    pub label: &'static str,
+    /// Always `"tool"` for default bindings (security requirement).
+    pub executor: &'static str,
+    pub is_default: bool,
+    pub priority: i32,
+}
+
+/// The canonical default seed rows in pure-data form. Every `action_ref` here
+/// is a built-in dispatch-table key, cross-checked in
+/// `reconcile_tests::seed_uses_builtin_action_names`.
+///
+/// Adding a new row here requires a parallel entry in `FSE_DEFAULT_ALLOWLIST`
+/// (the compiler won't enforce that — the guard test will catch it at CI).
+pub(crate) fn default_seed_rows() -> Vec<SeedRow> {
+    vec![
+        SeedRow {
+            match_type: "audio/*",
+            action_ref: "transcribe",
+            label: "Transcribe audio",
+            executor: "tool",
+            is_default: true,
+            priority: 100,
+        },
+        SeedRow {
+            match_type: "image/*",
+            action_ref: "describe",
+            label: "Describe image",
+            executor: "tool",
+            is_default: true,
+            priority: 100,
+        },
+        SeedRow {
+            match_type: "application/pdf",
+            action_ref: "extract_document",
+            label: "Extract document text",
+            executor: "tool",
+            is_default: true,
+            priority: 100,
+        },
+    ]
+}
 
 /// Insert the default bindings if absent. Returns the number of rows
 /// actually inserted (0 on a re-seed). Safe to call on every startup.
 pub async fn seed_default_file_scenarios(db: &PgPool) -> anyhow::Result<u64> {
     let mut inserted: u64 = 0;
-    for (match_type, action_ref, label) in DEFAULT_BINDINGS {
+    for row in default_seed_rows() {
         // Defense-in-depth: never seed a default that is not in the allowlist
         // constant (keeps the seeder honest against a future careless edit).
         debug_assert!(
-            FSE_DEFAULT_ALLOWLIST.contains(action_ref),
-            "seed action '{action_ref}' must be in FSE_DEFAULT_ALLOWLIST"
+            FSE_DEFAULT_ALLOWLIST.contains(&row.action_ref),
+            "seed action '{}' must be in FSE_DEFAULT_ALLOWLIST",
+            row.action_ref
         );
         let res = sqlx::query(
             "INSERT INTO file_scenarios \
@@ -39,9 +82,9 @@ pub async fn seed_default_file_scenarios(db: &PgPool) -> anyhow::Result<u64> {
              VALUES (gen_random_uuid(), $1, 'tool', $2, $3, true, 100, true, 'global', 'system') \
              ON CONFLICT (match_type, action_ref) DO NOTHING",
         )
-        .bind(match_type)
-        .bind(action_ref)
-        .bind(label)
+        .bind(row.match_type)
+        .bind(row.action_ref)
+        .bind(row.label)
         .execute(db)
         .await?;
         inserted += res.rows_affected();
@@ -97,5 +140,58 @@ mod tests {
         // second run inserts nothing, does not error, leaves 3 rows
         assert_eq!(seed_default_file_scenarios(&pool).await.unwrap(), 0);
         assert_eq!(count(&pool).await, 3);
+    }
+}
+
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+
+    /// Regression guard: every seeded default row must carry a built-in
+    /// dispatch-table action name (`FSE_DEFAULT_ALLOWLIST`), NEVER a YAML-tool
+    /// alias (`transcribe_audio`, `analyze_image`, …). The dispatch table is
+    /// keyed by action names; a YAML alias resolves to `None` → `Unsupported`
+    /// at run time, silently breaking the deterministic default.
+    ///
+    /// This test is intentionally pure (no DB) so it runs without DATABASE_URL.
+    #[test]
+    fn seed_uses_builtin_action_names() {
+        let rows = default_seed_rows();
+        assert!(!rows.is_empty(), "seed must produce at least one row");
+
+        // Names that LOOK plausible but are YAML-tool aliases, not dispatch keys.
+        let yaml_aliases = [
+            "transcribe_audio",
+            "analyze_image",
+            "extract_document_tool",
+            "describe_image",
+        ];
+
+        for row in &rows {
+            assert_eq!(row.executor, "tool", "seeded defaults must be executor='tool'");
+            assert!(row.is_default, "seeded rows must have is_default=true");
+            assert!(
+                FSE_DEFAULT_ALLOWLIST.contains(&row.action_ref),
+                "action_ref {:?} is not in FSE_DEFAULT_ALLOWLIST ({:?}); \
+                 use the built-in dispatch key, not a YAML-tool alias",
+                row.action_ref,
+                FSE_DEFAULT_ALLOWLIST,
+            );
+            assert!(
+                !yaml_aliases.contains(&row.action_ref),
+                "action_ref {:?} is a YAML-tool alias — seed must use the \
+                 built-in dispatch-table name instead",
+                row.action_ref,
+            );
+        }
+
+        // The three intentional default match-types are all present.
+        let types: Vec<&str> = rows.iter().map(|r| r.match_type).collect();
+        assert!(types.contains(&"audio/*"), "audio/* default is missing from seed");
+        assert!(types.contains(&"image/*"), "image/* default is missing from seed");
+        assert!(
+            types.iter().any(|t| t.contains("pdf") || *t == "application/pdf"),
+            "application/pdf default is missing from seed",
+        );
     }
 }
