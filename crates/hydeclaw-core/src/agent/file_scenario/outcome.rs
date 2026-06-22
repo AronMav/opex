@@ -59,12 +59,10 @@ impl ScenarioOutcome {
     }
 }
 
-/// Hard-coded v1 allowlist of built-in deterministic actions runnable as
-/// `executor=tool`. This is the closed set the dispatch table keys on AND the
-/// closed domain the operator allowlist toggle (later phase) may enable/disable
-/// members of — it can never admit `code_exec` / raw-URL / a YAML tool.
-#[allow(dead_code)] // Phase 4+: consumed by the operator allowlist API route and binding validator
-pub const FSE_DEFAULT_ALLOWLIST: &[&str] = &["transcribe", "describe", "extract_document", "save"];
+/// Re-export the single source of truth from `fse::allowlist`.
+/// `file_scenario::FSE_DEFAULT_ALLOWLIST` and `fse::allowlist::FSE_DEFAULT_ALLOWLIST`
+/// resolve to the same constant — no duplicate literal.
+pub use crate::agent::fse::allowlist::FSE_DEFAULT_ALLOWLIST;
 
 /// Map a toolgate/HTTP status code to a [`ScenarioStatus`]. 2xx => `Ok`;
 /// 413 (payload too large) => `TooLarge`; 504 (gateway timeout) => `Timeout`;
