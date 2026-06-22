@@ -177,7 +177,6 @@ pub(super) fn parse_fse_callback(text: &str) -> Option<(uuid::Uuid, String)> {
 /// do not fall through to the dispatcher). If the callback context is missing
 /// `session_id` or `upload_id` the handler returns `true` (consumed) but does
 /// nothing — unactionable but not a caller error.
-#[allow(dead_code)] // Task 6.11: invoked from reader.rs
 pub(super) async fn handle_fse_callback(
     ctx: &CwsCtx,
     engine: &Arc<AgentEngine>,
