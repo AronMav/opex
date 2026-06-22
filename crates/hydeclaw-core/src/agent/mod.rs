@@ -30,6 +30,7 @@ pub mod subagent_state;
 pub mod session_agent_pool;
 pub mod tool_loop;
 pub(crate) mod url_tools;
+pub(crate) mod file_scenario;
 pub mod mention_parser;
 pub mod workspace;
 pub mod knowledge_extractor;
