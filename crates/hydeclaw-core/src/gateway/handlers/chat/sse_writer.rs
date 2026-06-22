@@ -71,18 +71,11 @@ impl From<StreamEvent> for SseEvent {
             | StreamEvent::ToolCallStart { .. }
             | StreamEvent::Usage { .. }
             | StreamEvent::Finish { .. }
-            | StreamEvent::RichCard { .. } => {
+            | StreamEvent::RichCard { .. }
+            | StreamEvent::FileScenarioChips { .. } => {
                 unimplemented!(
                     "StreamEvent variant requires SseStreamWriter context — \
                      use the appropriate build_* method"
-                )
-            }
-
-            // Task 6.2/6.4 will wire up the real SSE serialisation.
-            StreamEvent::FileScenarioChips { .. } => {
-                unimplemented!(
-                    "StreamEvent::FileScenarioChips requires SseStreamWriter context — \
-                     use build_file_scenario_chips (Task 6.4)"
                 )
             }
 
@@ -288,6 +281,19 @@ impl SseStreamWriter {
         data: serde_json::Value,
     ) -> String {
         self.frame(&SseEvent::rich_card_from_stream(card_type, data))
+    }
+
+    pub fn build_file_scenario_chips(
+        &mut self,
+        message_id: hydeclaw_types::ids::MessageId,
+        upload_id: uuid::Uuid,
+        alternatives: Vec<hydeclaw_types::sse::ScenarioChoice>,
+    ) -> String {
+        self.frame(&SseEvent::FileScenarioChips {
+            message_id,
+            upload_id,
+            alternatives,
+        })
     }
 
     /// Convenience for pure-mapped middle events. Delegates to
@@ -644,6 +650,24 @@ mod tests {
             serde_json::json!({"foo": 1}),
         );
         assert!(json.contains(r#""cardType":"future_card""#));
+    }
+
+    #[test]
+    fn writer_file_scenario_chips_emits_camelcase_wire() {
+        use hydeclaw_types::sse::ScenarioChoice;
+        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let json = w.build_file_scenario_chips(
+            MessageId::from(Uuid::nil()),
+            Uuid::nil(),
+            vec![ScenarioChoice {
+                scenario_id: Uuid::nil(),
+                label: "Transcribe".to_string(),
+                executor: "tool".to_string(),
+            }],
+        );
+        assert!(json.contains(r#""type":"file-scenario-chips""#));
+        assert!(json.contains(r#""uploadId":"00000000-0000-0000-0000-000000000000""#));
+        assert!(json.contains(r#""label":"Transcribe""#));
     }
 
     #[test]
