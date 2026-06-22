@@ -191,8 +191,6 @@ pub async fn unset_default(pool: &PgPool, id: Uuid) -> Result<Option<FileScenari
 }
 
 /// Record a per-file processing outcome. Returns the new row id.
-// Phase 6 dispatch layer is the next consumer; keep the allow until dispatch lands.
-#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_outcome(
     pool: &PgPool,
