@@ -55,4 +55,21 @@ describe("file-scenarios helpers", () => {
     expect(isAllowlistViolation("tool", false, "code_exec")).toBe(false);
     expect(isAllowlistViolation("skill", true, "anything")).toBe(false);
   });
+
+  it("isAllowlistViolation respects enabledAllowlist — disabled entry is a violation", () => {
+    // describe is in the static set but NOT in the enabled set → violation
+    expect(isAllowlistViolation("tool", true, "describe", new Set(["transcribe"]))).toBe(true);
+    // transcribe is in the enabled set → no violation
+    expect(isAllowlistViolation("tool", true, "transcribe", new Set(["transcribe"]))).toBe(false);
+    // skill executor is always exempt regardless of the enabled set
+    expect(isAllowlistViolation("skill", true, "describe", new Set(["transcribe"]))).toBe(false);
+    // non-default is always exempt
+    expect(isAllowlistViolation("tool", false, "describe", new Set(["transcribe"]))).toBe(false);
+  });
+
+  it("isAllowlistViolation with readonly string[] enabled set behaves identically to Set", () => {
+    const arr = ["transcribe", "save"] as const;
+    expect(isAllowlistViolation("tool", true, "transcribe", arr)).toBe(false);
+    expect(isAllowlistViolation("tool", true, "describe", arr)).toBe(true);
+  });
 });
