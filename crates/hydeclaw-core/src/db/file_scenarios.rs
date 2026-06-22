@@ -65,4 +65,31 @@ mod tests {
         .await;
         assert!(bad.is_err(), "executor must be CHECK-constrained to tool|skill");
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn outcomes_row_round_trip(pool: PgPool) {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO file_scenario_outcomes
+               (id, session_id, upload_id, match_type, scenario_id, status, reason, duration_ms, bytes)
+               VALUES ($1, $2, $3, 'application/pdf', NULL, 'ok', NULL, 1234, 4096)"#,
+        )
+        .bind(id)
+        .bind(Uuid::new_v4())
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await
+        .expect("outcome inserts with NULL scenario_id and NULL reason");
+
+        let (status, dur, bytes): (String, i64, i64) = sqlx::query_as(
+            r#"SELECT status, duration_ms, bytes FROM file_scenario_outcomes WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "ok");
+        assert_eq!(dur, 1234);
+        assert_eq!(bytes, 4096);
+    }
 }
