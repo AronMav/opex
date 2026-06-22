@@ -24,7 +24,6 @@ const DEFAULT_BINDINGS: &[(&str, &str, &str)] = &[
 
 /// Insert the default bindings if absent. Returns the number of rows
 /// actually inserted (0 on a re-seed). Safe to call on every startup.
-#[allow(dead_code)] // Task 4.4: wired into startup
 pub async fn seed_default_file_scenarios(db: &PgPool) -> anyhow::Result<u64> {
     let mut inserted: u64 = 0;
     for (match_type, action_ref, label) in DEFAULT_BINDINGS {
