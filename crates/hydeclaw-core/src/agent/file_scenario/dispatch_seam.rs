@@ -12,6 +12,7 @@ use crate::agent::file_scenario::outcome::ScenarioOutcome;
 use crate::agent::file_scenario::sniff::sniff_bytes;
 use crate::agent::fse::{get_enabled_allowlist, is_allowed_for_autorun};
 use crate::agent::url_tools::uploads_local_url;
+use crate::db::audit::event_types::FSE_AUTO_RUN;
 use hydeclaw_types::MediaAttachment;
 use uuid::Uuid;
 
@@ -189,6 +190,32 @@ pub async fn dispatch_attachments(
                     att,
                 )
                 .await;
+
+                // I-3: Audit the auto-run only when the configured default action ran —
+                // NOT when the allowlist blocked it and we fell back to `save`.
+                // `action_to_run == b.action_ref` means the binding's own action ran;
+                // a fallback overwrites action_to_run with "save" which != action_ref
+                // (unless the binding itself is action_ref="save", which is a valid
+                // configured auto-run and SHOULD be audited).
+                // Discriminate by tracking whether the allowlist check passed:
+                if is_allowed_for_autorun(&b.action_ref, &enabled_allowlist) {
+                    let upload_ref = upload_id_from_url(&att.url)
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
+                    crate::db::audit::audit_spawn(
+                        db.clone(),
+                        String::new(),
+                        FSE_AUTO_RUN,
+                        Some("system".into()),
+                        serde_json::json!({
+                            "scenario_id": b.id.to_string(),
+                            "match_type": b.match_type,
+                            "action_ref": action_to_run,
+                            "upload_ref": upload_ref,
+                        }),
+                    );
+                }
+
                 outcomes.push(outcome);
 
                 // Non-default bindings → post-hoc alternatives (Phase 6 emits).
@@ -1214,6 +1241,203 @@ mod tests {
         assert_eq!(
             outcomes[0].status,
             crate::agent::file_scenario::outcome::ScenarioStatus::Failed
+        );
+    }
+
+    // ── I-3: FSE_AUTO_RUN audit emit tests ────────────────────────────────────
+
+    /// (a) When a default binding auto-runs (allowed by allowlist), an `fse_auto_run`
+    /// row must appear in `audit_events`. The save-fallback path must NOT emit one.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn auto_run_default_emits_fse_auto_run_audit(pool: sqlx::PgPool) {
+        use crate::db::file_scenarios::create;
+
+        // Insert a default `save` binding for `application/octet-stream`.
+        // `save` is in FSE_DEFAULT_ALLOWLIST → allowlist re-check passes → audit fires.
+        create(
+            &pool,
+            "application/octet-stream",
+            "tool",
+            "save",
+            "Save file",
+            true, // is_default
+            50,
+            true, // enabled
+            "test",
+        )
+        .await
+        .unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(b"\x00\x01\x02\x03".to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let port = server.address().port();
+        let gateway_listen = format!("127.0.0.1:{port}");
+        let upload_uuid = Uuid::new_v4();
+        let upload_url = format!("{}/api/uploads/{upload_uuid}?sig=x&exp=1", server.uri());
+
+        let client = reqwest::Client::new();
+        let mut enriched = String::new();
+        let (outcomes, _pending) = dispatch_attachments(
+            &client,
+            &gateway_listen,
+            "http://localhost:9011",
+            "en",
+            &pool,
+            &mut enriched,
+            &[att(&upload_url, hydeclaw_types::MediaType::Document)],
+        )
+        .await;
+
+        assert_eq!(outcomes.len(), 1, "one outcome");
+        assert_eq!(
+            outcomes[0].status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::Ok,
+            "save returns Ok"
+        );
+
+        // Give the spawned audit task a moment to complete.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Verify an fse_auto_run row was written to audit_events.
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type = 'fse_auto_run'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("audit_events query must succeed");
+
+        assert_eq!(count, 1, "exactly one fse_auto_run audit row must be emitted");
+    }
+
+    /// (b) The save-fallback branch (0 bindings) and the allowlist-blocked branch
+    /// must NOT emit an `fse_auto_run` audit row.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn save_fallback_and_blocked_do_not_emit_fse_auto_run_audit(pool: sqlx::PgPool) {
+        use crate::agent::fse::set_enabled_allowlist;
+        use crate::db::file_scenarios::create;
+
+        // Case 1: 0-binding fallback to save (no default, no bindings at all).
+        // No bindings → 0-binding branch → run_builtin("save") → no audit.
+        {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path_regex(r"^/api/uploads/.*"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_bytes(b"\x00\x01\x02\x03".to_vec()),
+                )
+                .mount(&server)
+                .await;
+
+            let port = server.address().port();
+            let gateway_listen = format!("127.0.0.1:{port}");
+            let upload_url = format!(
+                "{}/api/uploads/20000000-0000-0000-0000-000000000001?sig=x&exp=1",
+                server.uri()
+            );
+
+            let client = reqwest::Client::new();
+            let mut enriched = String::new();
+            let (outcomes, _) = dispatch_attachments(
+                &client,
+                &gateway_listen,
+                "http://localhost:9011",
+                "en",
+                &pool,
+                &mut enriched,
+                &[att(&upload_url, hydeclaw_types::MediaType::Document)],
+            )
+            .await;
+            assert_eq!(outcomes.len(), 1, "one outcome for 0-binding case");
+        }
+
+        // Case 2: allowlist-blocked default → falls back to save → no audit.
+        // Insert `describe` as is_default for image/*, then disable it so allowlist
+        // re-check blocks it → action_to_run = "save" → no FSE_AUTO_RUN.
+        {
+            // Seed the `describe` default for image/*.
+            create(
+                &pool,
+                "image/*",
+                "tool",
+                "describe",
+                "Describe",
+                true, // is_default
+                50,
+                true, // enabled in bindings
+                "test",
+            )
+            .await
+            .unwrap();
+
+            // Disable `describe` in the allowlist so the re-check blocks it.
+            set_enabled_allowlist(
+                &pool,
+                &["transcribe".to_string(), "extract_document".to_string(), "save".to_string()],
+            )
+            .await
+            .expect("set_enabled_allowlist must not fail");
+
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path_regex(r"^/api/uploads/.*"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_bytes(b"\xFF\xD8\xFFfakejpeg".to_vec()),
+                )
+                .mount(&server)
+                .await;
+
+            let port = server.address().port();
+            let gateway_listen = format!("0.0.0.0:{port}");
+            let upload_url = format!(
+                "{}/api/uploads/20000000-0000-0000-0000-000000000002?sig=x&exp=1",
+                server.uri()
+            );
+            let image_att = MediaAttachment {
+                url: upload_url,
+                media_type: hydeclaw_types::MediaType::Image,
+                file_name: Some("blocked.jpg".into()),
+                mime_type: Some("image/jpeg".into()),
+                file_size: None,
+            };
+
+            let client = reqwest::Client::new();
+            let mut enriched = String::new();
+            let (outcomes, _) = dispatch_attachments(
+                &client,
+                &gateway_listen,
+                "http://localhost:9011",
+                "en",
+                &pool,
+                &mut enriched,
+                &[image_att],
+            )
+            .await;
+            assert_eq!(outcomes.len(), 1, "one outcome for blocked case");
+        }
+
+        // Give any potential spawned tasks a moment.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Neither the 0-binding fallback nor the blocked case should have emitted audit.
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM audit_events WHERE event_type = 'fse_auto_run'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("audit_events query must succeed");
+
+        assert_eq!(
+            count,
+            0,
+            "save-fallback and allowlist-blocked must NOT emit fse_auto_run; got {count}"
         );
     }
 }
