@@ -1202,5 +1202,15 @@
   "file_scenarios.default_badge": "по умолчанию",
   "file_scenarios.disabled_badge": "Отключён",
   "file_scenarios.set_default": "Сделать по умолчанию",
-  "file_scenarios.toggle_enabled": "Включить/выключить"
+  "file_scenarios.toggle_enabled": "Включить/выключить",
+  "file_scenarios.create_title": "Новый сценарий файла",
+  "file_scenarios.edit_title": "Редактировать сценарий",
+  "file_scenarios.match_type": "Тип файла",
+  "file_scenarios.executor": "Исполнитель",
+  "file_scenarios.action_ref": "Действие",
+  "file_scenarios.label": "Название",
+  "file_scenarios.priority": "Приоритет",
+  "file_scenarios.is_default": "По умолчанию",
+  "file_scenarios.enabled": "Включён",
+  "file_scenarios.default_not_allowlisted": "По умолчанию можно установить только разрешённые инструменты (transcribe, describe, extract_document, save)."
 }

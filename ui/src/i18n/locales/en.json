@@ -1203,5 +1203,15 @@
   "file_scenarios.default_badge": "default",
   "file_scenarios.disabled_badge": "Disabled",
   "file_scenarios.set_default": "Set as default",
-  "file_scenarios.toggle_enabled": "Toggle enabled"
+  "file_scenarios.toggle_enabled": "Toggle enabled",
+  "file_scenarios.create_title": "New file scenario",
+  "file_scenarios.edit_title": "Edit file scenario",
+  "file_scenarios.match_type": "Match type",
+  "file_scenarios.executor": "Executor",
+  "file_scenarios.action_ref": "Action",
+  "file_scenarios.label": "Label",
+  "file_scenarios.priority": "Priority",
+  "file_scenarios.is_default": "Set as default",
+  "file_scenarios.enabled": "Enabled",
+  "file_scenarios.default_not_allowlisted": "Only allowlisted tool actions (transcribe, describe, extract_document, save) can be set as default."
 }
