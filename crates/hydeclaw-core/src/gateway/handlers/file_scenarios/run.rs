@@ -148,13 +148,12 @@ pub(crate) async fn run_scenario_and_persist(
     if matches!(
         outcome.status,
         ScenarioStatus::Failed | ScenarioStatus::Unsupported | ScenarioStatus::TooLarge | ScenarioStatus::Timeout
-    ) {
-        if let Some(reason) = &outcome.reason {
-            if !body.is_empty() {
-                body.push('\n');
-            }
-            body.push_str(&format!("(reason: {reason})"));
+    ) && let Some(reason) = &outcome.reason
+    {
+        if !body.is_empty() {
+            body.push('\n');
         }
+        body.push_str(&format!("(reason: {reason})"));
     }
 
     let msg_id = hydeclaw_db::sessions::save_message_ex(
