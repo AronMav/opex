@@ -105,16 +105,24 @@ pub struct UploadsConfig {
     /// Default: `true` (enforced). Set `false` to accept unsigned URLs.
     #[serde(default = "default_require_signature")]
     pub require_signature: bool,
+    /// Per-file upload byte ceiling. Single source of truth for the request-layer
+    /// caps (DefaultBodyLimit + the `POST /api/media/upload` guard) — the DB
+    /// CHECK (migration 062) and `db::uploads::MAX_UPLOAD_BYTES` are the matched
+    /// backstops. Default: 50 MB. Toolgate VISION_MAX_BYTES (20 MB) is independent.
+    #[serde(default = "default_max_upload_bytes")]
+    pub max_upload_bytes: u64,
 }
 
 fn default_signed_url_ttl() -> u64 { 86_400 }
 fn default_require_signature() -> bool { true }
+fn default_max_upload_bytes() -> u64 { 52_428_800 }
 
 impl Default for UploadsConfig {
     fn default() -> Self {
         Self {
             signed_url_ttl_secs: default_signed_url_ttl(),
             require_signature: default_require_signature(),
+            max_upload_bytes: default_max_upload_bytes(),
         }
     }
 }
@@ -1956,6 +1964,7 @@ prompt_cache = true
         let cfg = UploadsConfig::default();
         assert_eq!(cfg.signed_url_ttl_secs, 86_400);
         assert!(cfg.require_signature, "v0.26.0 enforces signatures by default");
+        assert_eq!(cfg.max_upload_bytes, 52_428_800, "default 50 MB per-file ceiling");
     }
 
     #[test]
@@ -1970,10 +1979,12 @@ url = "postgres://localhost/test"
 [uploads]
 signed_url_ttl_secs = 3600
 require_signature = true
+max_upload_bytes = 41943040
 "#;
         let cfg: AppConfig = toml::from_str(toml_str).expect("parse");
         assert_eq!(cfg.uploads.signed_url_ttl_secs, 3600);
         assert!(cfg.uploads.require_signature);
+        assert_eq!(cfg.uploads.max_upload_bytes, 41_943_040);
     }
 
     #[test]
