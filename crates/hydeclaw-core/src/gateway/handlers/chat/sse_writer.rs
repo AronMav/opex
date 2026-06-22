@@ -78,6 +78,14 @@ impl From<StreamEvent> for SseEvent {
                 )
             }
 
+            // Task 6.2/6.4 will wire up the real SSE serialisation.
+            StreamEvent::FileScenarioChips { .. } => {
+                unimplemented!(
+                    "StreamEvent::FileScenarioChips requires SseStreamWriter context — \
+                     use build_file_scenario_chips (Task 6.4)"
+                )
+            }
+
             // Dropped on wire (currently never reach SSE):
             StreamEvent::StepFinish { .. } | StreamEvent::AgentSwitch { .. } => {
                 unimplemented!(

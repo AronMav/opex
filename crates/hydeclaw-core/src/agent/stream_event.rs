@@ -71,6 +71,15 @@ pub enum StreamEvent {
         url: String,
         media_type: String,
     },
+    /// File Scenario Engine post-hoc alternatives chip event (web SSE).
+    /// Emitted by `bootstrap` after the default binding has run, carrying the
+    /// non-default bindings the user may pick. A chip click calls
+    /// POST /api/file-scenarios/run (a fresh request, NOT a resumed stream).
+    FileScenarioChips {
+        message_id: hydeclaw_types::ids::MessageId,
+        upload_id: uuid::Uuid,
+        alternatives: Vec<hydeclaw_types::sse::ScenarioChoice>,
+    },
     Finish {
         finish_reason: String,
         continuation: bool,
@@ -114,4 +123,28 @@ pub enum StreamEvent {
         cache_creation_tokens: Option<u32>,
         reasoning_tokens: Option<u32>,
     },
+}
+
+#[cfg(test)]
+mod fse_stream_event_tests {
+    use super::StreamEvent;
+    use hydeclaw_types::ids::MessageId;
+    use hydeclaw_types::sse::ScenarioChoice;
+    use uuid::Uuid;
+
+    #[test]
+    fn file_scenario_chips_constructs_and_clones() {
+        let ev = StreamEvent::FileScenarioChips {
+            message_id: MessageId::from(Uuid::nil()),
+            upload_id: Uuid::nil(),
+            alternatives: vec![ScenarioChoice {
+                scenario_id: Uuid::nil(),
+                label: "Transcribe".to_string(),
+                executor: "tool".to_string(),
+            }],
+        };
+        // Clone must work (StreamEvent derives Clone) and the variant must match.
+        let cloned = ev.clone();
+        assert!(matches!(cloned, StreamEvent::FileScenarioChips { .. }));
+    }
 }
