@@ -39,10 +39,8 @@ pub async fn dispatch_action(input: DispatchInput<'_>) -> ScenarioOutcome {
     match action {
         BuiltinAction::Save => run_save(&input),
         BuiltinAction::Transcribe => run_transcribe(&input).await,
-        // Describe + ExtractDocument land in Task 2.5.
-        BuiltinAction::Describe | BuiltinAction::ExtractDocument => {
-            ScenarioOutcome::unsupported(format!("{:?} not yet wired", action))
-        }
+        BuiltinAction::Describe => run_describe(&input).await,
+        BuiltinAction::ExtractDocument => run_extract_document(&input).await,
     }
 }
 
@@ -112,6 +110,110 @@ async fn run_transcribe(input: &DispatchInput<'_>) -> ScenarioOutcome {
             }
         }
         Ok(Err(e)) => ScenarioOutcome::failed(format!("transcribe request: {e}")),
+        Err(_) => ScenarioOutcome::timeout(),
+    }
+}
+
+/// `describe` built-in — downloads the image via localhost then POSTs to
+/// toolgate `/describe` (multipart). On ok: appends `<vision>…</vision>` and
+/// keeps the URL in `artifact_urls` so the UI can reconstruct the image
+/// FilePart from history (image-ok exception, §4.4).
+async fn run_describe(input: &DispatchInput<'_>) -> ScenarioOutcome {
+    let local_url = uploads_local_url(&input.attachment.url, input.gateway_listen);
+    let bytes = match input.http_client.get(&local_url).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.bytes().await {
+            Ok(b) => b,
+            Err(e) => return ScenarioOutcome::failed(format!("read image bytes: {e}")),
+        },
+        Ok(resp) => return ScenarioOutcome::failed(format!("download image: HTTP {}", resp.status().as_u16())),
+        Err(e) => return ScenarioOutcome::failed(format!("download image: {e}")),
+    };
+
+    let url = format!("{}/describe", input.toolgate_url.trim_end_matches('/'));
+    let filename = input.attachment.url.split('/').next_back().unwrap_or("image.jpg").to_string();
+    let mime = input.attachment.mime_type.as_deref().unwrap_or("image/jpeg").to_string();
+    let part = reqwest::multipart::Part::bytes(bytes.to_vec())
+        .file_name(filename)
+        .mime_str(&mime)
+        .unwrap_or_else(|_| reqwest::multipart::Part::bytes(bytes.to_vec()));
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("language", input.language.to_string());
+
+    let req = input.http_client.post(&url).multipart(form);
+    let req = crate::trace_propagation::inject_trace_context(req);
+
+    match tokio::time::timeout(input.timeout, req.send()).await {
+        Ok(Ok(resp)) => {
+            let code = resp.status().as_u16();
+            if !resp.status().is_success() {
+                return ScenarioOutcome {
+                    status: status_from_http(code),
+                    summary_text: String::new(),
+                    artifact_urls: Vec::new(),
+                    reason: Some(format!("describe: HTTP {code}")),
+                };
+            }
+            match resp.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    let desc = data["description"].as_str().unwrap_or("").to_string();
+                    if desc.is_empty() {
+                        ScenarioOutcome::failed("describe: empty description".into())
+                    } else {
+                        ScenarioOutcome::ok(
+                            format!("[User attached an image: {}]\n<vision>{desc}</vision>", input.attachment.url),
+                            vec![input.attachment.url.clone()],
+                        )
+                    }
+                }
+                Err(e) => ScenarioOutcome::failed(format!("describe: bad JSON: {e}")),
+            }
+        }
+        Ok(Err(e)) => ScenarioOutcome::failed(format!("describe request: {e}")),
+        Err(_) => ScenarioOutcome::timeout(),
+    }
+}
+
+/// `extract_document` built-in — POSTs the LOCALHOST-REWRITTEN upload URL to
+/// toolgate `/extract-text-url`. The signed `/api/uploads` URL is unreachable
+/// from inside the deployment, so toolgate must download from localhost (same
+/// reason the enrichers rewrite). Toolgate itself does the download.
+async fn run_extract_document(input: &DispatchInput<'_>) -> ScenarioOutcome {
+    let document_url = uploads_local_url(&input.attachment.url, input.gateway_listen);
+    let url = format!("{}/extract-text-url", input.toolgate_url.trim_end_matches('/'));
+    let body = serde_json::json!({ "document_url": document_url, "max_chars": 8000 });
+
+    let req = input.http_client.post(&url).json(&body);
+    let req = crate::trace_propagation::inject_trace_context(req);
+
+    match tokio::time::timeout(input.timeout, req.send()).await {
+        Ok(Ok(resp)) => {
+            let code = resp.status().as_u16();
+            if !resp.status().is_success() {
+                return ScenarioOutcome {
+                    status: status_from_http(code),
+                    summary_text: String::new(),
+                    artifact_urls: Vec::new(),
+                    reason: Some(format!("extract_document: HTTP {code}")),
+                };
+            }
+            match resp.json::<serde_json::Value>().await {
+                Ok(data) => {
+                    let text = data["text"].as_str().unwrap_or("").to_string();
+                    if text.is_empty() {
+                        ScenarioOutcome::failed("extract_document: empty extraction".into())
+                    } else {
+                        let name = input.attachment.file_name.as_deref().unwrap_or("document");
+                        ScenarioOutcome::ok(
+                            format!("[Document '{name}' contents]:\n{text}"),
+                            vec![input.attachment.url.clone()],
+                        )
+                    }
+                }
+                Err(e) => ScenarioOutcome::failed(format!("extract_document: bad JSON: {e}")),
+            }
+        }
+        Ok(Err(e)) => ScenarioOutcome::failed(format!("extract_document request: {e}")),
         Err(_) => ScenarioOutcome::timeout(),
     }
 }
@@ -282,5 +384,88 @@ mod tests {
         for name in crate::agent::file_scenario::outcome::FSE_DEFAULT_ALLOWLIST {
             assert!(resolve(name).is_some(), "allowlist member {name} must resolve to a builtin");
         }
+    }
+
+    #[tokio::test]
+    async fn describe_success_returns_ok_with_vision_and_keeps_url() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/api/uploads/i1"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNGfake".to_vec()))
+            .mount(&server).await;
+        Mock::given(method("POST")).and(path("/describe"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"description": "a red square"})))
+            .mount(&server).await;
+        let client = reqwest::Client::new();
+        let server_uri = server.uri();
+        let a = att(&format!("{}/api/uploads/i1?sig=x", server_uri), MediaType::Image);
+        let port = server_uri.rsplit(':').next().unwrap().to_string();
+        let mut inp = input("describe", &a, &server_uri, &client);
+        let gl = format!("0.0.0.0:{port}");
+        inp.gateway_listen = &gl;
+        let out = dispatch_action(inp).await;
+        assert_eq!(out.status, ScenarioStatus::Ok);
+        assert!(out.summary_text.contains("a red square"));
+        assert!(out.summary_text.contains("<vision>"), "describe must wrap in <vision> tags");
+        // image-ok keeps the URL hint so the UI can reconstruct the FilePart
+        assert_eq!(out.artifact_urls.first().map(|s| s.as_str()), Some(a.url.as_str()));
+    }
+
+    #[tokio::test]
+    async fn describe_503_provider_inactive_is_failed() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/api/uploads/i2"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNGfake".to_vec()))
+            .mount(&server).await;
+        Mock::given(method("POST")).and(path("/describe"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("no vision provider"))
+            .mount(&server).await;
+        let client = reqwest::Client::new();
+        let server_uri = server.uri();
+        let a = att(&format!("{}/api/uploads/i2?sig=x", server_uri), MediaType::Image);
+        let port = server_uri.rsplit(':').next().unwrap().to_string();
+        let mut inp = input("describe", &a, &server_uri, &client);
+        let gl = format!("0.0.0.0:{port}");
+        inp.gateway_listen = &gl;
+        let out = dispatch_action(inp).await;
+        assert_eq!(out.status, ScenarioStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn extract_document_localhost_rewrites_url_before_calling_toolgate() {
+        let server = MockServer::start().await;
+        // The handler must POST a document_url whose host is localhost:{port},
+        // NOT the public host. We assert by matching the body.
+        let port = server.uri().rsplit(':').next().unwrap().to_string();
+        let expected_url = format!("http://localhost:{port}/api/uploads/d1?sig=x");
+        Mock::given(method("POST")).and(path("/extract-text-url"))
+            .and(wiremock::matchers::body_partial_json(serde_json::json!({ "document_url": expected_url })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"text": "Hello PDF"})))
+            .mount(&server).await;
+        let client = reqwest::Client::new();
+        let server_uri = server.uri();
+        let a = att("https://public.example/api/uploads/d1?sig=x", MediaType::Document);
+        let mut inp = input("extract_document", &a, &server_uri, &client);
+        let gl = format!("0.0.0.0:{port}");
+        inp.gateway_listen = &gl;
+        let out = dispatch_action(inp).await;
+        assert_eq!(out.status, ScenarioStatus::Ok, "reason: {:?}", out.reason);
+        assert!(out.summary_text.contains("Hello PDF"));
+    }
+
+    #[tokio::test]
+    async fn extract_document_413_is_too_large() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/extract-text-url"))
+            .respond_with(ResponseTemplate::new(413).set_body_string("too big"))
+            .mount(&server).await;
+        let client = reqwest::Client::new();
+        let server_uri = server.uri();
+        let a = att("https://public.example/api/uploads/d2?sig=x", MediaType::Document);
+        let port = server_uri.rsplit(':').next().unwrap().to_string();
+        let gl = format!("0.0.0.0:{port}");
+        let mut inp = input("extract_document", &a, &server_uri, &client);
+        inp.gateway_listen = &gl;
+        let out = dispatch_action(inp).await;
+        assert_eq!(out.status, ScenarioStatus::TooLarge);
     }
 }
