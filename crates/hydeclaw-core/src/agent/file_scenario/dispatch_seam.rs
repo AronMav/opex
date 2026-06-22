@@ -130,6 +130,11 @@ pub async fn dispatch_attachments(
     let mut outcomes = Vec::with_capacity(attachments.len());
     let mut pending: Vec<PendingAlternative> = Vec::new();
 
+    // Fetch the operator allowlist once per request — it is a per-request
+    // invariant (a system_flags row), not per-attachment. Hoisting avoids
+    // N redundant DB reads for N attachments in a single call.
+    let enabled_allowlist = get_enabled_allowlist(db).await;
+
     for att in attachments {
         // 1. Download full bytes once.
         let bytes = download_full(http_client, gateway_listen, &att.url).await;
@@ -163,8 +168,7 @@ pub async fn dispatch_attachments(
             Some(b) => {
                 // ≥1 bindings and a default exists → re-check the operator allowlist
                 // (defense-in-depth per design §4.6) before auto-running.
-                // `get_enabled_allowlist` returns the full constant when unset (default-enabled).
-                let enabled_allowlist = get_enabled_allowlist(db).await;
+                // `enabled_allowlist` was fetched once before the loop.
                 let action_to_run = if is_allowed_for_autorun(&b.action_ref, &enabled_allowlist) {
                     b.action_ref.as_str()
                 } else {
