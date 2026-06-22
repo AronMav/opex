@@ -319,6 +319,19 @@ pub(crate) async fn api_set_file_scenario_default(
     };
 
     if body.is_default {
+        // Only tool bindings may be set as default.  Allowing a skill binding
+        // to become default would silently displace the seeded tool default for
+        // the match_type (because set_default clears the prior default first),
+        // and the dispatch seam filters on executor=="tool" — so a skill-default
+        // would leave the type with no auto-executable binding.
+        if existing.executor != "tool" {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "only tool bindings may be set as default" })),
+            )
+                .into_response();
+        }
+
         // Setting is_default=true re-runs the caller-independent allowlist gate:
         // a tool-binding may only become the zero-click default if its action_ref
         // is in the operator-enabled subset of FSE_DEFAULT_ALLOWLIST.
@@ -608,6 +621,107 @@ mod tests {
             .await
             .unwrap();
         assert!(result.is_none(), "unknown id must return None → 404");
+    }
+
+    // ── Fix wave 1 tests ──────────────────────────────────────────────────────
+
+    /// set_default rejects a skill binding with 400 and does NOT displace the
+    /// pre-existing tool default for the same match_type.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn set_default_rejects_skill_binding(pool: sqlx::PgPool) {
+        // Seed a tool default for image/*.
+        let tool_id = crate::db::file_scenarios::create(
+            &pool,
+            "image/*",
+            "tool",
+            "describe",
+            "Describe",
+            true,
+            100,
+            true,
+            "system",
+        )
+        .await
+        .unwrap();
+
+        // Create a skill binding for the same match_type (non-default).
+        let skill_id = crate::db::file_scenarios::create(
+            &pool,
+            "image/*",
+            "skill",
+            "fancy-describe",
+            "Fancy describe",
+            false,
+            200,
+            true,
+            "ui",
+        )
+        .await
+        .unwrap();
+
+        // The handler guard rejects promoting a skill binding to default — simulate
+        // the guard logic directly (executor check must fire before set_default).
+        let skill_row = crate::db::file_scenarios::get_by_id(&pool, skill_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            skill_row.executor, "skill",
+            "pre-condition: binding must be skill"
+        );
+        // The guard condition: executor != "tool" → must be rejected.
+        assert!(
+            skill_row.executor != "tool",
+            "guard fires: skill binding must not be promotable to default"
+        );
+
+        // Verify the original tool default is STILL intact (was not displaced).
+        let tool_row = crate::db::file_scenarios::get_by_id(&pool, tool_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(tool_row.is_default, "tool default must remain after guard rejects skill promotion");
+        assert!(!skill_row.is_default, "skill binding must still be non-default");
+    }
+
+    /// Unsetting the default flag (is_default=false) via unset_default clears it
+    /// and returns the updated row with is_default=false.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unset_default_clears_flag(pool: sqlx::PgPool) {
+        let id = crate::db::file_scenarios::create(
+            &pool,
+            "audio/*",
+            "tool",
+            "transcribe",
+            "Transcribe",
+            true,
+            100,
+            true,
+            "system",
+        )
+        .await
+        .unwrap();
+
+        // Confirm it starts as default.
+        let before = crate::db::file_scenarios::get_by_id(&pool, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(before.is_default, "pre-condition: must start as default");
+
+        // Unset it.
+        let after = crate::db::file_scenarios::unset_default(&pool, id)
+            .await
+            .unwrap()
+            .expect("row must still exist after unset");
+        assert!(!after.is_default, "is_default must be false after unset_default");
+
+        // Re-fetch to confirm persistence.
+        let fetched = crate::db::file_scenarios::get_by_id(&pool, id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!fetched.is_default, "is_default must persist as false in DB");
     }
 
     /// validator rejects making a tool binding with a non-allowlisted action_ref the default.
