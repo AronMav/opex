@@ -788,6 +788,125 @@ mod tests {
         assert!(pending.is_empty(), "no non-default alternatives for seeded defaults");
     }
 
+    // ── Task 9.6: web 2+-no-default → immediate save + alternatives offered ─────
+
+    /// On the web (sink-less) path, when ≥2 enabled bindings match but NONE is
+    /// marked `is_default`, the dispatcher MUST NOT stall or block. It must:
+    ///   1. Run `save` immediately (outcome status == Ok).
+    ///   2. Record ALL matched bindings as `pending_alternatives` for Phase 6
+    ///      to emit as UI chips — NOT leave the list empty.
+    ///
+    /// This is the **web affordance** contract: save prevents loss of the file
+    /// while the user's explicit choice is pending. The pending_alternatives
+    /// carry the available options so the UI can surface them without a round-trip.
+    ///
+    /// Brief (Task 9.6) incorrectly asserted `pending_alternatives.is_empty()`.
+    /// The real design (dispatch_seam.rs, `None =>` branch, lines 208-236) and
+    /// the existing `two_bindings_no_default_save_with_alternatives` unit test
+    /// (line 388) both confirm that alternatives ARE populated. The test below
+    /// guards the correct behavior.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn web_two_bindings_no_default_immediate_save_with_alternatives(pool: sqlx::PgPool) {
+        use crate::db::file_scenarios::create;
+
+        // Two non-default bindings for image/png (via image/* glob).
+        // Both `save` and `describe` are in the FSE_DEFAULT_ALLOWLIST.
+        let id_a = create(
+            &pool,
+            "image/*",
+            "tool",
+            "save",
+            "Save image",
+            false, // is_default = false
+            50,
+            true, // enabled
+            "test",
+        )
+        .await
+        .unwrap();
+
+        let id_b = create(
+            &pool,
+            "image/*",
+            "tool",
+            "describe",
+            "Describe image",
+            false, // is_default = false
+            100,
+            true, // enabled
+            "test",
+        )
+        .await
+        .unwrap();
+
+        // Serve PNG magic bytes so download_full succeeds and sniff recognises image/png.
+        let png_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(png_bytes))
+            .mount(&server)
+            .await;
+
+        let port = server.address().port();
+        let gateway_listen = format!("127.0.0.1:{port}");
+        // Use a valid UUID in the upload URL so upload_id_from_url can extract it
+        // and populate PendingAlternative.upload_id (matches production path).
+        let upload_uuid = uuid::Uuid::new_v4();
+        let upload_url = format!(
+            "{}/api/uploads/{upload_uuid}?sig=x&exp=1",
+            server.uri()
+        );
+
+        let client = reqwest::Client::new();
+        let mut enriched = format!("[User attached an image: {upload_url}]");
+        let (outcomes, pending) = dispatch_attachments(
+            &client,
+            &gateway_listen,
+            "http://localhost:9011", // toolgate not called by `save`
+            "en",
+            &pool,
+            &mut enriched,
+            &[att(&upload_url, MediaType::Image)],
+        )
+        .await;
+
+        // 1. One outcome: save ran immediately (no stall, no block).
+        assert_eq!(outcomes.len(), 1, "one outcome per attachment");
+        assert_eq!(
+            outcomes[0].status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::Ok,
+            "fallback save must return Ok immediately; reason: {:?}",
+            outcomes[0].reason
+        );
+
+        // 2. The artifact URL must contain the upload path (save preserves the file).
+        assert!(
+            outcomes[0].artifact_urls.iter().any(|u| u.contains("/api/uploads/")),
+            "save must record the upload URL in artifact_urls: {:?}",
+            outcomes[0].artifact_urls
+        );
+
+        // 3. Alternatives ARE populated (not empty) — Phase 6 uses them to emit chips.
+        assert_eq!(
+            pending.len(),
+            1,
+            "pending_alternatives must contain one set (one attachment)"
+        );
+        assert_eq!(
+            pending[0].alternatives.len(),
+            2,
+            "both non-default bindings must appear as alternatives"
+        );
+        let ids: Vec<uuid::Uuid> = pending[0].alternatives.iter().map(|a| a.scenario_id).collect();
+        assert!(ids.contains(&id_a), "binding A must be in alternatives");
+        assert!(ids.contains(&id_b), "binding B must be in alternatives");
+        assert_eq!(
+            pending[0].upload_id, upload_uuid,
+            "PendingAlternative.upload_id must match the upload UUID from the URL"
+        );
+    }
+
     // ── download failure → Failed outcome ─────────────────────────────────────
 
     #[sqlx::test(migrations = "../../migrations")]

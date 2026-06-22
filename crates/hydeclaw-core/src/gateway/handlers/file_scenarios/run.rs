@@ -737,4 +737,151 @@ mod tests {
             "all public artifact URLs must be root-relative /api/uploads/ URLs: {public_urls:?}"
         );
     }
+
+    // ── Task 9.6: dual-channel convergence guard ──────────────────────────────
+
+    /// Both the web chip click (POST /api/file-scenarios/run → api_run_scenario)
+    /// and the Telegram FSE callback (channel_ws/inline.rs → fse_callback_handler)
+    /// converge on the SAME function: `run_scenario_and_persist`. This test proves
+    /// the shared run path persists exactly one assistant message when invoked
+    /// with a valid session + upload + enabled binding.
+    ///
+    /// Transport-layer differences (HTTP bearer vs Telegram button callback) are
+    /// irrelevant here: the convergence is at `run_scenario_and_persist`, which
+    /// is the single code path exercised by both callers. See also
+    /// `gateway/handlers/channel_ws/inline.rs` which calls
+    /// `crate::gateway::handlers::file_scenarios::run::run_scenario_and_persist`
+    /// directly (verified by Task 9.5 source-text search).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn dual_channel_convergence_persists_one_assistant_message(pool: PgPool) {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Serve the upload download on localhost so the `save` built-in can
+        // re-issue the download via uploads_local_url.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(b"\x89PNG\r\n\x1a\nfakepng".to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let port = server.address().port();
+        let gateway_listen = format!("127.0.0.1:{port}");
+
+        // Seed session + upload + enabled binding (save, always Ok, no toolgate call).
+        let session_id =
+            hydeclaw_db::sessions::create_new_session(&pool, "Hyde", "ui", "web")
+                .await
+                .unwrap();
+        let upload_id = crate::db::uploads::insert_with_retention(
+            &pool,
+            "client_upload",
+            None,
+            "image/png",
+            b"\x89PNG\r\n\x1a\nfakepng",
+            30,
+        )
+        .await
+        .unwrap();
+        let scenario_id = crate::db::file_scenarios::insert_for_test(
+            &pool,
+            "image/*",
+            "tool",
+            "save",
+            "Save image",
+            false, // is_default — irrelevant for the deferred run path
+            true,  // enabled
+        )
+        .await
+        .unwrap();
+
+        let http = reqwest::Client::new();
+        // ── Web path (what api_run_scenario calls) ────────────────────────────
+        let (outcome, msg_id) = run_scenario_and_persist(
+            &pool,
+            &http,
+            &gateway_listen,
+            &server.uri(),
+            "en",
+            session_id,
+            upload_id,
+            scenario_id,
+        )
+        .await
+        .expect("run_scenario_and_persist must succeed for enabled save binding");
+
+        // The `save` built-in always returns Ok.
+        assert_eq!(
+            outcome.status,
+            ScenarioStatus::Ok,
+            "save always returns Ok; reason: {:?}",
+            outcome.reason
+        );
+
+        // Exactly one assistant message must be persisted.
+        let messages = hydeclaw_db::sessions::load_messages(&pool, session_id, None)
+            .await
+            .unwrap();
+        let assistant_msgs: Vec<_> = messages.iter().filter(|m| m.role == "assistant").collect();
+        assert_eq!(
+            assistant_msgs.len(),
+            1,
+            "run path must persist exactly one assistant message; got {} messages, msg_id={msg_id}",
+            assistant_msgs.len()
+        );
+        assert_eq!(
+            assistant_msgs[0].id, msg_id,
+            "persisted message id must match the returned msg_id"
+        );
+
+        // ── Telegram path calls the SAME function (run_scenario_and_persist) ─
+        // This is verified at source-text level in Task 9.5 and by the fact
+        // that `inline.rs:fse_callback_handler` imports and calls
+        // `crate::gateway::handlers::file_scenarios::run::run_scenario_and_persist`.
+        // We prove the shared behavior by invoking it a second time
+        // (simulating the Telegram callback for a different upload/scenario pair)
+        // and confirming another assistant message is added.
+        let upload_id2 = crate::db::uploads::insert_with_retention(
+            &pool,
+            "client_upload",
+            None,
+            "image/png",
+            b"\x89PNG\r\n\x1a\nfakepng",
+            30,
+        )
+        .await
+        .unwrap();
+        let (outcome2, _msg_id2) = run_scenario_and_persist(
+            &pool,
+            &http,
+            &gateway_listen,
+            &server.uri(),
+            "en",
+            session_id,
+            upload_id2,
+            scenario_id,
+        )
+        .await
+        .expect("telegram-path invocation of run_scenario_and_persist must also succeed");
+
+        assert_eq!(
+            outcome2.status,
+            ScenarioStatus::Ok,
+            "telegram-path save must return Ok"
+        );
+
+        let messages2 = hydeclaw_db::sessions::load_messages(&pool, session_id, None)
+            .await
+            .unwrap();
+        let count2 = messages2.iter().filter(|m| m.role == "assistant").count();
+        assert_eq!(
+            count2,
+            2,
+            "each invocation of the shared run path must persist one additional assistant message"
+        );
+    }
 }
