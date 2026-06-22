@@ -67,6 +67,30 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    async fn uploads_cap_relaxed_to_50mb(pool: PgPool) {
+        // A row at 30 MB must be accepted after the relax migration (was rejected by 052's 20 MB CHECK).
+        let id = Uuid::new_v4();
+        let res = sqlx::query(
+            r#"INSERT INTO uploads (id, owner_type, owner_id, mime, data, sha256, size_bytes, expires_at)
+               VALUES ($1, 'tool_output', NULL, 'application/pdf', '\x00', '\x00', 31457280, NULL)"#,
+        )
+        .bind(id)
+        .execute(&pool)
+        .await;
+        assert!(res.is_ok(), "30 MB size_bytes must pass after migration 062 relaxes the CHECK");
+
+        // 60 MB still rejected by the new 50 MB CHECK.
+        let over = sqlx::query(
+            r#"INSERT INTO uploads (id, owner_type, owner_id, mime, data, sha256, size_bytes, expires_at)
+               VALUES ($1, 'tool_output', NULL, 'application/pdf', '\x00', '\x00', 62914560, NULL)"#,
+        )
+        .bind(Uuid::new_v4())
+        .execute(&pool)
+        .await;
+        assert!(over.is_err(), "60 MB must still violate the new 50 MB CHECK");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
     async fn outcomes_row_round_trip(pool: PgPool) {
         let id = Uuid::new_v4();
         sqlx::query(
