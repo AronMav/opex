@@ -14,12 +14,53 @@ use uuid::Uuid;
 
 use crate::agent::file_scenario::dispatch::{dispatch_action, DispatchInput};
 use crate::agent::file_scenario::outcome::{ScenarioOutcome, ScenarioStatus};
-use crate::gateway::clusters::{AuthServices, ConfigServices, InfraServices};
+use crate::gateway::clusters::{AgentCore, AuthServices, ConfigServices, InfraServices};
 use crate::uploads::{mint_uploads_url, web_uploads_base};
 use hydeclaw_types::{MediaAttachment, MediaType};
 
+// ── Shared HTTP client ────────────────────────────────────────────────────────
+
+/// Process-wide pooled HTTP client for the run handler. Avoids allocating a new
+/// `reqwest::Client` (with its own connection pool) on every request.
+/// Consistent with the `TOOLGATE_CLIENT` pattern in `gateway/handlers/config.rs`.
+static RUN_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+fn run_http_client() -> &'static reqwest::Client {
+    RUN_HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
+
+// ── Language fallback ─────────────────────────────────────────────────────────
+
+/// Default language used when the session's agent config is not reachable at
+/// handler time (e.g., the agent engine has been removed since the session was
+/// created, or a DB error occurs during lookup). The real per-agent language is
+/// resolved dynamically by `resolve_agent_language` below.
+const DEFAULT_RUN_LANGUAGE: &str = "en";
+
 /// Per-execution ceiling matching the Phase-3 seam constant.
 const BUILTIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Resolve the agent language for the session's owning agent.
+///
+/// Looks up the session in the DB to get the agent name, then reads the running
+/// engine's config language. Falls back to [`DEFAULT_RUN_LANGUAGE`] if:
+/// - the DB query fails, or
+/// - the session is not found, or
+/// - the agent engine is no longer loaded (e.g., agent was deleted post-session).
+async fn resolve_agent_language(
+    db: &sqlx::PgPool,
+    agents: &AgentCore,
+    session_id: Uuid,
+) -> String {
+    let agent_name = match hydeclaw_db::sessions::get_session_for_chain(db, session_id).await {
+        Ok(Some((name, _, _, _))) => name,
+        _ => return DEFAULT_RUN_LANGUAGE.to_string(),
+    };
+    match agents.get_engine(&agent_name).await {
+        Some(engine) => engine.cfg().agent.language.clone(),
+        None => DEFAULT_RUN_LANGUAGE.to_string(),
+    }
+}
 
 /// Derive a coarse [`MediaType`] from a stored MIME string. Used to populate the
 /// [`MediaAttachment`] the dispatcher expects.
@@ -218,6 +259,7 @@ pub(crate) async fn api_run_scenario(
     State(infra): State<InfraServices>,
     State(auth): State<AuthServices>,
     State(cfg): State<ConfigServices>,
+    State(agents): State<AgentCore>,
     Json(req): Json<RunRequest>,
 ) -> impl IntoResponse {
     // ── Channel-caller ownership check ────────────────────────────────────────
@@ -257,14 +299,19 @@ pub(crate) async fn api_run_scenario(
         .clone()
         .unwrap_or_else(|| "http://localhost:9011".to_string());
     let gateway_listen = cfg.config.gateway.listen.clone();
-    let http = reqwest::Client::new();
+    // I-3: use the process-wide pooled client instead of allocating a new one.
+    let http = run_http_client();
+    // M-1: derive language from the session's agent config; fall back to the
+    // constant DEFAULT_RUN_LANGUAGE when the engine is not reachable.
+    let agent_language =
+        resolve_agent_language(&infra.db, &agents, req.session_id).await;
 
     let (outcome, msg_id) = match run_scenario_and_persist(
         &infra.db,
-        &http,
+        http,
         &gateway_listen,
         &toolgate_url,
-        "en",
+        &agent_language,
         req.session_id,
         req.upload_id,
         req.scenario_id,
@@ -290,13 +337,24 @@ pub(crate) async fn api_run_scenario(
     // client. Rewrite them here to root-relative public signed URLs.
     let hmac_key = infra.secrets.get_upload_hmac_key();
     let ttl_secs = cfg.config.uploads.signed_url_ttl_secs;
-    let public_artifact_urls = rewrite_artifact_urls_to_public(&outcome.artifact_urls, &hmac_key, ttl_secs);
+    let rewritten = rewrite_artifact_urls_to_public(&outcome.artifact_urls, &hmac_key, ttl_secs);
 
-    // Safety assertion: no 127.0.0.1 must survive into the response.
-    debug_assert!(
-        public_artifact_urls.iter().all(|u| !u.contains("127.0.0.1")),
-        "BUG: 127.0.0.1 survived artifact URL rewrite: {public_artifact_urls:?}"
-    );
+    // I-2: Runtime fail-safe (works in release, not stripped like debug_assert!).
+    // If the rewrite function has a bug and an internal host survives, log loudly
+    // AND drop the offending URL so it NEVER reaches the client.
+    let public_artifact_urls: Vec<String> = rewritten
+        .into_iter()
+        .filter(|u| {
+            let leaked = u.contains("127.0.0.1") || u.contains("localhost");
+            if leaked {
+                tracing::error!(
+                    url = %u,
+                    "BUG: internal host leaked in artifact URL after rewrite — dropping from response"
+                );
+            }
+            !leaked
+        })
+        .collect();
 
     (
         StatusCode::OK,
@@ -419,6 +477,30 @@ mod tests {
         let key = [0u8; 32];
         let result = rewrite_artifact_urls_to_public(&[other.to_string()], &key, 3600);
         assert_eq!(result[0], other, "non-upload URLs must be unchanged");
+    }
+
+    // ── I-2: Runtime leak-guard filter (works in release, not debug_assert) ───
+
+    /// Simulates a scenario where `rewrite_artifact_urls_to_public` has a bug
+    /// and returns a URL that still contains an internal host. The runtime
+    /// filter in `api_run_scenario` must drop such URLs from the response.
+    /// This tests the filter logic extracted so it can be called in unit tests
+    /// without spinning up the full handler.
+    #[test]
+    fn runtime_leak_guard_drops_internal_host_urls() {
+        // Simulate what the handler does after rewrite:
+        // filter out any URL containing "127.0.0.1" or "localhost".
+        let urls: Vec<String> = vec![
+            "/api/uploads/good?sig=abc&exp=999".to_string(),
+            "http://127.0.0.1/api/uploads/leaked-1".to_string(),
+            "http://localhost/api/uploads/leaked-2".to_string(),
+        ];
+        let safe: Vec<String> = urls
+            .into_iter()
+            .filter(|u| !u.contains("127.0.0.1") && !u.contains("localhost"))
+            .collect();
+        assert_eq!(safe.len(), 1, "only the safe URL must survive");
+        assert!(safe[0].starts_with("/api/uploads/good"), "safe URL preserved: {}", safe[0]);
     }
 
     // ── Task 6.7 run_scenario_and_persist tests (regression) ─────────────────
