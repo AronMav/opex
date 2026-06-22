@@ -1,9 +1,207 @@
 //! `file_scenarios` table CRUD. See docs/superpowers/specs/2026-06-22-file-scenario-engine-design.md §4.1.
 
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use sqlx::{FromRow, PgPool};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, FromRow, serde::Serialize)]
+pub struct FileScenarioRow {
+    pub id: Uuid,
+    pub match_type: String,
+    pub executor: String,
+    pub action_ref: String,
+    pub label: String,
+    pub is_default: bool,
+    pub priority: i32,
+    pub enabled: bool,
+    pub scope: String,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+const SELECT_COLS: &str =
+    "id, match_type, executor, action_ref, label, is_default, priority, enabled, scope, created_by, created_at, updated_at";
+
+/// List all bindings, default-first then by priority (lowest wins) then created_at.
+pub async fn list(pool: &PgPool) -> Result<Vec<FileScenarioRow>> {
+    let sql = format!(
+        "SELECT {SELECT_COLS} FROM file_scenarios \
+         ORDER BY match_type, is_default DESC, priority ASC, created_at ASC, id ASC"
+    );
+    Ok(sqlx::query_as::<_, FileScenarioRow>(&sql).fetch_all(pool).await?)
+}
+
+pub async fn get_by_id(pool: &PgPool, id: Uuid) -> Result<Option<FileScenarioRow>> {
+    let sql = format!("SELECT {SELECT_COLS} FROM file_scenarios WHERE id = $1");
+    Ok(sqlx::query_as::<_, FileScenarioRow>(&sql).bind(id).fetch_optional(pool).await?)
+}
+
+/// Insert a binding. Caller is responsible for FSE_DEFAULT_ALLOWLIST / executor
+/// validation (enforced at the HTTP/tool layer in a later phase).
+#[allow(clippy::too_many_arguments)]
+pub async fn create(
+    pool: &PgPool,
+    match_type: &str,
+    executor: &str,
+    action_ref: &str,
+    label: &str,
+    is_default: bool,
+    priority: i32,
+    enabled: bool,
+    created_by: &str,
+) -> Result<Uuid> {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO file_scenarios \
+         (id, match_type, executor, action_ref, label, is_default, priority, enabled, created_by) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(id)
+    .bind(match_type)
+    .bind(executor)
+    .bind(action_ref)
+    .bind(label)
+    .bind(is_default)
+    .bind(priority)
+    .bind(enabled)
+    .bind(created_by)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Update mutable fields. Returns rows affected (0 or 1).
+pub async fn update(pool: &PgPool, id: Uuid, label: &str, priority: i32, enabled: bool) -> Result<u64> {
+    let res = sqlx::query(
+        "UPDATE file_scenarios SET label = $2, priority = $3, enabled = $4, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(label)
+    .bind(priority)
+    .bind(enabled)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+pub async fn delete(pool: &PgPool, id: Uuid) -> Result<u64> {
+    let res = sqlx::query("DELETE FROM file_scenarios WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
+}
+
+/// Promote `id` to the default for its match_type, clearing the prior default in
+/// one transaction so the `file_scenarios_one_default` partial unique index is
+/// never transiently violated.
+pub async fn set_default(pool: &PgPool, id: Uuid) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let match_type: String = sqlx::query_scalar("SELECT match_type FROM file_scenarios WHERE id = $1")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE file_scenarios SET is_default = false, updated_at = NOW() WHERE match_type = $1 AND is_default")
+        .bind(&match_type)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE file_scenarios SET is_default = true, updated_at = NOW() WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Record a per-file processing outcome. Returns the new row id.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_outcome(
+    pool: &PgPool,
+    session_id: Uuid,
+    upload_id: Uuid,
+    match_type: &str,
+    scenario_id: Option<Uuid>,
+    status: &str,
+    reason: Option<&str>,
+    duration_ms: i64,
+    bytes: i64,
+) -> Result<Uuid> {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO file_scenario_outcomes \
+         (id, session_id, upload_id, match_type, scenario_id, status, reason, duration_ms, bytes) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(id)
+    .bind(session_id)
+    .bind(upload_id)
+    .bind(match_type)
+    .bind(scenario_id)
+    .bind(status)
+    .bind(reason)
+    .bind(duration_ms)
+    .bind(bytes)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::PgPool;
     use uuid::Uuid;
+
+    use super::{create, get_by_id, insert_outcome, list, set_default};
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn create_then_get_round_trip(pool: PgPool) {
+        let id = create(&pool, "image/*", "tool", "describe", "Describe", true, 50, true, "system")
+            .await
+            .unwrap();
+        let row = get_by_id(&pool, id).await.unwrap().expect("row present");
+        assert_eq!(row.match_type, "image/*");
+        assert_eq!(row.executor, "tool");
+        assert_eq!(row.action_ref, "describe");
+        assert!(row.is_default);
+        assert_eq!(row.priority, 50);
+        assert_eq!(list(&pool).await.unwrap().len(), 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn set_default_flips_within_match_type(pool: PgPool) {
+        let a = create(&pool, "audio/*", "tool", "transcribe", "Transcribe", true, 100, true, "system").await.unwrap();
+        let b = create(&pool, "audio/*", "skill", "fancy", "Fancy", false, 100, true, "ui").await.unwrap();
+
+        // Promote b to default — a must be demoted in the same transaction (else the
+        // partial unique index would be violated).
+        set_default(&pool, b).await.unwrap();
+
+        assert!(!get_by_id(&pool, a).await.unwrap().unwrap().is_default, "old default cleared");
+        assert!(get_by_id(&pool, b).await.unwrap().unwrap().is_default, "new default set");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn insert_outcome_round_trip(pool: PgPool) {
+        let oid = insert_outcome(
+            &pool, Uuid::new_v4(), Uuid::new_v4(), "application/pdf",
+            None, "failed", Some("toolgate 502"), 880, 2048,
+        )
+        .await
+        .unwrap();
+        let (status, reason): (String, Option<String>) = sqlx::query_as(
+            r#"SELECT status, reason FROM file_scenario_outcomes WHERE id = $1"#,
+        )
+        .bind(oid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "failed");
+        assert_eq!(reason.as_deref(), Some("toolgate 502"));
+    }
+
+    // ── Tests from Tasks 1.1–1.3 (table/index/constraint verification) ──────
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn one_default_per_match_type_enforced(pool: PgPool) {
