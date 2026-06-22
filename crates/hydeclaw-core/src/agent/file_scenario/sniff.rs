@@ -18,8 +18,10 @@ pub struct SniffedType {
     /// Effective MIME type (safe: never svg/html — forced to `application/octet-stream`).
     pub mime: String,
     /// Best-guess extension (from magic bytes or filename; `None` when only declared).
+    #[allow(dead_code)] // Phase 4+: surfaced in binding-match UI and audit log
     pub extension: Option<String>,
     /// Which layer resolved the MIME.
+    #[allow(dead_code)] // Phase 4+: surfaced in binding-match UI and audit log
     pub source: SniffSource,
 }
 

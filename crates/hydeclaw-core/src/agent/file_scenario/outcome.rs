@@ -53,6 +53,7 @@ impl ScenarioOutcome {
         Self { status: ScenarioStatus::Timeout, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some("per-execution timeout".to_string()) }
     }
 
+    #[allow(dead_code)] // Phase 6: used when HTTP 413 from toolgate is surfaced as a UI chip message
     pub fn too_large(reason: String) -> Self {
         Self { status: ScenarioStatus::TooLarge, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason) }
     }
@@ -62,6 +63,7 @@ impl ScenarioOutcome {
 /// `executor=tool`. This is the closed set the dispatch table keys on AND the
 /// closed domain the operator allowlist toggle (later phase) may enable/disable
 /// members of — it can never admit `code_exec` / raw-URL / a YAML tool.
+#[allow(dead_code)] // Phase 4+: consumed by the operator allowlist API route and binding validator
 pub const FSE_DEFAULT_ALLOWLIST: &[&str] = &["transcribe", "describe", "extract_document", "save"];
 
 /// Map a toolgate/HTTP status code to a [`ScenarioStatus`]. 2xx => `Ok`;

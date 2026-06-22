@@ -172,15 +172,27 @@ pub async fn fetch_url_content(
     ))
 }
 
-/// Enrich user text: auto-fetch URLs (max 2), add attachment descriptions.
+/// Result of `enrich_message_text`: the enriched LLM text plus the deterministic
+/// per-attachment dispatch outcomes and any post-hoc alternatives (chip/button
+/// emission is Phase 6 — this only carries them out of the sink-less hook).
+pub struct EnrichResult {
+    pub text: String,
+    pub outcomes: Vec<crate::agent::file_scenario::ScenarioOutcome>,
+    pub pending_alternatives: Vec<crate::agent::file_scenario::PendingAlternative>,
+}
+
+/// Enrich user text: auto-fetch URLs (max 2), add attachment hints, then run the
+/// File Scenario Engine dispatch (sniff → bindings → built-in) and rewrite the
+/// enriched text per the outcome contract (§4.4). Returns an `EnrichResult`.
 pub async fn enrich_message_text(
     http_client: &reqwest::Client,
     gateway_listen: &str,
     toolgate_url: &str,
     agent_language: &str,
+    db: &sqlx::PgPool,
     user_text: &str,
     attachments: &[hydeclaw_types::MediaAttachment],
-) -> String {
+) -> EnrichResult {
     let mut enriched = user_text.to_string();
 
     // PII redaction before sending to external LLM
@@ -204,17 +216,27 @@ pub async fn enrich_message_text(
     }
     enrich_with_attachments(&mut enriched, attachments);
 
-    // Auto-transcribe voice messages via toolgate STT
-    crate::agent::url_tools::auto_transcribe_audio(
-        &mut enriched, attachments, toolgate_url, agent_language, http_client, gateway_listen,
-    ).await;
+    // FSE dispatch replaces the old inline auto_transcribe_audio/auto_describe_images
+    // calls: sniff each attachment, look up bindings, run the built-in via the
+    // in-core dispatch table, then deterministically rewrite the enriched text.
+    let (outcomes, pending_alternatives) =
+        crate::agent::file_scenario::dispatch_seam::dispatch_attachments(
+            http_client,
+            gateway_listen,
+            toolgate_url,
+            agent_language,
+            db,
+            &mut enriched,
+            attachments,
+        )
+        .await;
+    crate::agent::file_scenario::rewrite::rewrite_enriched_text(
+        &mut enriched,
+        attachments,
+        &outcomes,
+    );
 
-    // Auto-describe images via toolgate vision
-    crate::agent::url_tools::auto_describe_images(
-        &mut enriched, attachments, toolgate_url, agent_language, http_client, gateway_listen,
-    ).await;
-
-    enriched
+    EnrichResult { text: enriched, outcomes, pending_alternatives }
 }
 
 /// Fetch a URL and return text content (tool handler).
@@ -803,5 +825,54 @@ mod tests {
         let denied = runtime_subagent_denylist(&cfg);
         assert_eq!(denied.iter().filter(|d| *d == "cron").count(), 1,
             "duplicate entries between extra and SUBAGENT_DENIED_TOOLS must be deduped");
+    }
+
+    // ── enrich_message_text → EnrichResult ──────────────────────────────────
+
+    /// No binding seeded → save path → no dangling signed URL in `.text`.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enrich_returns_enrichresult_and_strips_url_on_save(pool: sqlx::PgPool) {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4 fake".to_vec()))
+            .mount(&server)
+            .await;
+        let gateway_listen = format!("127.0.0.1:{}", server.address().port());
+        let upload_url = format!(
+            "{}/api/uploads/00000000-0000-0000-0000-000000000009?sig=x&exp=1",
+            server.uri()
+        );
+
+        let att = hydeclaw_types::MediaAttachment {
+            url: upload_url.clone(),
+            media_type: hydeclaw_types::MediaType::Document,
+            file_name: Some("r.pdf".into()),
+            mime_type: None,
+            file_size: None,
+        };
+        let client = reqwest::Client::new();
+        let result = enrich_message_text(
+            &client,
+            &gateway_listen,
+            "http://localhost:9011", // unreachable toolgate → built-in extract fails or save runs
+            "ru",
+            &pool,
+            "see attached",
+            &[att],
+        )
+        .await;
+
+        // New return type: an EnrichResult with one outcome.
+        assert_eq!(result.outcomes.len(), 1, "one outcome per attachment");
+        // No dangling signed/localhost URL survives in the LLM text on the save/non-image path.
+        assert!(
+            !result.text.contains(&upload_url),
+            "no dangling URL must survive: {}",
+            result.text
+        );
     }
 }
