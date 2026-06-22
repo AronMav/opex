@@ -1,0 +1,12 @@
+# Pin the project toolchain so local dev, the prod build host (server-deploy),
+# and any future host / CI compile with the EXACT same rustc/cargo/clippy —
+# prevents silent drift between hosts (each previously tracked its own `stable`,
+# which had diverged: local 1.95.0 vs server 1.96.0).
+#
+# Reproducibility trade-off: this version does NOT auto-update with new stable
+# releases. Bump it deliberately here (one line) when you want to move forward.
+# components: clippy + rustfmt are guaranteed present on every host (no more
+# "clippy is not installed for the toolchain").
+[toolchain]
+channel = "1.96.0"
+components = ["clippy", "rustfmt"]
