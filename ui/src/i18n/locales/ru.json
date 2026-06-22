@@ -1197,5 +1197,9 @@
   "setup.model_placeholder": "название-модели",
   "setup.optional_hint": "(необязательно)",
 
-  "login.show_token": "Показать токен"
+  "login.show_token": "Показать токен",
+
+  "file_scenarios.default_badge": "по умолчанию",
+  "file_scenarios.set_default": "Сделать по умолчанию",
+  "file_scenarios.toggle_enabled": "Включить/выключить"
 }
