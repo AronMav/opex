@@ -33,6 +33,8 @@ pub mod event_types {
     // File Scenario Engine — authorization events (see spec §4.6). Kept off
     // session_timeline (which LoopDetector warm-up scans); home is audit_events.
     pub const FSE_BINDING_CREATED: &str = "fse_binding_created";
+    pub const FSE_BINDING_UPDATED: &str = "fse_binding_updated";
+    pub const FSE_BINDING_DELETED: &str = "fse_binding_deleted";
     pub const FSE_DEFAULT_CHANGED: &str = "fse_default_changed";
     pub const FSE_ALLOWLIST_AMENDED: &str = "fse_allowlist_amended";
     pub const FSE_AUTO_RUN: &str = "fse_auto_run";
@@ -150,6 +152,8 @@ mod tests {
             event_types::MEMORY_PINNED,
             event_types::RATE_LIMITED,
             event_types::FSE_BINDING_CREATED,
+            event_types::FSE_BINDING_UPDATED,
+            event_types::FSE_BINDING_DELETED,
             event_types::FSE_DEFAULT_CHANGED,
             event_types::FSE_ALLOWLIST_AMENDED,
             event_types::FSE_AUTO_RUN,
@@ -184,5 +188,19 @@ mod tests {
             constants.len(),
             "duplicate event type constants detected"
         );
+    }
+}
+
+#[cfg(test)]
+mod fse_event_type_tests {
+    use super::event_types;
+
+    #[test]
+    fn fse_event_types_have_expected_string_values() {
+        assert_eq!(event_types::FSE_BINDING_CREATED, "fse_binding_created");
+        assert_eq!(event_types::FSE_BINDING_UPDATED, "fse_binding_updated");
+        assert_eq!(event_types::FSE_BINDING_DELETED, "fse_binding_deleted");
+        assert_eq!(event_types::FSE_DEFAULT_CHANGED, "fse_default_changed");
+        assert_eq!(event_types::FSE_ALLOWLIST_AMENDED, "fse_allowlist_amended");
     }
 }
