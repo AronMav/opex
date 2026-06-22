@@ -58,6 +58,25 @@ impl ScenarioOutcome {
     }
 }
 
+/// Hard-coded v1 allowlist of built-in deterministic actions runnable as
+/// `executor=tool`. This is the closed set the dispatch table keys on AND the
+/// closed domain the operator allowlist toggle (later phase) may enable/disable
+/// members of — it can never admit `code_exec` / raw-URL / a YAML tool.
+pub const FSE_DEFAULT_ALLOWLIST: &[&str] = &["transcribe", "describe", "extract_document", "save"];
+
+/// Map a toolgate/HTTP status code to a [`ScenarioStatus`]. 2xx => `Ok`;
+/// 413 (payload too large) => `TooLarge`; 504 (gateway timeout) => `Timeout`;
+/// every other non-2xx => `Failed`. (The Rust-side per-execution timeout maps
+/// to `Timeout` separately in the dispatcher's `Err(_)` arm.)
+pub fn status_from_http(code: u16) -> ScenarioStatus {
+    match code {
+        200..=299 => ScenarioStatus::Ok,
+        413 => ScenarioStatus::TooLarge,
+        504 => ScenarioStatus::Timeout,
+        _ => ScenarioStatus::Failed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +117,38 @@ mod tests {
     #[test]
     fn timeout_helper_has_timeout_status() {
         assert_eq!(ScenarioOutcome::timeout().status, ScenarioStatus::Timeout);
+    }
+
+    #[test]
+    fn allowlist_contains_exactly_the_four_builtins() {
+        assert_eq!(FSE_DEFAULT_ALLOWLIST, &["transcribe", "describe", "extract_document", "save"]);
+        assert!(FSE_DEFAULT_ALLOWLIST.contains(&"transcribe"));
+        assert!(!FSE_DEFAULT_ALLOWLIST.contains(&"code_exec"), "code_exec must never be allowlisted");
+    }
+
+    #[test]
+    fn status_from_http_2xx_is_ok() {
+        assert_eq!(status_from_http(200), ScenarioStatus::Ok);
+        assert_eq!(status_from_http(204), ScenarioStatus::Ok);
+    }
+
+    #[test]
+    fn status_from_http_413_is_too_large() {
+        // toolgate raises 413 on oversized download (documents.py / download_limited).
+        assert_eq!(status_from_http(413), ScenarioStatus::TooLarge);
+    }
+
+    #[test]
+    fn status_from_http_504_is_timeout() {
+        // toolgate maps an upstream URL timeout to 504 (vision.py describe_url).
+        assert_eq!(status_from_http(504), ScenarioStatus::Timeout);
+    }
+
+    #[test]
+    fn status_from_http_other_non_2xx_is_failed() {
+        assert_eq!(status_from_http(400), ScenarioStatus::Failed);
+        assert_eq!(status_from_http(415), ScenarioStatus::Failed);
+        assert_eq!(status_from_http(502), ScenarioStatus::Failed);
+        assert_eq!(status_from_http(503), ScenarioStatus::Failed);
     }
 }
