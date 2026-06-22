@@ -11,6 +11,24 @@ use uuid::Uuid;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
+/// Which affordance transport to use for FSE post-hoc alternatives.
+/// Telegram → inline buttons; web/UI (channel None or "web") → SSE chips;
+/// every other channel has no send_buttons handler → plain-text note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AffordanceTransport {
+    TelegramButtons,
+    WebChips,
+    PlainTextNote,
+}
+
+pub(crate) fn affordance_transport(channel: Option<&str>) -> AffordanceTransport {
+    match channel {
+        Some("telegram") => AffordanceTransport::TelegramButtons,
+        None | Some("web") | Some("ui") => AffordanceTransport::WebChips,
+        Some(_) => AffordanceTransport::PlainTextNote,
+    }
+}
+
 /// Outcome of the bootstrap phase — passed directly to the execute phase.
 ///
 /// `lifecycle_guard` is wrapped in `Option` so the adapter can `.take()` it
@@ -41,6 +59,10 @@ pub struct BootstrapOutcome {
     /// breakpoint. Forwarded from `ContextSnapshot.claude_md_content`.
     /// `None` for non-base agents and agents without prompt_cache.
     pub claude_md_content: Option<String>,
+    /// FSE post-hoc alternatives already emitted as affordances in bootstrap.
+    /// Carried forward for diagnostics / downstream phases.
+    #[allow(dead_code)]
+    pub pending_alternatives: Vec<crate::agent::file_scenario::PendingAlternative>,
 }
 
 /// Input context for the bootstrap phase.
@@ -225,15 +247,8 @@ pub async fn bootstrap<S: EventSink>(
     )
     .await;
     let enriched_text = enrich.text;
-    // Phase 6 will emit `enrich.pending_alternatives` as Telegram buttons / SSE
-    // chips here (where the EngineEventSender lives). For now, record them so the
-    // dispatch is observable and the seam is exercised end-to-end.
-    if !enrich.pending_alternatives.is_empty() {
-        tracing::info!(
-            count = enrich.pending_alternatives.len(),
-            "fse: post-hoc alternatives produced (emission deferred to Phase 6)"
-        );
-    }
+    let pending_alternatives = enrich.pending_alternatives;
+
     if enrich.outcomes.iter().any(|o| !matches!(o.status, crate::agent::file_scenario::ScenarioStatus::Ok)) {
         tracing::info!("fse: at least one attachment took the failure-rewrite path");
     }
@@ -289,6 +304,100 @@ pub async fn bootstrap<S: EventSink>(
         )
         .await?
     };
+
+    // ── FSE affordance emission ───────────────────────────────────────────────
+    // Emit Telegram inline-keyboard buttons / web SSE chips / plain-text note
+    // for each non-default binding the user may pick (Phase 6 keystone).
+    // Runs after user_message_id is allocated so the web-chip event can anchor
+    // to the persisted message row.
+    if !pending_alternatives.is_empty() {
+        let channel_str = ctx.msg.channel.as_str();
+        let transport = affordance_transport(if channel_str.is_empty() { None } else { Some(channel_str) });
+        for pending in &pending_alternatives {
+            match transport {
+                AffordanceTransport::TelegramButtons => {
+                    if let Some(router) = engine.channel_router_ref() {
+                        let buttons: Vec<serde_json::Value> = pending
+                            .alternatives
+                            .iter()
+                            .map(|c| {
+                                serde_json::json!({
+                                    "text": c.label,
+                                    "data": format!("fse:{}:{}", c.scenario_id, c.executor),
+                                })
+                            })
+                            .collect();
+                        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                        let action = crate::agent::channel_actions::ChannelAction {
+                            name: "send_buttons".to_string(),
+                            params: serde_json::json!({
+                                "text": "Other ways to handle this file:",
+                                "buttons": buttons,
+                            }),
+                            // Echo session_id + upload_id so the callback can resolve them
+                            // (consumed by Task 6.10's handle_fse_callback via msg.context).
+                            context: serde_json::json!({
+                                "chat_id": ctx.msg.context.get("chat_id"),
+                                "message_id": ctx.msg.context.get("message_id"),
+                                "session_id": session_id.to_string(),
+                                "upload_id": pending.upload_id.to_string(),
+                            }),
+                            reply: reply_tx,
+                            target_channel: Some("telegram".to_string()),
+                        };
+                        if let Err(e) = router.send(action).await {
+                            tracing::warn!(error = %e, "fse: failed to send send_buttons to Telegram");
+                        }
+                    }
+                }
+                AffordanceTransport::WebChips => {
+                    // Map internal ScenarioChoice → wire hydeclaw_types::sse::ScenarioChoice.
+                    let wire_alts: Vec<hydeclaw_types::sse::ScenarioChoice> = pending
+                        .alternatives
+                        .iter()
+                        .map(|c| hydeclaw_types::sse::ScenarioChoice {
+                            scenario_id: c.scenario_id,
+                            label: c.label.clone(),
+                            executor: c.executor.clone(),
+                        })
+                        .collect();
+                    let ev = crate::agent::engine::StreamEvent::FileScenarioChips {
+                        message_id: hydeclaw_types::ids::MessageId::from(user_message_id),
+                        upload_id: pending.upload_id,
+                        alternatives: wire_alts,
+                    };
+                    if let Some(tx) = engine.sse_event_tx().lock().await.as_ref()
+                        && let Err(e) = tx.send_async(ev).await
+                    {
+                        tracing::warn!(error = ?e, "fse: failed to send FileScenarioChips SSE event");
+                    }
+                }
+                AffordanceTransport::PlainTextNote => {
+                    if let Some(router) = engine.channel_router_ref() {
+                        let opts = pending
+                            .alternatives
+                            .iter()
+                            .map(|c| c.label.clone())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+                        let action = crate::agent::channel_actions::ChannelAction {
+                            name: "send_message".to_string(),
+                            params: serde_json::json!({
+                                "text": format!("Reply to re-run as: {opts}"),
+                            }),
+                            context: ctx.msg.context.clone(),
+                            reply: reply_tx,
+                            target_channel: None,
+                        };
+                        if let Err(e) = router.send(action).await {
+                            tracing::warn!(error = %e, "fse: failed to send plain-text alternatives note");
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // 7. LoopDetector: warm from timeline ONLY when this is a true continuation
     //    of an in-flight run (`ResumeRunning` after a crash, or `ExplicitResume`
@@ -366,12 +475,23 @@ pub async fn bootstrap<S: EventSink>(
         channel: ctx.msg.channel.clone(),
         compressor,
         claude_md_content,
+        pending_alternatives,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn affordance_transport_for_channel() {
+        assert_eq!(affordance_transport(Some("telegram")), AffordanceTransport::TelegramButtons);
+        assert_eq!(affordance_transport(None), AffordanceTransport::WebChips);
+        assert_eq!(affordance_transport(Some("web")), AffordanceTransport::WebChips);
+        assert_eq!(affordance_transport(Some("ui")), AffordanceTransport::WebChips);
+        assert_eq!(affordance_transport(Some("discord")), AffordanceTransport::PlainTextNote);
+        assert_eq!(affordance_transport(Some("slack")), AffordanceTransport::PlainTextNote);
+    }
 
     #[test]
     fn extract_sender_agent_id_strips_prefix() {
