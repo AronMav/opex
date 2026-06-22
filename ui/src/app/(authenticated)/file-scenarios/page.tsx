@@ -25,13 +25,14 @@ import {
   sortBindings,
   buildScenarioBody,
   isAllowlistViolation,
+  isDefaultIneligible,
 } from "./_parts/helpers";
 import { ScenarioRow } from "./ScenarioRow";
 import { ScenarioDialog } from "./ScenarioDialog";
 import { AllowlistEditor } from "./AllowlistEditor";
 
 // ── Re-exports for tests ───────────────────────────────────────────────────────
-export { groupByMatchType, sortBindings, buildScenarioBody, isAllowlistViolation };
+export { groupByMatchType, sortBindings, buildScenarioBody, isAllowlistViolation, isDefaultIneligible };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -123,7 +124,7 @@ export default function FileScenariosPage() {
   // live enabled-allowlist set before calling setDefault.
   const onToggleDefault = (s: FileScenario) => {
     const nextDefault = !s.is_default;
-    if (nextDefault && isAllowlistViolation(s.executor, true, s.action_ref, enabledAllowlistSet)) {
+    if (nextDefault && isDefaultIneligible(s.executor, s.action_ref, enabledAllowlistSet)) {
       // Gate: skill binding or tool action not in the ENABLED allowlist → no-op.
       return;
     }

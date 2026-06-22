@@ -66,3 +66,22 @@ export function isAllowlistViolation(
       : new Set(enabledAllowlist);
   return !set.has(action_ref);
 }
+
+/**
+ * A binding is INELIGIBLE to be the auto-default if it's a skill (skills can
+ * never be the 0-click default) OR it's a tool whose action_ref is not in the
+ * currently-enabled allowlist. Single source of truth for default-eligibility
+ * across the page gate and the dialog.
+ *
+ * @param enabledAllowlist  Defaults to the static `FSE_ALLOWLIST_MEMBERS` set,
+ *   which is the correct default for the dialog. The page gate should pass the
+ *   live `enabledAllowlistSet` derived from `useFileScenarioAllowlist`.
+ */
+export function isDefaultIneligible(
+  executor: string,
+  action_ref: string,
+  enabledAllowlist: ReadonlySet<string> | readonly string[] = FSE_ALLOWLIST_MEMBERS,
+): boolean {
+  if (executor === "skill") return true;
+  return isAllowlistViolation(executor, true, action_ref, enabledAllowlist);
+}
