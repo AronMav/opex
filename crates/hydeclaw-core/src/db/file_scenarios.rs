@@ -79,6 +79,14 @@ pub async fn get_by_id(pool: &PgPool, id: Uuid) -> Result<Option<FileScenarioRow
     Ok(sqlx::query_as::<_, FileScenarioRow>(&sql).bind(id).fetch_optional(pool).await?)
 }
 
+/// Same as [`get_by_id`] but returns `None` for disabled rows (enabled = false).
+/// Used by the deferred-run path (Task 6.7/6.8) to reject disabled bindings without
+/// exposing them to the caller.
+pub async fn get_enabled_by_id(pool: &PgPool, id: Uuid) -> Result<Option<FileScenarioRow>> {
+    let sql = format!("SELECT {SELECT_COLS} FROM file_scenarios WHERE id = $1 AND enabled = true");
+    Ok(sqlx::query_as::<_, FileScenarioRow>(&sql).bind(id).fetch_optional(pool).await?)
+}
+
 /// Insert a binding. Caller is responsible for FSE_DEFAULT_ALLOWLIST / executor
 /// validation (enforced at the HTTP/tool layer in a later phase).
 #[allow(clippy::too_many_arguments)]
@@ -217,12 +225,28 @@ pub async fn insert_outcome(
     Ok(id)
 }
 
+/// Test-only helper: insert a binding with explicit `enabled` flag, bypassing the
+/// HTTP validation layer. Used by Task 6.7 sqlx::test to seed disabled rows.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_for_test(
+    pool: &PgPool,
+    match_type: &str,
+    executor: &str,
+    action_ref: &str,
+    label: &str,
+    is_default: bool,
+    enabled: bool,
+) -> Result<Uuid> {
+    create(pool, match_type, executor, action_ref, label, is_default, 100, enabled, "test").await
+}
+
 #[cfg(test)]
 mod tests {
     use sqlx::PgPool;
     use uuid::Uuid;
 
-    use super::{create, get_by_id, insert_outcome, list, set_default};
+    use super::{create, get_by_id, get_enabled_by_id, insert_outcome, insert_for_test, list, set_default};
 
     // ── Pure unit tests for mime_glob_matches (no DB) ────────────────────────
 
@@ -263,6 +287,27 @@ mod tests {
         assert!(row.is_default);
         assert_eq!(row.priority, 50);
         assert_eq!(list(&pool).await.unwrap().len(), 1);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn get_enabled_by_id_returns_none_for_disabled(pool: PgPool) {
+        let enabled_id = insert_for_test(&pool, "audio/*", "tool", "transcribe", "T", false, true)
+            .await
+            .unwrap();
+        let disabled_id = insert_for_test(&pool, "image/*", "tool", "describe", "D", false, false)
+            .await
+            .unwrap();
+
+        // Enabled row is visible.
+        assert!(
+            get_enabled_by_id(&pool, enabled_id).await.unwrap().is_some(),
+            "enabled row must be returned"
+        );
+        // Disabled row is filtered out.
+        assert!(
+            get_enabled_by_id(&pool, disabled_id).await.unwrap().is_none(),
+            "disabled row must return None from get_enabled_by_id"
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]
