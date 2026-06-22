@@ -27,6 +27,7 @@ pub mod tool_audit;
 pub mod tool_quality;
 pub mod upload_migration;
 pub mod uploads;
+pub mod file_scenarios;
 
 use anyhow::Result;
 use sqlx::postgres::PgPoolOptions;
