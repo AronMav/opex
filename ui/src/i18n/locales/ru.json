@@ -1212,5 +1212,6 @@
   "file_scenarios.priority": "Приоритет",
   "file_scenarios.is_default": "По умолчанию",
   "file_scenarios.enabled": "Включён",
-  "file_scenarios.default_not_allowlisted": "По умолчанию можно установить только разрешённые инструменты (transcribe, describe, extract_document, save)."
+  "file_scenarios.default_not_allowlisted": "По умолчанию можно установить только разрешённые инструменты (transcribe, describe, extract_document, save).",
+  "file_scenarios.default_not_skill": "Skill-сценарии не могут быть автоматическим выбором по умолчанию; они отображаются как вариант для выбора."
 }

@@ -19,10 +19,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { CreateFileScenarioInput } from "@/types/api";
-import { isAllowlistViolation } from "./_parts/helpers";
+import type { CreateFileScenarioInput, UpdateFileScenarioInput } from "@/types/api";
+import { isAllowlistViolation, buildScenarioBody } from "./_parts/helpers";
 
 // ── Props ───────────────────────────────────────────────────────────────────
+
+/**
+ * onSave contract (for Task 8.6 wiring):
+ *   - CREATE mode: called with `CreateFileScenarioInput` (full payload via buildScenarioBody)
+ *   - EDIT mode:   called with `UpdateFileScenarioInput` (only label/priority/enabled)
+ *
+ * The dialog shapes the payload internally so callers never accidentally send
+ * structural fields (match_type/executor/action_ref) on a PUT request.
+ */
+type OnSaveArg = CreateFileScenarioInput | UpdateFileScenarioInput;
 
 interface ScenarioDialogProps {
   open: boolean;
@@ -31,7 +41,8 @@ interface ScenarioDialogProps {
   form: CreateFileScenarioInput;
   setForm: (f: CreateFileScenarioInput) => void;
   saving: boolean;
-  onSave: () => void;
+  /** Receives the shaped payload — CREATE: full body; EDIT: {label,priority,enabled} only. */
+  onSave: (payload: OnSaveArg) => void;
   onClose: () => void;
 }
 
@@ -48,13 +59,30 @@ export function ScenarioDialog({
 }: ScenarioDialogProps) {
   const { t } = useTranslation();
 
-  // Only a tool binding whose action_ref is in the enabled allowlist may set is_default.
-  const defaultBlocked = isAllowlistViolation(form.executor, true, form.action_ref);
+  // Skill bindings can never be default (backend rule: is_default requires executor="tool").
+  // Tool bindings must also pass the allowlist check.
+  const isSkill = form.executor === "skill";
+  const defaultBlocked = isSkill || isAllowlistViolation(form.executor, true, form.action_ref);
 
   const valid =
     form.match_type.trim().length > 0 &&
     form.action_ref.trim().length > 0 &&
     form.label.trim().length > 0;
+
+  // Shape the payload by mode so the caller never accidentally sends structural
+  // fields on a PUT (edit) request.
+  function handleSave() {
+    if (editing) {
+      const payload: UpdateFileScenarioInput = {
+        label: form.label.trim(),
+        priority: form.priority ?? 100,
+        enabled: form.enabled ?? true,
+      };
+      onSave(payload);
+    } else {
+      onSave(buildScenarioBody(form));
+    }
+  }
 
   // IDs for label association
   const matchId = React.useId();
@@ -172,7 +200,9 @@ export function ScenarioDialog({
           </div>
           {defaultBlocked && (
             <p className="text-xs text-destructive -mt-1">
-              {t("file_scenarios.default_not_allowlisted")}
+              {isSkill
+                ? t("file_scenarios.default_not_skill")
+                : t("file_scenarios.default_not_allowlisted")}
             </p>
           )}
 
@@ -194,7 +224,7 @@ export function ScenarioDialog({
           <Button variant="ghost" onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button onClick={onSave} disabled={saving || !valid}>
+          <Button onClick={handleSave} disabled={saving || !valid}>
             {editing ? t("common.save") : t("common.create")}
           </Button>
         </DialogFooter>

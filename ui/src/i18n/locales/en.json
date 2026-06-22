@@ -1213,5 +1213,6 @@
   "file_scenarios.priority": "Priority",
   "file_scenarios.is_default": "Set as default",
   "file_scenarios.enabled": "Enabled",
-  "file_scenarios.default_not_allowlisted": "Only allowlisted tool actions (transcribe, describe, extract_document, save) can be set as default."
+  "file_scenarios.default_not_allowlisted": "Only allowlisted tool actions (transcribe, describe, extract_document, save) can be set as default.",
+  "file_scenarios.default_not_skill": "Skill scenarios can't be the automatic default; they appear as a selectable option."
 }
