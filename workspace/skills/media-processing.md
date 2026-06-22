@@ -1,29 +1,22 @@
 ---
 name: media-processing
-description: Automatic processing of media attachments from the user — photos, documents, audio
+description: Guidance for video attachments (non-video media is auto-dispatched by the File Scenario Engine)
 triggers:
-  - "attached an image"
-  - "attached a document"
-  - "voice message"
   - "sent a video"
-  - прикреплено изображение
-  - прикреплён документ
-  - голосовое сообщение
   - видео
 tools_required:
   - analyze_image
-  - extract_document
-  - transcribe_audio
 priority: 10
 state: active
 ---
 
-When the user attaches a file to a message — process it immediately without asking permission:
+Non-video attachments (images, documents, audio/voice) are dispatched
+automatically by the File Scenario Engine before your turn begins — you will
+already see the transcript / extracted text / vision description (or an
+explicit failure note) in the user message. Do NOT re-process them.
 
-- **Image** `[User attached an image: URL]` + `<vision>description</vision>` → the image was already auto-described; use the description to respond. Do NOT call `analyze_image` again.
-- **Image** `[User attached an image: URL]` (no `<vision>` block follows) → auto-describe was not available; call `analyze_image` with the URL to get a description, then respond.
-- **Document (PDF, DOCX, TXT, etc.)** `[User attached a document: URL]` → call `extract_document` with the URL, use the content to respond
-- **Voice / audio** `[User sent a voice message: URL]` → call `transcribe_audio` with the URL, respond to the transcription content
-- **Video** `[User sent a video: URL]` → describe what is available, call `analyze_image` with the preview URL if present
+Video has no deterministic handler yet:
 
-Do not ask the user whether they want processing — just process and respond.
+- **Video** `[User sent a video: URL]` → describe what is available; if a preview
+  URL is present, call `analyze_image` on the preview. (This arm is retired once
+  the dedicated video-summary plugin ships.)
