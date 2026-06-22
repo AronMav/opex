@@ -1198,5 +1198,9 @@
   "setup.model_placeholder": "model-name",
   "setup.optional_hint": "(optional)",
 
-  "login.show_token": "Show token"
+  "login.show_token": "Show token",
+
+  "file_scenarios.default_badge": "default",
+  "file_scenarios.set_default": "Set as default",
+  "file_scenarios.toggle_enabled": "Toggle enabled"
 }
