@@ -79,6 +79,8 @@ pub(crate) async fn api_create_file_scenario(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": msg.to_string() }))).into_response();
     }
 
+    // `scope` is intentionally not settable via this endpoint: defaults to 'global'
+    // per spec §9. Per-agent scope is future work.
     match file_scenarios::create(
         &infra.db,
         &body.match_type,
@@ -94,6 +96,8 @@ pub(crate) async fn api_create_file_scenario(
     {
         Ok(id) => {
             // Audit: fire-and-forget, does not affect the response.
+            // agent_id empty: this is an operator/UI HTTP write with no per-request agent scope;
+            // actor=Some("ui") carries attribution.
             crate::db::audit::audit_spawn(
                 infra.db.clone(),
                 String::new(),
@@ -206,6 +210,8 @@ mod tests {
         assert!(fetched.is_default);
     }
 
+    // Unit test of the validator layer that the create handler calls. A handler-level
+    // integration test (HTTP -> 400 + empty DB) is deferred to Phase 9's e2e regression suite.
     #[sqlx::test(migrations = "../../migrations")]
     async fn create_default_tool_outside_allowlist_is_rejected_by_validator(pool: sqlx::PgPool) {
         // executor=tool + is_default=true + action_ref=code_exec must be rejected
