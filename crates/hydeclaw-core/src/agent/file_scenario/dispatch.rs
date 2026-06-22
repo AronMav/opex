@@ -6,7 +6,7 @@
 //! tool or a generic executor. A future contributor must not add a generic
 //! fallthrough arm.
 
-use crate::agent::file_scenario::outcome::{status_from_http, ScenarioOutcome, ScenarioStatus};
+use crate::agent::file_scenario::outcome::{status_from_http, ScenarioOutcome};
 use crate::agent::url_tools::uploads_local_url;
 
 /// Everything one built-in handler needs. Borrowed (no ownership) — the

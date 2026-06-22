@@ -182,14 +182,14 @@ pub async fn dispatch_attachments(
                         executor: x.executor.clone(),
                     })
                     .collect();
-                if !alts.is_empty() {
-                    if let Some(upload_id) = upload_id_from_url(&att.url) {
-                        pending.push(PendingAlternative {
-                            upload_id,
-                            match_type: sniffed.mime.clone(),
-                            alternatives: alts,
-                        });
-                    }
+                if !alts.is_empty()
+                    && let Some(upload_id) = upload_id_from_url(&att.url)
+                {
+                    pending.push(PendingAlternative {
+                        upload_id,
+                        match_type: sniffed.mime.clone(),
+                        alternatives: alts,
+                    });
                 }
             }
             None if bindings.is_empty() => {

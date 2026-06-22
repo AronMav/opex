@@ -214,15 +214,29 @@ pub async fn bootstrap<S: EventSink>(
         .toolgate_url
         .clone()
         .unwrap_or_else(|| "http://localhost:9011".to_string());
-    let enriched_text = crate::agent::pipeline::subagent::enrich_message_text(
+    let enrich = crate::agent::pipeline::subagent::enrich_message_text(
         engine.http_client(),
         &engine.cfg().app_config.gateway.listen,
         &toolgate_url,
         &engine.cfg().agent.language,
+        &engine.cfg().db,
         &user_text,
         &ctx.msg.attachments,
     )
     .await;
+    let enriched_text = enrich.text;
+    // Phase 6 will emit `enrich.pending_alternatives` as Telegram buttons / SSE
+    // chips here (where the EngineEventSender lives). For now, record them so the
+    // dispatch is observable and the seam is exercised end-to-end.
+    if !enrich.pending_alternatives.is_empty() {
+        tracing::info!(
+            count = enrich.pending_alternatives.len(),
+            "fse: post-hoc alternatives produced (emission deferred to Phase 6)"
+        );
+    }
+    if enrich.outcomes.iter().any(|o| !matches!(o.status, crate::agent::file_scenario::ScenarioStatus::Ok)) {
+        tracing::info!("fse: at least one attachment took the failure-rewrite path");
+    }
 
     let sender_agent_id = extract_sender_agent_id(&ctx.msg.user_id);
     // parent_message_id = leaf_message_id: threads the new user message onto
@@ -377,5 +391,19 @@ mod tests {
     #[test]
     fn extract_sender_agent_id_returns_none_for_bare_string() {
         assert_eq!(extract_sender_agent_id("Arty"), None);
+    }
+}
+
+// ── EnrichResult field-stability guard (Phase 6 relies on these names) ────────
+
+#[cfg(test)]
+mod enrich_result_shape {
+    use crate::agent::pipeline::subagent::EnrichResult;
+    #[test]
+    fn enrich_result_exposes_text_and_pending() {
+        let r = EnrichResult { text: "hi".into(), outcomes: vec![], pending_alternatives: vec![] };
+        assert_eq!(r.text, "hi");
+        assert!(r.outcomes.is_empty());
+        assert!(r.pending_alternatives.is_empty());
     }
 }
