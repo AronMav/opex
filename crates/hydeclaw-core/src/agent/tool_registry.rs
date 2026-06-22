@@ -192,4 +192,11 @@ impl SystemToolRegistry {
         let handler = self.handlers.get(name)?;
         Some(handler.handle(deps.reborrow(), args).await)
     }
+
+    /// Returns true if a handler is registered under `name`. Read-only;
+    /// used by tests to assert wiring without invoking handler side effects.
+    #[cfg(test)]
+    pub fn is_registered(&self, name: &str) -> bool {
+        self.handlers.contains_key(name)
+    }
 }

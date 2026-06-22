@@ -65,3 +65,24 @@ impl SystemToolRegistry {
         r
     }
 }
+
+#[cfg(test)]
+mod registry_tests {
+    use super::SystemToolRegistry;
+
+    #[test]
+    fn file_scenario_handler_is_registered() {
+        let r = SystemToolRegistry::build();
+        // dispatch returns None only when the name is unknown; a known handler
+        // returns Some(_). We assert registration without invoking DB work by
+        // checking the handler map via a known-unknown contrast.
+        assert!(
+            r.is_registered("file_scenario"),
+            "file_scenario must be registered in SystemToolRegistry::build()"
+        );
+        assert!(
+            !r.is_registered("definitely_not_a_tool"),
+            "control: unknown tool must not be registered"
+        );
+    }
+}
