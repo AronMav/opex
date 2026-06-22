@@ -562,3 +562,20 @@ pub(super) async fn run_converter(
     // Session agent pool is NOT cleaned up here — agents live until
     // explicitly killed via agent(action: "kill") or session expiry.
 }
+
+#[cfg(test)]
+mod fse_converter_guard {
+    use std::path::Path;
+    #[test]
+    fn converter_handles_file_scenario_chips() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/gateway/handlers/chat/sse_converter.rs");
+        let src = std::fs::read_to_string(&path).unwrap();
+        // The arm must exist AND call the dedicated writer method.
+        assert!(
+            src.contains("StreamEvent::FileScenarioChips")
+                && src.contains("build_file_scenario_chips"),
+            "sse_converter must handle FileScenarioChips via build_file_scenario_chips"
+        );
+    }
+}
