@@ -38,6 +38,10 @@ pub mod event_types {
     pub const FSE_DEFAULT_CHANGED: &str = "fse_default_changed";
     pub const FSE_ALLOWLIST_AMENDED: &str = "fse_allowlist_amended";
     pub const FSE_AUTO_RUN: &str = "fse_auto_run";
+    // File Scenario Engine — agent-tool authoring events (distinct from operator-HTTP
+    // FSE_BINDING_CREATED; no fse_ prefix because it represents an agent-authored action,
+    // not an operator-authorization event).
+    pub const FILE_SCENARIO_CREATED: &str = "file_scenario_created";
 }
 
 /// Fire-and-forget audit log helper. Spawns a background task.
@@ -157,6 +161,7 @@ mod tests {
             event_types::FSE_DEFAULT_CHANGED,
             event_types::FSE_ALLOWLIST_AMENDED,
             event_types::FSE_AUTO_RUN,
+            event_types::FILE_SCENARIO_CREATED,
         ]
     }
 
@@ -202,5 +207,13 @@ mod fse_event_type_tests {
         assert_eq!(event_types::FSE_BINDING_DELETED, "fse_binding_deleted");
         assert_eq!(event_types::FSE_DEFAULT_CHANGED, "fse_default_changed");
         assert_eq!(event_types::FSE_ALLOWLIST_AMENDED, "fse_allowlist_amended");
+    }
+
+    #[test]
+    fn fse_event_type_constant_is_stable() {
+        assert_eq!(
+            super::event_types::FILE_SCENARIO_CREATED,
+            "file_scenario_created"
+        );
     }
 }
