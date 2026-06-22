@@ -202,7 +202,8 @@ pub(super) async fn handle_fse_callback(
 
     // Owner gate — non-owners may see the buttons in a shared chat.
     let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
-    if !live_guard.as_ref().is_some_and(|g| g.is_owner(&user_id)) {
+    let is_owner = live_guard.as_ref().is_some_and(|g| g.is_owner(&user_id));
+    if crate::agent::file_scenario::assert_fse_owner(is_owner).is_err() {
         tracing::warn!(%user_id, "non-owner attempted FSE choice via callback");
         let _ = out_tx
             .send(OutboundMsg::Wire(ChannelOutbound::Error {

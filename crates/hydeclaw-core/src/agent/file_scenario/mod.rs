@@ -24,3 +24,11 @@ pub use dispatch::{resolve, BuiltinAction};
 pub use dispatch_seam::{dispatch_attachments, PendingAlternative, ScenarioChoice};
 #[allow(unused_imports)] // Phase 4+: FSE_DEFAULT_ALLOWLIST consumed by binding validator; ScenarioOutcome/ScenarioStatus used via sub-paths
 pub use outcome::{FSE_DEFAULT_ALLOWLIST, ScenarioOutcome, ScenarioStatus};
+
+// ── Owner-gate primitive (Task 9.7) ──────────────────────────────────────────
+//
+// Extracted into `owner_gate.rs` so the lib facade can mount it as a leaf
+// without pulling in the full `file_scenario` sub-module tree.
+pub mod owner_gate;
+#[allow(unused_imports)] // consumed by lib facade and by integration tests via hydeclaw_core::agent::file_scenario::assert_fse_owner
+pub use owner_gate::assert_fse_owner;

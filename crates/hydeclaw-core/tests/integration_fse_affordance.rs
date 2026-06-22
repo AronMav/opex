@@ -31,6 +31,84 @@
 //!
 //! This file provides the **structural / static proofs** accessible from here.
 
+// ── Test 3 (Task 9.7): non-owner callback rejected ───────────────────────────
+
+/// Security guard: a non-owner user in a shared Telegram chat MUST NOT be able
+/// to trigger a file-scenario run by tapping the `fse:<id>:<action>` inline
+/// button. This test asserts the owner-gate predicate (`assert_fse_owner`)
+/// which is the authoritative check applied by both:
+///
+/// - `gateway/handlers/channel_ws/inline.rs:handle_fse_callback` (line ~205),
+///   which re-fetches `AccessGuard::is_owner(&user_id)` and rejects non-owners
+///   with an Error frame BEFORE calling `run_scenario_and_persist`.
+/// - `gateway/handlers/file_scenarios/run.rs:is_run_authorized` (the web path).
+///
+/// The test is a pure-function assertion (no DB, no network) exercising the
+/// real `assert_fse_owner` gate from `hydeclaw_core::agent::file_scenario`.
+///
+/// Entry point: `hydeclaw_core::agent::file_scenario::assert_fse_owner(is_owner)`
+#[test]
+fn non_owner_callback_rejected() {
+    use hydeclaw_core::agent::file_scenario::assert_fse_owner;
+
+    // ── Non-owner is rejected ─────────────────────────────────────────────────
+    // Simulates: intruder taps the button in a shared chat. The live AccessGuard
+    // has returned `is_owner = false` for this user_id.
+    let denied = assert_fse_owner(false);
+    assert!(denied.is_err(), "non-owner callback must be rejected");
+    let msg = format!("{:#}", denied.unwrap_err());
+    assert!(
+        msg.to_lowercase().contains("owner") || msg.to_lowercase().contains("not authorized"),
+        "rejection reason must cite ownership: {msg}"
+    );
+
+    // ── Owner is accepted ─────────────────────────────────────────────────────
+    // Simulates: session owner taps the button. AccessGuard returned is_owner = true.
+    let ok = assert_fse_owner(true);
+    assert!(ok.is_ok(), "owner callback must be accepted");
+
+    // ── Web/operator path is always accepted ──────────────────────────────────
+    // Web callers (no channel_user_id) are bearer-authenticated operators.
+    // The `is_run_authorized(_, None)` path in run.rs returns true regardless
+    // of is_owner. Assert via the inline.rs gate which always passes is_owner=true
+    // for the session owner (confirmed by the access guard).
+    // Here we just confirm the gate never spuriously rejects an owner.
+    let web_operator = assert_fse_owner(true);
+    assert!(web_operator.is_ok(), "operator/web path must not be blocked by the owner gate");
+}
+
+/// Structural guard: `inline.rs::handle_fse_callback` MUST check `is_owner`
+/// before calling `run_scenario_and_persist`. This verifies at source level
+/// that the non-owner gate cannot be bypassed by a code refactor that removes
+/// the guard.
+///
+/// If this assertion fails it means the Telegram callback handler lost its
+/// ownership check — a critical security regression.
+#[test]
+fn inline_rs_owner_gate_present_before_run() {
+    let inline_src = include_str!("../src/gateway/handlers/channel_ws/inline.rs");
+
+    // The owner check must appear before the run_scenario_and_persist call.
+    let owner_gate_pos = inline_src
+        .find("is_owner")
+        .expect("inline.rs must contain is_owner ownership check for FSE callbacks");
+    let run_pos = inline_src
+        .find("run_scenario_and_persist")
+        .expect("inline.rs must call run_scenario_and_persist");
+
+    assert!(
+        owner_gate_pos < run_pos,
+        "is_owner check ({owner_gate_pos}) must appear BEFORE run_scenario_and_persist \
+         call ({run_pos}) in inline.rs — non-owner gate must not be bypassed"
+    );
+
+    // Non-owner must receive a rejection (not fall through to the run).
+    assert!(
+        inline_src.contains("Only the owner can run this action."),
+        "inline.rs must emit an ownership-rejection message for non-owner FSE taps"
+    );
+}
+
 // ── Test 1: dual-channel convergence — source-level guard ────────────────────
 
 /// Both the web HTTP handler and the Telegram inline-button callback must

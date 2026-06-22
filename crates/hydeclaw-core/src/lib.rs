@@ -95,6 +95,13 @@ pub mod agent {
         // outcome (in lib). No additional cascading deps.
         #[path = "dispatch.rs"]
         pub mod dispatch;
+
+        // Task 9.7: pure owner-gate predicate for FSE callback security tests.
+        // Leaf function (anyhow only) — safe to expose from the lib facade.
+        // `owner_gate.rs` is a standalone leaf with only `anyhow` as a dep.
+        #[path = "owner_gate.rs"]
+        pub mod owner_gate;
+        pub use owner_gate::assert_fse_owner;
     }
 }
 
