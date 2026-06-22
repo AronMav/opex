@@ -9,12 +9,14 @@ use sqlx::PgPool;
 use super::allowlist::{validate_allowlist_toggle, AllowlistError, FSE_DEFAULT_ALLOWLIST};
 
 /// `system_flags` key holding the JSON array of currently-enabled members.
+#[allow(dead_code)] // Phase 5: consumed by the /api/file-scenarios/allowlist handler
 const ALLOWLIST_FLAG_KEY: &str = "fse.allowlist.enabled";
 
 /// Return the enabled subset of `FSE_DEFAULT_ALLOWLIST`. When the flag is
 /// unset (fresh install) or unreadable, defaults to the FULL constant — the
 /// seeded defaults must work out of the box. Any stale value not in the
 /// constant is silently dropped (defense-in-depth against a hand-edited row).
+#[allow(dead_code)] // Phase 5: consumed by GET /api/file-scenarios/allowlist
 pub async fn get_enabled_allowlist(db: &PgPool) -> Vec<String> {
     let stored: Option<Vec<String>> = hydeclaw_db::sys_flags::get(db, ALLOWLIST_FLAG_KEY)
         .await
@@ -32,6 +34,7 @@ pub async fn get_enabled_allowlist(db: &PgPool) -> Vec<String> {
 /// from the constant — exactly as `providers.rs:570` rejects a non-member
 /// capability. Persistence is best-effort upsert; a DB failure is surfaced
 /// as a logged warning but the validation gate is the security boundary.
+#[allow(dead_code)] // Phase 5: consumed by PUT /api/file-scenarios/allowlist
 pub async fn set_enabled_allowlist(
     db: &PgPool,
     members: &[String],
