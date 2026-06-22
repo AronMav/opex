@@ -15,6 +15,23 @@ pub struct FileScenarioHandler;
 /// can assert it never widens to "tool".
 pub const AGENT_AUTHORED_EXECUTOR: &str = "skill";
 
+/// Error returned when a non-base agent attempts 'create'. Single source of
+/// truth: both `handle()` and `create_as_agent` call `require_base_for_create`,
+/// so the security test exercises the SAME gate as production.
+pub(crate) const NON_BASE_CREATE_ERROR: &str =
+    "Error: file_scenario 'create' requires a base agent. Regular agents may only 'list'.";
+
+/// Base-gate guard for the 'create' action. Returns `Err` with the canonical
+/// error string when `agent_base` is false. Called by both the production
+/// `handle()` dispatch and the `#[cfg(test)]` seam `create_as_agent`.
+fn require_base_for_create(agent_base: bool) -> Result<(), String> {
+    if agent_base {
+        Ok(())
+    } else {
+        Err(NON_BASE_CREATE_ERROR.to_string())
+    }
+}
+
 #[async_trait]
 impl SystemToolHandler for FileScenarioHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
@@ -22,8 +39,8 @@ impl SystemToolHandler for FileScenarioHandler {
         match action {
             "create" => {
                 // create mutates the registry → base-only (mirror cron.rs:20).
-                if !deps.agent_base {
-                    return "Error: file_scenario 'create' requires a base agent. Regular agents may only 'list'.".to_string();
+                if let Err(e) = require_base_for_create(deps.agent_base) {
+                    return e;
                 }
                 handle_create(&deps, args).await
             }
@@ -44,8 +61,9 @@ async fn handle_create(deps: &ToolDeps<'_>, args: &Value) -> String {
 
 /// Security seam for DB-backed testing of the base-gate (Task 9.8).
 /// Replicates the `handle()` routing for the "create" action without needing
-/// the full `ToolDeps` graph: applies the base-gate first (same check as
-/// `handle()`), then delegates to `handle_create_inner`.
+/// the full `ToolDeps` graph: applies the base-gate first via the SHARED
+/// `require_base_for_create` guard (same code path as production `handle()`),
+/// then delegates to `handle_create_inner`.
 ///
 /// The production path goes through `handle()` → `handle_create` →
 /// `handle_create_inner`. This function mirrors that chain at the
@@ -59,8 +77,8 @@ pub(crate) async fn create_as_agent(
     agent_base: bool,
     args: &serde_json::Value,
 ) -> String {
-    if !agent_base {
-        return "Error: file_scenario 'create' requires a base agent. Regular agents may only 'list'.".to_string();
+    if let Err(e) = require_base_for_create(agent_base) {
+        return e;
     }
     handle_create_inner(db, agent_name, args).await
 }
@@ -188,8 +206,9 @@ mod tests {
 
     #[test]
     fn non_base_create_message_is_clear() {
-        let msg = "Error: file_scenario 'create' requires a base agent. Regular agents may only 'list'.";
-        assert!(msg.contains("requires a base agent"));
+        // Pins the string that production actually emits via NON_BASE_CREATE_ERROR.
+        assert!(NON_BASE_CREATE_ERROR.contains("requires a base agent"));
+        assert!(NON_BASE_CREATE_ERROR.contains("list"));
     }
 
     // ── DB-backed: constrained-write + no arg-order swap ─────────────────────
