@@ -7,9 +7,11 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Hard upper bound on a single uploads.data row, matching the DB CHECK in
-/// `migrations/052_uploads_table.sql`. Callers must reject larger inputs
-/// before INSERT — the DB will refuse a CHECK violation otherwise.
-pub const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
+/// `migrations/062_uploads_relax_cap.sql` (relaxed from 052's 20 MB). This is
+/// the DB-backstop; the runtime request-layer ceiling is `[uploads]
+/// max_upload_bytes`. Callers must reject larger inputs before INSERT — the DB
+/// will refuse a CHECK violation otherwise.
+pub const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]   // id/expires_at part of the query shape; reserved for diagnostics
@@ -275,6 +277,13 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         assert!(get_by_id(&pool, id).await.unwrap().is_none(), "expired row must not surface");
+    }
+
+    #[test]
+    fn max_upload_bytes_is_50mb() {
+        // Must match migration 062's relaxed CHECK (52_428_800) so the const
+        // backstop never rejects a row the DB would accept.
+        assert_eq!(super::MAX_UPLOAD_BYTES, 52_428_800);
     }
 
     #[sqlx::test(migrations = "../../migrations")]
