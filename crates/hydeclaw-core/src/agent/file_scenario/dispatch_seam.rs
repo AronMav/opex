@@ -10,6 +10,7 @@
 use crate::agent::file_scenario::dispatch::{dispatch_action, DispatchInput};
 use crate::agent::file_scenario::outcome::ScenarioOutcome;
 use crate::agent::file_scenario::sniff::sniff_bytes;
+use crate::agent::fse::{get_enabled_allowlist, is_allowed_for_autorun};
 use crate::agent::url_tools::uploads_local_url;
 use hydeclaw_types::MediaAttachment;
 use uuid::Uuid;
@@ -160,9 +161,23 @@ pub async fn dispatch_attachments(
 
         match default_binding {
             Some(b) => {
-                // ≥1 bindings and a default exists → run the highest-priority default.
+                // ≥1 bindings and a default exists → re-check the operator allowlist
+                // (defense-in-depth per design §4.6) before auto-running.
+                // `get_enabled_allowlist` returns the full constant when unset (default-enabled).
+                let enabled_allowlist = get_enabled_allowlist(db).await;
+                let action_to_run = if is_allowed_for_autorun(&b.action_ref, &enabled_allowlist) {
+                    b.action_ref.as_str()
+                } else {
+                    // Action disabled by operator or not in the constant (forged row) →
+                    // fail-close to `save`, same as the 0-bindings / no-default branch.
+                    tracing::warn!(
+                        action_ref = %b.action_ref,
+                        "fse: default binding blocked by allowlist re-check; falling back to save"
+                    );
+                    "save"
+                };
                 let outcome = run_builtin(
-                    &b.action_ref,
+                    action_to_run,
                     http_client,
                     gateway_listen,
                     toolgate_url,
@@ -904,6 +919,258 @@ mod tests {
         assert_eq!(
             pending[0].upload_id, upload_uuid,
             "PendingAlternative.upload_id must match the upload UUID from the URL"
+        );
+    }
+
+    // ── Task 9.9b: allowlist re-check in the auto-run hot path ───────────────
+
+    /// Test 1: Legitimate seeded default still runs when allowlist is all-enabled
+    /// (the default, unset state). Proves no regression for the happy path.
+    /// image/jpeg → seeded image/*→describe default → describe runs (Ok + <vision>).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn allowlist_enabled_default_still_runs(pool: sqlx::PgPool) {
+        // Seed real default bindings; allowlist flag is unset → all entries enabled.
+        crate::agent::fse::seed_default_file_scenarios(&pool)
+            .await
+            .expect("seed must not fail");
+
+        let server = MockServer::start().await;
+        let jpeg_bytes: Vec<u8> = b"\xFF\xD8\xFFfakejpeg".to_vec();
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(jpeg_bytes))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::path("/describe"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"description": "allowlist ok"})),
+            )
+            .mount(&server)
+            .await;
+
+        let port = server.address().port();
+        let gateway_listen = format!("0.0.0.0:{port}");
+        let upload_url = format!(
+            "{}/api/uploads/10000000-0000-0000-0000-000000000001?sig=x&exp=1",
+            server.uri()
+        );
+        let image_att = MediaAttachment {
+            url: upload_url.clone(),
+            media_type: MediaType::Image,
+            file_name: Some("photo.jpg".into()),
+            mime_type: Some("image/jpeg".into()),
+            file_size: None,
+        };
+
+        let client = reqwest::Client::new();
+        let mut enriched = String::new();
+        let (outcomes, _pending) = dispatch_attachments(
+            &client,
+            &gateway_listen,
+            &server.uri(),
+            "en",
+            &pool,
+            &mut enriched,
+            &[image_att],
+        )
+        .await;
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::Ok,
+            "describe must run when allowlist is fully enabled; reason: {:?}",
+            outcomes[0].reason
+        );
+        assert!(
+            outcomes[0].summary_text.contains("allowlist ok"),
+            "describe result 'allowlist ok' must be in summary_text: {:?}",
+            outcomes[0].summary_text
+        );
+        assert!(
+            outcomes[0].summary_text.contains("<vision>"),
+            "describe must wrap in <vision> tags: {:?}",
+            outcomes[0].summary_text
+        );
+    }
+
+    /// Test 2: Operator-disabled allowlist entry blocks auto-run and falls back to `save`.
+    /// Seeds defaults, disables `describe` via `set_enabled_allowlist`, dispatches
+    /// image/jpeg → must NOT describe; must resolve to save (Ok + no vision output).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn allowlist_disabled_entry_falls_back_to_save(pool: sqlx::PgPool) {
+        use crate::agent::fse::set_enabled_allowlist;
+
+        crate::agent::fse::seed_default_file_scenarios(&pool)
+            .await
+            .expect("seed must not fail");
+
+        // Disable `describe` — operator removes it from the enabled set.
+        set_enabled_allowlist(
+            &pool,
+            &["transcribe".to_string(), "extract_document".to_string(), "save".to_string()],
+        )
+        .await
+        .expect("set_enabled_allowlist must not fail for valid subset");
+
+        let server = MockServer::start().await;
+        let jpeg_bytes: Vec<u8> = b"\xFF\xD8\xFFfakejpeg".to_vec();
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(jpeg_bytes))
+            .mount(&server)
+            .await;
+        // /describe must NOT be called; if it is, this mock returns an unexpected response
+        // and the describe-content assertion would fail.
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::path("/describe"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"description": "SHOULD NOT APPEAR"})),
+            )
+            .mount(&server)
+            .await;
+
+        let port = server.address().port();
+        let gateway_listen = format!("0.0.0.0:{port}");
+        let upload_url = format!(
+            "{}/api/uploads/10000000-0000-0000-0000-000000000002?sig=x&exp=1",
+            server.uri()
+        );
+        let image_att = MediaAttachment {
+            url: upload_url.clone(),
+            media_type: MediaType::Image,
+            file_name: Some("blocked.jpg".into()),
+            mime_type: Some("image/jpeg".into()),
+            file_size: None,
+        };
+
+        let client = reqwest::Client::new();
+        let mut enriched = String::new();
+        let (outcomes, _pending) = dispatch_attachments(
+            &client,
+            &gateway_listen,
+            &server.uri(),
+            "en",
+            &pool,
+            &mut enriched,
+            &[image_att],
+        )
+        .await;
+
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::Ok,
+            "save fallback must return Ok; reason: {:?}",
+            outcomes[0].reason
+        );
+        // `save` does NOT produce vision output; must not contain describe result.
+        assert!(
+            !outcomes[0].summary_text.contains("SHOULD NOT APPEAR"),
+            "describe must NOT run when operator disabled it: {:?}",
+            outcomes[0].summary_text
+        );
+        assert!(
+            !outcomes[0].summary_text.contains("<vision>"),
+            "save outcome must not contain <vision> tags: {:?}",
+            outcomes[0].summary_text
+        );
+        // `save` produces the save message.
+        assert!(
+            outcomes[0].summary_text.contains("saved"),
+            "save fallback must mention 'saved': {:?}",
+            outcomes[0].summary_text
+        );
+    }
+
+    /// Test 3: Forged non-allowlisted default blocked by allowlist re-check (defense-in-depth).
+    /// Directly inserts `is_default=true, executor="tool", action_ref="code_exec"` for image/*.
+    /// Dispatching image/jpeg must NOT run code_exec; must resolve to save.
+    /// This proves the seam's re-check fires even for a forged DB row,
+    /// independently of `resolve()`'s Unsupported fallthrough.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn forged_non_allowlisted_default_blocked(pool: sqlx::PgPool) {
+        use crate::db::file_scenarios::create;
+
+        // Force-insert a forged binding: image/* → code_exec, is_default=true.
+        // This bypasses the HTTP validation layer (which would normally reject it).
+        // We use raw SQL to skip the DB CHECK on executor (which only allows tool|skill,
+        // but code_exec with executor=tool is the threat model: a constant member that
+        // is NOT in FSE_DEFAULT_ALLOWLIST).
+        //
+        // Since `code_exec` is executor=tool and NOT in FSE_DEFAULT_ALLOWLIST,
+        // is_allowed_for_autorun("code_exec", &enabled) returns false regardless of toggle.
+        //
+        // We can use `create()` directly since executor=tool is valid for the DB CHECK;
+        // the protection must come from the allowlist re-check at dispatch time.
+        create(
+            &pool,
+            "image/*",
+            "tool",
+            "code_exec",      // NOT in FSE_DEFAULT_ALLOWLIST — forged action
+            "Forged action",
+            true,             // is_default = true (the threat: auto-runs 0-click)
+            50,
+            true,             // enabled in bindings table
+            "attacker",
+        )
+        .await
+        .expect("raw insert of forged binding must succeed at DB level");
+
+        let server = MockServer::start().await;
+        let jpeg_bytes: Vec<u8> = b"\xFF\xD8\xFFfakejpeg".to_vec();
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(jpeg_bytes))
+            .mount(&server)
+            .await;
+
+        let port = server.address().port();
+        let gateway_listen = format!("0.0.0.0:{port}");
+        let upload_url = format!(
+            "{}/api/uploads/10000000-0000-0000-0000-000000000003?sig=x&exp=1",
+            server.uri()
+        );
+        let image_att = MediaAttachment {
+            url: upload_url.clone(),
+            media_type: MediaType::Image,
+            file_name: Some("attack.jpg".into()),
+            mime_type: Some("image/jpeg".into()),
+            file_size: None,
+        };
+
+        let client = reqwest::Client::new();
+        let mut enriched = String::new();
+        let (outcomes, _pending) = dispatch_attachments(
+            &client,
+            &gateway_listen,
+            &server.uri(),
+            "en",
+            &pool,
+            &mut enriched,
+            &[image_att],
+        )
+        .await;
+
+        assert_eq!(outcomes.len(), 1);
+        // Must NOT be Unsupported (which would indicate dispatch reached code_exec
+        // and resolve() caught it); must be Ok from `save` — the allowlist re-check
+        // fires BEFORE dispatch_action is called.
+        assert_eq!(
+            outcomes[0].status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::Ok,
+            "forged code_exec default must be blocked at allowlist re-check → save fallback (Ok); \
+             got: {:?} / {:?}",
+            outcomes[0].status,
+            outcomes[0].reason
+        );
+        assert!(
+            outcomes[0].summary_text.contains("saved"),
+            "forged default must resolve to save, not code_exec: {:?}",
+            outcomes[0].summary_text
         );
     }
 
