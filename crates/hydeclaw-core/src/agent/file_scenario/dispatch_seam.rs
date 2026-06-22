@@ -694,6 +694,100 @@ mod tests {
         assert!(pending.is_empty(), "no non-default alternatives for seeded defaults");
     }
 
+    // ── seeded application/pdf → extract_document (Link B: document path) ───────
+
+    /// Mirrors `seeded_audio_ogg_routes_to_transcribe` for the document path:
+    /// proves the seam's DB binding-lookup finds the `application/pdf→extract_document`
+    /// seeded default and routes PDF bytes through to the `extract_document` built-in.
+    ///
+    /// `extract_document` POSTs the localhost-rewritten URL (not the file bytes) to
+    /// toolgate `POST /extract-text-url` with `{"document_url": ..., "max_chars": 8000}`.
+    /// The mock returns `{"text": "seam pdf ok"}` which must appear in `summary_text`.
+    ///
+    /// If the seam's glob-match for `application/pdf` were broken, or the seeded
+    /// row were missing, the 0-binding branch would fire (`save`), the
+    /// `/extract-text-url` mock would receive no request, and the `summary_text`
+    /// assertion would fail — catching the regression.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn seeded_pdf_routes_to_extract_document(pool: sqlx::PgPool) {
+        // 1. Seed the real default bindings (audio/*→transcribe, image/*→describe,
+        //    application/pdf→extract_document) exactly as startup does.
+        crate::agent::fse::seed_default_file_scenarios(&pool)
+            .await
+            .expect("seed must not fail");
+
+        // 2. Wiremock doubles as upload host + toolgate.
+        //    - GET /api/uploads/* → PDF magic bytes (sniff confirms application/pdf)
+        //    - POST /extract-text-url → {"text":"seam pdf ok"}
+        //
+        //    Note: unlike transcribe/describe, extract_document does NOT download the
+        //    bytes itself — it sends the localhost-rewritten URL to toolgate and lets
+        //    toolgate do the download. So the GET mock is only needed so `download_full`
+        //    in the seam (Step 1) succeeds; the built-in itself only calls POST.
+        let server = MockServer::start().await;
+        // PDF magic bytes: "%PDF-1.4" — `infer` crate sniffs this as application/pdf.
+        let pdf_bytes: Vec<u8> = b"%PDF-1.4 fake pdf bytes".to_vec();
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/api/uploads/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(pdf_bytes))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(wiremock::matchers::path("/extract-text-url"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"text": "seam pdf ok"})),
+            )
+            .mount(&server)
+            .await;
+
+        // 3. gateway_listen → mock port so uploads_local_url rewrites correctly.
+        let port = server.address().port();
+        let gateway_listen = format!("0.0.0.0:{port}");
+        let upload_url = format!(
+            "{}/api/uploads/00000000-0000-0000-0000-000000000008?sig=x&exp=1",
+            server.uri()
+        );
+
+        let pdf_att = MediaAttachment {
+            url: upload_url.clone(),
+            media_type: MediaType::Document,
+            file_name: Some("report.pdf".into()),
+            mime_type: Some("application/pdf".into()),
+            file_size: None,
+        };
+
+        // 4. Call the seam — the seam must look up the seeded `application/pdf→extract_document`
+        //    default binding, find it, and route to the `extract_document` built-in.
+        let client = reqwest::Client::new();
+        let mut enriched = format!("[User attached a document \"report.pdf\": {upload_url}]");
+        let (outcomes, pending) = dispatch_attachments(
+            &client,
+            &gateway_listen,
+            &server.uri(),
+            "en",
+            &pool,
+            &mut enriched,
+            &[pdf_att],
+        )
+        .await;
+
+        // 5. Assertions: seeded application/pdf → extract_document must route and succeed.
+        assert_eq!(outcomes.len(), 1, "one outcome per attachment");
+        assert_eq!(
+            outcomes[0].status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::Ok,
+            "seeded application/pdf→extract_document must return Ok; reason: {:?}",
+            outcomes[0].reason
+        );
+        assert!(
+            outcomes[0].summary_text.contains("seam pdf ok"),
+            "extracted text 'seam pdf ok' must appear in summary_text: {:?}",
+            outcomes[0].summary_text
+        );
+        assert!(pending.is_empty(), "no non-default alternatives for seeded defaults");
+    }
+
     // ── download failure → Failed outcome ─────────────────────────────────────
 
     #[sqlx::test(migrations = "../../migrations")]

@@ -189,6 +189,93 @@ async fn regression_first_voice_transcribed() {
     );
 }
 
+// ── regression_document_auto_extracted ──────────────────────────────────────
+
+/// Regression guard: `dispatch_action("extract_document", ...)` still calls
+/// toolgate `POST /extract-text-url` (with the localhost-rewritten URL in the
+/// JSON body, NOT a file-bytes multipart) and returns `Ok` with the extracted
+/// text in `summary_text`.
+///
+/// The `extract_document` built-in POSTs `{"document_url": "<local_url>",
+/// "max_chars": 8000}` to toolgate — toolgate does the download, not core.
+/// This differs from `transcribe`/`describe` which download the bytes
+/// themselves and send them as multipart.
+///
+/// Also verifies the §4.4 rewrite contract: after `rewrite_enriched_text` the
+/// bare document upload URL does NOT survive in the enriched text.
+#[tokio::test]
+async fn regression_document_auto_extracted() {
+    // 1. Stand up a wiremock server:
+    //    - POST /extract-text-url → {"text":"Quarterly report body"}
+    //    (No GET /api/uploads/* mock needed: extract_document sends the URL
+    //    to toolgate, so core itself never downloads the bytes for this built-in.)
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/extract-text-url"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"text": "Quarterly report body"})),
+        )
+        .mount(&server)
+        .await;
+
+    // 2. Build a document attachment. The URL must contain /api/uploads/ so
+    //    uploads_local_url rewrites to http://localhost:{port}/api/uploads/doc1.
+    let port = server.address().port();
+    let gateway_listen = format!("0.0.0.0:{port}");
+    let upload_url = "https://pub.example/api/uploads/doc1?sig=x&exp=1".to_string();
+    let att = MediaAttachment {
+        url: upload_url.clone(),
+        media_type: MediaType::Document,
+        file_name: Some("q3.pdf".into()),
+        mime_type: Some("application/pdf".into()),
+        file_size: None,
+    };
+    let client = reqwest::Client::new();
+
+    // 3. Run dispatch_action("extract_document") — the exact call made by run_builtin
+    //    in the seam for an application/pdf attachment with the seeded default.
+    let outcome = dispatch_action(DispatchInput {
+        action_ref: "extract_document",
+        attachment: &att,
+        toolgate_url: &server.uri(),
+        gateway_listen: &gateway_listen,
+        language: "en",
+        http_client: &client,
+        timeout: std::time::Duration::from_secs(10),
+    })
+    .await;
+
+    // ── Assertions ──────────────────────────────────────────────────────────
+    assert_eq!(
+        outcome.status,
+        ScenarioStatus::Ok,
+        "extract_document must succeed: {:?}",
+        outcome.reason
+    );
+    // The extracted text lands in summary_text.
+    assert!(
+        outcome.summary_text.contains("Quarterly report body"),
+        "extracted text must be in summary_text: {:?}",
+        outcome.summary_text
+    );
+    // summary_text must NOT contain the bare signed URL (§4.4 / outcome contract).
+    assert!(
+        !outcome.summary_text.contains("/api/uploads/doc1"),
+        "bare upload URL must not appear in summary_text: {:?}",
+        outcome.summary_text
+    );
+
+    // Also verify the rewrite contract: after rewrite on document-ok the
+    // hint is stripped (URL removed from the enriched text).
+    let mut enriched = format!("[User attached a document \"q3.pdf\": {upload_url}]");
+    rewrite_enriched_text(&mut enriched, &[att], &[outcome]);
+    assert!(
+        !enriched.contains(&upload_url),
+        "§4.4: document-ok must strip the bare URL from enriched text: {enriched:?}"
+    );
+}
+
 // ── regression_first_photo_described ────────────────────────────────────────
 
 /// Regression guard: `dispatch_action("describe", ...)` still calls toolgate
