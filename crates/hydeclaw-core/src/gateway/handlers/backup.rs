@@ -40,17 +40,38 @@ pub(crate) fn routes() -> Router<AppState> {
 
 const BACKUP_DIR: &str = "backups";
 
-/// Parse the first non-empty container name from `docker ps` stdout.
-fn parse_container_name<'a>(docker_output: &'a str, fallback: &'a str) -> &'a str {
-    docker_output
+/// Select which postgres container to use from `docker ps` stdout.
+///
+/// The configured name is **authoritative**: if it appears among the running
+/// containers it is always chosen. This prevents a stray container that merely
+/// matches the `name=postgres` *substring* filter (e.g. `docker-postgres-test-1`)
+/// from being picked over the real one — `docker ps` output order is not
+/// deterministic, and the test container has no `hydeclaw` role, so picking it
+/// makes `pg_dump` fail with `role "hydeclaw" does not exist`.
+///
+/// Auto-discovery only kicks in when the configured container is absent and
+/// exactly one postgres container is running (convenience for non-standard
+/// deployments). When the configured name is absent and several containers
+/// match, we cannot safely guess, so we trust the configured value.
+fn select_container<'a>(docker_output: &'a str, configured: &'a str) -> &'a str {
+    let running: Vec<&str> = docker_output
         .lines()
         .map(str::trim)
-        .find(|s| !s.is_empty())
-        .unwrap_or(fallback)
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if running.contains(&configured) {
+        configured
+    } else if running.len() == 1 {
+        running[0]
+    } else {
+        configured
+    }
 }
 
-/// Discover the running postgres container name.
-/// Tries `docker ps --filter name=postgres`; falls back to `configured`.
+/// Resolve which postgres container to run `pg_dump`/`pg_restore` against.
+/// Lists `docker ps --filter name=postgres` and lets `select_container` apply
+/// config precedence; falls back to `configured` if the `docker` call fails.
 async fn discover_postgres_container(configured: &str) -> String {
     let out = tokio::process::Command::new("docker")
         .args(["ps", "--filter", "name=postgres", "--format", "{{.Names}}"])
@@ -59,7 +80,7 @@ async fn discover_postgres_container(configured: &str) -> String {
     match out {
         Ok(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            parse_container_name(&stdout, configured).to_owned()
+            select_container(&stdout, configured).to_owned()
         }
         _ => configured.to_owned(),
     }
@@ -744,22 +765,49 @@ pub(crate) async fn api_restore(
 mod tests {
     use super::*;
 
+    // Regression: `docker ps --filter name=postgres` is a *substring* filter, so
+    // it also matches `docker-postgres-test-1`. Docker's output order is not
+    // deterministic — when the test container is listed first, the old "first
+    // line wins" logic picked it, and pg_dump failed with `role "hydeclaw" does
+    // not exist` (the test container has no hydeclaw role). The configured
+    // container must win whenever it is present.
     #[test]
-    fn parse_container_name_returns_first_non_empty_line() {
+    fn select_container_prefers_configured_over_substring_match() {
         assert_eq!(
-            parse_container_name("docker-postgres-1\ndocker-postgres-2\n", "fallback"),
+            select_container("docker-postgres-test-1\ndocker-postgres-1\n", "docker-postgres-1"),
             "docker-postgres-1"
         );
     }
 
+    // When the configured container is absent and several postgres containers
+    // are running, we cannot safely guess — trust the configured value rather
+    // than picking an arbitrary first line.
     #[test]
-    fn parse_container_name_falls_back_when_output_empty() {
-        assert_eq!(parse_container_name("", "docker-postgres-1"), "docker-postgres-1");
+    fn select_container_trusts_config_when_ambiguous() {
+        assert_eq!(
+            select_container("docker-postgres-1\ndocker-postgres-2\n", "configured-pg"),
+            "configured-pg"
+        );
+    }
+
+    // Auto-discovery convenience: exactly one postgres container running under a
+    // non-standard name → use it even though it differs from the configured one.
+    #[test]
+    fn select_container_autodiscovers_single_nonstandard() {
+        assert_eq!(
+            select_container("my-pg-1\n", "docker-postgres-1"),
+            "my-pg-1"
+        );
     }
 
     #[test]
-    fn parse_container_name_trims_whitespace() {
-        assert_eq!(parse_container_name("  my-pg-1  \n", "fb"), "my-pg-1");
+    fn select_container_falls_back_when_output_empty() {
+        assert_eq!(select_container("", "docker-postgres-1"), "docker-postgres-1");
+    }
+
+    #[test]
+    fn select_container_trims_whitespace() {
+        assert_eq!(select_container("  my-pg-1  \n", "fb"), "my-pg-1");
     }
 
     /// `ephemeral_tables()` parses psql -tAc output (one name per line, with
