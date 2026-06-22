@@ -1057,6 +1057,39 @@ pub async fn claim_redrive(db: &PgPool, session_id: Uuid, max_retries: i32) -> R
     Ok(row.map(|(c,)| c))
 }
 
+/// Delete orphaned tool-result rows: `role='tool'` messages whose `tool_call_id`
+/// is declared by NO `role='assistant'` message in the same session.
+///
+/// The DB-level counterpart of the read-path `drop_orphan_tool_results` filter.
+/// A crash can commit a tool-result row while losing its parent assistant row
+/// (the two persist via independent detached tasks — see `pipeline::execute`).
+/// Filtering on read keeps the transcript valid, but the dangling rows otherwise
+/// accumulate forever; this sweep removes them. Returns the number deleted.
+///
+/// Safe by construction: the synthetic `[interrupted:verify]` rows are NOT
+/// orphans — they carry the `tool_call_id` of a declared (dangling) assistant
+/// tool_call, so a matching assistant exists and they are preserved.
+/// `jsonb_typeof = 'array'` guards against malformed `tool_calls` JSON.
+pub async fn sweep_orphan_tool_results(db: &PgPool) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM messages t \
+         WHERE t.role = 'tool' \
+           AND t.tool_call_id IS NOT NULL \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM messages a \
+             CROSS JOIN LATERAL jsonb_array_elements(a.tool_calls) elem \
+             WHERE a.session_id = t.session_id \
+               AND a.role = 'assistant' \
+               AND a.tool_calls IS NOT NULL \
+               AND jsonb_typeof(a.tool_calls) = 'array' \
+               AND elem->>'id' = t.tool_call_id \
+           )",
+    )
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Mark a session as permanently failed after max retries exhausted.
 pub async fn mark_session_failed(db: &PgPool, session_id: Uuid) -> Result<()> {
     sqlx::query("UPDATE sessions SET run_status = 'failed' WHERE id = $1")
@@ -2269,6 +2302,42 @@ mod tests {
         let status: String = sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
             .bind(sid).fetch_one(&pool).await.unwrap();
         assert_eq!(status, "interrupted", "exhausted claim leaves status untouched");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn sweep_orphan_tool_results_deletes_only_undeclared(pool: sqlx::PgPool) {
+        let sid = super::create_new_session(&pool, "a", "u", "web").await.unwrap();
+
+        // Assistant declares tool_call "X" (note: serde-transparent ToolCallId → "id" is a plain string).
+        sqlx::query(
+            "INSERT INTO messages (session_id, role, content, tool_calls) \
+             VALUES ($1, 'assistant', '', '[{\"id\":\"X\",\"name\":\"t\",\"arguments\":{}}]'::jsonb)",
+        )
+        .bind(sid).execute(&pool).await.unwrap();
+        // Declared result for X → keep.
+        sqlx::query("INSERT INTO messages (session_id, role, content, tool_call_id) VALUES ($1, 'tool', 'ok', 'X')")
+            .bind(sid).execute(&pool).await.unwrap();
+        // Orphan result for Y (no assistant declares it) → delete.
+        sqlx::query("INSERT INTO messages (session_id, role, content, tool_call_id) VALUES ($1, 'tool', 'lost', 'Y')")
+            .bind(sid).execute(&pool).await.unwrap();
+        // A synthetic [interrupted:verify] result for a SEPARATE declared call "Z" → keep
+        // (it carries the tool_call_id of a declared dangling call, so it is not an orphan).
+        sqlx::query(
+            "INSERT INTO messages (session_id, role, content, tool_calls) \
+             VALUES ($1, 'assistant', '', '[{\"id\":\"Z\",\"name\":\"t\",\"arguments\":{}}]'::jsonb)",
+        )
+        .bind(sid).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO messages (session_id, role, content, tool_call_id) VALUES ($1, 'tool', $2, 'Z')")
+            .bind(sid).bind(super::INTERRUPTED_TOOL_RESULT).execute(&pool).await.unwrap();
+
+        let deleted = super::sweep_orphan_tool_results(&pool).await.unwrap();
+        assert_eq!(deleted, 1, "only the undeclared orphan (Y) is swept");
+
+        let remaining: Vec<String> = sqlx::query_scalar(
+            "SELECT tool_call_id FROM messages WHERE session_id = $1 AND role = 'tool' ORDER BY tool_call_id",
+        )
+        .bind(sid).fetch_all(&pool).await.unwrap();
+        assert_eq!(remaining, vec!["X".to_string(), "Z".to_string()], "declared + interrupted-verify results survive");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

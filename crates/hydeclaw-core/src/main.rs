@@ -319,6 +319,15 @@ async fn main() -> Result<()> {
     // Startup cleanup: repair sessions interrupted by previous crash (batched)
     cleanup_interrupted_sessions(&db_pool).await;
 
+    // Startup cleanup: delete orphaned tool-result rows whose parent assistant
+    // row was lost to a crash (the DB counterpart of the read-path filter, so
+    // they don't accumulate). Best-effort — a failure here must not block boot.
+    match crate::db::sessions::sweep_orphan_tool_results(&db_pool).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(deleted = n, "swept orphaned tool-result rows"),
+        Err(e) => tracing::warn!(error = %e, "orphan tool-result sweep failed (non-fatal)"),
+    }
+
     // Secrets vault
     let master_key_hex = get_master_key();
     let secrets_manager = secrets::SecretsManager::new(&master_key_hex, db_pool.clone())?;
