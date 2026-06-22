@@ -251,6 +251,32 @@ mod tests {
         assert_eq!(resolve("Transcribe"), None); // case-sensitive
     }
 
+    #[tokio::test]
+    async fn transcribe_timeout_returns_timeout_status() {
+        let server = MockServer::start().await;
+        // Download responds instantly — proves the timeout fires inside the toolgate POST, not here.
+        Mock::given(method("GET")).and(path("/api/uploads/v3"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"OggSfakeaudio".to_vec()))
+            .mount(&server).await;
+        // Toolgate POST is deliberately slow (30 s) — will be hit by the 100 ms ceiling.
+        Mock::given(method("POST")).and(path("/transcribe"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_secs(30))
+                .set_body_json(serde_json::json!({"text": "never reached"})))
+            .mount(&server).await;
+
+        let client = reqwest::Client::new();
+        let server_uri = server.uri();
+        let a = att(&format!("{server_uri}/api/uploads/v3?sig=x"), MediaType::Audio);
+        let port = server_uri.rsplit(':').next().unwrap().to_string();
+        let gl = format!("0.0.0.0:{port}");
+        let mut inp = input("transcribe", &a, &server_uri, &client);
+        inp.gateway_listen = &gl;
+        inp.timeout = Duration::from_millis(100);
+        let out = dispatch_action(inp).await;
+        assert_eq!(out.status, ScenarioStatus::Timeout);
+    }
+
     #[test]
     fn every_allowlist_member_resolves() {
         for name in crate::agent::file_scenario::outcome::FSE_DEFAULT_ALLOWLIST {
