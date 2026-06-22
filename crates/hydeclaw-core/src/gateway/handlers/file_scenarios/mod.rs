@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json,
 };
 use serde::Deserialize;
@@ -76,13 +76,17 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/file-scenarios",
             get(api_list_file_scenarios).post(api_create_file_scenario),
         )
-        // NOTE: `/allowlist` is a literal segment and must be registered before `/{id}`
-        // so axum's router does not attempt to parse "allowlist" as a UUID. In axum 0.8
+        // NOTE: `/allowlist` and `/run` are literal segments and must be registered before
+        // `/{id}` so axum's router does not attempt to parse them as UUIDs. In axum 0.8
         // literal routes already take priority over capture routes, but explicit ordering
         // makes the intent clear.
         .route(
             "/api/file-scenarios/allowlist",
             get(api_get_fse_allowlist).put(api_set_fse_allowlist),
+        )
+        .route(
+            "/api/file-scenarios/run",
+            post(run::api_run_scenario),
         )
         .route(
             "/api/file-scenarios/{id}",
@@ -806,7 +810,7 @@ mod tests {
         const LOOPBACK_EXACT: &[&str] =
             &["/health", "/api/channels/notify", "/api/media/upload", "/api/vision/analyze"];
         const LOOPBACK_PREFIX: &[&str] = &["/api/uploads/"];
-        for p in ["/api/file-scenarios", "/api/file-scenarios/allowlist"] {
+        for p in ["/api/file-scenarios", "/api/file-scenarios/allowlist", "/api/file-scenarios/run"] {
             assert!(!LOOPBACK_EXACT.contains(&p), "{p} must not be loopback-exact-exempt");
             assert!(
                 !LOOPBACK_PREFIX.iter().any(|pre| p.starts_with(pre)),
