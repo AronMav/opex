@@ -20,7 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { CreateFileScenarioInput, UpdateFileScenarioInput } from "@/types/api";
-import { isAllowlistViolation, buildScenarioBody } from "./_parts/helpers";
+import { isDefaultIneligible, buildScenarioBody } from "./_parts/helpers";
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -61,8 +61,9 @@ export function ScenarioDialog({
 
   // Skill bindings can never be default (backend rule: is_default requires executor="tool").
   // Tool bindings must also pass the allowlist check.
+  // isDefaultIneligible is the single source of truth shared with the page gate.
   const isSkill = form.executor === "skill";
-  const defaultBlocked = isSkill || isAllowlistViolation(form.executor, true, form.action_ref);
+  const defaultBlocked = isDefaultIneligible(form.executor, form.action_ref);
 
   const valid =
     form.match_type.trim().length > 0 &&
