@@ -13,6 +13,7 @@
 
 pub mod dispatch;
 pub mod outcome;
+pub mod rewrite;
 pub mod sniff;
 
 pub use dispatch::{resolve, BuiltinAction};
