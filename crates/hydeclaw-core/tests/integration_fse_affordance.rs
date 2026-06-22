@@ -90,8 +90,8 @@ fn inline_rs_owner_gate_present_before_run() {
 
     // The owner check must appear before the run_scenario_and_persist call.
     let owner_gate_pos = inline_src
-        .find("is_owner")
-        .expect("inline.rs must contain is_owner ownership check for FSE callbacks");
+        .find("assert_fse_owner(is_owner)")
+        .expect("inline.rs handle_fse_callback must gate via assert_fse_owner before running");
     let run_pos = inline_src
         .find("run_scenario_and_persist")
         .expect("inline.rs must call run_scenario_and_persist");
