@@ -78,6 +78,12 @@ export interface CompressionDividerPart {
   totalSegments: number;
 }
 
+export interface FileScenarioChipsPart {
+  type: "fileScenarioChips";
+  uploadId: string;
+  messageId: string;
+  alternatives: { scenarioId: string; label: string; executor: string }[];
+}
 
 export type MessagePart =
   | TextPart
@@ -86,7 +92,8 @@ export type MessagePart =
   | ToolPart
   | RichCardPart
   | ApprovalPart
-  | CompressionDividerPart;
+  | CompressionDividerPart
+  | FileScenarioChipsPart;
 
 export interface ChatMessage {
   /**
