@@ -556,7 +556,7 @@ export default function ChatPage() {
           />
         </div>
       </div>
-      <div className="flex-1 min-h-0 px-3 relative">
+      <div className="flex-1 min-h-0 px-3 relative overflow-hidden">
         {sessionsLoading && sessions.length === 0 ? (
           <div className="space-y-4 p-3">
             {[1, 2, 3].map((i) => (
@@ -581,7 +581,7 @@ export default function ChatPage() {
                 const isSelected = selectedSessions.has(s.id);
                 const displayTitle = s.title || s.user_id || t("chat.no_title");
                 return (
-                  <div className="group relative pb-1.5 flex items-stretch gap-1">
+                  <div className="group relative pb-1.5 flex items-stretch gap-1 min-w-0 overflow-hidden">
                     <button
                       onClick={() => toggleSessionSelection(s.id)}
                       className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer ${
@@ -601,7 +601,7 @@ export default function ChatPage() {
                     </button>
                     <button
                       onClick={() => handleSelectSession(s)}
-                      className={`relative flex w-full flex-col gap-1.5 rounded-lg px-4 py-3 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
+                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-4 py-3 pr-10 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
                         activeSessionId === s.id
                         ? "bg-accent shadow-inner"
                         : "hover:bg-accent/40"
@@ -660,7 +660,7 @@ export default function ChatPage() {
                       ) : (
                         <>
                           <p
-                            className={`truncate text-sm transition-colors ${
+                            className={`text-sm transition-colors break-words line-clamp-2 ${
                               activeSessionId === s.id
                                 ? "text-foreground"
                                 : "text-muted-foreground/70 group-hover:text-muted-foreground/90"
@@ -668,7 +668,7 @@ export default function ChatPage() {
                           >
                             {displayTitle}
                             {s.segment_count != null && s.segment_count > 1 && (
-                              <span className="ml-1.5 text-xs text-muted-foreground/50 shrink-0 tabular-nums not-italic">
+                              <span className="ml-1.5 text-xs text-muted-foreground/50 tabular-nums not-italic whitespace-nowrap">
                                 ◈{s.segment_count}
                               </span>
                             )}
