@@ -137,26 +137,49 @@ pub async fn delete(pool: &PgPool, id: Uuid) -> Result<u64> {
 
 /// Promote `id` to the default for its match_type, clearing the prior default in
 /// one transaction so the `file_scenarios_one_default` partial unique index is
-/// never transiently violated.
-// Phase 5 set-default endpoint (PUT /api/file-scenarios/{id}/default) is
-// the next consumer; keep the allow until that handler lands.
-#[allow(dead_code)]
-pub async fn set_default(pool: &PgPool, id: Uuid) -> Result<()> {
+/// never transiently violated. Returns the updated row, or `None` if `id` is absent.
+pub async fn set_default(pool: &PgPool, id: Uuid) -> Result<Option<FileScenarioRow>> {
     let mut tx = pool.begin().await?;
-    let match_type: String = sqlx::query_scalar("SELECT match_type FROM file_scenarios WHERE id = $1")
-        .bind(id)
-        .fetch_one(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE file_scenarios SET is_default = false, updated_at = NOW() WHERE match_type = $1 AND is_default")
-        .bind(&match_type)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("UPDATE file_scenarios SET is_default = true, updated_at = NOW() WHERE id = $1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    let match_type: Option<String> =
+        sqlx::query_scalar("SELECT match_type FROM file_scenarios WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some(match_type) = match_type else {
+        tx.rollback().await?;
+        return Ok(None);
+    };
+    sqlx::query(
+        "UPDATE file_scenarios SET is_default = false, updated_at = NOW() \
+         WHERE match_type = $1 AND is_default",
+    )
+    .bind(&match_type)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE file_scenarios SET is_default = true, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(())
+    // Re-fetch outside the (now-committed) transaction.
+    get_by_id(pool, id).await
+}
+
+/// Clear the default flag for a single binding without promoting another.
+/// Returns the updated row, or `None` if `id` is absent.
+pub async fn unset_default(pool: &PgPool, id: Uuid) -> Result<Option<FileScenarioRow>> {
+    let affected =
+        sqlx::query("UPDATE file_scenarios SET is_default = false, updated_at = NOW() WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?
+            .rows_affected();
+    if affected == 0 {
+        return Ok(None);
+    }
+    get_by_id(pool, id).await
 }
 
 /// Record a per-file processing outcome. Returns the new row id.
@@ -248,11 +271,12 @@ mod tests {
         let b = create(&pool, "audio/*", "skill", "fancy", "Fancy", false, 100, true, "ui").await.unwrap();
 
         // Promote b to default — a must be demoted in the same transaction (else the
-        // partial unique index would be violated).
-        set_default(&pool, b).await.unwrap();
+        // partial unique index would be violated). Returns the updated row.
+        let updated = set_default(&pool, b).await.unwrap().expect("row exists");
+        assert!(updated.is_default, "new default set in returned row");
 
         assert!(!get_by_id(&pool, a).await.unwrap().unwrap().is_default, "old default cleared");
-        assert!(get_by_id(&pool, b).await.unwrap().unwrap().is_default, "new default set");
+        assert!(get_by_id(&pool, b).await.unwrap().unwrap().is_default, "new default set in DB");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
