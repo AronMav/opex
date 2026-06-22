@@ -42,6 +42,29 @@ async fn handle_create(deps: &ToolDeps<'_>, args: &Value) -> String {
     handle_create_inner(deps.db, deps.agent_name, args).await
 }
 
+/// Security seam for DB-backed testing of the base-gate (Task 9.8).
+/// Replicates the `handle()` routing for the "create" action without needing
+/// the full `ToolDeps` graph: applies the base-gate first (same check as
+/// `handle()`), then delegates to `handle_create_inner`.
+///
+/// The production path goes through `handle()` → `handle_create` →
+/// `handle_create_inner`. This function mirrors that chain at the
+/// db + agent_base level so inline `#[sqlx::test]` can verify both:
+///   - base-gate: non-base returns the error string AND writes nothing to DB.
+///   - clamp: malicious executor/is_default in args are ignored.
+#[cfg(test)]
+pub(crate) async fn create_as_agent(
+    db: &sqlx::PgPool,
+    agent_name: &str,
+    agent_base: bool,
+    args: &serde_json::Value,
+) -> String {
+    if !agent_base {
+        return "Error: file_scenario 'create' requires a base agent. Regular agents may only 'list'.".to_string();
+    }
+    handle_create_inner(db, agent_name, args).await
+}
+
 /// Inner implementation extracted for DB-backed testing: only needs the pool
 /// and agent name, not the full `ToolDeps` graph.
 pub(crate) async fn handle_create_inner(
@@ -272,6 +295,164 @@ mod tests {
             ev.details.get("executor").and_then(|v| v.as_str()),
             Some("skill"),
             "audit details must record executor='skill'"
+        );
+    }
+
+    // ── Task 9.8: integration-layer security e2e ─────────────────────────────
+    //
+    // Three assertions that go beyond Task 7.3's `handle_create_inner` unit test:
+    //
+    //  A. Clamp (integration layer, via create_as_agent): passes malicious
+    //     executor="tool" and is_default=true through the base-gated seam —
+    //     same invariant as 7.3 but explicitly named for the 9.8 requirement and
+    //     exercising the `create_as_agent` entry point (not bare inner fn).
+    //     Overlap with 7.3 is acknowledged in the task brief.
+    //
+    //  B. Base-gate behavioral (NEW): a non-base agent's create attempt is
+    //     rejected AND leaves the file_scenarios table empty — 7.3 only tested
+    //     the message constant, not that no DB write occurs.
+    //
+    //  C. Audit actor (NEW): the audit row emitted for a successful create
+    //     carries actor = "agent:<agent_name>" (7.3 checked the audit event
+    //     exists and its `executor` detail; 9.8 adds explicit actor verification).
+    //
+    // All three use `create_as_agent` — the thin seam that replicates the
+    // handle() routing without requiring the full ToolDeps graph, which would
+    // cascade the entire engine into the test tree. See lib.rs comment:
+    // "When a test needs production code that isn't a leaf, the right pattern
+    //  is to add the test inline next to the production code."
+
+    /// Task 9.8-A: clamp via create_as_agent.
+    /// Malicious args (executor="tool", is_default=true) passed to the base-gated
+    /// entry point must be silently overridden. The persisted row must be
+    /// executor="skill", is_default=false (escalation neutralized, not rejected).
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn task_9_8_clamp_through_create_as_agent(pool: sqlx::PgPool) {
+        let args = serde_json::json!({
+            "action":     "create",
+            "match_type": "application/pdf",
+            "action_ref": "pdf_summarizer",
+            "label":      "Summarize PDF",
+            "executor":   "tool",   // malicious: attempt to escalate
+            "is_default": true      // malicious: attempt to set default
+        });
+
+        let result = create_as_agent(&pool, "Atlas", true, &args).await;
+
+        assert!(
+            !result.starts_with("Error"),
+            "base-agent create with malicious args must succeed (clamp, not reject): {result}"
+        );
+
+        // Extract the UUID from "Created scenario <UUID> — ..."
+        let scenario_id: uuid::Uuid = result
+            .split_whitespace()
+            .nth(2)
+            .expect("UUID token in result")
+            .parse()
+            .expect("token is a valid UUID");
+
+        let row = crate::db::file_scenarios::get_by_id(&pool, scenario_id)
+            .await
+            .expect("DB read")
+            .expect("row must exist");
+
+        // Clamp invariant: executor and is_default are always overridden.
+        assert_eq!(row.executor, "skill",
+            "executor must be clamped to 'skill' regardless of args");
+        assert!(!row.is_default,
+            "is_default must be clamped to false regardless of args");
+        assert_eq!(row.action_ref, "pdf_summarizer",
+            "action_ref must be persisted from args");
+    }
+
+    /// Task 9.8-B: base-gate behavioral — non-base agent persists NOTHING.
+    /// 7.3 only asserted the rejection message constant; this test verifies
+    /// that the DB row count remains zero after a non-base create attempt.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn task_9_8_non_base_agent_persists_nothing(pool: sqlx::PgPool) {
+        let args = serde_json::json!({
+            "action":     "create",
+            "match_type": "image/png",
+            "action_ref": "my_skill",
+            "label":      "Describe PNG",
+            "executor":   "skill",
+            "is_default": false
+        });
+
+        let result = create_as_agent(&pool, "Worker", false, &args).await;
+
+        // Must be rejected with the base-gate message.
+        assert!(
+            result.contains("requires a base agent"),
+            "non-base rejection must cite 'requires a base agent': {result}"
+        );
+
+        // DB must be clean — no scenario row written, no audit event written.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*)::bigint FROM file_scenarios")
+            .fetch_one(&pool)
+            .await
+            .expect("count query");
+        assert_eq!(count, 0,
+            "non-base create must persist nothing (file_scenarios count must be 0)");
+
+        let audit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::bigint FROM audit_events WHERE event_type = 'file_scenario_created'"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("audit count query");
+        assert_eq!(audit_count, 0,
+            "non-base create must emit no FILE_SCENARIO_CREATED audit event");
+    }
+
+    /// Task 9.8-C: audit actor format — the audit row emitted for a successful
+    /// agent create must carry `actor = "agent:<agent_name>"`.
+    /// 7.3 verified the audit event exists and its `executor` detail field;
+    /// this test adds explicit actor-format verification.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn task_9_8_audit_actor_format(pool: sqlx::PgPool) {
+        let args = serde_json::json!({
+            "action":     "create",
+            "match_type": "audio/*",
+            "action_ref": "transcribe_audio",
+            "label":      "Transcribe voice",
+            "executor":   "skill",
+            "is_default": false
+        });
+
+        let result = create_as_agent(&pool, "Hermes", true, &args).await;
+        assert!(!result.starts_with("Error"),
+            "create must succeed: {result}");
+
+        // audit_spawn is fire-and-forget; yield briefly to let it settle.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let audit_rows = crate::db::audit::query_events(
+            &pool,
+            Some("Hermes"),
+            Some(crate::db::audit::event_types::FILE_SCENARIO_CREATED),
+            10,
+            0,
+        )
+        .await
+        .expect("audit query");
+
+        assert!(!audit_rows.is_empty(),
+            "FILE_SCENARIO_CREATED audit event must be emitted for a successful create");
+
+        let ev = &audit_rows[0];
+        // actor must be "agent:<agent_name>" — the canonical format used for
+        // agent-authored rows (also stored in created_by column).
+        assert_eq!(
+            ev.actor.as_deref(),
+            Some("agent:Hermes"),
+            "audit actor must be 'agent:<agent_name>' format: {:?}", ev.actor
+        );
+        assert_eq!(
+            ev.details.get("executor").and_then(|v| v.as_str()),
+            Some("skill"),
+            "audit details.executor must be 'skill'"
         );
     }
 }
