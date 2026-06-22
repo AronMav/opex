@@ -732,6 +732,36 @@ mod tests {
         assert!(is_archived);
     }
 
+    #[test]
+    fn media_processing_is_video_only() {
+        // Step-1 retirement: the image/audio/document arms are now owned by the
+        // File Scenario Engine deterministic default bindings. The skill body must
+        // no longer instruct the LLM to call analyze_image/extract_document/
+        // transcribe_audio for those types; only the video arm survives until the
+        // video plugin lands.
+        let content = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../workspace/skills/media-processing.md"),
+        )
+        .expect("media-processing.md must exist (step-1 retirement keeps the video arm)");
+        let skill = SkillDef::parse(&content).expect("must still parse as a skill");
+        let body = skill.instructions.to_lowercase();
+        assert!(body.contains("video"), "video arm must survive step-1 retirement");
+        assert!(
+            !body.contains("transcribe_audio"),
+            "audio arm must be removed — FSE owns audio→transcribe now"
+        );
+        assert!(
+            !body.contains("extract_document"),
+            "document arm must be removed — FSE owns document→extract_document now"
+        );
+        assert!(
+            !body.contains("<vision>"),
+            "image auto-describe arm must be removed — FSE owns image→describe now"
+        );
+        // tools_required is trimmed to the only YAML tool the video arm still uses.
+        assert_eq!(skill.meta.tools_required, vec!["analyze_image".to_string()]);
+    }
+
     #[tokio::test]
     async fn audit_all_skills_required_tools_exist() {
         // Resolve workspace/ relative to the Cargo workspace root (two levels up from
