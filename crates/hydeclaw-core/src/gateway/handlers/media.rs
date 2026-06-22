@@ -32,7 +32,7 @@ pub(crate) fn routes() -> Router<AppState> {
 /// nosniff` unconditionally. Both `text/html` and `image/svg+xml` are rejected
 /// here because they can execute script same-origin if a future change ever
 /// inlines them.
-fn is_safe_client_upload_mime(mime: &str) -> bool {
+pub(crate) fn is_safe_client_upload_mime(mime: &str) -> bool {
     let lower = mime.to_ascii_lowercase();
     if lower.starts_with("image/") {
         // svg explicitly rejected — can carry <script>.
@@ -404,6 +404,19 @@ pub(crate) async fn api_vision_analyze(
             (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {body}")}))).into_response()
         }
         Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("Vision failed: {e}")}))).into_response(),
+    }
+}
+
+#[cfg(test)]
+mod safe_mime_visibility {
+    // Reaching the symbol via the absolute crate path proves it is at least
+    // pub(crate) (a private `fn` is not nameable from a child mod via crate::).
+    #[test]
+    fn is_safe_client_upload_mime_is_crate_visible() {
+        assert!(crate::gateway::handlers::media::is_safe_client_upload_mime("image/png"));
+        assert!(!crate::gateway::handlers::media::is_safe_client_upload_mime("image/svg+xml"));
+        assert!(!crate::gateway::handlers::media::is_safe_client_upload_mime("text/html"));
+        assert!(crate::gateway::handlers::media::is_safe_client_upload_mime("application/pdf"));
     }
 }
 
