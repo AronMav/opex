@@ -307,7 +307,7 @@ test("abort mid-stream marks session interrupted", async ({ page }) => {
   // Also abort the local SSE fetch so the UI updates immediately
   await page.evaluate(() => {
     // Trigger stopStream via the store's public API
-    const event = new CustomEvent("hydeclaw:stop-stream");
+    const event = new CustomEvent("opex:stop-stream");
     document.dispatchEvent(event);
   });
 

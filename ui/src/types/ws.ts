@@ -1,4 +1,4 @@
-/** Discriminated union of all WebSocket event types from HydeClaw backend. */
+/** Discriminated union of all WebSocket event types from OPEX backend. */
 
 export interface WsSessionUpdated {
   type: "session_updated";

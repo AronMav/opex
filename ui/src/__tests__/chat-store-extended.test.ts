@@ -218,7 +218,7 @@ describe("STATE-03: convertHistory agentId forward-fill", () => {
 
 describe("getInitialAgent", () => {
   it("returns first agent when nothing saved", () => {
-    localStorage.removeItem("hydeclaw.lastSession");
+    localStorage.removeItem("opex.chat.lastSession");
     expect(getInitialAgent(["A", "B"])).toBe("A");
   });
 
@@ -234,7 +234,7 @@ describe("saveLastSession / getLastSessionId", () => {
   });
 
   it("returns undefined for unknown agent", () => {
-    localStorage.removeItem("hydeclaw.lastSession");
+    localStorage.removeItem("opex.chat.lastSession");
     expect(getLastSessionId("Unknown")).toBeUndefined();
   });
 });

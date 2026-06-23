@@ -1,5 +1,5 @@
 /**
- * Unified message parsing logic for HydeClaw.
+ * Unified message parsing logic for OPEX.
  * Handles <think> blocks, cleaning artifacts, and merging consecutive parts.
  */
 

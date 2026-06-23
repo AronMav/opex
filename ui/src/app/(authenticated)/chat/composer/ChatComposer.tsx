@@ -25,7 +25,7 @@ import {
 
 // ── Draft persistence helpers ─────────────────────────────────────────────────
 
-const DRAFT_PREFIX = "hydeclaw.draft.";
+const DRAFT_PREFIX = "opex.draft.";
 
 export function saveDraft(agent: string, text: string) {
   if (text) localStorage.setItem(DRAFT_PREFIX + agent, text);

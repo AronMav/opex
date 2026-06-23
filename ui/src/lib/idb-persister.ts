@@ -5,7 +5,7 @@ import type { PersistedClient, Persister } from "@tanstack/query-persist-client-
  * IndexedDB persister for React Query cache.
  * Stores the dehydrated cache under a single IDB key.
  */
-export function createIDBPersister(key: IDBValidKey = "hydeclaw-rq"): Persister {
+export function createIDBPersister(key: IDBValidKey = "opex-rq"): Persister {
   return {
     persistClient: async (client: PersistedClient) => {
       try {

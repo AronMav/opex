@@ -50,7 +50,7 @@ export default function LoginPage() {
           </div>
           <div className="flex flex-col items-center">
             <h1 className="font-display text-2xl font-bold tracking-wide text-foreground">
-              HydeClaw
+              OPEX
             </h1>
             <span className="text-sm text-muted-foreground mt-1">
               {t("login.control_panel")}

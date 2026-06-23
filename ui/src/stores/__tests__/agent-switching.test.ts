@@ -129,7 +129,7 @@ describe("setCurrentAgent — new-chat state when no prior session exists", () =
     // returned the global sessionId, causing the cross-agent resolver to switch
     // back to the agent that owned that session.
     const raw = { agent: "Agent1", sessions: { Agent1: "sess-agent1" }, sessionId: "sess-agent1" };
-    localStorage.setItem("hydeclaw.chat.lastSession", JSON.stringify(raw));
+    localStorage.setItem("opex.chat.lastSession", JSON.stringify(raw));
 
     useChatStore.getState().setCurrentAgent("Agent2");
 
