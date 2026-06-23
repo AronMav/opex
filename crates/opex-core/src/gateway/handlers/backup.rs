@@ -46,8 +46,8 @@ const BACKUP_DIR: &str = "backups";
 /// containers it is always chosen. This prevents a stray container that merely
 /// matches the `name=postgres` *substring* filter (e.g. `docker-postgres-test-1`)
 /// from being picked over the real one — `docker ps` output order is not
-/// deterministic, and the test container has no `opex` role, so picking it
-/// makes `pg_dump` fail with `role "opex" does not exist`.
+/// deterministic, and the test container has no `hydeclaw` role, so picking it
+/// makes `pg_dump` fail with `role "hydeclaw" does not exist`.
 ///
 /// Auto-discovery only kicks in when the configured container is absent and
 /// exactly one postgres container is running (convenience for non-standard
@@ -93,7 +93,7 @@ async fn discover_postgres_container(configured: &str) -> String {
 async fn ephemeral_tables(container: &str) -> anyhow::Result<Vec<String>> {
     let out = tokio::process::Command::new("docker")
         .args([
-            "exec", container, "psql", "-U", "opex", "opex",
+            "exec", container, "psql", "-U", "hydeclaw", "hydeclaw",
             "-tAc",  // tuple-only, unaligned, command — emits one name per line
             "SELECT c.relname FROM pg_class c \
              JOIN pg_namespace n ON n.oid = c.relnamespace \
@@ -131,7 +131,7 @@ async fn run_pg_dump(container: &str, dest: &std::path::Path) -> anyhow::Result<
         .with_context(|| format!("create db.dump at {}", dest.display()))?;
 
     let mut cmd = tokio::process::Command::new("docker");
-    cmd.args(["exec", container, "pg_dump", "-U", "opex", "opex", "-Fc"]);
+    cmd.args(["exec", container, "pg_dump", "-U", "hydeclaw", "hydeclaw", "-Fc"]);
     for table in &ephemeral {
         cmd.args(["--exclude-table", table]);
     }
@@ -162,7 +162,7 @@ async fn run_pg_dump(container: &str, dest: &std::path::Path) -> anyhow::Result<
 /// Get the PostgreSQL version string from inside the container for the manifest.
 async fn get_pg_version(container: &str) -> anyhow::Result<String> {
     let out = tokio::process::Command::new("docker")
-        .args(["exec", container, "psql", "-U", "opex", "-t", "-c", "SELECT version()"])
+        .args(["exec", container, "psql", "-U", "hydeclaw", "-t", "-c", "SELECT version()"])
         .output()
         .await?;
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -212,7 +212,7 @@ async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow:
     if !tables.is_empty() {
         let sql = format!("TRUNCATE {} CASCADE", tables.join(", "));
         let trunc = tokio::process::Command::new("docker")
-            .args(["exec", container, "psql", "-U", "opex", "opex", "-c", &sql])
+            .args(["exec", container, "psql", "-U", "hydeclaw", "hydeclaw", "-c", &sql])
             .output()
             .await
             .context("pre-restore TRUNCATE failed")?;
@@ -230,10 +230,10 @@ async fn run_pg_restore(container: &str, dump_path: &std::path::Path) -> anyhow:
     let out = tokio::process::Command::new("docker")
         .args([
             "exec", "-i", container,
-            "pg_restore", "-U", "opex", "-d", "opex",
+            "pg_restore", "-U", "hydeclaw", "-d", "hydeclaw",
             "--data-only",
             // Disable FK triggers during COPY so restore order doesn't cause
-            // constraint violations. Requires superuser — opex is POSTGRES_USER.
+            // constraint violations. Requires superuser — hydeclaw is POSTGRES_USER.
             "--disable-triggers",
             "-Fc",
         ])
@@ -768,8 +768,8 @@ mod tests {
     // Regression: `docker ps --filter name=postgres` is a *substring* filter, so
     // it also matches `docker-postgres-test-1`. Docker's output order is not
     // deterministic — when the test container is listed first, the old "first
-    // line wins" logic picked it, and pg_dump failed with `role "opex" does
-    // not exist` (the test container has no opex role). The configured
+    // line wins" logic picked it, and pg_dump failed with `role "hydeclaw" does
+    // not exist` (the test container has no hydeclaw role). The configured
     // container must win whenever it is present.
     #[test]
     fn select_container_prefers_configured_over_substring_match() {

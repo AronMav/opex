@@ -20,7 +20,7 @@ Core (Rust, :18789)
 
 ## Core API Reference
 
-Base: `http://localhost:18789` — Auth: Bearer `$HYDECLAW_AUTH_TOKEN`
+Base: `http://localhost:18789` — Auth: Bearer `$OPEX_AUTH_TOKEN`
 
 | Resource | Endpoints |
 |----------|-----------|
