@@ -516,6 +516,9 @@ grep -rl 'HydeClaw' --include='*.rs' --include='*.ts' --include='*.tsx' . | xarg
 grep -rl 'hydeclaw' --include='*.rs' --include='*.ts' --include='*.tsx' . | xargs sed -i 's/hydeclaw/opex/g'
 # B4: имя docker-сети в sandbox.rs — runtime-coupling, ДОЛЖНО остаться hydeclaw до PR2
 sed -i 's/Some("opex".to_string())/Some("hydeclaw".to_string())/' crates/opex-core/src/containers/sandbox.rs
+# T1-Minor2: OAuth-storage каталог на диске (~/.config/hydeclaw/) — runtime-state, остаётся hydeclaw до PR2
+sed -i 's/\.join("opex")\(\s*\)$/.join("hydeclaw")\1/' crates/opex-core/src/agent/providers/gemini_cloudcode/oauth/storage.rs
+# Проверить вручную, что в storage.rs восстановлена именно строка пути конфиг-каталога (.join("hydeclaw") перед google_oauth.json), а комментарии/прочее остались opex.
 ```
 
 Примечание: реальная регистрация mDNS — `main.rs:1475` (`_hydeclaw._tcp.local.`, `hydeclaw.local.`) — переворачивается этим же blanket-sed (безопасно), как и OTEL-имена `main.rs:228/249` и `otel_init.rs:81`. `network.rs:189` уже обработан в Step 1.
