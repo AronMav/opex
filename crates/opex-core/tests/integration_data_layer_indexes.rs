@@ -70,7 +70,7 @@ async fn reindex_completes_under_budget_on_50k_fixture() {
 
         // Proxy for migration wall-clock: REINDEX over already-seeded data.
         // Budget 5s comes from ROADMAP success criterion #1.
-        let budget_ms: u64 = std::env::var("HYDECLAW_MIGRATION_BUDGET_MS")
+        let budget_ms: u64 = std::env::var("OPEX_MIGRATION_BUDGET_MS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(5000);
@@ -89,7 +89,7 @@ async fn reindex_completes_under_budget_on_50k_fixture() {
         assert!(
             elapsed < Duration::from_millis(budget_ms),
             "REINDEX wall-clock {elapsed:?} exceeded budget {budget_ms}ms \
-             (override via HYDECLAW_MIGRATION_BUDGET_MS)"
+             (override via OPEX_MIGRATION_BUDGET_MS)"
         );
         eprintln!("reindex_completes_under_budget_on_50k_fixture: elapsed={elapsed:?}");
     })

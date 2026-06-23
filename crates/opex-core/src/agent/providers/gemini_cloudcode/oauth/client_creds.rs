@@ -1,8 +1,8 @@
 //! 3-tier OAuth client credential resolution for Gemini Code Assist.
 //!
 //! Resolution order (first match wins):
-//!  1. Environment variables `HYDECLAW_GEMINI_CLIENT_ID` /
-//!     `HYDECLAW_GEMINI_CLIENT_SECRET`.
+//!  1. Environment variables `OPEX_GEMINI_CLIENT_ID` /
+//!     `OPEX_GEMINI_CLIENT_SECRET` (or legacy `HYDECLAW_*` fallback).
 //!  2. Scrape the `~/.npm-global/lib/node_modules/@google/gemini-cli/...` bundle
 //!     (best-effort; silently skipped if the file is absent or unreadable).
 //!  3. The published public OAuth client credentials bundled with gemini-cli.
@@ -37,9 +37,9 @@ fn default_client_secret() -> String {
     format!("GOCSPX-{}", PUBLIC_CLIENT_SECRET_SUFFIX)
 }
 
-/// Env var names for operator-supplied client credentials.
-const ENV_CLIENT_ID: &str = "HYDECLAW_GEMINI_CLIENT_ID";
-const ENV_CLIENT_SECRET: &str = "HYDECLAW_GEMINI_CLIENT_SECRET";
+/// Env var suffix (used with opex_gateway_util::env::env_var) for operator-supplied client credentials.
+const ENV_CLIENT_ID_SUFFIX: &str = "GEMINI_CLIENT_ID";
+const ENV_CLIENT_SECRET_SUFFIX: &str = "GEMINI_CLIENT_SECRET";
 
 /// Resolved OAuth client ID and secret.
 ///
@@ -65,10 +65,10 @@ impl OauthClientCreds {
 /// Never fails — falls through to the published public defaults if both
 /// env-var and scrape tiers are unavailable.
 pub fn resolve_client_creds() -> OauthClientCreds {
-    // Tier 1: explicit env override.
-    if let (Ok(id), Ok(secret)) = (
-        std::env::var(ENV_CLIENT_ID),
-        std::env::var(ENV_CLIENT_SECRET),
+    // Tier 1: explicit env override (OPEX_* preferred, HYDECLAW_* fallback).
+    if let (Some(id), Some(secret)) = (
+        opex_gateway_util::env::env_var(ENV_CLIENT_ID_SUFFIX),
+        opex_gateway_util::env::env_var(ENV_CLIENT_SECRET_SUFFIX),
     ) && !id.is_empty() && !secret.is_empty()
     {
         return OauthClientCreds {

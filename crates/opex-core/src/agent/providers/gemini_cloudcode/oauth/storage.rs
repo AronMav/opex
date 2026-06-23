@@ -1,7 +1,7 @@
 //! Credential file persistence for the Gemini Cloud Code OAuth provider.
 //!
 //! **Path resolution (in priority order):**
-//! 1. `HYDECLAW_OAUTH_CREDENTIALS_PATH` env var — used by tests and operators.
+//! 1. `OPEX_OAUTH_CREDENTIALS_PATH` env var — used by tests and operators.
 //! 2. Platform default:
 //!    - Linux/macOS: `~/.config/hydeclaw/google_oauth.json`
 //!    - Windows:     `%APPDATA%\hydeclaw\google_oauth.json`
@@ -29,11 +29,11 @@ use super::types::{GoogleCredentials, OauthError};
 
 /// Environment variable that overrides the credentials file path.
 /// Intended for tests and operator-managed deployments.
-const CREDENTIALS_PATH_ENV: &str = "HYDECLAW_OAUTH_CREDENTIALS_PATH";
+const CREDENTIALS_PATH_ENV: &str = "OPEX_OAUTH_CREDENTIALS_PATH";
 
 /// Resolve the credentials file path.
 ///
-/// Priority: `HYDECLAW_OAUTH_CREDENTIALS_PATH` env var → platform default.
+/// Priority: `OPEX_OAUTH_CREDENTIALS_PATH` env var → platform default.
 pub fn credentials_path() -> PathBuf {
     if let Ok(p) = std::env::var(CREDENTIALS_PATH_ENV)
         && !p.is_empty()
@@ -245,7 +245,7 @@ mod tests {
         }
     }
 
-    /// Run a closure with `HYDECLAW_OAUTH_CREDENTIALS_PATH` set to a temp-dir
+    /// Run a closure with `OPEX_OAUTH_CREDENTIALS_PATH` set to a temp-dir
     /// path, then restore the env var (or remove it if it wasn't set).
     fn with_tmp_path<F: FnOnce(PathBuf)>(f: F) {
         let dir = tempfile::tempdir().expect("tempdir");

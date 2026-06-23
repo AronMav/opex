@@ -10,6 +10,15 @@ use opex_watchdog::{alerter, config, inactivity};
 
 use std::collections::HashMap;
 
+/// Dual-read env: reads OPEX_<suffix>, falls back to HYDECLAW_<suffix>.
+/// Local copy — watchdog intentionally has no dep on opex-gateway-util.
+/// Remove fallback in PR3 after server .env is migrated.
+fn env_var(suffix: &str) -> Option<String> {
+    std::env::var(format!("OPEX_{suffix}"))
+        .ok()
+        .or_else(|| std::env::var(format!("HYDECLAW_{suffix}")).ok())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -34,13 +43,13 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let auth_token = std::env::var("HYDECLAW_AUTH_TOKEN").unwrap_or_default();
+    let auth_token = env_var("AUTH_TOKEN").unwrap_or_default();
     if auth_token.is_empty() {
-        tracing::warn!("HYDECLAW_AUTH_TOKEN not set — alerts will fail");
+        tracing::warn!("OPEX_AUTH_TOKEN not set — alerts will fail");
     }
 
-    let core_url = std::env::var("HYDECLAW_CORE_URL")
-        .unwrap_or_else(|_| "http://localhost:18789".into());
+    let core_url = env_var("CORE_URL")
+        .unwrap_or_else(|| "http://localhost:18789".into());
 
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))

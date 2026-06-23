@@ -167,8 +167,8 @@ pub(crate) async fn gmail_push_handler(
     use base64::Engine;
 
     // Verify push authentication token — the Pub/Sub subscription URL must include
-    // ?token=HYDECLAW_AUTH_TOKEN so only our own Google Cloud project can trigger this handler.
-    let expected_token = std::env::var("HYDECLAW_AUTH_TOKEN").unwrap_or_default();
+    // ?token=OPEX_AUTH_TOKEN so only our own Google Cloud project can trigger this handler.
+    let expected_token = opex_gateway_util::env::env_var("AUTH_TOKEN").unwrap_or_default();
     let provided_token = params.get("token").map_or("", std::string::String::as_str);
     use subtle::ConstantTimeEq;
     if expected_token.is_empty()

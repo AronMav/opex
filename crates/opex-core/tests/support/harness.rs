@@ -6,10 +6,10 @@
 //!
 //! On Drop the underlying `ContainerAsync` is dropped, which removes the container.
 //!
-//! Override the image via `HYDECLAW_PG_TEST_IMAGE=<repo>:<tag>` (split on the LAST
+//! Override the image via `OPEX_PG_TEST_IMAGE=<repo>:<tag>` (split on the LAST
 //! `:` so registry hosts with explicit ports still parse). Examples:
-//!   - HYDECLAW_PG_TEST_IMAGE=postgres:17                 (vanilla PG, no pgvector)
-//!   - HYDECLAW_PG_TEST_IMAGE=ghcr.io/foo/pg:17-age       (custom registry)
+//!   - OPEX_PG_TEST_IMAGE=postgres:17                 (vanilla PG, no pgvector)
+//!   - OPEX_PG_TEST_IMAGE=ghcr.io/foo/pg:17-age       (custom registry)
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -18,7 +18,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 /// Env var: full `image:tag` override. CONTEXT.md decision-locked name.
-const PG_IMAGE_ENV: &str = "HYDECLAW_PG_TEST_IMAGE";
+const PG_IMAGE_ENV: &str = "OPEX_PG_TEST_IMAGE";
 /// Default image — matches production deployment. CONTEXT.md decision-locked value.
 const DEFAULT_PG_IMAGE: &str = "pgvector/pgvector:pg17";
 
