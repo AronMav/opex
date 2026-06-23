@@ -9,7 +9,7 @@
 #   1. Add an entry below.
 #   2. Implement the provider class in toolgate/providers/<capability>_<driver>.py.
 #   3. Register the class in toolgate/registry.py::_build_driver_map().
-#   4. Rebuild hydeclaw-core (Rust embeds this file at compile time).
+#   4. Rebuild opex-core (Rust embeds this file at compile time).
 
 drivers:
   stt:

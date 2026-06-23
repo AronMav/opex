@@ -1,5 +1,5 @@
 // @generated — do not edit by hand.
-// Source of truth: types annotated with #[ts(export)] in crates/hydeclaw-core/.
+// Source of truth: types annotated with #[ts(export)] in crates/opex-core/.
 // Regenerate with: make gen-types
 
 export type ApprovalAction = "approved" | "rejected" | "timeout_rejected";

@@ -3,7 +3,7 @@ description: "Cryptocurrency price from CoinGecko. Returns price in specified cu
 endpoint: https://api.coingecko.com/api/v3/simple/price
 method: GET
 headers:
-  User-Agent: "HydeClaw/1.0"
+  User-Agent: "OPEX/1.0"
 parameters:
   ids:
     type: string
