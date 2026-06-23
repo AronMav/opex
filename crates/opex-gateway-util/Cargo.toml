@@ -16,3 +16,6 @@ uuid         = { workspace = true }
 serde_json   = { workspace = true }
 futures-util = { workspace = true }
 struson      = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

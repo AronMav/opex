@@ -2172,6 +2172,7 @@ dependencies = [
  "futures-util",
  "serde_json",
  "struson",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
