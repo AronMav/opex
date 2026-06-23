@@ -96,14 +96,15 @@ export function ScenarioDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90dvh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>
             {editing ? t("file_scenarios.edit_title") : t("file_scenarios.create_title")}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
+        {/* Native scroll (not Radix ScrollArea — keeps touch-scroll on mobile) */}
+        <div className="flex flex-col gap-3 overflow-y-auto overscroll-contain -mx-1 px-1 py-0.5">
           {/* match_type — structural, immutable in edit mode */}
           <div className="space-y-1.5">
             <label htmlFor={matchId} className="text-xs font-medium text-muted-foreground">
