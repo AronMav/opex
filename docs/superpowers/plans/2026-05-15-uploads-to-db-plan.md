@@ -22,12 +22,12 @@ Every implementation task (Tasks 2-15) follows the same gate:
 
 1. **Read** the relevant production file with the `Read` tool to confirm current line ranges of items being moved/edited.
 2. **Edit/Write** the change. For new files, use `Write`. For modifications, use `Edit`.
-3. **`cargo check -p hydeclaw-core`** — fast feedback.
-4. **`cargo clippy -p hydeclaw-core --all-targets -- -D warnings`** — strict.
+3. **`cargo check -p opex-core`** — fast feedback.
+4. **`cargo clippy -p opex-core --all-targets -- -D warnings`** — strict.
 5. **Targeted test run** for the affected module (specific command listed per task).
 6. **Commit** with the exact message specified in the task.
 
-Database tests use `#[sqlx::test]` with `DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test`. Run via `make test-db` for the full suite, or pass `DATABASE_URL=...` to a targeted `cargo test`.
+Database tests use `#[sqlx::test]` with `DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test`. Run via `make test-db` for the full suite, or pass `DATABASE_URL=...` to a targeted `cargo test`.
 
 If any commit's `cargo clippy` or tests fail, **stop and debug** before moving on. Behaviour-change regressions cascade across the 16 commits otherwise.
 
@@ -42,17 +42,17 @@ If any commit's `cargo clippy` or tests fail, **stop and debug** before moving o
 - [ ] **Step 1: Locate `save_binary_to_uploads` call sites**
 
 ```bash
-grep -rn "save_binary_to_uploads" crates/hydeclaw-core/src/
+grep -rn "save_binary_to_uploads" crates/opex-core/src/
 ```
 
 Expected (lock these line numbers in commit body):
 
 ```
-crates/hydeclaw-core/src/agent/pipeline/handlers.rs:277       # definition
-crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs:150  # import
-crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs:200  # callsite
-crates/hydeclaw-core/src/agent/pipeline/media_background.rs:527 # callsite
-crates/hydeclaw-core/src/agent/pipeline/media_background.rs:624 # callsite
+crates/opex-core/src/agent/pipeline/handlers.rs:277       # definition
+crates/opex-core/src/agent/pipeline/channel_actions.rs:150  # import
+crates/opex-core/src/agent/pipeline/channel_actions.rs:200  # callsite
+crates/opex-core/src/agent/pipeline/media_background.rs:527 # callsite
+crates/opex-core/src/agent/pipeline/media_background.rs:624 # callsite
 ```
 
 If counts differ, update the plan task list before continuing.
@@ -60,7 +60,7 @@ If counts differ, update the plan task list before continuing.
 - [ ] **Step 2: Locate `/api/media/upload` call sites**
 
 ```bash
-grep -rn "/api/media/upload" ui/src/ channels/src/ crates/hydeclaw-core/src/
+grep -rn "/api/media/upload" ui/src/ channels/src/ crates/opex-core/src/
 ```
 
 Expected:
@@ -69,14 +69,14 @@ Expected:
 ui/src/app/(authenticated)/agents/AgentEditDialog.tsx:266
 ui/src/app/(authenticated)/chat/composer/ChatComposer.tsx:192
 channels/src/bridge.ts:349
-crates/hydeclaw-core/src/gateway/handlers/media.rs:33  # route declaration
-crates/hydeclaw-core/src/gateway/handlers/media.rs:40  # handler fn
+crates/opex-core/src/gateway/handlers/media.rs:33  # route declaration
+crates/opex-core/src/gateway/handlers/media.rs:40  # handler fn
 ```
 
 - [ ] **Step 3: Locate DTO icon fields**
 
 ```bash
-grep -nE "pub icon(:| _url)" crates/hydeclaw-core/src/gateway/handlers/agents/dto_structs.rs
+grep -nE "pub icon(:| _url)" crates/opex-core/src/gateway/handlers/agents/dto_structs.rs
 ```
 
 Expected (these will be DROPPED for the bare `icon` field; `icon_url` stays):
@@ -99,7 +99,7 @@ Expected: latest is `051_drop_phantom_tasks_tables.sql`. New migration will be `
 - [ ] **Step 5: Measure baseline test count**
 
 ```bash
-cargo test -p hydeclaw-core --bin hydeclaw-core uploads 2>&1 | tail -3
+cargo test -p opex-core --bin opex-core uploads 2>&1 | tail -3
 ```
 
 Capture the test count (expected ~32 in `uploads::tests`) for the commit body.
@@ -118,8 +118,8 @@ Inventory locked at 2026-05-15:
 * DTO icon fields: AgentDetailDto.icon (line 184) + AgentSummaryDto.icon
   (line 232) drop; .icon_url (188, 234) stays.
 * Latest migration: 051_drop_phantom_tasks_tables.sql; new is 052.
-* uploads::tests baseline: 32 tests passing (cargo test -p hydeclaw-core
-  --bin hydeclaw-core uploads).
+* uploads::tests baseline: 32 tests passing (cargo test -p opex-core
+  --bin opex-core uploads).
 
 Scope extension over spec: chat_attachment owner_type added because
 removing /uploads/{filename} static route also breaks /api/media/upload
@@ -172,14 +172,14 @@ COMMENT ON INDEX uploads_agent_icon_unique IS 'One icon per agent. INSERT must u
 - [ ] **Step 2: Verify migration applies cleanly**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --bin hydeclaw-core migrations::tests 2>&1 | tail -5
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --bin opex-core migrations::tests 2>&1 | tail -5
 ```
 
 If no `migrations::tests` exists, just run any sqlx-test which triggers migration replay:
 
 ```bash
-DATABASE_URL=... cargo test -p hydeclaw-core --bin hydeclaw-core db::sessions::tests 2>&1 | tail -5
+DATABASE_URL=... cargo test -p opex-core --bin opex-core db::sessions::tests 2>&1 | tail -5
 ```
 
 Expected: tests pass (migration applies on the ephemeral test DB).
@@ -193,16 +193,16 @@ git commit -m "feat(db): m052 uploads table for binary assets"
 
 ---
 
-## Task 3: DB layer — `crates/hydeclaw-core/src/db/uploads.rs`
+## Task 3: DB layer — `crates/opex-core/src/db/uploads.rs`
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/db/uploads.rs`
-- Modify: `crates/hydeclaw-core/src/db/mod.rs` (add `pub mod uploads;`)
+- Create: `crates/opex-core/src/db/uploads.rs`
+- Modify: `crates/opex-core/src/db/mod.rs` (add `pub mod uploads;`)
 
 - [ ] **Step 1: Write the DB module**
 
-`crates/hydeclaw-core/src/db/uploads.rs`:
+`crates/opex-core/src/db/uploads.rs`:
 
 ```rust
 //! `uploads` table CRUD. See docs/superpowers/specs/2026-05-15-uploads-to-db-design.md.
@@ -491,7 +491,7 @@ mod tests {
 
 - [ ] **Step 2: Register the module**
 
-Modify `crates/hydeclaw-core/src/db/mod.rs`. Find the `pub mod` declarations (alphabetical order around access/audit/curator/etc.) and insert in alphabetical position:
+Modify `crates/opex-core/src/db/mod.rs`. Find the `pub mod` declarations (alphabetical order around access/audit/curator/etc.) and insert in alphabetical position:
 
 ```rust
 pub mod uploads;
@@ -500,10 +500,10 @@ pub mod uploads;
 - [ ] **Step 3: Verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --bin hydeclaw-core db::uploads 2>&1 | tail -10
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --bin opex-core db::uploads 2>&1 | tail -10
 ```
 
 All 9 tests pass.
@@ -511,7 +511,7 @@ All 9 tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/db/uploads.rs crates/hydeclaw-core/src/db/mod.rs
+git add crates/opex-core/src/db/uploads.rs crates/opex-core/src/db/mod.rs
 git commit -m "feat(db): uploads CRUD layer with 9 sqlx tests"
 ```
 
@@ -521,19 +521,19 @@ git commit -m "feat(db): uploads CRUD layer with 9 sqlx tests"
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/uploads.rs`
+- Modify: `crates/opex-core/src/uploads.rs`
 
 - [ ] **Step 1: Locate the function**
 
 ```bash
-grep -n "fn mint_workspace_file_url\|fn verify_signed_url\|workspace_files:\|uploads:" crates/hydeclaw-core/src/uploads.rs
+grep -n "fn mint_workspace_file_url\|fn verify_signed_url\|workspace_files:\|uploads:" crates/opex-core/src/uploads.rs
 ```
 
 Expected: `mint_workspace_file_url` at ~line 139, `uploads:` namespace literal at ~line 212.
 
 - [ ] **Step 2: Add new signing helpers reusing `mint_namespaced_url`**
 
-In `crates/hydeclaw-core/src/uploads.rs`, add after `mint_workspace_file_url`:
+In `crates/opex-core/src/uploads.rs`, add after `mint_workspace_file_url`:
 
 ```rust
 /// Mint a signed URL for an upload row: `{base}/api/uploads/{id}?sig=...&exp=...`.
@@ -577,7 +577,7 @@ pub fn verify_uploads_url(
 
 - [ ] **Step 3: Add tests for the new functions**
 
-Append to the `#[cfg(test)] mod tests` block at the end of `crates/hydeclaw-core/src/uploads.rs`:
+Append to the `#[cfg(test)] mod tests` block at the end of `crates/opex-core/src/uploads.rs`:
 
 ```rust
 fn parse_url_qs(url: &str) -> (String, u64) {
@@ -646,9 +646,9 @@ fn uploads_url_namespace_cannot_forge_workspace_files() {
 - [ ] **Step 4: Verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core uploads:: 2>&1 | tail -10
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core uploads:: 2>&1 | tail -10
 ```
 
 The new 4 tests pass; the existing 32 still pass.
@@ -656,7 +656,7 @@ The new 4 tests pass; the existing 32 still pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/uploads.rs
+git add crates/opex-core/src/uploads.rs
 git commit -m "feat(uploads): mint_uploads_url + verify_uploads_url for id-based signing"
 ```
 
@@ -666,14 +666,14 @@ git commit -m "feat(uploads): mint_uploads_url + verify_uploads_url for id-based
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/gateway/handlers/uploads_serve.rs`
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/mod.rs` (add `pub mod uploads_serve;`)
+- Create: `crates/opex-core/src/gateway/handlers/uploads_serve.rs`
+- Modify: `crates/opex-core/src/gateway/handlers/mod.rs` (add `pub mod uploads_serve;`)
 
 Name `uploads_serve` avoids collision with `crate::uploads` (the signing module).
 
 - [ ] **Step 1: Write the handler module**
 
-`crates/hydeclaw-core/src/gateway/handlers/uploads_serve.rs`:
+`crates/opex-core/src/gateway/handlers/uploads_serve.rs`:
 
 ```rust
 //! GET /api/uploads/{id} — read-through to the `uploads` table with HMAC verification.
@@ -763,13 +763,13 @@ mod tests {
 
 - [ ] **Step 2: Register the module**
 
-In `crates/hydeclaw-core/src/gateway/handlers/mod.rs`, add `pub mod uploads_serve;` in alphabetical position.
+In `crates/opex-core/src/gateway/handlers/mod.rs`, add `pub mod uploads_serve;` in alphabetical position.
 
 - [ ] **Step 3: Build + verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
 ```
 
 Clippy clean. No tests yet — they come at Task 12 (integration) and via Task 6 indirectly.
@@ -777,7 +777,7 @@ Clippy clean. No tests yet — they come at Task 12 (integration) and via Task 6
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/uploads_serve.rs crates/hydeclaw-core/src/gateway/handlers/mod.rs
+git add crates/opex-core/src/gateway/handlers/uploads_serve.rs crates/opex-core/src/gateway/handlers/mod.rs
 git commit -m "feat(gateway): GET /api/uploads/{id} handler with HMAC verification"
 ```
 
@@ -787,12 +787,12 @@ git commit -m "feat(gateway): GET /api/uploads/{id} handler with HMAC verificati
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/gateway/handlers/agents/icon.rs`
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/agents/mod.rs` (add `pub mod icon;`)
+- Create: `crates/opex-core/src/gateway/handlers/agents/icon.rs`
+- Modify: `crates/opex-core/src/gateway/handlers/agents/mod.rs` (add `pub mod icon;`)
 
 - [ ] **Step 1: Write the handler**
 
-`crates/hydeclaw-core/src/gateway/handlers/agents/icon.rs`:
+`crates/opex-core/src/gateway/handlers/agents/icon.rs`:
 
 ```rust
 //! PUT/DELETE /api/agents/{name}/icon — multipart upload + delete for agent icons.
@@ -914,19 +914,19 @@ All State extractors (`AgentCore`, `InfraServices`, `AuthServices`, `ConfigServi
 
 - [ ] **Step 2: Register the module**
 
-In `crates/hydeclaw-core/src/gateway/handlers/agents/mod.rs`, add `pub mod icon;` near other submodule declarations.
+In `crates/opex-core/src/gateway/handlers/agents/mod.rs`, add `pub mod icon;` near other submodule declarations.
 
 - [ ] **Step 3: Verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/agents/icon.rs crates/hydeclaw-core/src/gateway/handlers/agents/mod.rs
+git add crates/opex-core/src/gateway/handlers/agents/icon.rs crates/opex-core/src/gateway/handlers/agents/mod.rs
 git commit -m "feat(gateway): PUT/DELETE /api/agents/{name}/icon multipart handler"
 ```
 
@@ -936,20 +936,20 @@ git commit -m "feat(gateway): PUT/DELETE /api/agents/{name}/icon multipart handl
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` (the fn at line 277)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs:150,200` (callsite update — new params)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:527` (callsite update)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:624` (callsite update)
+- Modify: `crates/opex-core/src/agent/pipeline/handlers.rs` (the fn at line 277)
+- Modify: `crates/opex-core/src/agent/pipeline/channel_actions.rs:150,200` (callsite update — new params)
+- Modify: `crates/opex-core/src/agent/pipeline/media_background.rs:527` (callsite update)
+- Modify: `crates/opex-core/src/agent/pipeline/media_background.rs:624` (callsite update)
 
 **Signature changes** (the spec hedged "preserve signature" but no global-pool helper exists in `gateway::state` — and adding one is more risk than threading the pool explicitly). The new signature **adds two parameters** at the front: `pool` and `retention_days`. All four callsites update.
 
 - [ ] **Step 1: Read current implementation + callsites**
 
 ```bash
-sed -n '270,330p' crates/hydeclaw-core/src/agent/pipeline/handlers.rs
-sed -n '195,215p' crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs
-sed -n '520,545p' crates/hydeclaw-core/src/agent/pipeline/media_background.rs
-sed -n '618,640p' crates/hydeclaw-core/src/agent/pipeline/media_background.rs
+sed -n '270,330p' crates/opex-core/src/agent/pipeline/handlers.rs
+sed -n '195,215p' crates/opex-core/src/agent/pipeline/channel_actions.rs
+sed -n '520,545p' crates/opex-core/src/agent/pipeline/media_background.rs
+sed -n '618,640p' crates/opex-core/src/agent/pipeline/media_background.rs
 ```
 
 - [ ] **Step 2: Replace the fn body in handlers.rs**
@@ -1015,10 +1015,10 @@ Same shape as Step 3. Both callsites live inside fns that are already invoked fr
 - [ ] **Step 5: Verify build**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --bin hydeclaw-core agent::pipeline 2>&1 | tail -10
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --bin opex-core agent::pipeline 2>&1 | tail -10
 ```
 
 All 4 callsites compile with the new signature.
@@ -1026,9 +1026,9 @@ All 4 callsites compile with the new signature.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/handlers.rs \
-        crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs \
-        crates/hydeclaw-core/src/agent/pipeline/media_background.rs
+git add crates/opex-core/src/agent/pipeline/handlers.rs \
+        crates/opex-core/src/agent/pipeline/channel_actions.rs \
+        crates/opex-core/src/agent/pipeline/media_background.rs
 git commit -m "$(cat <<'EOF'
 feat(pipeline): save_binary_to_uploads writes to uploads table (tool_output)
 
@@ -1056,14 +1056,14 @@ EOF
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/media.rs:39-100` (the `api_media_upload` handler)
+- Modify: `crates/opex-core/src/gateway/handlers/media.rs:39-100` (the `api_media_upload` handler)
 
 This task is the discovered scope extension. ChatComposer (`ui/src/app/(authenticated)/chat/composer/ChatComposer.tsx:192`) and channels/bridge.ts (`channels/src/bridge.ts:349`) both POST to `/api/media/upload`. After Task 12 removes the `GET /uploads/{filename}` static route, those uploads have no read endpoint unless their write side also moves to DB.
 
 - [ ] **Step 1: Read current handler**
 
 ```bash
-sed -n '39,100p' crates/hydeclaw-core/src/gateway/handlers/media.rs
+sed -n '39,100p' crates/opex-core/src/gateway/handlers/media.rs
 ```
 
 - [ ] **Step 2: Rewire the body**
@@ -1090,8 +1090,8 @@ Based on Step 2 grep, adjust the 3 consumers to read whatever the new response s
 - [ ] **Step 4: Verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
 cd ui && npm run build 2>&1 | tail -5  # confirms UI typecheck passes after any response-shape changes
 cd ..
 ```
@@ -1099,7 +1099,7 @@ cd ..
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/media.rs
+git add crates/opex-core/src/gateway/handlers/media.rs
 # include any UI/channels touch from Step 3:
 git add -A
 git commit -m "feat(media): POST /api/media/upload writes to uploads table (client_upload)"
@@ -1111,8 +1111,8 @@ git commit -m "feat(media): POST /api/media/upload writes to uploads table (clie
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/agents/dto_structs.rs:184` and `:232`
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/agents/dto.rs:14`, `:81`, `:148`
+- Modify: `crates/opex-core/src/gateway/handlers/agents/dto_structs.rs:184` and `:232`
+- Modify: `crates/opex-core/src/gateway/handlers/agents/dto.rs:14`, `:81`, `:148`
 - Modify: callers of `agent_to_summary_dto` / `agent_to_detail_dto` in `crud.rs` (and anywhere else they live) — they need to call `db::uploads::list_agent_icon_ids` first and pass the map
 
 - [ ] **Step 1: Drop the bare `icon` field from both DTOs**
@@ -1173,7 +1173,7 @@ The fn signature changes from `(a: &AgentSettings, upload_key: ...)` to `(a: &Ag
 Find every place that calls `agent_to_summary_dto` or `agent_to_detail_dto`:
 
 ```bash
-grep -rn "agent_to_summary_dto\|agent_to_detail_dto" crates/hydeclaw-core/src/gateway/handlers/agents/
+grep -rn "agent_to_summary_dto\|agent_to_detail_dto" crates/opex-core/src/gateway/handlers/agents/
 ```
 
 For each call site (most likely in `crud.rs`):
@@ -1190,16 +1190,16 @@ For each call site (most likely in `crud.rs`):
 - [ ] **Step 5: Verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --bin hydeclaw-core agents 2>&1 | tail -10
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --bin opex-core agents 2>&1 | tail -10
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/agents/
+git add crates/opex-core/src/gateway/handlers/agents/
 git commit -m "$(cat <<'EOF'
 refactor(agents/dto): batch-prefetch icon IDs; drop bare icon DTO fields
 
@@ -1225,11 +1225,11 @@ EOF
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/config/mod.rs` (drop `icon` field around line 654; add `uploads_retention_days` to CleanupConfig)
+- Modify: `crates/opex-core/src/config/mod.rs` (drop `icon` field around line 654; add `uploads_retention_days` to CleanupConfig)
 
 - [ ] **Step 1: Remove `AgentSettings.icon`**
 
-In `crates/hydeclaw-core/src/config/mod.rs`, find:
+In `crates/opex-core/src/config/mod.rs`, find:
 
 ```
 654:    pub icon: Option<String>,
@@ -1265,15 +1265,15 @@ Update the corresponding `parse_minimal_config` test (around lines 2600s) to ass
 - [ ] **Step 3: Verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core config:: 2>&1 | tail -10
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core config:: 2>&1 | tail -10
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/config/mod.rs
+git add crates/opex-core/src/config/mod.rs
 git commit -m "$(cat <<'EOF'
 refactor(config): drop AgentSettings.icon, add CleanupConfig.uploads_retention_days
 
@@ -1293,12 +1293,12 @@ EOF
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/scheduler/mod.rs` (add `Scheduler::add_uploads_cleanup_hourly`)
-- Modify: `crates/hydeclaw-core/src/main.rs` (register the new cron job near the session_timeline one)
+- Modify: `crates/opex-core/src/scheduler/mod.rs` (add `Scheduler::add_uploads_cleanup_hourly`)
+- Modify: `crates/opex-core/src/main.rs` (register the new cron job near the session_timeline one)
 
 - [ ] **Step 1: Add the new scheduler method**
 
-In `crates/hydeclaw-core/src/scheduler/mod.rs`, find `add_session_timeline_cleanup_hourly` and add a parallel method right after it:
+In `crates/opex-core/src/scheduler/mod.rs`, find `add_session_timeline_cleanup_hourly` and add a parallel method right after it:
 
 ```rust
     pub async fn add_uploads_cleanup_hourly(
@@ -1332,7 +1332,7 @@ Adjust signature pattern to exactly match `add_session_timeline_cleanup_hourly` 
 
 - [ ] **Step 2: Register the cron job in main.rs**
 
-In `crates/hydeclaw-core/src/main.rs`, find the existing call:
+In `crates/opex-core/src/main.rs`, find the existing call:
 
 ```rust
         .add_session_timeline_cleanup_hourly(
@@ -1356,16 +1356,16 @@ Immediately after that block (after the `if let Err(e) = ...` warning handler), 
 - [ ] **Step 3: Verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --bin hydeclaw-core db::uploads::tests::cleanup_expired_deletes_only_expired 2>&1 | tail -5
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --bin opex-core db::uploads::tests::cleanup_expired_deletes_only_expired 2>&1 | tail -5
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/scheduler/mod.rs crates/hydeclaw-core/src/main.rs
+git add crates/opex-core/src/scheduler/mod.rs crates/opex-core/src/main.rs
 git commit -m "feat(scheduler): hourly uploads cleanup job for expired rows"
 ```
 
@@ -1375,13 +1375,13 @@ git commit -m "feat(scheduler): hourly uploads cleanup job for expired rows"
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/gateway/mod.rs` (merge new routers, drop old `/uploads/{filename}` route at media.rs:29)
-- Modify: `crates/hydeclaw-core/src/gateway/middleware.rs:204` (replace `/uploads/` with `/api/uploads/` in PUBLIC_PREFIX)
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/media.rs:29` (remove the `.route("/uploads/{filename}", get(api_media_serve))` line)
+- Modify: `crates/opex-core/src/gateway/mod.rs` (merge new routers, drop old `/uploads/{filename}` route at media.rs:29)
+- Modify: `crates/opex-core/src/gateway/middleware.rs:204` (replace `/uploads/` with `/api/uploads/` in PUBLIC_PREFIX)
+- Modify: `crates/opex-core/src/gateway/handlers/media.rs:29` (remove the `.route("/uploads/{filename}", get(api_media_serve))` line)
 
 - [ ] **Step 1: Wire the new routes**
 
-In `crates/hydeclaw-core/src/gateway/mod.rs`, find the existing `.merge(...)` chain. Add:
+In `crates/opex-core/src/gateway/mod.rs`, find the existing `.merge(...)` chain. Add:
 
 ```rust
         .merge(handlers::uploads_serve::routes())   // /api/uploads/{id}
@@ -1392,7 +1392,7 @@ If the `agents::icon` re-export path needs a hookup, ensure `handlers::agents::i
 
 - [ ] **Step 2: Drop the old route**
 
-In `crates/hydeclaw-core/src/gateway/handlers/media.rs:29`, remove the line:
+In `crates/opex-core/src/gateway/handlers/media.rs:29`, remove the line:
 
 ```rust
         .route("/uploads/{filename}", get(api_media_serve))
@@ -1403,14 +1403,14 @@ Keep `POST /api/media/upload` (Task 8 rewired its body but the route stays). Kee
 If removing `api_media_serve` is clean, do it — it's no longer referenced after the route disappears. Verify with:
 
 ```bash
-grep -rn "api_media_serve" crates/hydeclaw-core/src/
+grep -rn "api_media_serve" crates/opex-core/src/
 ```
 
 If only the definition remains, delete it.
 
 - [ ] **Step 3: Update middleware exclusion list**
 
-In `crates/hydeclaw-core/src/gateway/middleware.rs:204`, change:
+In `crates/opex-core/src/gateway/middleware.rs:204`, change:
 
 ```rust
     const PUBLIC_PREFIX: &[&str] = &["/webhook/", "/uploads/", "/workspace-files/"];
@@ -1427,16 +1427,16 @@ Also check line 227's `LOOPBACK_PREFIX` (`&["/uploads/"]`) — replace with `&["
 - [ ] **Step 4: Verify**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --bin hydeclaw-core gateway 2>&1 | tail -10
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --bin opex-core gateway 2>&1 | tail -10
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/
+git add crates/opex-core/src/gateway/
 git commit -m "$(cat <<'EOF'
 feat(gateway): wire /api/uploads/* + /api/agents/{name}/icon; drop /uploads/{filename}
 
@@ -1459,7 +1459,7 @@ EOF
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/tests/integration_uploads_db.rs`
+- Create: `crates/opex-core/tests/integration_uploads_db.rs`
 
 - [ ] **Step 1: Write the integration test**
 
@@ -1470,7 +1470,7 @@ The codebase has TWO integration-test patterns for DB tests:
 
 For `tests/integration_uploads_db.rs` we use **pattern #2** (matches existing siblings like `integration_watchdog_agent_activity.rs`, `integration_data_layer_indexes.rs`).
 
-`crates/hydeclaw-core/tests/integration_uploads_db.rs`:
+`crates/opex-core/tests/integration_uploads_db.rs`:
 
 ```rust
 //! End-to-end: agent_icon upsert/lookup/delete + tool_output retention + cleanup
@@ -1479,8 +1479,8 @@ For `tests/integration_uploads_db.rs` we use **pattern #2** (matches existing si
 mod support;
 
 use support::harness::TestHarness;
-use hydeclaw_core::db::uploads;
-use hydeclaw_core::uploads::{mint_uploads_url, verify_uploads_url};
+use opex_core::db::uploads;
+use opex_core::uploads::{mint_uploads_url, verify_uploads_url};
 
 #[tokio::test]
 async fn icon_roundtrip_db_layer() {
@@ -1544,13 +1544,13 @@ async fn tool_output_with_retention_then_cleanup() {
 }
 ```
 
-`hydeclaw_core::db::uploads` must be re-exported via the lib facade (`crates/hydeclaw-core/src/lib.rs`) for the integration test to reach it. Check if it's already exported; if not, add `pub use db::uploads;` to the lib facade in the same commit, mirroring how `db::session_timeline` or other DB modules are exposed for tests.
+`opex_core::db::uploads` must be re-exported via the lib facade (`crates/opex-core/src/lib.rs`) for the integration test to reach it. Check if it's already exported; if not, add `pub use db::uploads;` to the lib facade in the same commit, mirroring how `db::session_timeline` or other DB modules are exposed for tests.
 
 - [ ] **Step 2: Verify**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --test integration_uploads_db 2>&1 | tail -10
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --test integration_uploads_db 2>&1 | tail -10
 ```
 
 Both tests pass.
@@ -1558,7 +1558,7 @@ Both tests pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/tests/integration_uploads_db.rs
+git add crates/opex-core/tests/integration_uploads_db.rs
 git commit -m "test(uploads): integration roundtrip — upsert → serve → delete + cleanup"
 ```
 
@@ -1619,26 +1619,26 @@ git commit -m "feat(ui): AgentEditDialog uses PUT /api/agents/{name}/icon multip
 
 **Files:**
 
-- Modify (on Pi via ssh): `~/hydeclaw/config/agents/Hyde.toml`, `Arty.toml`, `Alma.toml`
+- Modify (on Pi via ssh): `~/opex/config/agents/Hyde.toml`, `Arty.toml`, `Alma.toml`
 
 - [ ] **Step 1: Verify the dead lines exist**
 
 ```bash
-ssh aronmav@192.168.1.82 "grep -nE '^icon =' ~/hydeclaw/config/agents/*.toml"
+ssh aronmav@192.168.1.82 "grep -nE '^icon =' ~/opex/config/agents/*.toml"
 ```
 
 Expected:
 
 ```
-~/hydeclaw/config/agents/Alma.toml:N:icon = "b39d47ac-5c89-4d0c-9471-c9985a5ea021.jpg"
-~/hydeclaw/config/agents/Arty.toml:M:icon = "b330b36d-54ae-414f-bbca-930c0e20162a.jpg"
-~/hydeclaw/config/agents/Hyde.toml:K:icon = "ed1d123e-4b92-4942-abd3-0bfbda7ce7bd.jpg"
+~/opex/config/agents/Alma.toml:N:icon = "b39d47ac-5c89-4d0c-9471-c9985a5ea021.jpg"
+~/opex/config/agents/Arty.toml:M:icon = "b330b36d-54ae-414f-bbca-930c0e20162a.jpg"
+~/opex/config/agents/Hyde.toml:K:icon = "ed1d123e-4b92-4942-abd3-0bfbda7ce7bd.jpg"
 ```
 
 - [ ] **Step 2: Remove the lines**
 
 ```bash
-ssh aronmav@192.168.1.82 "sed -i '/^icon = /d' ~/hydeclaw/config/agents/Hyde.toml ~/hydeclaw/config/agents/Arty.toml ~/hydeclaw/config/agents/Alma.toml && grep -E '^icon =' ~/hydeclaw/config/agents/*.toml ; echo 'sweep done'"
+ssh aronmav@192.168.1.82 "sed -i '/^icon = /d' ~/opex/config/agents/Hyde.toml ~/opex/config/agents/Arty.toml ~/opex/config/agents/Alma.toml && grep -E '^icon =' ~/opex/config/agents/*.toml ; echo 'sweep done'"
 ```
 
 Expected output: only `sweep done` (no matches from grep).
@@ -1648,7 +1648,7 @@ Expected output: only `sweep done` (no matches from grep).
 The file watcher should hot-reload automatically. If not, manual restart:
 
 ```bash
-ssh aronmav@192.168.1.82 "systemctl --user restart hydeclaw-core && sleep 5 && curl -sf -H \"Authorization: Bearer \$(grep HYDECLAW_AUTH_TOKEN ~/hydeclaw/.env | cut -d= -f2 | tr -d '\"')\" http://localhost:18789/api/doctor | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"doctor:\", \"OK\" if all(v.get(chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115))==\"ok\" for v in d[chr(34)+chr(99)+chr(104)+chr(101)+chr(99)+chr(107)+chr(115)+chr(34)].values()) else \"FAIL\")'"
+ssh aronmav@192.168.1.82 "systemctl --user restart opex-core && sleep 5 && curl -sf -H \"Authorization: Bearer \$(grep OPEX_AUTH_TOKEN ~/opex/.env | cut -d= -f2 | tr -d '\"')\" http://localhost:18789/api/doctor | python3 -c 'import json,sys; d=json.load(sys.stdin); print(\"doctor:\", \"OK\" if all(v.get(chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115))==\"ok\" for v in d[chr(34)+chr(99)+chr(104)+chr(101)+chr(99)+chr(107)+chr(115)+chr(34)].values()) else \"FAIL\")'"
 ```
 
 - [ ] **Step 4: Commit (no source changes — this task happens on the Pi, not in the repo)**
@@ -1662,7 +1662,7 @@ references to non-existent files (workspace/uploads/ was empty).
 After Task 10 dropped AgentSettings.icon, serde silently ignored
 these — but tidiness is cheap. Removed via:
 
-  sed -i '/^icon = /d' ~/hydeclaw/config/agents/*.toml
+  sed -i '/^icon = /d' ~/opex/config/agents/*.toml
 
 This commit is empty; it records the cutover event in the master
 branch's history for forensic value.
@@ -1685,7 +1685,7 @@ EOF
 
 ```bash
 cargo clippy --all-targets -- -D warnings 2>&1 | tail -3
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
   cargo test --workspace --no-fail-fast 2>&1 | grep -E "^test result|FAILED" | tail -15
 ```
 
@@ -1710,13 +1710,13 @@ cargo tree --workspace -e normal | grep -E "openssl-sys|native-tls" || echo "rus
 
 ```bash
 # Build + deploy
-cargo zigbuild --release --target aarch64-unknown-linux-gnu -p hydeclaw-core
-ssh aronmav@192.168.1.82 "systemctl --user stop hydeclaw-core"
-scp target/aarch64-unknown-linux-gnu/release/hydeclaw-core aronmav@192.168.1.82:~/hydeclaw/hydeclaw-core-aarch64
-ssh aronmav@192.168.1.82 "chmod +x ~/hydeclaw/hydeclaw-core-aarch64 && systemctl --user start hydeclaw-core && sleep 8"
+cargo zigbuild --release --target aarch64-unknown-linux-gnu -p opex-core
+ssh aronmav@192.168.1.82 "systemctl --user stop opex-core"
+scp target/aarch64-unknown-linux-gnu/release/opex-core aronmav@192.168.1.82:~/opex/opex-core-aarch64
+ssh aronmav@192.168.1.82 "chmod +x ~/opex/opex-core-aarch64 && systemctl --user start opex-core && sleep 8"
 
 # Doctor check
-ssh aronmav@192.168.1.82 "AUTH=\$(grep HYDECLAW_AUTH_TOKEN ~/hydeclaw/.env | cut -d= -f2 | tr -d '\"'); curl -sf -H \"Authorization: Bearer \$AUTH\" http://localhost:18789/api/doctor > /tmp/d.json && python3 -c \"import json; d=json.load(open('/tmp/d.json')); bad=[k for k,v in d['checks'].items() if v.get('status')!='ok']; print('OK' if not bad else f'FAIL: {bad}')\""
+ssh aronmav@192.168.1.82 "AUTH=\$(grep OPEX_AUTH_TOKEN ~/opex/.env | cut -d= -f2 | tr -d '\"'); curl -sf -H \"Authorization: Bearer \$AUTH\" http://localhost:18789/api/doctor > /tmp/d.json && python3 -c \"import json; d=json.load(open('/tmp/d.json')); bad=[k for k,v in d['checks'].items() if v.get('status')!='ok']; print('OK' if not bad else f'FAIL: {bad}')\""
 ```
 
 Expected: `OK` or `FAIL: ['qwen3-tts-local']` (pre-existing).

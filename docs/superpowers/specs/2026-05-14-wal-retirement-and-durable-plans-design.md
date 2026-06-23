@@ -28,7 +28,7 @@ Acceptance: no production code or docs reference WAL or crash recovery; an agent
 
 ### What `session_events` actually does today
 
-- Table created by [m013](../../../migrations/013_session_wal.sql); 86 references across 20 files; module file [`crates/hydeclaw-db/src/session_wal.rs`](../../../crates/hydeclaw-db/src/session_wal.rs).
+- Table created by [m013](../../../migrations/013_session_wal.sql); 86 references across 20 files; module file [`crates/opex-db/src/session_wal.rs`](../../../crates/opex-db/src/session_wal.rs).
 - `log_event` / `log_event_tx` write rows during bootstrap (`running`), tool start/end, and finalize (`done`/`failed`/`interrupted`). Also bumps `sessions.activity_at` (debounced to ~10 s).
 - `load_tool_events` warms the `LoopDetector` on session re-entry by replaying `tool_end` rows (BUG-026 fix) — this is the only "recovery" feature that exists.
 - `prune_old_events_batched` runs hourly under `[cleanup]` config to keep the table bounded.
@@ -77,8 +77,8 @@ ALTER INDEX IF EXISTS idx_session_events_type    RENAME TO idx_session_timeline_
 
 ### A.2 Module rename
 
-- Move `crates/hydeclaw-db/src/session_wal.rs` → `crates/hydeclaw-db/src/session_timeline.rs`.
-- Update `crates/hydeclaw-db/src/lib.rs`: `pub mod session_wal;` → `pub mod session_timeline;`.
+- Move `crates/opex-db/src/session_wal.rs` → `crates/opex-db/src/session_timeline.rs`.
+- Update `crates/opex-db/src/lib.rs`: `pub mod session_wal;` → `pub mod session_timeline;`.
 - Public function names stay (`log_event`, `log_event_tx`, `load_tool_events`, `prune_old_events_batched`, `WalToolEvent`). The `WalToolEvent` struct renames to `TimelineToolEvent` for consistency; callers are within the workspace and update accordingly.
 - Module-level doc-comment is replaced with the new framing (see A.4).
 
@@ -86,8 +86,8 @@ ALTER INDEX IF EXISTS idx_session_events_type    RENAME TO idx_session_timeline_
 
 All 86 references in 20 files; the SQL strings to update are concentrated in:
 
-- `crates/hydeclaw-db/src/session_timeline.rs` (formerly `session_wal.rs`): 5 SQL string literals.
-- `crates/hydeclaw-db/src/sessions.rs`: 4 SQL string literals + 1 test that drops the table (`DROP TABLE session_events` → `DROP TABLE session_timeline`).
+- `crates/opex-db/src/session_timeline.rs` (formerly `session_wal.rs`): 5 SQL string literals.
+- `crates/opex-db/src/sessions.rs`: 4 SQL string literals + 1 test that drops the table (`DROP TABLE session_events` → `DROP TABLE session_timeline`).
 - Test files: `tests/integration_session_events_cleanup.rs` → `tests/integration_session_timeline_cleanup.rs` (file rename + content).
 - Test `tests/integration_dashboard_metrics.rs`: assertion strings.
 
@@ -118,16 +118,16 @@ These are tracked as breaking changes; documented in release notes for the opera
 - Field renamed: `session_events_table_size_bytes` → `session_timeline_table_size_bytes`.
 - No alias for one release. UI does not consume this field (verified — no matches in `ui/src` for `session_events`).
 
-**Config keys** in `hydeclaw.toml` `[cleanup]` section:
+**Config keys** in `opex.toml` `[cleanup]` section:
 - `session_events_retention_days` → `session_timeline_retention_days`
 - `session_events_batch_size` → `session_timeline_batch_size`
 - Cron job key `session_events_cleanup_hourly` → `session_timeline_cleanup_hourly`.
 
-**Startup PreCheck**: in `crates/hydeclaw-core/src/config/mod.rs::load`, before normal serde parsing, scan the raw TOML for any of the three old keys. If found, return a `ConfigError` with a clear actionable message instead of falling through to a bare serde "unknown field" error:
+**Startup PreCheck**: in `crates/opex-core/src/config/mod.rs::load`, before normal serde parsing, scan the raw TOML for any of the three old keys. If found, return a `ConfigError` with a clear actionable message instead of falling through to a bare serde "unknown field" error:
 
 ```
 config error: [cleanup] key `session_events_retention_days` was renamed to
-`session_timeline_retention_days` in this release. Update hydeclaw.toml.
+`session_timeline_retention_days` in this release. Update opex.toml.
 ```
 
 This avoids the bare serde "unknown field" error and helps the single operator.
@@ -196,7 +196,7 @@ CREATE INDEX idx_plan_steps_running_heartbeat
 4. No DAG dependencies in MVP (linear by `ord`). Future `depends_on UUID[]` migration is cheap.
 5. `heartbeat_at` is the source of truth for stall detection; agents update it during long steps.
 
-### B.2 DB layer: `crates/hydeclaw-db/src/plans.rs`
+### B.2 DB layer: `crates/opex-db/src/plans.rs`
 
 New module. Functions all take `&PgPool` or `&mut Transaction`; each mutation runs in a single transaction and bumps `plans.updated_at`.
 
@@ -224,7 +224,7 @@ Errors:
 
 ### B.3 Tool: `plan` system-tool
 
-New file `crates/hydeclaw-core/src/agent/pipeline/plan_handler.rs` (not appended to the already-1200-line `handlers.rs`).
+New file `crates/opex-core/src/agent/pipeline/plan_handler.rs` (not appended to the already-1200-line `handlers.rs`).
 
 Registered in `agent/tool_registry.rs` SystemToolRegistry alongside `agent`, `memory_*`, `workspace_*`. JSON schema in `pipeline/tool_defs.rs`. Visible to all agents (not `required_base`). Subagent denylist not extended — plans are useful in delegated work.
 
@@ -245,7 +245,7 @@ All errors come back as `tool error: <code>: <message>` text; no panics.
 
 ### B.4 Re-entry: active-plan block
 
-Integration point: [`crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`](../../../crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs) or [`crates/hydeclaw-core/src/agent/engine/context_builder.rs`](../../../crates/hydeclaw-core/src/agent/engine/context_builder.rs), whichever assembles the system-message list for the upcoming LLM call. After history load and session claim, before the first LLM call:
+Integration point: [`crates/opex-core/src/agent/pipeline/bootstrap.rs`](../../../crates/opex-core/src/agent/pipeline/bootstrap.rs) or [`crates/opex-core/src/agent/engine/context_builder.rs`](../../../crates/opex-core/src/agent/engine/context_builder.rs), whichever assembles the system-message list for the upcoming LLM call. After history load and session claim, before the first LLM call:
 
 ```rust
 // Pseudocode — exact API depends on which module owns system-message assembly.
@@ -304,8 +304,8 @@ Renderer is a pure function `render_active_plan_block(plan: &PlanWithSteps, now:
 
 To make new agents reliable consumers of the block, add a short "Plan handling" section to:
 
-- `crates/hydeclaw-core/scaffold/base/SOUL.md`
-- `crates/hydeclaw-core/scaffold/regular/SOUL.md`
+- `crates/opex-core/scaffold/base/SOUL.md`
+- `crates/opex-core/scaffold/regular/SOUL.md`
 
 Content: "If you see a `=== ACTIVE PLAN ===` block in the system prompt, it is not advisory — it is a commitment. Read the steps, decide what to do, and act via the `plan` tool."
 
@@ -315,7 +315,7 @@ Existing agents' SOUL.md files are **not** modified (they are operator-owned). T
 
 #### Stuck-step detection
 
-Add to existing [hydeclaw-watchdog](../../../crates/hydeclaw-watchdog/) a check that runs every `watchdog_interval_minutes` (default 5):
+Add to existing [opex-watchdog](../../../crates/opex-watchdog/) a check that runs every `watchdog_interval_minutes` (default 5):
 
 ```sql
 SELECT ps.id, ps.plan_id, ps.title, p.session_id, p.agent_id,
@@ -356,7 +356,7 @@ Logged at `tracing::info`. No operator alert (this is normal cleanup).
 
 #### Config additions
 
-New `[plans]` section in `hydeclaw.toml`:
+New `[plans]` section in `opex.toml`:
 
 ```toml
 [plans]
@@ -378,7 +378,7 @@ Read-only (Bearer-auth):
 
 #### Metrics
 
-Add to `DashboardMetrics` (`crates/hydeclaw-core/src/metrics.rs`) and the JSON response of `/api/dashboard/metrics`:
+Add to `DashboardMetrics` (`crates/opex-core/src/metrics.rs`) and the JSON response of `/api/dashboard/metrics`:
 
 - `plans_running_total: u64`
 - `plans_completed_24h: u64`
@@ -419,7 +419,7 @@ Steps 1–2 are independent of 3–7 and could land first as their own PR.
 1. No production source or doc file (excluding the historical `migrations/` directory) contains the phrases "session WAL", "WAL replay", or "crash recovery via WAL". `grep -wr 'WAL' crates/ docs/ CLAUDE.md --exclude-dir=migrations` returns no matches related to the session timeline concept.
 2. `grep -wr "session_events" crates/ docs/ CLAUDE.md --exclude-dir=migrations` returns no matches.
 3. CLAUDE.md sections covering bootstrap/finalize and m013 use the new phrase-anchor.
-4. `hydeclaw.toml` examples and `docs/CONFIGURATION.md` reference the new `session_timeline_*` keys and the new `[plans]` section.
+4. `opex.toml` examples and `docs/CONFIGURATION.md` reference the new `session_timeline_*` keys and the new `[plans]` section.
 5. End-to-end test: agent creates a plan with 4 steps → starts step 1 → core restart → on next bootstrap the agent's first LLM input contains `=== ACTIVE PLAN ===` and step 1 marked running → agent finishes the plan via `plan.complete` → DB shows `status='done'`.
 6. `make test-db` is green.
 7. Watchdog catches an abandoned plan (terminal session + plan idle >24 h) and auto-aborts it.

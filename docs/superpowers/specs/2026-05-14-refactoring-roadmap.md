@@ -6,7 +6,7 @@
 
 ## Goal
 
-Lower the cognitive load of working in `hydeclaw-core` and the UI by splitting the largest modules along boundaries that already exist in the code. Three intertwined sub-goals:
+Lower the cognitive load of working in `opex-core` and the UI by splitting the largest modules along boundaries that already exist in the code. Three intertwined sub-goals:
 
 1. **Readability** — no production source file >500 LoC. Exceptions: pure-data files (large `#[derive(Deserialize)]` struct trees, generated TS types, sqlx query macros that expand inline) where line count reflects schema width rather than logic; documented when invoked.
 2. **Single responsibility** — each file answers *one* of (request build / response parse / streaming / persistence / dispatch / routing / config-shape). Today several 1000+ LoC files mix three or four of those.
@@ -45,11 +45,11 @@ Each wave passes the same gate:
 
 | File                                                    | LoC  | Action                                                       |
 | ------------------------------------------------------- | ---- | ------------------------------------------------------------ |
-| `crates/hydeclaw-core/src/agent/providers/anthropic.rs` | 1643 | full split (5 modules)                                       |
-| `crates/hydeclaw-core/src/agent/providers/openai.rs`    | 1230 | full split (5 modules)                                       |
-| `crates/hydeclaw-core/src/agent/providers/google.rs`    | 619  | optional partial split (2-3 modules) if W1 brainstorm agrees |
-| `crates/hydeclaw-core/src/agent/providers/http.rs`      | 350  | leave as-is (already under threshold)                        |
-| `crates/hydeclaw-core/src/agent/providers/claude_cli.rs`| 154  | leave as-is                                                  |
+| `crates/opex-core/src/agent/providers/anthropic.rs` | 1643 | full split (5 modules)                                       |
+| `crates/opex-core/src/agent/providers/openai.rs`    | 1230 | full split (5 modules)                                       |
+| `crates/opex-core/src/agent/providers/google.rs`    | 619  | optional partial split (2-3 modules) if W1 brainstorm agrees |
+| `crates/opex-core/src/agent/providers/http.rs`      | 350  | leave as-is (already under threshold)                        |
+| `crates/opex-core/src/agent/providers/claude_cli.rs`| 154  | leave as-is                                                  |
 
 **Target split per adapter:**
 
@@ -82,11 +82,11 @@ Same shape for `openai/`, smaller wedges for `google/`, `claude_cli/`, `http/`.
 
 **Files (6993 LoC total → target ~15 modules, average ~400-500 LoC):**
 
-- `crates/hydeclaw-core/src/agent/pipeline/execute.rs` — 1514 LoC
-- `crates/hydeclaw-core/src/agent/pipeline/parallel.rs` — 1426 LoC
-- `crates/hydeclaw-core/src/agent/pipeline/media_background.rs` — 1735 LoC
-- `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` — 1202 LoC
-- `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` — 1116 LoC
+- `crates/opex-core/src/agent/pipeline/execute.rs` — 1514 LoC
+- `crates/opex-core/src/agent/pipeline/parallel.rs` — 1426 LoC
+- `crates/opex-core/src/agent/pipeline/media_background.rs` — 1735 LoC
+- `crates/opex-core/src/agent/pipeline/handlers.rs` — 1202 LoC
+- `crates/opex-core/src/agent/pipeline/finalize.rs` — 1116 LoC
 
 **Target split:**
 
@@ -118,11 +118,11 @@ Same shape for `openai/`, smaller wedges for `google/`, `claude_cli/`, `http/`.
 
 **Files (11030 LoC total → target ~25 modules, average ~400-500 LoC):**
 
-- `crates/hydeclaw-core/src/config/mod.rs` — 2648 LoC
-- `crates/hydeclaw-db/src/sessions.rs` — 2550 LoC
-- `crates/hydeclaw-core/src/tools/yaml_tools.rs` — 2646 LoC
-- `crates/hydeclaw-core/src/agent/workspace.rs` — 1582 LoC
-- `crates/hydeclaw-core/src/agent/history.rs` — 1504 LoC
+- `crates/opex-core/src/config/mod.rs` — 2648 LoC
+- `crates/opex-db/src/sessions.rs` — 2550 LoC
+- `crates/opex-core/src/tools/yaml_tools.rs` — 2646 LoC
+- `crates/opex-core/src/agent/workspace.rs` — 1582 LoC
+- `crates/opex-core/src/agent/history.rs` — 1504 LoC
 
 **Target split:**
 
@@ -138,11 +138,11 @@ Same shape for `openai/`, smaller wedges for `google/`, `claude_cli/`, `http/`.
 
 **Test guards:**
 
-- `cargo test -p hydeclaw-core --bin hydeclaw-core config::tests` (parse round-trip)
-- `cargo test -p hydeclaw-db` (full sqlx test matrix)
-- `cargo test -p hydeclaw-core --bin hydeclaw-core tools::yaml_tools` (already 73 tests after the cache work)
-- `cargo test -p hydeclaw-core --bin hydeclaw-core agent::workspace` + `agent::history`
-- New: TOML round-trip golden snapshots — write a representative `hydeclaw.toml` fixture, deserialize → serialize, snapshot the JSON. Any reorder caught immediately.
+- `cargo test -p opex-core --bin opex-core config::tests` (parse round-trip)
+- `cargo test -p opex-db` (full sqlx test matrix)
+- `cargo test -p opex-core --bin opex-core tools::yaml_tools` (already 73 tests after the cache work)
+- `cargo test -p opex-core --bin opex-core agent::workspace` + `agent::history`
+- New: TOML round-trip golden snapshots — write a representative `opex.toml` fixture, deserialize → serialize, snapshot the JSON. Any reorder caught immediately.
 
 **Discovery commit:** add the TOML round-trip golden snapshot. Add per-table `db::sessions` invariant tests (insert/read same row, compare hashes) before splitting.
 
@@ -154,11 +154,11 @@ Same shape for `openai/`, smaller wedges for `google/`, `claude_cli/`, `http/`.
 
 **Files (7407 LoC total → target ~15 modules, average ~450 LoC):**
 
-- `crates/hydeclaw-core/src/gateway/handlers/agents/crud.rs` — 1393 LoC
-- `crates/hydeclaw-core/src/gateway/handlers/providers.rs` — 1327 LoC
-- `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` — 1237 LoC
-- `crates/hydeclaw-core/src/scheduler/mod.rs` — 2089 LoC
-- `crates/hydeclaw-core/src/main.rs` — 1361 LoC
+- `crates/opex-core/src/gateway/handlers/agents/crud.rs` — 1393 LoC
+- `crates/opex-core/src/gateway/handlers/providers.rs` — 1327 LoC
+- `crates/opex-core/src/gateway/handlers/sessions.rs` — 1237 LoC
+- `crates/opex-core/src/scheduler/mod.rs` — 2089 LoC
+- `crates/opex-core/src/main.rs` — 1361 LoC
 
 **Target split:**
 
@@ -258,7 +258,7 @@ The wave is "done" when every extract commit independently builds + tests + clip
 
 ## Cross-cutting rules
 
-- **One Rust wave at a time.** UI wave (W5) is parallel-safe with any Rust wave (touches no shared files). Two Rust waves running in parallel risk conflict in `crates/hydeclaw-core/src/lib.rs` re-exports and `agent/mod.rs` / `gateway/mod.rs` module declarations — serialize at those merge points.
+- **One Rust wave at a time.** UI wave (W5) is parallel-safe with any Rust wave (touches no shared files). Two Rust waves running in parallel risk conflict in `crates/opex-core/src/lib.rs` re-exports and `agent/mod.rs` / `gateway/mod.rs` module declarations — serialize at those merge points.
 - **No rewrites in extract commits.** If you change *what* code does in the same commit that moves it, the diff is unreviewable. Rewrites are separate follow-up commits clearly labelled `refactor(<scope>): simplify <thing>`.
 - **No new features.** If discovery turns up a bug, file an issue and fix it in a separate commit on the same wave branch — the bug fix is reviewed on its own merits.
 - **No tool-policy change.** `agent::engine::dispatch_impl::SUBAGENT_DENIED_TOOLS` and friends are out of scope unless a wave's seam crosses them (it shouldn't).

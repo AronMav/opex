@@ -19,13 +19,13 @@ missing cleanup. Each task is a focused, self-contained change.
 
 | File | What changes |
 | --- | --- |
-| `crates/hydeclaw-core/src/agent/dispatcher/state.rs` | Rewrite struct; add `get_describe`/`set_describe`; remove old fields in Task 5 |
-| `crates/hydeclaw-core/src/agent/tool_handlers/tool_use.rs` | Use new API; delete `promoted_set()`; pass `&HashSet::new()` |
-| `crates/hydeclaw-core/src/agent/context_builder.rs` | Remove `agent_promotion_max` trait method; remove `state.promoted.read()` calls |
-| `crates/hydeclaw-core/src/agent/engine/context_builder.rs` | Remove `agent_promotion_max` impl |
-| `crates/hydeclaw-core/src/agent/pipeline/parallel.rs` | Remove both promotion blocks, `via_dispatcher_map`, `is_system_extension_tool`, `promotion_max` param |
-| `crates/hydeclaw-core/src/agent/engine/tool_executor.rs` | Remove `promotion_max` read + pass-through |
-| `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` | Add `session_tool_state.remove()` and `.retain()` cleanup |
+| `crates/opex-core/src/agent/dispatcher/state.rs` | Rewrite struct; add `get_describe`/`set_describe`; remove old fields in Task 5 |
+| `crates/opex-core/src/agent/tool_handlers/tool_use.rs` | Use new API; delete `promoted_set()`; pass `&HashSet::new()` |
+| `crates/opex-core/src/agent/context_builder.rs` | Remove `agent_promotion_max` trait method; remove `state.promoted.read()` calls |
+| `crates/opex-core/src/agent/engine/context_builder.rs` | Remove `agent_promotion_max` impl |
+| `crates/opex-core/src/agent/pipeline/parallel.rs` | Remove both promotion blocks, `via_dispatcher_map`, `is_system_extension_tool`, `promotion_max` param |
+| `crates/opex-core/src/agent/engine/tool_executor.rs` | Remove `promotion_max` read + pass-through |
+| `crates/opex-core/src/gateway/handlers/sessions.rs` | Add `session_tool_state.remove()` and `.retain()` cleanup |
 
 ---
 
@@ -36,7 +36,7 @@ fields (`call_counts`, `promoted`) stay intact so existing consumers compile unc
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/agent/dispatcher/state.rs`
+- Modify: `crates/opex-core/src/agent/dispatcher/state.rs`
 
 - [ ] **Step 1.1: Write failing tests**
 
@@ -75,7 +75,7 @@ mod tests {
 - [ ] **Step 1.2: Run tests — expect compile error**
 
 ```bash
-cargo test -p hydeclaw-core dispatcher::state -- --nocapture
+cargo test -p opex-core dispatcher::state -- --nocapture
 ```
 
 Expected: compile error — `get_describe`/`set_describe` not found.
@@ -99,7 +99,7 @@ pub async fn set_describe(&self, name: String, value: String) {
 - [ ] **Step 1.4: Run tests — expect pass**
 
 ```bash
-cargo test -p hydeclaw-core dispatcher::state -- --nocapture
+cargo test -p opex-core dispatcher::state -- --nocapture
 ```
 
 Expected: 3 tests PASS.
@@ -115,7 +115,7 @@ Expected: no errors (old fields still present, old consumers unaffected).
 - [ ] **Step 1.6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/dispatcher/state.rs
+git add crates/opex-core/src/agent/dispatcher/state.rs
 git commit -m "refactor(dispatcher): add get_describe/set_describe API to SessionToolState"
 ```
 
@@ -129,12 +129,12 @@ git commit -m "refactor(dispatcher): add get_describe/set_describe API to Sessio
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/agent/tool_handlers/tool_use.rs`
+- Modify: `crates/opex-core/src/agent/tool_handlers/tool_use.rs`
 
 - [ ] **Step 2.1: Verify existing tests pass as baseline**
 
 ```bash
-cargo test -p hydeclaw-core tool_handlers::tool_use -- --nocapture
+cargo test -p opex-core tool_handlers::tool_use -- --nocapture
 ```
 
 Expected: all existing tests pass.
@@ -263,7 +263,7 @@ compiler still needs it for other `HashSet` uses, keep it.
 
 ```bash
 make check
-cargo test -p hydeclaw-core tool_handlers::tool_use -- --nocapture
+cargo test -p opex-core tool_handlers::tool_use -- --nocapture
 ```
 
 Expected: no errors, all existing tool_use tests pass.
@@ -271,7 +271,7 @@ Expected: no errors, all existing tool_use tests pass.
 - [ ] **Step 2.6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/tool_use.rs
+git add crates/opex-core/src/agent/tool_handlers/tool_use.rs
 git commit -m "refactor(tool_use): use SessionToolState new API; remove promoted_set()"
 ```
 
@@ -285,8 +285,8 @@ git commit -m "refactor(tool_use): use SessionToolState new API; remove promoted
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/agent/context_builder.rs`
-- Modify: `crates/hydeclaw-core/src/agent/engine/context_builder.rs`
+- Modify: `crates/opex-core/src/agent/context_builder.rs`
+- Modify: `crates/opex-core/src/agent/engine/context_builder.rs`
 
 - [ ] **Step 3.1: Remove first `promoted_set` read (catalogue section)**
 
@@ -386,7 +386,7 @@ fn agent_promotion_max(&self) -> u32 {
 
 ```bash
 make check
-cargo test -p hydeclaw-core -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: no errors, no new test failures.
@@ -394,8 +394,8 @@ Expected: no errors, no new test failures.
 - [ ] **Step 3.7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/context_builder.rs \
-        crates/hydeclaw-core/src/agent/engine/context_builder.rs
+git add crates/opex-core/src/agent/context_builder.rs \
+        crates/opex-core/src/agent/engine/context_builder.rs
 git commit -m "refactor(context_builder): remove promoted reads and agent_promotion_max"
 ```
 
@@ -409,8 +409,8 @@ corresponding read + pass-through in `tool_executor.rs`.
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/parallel.rs`
-- Modify: `crates/hydeclaw-core/src/agent/engine/tool_executor.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/parallel.rs`
+- Modify: `crates/opex-core/src/agent/engine/tool_executor.rs`
 
 - [ ] **Step 4.1: Remove `promotion_max` parameter from `execute_tool_calls_partitioned`**
 
@@ -601,7 +601,7 @@ promotion_max,
 
 ```bash
 make check
-cargo test -p hydeclaw-core -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: no errors, no new test failures.
@@ -609,8 +609,8 @@ Expected: no errors, no new test failures.
 - [ ] **Step 4.8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/parallel.rs \
-        crates/hydeclaw-core/src/agent/engine/tool_executor.rs
+git add crates/opex-core/src/agent/pipeline/parallel.rs \
+        crates/opex-core/src/agent/engine/tool_executor.rs
 git commit -m "refactor(parallel): remove auto-promotion path and promotion_max parameter"
 ```
 
@@ -623,7 +623,7 @@ struct. This is a safe deletion — the compiler will confirm zero remaining rea
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/agent/dispatcher/state.rs`
+- Modify: `crates/opex-core/src/agent/dispatcher/state.rs`
 
 - [ ] **Step 5.1: Remove `call_counts` and `promoted` fields**
 
@@ -687,8 +687,8 @@ use std::collections::{HashMap, HashSet};  // → just: use std::collections::Ha
 
 ```bash
 make check
-cargo test -p hydeclaw-core dispatcher::state -- --nocapture
-cargo test -p hydeclaw-core -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core dispatcher::state -- --nocapture
+cargo test -p opex-core -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: all 3 describe_cache tests from Task 1 still pass. Full suite passes.
@@ -696,7 +696,7 @@ Expected: all 3 describe_cache tests from Task 1 still pass. Full suite passes.
 - [ ] **Step 5.3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/dispatcher/state.rs
+git add crates/opex-core/src/agent/dispatcher/state.rs
 git commit -m "refactor(dispatcher): finalize SessionToolState — remove call_counts and promoted"
 ```
 
@@ -709,7 +709,7 @@ sessions are deleted, matching the existing `session_pools` cleanup pattern.
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/sessions.rs`
+- Modify: `crates/opex-core/src/gateway/handlers/sessions.rs`
 
 - [ ] **Step 6.1: Write a unit test for the cleanup invariant**
 
@@ -766,7 +766,7 @@ mod lifecycle_tests {
 - [ ] **Step 6.2: Run tests — expect pass (pure logic test, no handler deps)**
 
 ```bash
-cargo test -p hydeclaw-core sessions::lifecycle_tests -- --nocapture
+cargo test -p opex-core sessions::lifecycle_tests -- --nocapture
 ```
 
 Expected: both tests PASS (the logic is just DashMap operations).
@@ -809,7 +809,7 @@ agents.session_tool_state.retain(|sid, _| !session_ids.contains(sid));
 
 ```bash
 make check
-cargo test -p hydeclaw-core -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: no errors, all tests pass.
@@ -817,7 +817,7 @@ Expected: no errors, all tests pass.
 - [ ] **Step 6.6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/sessions.rs
+git add crates/opex-core/src/gateway/handlers/sessions.rs
 git commit -m "fix(sessions): cleanup session_tool_state on session delete"
 ```
 
@@ -845,8 +845,8 @@ by the refactor.
 - [ ] **Smoke-check dispatcher tests specifically**
 
 ```bash
-cargo test -p hydeclaw-core dispatcher -- --nocapture
-cargo test -p hydeclaw-core tool_handlers -- --nocapture
+cargo test -p opex-core dispatcher -- --nocapture
+cargo test -p opex-core tool_handlers -- --nocapture
 ```
 
 Expected: all pass.

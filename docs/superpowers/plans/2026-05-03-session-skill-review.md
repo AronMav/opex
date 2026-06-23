@@ -14,16 +14,16 @@
 
 | File | Change |
 |---|---|
-| `crates/hydeclaw-core/src/config/mod.rs` | Add `SkillReviewConfig` struct; add `skill_review` field to `AgentSettings` |
-| `crates/hydeclaw-core/src/skills/evolution.rs` | Add `review_session_for_skills()` + unit tests |
-| `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` | Add `skill_review` to `FinalizeContext`; add `spawn_skill_review()`; trigger in `Done` arm; update `finalize_context_from_engine()` |
+| `crates/opex-core/src/config/mod.rs` | Add `SkillReviewConfig` struct; add `skill_review` field to `AgentSettings` |
+| `crates/opex-core/src/skills/evolution.rs` | Add `review_session_for_skills()` + unit tests |
+| `crates/opex-core/src/agent/pipeline/finalize.rs` | Add `skill_review` to `FinalizeContext`; add `spawn_skill_review()`; trigger in `Done` arm; update `finalize_context_from_engine()` |
 
 ---
 
 ## Task 1: Add `SkillReviewConfig` to config
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/config/mod.rs` (~line 1000, after `CompactionConfig`)
+- Modify: `crates/opex-core/src/config/mod.rs` (~line 1000, after `CompactionConfig`)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -86,14 +86,14 @@ fn skill_review_enabled_only_gives_default_min_tool_calls() {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p hydeclaw-core skill_review_config -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core skill_review_config -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: FAIL — `SkillReviewConfig` not found.
 
 - [ ] **Step 3: Add `SkillReviewConfig` struct**
 
-In `crates/hydeclaw-core/src/config/mod.rs`, after the `impl CompactionConfig` block (~line 1000), add:
+In `crates/opex-core/src/config/mod.rs`, after the `impl CompactionConfig` block (~line 1000), add:
 
 ```rust
 /// Per-agent session skill review config (TOML: `[agent.skill_review]`).
@@ -129,7 +129,7 @@ pub skill_review: Option<SkillReviewConfig>,
 - [ ] **Step 5: Run tests to verify they pass**
 
 ```bash
-cargo test -p hydeclaw-core skill_review_config -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core skill_review_config -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: 4 tests PASS.
@@ -137,7 +137,7 @@ Expected: 4 tests PASS.
 - [ ] **Step 6: Run full config tests to confirm no regressions**
 
 ```bash
-cargo test -p hydeclaw-core config -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core config -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: all pass.
@@ -145,7 +145,7 @@ Expected: all pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/config/mod.rs
+git add crates/opex-core/src/config/mod.rs
 git commit -m "feat(skill-review): add SkillReviewConfig to AgentSettings"
 ```
 
@@ -154,7 +154,7 @@ git commit -m "feat(skill-review): add SkillReviewConfig to AgentSettings"
 ## Task 2: Add `review_session_for_skills` to evolution.rs
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/skills/evolution.rs`
+- Modify: `crates/opex-core/src/skills/evolution.rs`
 
 - [ ] **Step 1: Write failing unit tests**
 
@@ -236,7 +236,7 @@ fn build_task_summary_joins_user_messages() {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cargo test -p hydeclaw-core session_review -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core session_review -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: FAIL on the `session_review_*` tests (function not yet defined).
@@ -328,8 +328,8 @@ async fn review_session_inner(
          pattern. SKIP is a valid outcome — do not force an action where none fits."
     );
 
-    let msg = hydeclaw_types::Message {
-        role: hydeclaw_types::MessageRole::User,
+    let msg = opex_types::Message {
+        role: opex_types::MessageRole::User,
         content: prompt,
         tool_calls: None,
         tool_call_id: None,
@@ -399,7 +399,7 @@ async fn review_session_inner(
 - [ ] **Step 4: Run unit tests to verify they pass**
 
 ```bash
-cargo test -p hydeclaw-core session_review -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core session_review -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: 7 tests PASS.
@@ -407,7 +407,7 @@ Expected: 7 tests PASS.
 - [ ] **Step 5: Cargo check**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | tail -30
+cargo check -p opex-core 2>&1 | tail -30
 ```
 
 Expected: no errors.
@@ -415,7 +415,7 @@ Expected: no errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/skills/evolution.rs
+git add crates/opex-core/src/skills/evolution.rs
 git commit -m "feat(skill-review): add review_session_for_skills to evolution.rs"
 ```
 
@@ -424,11 +424,11 @@ git commit -m "feat(skill-review): add review_session_for_skills to evolution.rs
 ## Task 3: Wire into finalize.rs
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/finalize.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` at the end of any existing `#[cfg(test)]` block, or create a new one:
+Add to `crates/opex-core/src/agent/pipeline/finalize.rs` at the end of any existing `#[cfg(test)]` block, or create a new one:
 
 ```rust
 #[cfg(test)]
@@ -495,7 +495,7 @@ mod tests {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cargo test -p hydeclaw-core spawn_skill_review -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core spawn_skill_review -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: FAIL — `SkillReviewConfig` not yet imported in finalize.rs.
@@ -586,7 +586,7 @@ skill_review: engine.cfg().agent.skill_review.clone(),
 - [ ] **Step 7: Run finalize tests**
 
 ```bash
-cargo test -p hydeclaw-core spawn_skill_review -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core spawn_skill_review -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: 4 tests PASS.
@@ -594,8 +594,8 @@ Expected: 4 tests PASS.
 - [ ] **Step 8: Cargo check + full test suite**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | tail -30
-cargo test -p hydeclaw-core 2>&1 | tail -30
+cargo check -p opex-core 2>&1 | tail -30
+cargo test -p opex-core 2>&1 | tail -30
 ```
 
 Expected: no errors, all tests pass.
@@ -603,7 +603,7 @@ Expected: no errors, all tests pass.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/finalize.rs
+git add crates/opex-core/src/agent/pipeline/finalize.rs
 git commit -m "feat(skill-review): wire spawn_skill_review into pipeline finalize"
 ```
 
@@ -612,20 +612,20 @@ git commit -m "feat(skill-review): wire spawn_skill_review into pipeline finaliz
 ## Task 4: Enable on Pi agents + smoke test
 
 **Files:**
-- Modify on Pi: `~/hydeclaw/config/agents/Arty.toml`, `Alma.toml`, `Hyde.toml`
+- Modify on Pi: `~/opex/config/agents/Arty.toml`, `Alma.toml`, `Hyde.toml`
 
 - [ ] **Step 1: Cross-compile and deploy binary**
 
 ```bash
 make build-arm64 2>&1 | tail -10
 # Wait for success, then:
-scp target/aarch64-unknown-linux-gnu/release/hydeclaw-core-aarch64 aronmav@192.168.1.85:~/hydeclaw/
+scp target/aarch64-unknown-linux-gnu/release/opex-core-aarch64 aronmav@192.168.1.85:~/opex/
 ```
 
 - [ ] **Step 2: Restart service on Pi**
 
 ```bash
-ssh aronmav@192.168.1.85 "systemctl --user restart hydeclaw-core && sleep 3 && systemctl --user is-active hydeclaw-core"
+ssh aronmav@192.168.1.85 "systemctl --user restart opex-core && sleep 3 && systemctl --user is-active opex-core"
 ```
 
 Expected: `active`
@@ -633,7 +633,7 @@ Expected: `active`
 - [ ] **Step 3: Enable skill_review on Arty**
 
 ```bash
-ssh aronmav@192.168.1.85 "cat >> ~/hydeclaw/config/agents/Arty.toml << 'EOF'
+ssh aronmav@192.168.1.85 "cat >> ~/opex/config/agents/Arty.toml << 'EOF'
 
 [agent.skill_review]
 enabled = true
@@ -658,7 +658,7 @@ Expected: 3+ `tool-input-available` events.
 - [ ] **Step 5: Check logs for skill review activity**
 
 ```bash
-ssh aronmav@192.168.1.85 "grep -E '(session skill review|skill review)' ~/hydeclaw/logs/core.log | tail -10"
+ssh aronmav@192.168.1.85 "grep -E '(session skill review|skill review)' ~/opex/logs/core.log | tail -10"
 ```
 
 Expected: `session skill review: SKIP` or `session skill review: CAPTURED/FIX queued` or `session skill review complete`.
@@ -666,7 +666,7 @@ Expected: `session skill review: SKIP` or `session skill review: CAPTURED/FIX qu
 - [ ] **Step 6: Check pending_skill_repairs queue**
 
 ```bash
-ssh aronmav@192.168.1.85 "docker exec docker-postgres-1 psql -U hydeclaw -d hydeclaw -c \
+ssh aronmav@192.168.1.85 "docker exec docker-postgres-1 psql -U opex -d opex -c \
   'SELECT skill_name, agent_name, kind, status, created_at FROM pending_skill_repairs ORDER BY created_at DESC LIMIT 5;'"
 ```
 
@@ -674,7 +674,7 @@ ssh aronmav@192.168.1.85 "docker exec docker-postgres-1 psql -U hydeclaw -d hyde
 
 ```bash
 # Only if enabling on all 3 agents is desired
-git add crates/hydeclaw-core/  # binary changes only
+git add crates/opex-core/  # binary changes only
 git commit -m "feat(skill-review): P0.2 complete — session skill review wired and deployed"
 ```
 

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close four locally-verifiable HydeClaw gaps vs Hermes — email channel allowlist fix, expanded browser actions, a session-scoped `todo` tool, and blocking high-severity prompt injection in identity files.
+**Goal:** Close four locally-verifiable OPEX gaps vs Hermes — email channel allowlist fix, expanded browser actions, a session-scoped `todo` tool, and blocking high-severity prompt injection in identity files.
 
-**Architecture:** Pure-Rust additions to `hydeclaw-core` (channel allowlist, injection severity + blocking, `todo` tool + DB table + context injection) plus Python additions to the `browser-renderer` service (new automation actions + dialog handling), with the Rust browser tool schema extended to expose them. Each task is independently testable.
+**Architecture:** Pure-Rust additions to `opex-core` (channel allowlist, injection severity + blocking, `todo` tool + DB table + context injection) plus Python additions to the `browser-renderer` service (new automation actions + dialog handling), with the Rust browser tool schema extended to expose them. Each task is independently testable.
 
 **Tech Stack:** Rust 2024 (axum, sqlx, async-trait, tokio), PostgreSQL 17, Python 3 (FastAPI, Playwright), pytest.
 
@@ -22,7 +22,7 @@
 ### Task 1: Email channel allowlist fix (Component A)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/channels.rs` (inline `SUPPORTED` at ~122 → module const; test module at ~723)
+- Modify: `crates/opex-core/src/gateway/handlers/channels.rs` (inline `SUPPORTED` at ~122 → module const; test module at ~723)
 
 **Interfaces:**
 - Produces: `pub(crate) const SUPPORTED_CHANNEL_TYPES: &[&str]`
@@ -41,7 +41,7 @@ fn email_is_a_supported_channel_type() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p hydeclaw-core email_is_a_supported_channel_type`
+Run: `cargo test -p opex-core email_is_a_supported_channel_type`
 Expected: FAIL — `SUPPORTED_CHANNEL_TYPES` not found (cannot find value).
 
 - [ ] **Step 3: Add the module-level const** near the top of `channels.rs` (after the `use` block):
@@ -65,13 +65,13 @@ pub(crate) const SUPPORTED_CHANNEL_TYPES: &[&str] =
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p hydeclaw-core email_is_a_supported_channel_type`
+Run: `cargo test -p opex-core email_is_a_supported_channel_type`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/channels.rs
+git add crates/opex-core/src/gateway/handlers/channels.rs
 git commit -m "fix(channels): accept email channel_type (driver existed but was blocked by allowlist)"
 ```
 
@@ -80,7 +80,7 @@ git commit -m "fix(channels): accept email channel_type (driver existed but was 
 ### Task 2: Severity-tagged injection patterns + `scan_for_block` (Component D, part 1)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/tools/content_security.rs`
+- Modify: `crates/opex-core/src/tools/content_security.rs`
 
 **Interfaces:**
 - Produces: `pub enum Severity { Low, High }`, `pub fn scan_for_block(text: &str) -> bool`
@@ -117,7 +117,7 @@ git commit -m "fix(channels): accept email channel_type (driver existed but was 
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p hydeclaw-core content_security`
+Run: `cargo test -p opex-core content_security`
 Expected: FAIL — `Severity` / `scan_for_block` not found.
 
 - [ ] **Step 3: Replace the patterns table and add the severity machinery.** Replace `INJECTION_PATTERNS` (lines 3-24) with:
@@ -208,13 +208,13 @@ pub fn scan_for_block(text: &str) -> bool {
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test -p hydeclaw-core content_security`
+Run: `cargo test -p opex-core content_security`
 Expected: PASS (new + all pre-existing content_security tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/tools/content_security.rs
+git add crates/opex-core/src/tools/content_security.rs
 git commit -m "feat(security): tag injection patterns with severity + add scan_for_block; expand C2/exfil/persistence patterns"
 ```
 
@@ -223,7 +223,7 @@ git commit -m "feat(security): tag injection patterns with severity + add scan_f
 ### Task 3: Block identity files in the system prompt (Component D, part 2)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/workspace.rs` (prompt assembly ~196-270; test module at ~1059)
+- Modify: `crates/opex-core/src/agent/workspace.rs` (prompt assembly ~196-270; test module at ~1059)
 
 **Interfaces:**
 - Consumes: `crate::tools::content_security::scan_for_block`
@@ -254,7 +254,7 @@ git commit -m "feat(security): tag injection patterns with severity + add scan_f
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p hydeclaw-core -- workspace`
+Run: `cargo test -p opex-core -- workspace`
 Expected: FAIL — `redact_if_blocked` not found.
 
 - [ ] **Step 3: Add `redact_if_blocked`** just above `scan_and_warn` (workspace.rs:182):
@@ -296,13 +296,13 @@ fn redact_if_blocked(agent_name: &str, file: &str, content: String) -> String {
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test -p hydeclaw-core -- workspace`
+Run: `cargo test -p opex-core -- workspace`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/workspace.rs
+git add crates/opex-core/src/agent/workspace.rs
 git commit -m "feat(security): block high-severity prompt injection in SOUL.md/IDENTITY.md system-prompt files"
 ```
 
@@ -312,8 +312,8 @@ git commit -m "feat(security): block high-severity prompt injection in SOUL.md/I
 
 **Files:**
 - Create: `migrations/054_session_todos.sql`
-- Create: `crates/hydeclaw-core/src/db/todos.rs`
-- Modify: `crates/hydeclaw-core/src/db/mod.rs` (add `pub mod todos;`)
+- Create: `crates/opex-core/src/db/todos.rs`
+- Modify: `crates/opex-core/src/db/mod.rs` (add `pub mod todos;`)
 
 **Interfaces:**
 - Produces: `pub struct TodoItem { pub id: String, pub content: String, pub status: String }`
@@ -343,7 +343,7 @@ CREATE INDEX idx_session_todos_session ON session_todos(session_id, position);
 pub mod todos;
 ```
 
-- [ ] **Step 3: Write the failing DB test** — create `crates/hydeclaw-core/src/db/todos.rs` with only the type, then the test (implementation comes in Step 5):
+- [ ] **Step 3: Write the failing DB test** — create `crates/opex-core/src/db/todos.rs` with only the type, then the test (implementation comes in Step 5):
 
 ```rust
 //! Session-scoped TODO list storage (table `session_todos`).
@@ -491,7 +491,7 @@ Expected: PASS (3 new todos tests + existing suite).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add migrations/054_session_todos.sql crates/hydeclaw-core/src/db/todos.rs crates/hydeclaw-core/src/db/mod.rs
+git add migrations/054_session_todos.sql crates/opex-core/src/db/todos.rs crates/opex-core/src/db/mod.rs
 git commit -m "feat(todo): session_todos table + storage module (list/replace/merge/clear)"
 ```
 
@@ -500,7 +500,7 @@ git commit -m "feat(todo): session_todos table + storage module (list/replace/me
 ### Task 5: `todo` parse + format pure logic (Component C, part 2)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/db/todos.rs` (add pure functions + local unit tests)
+- Modify: `crates/opex-core/src/db/todos.rs` (add pure functions + local unit tests)
 
 **Interfaces:**
 - Consumes: `TodoItem` (Task 4)
@@ -548,7 +548,7 @@ git commit -m "feat(todo): session_todos table + storage module (list/replace/me
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test -p hydeclaw-core -- todos::tests::parse`
+Run: `cargo test -p opex-core -- todos::tests::parse`
 Expected: FAIL — `parse_items` not found.
 
 - [ ] **Step 3: Implement the pure functions** (insert after the storage functions, before `#[cfg(test)]`):
@@ -603,13 +603,13 @@ pub fn format_for_injection(items: &[TodoItem]) -> String {
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cargo test -p hydeclaw-core -- todos::tests`
+Run: `cargo test -p opex-core -- todos::tests`
 Expected: PASS (the 4 pure tests run locally; DB tests are skipped without DATABASE_URL).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/db/todos.rs
+git add crates/opex-core/src/db/todos.rs
 git commit -m "feat(todo): parse_items validation + format_for_injection rendering"
 ```
 
@@ -618,11 +618,11 @@ git commit -m "feat(todo): parse_items validation + format_for_injection renderi
 ### Task 6: `session_id` in ToolDeps + `todo` tool handler + schema (Component C, part 3)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/tool_registry.rs` (add `session_id` field + set in `from_engine`; register `todo`)
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/todo.rs`
-- Modify: `crates/hydeclaw-core/src/agent/tool_handlers/mod.rs` (declare module + register)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` (add `handle_todo`)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs` (add `todo` ToolDefinition)
+- Modify: `crates/opex-core/src/agent/tool_registry.rs` (add `session_id` field + set in `from_engine`; register `todo`)
+- Create: `crates/opex-core/src/agent/tool_handlers/todo.rs`
+- Modify: `crates/opex-core/src/agent/tool_handlers/mod.rs` (declare module + register)
+- Modify: `crates/opex-core/src/agent/pipeline/handlers.rs` (add `handle_todo`)
+- Modify: `crates/opex-core/src/agent/pipeline/tool_defs.rs` (add `todo` ToolDefinition)
 
 **Interfaces:**
 - Consumes: `db::todos::{list_todos, replace_todos, merge_todos, parse_items, format_for_injection}`
@@ -691,7 +691,7 @@ pub async fn handle_todo(
 }
 ```
 
-- [ ] **Step 4: Create the handler** `crates/hydeclaw-core/src/agent/tool_handlers/todo.rs`:
+- [ ] **Step 4: Create the handler** `crates/opex-core/src/agent/tool_handlers/todo.rs`:
 
 ```rust
 use async_trait::async_trait;
@@ -748,14 +748,14 @@ impl SystemToolHandler for TodoHandler {
 
 - [ ] **Step 7: Verify it compiles** (the new tool is wired end-to-end; behaviour is exercised by Task 4/5 tests):
 
-Run: `cargo check -p hydeclaw-core`
+Run: `cargo check -p opex-core`
 Expected: clean (no errors). If a non-`from_engine` `ToolDeps { … }` literal exists elsewhere, add `session_id: None,` there.
 
 - [ ] **Step 8: Lint + commit**
 
 ```bash
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-git add crates/hydeclaw-core/src/agent/tool_registry.rs crates/hydeclaw-core/src/agent/tool_handlers/ crates/hydeclaw-core/src/agent/pipeline/handlers.rs crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs
+cargo clippy -p opex-core --all-targets -- -D warnings
+git add crates/opex-core/src/agent/tool_registry.rs crates/opex-core/src/agent/tool_handlers/ crates/opex-core/src/agent/pipeline/handlers.rs crates/opex-core/src/agent/pipeline/tool_defs.rs
 git commit -m "feat(todo): wire todo tool (handler, registration, schema) with session_id in ToolDeps"
 ```
 
@@ -764,8 +764,8 @@ git commit -m "feat(todo): wire todo tool (handler, registration, schema) with s
 ### Task 7: Inject the TODO block into context (Component C, part 4)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/context_builder.rs` (trait method + call in `build`)
-- Modify: `crates/hydeclaw-core/src/agent/engine/context_builder.rs` (impl for `AgentEngine`)
+- Modify: `crates/opex-core/src/agent/context_builder.rs` (trait method + call in `build`)
+- Modify: `crates/opex-core/src/agent/engine/context_builder.rs` (impl for `AgentEngine`)
 
 **Interfaces:**
 - Consumes: `db::todos::{list_todos, format_for_injection}`
@@ -803,7 +803,7 @@ git commit -m "feat(todo): wire todo tool (handler, registration, schema) with s
 
 - [ ] **Step 4: Patch any test/mock impl.** Search for other `impl ContextBuilderDeps`:
 
-Run: `grep -rn "impl .*ContextBuilderDeps for" crates/hydeclaw-core/src`
+Run: `grep -rn "impl .*ContextBuilderDeps for" crates/opex-core/src`
 For each impl that is NOT `AgentEngine` (e.g. a test mock), add:
 
 ```rust
@@ -812,13 +812,13 @@ For each impl that is NOT `AgentEngine` (e.g. a test mock), add:
 
 - [ ] **Step 5: Verify it compiles + tests pass**
 
-Run: `cargo test -p hydeclaw-core -- context_builder`
+Run: `cargo test -p opex-core -- context_builder`
 Expected: PASS (existing context_builder tests still green; trait is satisfied by all impls).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/context_builder.rs crates/hydeclaw-core/src/agent/engine/context_builder.rs
+git add crates/opex-core/src/agent/context_builder.rs crates/opex-core/src/agent/engine/context_builder.rs
 git commit -m "feat(todo): inject Active TODO block into system prompt each turn"
 ```
 
@@ -1173,7 +1173,7 @@ git commit -m "feat(browser): add scroll/hover/drag/back/press + dialog handling
 ### Task 9: Expose new browser actions in the Rust tool schema (Component B, part 2)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs` (the `browser_action` ToolDefinition at ~847)
+- Modify: `crates/opex-core/src/agent/pipeline/tool_defs.rs` (the `browser_action` ToolDefinition at ~847)
 
 **Interfaces:**
 - Consumes: the browser-renderer actions from Task 8 (the Rust handler is an unchanged pass-through).
@@ -1205,13 +1205,13 @@ git commit -m "feat(browser): add scroll/hover/drag/back/press + dialog handling
 
 - [ ] **Step 4: Verify it compiles + lint**
 
-Run: `cargo check -p hydeclaw-core && cargo clippy -p hydeclaw-core --all-targets -- -D warnings`
+Run: `cargo check -p opex-core && cargo clippy -p opex-core --all-targets -- -D warnings`
 Expected: clean.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs
+git add crates/opex-core/src/agent/pipeline/tool_defs.rs
 git commit -m "feat(browser): expose scroll/hover/drag/back/press/set_dialog in browser_action schema"
 ```
 

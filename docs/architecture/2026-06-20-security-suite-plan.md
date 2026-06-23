@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- rustls-only; `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings` clean.
-- App-tree tests run under `cargo test --bin hydeclaw-core`.
+- rustls-only; `cargo clippy --bin opex-core --all-targets -- -D warnings` clean.
+- App-tree tests run under `cargo test --bin opex-core`.
 - No `Co-Authored-By`; no `git push` unless asked.
 - Scanners are dependency-free pattern matching (no new crate); URL host parsing uses `reqwest::Url`/`url` already in the tree.
 
@@ -20,9 +20,9 @@
 ### Task A: pre-exec command scanner + code_exec hook
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/tools/command_security.rs`
-- Modify: `crates/hydeclaw-core/src/tools/mod.rs` (add `pub mod command_security;`)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/sandbox.rs` (`handle_code_exec`)
+- Create: `crates/opex-core/src/tools/command_security.rs`
+- Modify: `crates/opex-core/src/tools/mod.rs` (add `pub mod command_security;`)
+- Modify: `crates/opex-core/src/agent/pipeline/sandbox.rs` (`handle_code_exec`)
 
 **Interfaces:**
 - Produces: `enum CommandThreat { None, Dangerous(&'static str) }`; `scan_command(code: &str) -> CommandThreat`; `enum CmdAction { Allow, Warn(String), Block(String) }`; `command_action(threat: CommandThreat, is_host: bool) -> CmdAction`.
@@ -79,7 +79,7 @@ mod tests {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test --bin hydeclaw-core command_security`
+Run: `cargo test --bin opex-core command_security`
 Expected: FAIL — `scan_command`/`command_action` not found.
 
 - [ ] **Step 3: Implement** (above `#[cfg(test)]`):
@@ -136,7 +136,7 @@ pub fn command_action(threat: CommandThreat, is_host: bool) -> CmdAction {
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test --bin hydeclaw-core command_security`
+Run: `cargo test --bin opex-core command_security`
 Expected: PASS (3 tests).
 
 - [ ] **Step 6: Hook into `handle_code_exec`** (`agent/pipeline/sandbox.rs`). After the `if code.is_empty() { … }` guard, add:
@@ -161,13 +161,13 @@ Then change the function's final return (currently the bare `out` on the last li
 
 - [ ] **Step 7: Verify compile + tests**
 
-Run: `cargo test --bin hydeclaw-core command_security && cargo clippy --bin hydeclaw-core --all-targets -- -D warnings`
+Run: `cargo test --bin opex-core command_security && cargo clippy --bin opex-core --all-targets -- -D warnings`
 Expected: clean.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/tools/command_security.rs crates/hydeclaw-core/src/tools/mod.rs crates/hydeclaw-core/src/agent/pipeline/sandbox.rs
+git add crates/opex-core/src/tools/command_security.rs crates/opex-core/src/tools/mod.rs crates/opex-core/src/agent/pipeline/sandbox.rs
 git commit -m "feat(security): pre-exec scan of code_exec (block on host, warn in sandbox)"
 ```
 
@@ -176,9 +176,9 @@ git commit -m "feat(security): pre-exec scan of code_exec (block on host, warn i
 ### Task B: post-write dangerous-code warnings
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/tools/code_smell.rs`
-- Modify: `crates/hydeclaw-core/src/tools/mod.rs` (add `pub mod code_smell;`)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` (`handle_workspace_write`, `handle_workspace_edit` success arms)
+- Create: `crates/opex-core/src/tools/code_smell.rs`
+- Modify: `crates/opex-core/src/tools/mod.rs` (add `pub mod code_smell;`)
+- Modify: `crates/opex-core/src/agent/pipeline/handlers.rs` (`handle_workspace_write`, `handle_workspace_edit` success arms)
 
 **Interfaces:**
 - Produces: `scan_written(filename: &str, content: &str) -> Vec<&'static str>`; `warning_for(filename: &str, content: &str) -> String` (empty when clean).
@@ -220,7 +220,7 @@ mod tests {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test --bin hydeclaw-core code_smell`
+Run: `cargo test --bin opex-core code_smell`
 Expected: FAIL — not found.
 
 - [ ] **Step 3: Implement** (above `#[cfg(test)]`):
@@ -289,7 +289,7 @@ pub fn warning_for(filename: &str, content: &str) -> String {
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test --bin hydeclaw-core code_smell`
+Run: `cargo test --bin opex-core code_smell`
 Expected: PASS (4 tests).
 
 - [ ] **Step 6: Hook into the write/edit success arms** (`handlers.rs`). In `handle_workspace_write`'s `Ok(())` arm, change the success `format!` to insert the note **before** the FILE_PREFIX marker:
@@ -323,13 +323,13 @@ before the marker:
 
 - [ ] **Step 7: Verify compile + tests**
 
-Run: `cargo test --bin hydeclaw-core code_smell && cargo clippy --bin hydeclaw-core --all-targets -- -D warnings`
+Run: `cargo test --bin opex-core code_smell && cargo clippy --bin opex-core --all-targets -- -D warnings`
 Expected: clean.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/tools/code_smell.rs crates/hydeclaw-core/src/tools/mod.rs crates/hydeclaw-core/src/agent/pipeline/handlers.rs
+git add crates/opex-core/src/tools/code_smell.rs crates/opex-core/src/tools/mod.rs crates/opex-core/src/agent/pipeline/handlers.rs
 git commit -m "feat(security): non-blocking dangerous-code warnings on workspace_write/edit"
 ```
 
@@ -338,9 +338,9 @@ git commit -m "feat(security): non-blocking dangerous-code warnings on workspace
 ### Task C1: SecurityConfig + url_policy
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/tools/url_policy.rs`
-- Modify: `crates/hydeclaw-core/src/tools/mod.rs` (add `pub mod url_policy;`)
-- Modify: `crates/hydeclaw-core/src/config/mod.rs` (`SecurityConfig` + `AppConfig.security`)
+- Create: `crates/opex-core/src/tools/url_policy.rs`
+- Modify: `crates/opex-core/src/tools/mod.rs` (add `pub mod url_policy;`)
+- Modify: `crates/opex-core/src/config/mod.rs` (`SecurityConfig` + `AppConfig.security`)
 
 **Interfaces:**
 - Produces: `SecurityConfig { pub blocked_domains: Vec<String> }`; `host_blocked(host: &str, globs: &[String]) -> bool`; `url_blocked(url: &str, globs: &[String]) -> bool`.
@@ -383,7 +383,7 @@ mod tests {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test --bin hydeclaw-core url_policy`
+Run: `cargo test --bin opex-core url_policy`
 Expected: FAIL — not found.
 
 - [ ] **Step 3: Implement `url_policy.rs`** (above `#[cfg(test)]`):
@@ -415,7 +415,7 @@ pub fn url_blocked(url: &str, globs: &[String]) -> bool {
 }
 ```
 
-(If `url` is not a direct dependency, use `reqwest::Url` — `reqwest::Url::parse(url)` has the same `.host_str()`. Check with `grep -E '^url =' crates/hydeclaw-core/Cargo.toml`; `reqwest` is always present.)
+(If `url` is not a direct dependency, use `reqwest::Url` — `reqwest::Url::parse(url)` has the same `.host_str()`. Check with `grep -E '^url =' crates/opex-core/Cargo.toml`; `reqwest` is always present.)
 
 - [ ] **Step 4: Register module** — add `pub mod url_policy;` to `tools/mod.rs`.
 
@@ -439,13 +439,13 @@ and add the field to `AppConfig`:
 
 - [ ] **Step 6: Run to verify it passes + compiles**
 
-Run: `cargo test --bin hydeclaw-core url_policy`
-Expected: PASS (3 tests). `cargo check --bin hydeclaw-core` clean.
+Run: `cargo test --bin opex-core url_policy`
+Expected: PASS (3 tests). `cargo check --bin opex-core` clean.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/tools/url_policy.rs crates/hydeclaw-core/src/tools/mod.rs crates/hydeclaw-core/src/config/mod.rs
+git add crates/opex-core/src/tools/url_policy.rs crates/opex-core/src/tools/mod.rs crates/opex-core/src/config/mod.rs
 git commit -m "feat(security): [security] blocked_domains config + url_policy glob matcher"
 ```
 
@@ -454,8 +454,8 @@ git commit -m "feat(security): [security] blocked_domains config + url_policy gl
 ### Task C2: enforce the blocklist on agent web fetches
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/tool_handlers/comms.rs` (`BrowserActionHandler::handle`)
-- Modify: `crates/hydeclaw-core/src/agent/tool_handlers/web.rs` (`WebFetchHandler::handle`)
+- Modify: `crates/opex-core/src/agent/tool_handlers/comms.rs` (`BrowserActionHandler::handle`)
+- Modify: `crates/opex-core/src/agent/tool_handlers/web.rs` (`WebFetchHandler::handle`)
 
 **Interfaces:**
 - Consumes: `url_policy::url_blocked`; `deps.cfg.app_config.security.blocked_domains`; `args["url"]`.
@@ -482,13 +482,13 @@ git commit -m "feat(security): [security] blocked_domains config + url_policy gl
 
 - [ ] **Step 3: Verify compile + lint**
 
-Run: `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings`
+Run: `cargo clippy --bin opex-core --all-targets -- -D warnings`
 Expected: clean. (If `deps.cfg.app_config.security` path differs, reconcile: `ToolDeps.cfg: &AgentConfig`, `AgentConfig.app_config: Arc<AppConfig>`, `AppConfig.security: SecurityConfig`.)
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/comms.rs crates/hydeclaw-core/src/agent/tool_handlers/web.rs
+git add crates/opex-core/src/agent/tool_handlers/comms.rs crates/opex-core/src/agent/tool_handlers/web.rs
 git commit -m "feat(security): enforce domain blocklist on browser_action + web_fetch"
 ```
 
@@ -496,10 +496,10 @@ git commit -m "feat(security): enforce domain blocklist on browser_action + web_
 
 ## Final verification & deploy
 
-- [ ] `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings` — clean.
-- [ ] `cargo test --bin hydeclaw-core` — full suite incl. `command_security`, `code_smell`, `url_policy` green.
+- [ ] `cargo clippy --bin opex-core --all-targets -- -D warnings` — clean.
+- [ ] `cargo test --bin opex-core` — full suite incl. `command_security`, `code_smell`, `url_policy` green.
 - [ ] Deploy: `make remote-deploy` (no migration) + `make doctor`.
-- [ ] Server smoke (via API on a base agent): `code_exec` `{"language":"bash","code":"rm -rf /"}` → refused; `workspace_write` of `x.py` with `eval(` → result includes the Security note; set `[security] blocked_domains=["*.example.com"]` in `config/hydeclaw.toml`, restart, `browser_action navigate` to `https://example.com` → refused.
+- [ ] Server smoke (via API on a base agent): `code_exec` `{"language":"bash","code":"rm -rf /"}` → refused; `workspace_write` of `x.py` with `eval(` → result includes the Security note; set `[security] blocked_domains=["*.example.com"]` in `config/opex.toml`, restart, `browser_action navigate` to `https://example.com` → refused.
 
 ## Self-review checklist (completed by plan author)
 

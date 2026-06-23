@@ -1,120 +1,122 @@
-# Contributing to HydeClaw
+# Участие в разработке OPEX
 
-Thank you for your interest in contributing! Here's how to get started.
+Спасибо за интерес к проекту! Вот как начать.
 
-## Getting Started
+## Начало работы
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/AronMav/hydeclaw`
-3. Create a branch: `git checkout -b feature/your-feature-name`
+1. Создайте форк репозитория
+2. Клонируйте форк: `git clone https://github.com/AronMav/opex`
+3. Создайте ветку: `git checkout -b feature/your-feature-name`
 
-## Development Setup
+## Настройка окружения разработки
 
-### Prerequisites
+### Зависимости
 
 - Rust 1.85+ (`rustup update stable`)
-- PostgreSQL 17 with pgvector extension
-- Bun 1.x (for channel adapters)
-- Python 3.11+ with uv (for toolgate)
+- PostgreSQL 17 с расширением pgvector
+- Bun 1.x (для адаптеров каналов)
+- Python 3.11+ с uv (для toolgate)
 
-### Running Locally
+### Локальный запуск
 
 ```bash
-# 1. Start PostgreSQL
+# 1. Запустить PostgreSQL
 docker compose -f docker/docker-compose.yml up -d postgres
 
-# 2. Set up environment
+# 2. Настроить окружение
 cp .env.example .env
-# Edit .env with your values
+# Отредактируйте .env, указав ваши значения
 
-# 3. Build and run
-cargo run -p hydeclaw-core
+# 3. Собрать и запустить
+cargo run -p opex-core
 
-# 4. (Optional) Run channel adapters
+# 4. (Опционально) Запустить адаптеры каналов
 cd channels && bun install && bun run src/index.ts
 ```
 
-### Running Tests
+### Запуск тестов
 
 ```bash
-# All tests
+# Все тесты
 make test
 
-# Single test
+# Один тест
 cargo test test_name -- --nocapture
 
-# UI tests
+# Тесты UI
 cd ui && npm test
 
-# Channel adapter tests
+# Тесты адаптеров каналов
 cd channels && bun test
 ```
 
-### Linting
+### Линтинг
 
 ```bash
 make lint          # cargo clippy --all-targets -- -D warnings
 cd ui && npm run typecheck
 ```
 
-## Code Style
+## Стиль кода
 
 ### Rust
 
-- Follow standard Rust idioms (`cargo clippy` must pass with `-D warnings`)
-- Use `anyhow` for error propagation in application code, `thiserror` for library errors
-- No `unwrap()` or `expect()` in production paths — use `?` or proper error handling
-- All dependencies must use `rustls-tls` (no OpenSSL) to allow cross-compilation
+- Следуйте стандартным идиомам Rust (`cargo clippy` должен проходить с `-D warnings`)
+- Используйте `anyhow` для передачи ошибок в прикладном коде, `thiserror` для библиотечных ошибок
+- Никакого `unwrap()` или `expect()` в продакшн-путях — используйте `?` или корректную обработку ошибок
+- Все зависимости должны использовать `rustls-tls` (без OpenSSL) для возможности кросс-компиляции
 
 ### TypeScript
 
-- Strict mode enabled — no `any` types
-- Follow existing patterns in the codebase
+- Включён строгий режим — никаких типов `any`
+- Следуйте существующим паттернам в кодовой базе
 
-### YAML Tools
+### YAML-инструменты
 
-When adding a new tool to `workspace/tools/`:
-- `description` must be in English and clearly explain when to use the tool
-- Set `status: draft` until tested, `status: verified` when confirmed working
-- Test all parameters before submitting
+При добавлении нового инструмента в `workspace/tools/`:
 
-## Submitting a Pull Request
+- `description` должен быть на английском и чётко объяснять, когда использовать инструмент
+- Устанавливайте `status: draft` до тестирования, `status: verified` после подтверждения работоспособности
+- Тестируйте все параметры перед отправкой
 
-1. Make sure tests pass: `make test && make lint`
-2. Keep PRs focused — one feature or fix per PR
-3. Write a clear PR description explaining what and why
-4. Reference any related issues
+## Отправка Pull Request
 
-## Reporting Issues
+1. Убедитесь, что тесты проходят: `make test && make lint`
+2. Держите PR сфокусированным — один feature или fix на PR
+3. Пишите чёткое описание PR, объясняя что и почему
+4. Ссылайтесь на связанные issues
 
-When reporting a bug, please include:
-- HydeClaw version or commit hash
-- Operating system and architecture
-- Relevant logs (from `journalctl` or stdout)
-- Steps to reproduce
+## Сообщение об ошибках
 
-## Security Vulnerabilities
+При сообщении об ошибке укажите:
 
-Please do **not** open public issues for security vulnerabilities. Instead, create a [GitHub Security Advisory](https://github.com/AronMav/hydeclaw/security/advisories/new) or email the maintainers directly.
+- Версию OPEX или хэш коммита
+- Операционную систему и архитектуру
+- Соответствующие логи (из `journalctl` или stdout)
+- Шаги для воспроизведения
 
-## Building a Release
+## Уязвимости безопасности
+
+Пожалуйста, **не открывайте** публичные issues для уязвимостей безопасности. Вместо этого создайте [GitHub Security Advisory](https://github.com/AronMav/opex/security/advisories/new) или напишите напрямую мейнтейнерам.
+
+## Создание Release
 
 ```bash
-# Build release archive (all platforms)
+# Сборка release-архива (все платформы)
 ./release.sh 0.27.0 --all
 
-# Result: release/hydeclaw-v0.27.0.tar.gz
+# Результат: release/opex-v0.27.0.tar.gz
 ```
 
-The release script syncs the version to `Cargo.toml` and `package.json` files, builds all binaries, packages the UI, and creates a single archive.
+Скрипт release синхронизирует версию в `Cargo.toml` и файлы `package.json`, собирает все бинарники, упаковывает UI и создаёт единый архив.
 
-To publish a release on GitHub, create and push a tag — CI builds and publishes automatically:
+Для публикации release на GitHub создайте и запушьте тег — CI собирает и публикует автоматически:
 
 ```bash
 git tag v0.27.0
 git push origin v0.27.0
 ```
 
-## Questions
+## Вопросы
 
-Open a [GitHub Discussion](https://github.com/AronMav/hydeclaw/discussions) for questions about usage, architecture, or design decisions.
+Открывайте [GitHub Discussion](https://github.com/AronMav/opex/discussions) для вопросов об использовании, архитектуре или решениях по дизайну.

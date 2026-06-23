@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- rustls-only; `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings` must pass.
-- Application-tree Rust tests run under `cargo test --bin hydeclaw-core` (the lib facade excludes `gateway::handlers`/`agent`; the bin compiles the full tree). DB tests need the test postgres (`docker compose -f docker/docker-compose.test.yml up -d --build postgres-test`, `DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test`).
+- rustls-only; `cargo clippy --bin opex-core --all-targets -- -D warnings` must pass.
+- Application-tree Rust tests run under `cargo test --bin opex-core` (the lib facade excludes `gateway::handlers`/`agent`; the bin compiles the full tree). DB tests need the test postgres (`docker compose -f docker/docker-compose.test.yml up -d --build postgres-test`, `DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test`).
 - `#[sqlx::test]` must use `#[sqlx::test(migrations = "../../migrations")]` or the schema is empty.
 - Migrations runtime-loaded; `make remote-deploy` now syncs them.
 - Commit messages: conventional, no `Co-Authored-By`. No `git push` unless the user asks.
@@ -89,8 +89,8 @@ git commit -m "feat(ui/chat): surface /compact in the slash menu autocomplete"
 
 **Files:**
 - Create: `migrations/055_channel_voice_modes.sql`
-- Create: `crates/hydeclaw-core/src/db/channel_voice_modes.rs`
-- Modify: `crates/hydeclaw-core/src/db/mod.rs` (add `pub mod channel_voice_modes;`)
+- Create: `crates/opex-core/src/db/channel_voice_modes.rs`
+- Modify: `crates/opex-core/src/db/mod.rs` (add `pub mod channel_voice_modes;`)
 
 **Interfaces:**
 - Produces: `get_voice_mode(db, channel, chat_id) -> Result<String>` (`"off"` when absent), `set_voice_mode(db, channel, chat_id, mode) -> Result<()>`.
@@ -114,7 +114,7 @@ CREATE TABLE channel_voice_modes (
 pub mod channel_voice_modes;
 ```
 
-- [ ] **Step 3: Write the failing DB test** — create `crates/hydeclaw-core/src/db/channel_voice_modes.rs` with the test first (impl in Step 5):
+- [ ] **Step 3: Write the failing DB test** — create `crates/opex-core/src/db/channel_voice_modes.rs` with the test first (impl in Step 5):
 
 ```rust
 //! Per-chat voice-mode storage (table `channel_voice_modes`).
@@ -140,7 +140,7 @@ mod tests {
 
 - [ ] **Step 4: Run to verify it fails**
 
-Run: `DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test cargo test --bin hydeclaw-core channel_voice_modes`
+Run: `DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test cargo test --bin opex-core channel_voice_modes`
 Expected: FAIL — `get_voice_mode` / `set_voice_mode` not found.
 
 - [ ] **Step 5: Implement the storage functions** (insert above the `#[cfg(test)]` block):
@@ -177,13 +177,13 @@ pub async fn set_voice_mode(db: &PgPool, channel: &str, chat_id: &str, mode: &st
 
 - [ ] **Step 6: Run to verify it passes**
 
-Run: `DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test cargo test --bin hydeclaw-core channel_voice_modes`
+Run: `DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test cargo test --bin opex-core channel_voice_modes`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add migrations/055_channel_voice_modes.sql crates/hydeclaw-core/src/db/channel_voice_modes.rs crates/hydeclaw-core/src/db/mod.rs
+git add migrations/055_channel_voice_modes.sql crates/opex-core/src/db/channel_voice_modes.rs crates/opex-core/src/db/mod.rs
 git commit -m "feat(voice): channel_voice_modes table + get/set storage"
 ```
 
@@ -192,7 +192,7 @@ git commit -m "feat(voice): channel_voice_modes table + get/set storage"
 ### Task 3: `/voice` slash command (Component F, part 2)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/commands.rs` (add `parse_voice_command` + a `"/voice"` match arm in `handle_command`)
+- Modify: `crates/opex-core/src/agent/pipeline/commands.rs` (add `parse_voice_command` + a `"/voice"` match arm in `handle_command`)
 
 **Interfaces:**
 - Consumes: `db::channel_voice_modes::{get_voice_mode, set_voice_mode}`; `CommandContext.db`; `msg: &IncomingMessage` (already a `handle_command` parameter); `msg.channel`, `msg.context["chat_id"]`.
@@ -215,7 +215,7 @@ git commit -m "feat(voice): channel_voice_modes table + get/set storage"
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test --bin hydeclaw-core parse_voice_command_maps_args`
+Run: `cargo test --bin opex-core parse_voice_command_maps_args`
 Expected: FAIL — `parse_voice_command` / `VoiceCmd` not found.
 
 - [ ] **Step 3: Add the parser** near the top of `commands.rs` (after the imports):
@@ -274,14 +274,14 @@ pub fn parse_voice_command(arg: &str) -> VoiceCmd {
 
 - [ ] **Step 5: Run to verify it passes (parser test compiles + the arm compiles)**
 
-Run: `cargo test --bin hydeclaw-core parse_voice_command_maps_args`
+Run: `cargo test --bin opex-core parse_voice_command_maps_args`
 Expected: PASS (the parser test) and the crate compiles with the new arm.
 
 - [ ] **Step 6: Lint + commit**
 
 ```bash
-cargo clippy --bin hydeclaw-core --all-targets -- -D warnings
-git add crates/hydeclaw-core/src/agent/pipeline/commands.rs
+cargo clippy --bin opex-core --all-targets -- -D warnings
+git add crates/opex-core/src/agent/pipeline/commands.rs
 git commit -m "feat(voice): /voice on|off|status slash command (per-chat, DB-backed)"
 ```
 
@@ -290,7 +290,7 @@ git commit -m "feat(voice): /voice on|off|status slash command (per-chat, DB-bac
 ### Task 4: Auto-TTS hook in the channel path (Component F, part 3)
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/engine/run.rs` (`handle_with_status`, after `finalize` at ~line 322)
+- Modify: `crates/opex-core/src/agent/engine/run.rs` (`handle_with_status`, after `finalize` at ~line 322)
 
 **Interfaces:**
 - Consumes: `db::channel_voice_modes::get_voice_mode`; `pipeline::CommandContext { cfg, state, tex, subagent_depth }`; `crate::tools::yaml_tools::find_yaml_tool(workspace_dir, name)`; `crate::agent::pipeline::channel_actions::execute_yaml_channel_action(ctx, tool, args, ca)`; the `synthesize_speech` YAML tool (input param `text`, `channel_action: send_voice`).
@@ -355,18 +355,18 @@ git commit -m "feat(voice): /voice on|off|status slash command (per-chat, DB-bac
 
 - [ ] **Step 3: Verify it compiles** (resolve exact field/fn names against the codebase):
 
-Run: `cargo test --bin hydeclaw-core --no-run`
+Run: `cargo test --bin opex-core --no-run`
 Expected: clean. If `tool.channel_action` is named differently or `find_yaml_tool` is sync, adjust to match `crate::tools::yaml_tools` (the `synthesize_speech.yaml` loader). `CommandContext` fields are exactly `cfg, state, tex, subagent_depth` (see `engine/mod.rs:341`).
 
 - [ ] **Step 4: Lint**
 
-Run: `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings`
+Run: `cargo clippy --bin opex-core --all-targets -- -D warnings`
 Expected: clean.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/engine/run.rs
+git add crates/opex-core/src/agent/engine/run.rs
 git commit -m "feat(voice): auto-send each reply as a voice message when chat voice mode is on"
 ```
 
@@ -375,8 +375,8 @@ git commit -m "feat(voice): auto-send each reply as a voice message when chat vo
 ## Final verification & deploy
 
 - [ ] `cd ui && npm test` — slash-menu test green.
-- [ ] `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings` — clean.
-- [ ] Test postgres up, then `DATABASE_URL=… cargo test --bin hydeclaw-core` — full bin suite (incl. `channel_voice_modes`, `parse_voice_command`) green.
+- [ ] `cargo clippy --bin opex-core --all-targets -- -D warnings` — clean.
+- [ ] Test postgres up, then `DATABASE_URL=… cargo test --bin opex-core` — full bin suite (incl. `channel_voice_modes`, `parse_voice_command`) green.
 - [ ] Deploy: `make remote-deploy` (syncs migration 055) + UI build/deploy for G + `make doctor`.
 - [ ] Server smoke: in a Telegram chat send `/voice on` → expect "enabled" reply; send a normal message → reply arrives as text **and** a voice message; `/voice off` → text only; `/voice` → reports current mode.
 

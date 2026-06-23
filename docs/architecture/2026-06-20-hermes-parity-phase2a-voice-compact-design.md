@@ -21,7 +21,7 @@ Two of the smaller Phase-2 gaps versus Hermes:
 - TDD: tests first (project convention).
 - rustls-only, clippy `-D warnings` clean, no `Co-Authored-By` in commits, no push without explicit user request.
 - Migrations are runtime-loaded; `make remote-deploy` now syncs them (fixed 2026-06-20).
-- Verify Rust logic locally with `cargo test --bin hydeclaw-core`; DB tests with the test postgres; auto-TTS end-to-end on the server (toolgate + Telegram). The TS channel adapter is NOT touched — the auto-TTS hook lives in Rust.
+- Verify Rust logic locally with `cargo test --bin opex-core`; DB tests with the test postgres; auto-TTS end-to-end on the server (toolgate + Telegram). The TS channel adapter is NOT touched — the auto-TTS hook lives in Rust.
 
 ---
 
@@ -52,14 +52,14 @@ translation key to `ui/src/i18n/locales/en.json` and `ru.json`.
 ## Component F — `/voice on|off|status` per-chat toggle
 
 ### Problem
-HydeClaw has one-shot TTS (the agent calls the TTS YAML tool, which emits a
+OPEX has one-shot TTS (the agent calls the TTS YAML tool, which emits a
 `send_voice` channel action) but no way for a channel user to put a specific chat
 into a persistent "read every reply aloud" mode. Hermes has `/voice on|off|tts`
 persisted per `(platform, chat_id)`.
 
 ### Design — storage decision: **DB-backed** (approved)
 A per-chat mode must survive restarts and is naturally keyed by the channel + chat,
-so a small table fits HydeClaw's DB-centric model.
+so a small table fits OPEX's DB-centric model.
 
 **Migration `migrations/055_channel_voice_modes.sql`:**
 ```sql
@@ -75,7 +75,7 @@ CREATE TABLE channel_voice_modes (
 (`on` = auto-TTS each reply in addition to text; `off` = default. The `only`
 text-suppression mode is deferred; the CHECK constraint can be widened later.)
 
-**`crates/hydeclaw-core/src/db/channel_voice_modes.rs` (new):**
+**`crates/opex-core/src/db/channel_voice_modes.rs` (new):**
 - `get_voice_mode(db, channel, chat_id) -> Result<String>` (returns `"off"` when absent).
 - `set_voice_mode(db, channel, chat_id, mode) -> Result<()>` (upsert).
 
@@ -115,10 +115,10 @@ touching the transport-agnostic `finalize`:
 
 ### Files
 - `migrations/055_channel_voice_modes.sql` (new)
-- `crates/hydeclaw-core/src/db/channel_voice_modes.rs` (new) + `db/mod.rs` export
-- `crates/hydeclaw-core/src/agent/pipeline/commands.rs` (`/voice` command + `parse_voice_command`)
-- `crates/hydeclaw-core/src/agent/engine/run.rs` (`handle_with_status` post-pipeline auto-TTS hook)
-- Possibly `crates/hydeclaw-core/src/agent/pipeline/commands.rs` `CommandContext` (add channel + chat_id fields)
+- `crates/opex-core/src/db/channel_voice_modes.rs` (new) + `db/mod.rs` export
+- `crates/opex-core/src/agent/pipeline/commands.rs` (`/voice` command + `parse_voice_command`)
+- `crates/opex-core/src/agent/engine/run.rs` (`handle_with_status` post-pipeline auto-TTS hook)
+- Possibly `crates/opex-core/src/agent/pipeline/commands.rs` `CommandContext` (add channel + chat_id fields)
 
 ### Tests
 - Unit (local): `parse_voice_command` maps `on`/`off`/empty/`status` correctly; unknown arg → error.
@@ -136,5 +136,5 @@ touching the transport-agnostic `finalize`:
 4. **F-hook** — auto-TTS in `handle_with_status`.
 
 ## Deploy / verification path
-- Local: `cd ui && npm test` (G); `cargo test --bin hydeclaw-core` + test-postgres (F logic + DB).
+- Local: `cd ui && npm test` (G); `cargo test --bin opex-core` + test-postgres (F logic + DB).
 - Server: `make remote-deploy` (now syncs migration 055) + `make doctor`; smoke `/voice on` → message → expect text + voice; `/voice off` → text only.

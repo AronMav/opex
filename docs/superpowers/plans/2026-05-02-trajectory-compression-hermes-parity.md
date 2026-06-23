@@ -6,7 +6,7 @@
 
 **Architecture:** New `agent/compressor.rs` holds per-session state (previous_summary, ineffective_count, last_prompt_tokens). `history.rs` gains `compress_messages()` with 5 phases. `pipeline/execute.rs` checks `should_compress()` before each LLM call using real token counts from prior responses. State persists in `sessions.compaction_state JSONB` across reconnects.
 
-**Tech Stack:** Rust async (tokio), sqlx (Postgres), existing `LlmProvider` trait, `estimate_tokens()` from `history.rs`, `MessageRole` from `hydeclaw_types`.
+**Tech Stack:** Rust async (tokio), sqlx (Postgres), existing `LlmProvider` trait, `estimate_tokens()` from `history.rs`, `MessageRole` from `opex_types`.
 
 **Spec:** `docs/superpowers/specs/2026-05-02-trajectory-compression-design.md`
 
@@ -17,15 +17,15 @@
 | File | Action | Responsibility |
 |---|---|---|
 | `migrations/040_sessions_compaction_state.sql` | **CREATE** | ADD COLUMN compaction_state JSONB |
-| `crates/hydeclaw-core/src/db/compaction.rs` | **CREATE** | get/set compaction_state DB queries |
-| `crates/hydeclaw-core/src/db/mod.rs` | **MODIFY** | pub mod compaction |
-| `crates/hydeclaw-core/src/agent/compressor.rs` | **CREATE** | Compressor struct + trigger logic |
-| `crates/hydeclaw-core/src/agent/mod.rs` | **MODIFY** | pub mod compressor |
-| `crates/hydeclaw-core/src/config/mod.rs` | **MODIFY** | 5 new CompactionConfig fields |
-| `crates/hydeclaw-core/src/agent/history.rs` | **MODIFY** | 5-phase compress_messages() + helpers |
-| `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | **MODIFY** | Load compaction_state into BootstrapOutcome |
-| `crates/hydeclaw-core/src/agent/pipeline/execute.rs` | **MODIFY** | Proactive trigger + update_token_count |
-| `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` | **MODIFY** | Save compaction_state to DB |
+| `crates/opex-core/src/db/compaction.rs` | **CREATE** | get/set compaction_state DB queries |
+| `crates/opex-core/src/db/mod.rs` | **MODIFY** | pub mod compaction |
+| `crates/opex-core/src/agent/compressor.rs` | **CREATE** | Compressor struct + trigger logic |
+| `crates/opex-core/src/agent/mod.rs` | **MODIFY** | pub mod compressor |
+| `crates/opex-core/src/config/mod.rs` | **MODIFY** | 5 new CompactionConfig fields |
+| `crates/opex-core/src/agent/history.rs` | **MODIFY** | 5-phase compress_messages() + helpers |
+| `crates/opex-core/src/agent/pipeline/bootstrap.rs` | **MODIFY** | Load compaction_state into BootstrapOutcome |
+| `crates/opex-core/src/agent/pipeline/execute.rs` | **MODIFY** | Proactive trigger + update_token_count |
+| `crates/opex-core/src/agent/pipeline/finalize.rs` | **MODIFY** | Save compaction_state to DB |
 
 ---
 
@@ -33,8 +33,8 @@
 
 **Files:**
 - Create: `migrations/040_sessions_compaction_state.sql`
-- Create: `crates/hydeclaw-core/src/db/compaction.rs`
-- Modify: `crates/hydeclaw-core/src/db/mod.rs`
+- Create: `crates/opex-core/src/db/compaction.rs`
+- Modify: `crates/opex-core/src/db/mod.rs`
 
 - [ ] **Step 1.1: Write migration**
 
@@ -49,7 +49,7 @@ COMMENT ON COLUMN sessions.compaction_state IS
 
 - [ ] **Step 1.2: Write DB helpers**
 
-Create `crates/hydeclaw-core/src/db/compaction.rs`:
+Create `crates/opex-core/src/db/compaction.rs`:
 
 ```rust
 use anyhow::Result;
@@ -84,7 +84,7 @@ pub async fn set_compaction_state(
 
 - [ ] **Step 1.3: Export from db/mod.rs**
 
-Open `crates/hydeclaw-core/src/db/mod.rs` and add:
+Open `crates/opex-core/src/db/mod.rs` and add:
 
 ```rust
 pub mod compaction;
@@ -93,7 +93,7 @@ pub mod compaction;
 - [ ] **Step 1.4: Verify migration compiles**
 
 ```bash
-cd crates/hydeclaw-core && cargo check 2>&1 | grep -E "^error"
+cd crates/opex-core && cargo check 2>&1 | grep -E "^error"
 ```
 
 Expected: no errors.
@@ -102,8 +102,8 @@ Expected: no errors.
 
 ```bash
 git add migrations/040_sessions_compaction_state.sql \
-        crates/hydeclaw-core/src/db/compaction.rs \
-        crates/hydeclaw-core/src/db/mod.rs
+        crates/opex-core/src/db/compaction.rs \
+        crates/opex-core/src/db/mod.rs
 git commit -m "feat(compaction): add sessions.compaction_state column + DB helpers"
 ```
 
@@ -112,12 +112,12 @@ git commit -m "feat(compaction): add sessions.compaction_state column + DB helpe
 ## Task 2: CompactionConfig — 5 new fields
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/config/mod.rs`
+- Modify: `crates/opex-core/src/config/mod.rs`
 
 - [ ] **Step 2.1: Find CompactionConfig in config/mod.rs**
 
 ```bash
-grep -n "CompactionConfig\|pub struct Compaction" crates/hydeclaw-core/src/config/mod.rs
+grep -n "CompactionConfig\|pub struct Compaction" crates/opex-core/src/config/mod.rs
 ```
 
 Note the line numbers. The struct currently has `enabled`, `threshold`, `preserve_tool_calls`, `preserve_last_n`, `max_context_tokens`.
@@ -132,11 +132,11 @@ If it does, skip this step. If not, add it:
 pub struct CompactionConfig {
 ```
 
-Run `cargo check -p hydeclaw-core 2>&1 | grep "^error"` — expected: no errors.
+Run `cargo check -p opex-core 2>&1 | grep "^error"` — expected: no errors.
 
 - [ ] **Step 2.3: Write failing test**
 
-In `crates/hydeclaw-core/src/config/mod.rs` inside `#[cfg(test)] mod tests`, add:
+In `crates/opex-core/src/config/mod.rs` inside `#[cfg(test)] mod tests`, add:
 
 ```rust
 #[test]
@@ -153,7 +153,7 @@ fn compaction_config_new_fields_have_defaults() {
 - [ ] **Step 2.4: Run to confirm it fails**
 
 ```bash
-cargo test -p hydeclaw-core compaction_config_new_fields_have_defaults 2>&1 | tail -5
+cargo test -p opex-core compaction_config_new_fields_have_defaults 2>&1 | tail -5
 ```
 
 Expected: compile error (fields don't exist yet).
@@ -180,7 +180,7 @@ pub anti_thrash_min_savings: f64,
 #[serde(default = "CompactionConfig::default_anti_thrash_max_skips")]
 pub anti_thrash_max_skips: u8,
 
-/// Keep HydeClaw's pgvector fact extraction alongside the Hermes summary.
+/// Keep OPEX's pgvector fact extraction alongside the Hermes summary.
 #[serde(default = "CompactionConfig::default_extract_to_memory")]
 pub extract_to_memory: bool,
 ```
@@ -200,7 +200,7 @@ fn default_extract_to_memory() -> bool { true }
 - [ ] **Step 2.7: Run test to confirm it passes**
 
 ```bash
-cargo test -p hydeclaw-core compaction_config_new_fields_have_defaults 2>&1 | tail -5
+cargo test -p opex-core compaction_config_new_fields_have_defaults 2>&1 | tail -5
 ```
 
 Expected: `test ... ok`.
@@ -208,7 +208,7 @@ Expected: `test ... ok`.
 - [ ] **Step 2.8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/config/mod.rs
+git add crates/opex-core/src/config/mod.rs
 git commit -m "feat(compaction): add 5 new CompactionConfig fields with defaults"
 ```
 
@@ -217,12 +217,12 @@ git commit -m "feat(compaction): add 5 new CompactionConfig fields with defaults
 ## Task 3: Compressor struct
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/compressor.rs`
-- Modify: `crates/hydeclaw-core/src/agent/mod.rs`
+- Create: `crates/opex-core/src/agent/compressor.rs`
+- Modify: `crates/opex-core/src/agent/mod.rs`
 
 - [ ] **Step 3.1: Write failing tests first**
 
-Create `crates/hydeclaw-core/src/agent/compressor.rs` with tests only (no implementation):
+Create `crates/opex-core/src/agent/compressor.rs` with tests only (no implementation):
 
 ```rust
 use crate::config::CompactionConfig;
@@ -326,7 +326,7 @@ mod tests {
 - [ ] **Step 3.2: Run to confirm tests fail**
 
 ```bash
-cargo test -p hydeclaw-core compressor 2>&1 | tail -10
+cargo test -p opex-core compressor 2>&1 | tail -10
 ```
 
 Expected: compile errors (methods not defined).
@@ -426,7 +426,7 @@ impl Compressor {
 
 - [ ] **Step 3.4: Export from agent/mod.rs**
 
-Find `crates/hydeclaw-core/src/agent/mod.rs` and add:
+Find `crates/opex-core/src/agent/mod.rs` and add:
 
 ```rust
 pub mod compressor;
@@ -435,7 +435,7 @@ pub mod compressor;
 - [ ] **Step 3.5: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core compressor 2>&1 | tail -10
+cargo test -p opex-core compressor 2>&1 | tail -10
 ```
 
 Expected: all 6 tests pass.
@@ -443,8 +443,8 @@ Expected: all 6 tests pass.
 - [ ] **Step 3.6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/compressor.rs \
-        crates/hydeclaw-core/src/agent/mod.rs
+git add crates/opex-core/src/agent/compressor.rs \
+        crates/opex-core/src/agent/mod.rs
 git commit -m "feat(compaction): add Compressor struct with should_compress and anti-thrashing"
 ```
 
@@ -453,7 +453,7 @@ git commit -m "feat(compaction): add Compressor struct with should_compress and 
 ## Task 4: Phase 1 — Pre-pass helpers
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/history.rs`
+- Modify: `crates/opex-core/src/agent/history.rs`
 
 These are pure functions (no I/O, no LLM). Add them near the top of `history.rs`.
 
@@ -464,7 +464,7 @@ At the bottom of `history.rs` in the `#[cfg(test)]` block, add:
 ```rust
 #[test]
 fn prune_deduplicates_identical_tool_results() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     let dup_content = "x".repeat(300); // > 200 chars threshold
     let msgs = vec![
         Message { role: MessageRole::Tool, content: dup_content.clone(),
@@ -480,7 +480,7 @@ fn prune_deduplicates_identical_tool_results() {
 
 #[test]
 fn prune_replaces_large_tool_result_with_summary_line() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     let msgs = vec![
         Message { role: MessageRole::Tool, content: "a".repeat(300),
                   tool_call_id: Some("x".into()), tool_calls: None, thinking_blocks: vec![] },
@@ -493,7 +493,7 @@ fn prune_replaces_large_tool_result_with_summary_line() {
 
 #[test]
 fn prune_skips_messages_in_protected_tail() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     let content = "b".repeat(300);
     let msgs = vec![
         Message { role: MessageRole::Tool, content: content.clone(),
@@ -507,7 +507,7 @@ fn prune_skips_messages_in_protected_tail() {
 - [ ] **Step 4.2: Run to confirm tests fail**
 
 ```bash
-cargo test -p hydeclaw-core prune_ 2>&1 | tail -5
+cargo test -p opex-core prune_ 2>&1 | tail -5
 ```
 
 Expected: compile error (`prune_old_tool_results` not found).
@@ -566,7 +566,7 @@ pub fn prune_old_tool_results(messages: &[Message], protect_tail: usize) -> Vec<
 - [ ] **Step 4.4: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core prune_ 2>&1 | tail -5
+cargo test -p opex-core prune_ 2>&1 | tail -5
 ```
 
 Expected: all 3 tests pass.
@@ -574,7 +574,7 @@ Expected: all 3 tests pass.
 - [ ] **Step 4.5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/history.rs
+git add crates/opex-core/src/agent/history.rs
 git commit -m "feat(compaction): add Phase 1 pre-pass: prune_old_tool_results"
 ```
 
@@ -583,14 +583,14 @@ git commit -m "feat(compaction): add Phase 1 pre-pass: prune_old_tool_results"
 ## Task 5: Phase 2 — Boundary calculation
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/history.rs`
+- Modify: `crates/opex-core/src/agent/history.rs`
 
 - [ ] **Step 5.1: Write failing tests**
 
 ```rust
 #[test]
 fn tail_cut_respects_token_budget() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     // 10 messages × ~100 tokens each = 1000 tokens total.
     // budget = 200 → tail should be last ~2 messages.
     let msgs: Vec<Message> = (0..10).map(|i| Message {
@@ -605,7 +605,7 @@ fn tail_cut_respects_token_budget() {
 
 #[test]
 fn tail_cut_always_includes_last_user_message() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     let mut msgs: Vec<Message> = (0..8).map(|i| Message {
         role: MessageRole::Assistant,
         content: "a".repeat(400),
@@ -620,7 +620,7 @@ fn tail_cut_always_includes_last_user_message() {
 
 #[test]
 fn head_end_skips_orphan_tool_results() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     let msgs = vec![
         Message { role: MessageRole::System,    content: "s".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
         Message { role: MessageRole::User,      content: "u".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
@@ -636,7 +636,7 @@ fn head_end_skips_orphan_tool_results() {
 - [ ] **Step 5.2: Run to confirm they fail**
 
 ```bash
-cargo test -p hydeclaw-core "tail_cut\|head_end" 2>&1 | tail -5
+cargo test -p opex-core "tail_cut\|head_end" 2>&1 | tail -5
 ```
 
 Expected: compile errors.
@@ -712,7 +712,7 @@ pub fn find_tail_start_by_tokens(messages: &[Message], head_end: usize, tail_bud
 - [ ] **Step 5.4: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core "tail_cut\|head_end" 2>&1 | tail -5
+cargo test -p opex-core "tail_cut\|head_end" 2>&1 | tail -5
 ```
 
 Expected: all 3 tests pass.
@@ -720,7 +720,7 @@ Expected: all 3 tests pass.
 - [ ] **Step 5.5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/history.rs
+git add crates/opex-core/src/agent/history.rs
 git commit -m "feat(compaction): add Phase 2 boundary helpers: find_head_end, find_tail_start_by_tokens"
 ```
 
@@ -729,14 +729,14 @@ git commit -m "feat(compaction): add Phase 2 boundary helpers: find_head_end, fi
 ## Task 6: Phase 5 — Tool pair sanitization
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/history.rs`
+- Modify: `crates/opex-core/src/agent/history.rs`
 
 - [ ] **Step 6.1: Write failing tests**
 
 ```rust
 #[test]
 fn sanitize_removes_orphaned_tool_results() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     let msgs = vec![
         // tool result whose call_id has no matching assistant tool_call
         Message { role: MessageRole::Tool, content: "orphan".into(),
@@ -751,7 +751,7 @@ fn sanitize_removes_orphaned_tool_results() {
 
 #[test]
 fn sanitize_adds_stub_for_orphaned_calls() {
-    use hydeclaw_types::{MessageRole, ToolCall};
+    use opex_types::{MessageRole, ToolCall};
     let msgs = vec![
         Message {
             role: MessageRole::Assistant,
@@ -780,7 +780,7 @@ fn sanitize_adds_stub_for_orphaned_calls() {
 - [ ] **Step 6.2: Run to confirm they fail**
 
 ```bash
-cargo test -p hydeclaw-core sanitize_ 2>&1 | tail -5
+cargo test -p opex-core sanitize_ 2>&1 | tail -5
 ```
 
 Expected: compile errors.
@@ -866,7 +866,7 @@ pub fn sanitize_tool_pairs(messages: Vec<Message>) -> Vec<Message> {
 - [ ] **Step 6.4: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core sanitize_ 2>&1 | tail -5
+cargo test -p opex-core sanitize_ 2>&1 | tail -5
 ```
 
 Expected: both tests pass.
@@ -874,7 +874,7 @@ Expected: both tests pass.
 - [ ] **Step 6.5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/history.rs
+git add crates/opex-core/src/agent/history.rs
 git commit -m "feat(compaction): add Phase 5 sanitize_tool_pairs for orphaned tool calls/results"
 ```
 
@@ -883,7 +883,7 @@ git commit -m "feat(compaction): add Phase 5 sanitize_tool_pairs for orphaned to
 ## Task 7: Phase 3 — Hermes summary + iterative update
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/history.rs`
+- Modify: `crates/opex-core/src/agent/history.rs`
 
 Constants and the new `generate_hermes_summary` function.
 
@@ -1007,7 +1007,7 @@ that will continue this conversation.\n\nTURNS TO SUMMARIZE:\n{turns_text}\n\n{t
         thinking_blocks: vec![],
     }];
 
-    let empty_tools: Vec<hydeclaw_types::ToolDefinition> = vec![];
+    let empty_tools: Vec<opex_types::ToolDefinition> = vec![];
     match provider
         .chat(
             &prompt,
@@ -1136,7 +1136,7 @@ async fn generate_hermes_summary_returns_none_on_llm_failure() {
 - [ ] **Step 7.4: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core generate_hermes_summary 2>&1 | tail -10
+cargo test -p opex-core generate_hermes_summary 2>&1 | tail -10
 ```
 
 Expected: all 3 tests pass.
@@ -1144,7 +1144,7 @@ Expected: all 3 tests pass.
 - [ ] **Step 7.5: Verify it compiles cleanly**
 
 ```bash
-cd crates/hydeclaw-core && cargo check 2>&1 | grep "^error"
+cd crates/opex-core && cargo check 2>&1 | grep "^error"
 ```
 
 Expected: no errors.
@@ -1152,7 +1152,7 @@ Expected: no errors.
 - [ ] **Step 7.6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/history.rs
+git add crates/opex-core/src/agent/history.rs
 git commit -m "feat(compaction): add Phase 3 generate_hermes_summary with 13-section template and iterative update"
 ```
 
@@ -1161,7 +1161,7 @@ git commit -m "feat(compaction): add Phase 3 generate_hermes_summary with 13-sec
 ## Task 8: Phase 4 — Assembly + `compress_messages` orchestrator
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/history.rs`
+- Modify: `crates/opex-core/src/agent/history.rs`
 
 - [ ] **Step 8.1: Write failing integration test**
 
@@ -1170,13 +1170,13 @@ git commit -m "feat(compaction): add Phase 3 generate_hermes_summary with 13-sec
 async fn compress_messages_reduces_token_count_and_keeps_tail() {
     // This test uses a mock provider that returns a fixed summary.
     // We build a 20-message conversation where the last 3 messages are recent.
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
 
     struct MockProvider;
     #[async_trait::async_trait]
     impl crate::agent::providers::LlmProvider for MockProvider {
         fn name(&self) -> &str { "mock" }
-        async fn chat(&self, _msgs: &[Message], _tools: &[hydeclaw_types::ToolDefinition],
+        async fn chat(&self, _msgs: &[Message], _tools: &[opex_types::ToolDefinition],
                       _opts: crate::agent::providers::CallOptions)
             -> anyhow::Result<crate::agent::providers::LlmResponse>
         {
@@ -1233,7 +1233,7 @@ async fn compress_messages_reduces_token_count_and_keeps_tail() {
 - [ ] **Step 8.2: Run to confirm it fails**
 
 ```bash
-cargo test -p hydeclaw-core compress_messages_reduces 2>&1 | tail -5
+cargo test -p opex-core compress_messages_reduces 2>&1 | tail -5
 ```
 
 Expected: compile error (`compress_messages` not found).
@@ -1448,7 +1448,7 @@ Continue based on the recent messages below."
 - [ ] **Step 8.4: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core compress_messages 2>&1 | tail -10
+cargo test -p opex-core compress_messages 2>&1 | tail -10
 ```
 
 Expected: test passes.
@@ -1456,7 +1456,7 @@ Expected: test passes.
 - [ ] **Step 8.5: Run full test suite**
 
 ```bash
-cargo test -p hydeclaw-core 2>&1 | grep -E "FAILED|test result"
+cargo test -p opex-core 2>&1 | grep -E "FAILED|test result"
 ```
 
 Expected: 0 failures (DB tests that need DATABASE_URL will skip).
@@ -1464,7 +1464,7 @@ Expected: 0 failures (DB tests that need DATABASE_URL will skip).
 - [ ] **Step 8.6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/history.rs
+git add crates/opex-core/src/agent/history.rs
 git commit -m "feat(compaction): add compress_messages orchestrator — Phase 4 assembly + full 5-phase flow"
 ```
 
@@ -1473,7 +1473,7 @@ git commit -m "feat(compaction): add compress_messages orchestrator — Phase 4 
 ## Task 9: Bootstrap — load compaction state
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/bootstrap.rs`
 
 - [ ] **Step 9.1: Add `compressor` to `BootstrapOutcome`**
 
@@ -1486,7 +1486,7 @@ pub compressor: crate::agent::compressor::Compressor,
 
 - [ ] **Step 9.2: Compute `context_limit` before all return paths**
 
-Run `grep -n "BootstrapOutcome {" crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` to find all construction sites. There will be 2-4 sites (normal path + early-return slash-command path + error path).
+Run `grep -n "BootstrapOutcome {" crates/opex-core/src/agent/pipeline/bootstrap.rs` to find all construction sites. There will be 2-4 sites (normal path + early-return slash-command path + error path).
 
 Add this block **before the first `BootstrapOutcome {`** construction site AND before any early returns:
 
@@ -1531,7 +1531,7 @@ BootstrapOutcome {
 - [ ] **Step 9.5: Verify compilation**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error"
+cargo check -p opex-core 2>&1 | grep "^error"
 ```
 
 Expected: no errors (all BootstrapOutcome construction sites updated).
@@ -1539,7 +1539,7 @@ Expected: no errors (all BootstrapOutcome construction sites updated).
 - [ ] **Step 9.6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs
+git add crates/opex-core/src/agent/pipeline/bootstrap.rs
 git commit -m "feat(compaction): load compaction_state in bootstrap, add Compressor to BootstrapOutcome"
 ```
 
@@ -1548,17 +1548,17 @@ git commit -m "feat(compaction): load compaction_state in bootstrap, add Compres
 ## Task 10: Execute — proactive trigger
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/execute.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/execute.rs`
 
 - [ ] **Step 10.1: Find the function signature of `execute`**
 
 ```bash
-grep -n "pub async fn execute" crates/hydeclaw-core/src/agent/pipeline/execute.rs | head -3
+grep -n "pub async fn execute" crates/opex-core/src/agent/pipeline/execute.rs | head -3
 ```
 
 - [ ] **Step 10.2: Add `compressor` to `execute` signature**
 
-Run `grep -n "pub async fn execute" crates/hydeclaw-core/src/agent/pipeline/execute.rs | head -3`
+Run `grep -n "pub async fn execute" crates/opex-core/src/agent/pipeline/execute.rs | head -3`
 to find the current signature. It will look like:
 
 ```rust
@@ -1587,7 +1587,7 @@ pub async fn execute(
 
 - [ ] **Step 10.3: Update all callers of `execute`**
 
-Run `grep -rn "::execute\b\|pipeline::execute(" crates/hydeclaw-core/src/agent/ | grep -v "test\|#\["`.
+Run `grep -rn "::execute\b\|pipeline::execute(" crates/opex-core/src/agent/ | grep -v "test\|#\["`.
 
 Each call site is in `engine/run.rs` (3 adapter functions: `handle_sse`, `handle_with_status`,
 `handle_streaming`). In each, `BootstrapOutcome` is already destructured or accessed.
@@ -1664,7 +1664,7 @@ if let Some(ref usage) = response.usage {
 - [ ] **Step 10.6: Verify compilation**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error"
+cargo check -p opex-core 2>&1 | grep "^error"
 ```
 
 Expected: no errors.
@@ -1672,7 +1672,7 @@ Expected: no errors.
 - [ ] **Step 10.7: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core 2>&1 | grep -E "FAILED|test result" | tail -5
+cargo test -p opex-core 2>&1 | grep -E "FAILED|test result" | tail -5
 ```
 
 Expected: 0 new failures.
@@ -1680,7 +1680,7 @@ Expected: 0 new failures.
 - [ ] **Step 10.8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/execute.rs
+git add crates/opex-core/src/agent/pipeline/execute.rs
 git commit -m "feat(compaction): add proactive compression trigger in execute.rs before each LLM call"
 ```
 
@@ -1689,17 +1689,17 @@ git commit -m "feat(compaction): add proactive compression trigger in execute.rs
 ## Task 11: Finalize — save compaction state
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/finalize.rs`
 
 - [ ] **Step 11.1: Find finalize function signature**
 
 ```bash
-grep -n "pub async fn finalize\|pub fn finalize" crates/hydeclaw-core/src/agent/pipeline/finalize.rs | head -5
+grep -n "pub async fn finalize\|pub fn finalize" crates/opex-core/src/agent/pipeline/finalize.rs | head -5
 ```
 
 - [ ] **Step 11.2: Add `compressor` parameter to finalize signature**
 
-Run `grep -n "pub async fn finalize\|pub fn finalize" crates/hydeclaw-core/src/agent/pipeline/finalize.rs | head -5`
+Run `grep -n "pub async fn finalize\|pub fn finalize" crates/opex-core/src/agent/pipeline/finalize.rs | head -5`
 to find the function signature. It accesses `session_id` and a `db: &PgPool`. Add `compressor`:
 
 ```rust
@@ -1732,7 +1732,7 @@ if let Err(e) = crate::db::compaction::set_compaction_state(
 
 - [ ] **Step 11.4: Update all callers of finalize**
 
-Run `grep -rn "pipeline::finalize\|::finalize(" crates/hydeclaw-core/src/agent/ | grep -v "test\|#\["`.
+Run `grep -rn "pipeline::finalize\|::finalize(" crates/opex-core/src/agent/ | grep -v "test\|#\["`.
 
 Callers are in `engine/run.rs` (same 3 adapter functions as execute). At each call site,
 `compressor` is available from `outcome.compressor` (owned after `execute` returns).
@@ -1755,7 +1755,7 @@ finalize(db, session_id, /* ... */, &compressor).await?
 - [ ] **Step 11.5: Final compilation check**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error"
+cargo check -p opex-core 2>&1 | grep "^error"
 ```
 
 Expected: no errors.
@@ -1763,7 +1763,7 @@ Expected: no errors.
 - [ ] **Step 11.6: Full test suite**
 
 ```bash
-cargo test -p hydeclaw-core 2>&1 | grep -E "FAILED|test result"
+cargo test -p opex-core 2>&1 | grep -E "FAILED|test result"
 ```
 
 Expected: 0 new failures.
@@ -1771,7 +1771,7 @@ Expected: 0 new failures.
 - [ ] **Step 11.7: Clippy**
 
 ```bash
-cargo clippy -p hydeclaw-core -- -D warnings 2>&1 | grep "^error" | head -10
+cargo clippy -p opex-core -- -D warnings 2>&1 | grep "^error" | head -10
 ```
 
 Fix any errors before committing.
@@ -1779,7 +1779,7 @@ Fix any errors before committing.
 - [ ] **Step 11.8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/finalize.rs
+git add crates/opex-core/src/agent/pipeline/finalize.rs
 git commit -m "feat(compaction): save compaction_state in finalize.rs for session persistence"
 ```
 
@@ -1799,12 +1799,12 @@ Expected: `Finished release`.
 
 ```bash
 PI_HOST="aronmav@192.168.1.85"
-PI_DIR="~/hydeclaw"
+PI_DIR="~/opex"
 TARGET="aarch64-unknown-linux-gnu"
 
-ssh $PI_HOST "systemctl --user stop hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker"
-scp target/$TARGET/release/hydeclaw-core "$PI_HOST:$PI_DIR/hydeclaw-core-aarch64"
-ssh $PI_HOST "chmod +x $PI_DIR/hydeclaw-core-aarch64; systemctl --user start hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker"
+ssh $PI_HOST "systemctl --user stop opex-core opex-watchdog opex-memory-worker"
+scp target/$TARGET/release/opex-core "$PI_HOST:$PI_DIR/opex-core-aarch64"
+ssh $PI_HOST "chmod +x $PI_DIR/opex-core-aarch64; systemctl --user start opex-core opex-watchdog opex-memory-worker"
 ```
 
 - [ ] **Step 12.3: Health check**

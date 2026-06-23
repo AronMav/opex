@@ -5,7 +5,7 @@
 
 ## Problem
 
-`crates/hydeclaw-core/src/agent/engine_dispatch.rs` contains a 622-line hardcoded
+`crates/opex-core/src/agent/engine_dispatch.rs` contains a 622-line hardcoded
 `match` with 28 named arms. Adding a new system tool requires modifying this file.
 The `skill_use` arm (42 lines), `dispatch_memory_tool` (~200 lines),
 `dispatch_git_tool` (130 lines), `dispatch_skill_tool`, `dispatch_session_tool`,
@@ -25,7 +25,7 @@ file shrinks to ~30 lines of pure routing.
 Three new components, one new directory:
 
 ```text
-crates/hydeclaw-core/src/agent/
+crates/opex-core/src/agent/
   tool_registry.rs          — ToolDeps, SystemToolHandler, SystemToolRegistry
   tool_handlers/
     mod.rs                  — re-exports + SystemToolRegistry::build()

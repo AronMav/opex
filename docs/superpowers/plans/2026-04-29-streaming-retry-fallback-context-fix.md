@@ -14,8 +14,8 @@
 
 | File | Change |
 |---|---|
-| `crates/hydeclaw-core/src/agent/providers_http.rs` | Add `SendError`, `send_with_retry()`; refactor `retry_http_post_custom()`; add `#[cfg(test)]` module |
-| `crates/hydeclaw-core/src/agent/providers_openai.rs` | Replace send block in `chat_stream()`; add context warning in `chat()` and `chat_stream()` |
+| `crates/opex-core/src/agent/providers_http.rs` | Add `SendError`, `send_with_retry()`; refactor `retry_http_post_custom()`; add `#[cfg(test)]` module |
+| `crates/opex-core/src/agent/providers_openai.rs` | Replace send block in `chat_stream()`; add context warning in `chat()` and `chat_stream()` |
 | Pi API (runtime) | PATCH `/api/agents/Arty` → `fallback_provider: null` |
 
 ---
@@ -23,11 +23,11 @@
 ## Task 1 — Add `SendError` and write failing tests for `send_with_retry`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_http.rs`
+- Modify: `crates/opex-core/src/agent/providers_http.rs`
 
 - [ ] **Step 1: Add `SendError` enum at the bottom of `providers_http.rs` (before the `#[allow(dead_code)]` section)**
 
-  Open `crates/hydeclaw-core/src/agent/providers_http.rs` and append after line 155 (after `RETRYABLE_ANTHROPIC`):
+  Open `crates/opex-core/src/agent/providers_http.rs` and append after line 155 (after `RETRYABLE_ANTHROPIC`):
 
   ```rust
   /// Typed error returned by [`send_with_retry`].
@@ -172,7 +172,7 @@
 - [ ] **Step 4: Verify tests fail (stub panics)**
 
   ```
-  cargo test -p hydeclaw-core send_with_retry -- --nocapture
+  cargo test -p opex-core send_with_retry -- --nocapture
   ```
 
   Expected: all three tests FAIL with `not yet implemented`.
@@ -180,7 +180,7 @@
 - [ ] **Step 5: Commit the failing tests + stub**
 
   ```bash
-  git add crates/hydeclaw-core/src/agent/providers_http.rs
+  git add crates/opex-core/src/agent/providers_http.rs
   git commit -m "test(providers_http): add failing tests for send_with_retry"
   ```
 
@@ -189,7 +189,7 @@
 ## Task 2 — Implement `send_with_retry`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_http.rs`
+- Modify: `crates/opex-core/src/agent/providers_http.rs`
 
 - [ ] **Step 1: Replace the stub with the real implementation**
 
@@ -278,7 +278,7 @@
 - [ ] **Step 2: Run tests — all three must pass**
 
   ```
-  cargo test -p hydeclaw-core send_with_retry -- --nocapture
+  cargo test -p opex-core send_with_retry -- --nocapture
   ```
 
   Expected output:
@@ -299,7 +299,7 @@
 - [ ] **Step 4: Commit**
 
   ```bash
-  git add crates/hydeclaw-core/src/agent/providers_http.rs
+  git add crates/opex-core/src/agent/providers_http.rs
   git commit -m "feat(providers_http): add SendError + send_with_retry with exponential backoff"
   ```
 
@@ -308,7 +308,7 @@
 ## Task 3 — Refactor `retry_http_post_custom` to delegate to `send_with_retry`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_http.rs` lines 63–149
+- Modify: `crates/opex-core/src/agent/providers_http.rs` lines 63–149
 
 - [ ] **Step 1: Replace the body of `retry_http_post_custom`**
 
@@ -353,7 +353,7 @@
 - [ ] **Step 4: Commit**
 
   ```bash
-  git add crates/hydeclaw-core/src/agent/providers_http.rs
+  git add crates/opex-core/src/agent/providers_http.rs
   git commit -m "refactor(providers_http): retry_http_post_custom delegates to send_with_retry"
   ```
 
@@ -362,7 +362,7 @@
 ## Task 4 — Update `chat_stream()` to use `send_with_retry`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_openai.rs` lines 430–486
+- Modify: `crates/opex-core/src/agent/providers_openai.rs` lines 430–486
 
 - [ ] **Step 1: Add `SendError` to the import in `providers_openai.rs`**
 
@@ -374,7 +374,7 @@
   Add `LlmCallError` import. Find the import of `LlmCallError` — it is referenced in `chat_stream` via `LlmCallError::AuthError` etc. Search for where it's imported:
 
   ```bash
-  grep -n "LlmCallError\|use super::" crates/hydeclaw-core/src/agent/providers_openai.rs | head -10
+  grep -n "LlmCallError\|use super::" crates/opex-core/src/agent/providers_openai.rs | head -10
   ```
 
   Then add `use crate::agent::providers_http::SendError;` near the top of the file (after existing `use` statements, before the struct definition).
@@ -501,7 +501,7 @@
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add crates/hydeclaw-core/src/agent/providers_openai.rs
+  git add crates/opex-core/src/agent/providers_openai.rs
   git commit -m "fix(providers_openai): chat_stream retries 5xx via send_with_retry"
   ```
 
@@ -510,7 +510,7 @@
 ## Task 5 — Add context size warning
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_openai.rs`
+- Modify: `crates/opex-core/src/agent/providers_openai.rs`
 
 The warning goes in **two places**: after the `tracing::info!` log and before key resolution in both `chat()` and `chat_stream()`.
 
@@ -581,7 +581,7 @@ The warning goes in **two places**: after the `tracing::info!` log and before ke
 - [ ] **Step 5: Commit**
 
   ```bash
-  git add crates/hydeclaw-core/src/agent/providers_openai.rs
+  git add crates/opex-core/src/agent/providers_openai.rs
   git commit -m "feat(providers_openai): warn on large LLM context (>200K chars)"
   ```
 
@@ -608,7 +608,7 @@ The warning goes in **two places**: after the `tracing::info!` log and before ke
 - [ ] **Step 3: PATCH Arty's config to remove stale fallback**
 
   ```bash
-  TOKEN=$(grep HYDECLAW_AUTH_TOKEN .deploy.env 2>/dev/null || ssh aronmav@192.168.1.85 'grep HYDECLAW_AUTH_TOKEN ~/hydeclaw/.env | cut -d= -f2 | tr -d "\" "')
+  TOKEN=$(grep OPEX_AUTH_TOKEN .deploy.env 2>/dev/null || ssh aronmav@192.168.1.85 'grep OPEX_AUTH_TOKEN ~/opex/.env | cut -d= -f2 | tr -d "\" "')
   curl -s -X PATCH http://192.168.1.85:18789/api/agents/Arty \
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \

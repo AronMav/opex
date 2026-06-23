@@ -15,12 +15,12 @@
 | File | Action |
 |---|---|
 | `migrations/041_sessions_compression_chains.sql` | CREATE |
-| `crates/hydeclaw-core/src/agent/compressor.rs` | MODIFY |
-| `crates/hydeclaw-db/src/sessions.rs` | MODIFY |
-| `crates/hydeclaw-core/src/agent/history.rs` | MODIFY |
-| `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | MODIFY |
-| `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` | MODIFY |
-| `crates/hydeclaw-core/tests/test_compression_chains.rs` | CREATE |
+| `crates/opex-core/src/agent/compressor.rs` | MODIFY |
+| `crates/opex-db/src/sessions.rs` | MODIFY |
+| `crates/opex-core/src/agent/history.rs` | MODIFY |
+| `crates/opex-core/src/agent/pipeline/bootstrap.rs` | MODIFY |
+| `crates/opex-core/src/gateway/handlers/sessions.rs` | MODIFY |
+| `crates/opex-core/tests/test_compression_chains.rs` | CREATE |
 | `ui/src/types/api.ts` | MODIFY |
 | `ui/src/types/api.generated.ts` | MODIFY (or regenerate via `make gen-types`) |
 | `ui/src/lib/queries.ts` | MODIFY |
@@ -74,7 +74,7 @@ git commit -m "feat(compression-chains): add parent_session_id + end_reason colu
 ### Task 2: CompressorState — `pending_split` field
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/compressor.rs`
+- Modify: `crates/opex-core/src/agent/compressor.rs`
 
 - [ ] **Step 2.1: Write 4 failing tests**
 
@@ -137,7 +137,7 @@ fn record_compression_result_does_not_set_pending_split_when_ineffective() {
 - [ ] **Step 2.2: Run to confirm they fail**
 
 ```bash
-cargo test -p hydeclaw-core pending_split 2>&1 | tail -8
+cargo test -p opex-core pending_split 2>&1 | tail -8
 ```
 
 Expected: compile errors (`pending_split` field not found on `Compressor`).
@@ -257,7 +257,7 @@ pub fn record_compression_result(
 - [ ] **Step 2.9: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core pending_split 2>&1 | tail -8
+cargo test -p opex-core pending_split 2>&1 | tail -8
 ```
 
 Expected: `4 passed`.
@@ -265,7 +265,7 @@ Expected: `4 passed`.
 - [ ] **Step 2.10: Run full compressor tests**
 
 ```bash
-cargo test -p hydeclaw-core compressor 2>&1 | grep -E "FAILED|test result"
+cargo test -p opex-core compressor 2>&1 | grep -E "FAILED|test result"
 ```
 
 Expected: `0 failed`.
@@ -273,7 +273,7 @@ Expected: `0 failed`.
 - [ ] **Step 2.11: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/compressor.rs
+git add crates/opex-core/src/agent/compressor.rs
 git commit -m "feat(compression-chains): add pending_split to CompressorState and Compressor"
 ```
 
@@ -282,7 +282,7 @@ git commit -m "feat(compression-chains): add pending_split to CompressorState an
 ### Task 3: DB helpers — Session struct + chain functions
 
 **Files:**
-- Modify: `crates/hydeclaw-db/src/sessions.rs`
+- Modify: `crates/opex-db/src/sessions.rs`
 
 - [ ] **Step 3.1: Add `parent_session_id` and `end_reason` to the `Session` struct**
 
@@ -294,7 +294,7 @@ pub parent_session_id: Option<uuid::Uuid>,
 pub end_reason: Option<String>,
 ```
 
-`hydeclaw-db` already depends on `hydeclaw-types` (confirmed in `Cargo.toml`). The struct uses ts-rs under the `ts-gen` feature — no extra attribute needed: `Option<Uuid>` automatically generates `string | null` in TypeScript.
+`opex-db` already depends on `opex-types` (confirmed in `Cargo.toml`). The struct uses ts-rs under the `ts-gen` feature — no extra attribute needed: `Option<Uuid>` automatically generates `string | null` in TypeScript.
 
 - [ ] **Step 3.2: Add `get_session_for_chain` helper**
 
@@ -375,15 +375,15 @@ pub async fn insert_seed_messages(
     db: &sqlx::PgPool,
     session_id: uuid::Uuid,
     agent_id: &str,
-    messages: &[hydeclaw_types::Message],
+    messages: &[opex_types::Message],
 ) -> anyhow::Result<()> {
     use chrono::Utc;
     for (i, msg) in messages.iter().enumerate() {
         let role: &str = match msg.role {
-            hydeclaw_types::MessageRole::System    => "system",
-            hydeclaw_types::MessageRole::User      => "user",
-            hydeclaw_types::MessageRole::Assistant => "assistant",
-            hydeclaw_types::MessageRole::Tool      => "tool",
+            opex_types::MessageRole::System    => "system",
+            opex_types::MessageRole::User      => "user",
+            opex_types::MessageRole::Assistant => "assistant",
+            opex_types::MessageRole::Tool      => "tool",
         };
         let tool_calls = msg.tool_calls.as_ref()
             .and_then(|tc| serde_json::to_value(tc).ok());
@@ -455,7 +455,7 @@ Note: `depth=0` is the queried session (current); `depth=N` is the root ancestor
 - [ ] **Step 3.7: Verify compilation**
 
 ```bash
-cargo check -p hydeclaw-db 2>&1 | grep "^error"
+cargo check -p opex-db 2>&1 | grep "^error"
 ```
 
 Expected: no errors.
@@ -463,7 +463,7 @@ Expected: no errors.
 - [ ] **Step 3.8: Commit**
 
 ```bash
-git add crates/hydeclaw-db/src/sessions.rs
+git add crates/opex-db/src/sessions.rs
 git commit -m "feat(compression-chains): add chain DB helpers and SessionChainEntry"
 ```
 
@@ -472,7 +472,7 @@ git commit -m "feat(compression-chains): add chain DB helpers and SessionChainEn
 ### Task 4: `build_compressed_seed` in `history.rs`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/history.rs`
+- Modify: `crates/opex-core/src/agent/history.rs`
 
 - [ ] **Step 4.1: Write 3 failing tests**
 
@@ -481,7 +481,7 @@ In `history.rs`, inside `#[cfg(test)] mod tests { ... }`, add:
 ```rust
 #[test]
 fn build_compressed_seed_correct_order_and_roles() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     let system = Message {
         role: MessageRole::System,
         content: "You are a helpful assistant.".into(),
@@ -503,7 +503,7 @@ fn build_compressed_seed_correct_order_and_roles() {
 
 #[test]
 fn build_compressed_seed_no_system_message() {
-    use hydeclaw_types::MessageRole;
+    use opex_types::MessageRole;
     let tail = vec![
         Message { role: MessageRole::User, content: "hi".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![] },
     ];
@@ -526,7 +526,7 @@ fn build_compressed_seed_empty_summary_uses_fallback() {
 - [ ] **Step 4.2: Run to confirm they fail**
 
 ```bash
-cargo test -p hydeclaw-core build_compressed_seed 2>&1 | tail -5
+cargo test -p opex-core build_compressed_seed 2>&1 | tail -5
 ```
 
 Expected: compile error `build_compressed_seed` not found.
@@ -580,7 +580,7 @@ Context was compacted to free space. Continue based on the recent messages below
 - [ ] **Step 4.4: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core build_compressed_seed 2>&1 | tail -6
+cargo test -p opex-core build_compressed_seed 2>&1 | tail -6
 ```
 
 Expected: `3 passed`.
@@ -588,7 +588,7 @@ Expected: `3 passed`.
 - [ ] **Step 4.5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/history.rs
+git add crates/opex-core/src/agent/history.rs
 git commit -m "feat(compression-chains): add build_compressed_seed to history.rs"
 ```
 
@@ -597,7 +597,7 @@ git commit -m "feat(compression-chains): add build_compressed_seed to history.rs
 ### Task 5: `maybe_split_session` + bootstrap wiring
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/bootstrap.rs`
 
 - [ ] **Step 5.1: Add `maybe_split_session` function**
 
@@ -659,8 +659,8 @@ async fn maybe_split_session(
     .fetch_optional(db)
     .await
     .unwrap_or(None)
-    .map(|(content,)| hydeclaw_types::Message {
-        role: hydeclaw_types::MessageRole::System,
+    .map(|(content,)| opex_types::Message {
+        role: opex_types::MessageRole::System,
         content,
         tool_calls: None,
         tool_call_id: None,
@@ -679,18 +679,18 @@ async fn maybe_split_session(
     .await
     .unwrap_or_default();
 
-    let tail: Vec<hydeclaw_types::Message> = all_rows
+    let tail: Vec<opex_types::Message> = all_rows
         .into_iter()
         .rev()
         .take(preserve_last_n)
         .rev()  // restore chronological order
         .map(|(role, content, tool_calls, tool_call_id)| {
             let msg_role = match role.as_str() {
-                "assistant" => hydeclaw_types::MessageRole::Assistant,
-                "tool"      => hydeclaw_types::MessageRole::Tool,
-                _           => hydeclaw_types::MessageRole::User,
+                "assistant" => opex_types::MessageRole::Assistant,
+                "tool"      => opex_types::MessageRole::Tool,
+                _           => opex_types::MessageRole::User,
             };
-            hydeclaw_types::Message {
+            opex_types::Message {
                 role: msg_role,
                 content,
                 tool_calls: tool_calls.and_then(|v| serde_json::from_value(v).ok()),
@@ -828,17 +828,17 @@ let crate::agent::context_builder::ContextSnapshot {
 - [ ] **Step 5.3: Verify compilation**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error"
+cargo check -p opex-core 2>&1 | grep "^error"
 ```
 
 Expected: no errors. If `engine.cfg().agent.compaction` doesn't have `preserve_last_n`, use `3` as hardcoded default and add a TODO comment.
 
-Note: `crates/hydeclaw-core/src/db/mod.rs` already has `pub use hydeclaw_db::sessions;` (line 7) — all new public functions added to `hydeclaw-db/src/sessions.rs` are automatically accessible as `crate::db::sessions::*` in `hydeclaw-core`. No changes to `db/mod.rs` needed.
+Note: `crates/opex-core/src/db/mod.rs` already has `pub use opex_db::sessions;` (line 7) — all new public functions added to `opex-db/src/sessions.rs` are automatically accessible as `crate::db::sessions::*` in `opex-core`. No changes to `db/mod.rs` needed.
 
 - [ ] **Step 5.4: Run full test suite**
 
 ```bash
-cargo test -p hydeclaw-core 2>&1 | grep -E "FAILED|test result" | tail -5
+cargo test -p opex-core 2>&1 | grep -E "FAILED|test result" | tail -5
 ```
 
 Expected: 0 new failures.
@@ -846,7 +846,7 @@ Expected: 0 new failures.
 - [ ] **Step 5.5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs
+git add crates/opex-core/src/agent/pipeline/bootstrap.rs
 git commit -m "feat(compression-chains): add maybe_split_session + wire into bootstrap"
 ```
 
@@ -855,7 +855,7 @@ git commit -m "feat(compression-chains): add maybe_split_session + wire into boo
 ### Task 6: Chain API endpoint
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/sessions.rs`
+- Modify: `crates/opex-core/src/gateway/handlers/sessions.rs`
 
 - [ ] **Step 6.1: Add route**
 
@@ -890,7 +890,7 @@ pub(crate) async fn api_session_chain(
 - [ ] **Step 6.3: Verify compilation**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error"
+cargo check -p opex-core 2>&1 | grep "^error"
 ```
 
 Expected: no errors.
@@ -898,7 +898,7 @@ Expected: no errors.
 - [ ] **Step 6.4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/sessions.rs
+git add crates/opex-core/src/gateway/handlers/sessions.rs
 git commit -m "feat(compression-chains): add GET /api/sessions/{id}/chain endpoint"
 ```
 
@@ -907,7 +907,7 @@ git commit -m "feat(compression-chains): add GET /api/sessions/{id}/chain endpoi
 ### Task 7: Session DTO — expose `parent_session_id` + `end_reason` in list/get
 
 **Files:**
-- Modify: `crates/hydeclaw-db/src/sessions.rs` (already has the `Session` struct fields from Task 3)
+- Modify: `crates/opex-db/src/sessions.rs` (already has the `Session` struct fields from Task 3)
 - Modify: `ui/src/types/api.generated.ts`
 
 The `Session` struct already has the new fields from Task 3. Now run codegen:
@@ -915,7 +915,7 @@ The `Session` struct already has the new fields from Task 3. Now run codegen:
 - [ ] **Step 7.1: Regenerate TypeScript bindings**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw && make gen-types 2>&1 | tail -10
+cd d:/GIT/bogdan/opex && make gen-types 2>&1 | tail -10
 ```
 
 Expected: `api.generated.ts` updated with `parent_session_id: string | null` and `end_reason: string | null` on the `Session` interface.
@@ -930,7 +930,7 @@ end_reason: string | null;
 - [ ] **Step 7.2: Verify UI build**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw/ui && npm run build 2>&1 | tail -10
+cd d:/GIT/bogdan/opex/ui && npm run build 2>&1 | tail -10
 ```
 
 Expected: build succeeds.
@@ -947,13 +947,13 @@ git commit -m "feat(compression-chains): expose parent_session_id + end_reason i
 ### Task 8: Integration tests
 
 **Files:**
-- Create: `crates/hydeclaw-core/tests/test_compression_chains.rs`
+- Create: `crates/opex-core/tests/test_compression_chains.rs`
 
-These tests use the existing testcontainers harness. Look at existing files in `crates/hydeclaw-core/tests/` for the harness setup pattern (e.g. `test_pg_trgm_search.rs` or `test_compression_chains.rs` for the exact `setup_test_db()` function signature).
+These tests use the existing testcontainers harness. Look at existing files in `crates/opex-core/tests/` for the harness setup pattern (e.g. `test_pg_trgm_search.rs` or `test_compression_chains.rs` for the exact `setup_test_db()` function signature).
 
 - [ ] **Step 8.1: Create test file**
 
-Create `crates/hydeclaw-core/tests/test_compression_chains.rs`:
+Create `crates/opex-core/tests/test_compression_chains.rs`:
 
 ```rust
 //! Integration tests for compression chain split (P1.1).
@@ -997,7 +997,7 @@ async fn no_split_when_pending_split_false() {
         "compression_count": 1,
         "pending_split": false
     });
-    hydeclaw_core::db::compaction::set_compaction_state(&db, session_id, state)
+    opex_core::db::compaction::set_compaction_state(&db, session_id, state)
         .await.unwrap();
 
     // Calling maybe_split_session with pending_split=false returns None
@@ -1006,7 +1006,7 @@ async fn no_split_when_pending_split_false() {
         .fetch_one(&db).await.unwrap();
 
     // Directly verify get_session_for_chain works
-    let row = hydeclaw_db::sessions::get_session_for_chain(&db, session_id)
+    let row = opex_db::sessions::get_session_for_chain(&db, session_id)
         .await.unwrap();
     assert!(row.is_some());
 
@@ -1020,7 +1020,7 @@ async fn create_chain_session_links_parent() {
     let db = match test_db().await { Some(d) => d, None => return };
 
     let parent_id = insert_test_session(&db, "TestAgent").await;
-    let child_id = hydeclaw_db::sessions::create_chain_session(
+    let child_id = opex_db::sessions::create_chain_session(
         &db, parent_id, "TestAgent", "user1", "ui", Some("Test Session")
     ).await.unwrap();
 
@@ -1038,7 +1038,7 @@ async fn set_session_end_reason_updates_parent() {
     let db = match test_db().await { Some(d) => d, None => return };
 
     let session_id = insert_test_session(&db, "TestAgent").await;
-    hydeclaw_db::sessions::set_session_end_reason(&db, session_id, "compression")
+    opex_db::sessions::set_session_end_reason(&db, session_id, "compression")
         .await.unwrap();
 
     let (end_reason,): (Option<String>,) = sqlx::query_as(
@@ -1055,10 +1055,10 @@ async fn get_session_chain_returns_ancestors_root_first() {
 
     // Build chain A -> B -> C
     let a = insert_test_session(&db, "TestAgent").await;
-    let b = hydeclaw_db::sessions::create_chain_session(&db, a, "TestAgent", "u", "ui", None).await.unwrap();
-    let c = hydeclaw_db::sessions::create_chain_session(&db, b, "TestAgent", "u", "ui", None).await.unwrap();
+    let b = opex_db::sessions::create_chain_session(&db, a, "TestAgent", "u", "ui", None).await.unwrap();
+    let c = opex_db::sessions::create_chain_session(&db, b, "TestAgent", "u", "ui", None).await.unwrap();
 
-    let chain = hydeclaw_db::sessions::get_session_chain(&db, c).await.unwrap();
+    let chain = opex_db::sessions::get_session_chain(&db, c).await.unwrap();
     assert_eq!(chain.len(), 3, "chain has 3 sessions");
     assert_eq!(chain[0].id, a, "root (A) is first");
     assert_eq!(chain[1].id, b);
@@ -1074,24 +1074,24 @@ async fn insert_seed_messages_preserves_order() {
     let session_id = insert_test_session(&db, "TestAgent").await;
 
     let messages = vec![
-        hydeclaw_types::Message {
-            role: hydeclaw_types::MessageRole::System,
+        opex_types::Message {
+            role: opex_types::MessageRole::System,
             content: "sys".into(),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
         },
-        hydeclaw_types::Message {
-            role: hydeclaw_types::MessageRole::Assistant,
+        opex_types::Message {
+            role: opex_types::MessageRole::Assistant,
             content: "summary".into(),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
         },
-        hydeclaw_types::Message {
-            role: hydeclaw_types::MessageRole::User,
+        opex_types::Message {
+            role: opex_types::MessageRole::User,
             content: "user turn".into(),
             tool_calls: None, tool_call_id: None, thinking_blocks: vec![],
         },
     ];
 
-    hydeclaw_db::sessions::insert_seed_messages(&db, session_id, "TestAgent", &messages)
+    opex_db::sessions::insert_seed_messages(&db, session_id, "TestAgent", &messages)
         .await.unwrap();
 
     let rows: Vec<(String,)> = sqlx::query_as(
@@ -1108,7 +1108,7 @@ async fn insert_seed_messages_preserves_order() {
 - [ ] **Step 8.2: Run integration tests**
 
 ```bash
-cargo test -p hydeclaw-core test_compression_chains -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core test_compression_chains -- --nocapture 2>&1 | tail -20
 ```
 
 Expected with DATABASE_URL set: all 5 tests pass. Without DATABASE_URL: all tests skipped (not failed).
@@ -1116,7 +1116,7 @@ Expected with DATABASE_URL set: all 5 tests pass. Without DATABASE_URL: all test
 - [ ] **Step 8.3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/tests/test_compression_chains.rs
+git add crates/opex-core/tests/test_compression_chains.rs
 git commit -m "test(compression-chains): add integration tests for chain split + CTE"
 ```
 
@@ -1177,7 +1177,7 @@ Also add `SessionChainResponse` to the import from `@/types/api` at line 7–42.
 - [ ] **Step 9.4: Verify TypeScript compilation**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw/ui && npx tsc --noEmit 2>&1 | head -20
+cd d:/GIT/bogdan/opex/ui && npx tsc --noEmit 2>&1 | head -20
 ```
 
 Expected: no type errors.
@@ -1252,7 +1252,7 @@ import { ParentBadge } from "@/components/chat/ParentBadge";
 - [ ] **Step 10.3: Verify UI builds**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw/ui && npm run build 2>&1 | grep -E "Error|error" | head -10
+cd d:/GIT/bogdan/opex/ui && npm run build 2>&1 | grep -E "Error|error" | head -10
 ```
 
 Expected: build succeeds.
@@ -1289,7 +1289,7 @@ interface CompactChainBannerProps {
   onNavigate: (sessionId: string) => void;
 }
 
-const STORAGE_KEY = "hydeclaw:chain-banner-collapsed";
+const STORAGE_KEY = "opex:chain-banner-collapsed";
 
 export function CompactChainBanner({ activeSessionId, onNavigate }: CompactChainBannerProps) {
   const { data } = useSessionChain(activeSessionId);
@@ -1385,7 +1385,7 @@ import { CompactChainBanner } from "@/components/chat/CompactChainBanner";
 - [ ] **Step 11.3: Verify UI builds**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw/ui && npm run build 2>&1 | grep -E "^Error|Failed" | head -10
+cd d:/GIT/bogdan/opex/ui && npm run build 2>&1 | grep -E "^Error|Failed" | head -10
 ```
 
 Expected: build succeeds.
@@ -1522,7 +1522,7 @@ describe("ParentBadge", () => {
 - [ ] **Step 12.2: Run tests**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw/ui && npm test -- --reporter=verbose --run src/__tests__/compression-chains.test.tsx 2>&1 | tail -20
+cd d:/GIT/bogdan/opex/ui && npm test -- --reporter=verbose --run src/__tests__/compression-chains.test.tsx 2>&1 | tail -20
 ```
 
 Expected: all tests pass (or skip if JSdom environment has issues with localStorage — add `try/catch` guards in the component if needed).
@@ -1530,7 +1530,7 @@ Expected: all tests pass (or skip if JSdom environment has issues with localStor
 - [ ] **Step 12.3: Run full UI test suite**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw/ui && npm test 2>&1 | grep -E "FAILED|Tests" | tail -5
+cd d:/GIT/bogdan/opex/ui && npm test 2>&1 | grep -E "FAILED|Tests" | tail -5
 ```
 
 Expected: 0 new failures.
@@ -1538,7 +1538,7 @@ Expected: 0 new failures.
 - [ ] **Step 12.4: Final ARM64 build**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw && cargo zigbuild --target aarch64-unknown-linux-gnu --release -p hydeclaw-core 2>&1 | tail -5
+cd d:/GIT/bogdan/opex && cargo zigbuild --target aarch64-unknown-linux-gnu --release -p opex-core 2>&1 | tail -5
 ```
 
 Expected: `Finished release`.

@@ -15,13 +15,13 @@
 | Action | File | Responsibility |
 | --- | --- | --- |
 | Create | `migrations/045_messages_compressed.sql` | Add `compressed` column + index |
-| Modify | `crates/hydeclaw-core/src/agent/compressor.rs` | Remove `pending_split` field |
-| Modify | `crates/hydeclaw-db/src/sessions.rs` | Add `mark_messages_compressed()`, `insert_compression_event()`, `get_messages_page()` |
-| Modify | `crates/hydeclaw-core/src/agent/history.rs` | Add params to `compress_messages()`: `message_db_ids`, `db`, `session_id` |
-| Modify | `crates/hydeclaw-core/src/agent/engine/context_builder.rs` | Add `message_db_ids` to `ContextSnapshot`; build from `MessageRow.id` |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | Delete `maybe_split_session()`; add `message_db_ids` to `BootstrapOutcome` (from ContextSnapshot) |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/execute.rs` | Thread `message_db_ids` through loop; pass new params to `compress_messages()` |
-| Modify | `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` | `before_id` param; new response shape; `segment_count` in session DTO |
+| Modify | `crates/opex-core/src/agent/compressor.rs` | Remove `pending_split` field |
+| Modify | `crates/opex-db/src/sessions.rs` | Add `mark_messages_compressed()`, `insert_compression_event()`, `get_messages_page()` |
+| Modify | `crates/opex-core/src/agent/history.rs` | Add params to `compress_messages()`: `message_db_ids`, `db`, `session_id` |
+| Modify | `crates/opex-core/src/agent/engine/context_builder.rs` | Add `message_db_ids` to `ContextSnapshot`; build from `MessageRow.id` |
+| Modify | `crates/opex-core/src/agent/pipeline/bootstrap.rs` | Delete `maybe_split_session()`; add `message_db_ids` to `BootstrapOutcome` (from ContextSnapshot) |
+| Modify | `crates/opex-core/src/agent/pipeline/execute.rs` | Thread `message_db_ids` through loop; pass new params to `compress_messages()` |
+| Modify | `crates/opex-core/src/gateway/handlers/sessions.rs` | `before_id` param; new response shape; `segment_count` in session DTO |
 | Create | `ui/src/components/chat/CompressionDivider.tsx` | Thin divider component |
 | Modify | `ui/src/types/api.ts` | Add `MessagesResponse`, `CompressionEvent`; `segment_count` on Session |
 | Modify | `ui/src/stores/chat/chat-types.ts` | Add `CompressionDividerPart` to `MessagePart` union |
@@ -65,7 +65,7 @@ CREATE INDEX idx_messages_session_compressed
 - [ ] **Step 3: Cargo check unaffected**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 5
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 5
 ```
 
 Expected: no errors (SQL file only, no Rust changes).
@@ -82,7 +82,7 @@ git commit -m "feat(db): add compressed column to messages for in-session compre
 ## Task 2 — Remove pending_split from CompressorState
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/compressor.rs`
+- Modify: `crates/opex-core/src/agent/compressor.rs`
 
 ### Context
 
@@ -119,7 +119,7 @@ fn compressor_state_serializes_without_pending_split() {
 - [ ] **Step 2: Run to verify it fails**
 
 ```powershell
-cargo test -p hydeclaw-core compressor_state_serializes_without_pending_split -- --nocapture 2>&1 | tail -5
+cargo test -p opex-core compressor_state_serializes_without_pending_split -- --nocapture 2>&1 | tail -5
 ```
 
 Expected: compile error — struct literal missing `pending_split` field.
@@ -145,7 +145,7 @@ self.state.pending_split = true;
 - [ ] **Step 5: Run tests**
 
 ```powershell
-cargo test -p hydeclaw-core compressor -- --nocapture 2>&1 | tail -10
+cargo test -p opex-core compressor -- --nocapture 2>&1 | tail -10
 ```
 
 Expected: all compressor tests pass including new one.
@@ -153,7 +153,7 @@ Expected: all compressor tests pass including new one.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/compressor.rs
+git add crates/opex-core/src/agent/compressor.rs
 git commit -m "refactor(compressor): remove pending_split — chain splits replaced by in-session compression tracking"
 ```
 
@@ -162,13 +162,13 @@ git commit -m "refactor(compressor): remove pending_split — chain splits repla
 ## Task 3 — DB functions for compression tracking
 
 **Files:**
-- Modify: `crates/hydeclaw-db/src/sessions.rs`
+- Modify: `crates/opex-db/src/sessions.rs`
 
 Three new functions added to the bottom of the file.
 
 - [ ] **Step 1: Write compile-time tests**
 
-Add to `crates/hydeclaw-db/src/sessions.rs` test section:
+Add to `crates/opex-db/src/sessions.rs` test section:
 
 ```rust
 #[cfg(test)]
@@ -206,7 +206,7 @@ mod compression_tests {
 - [ ] **Step 2: Run to verify failures**
 
 ```powershell
-cargo test -p hydeclaw-db compression_tests -- --nocapture 2>&1 | Select-String "error\[" | Select-Object -First 5
+cargo test -p opex-db compression_tests -- --nocapture 2>&1 | Select-String "error\[" | Select-Object -First 5
 ```
 
 Expected: compile errors — types and functions not defined.
@@ -368,7 +368,7 @@ pub async fn get_messages_page(
 - [ ] **Step 7: Run compile tests**
 
 ```powershell
-cargo test -p hydeclaw-db compression_tests -- --nocapture 2>&1 | tail -5
+cargo test -p opex-db compression_tests -- --nocapture 2>&1 | tail -5
 ```
 
 Expected: all 3 tests pass.
@@ -376,7 +376,7 @@ Expected: all 3 tests pass.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/hydeclaw-db/src/sessions.rs
+git add crates/opex-db/src/sessions.rs
 git commit -m "feat(db): add mark_messages_compressed, insert_compression_event, get_messages_page"
 ```
 
@@ -385,9 +385,9 @@ git commit -m "feat(db): add mark_messages_compressed, insert_compression_event,
 ## Task 4 — Thread message_db_ids through pipeline
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/engine/context_builder.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/execute.rs`
+- Modify: `crates/opex-core/src/agent/engine/context_builder.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/bootstrap.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/execute.rs`
 
 ### Context
 
@@ -434,7 +434,7 @@ mod tests {
 - [ ] **Step 2: Run to verify failure**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "error\[E" | Select-Object -First 3
+cargo check --package opex-core 2>&1 | Select-String "error\[E" | Select-Object -First 3
 ```
 
 Expected: compile error — field `message_db_ids` not found on `ContextSnapshot`.
@@ -459,7 +459,7 @@ pub message_db_ids: Vec<Option<uuid::Uuid>>,
 In `context_builder.rs`, find where `sessions::load_messages()` (or `session_load_messages()`) is called and the resulting `Vec<MessageRow>` is converted to `Vec<Message>`.
 
 ```powershell
-Select-String -Path "crates\hydeclaw-core\src\agent\engine\context_builder.rs" `
+Select-String -Path "crates\opex-core\src\agent\engine\context_builder.rs" `
     -Pattern "load_messages|MessageRow|into_iter.*map" | Select-Object LineNumber, Line
 ```
 
@@ -537,7 +537,7 @@ message_db_ids.push(None);
 - [ ] **Step 7: Compile check**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 10
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 10
 ```
 
 Expected: no errors. Fix any struct construction mismatches flagged by the compiler.
@@ -545,9 +545,9 @@ Expected: no errors. Fix any struct construction mismatches flagged by the compi
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/engine/context_builder.rs \
-        crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs \
-        crates/hydeclaw-core/src/agent/pipeline/execute.rs
+git add crates/opex-core/src/agent/engine/context_builder.rs \
+        crates/opex-core/src/agent/pipeline/bootstrap.rs \
+        crates/opex-core/src/agent/pipeline/execute.rs
 git commit -m "feat(pipeline): thread message_db_ids through context_builder, bootstrap, execute"
 ```
 
@@ -556,7 +556,7 @@ git commit -m "feat(pipeline): thread message_db_ids through context_builder, bo
 ## Task 5 — compress_messages(): add DB writes
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/history.rs`
+- Modify: `crates/opex-core/src/agent/history.rs`
 
 ### Context
 
@@ -722,7 +722,7 @@ Expected: no errors.
 - [ ] **Step 8: Run compression tests**
 
 ```powershell
-cargo test -p hydeclaw-core compress -- --nocapture 2>&1 | tail -10
+cargo test -p opex-core compress -- --nocapture 2>&1 | tail -10
 ```
 
 Expected: all pass.
@@ -730,8 +730,8 @@ Expected: all pass.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/history.rs \
-        crates/hydeclaw-core/src/agent/pipeline/execute.rs
+git add crates/opex-core/src/agent/history.rs \
+        crates/opex-core/src/agent/pipeline/execute.rs
 git commit -m "feat(compression): mark compressed messages in DB and insert WAL event after each proactive compression"
 ```
 
@@ -740,7 +740,7 @@ git commit -m "feat(compression): mark compressed messages in DB and insert WAL 
 ## Task 6 — Remove maybe_split_session from bootstrap.rs
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/bootstrap.rs`
 
 ### Context
 
@@ -751,7 +751,7 @@ git commit -m "feat(compression): mark compressed messages in DB and insert WAL 
 Remove the entire function from line 74 to its closing `}` (end of line 242). Also remove any helper functions it calls exclusively (e.g. `create_chain_session` if it exists only for this purpose — verify with grep before deleting).
 
 ```powershell
-Select-String -Path "crates\hydeclaw-core\src\agent\pipeline\bootstrap.rs" `
+Select-String -Path "crates\opex-core\src\agent\pipeline\bootstrap.rs" `
     -Pattern "fn create_chain_session|fn maybe_split_session" | Select-Object LineNumber, Line
 ```
 
@@ -789,7 +789,7 @@ After deletion, `cargo check` will flag any unused imports. Remove them.
 - [ ] **Step 4: Full compile check**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 15
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 15
 ```
 
 Expected: no errors.
@@ -797,7 +797,7 @@ Expected: no errors.
 - [ ] **Step 5: Run full test suite**
 
 ```powershell
-cargo test -p hydeclaw-core 2>&1 | Select-String "FAILED|test result" | Select-Object -First 10
+cargo test -p opex-core 2>&1 | Select-String "FAILED|test result" | Select-Object -First 10
 ```
 
 Expected: same pre-existing failures (finalize, lifecycle_guard — require DATABASE_URL). No new failures.
@@ -805,7 +805,7 @@ Expected: same pre-existing failures (finalize, lifecycle_guard — require DATA
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs
+git add crates/opex-core/src/agent/pipeline/bootstrap.rs
 git commit -m "refactor(bootstrap): remove maybe_split_session — compression stays in single session"
 ```
 
@@ -814,7 +814,7 @@ git commit -m "refactor(bootstrap): remove maybe_split_session — compression s
 ## Task 7 — Messages API endpoint with backward pagination
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/sessions.rs`
+- Modify: `crates/opex-core/src/gateway/handlers/sessions.rs`
 
 ### Context
 
@@ -911,14 +911,14 @@ Update the result struct / JSON serialization to include `segment_count: i32`.
 - [ ] **Step 4: Compile check**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 10
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 10
 ```
 
 - [ ] **Step 5: Quick smoke test** (optional, requires running server)
 
 ```powershell
 # After `cargo run`:
-$headers = @{ Authorization = "Bearer $env:HYDECLAW_AUTH_TOKEN" }
+$headers = @{ Authorization = "Bearer $env:OPEX_AUTH_TOKEN" }
 Invoke-RestMethod "http://localhost:18789/api/sessions/{id}/messages" -Headers $headers
 # Expected: { messages: [...], compression_events: [], has_more: false }
 ```
@@ -926,7 +926,7 @@ Invoke-RestMethod "http://localhost:18789/api/sessions/{id}/messages" -Headers $
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/sessions.rs
+git add crates/opex-core/src/gateway/handlers/sessions.rs
 git commit -m "feat(api): backward-paginated messages endpoint with compression_events and has_more; add segment_count to session DTO"
 ```
 
@@ -1392,8 +1392,8 @@ git commit -m "feat(ui): show ◈ N segment count badge in session list for mult
 - [ ] **Step 1: Full Rust tests**
 
 ```powershell
-cd d:\GIT\bogdan\hydeclaw
-cargo test -p hydeclaw-core -p hydeclaw-db 2>&1 | Select-String "FAILED|test result" | Select-Object -First 10
+cd d:\GIT\bogdan\opex
+cargo test -p opex-core -p opex-db 2>&1 | Select-String "FAILED|test result" | Select-Object -First 10
 ```
 
 Expected: same pre-existing failures only (finalize, lifecycle_guard — require DATABASE_URL).
@@ -1421,7 +1421,7 @@ Expected: CompressionDivider tests pass, no regressions.
 Get-ChildItem migrations\ | Sort-Object Name | Select-Object -Last 3
 
 # Verify compress_messages no longer referenced in bootstrap.rs chain-split context
-Select-String -Path "crates\hydeclaw-core\src\agent\pipeline\bootstrap.rs" `
+Select-String -Path "crates\opex-core\src\agent\pipeline\bootstrap.rs" `
     -Pattern "maybe_split_session|pending_split|create_chain_session"
 ```
 

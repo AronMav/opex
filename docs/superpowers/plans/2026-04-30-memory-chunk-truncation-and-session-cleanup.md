@@ -14,16 +14,16 @@
 
 | File | Change |
 |------|--------|
-| `crates/hydeclaw-core/src/agent/pipeline/memory.rs` | Add `MEMORY_CHUNK_MAX_CHARS`, `truncate_chunk_content()`, apply in search + get handlers |
-| `crates/hydeclaw-db/src/sessions.rs` | Add `cleanup_session_streaming_messages()` |
-| `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | Call cleanup after `claim_session_running` |
+| `crates/opex-core/src/agent/pipeline/memory.rs` | Add `MEMORY_CHUNK_MAX_CHARS`, `truncate_chunk_content()`, apply in search + get handlers |
+| `crates/opex-db/src/sessions.rs` | Add `cleanup_session_streaming_messages()` |
+| `crates/opex-core/src/agent/pipeline/bootstrap.rs` | Call cleanup after `claim_session_running` |
 
 ---
 
 ## Task 1: Add `truncate_chunk_content` to memory.rs
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/memory.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/memory.rs`
 
 Context: `handle_memory_search` (line 80) formats results at line 100–108. `handle_memory_get` (line 215) formats at line 225–236. Neither caps chunk size, so a 247 000-char Excalidraw file lands in the LLM context intact.
 
@@ -75,7 +75,7 @@ mod tests {
 - [ ] **Step 2: Run tests — expect compile failure (function not defined yet)**
 
 ```bash
-cargo test -p hydeclaw-core --lib memory 2>&1 | grep -E "error|FAILED|passed"
+cargo test -p opex-core --lib memory 2>&1 | grep -E "error|FAILED|passed"
 ```
 
 Expected: compilation error `cannot find function \`truncate_chunk_content\``.
@@ -109,7 +109,7 @@ pub(crate) fn truncate_chunk_content(content: &str) -> &str {
 - [ ] **Step 4: Run tests — expect 5 passed**
 
 ```bash
-cargo test -p hydeclaw-core --lib memory 2>&1 | grep -E "test result|FAILED"
+cargo test -p opex-core --lib memory 2>&1 | grep -E "test result|FAILED"
 ```
 
 Expected: `test result: ok. 5 passed`.
@@ -117,7 +117,7 @@ Expected: `test result: ok. 5 passed`.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/memory.rs
+git add crates/opex-core/src/agent/pipeline/memory.rs
 git commit -m "feat(memory): add truncate_chunk_content with Excalidraw detection and 6k char cap"
 ```
 
@@ -126,7 +126,7 @@ git commit -m "feat(memory): add truncate_chunk_content with Excalidraw detectio
 ## Task 2: Apply truncation in `handle_memory_search`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/memory.rs` (lines 100–108)
+- Modify: `crates/opex-core/src/agent/pipeline/memory.rs` (lines 100–108)
 
 - [ ] **Step 1: Replace the format line in `handle_memory_search`**
 
@@ -160,7 +160,7 @@ let body = results
 - [ ] **Step 2: Verify it compiles**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep -E "error|warning.*unused"
+cargo check -p opex-core 2>&1 | grep -E "error|warning.*unused"
 ```
 
 Expected: no errors.
@@ -168,7 +168,7 @@ Expected: no errors.
 - [ ] **Step 3: Run all lib tests**
 
 ```bash
-cargo test -p hydeclaw-core --lib 2>&1 | grep "test result"
+cargo test -p opex-core --lib 2>&1 | grep "test result"
 ```
 
 Expected: all pass.
@@ -176,7 +176,7 @@ Expected: all pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/memory.rs
+git add crates/opex-core/src/agent/pipeline/memory.rs
 git commit -m "fix(memory): truncate search result chunks to prevent context overflow"
 ```
 
@@ -185,7 +185,7 @@ git commit -m "fix(memory): truncate search result chunks to prevent context ove
 ## Task 3: Apply truncation in `handle_memory_get`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/memory.rs` (lines 225–236)
+- Modify: `crates/opex-core/src/agent/pipeline/memory.rs` (lines 225–236)
 
 - [ ] **Step 1: Replace the format line in `handle_memory_get`**
 
@@ -225,8 +225,8 @@ Ok(chunks) => chunks
 - [ ] **Step 2: Compile and test**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "error"
-cargo test -p hydeclaw-core --lib 2>&1 | grep "test result"
+cargo check -p opex-core 2>&1 | grep "error"
+cargo test -p opex-core --lib 2>&1 | grep "test result"
 ```
 
 Expected: no errors, all tests pass.
@@ -234,7 +234,7 @@ Expected: no errors, all tests pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/memory.rs
+git add crates/opex-core/src/agent/pipeline/memory.rs
 git commit -m "fix(memory): truncate get result chunks to prevent context overflow"
 ```
 
@@ -243,13 +243,13 @@ git commit -m "fix(memory): truncate get result chunks to prevent context overfl
 ## Task 4: Add `cleanup_session_streaming_messages` to sessions.rs
 
 **Files:**
-- Modify: `crates/hydeclaw-db/src/sessions.rs` (after `claim_session_running` at line 449)
+- Modify: `crates/opex-db/src/sessions.rs` (after `claim_session_running` at line 449)
 
 Context: `cleanup_interrupted_sessions` (line 738) does a global batch cleanup at startup. We need the same operation scoped to a single session, called at re-entry time.
 
 - [ ] **Step 1: Write a unit test for the new function**
 
-The existing test suite for sessions.rs uses integration tests with a real DB. Add this test to the `#[cfg(test)]` block in `sessions.rs` (or the nearest integration test file that sets up a DB connection — check `crates/hydeclaw-db/tests/` or `crates/hydeclaw-core/tests/`). If no unit test block exists in sessions.rs, add one.
+The existing test suite for sessions.rs uses integration tests with a real DB. Add this test to the `#[cfg(test)]` block in `sessions.rs` (or the nearest integration test file that sets up a DB connection — check `crates/opex-db/tests/` or `crates/opex-core/tests/`). If no unit test block exists in sessions.rs, add one.
 
 If running as an integration test is required, mark with `#[ignore]` and note it is verified by the bootstrap integration path. For a quick compile check, add a doc-test instead:
 
@@ -290,7 +290,7 @@ pub async fn cleanup_session_streaming_messages(
 - [ ] **Step 3: Verify it compiles**
 
 ```bash
-cargo check -p hydeclaw-db 2>&1 | grep "error"
+cargo check -p opex-db 2>&1 | grep "error"
 ```
 
 Expected: no errors.
@@ -298,8 +298,8 @@ Expected: no errors.
 - [ ] **Step 4: Run all lib tests**
 
 ```bash
-cargo test -p hydeclaw-db --lib 2>&1 | grep "test result"
-cargo test -p hydeclaw-core --lib 2>&1 | grep "test result"
+cargo test -p opex-db --lib 2>&1 | grep "test result"
+cargo test -p opex-core --lib 2>&1 | grep "test result"
 ```
 
 Expected: all pass.
@@ -307,7 +307,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-db/src/sessions.rs
+git add crates/opex-db/src/sessions.rs
 git commit -m "feat(db): add cleanup_session_streaming_messages for per-session orphan cleanup"
 ```
 
@@ -316,7 +316,7 @@ git commit -m "feat(db): add cleanup_session_streaming_messages for per-session 
 ## Task 5: Call cleanup in `bootstrap.rs`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` (after line 102)
+- Modify: `crates/opex-core/src/agent/pipeline/bootstrap.rs` (after line 102)
 
 Context: `claim_session_running` is called at line 94. Cleanup must happen after the session is claimed (line 102, the `Ok(true) => {}` branch) and before the lifecycle guard is created (line 112) and context is loaded.
 
@@ -377,7 +377,7 @@ Expected: no errors, all tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs
+git add crates/opex-core/src/agent/pipeline/bootstrap.rs
 git commit -m "fix(bootstrap): cleanup orphaned streaming messages on session re-entry"
 ```
 

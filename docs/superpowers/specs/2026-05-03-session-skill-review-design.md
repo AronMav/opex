@@ -7,7 +7,7 @@
 
 ## Context
 
-HydeClaw has a working skill evolution system (`skills/evolution.rs`) that analyzes
+OPEX has a working skill evolution system (`skills/evolution.rs`) that analyzes
 completed heartbeat tasks and queues skill repairs via `pending_skill_repairs`. However,
 it fires **only after scheduled heartbeat tasks** — never after interactive sessions.
 
@@ -16,7 +16,7 @@ iterations), using a forked agent with a rich `_SKILL_REVIEW_PROMPT`. This captu
 patterns, corrections, and new workflows from real usage rather than waiting for
 scheduled tasks.
 
-P0.2 brings HydeClaw to Hermes parity for session-based skill evolution while
+P0.2 brings OPEX to Hermes parity for session-based skill evolution while
 keeping the existing curator pipeline (queue → Hyde writes files) intact.
 
 ---
@@ -115,7 +115,7 @@ shutdown, same pattern as `spawn_knowledge_extraction`.
 
 ## New Function: `review_session_for_skills`
 
-Location: `crates/hydeclaw-core/src/skills/evolution.rs`
+Location: `crates/opex-core/src/skills/evolution.rs`
 
 ```rust
 pub async fn review_session_for_skills(
@@ -189,9 +189,9 @@ because interactive sessions have more noise than scheduled tasks.
 
 | File | Change |
 |---|---|
-| `crates/hydeclaw-core/src/config/mod.rs` | Add `SkillReviewConfig`, `AgentConfig.skill_review` field |
-| `crates/hydeclaw-core/src/skills/evolution.rs` | Add `review_session_for_skills()` |
-| `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` | Add `count_tool_calls()`, `spawn_skill_review()`, trigger in `finalize()` |
+| `crates/opex-core/src/config/mod.rs` | Add `SkillReviewConfig`, `AgentConfig.skill_review` field |
+| `crates/opex-core/src/skills/evolution.rs` | Add `review_session_for_skills()` |
+| `crates/opex-core/src/agent/pipeline/finalize.rs` | Add `count_tool_calls()`, `spawn_skill_review()`, trigger in `finalize()` |
 
 ---
 

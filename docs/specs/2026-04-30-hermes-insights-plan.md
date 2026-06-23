@@ -1,4 +1,4 @@
-# HydeClaw Development Plan: Insights from Hermes Agent
+# OPEX Development Plan: Insights from Hermes Agent
 
 > **Source:** Анализ проекта [Hermes Agent](https://github.com/NousResearch/hermes-agent) (Nous Research, Python, MIT) в `D:/GIT/hermes-agent` от 2026-04-30.
 > **Goal:** Список заимствуемых архитектурных идей и фич, сгруппированных по приоритету. Не implementation plan — это roadmap-кандидат на будущие phases.
@@ -14,9 +14,9 @@
 
 ## Контекст
 
-Hermes Agent — функциональный аналог HydeClaw на Python: AI-агент-фреймворк с фокусом на самообучение (self-improving skills), кросс-платформенный messaging, и RL-pipeline. Production-grade у Nous Research. У HydeClaw много общих фич (workspace, memory_chunks в pgvector, channels, cron, MCP-клиент), но Hermes раскрывает несколько направлений шире.
+Hermes Agent — функциональный аналог OPEX на Python: AI-агент-фреймворк с фокусом на самообучение (self-improving skills), кросс-платформенный messaging, и RL-pipeline. Production-grade у Nous Research. У OPEX много общих фич (workspace, memory_chunks в pgvector, channels, cron, MCP-клиент), но Hermes раскрывает несколько направлений шире.
 
-Этот документ перечисляет **только то, чего нет или явно слабее в HydeClaw**, с прямыми ссылками на reference-реализацию в Hermes.
+Этот документ перечисляет **только то, чего нет или явно слабее в OPEX**, с прямыми ссылками на reference-реализацию в Hermes.
 
 ---
 
@@ -26,7 +26,7 @@ Hermes Agent — функциональный аналог HydeClaw на Python:
 
 **Reference:** `D:/GIT/hermes-agent/trajectory_compressor.py` (1370 строк), `D:/GIT/hermes-agent/agent/context_compressor.py`
 
-**Проблема:** В HydeClaw компрессия контекста примитивная — нет умного алгоритма "что сжать, что сохранить".
+**Проблема:** В OPEX компрессия контекста примитивная — нет умного алгоритма "что сжать, что сохранить".
 
 **Решение Hermes — protect-compress-summarize:**
 - **Защита первых M turns**: system, human, первый assistant, первый tool call (configurable: `protect_first_system`, `protect_first_human`, `protect_first_gpt`, `protect_first_tool`)
@@ -44,9 +44,9 @@ Hermes Agent — функциональный аналог HydeClaw на Python:
 - **Auxiliary model** (cheap, типа Gemini Flash) для суммаризации
 - **Image token estimation**: 1600 токенов на изображение (Claude-tuned)
 
-**Перенос в HydeClaw:**
-- Новый модуль `crates/hydeclaw-core/src/agent/compression.rs`
-- Конфиг `[compression]` в `hydeclaw.toml`: `enabled`, `threshold_ratio`, `target_ratio`, `protect_last_n`, `protect_first_*`
+**Перенос в OPEX:**
+- Новый модуль `crates/opex-core/src/agent/compression.rs`
+- Конфиг `[compression]` в `opex.toml`: `enabled`, `threshold_ratio`, `target_ratio`, `protect_last_n`, `protect_first_*`
 - Использовать существующий `auxiliary_provider` (если есть в `provider_active`) или конфиг `compression.model`
 - Сохранять связь `parent_session_id` → новая сессия со сжатой историей (см. P1.1)
 
@@ -56,7 +56,7 @@ Hermes Agent — функциональный аналог HydeClaw на Python:
 
 **Reference:** `D:/GIT/hermes-agent/gateway/pairing.py` (~300 строк)
 
-**Проблема:** В HydeClaw для каналов используется allowlist user_id — UX плохой (нужно вручную узнать ID, прописать).
+**Проблема:** В OPEX для каналов используется allowlist user_id — UX плохой (нужно вручную узнать ID, прописать).
 
 **Решение Hermes:**
 - 8-символьный одноразовый код, алфавит без коллизий: `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (без 0/O, 1/I)
@@ -71,7 +71,7 @@ Hermes Agent — функциональный аналог HydeClaw на Python:
 2. Owner: `hermes approve CODE` в CLI
 3. User добавлен в `platform-approved.json`, future messages auto-accept
 
-**Перенос в HydeClaw:**
+**Перенос в OPEX:**
 - Новая таблица `pairing_codes` (платформа, code, expires_at, used)
 - Endpoint `POST /api/pairing/approve` (body: `{code}`)
 - В channel adapter (`channels/src/drivers/*.ts`): при получении сообщения от незнакомого user → выдать код, сохранить в DB
@@ -94,7 +94,7 @@ Hermes Agent — функциональный аналог HydeClaw на Python:
 
 **Reference:** `D:/GIT/hermes-agent/tools/delegate_tool.py:39-47`
 
-**Проблема:** В HydeClaw `agent`-тул (`engine_agent_tool.rs`) разрешает subagent'у любые действия — нет защиты от рекурсии или неконтролируемых side-effects.
+**Проблема:** В OPEX `agent`-тул (`engine_agent_tool.rs`) разрешает subagent'у любые действия — нет защиты от рекурсии или неконтролируемых side-effects.
 
 **Решение Hermes — `DELEGATE_BLOCKED_TOOLS`:**
 ```python
@@ -110,7 +110,7 @@ DELEGATE_BLOCKED_TOOLS = frozenset([
 - `MAX_DEPTH=1` по умолчанию (не позволяет subagent'у спавнить subagent'ов), расширяемо до 3
 - Глобальный lock `_active_subagents_lock` для tracking live children (для shutdown drain)
 
-**Перенос в HydeClaw:**
+**Перенос в OPEX:**
 - В `session_agent_pool.rs::LiveAgent::spawn()`: фильтр инструментов через blocked-list из агентского конфига
 - Default-deny: `agent` (no recursion), `code_exec`, `workspace_delete`, `workspace_rename`, `process_start`
 - Configurable per-agent: `[agent.delegation] blocked_tools = [...]` в TOML
@@ -128,8 +128,8 @@ DELEGATE_BLOCKED_TOOLS = frozenset([
   name. Fail-fast at boot вместо runtime surprise.
 - crud.rs preserves `existing_cfg.agent.delegation.clone()` on PUT (PR #24
   review fix C5 — иначе UI-update сбрасывал в default).
-- Files: `crates/hydeclaw-core/src/config/mod.rs`,
-  `crates/hydeclaw-core/src/agent/pipeline/{agent_tool,subagent}.rs`.
+- Files: `crates/opex-core/src/config/mod.rs`,
+  `crates/opex-core/src/agent/pipeline/{agent_tool,subagent}.rs`.
 
 ---
 
@@ -137,7 +137,7 @@ DELEGATE_BLOCKED_TOOLS = frozenset([
 
 **Reference:** `D:/GIT/hermes-agent/hermes_state.py:128-136`
 
-**Проблема:** HydeClaw использует стандартный FTS — для русского/CJK словарный токенизатор работает плохо.
+**Проблема:** OPEX использует стандартный FTS — для русского/CJK словарный токенизатор работает плохо.
 
 **Решение Hermes:**
 ```sql
@@ -148,7 +148,7 @@ CREATE VIRTUAL TABLE messages_fts_trigram USING fts5(
 - Trigram tokenizer бьёт текст на 3-байтовые последовательности — релевантно для морфологически богатых языков
 - Используется параллельно со стандартным FTS (выбор по `lang` сообщения)
 
-**Перенос в HydeClaw:**
+**Перенос в OPEX:**
 - Postgres имеет `pg_trgm` extension (уже доступно)
 - Новая миграция: GIN-индекс `CREATE INDEX ON memory_chunks USING gin (content gin_trgm_ops)`
 - В `memory.rs::hybrid_search`: для русского-CJK добавить trigram similarity к скору ранжирования
@@ -158,10 +158,10 @@ CREATE VIRTUAL TABLE messages_fts_trigram USING fts5(
 
 - PR #22 — миграция `035_pg_trgm_index.sql`: `CREATE EXTENSION pg_trgm` +
   `idx_memory_chunks_content_trgm` (GIN, `gin_trgm_ops`).
-- PR #22 — `search_trigram` в `crates/hydeclaw-db/src/memory_queries.rs`:
+- PR #22 — `search_trigram` в `crates/opex-db/src/memory_queries.rs`:
   similarity-search через `%` оператор + `set_limit(threshold)`. PR #25
   fix-up (`95be96b`) переключил на `SET LOCAL` для error-path GUC isolation.
-- PR #22 — 3-way RRF combiner в `crates/hydeclaw-core/src/memory/store.rs`:
+- PR #22 — 3-way RRF combiner в `crates/opex-core/src/memory/store.rs`:
   weights `W_SEM=0.6, W_FTS=0.25, W_TRGM=0.15`, `RRF_K=60`. 8-state shortcut
   match для случаев когда ≤1 ветка дала результаты.
 - PR #30 (`390e0c7`) — integration tests через `memory_test_facade`
@@ -176,7 +176,7 @@ CREATE VIRTUAL TABLE messages_fts_trigram USING fts5(
 
 **Reference:** `D:/GIT/hermes-agent/hermes_state.py:36-72`, `D:/GIT/hermes-agent/environments/agent_loop.py:186-200`
 
-**Проблема:** Extended-thinking модели (DeepSeek-R1, Claude 3.7 thinking, Qwen QwQ) генерируют отдельные reasoning_tokens — HydeClaw их не трекает в `usage_log`.
+**Проблема:** Extended-thinking модели (DeepSeek-R1, Claude 3.7 thinking, Qwen QwQ) генерируют отдельные reasoning_tokens — OPEX их не трекает в `usage_log`.
 
 **Решение Hermes — отдельная колонка + per-turn массив:**
 ```sql
@@ -189,7 +189,7 @@ class AgentResult:
     ...
 ```
 
-**Перенос в HydeClaw:**
+**Перенос в OPEX:**
 - Миграция: `ALTER TABLE usage_log ADD COLUMN reasoning_tokens INTEGER`
 - В providers (`providers_anthropic.rs`, `providers_openai.rs`, `providers_google.rs`): извлекать `usage.reasoning_tokens` (Anthropic) / `reasoning_content` (OpenAI o1) / `thoughtsTokenCount` (Gemini)
 - В UI: отображать как отдельную секцию в Usage event (rounded breakdown: input/output/cache/reasoning)
@@ -199,7 +199,7 @@ class AgentResult:
 
 - PR #23 — миграция `036_usage_log_extended_tokens.sql`: добавлены
   `cache_read_tokens`, `cache_creation_tokens`, `reasoning_tokens` в
-  `usage_log`. `TokenUsage` в `hydeclaw-types` расширен с новыми полями
+  `usage_log`. `TokenUsage` в `opex-types` расширен с новыми полями
   (`Option<u32>` — `None` если провайдер не отдаёт).
 - PR #23 + #28 — извлечение во всех 5 провайдерах: `providers_openai.rs`
   (`reasoning_tokens` + `cached_tokens`), `providers_anthropic.rs`
@@ -258,7 +258,7 @@ multi-agent isolation test (нет `it.todo()`).
 **✅ Реализовано:**
 
 - Миграция `is_mirror BOOLEAN DEFAULT false` в `messages` (с индексом для фильтрации в bootstrap).
-- `mirror_to_session()` в `crates/hydeclaw-core/src/db/sessions.rs` — upsert DM-сессии получателя + insert mirror-message.
+- `mirror_to_session()` в `crates/opex-core/src/db/sessions.rs` — upsert DM-сессии получателя + insert mirror-message.
 - Cron- и heartbeat-доставка зеркалятся в DM-сессию получателя (см. `scheduler/mod.rs::run_heartbeat` и dynamic job dispatch).
 - `isMirror` в UI `ChatMessage` + cron-badge (помечает зеркальные сообщения от системы).
 - Backend integration tests: mirroring, curator, chain CTE, webhook auth (см. недавние коммиты).
@@ -271,7 +271,7 @@ multi-agent isolation test (нет `it.todo()`).
 
 **Идея:** Парсинг targets вида `telegram:12345:thread_id`, `discord:#general`, `origin` (обратно в исходный чат), `local` (на диск). Truncation guard при >4000 символов: full на диск, в чат — short version + link.
 
-**В HydeClaw:** в `scheduled_jobs` уже есть `delivery_channels JSONB` — расширить парсингом target-string в enum:
+**В OPEX:** в `scheduled_jobs` уже есть `delivery_channels JSONB` — расширить парсингом target-string в enum:
 ```rust
 enum DeliveryTarget {
     Origin,                                  // в исходный канал
@@ -299,7 +299,7 @@ enum DeliveryTarget {
 
 ---
 
-### P1.4 — MCP Serve Mode (HydeClaw как MCP-сервер)
+### P1.4 — MCP Serve Mode (OPEX как MCP-сервер)
 
 **Reference:** `D:/GIT/hermes-agent/mcp_serve.py`
 
@@ -310,7 +310,7 @@ enum DeliveryTarget {
 
 Это позволяет Claude Desktop/любому MCP-клиенту читать/писать в сессии Hermes.
 
-**В HydeClaw:** новая команда `hydeclaw mcp serve` — отдельный binary или подкоманда `hydeclaw-core`. Wrapper над существующим `/api/sessions/*`, `/api/messages/*`, `/api/approvals/*` endpoints. Аутентификация через тот же `HYDECLAW_AUTH_TOKEN`.
+**В OPEX:** новая команда `opex mcp serve` — отдельный binary или подкоманда `opex-core`. Wrapper над существующим `/api/sessions/*`, `/api/messages/*`, `/api/approvals/*` endpoints. Аутентификация через тот же `OPEX_AUTH_TOKEN`.
 
 ---
 
@@ -320,11 +320,11 @@ enum DeliveryTarget {
 
 **Идея:** User создаёт `~/.hermes/hooks/my-hook/HOOK.yaml + handler.py`. События: `gateway:startup`, `session:start/end`, `agent:start/step/end`, `command:*`. Async fire, errors не блокируют pipeline.
 
-**В HydeClaw:** trait `Hook` в Rust, динамическая загрузка через WASM (для безопасности) или Lua (`mlua` crate). Альтернатива — webhook-based hooks: `[hooks]` секция в TOML с URLs, вызывается POST'ом на event. Проще портируется, без runtime для пользовательского кода.
+**В OPEX:** trait `Hook` в Rust, динамическая загрузка через WASM (для безопасности) или Lua (`mlua` crate). Альтернатива — webhook-based hooks: `[hooks]` секция в TOML с URLs, вызывается POST'ом на event. Проще портируется, без runtime для пользовательского кода.
 
 **⚠️ Частично реализовано:**
 
-- `crates/hydeclaw-core/src/agent/hooks.rs` — `HookEvent` enum
+- `crates/opex-core/src/agent/hooks.rs` — `HookEvent` enum
   (`BeforeMessage`, `AfterResponse`, `BeforeToolCall`, `AfterToolResult`,
   `OnError`), `HookAction` (`Continue` / `Block(String)`), `HookRegistry`
   с `register()` / `fire()`, built-in `logging_hook()` / `block_tools_hook()`.
@@ -342,7 +342,7 @@ enum DeliveryTarget {
 - **Curator** на inactivity-trigger переводит неиспользуемые скиллы в архив (30/90 дней)
 - Persistent state в `.curator_state` JSON: `last_run_at`, `paused`, `run_count`
 
-**В HydeClaw:** уже есть `workspace/skills/`. Добавить:
+**В OPEX:** уже есть `workspace/skills/`. Добавить:
 - Новый тул `skill_manage` (action: create/patch/edit/archive)
 - В `memory-worker`: периодическая задача (cron-like) — `skills_curator`, отслеживает `last_used_at` (новое поле в БД), архивирует stale
 - pgvector embeddings скиллов для семантического поиска и консолидации похожих
@@ -362,7 +362,7 @@ enum DeliveryTarget {
 
 **Идея:** Audio из всех платформ падает в `AUDIO_CACHE_DIR`, STT-тул читает оттуда. Поддержка OGG/Opus/MP3/WAV/M4A/FLAC. Telegram-специфика: `sendVoice` vs `sendAudio` правильно различает.
 
-**В HydeClaw:** в фазе [260430-oyx-04](commits) добавлен `/api/media/transcribe` — это endpoint per-request. У Hermes — fallback-cache: если STT падает, audio файл остаётся доступным. Перенос: `workspace/audio_cache/` с TTL 24h, индексируется в `messages` через `attachment_id`.
+**В OPEX:** в фазе [260430-oyx-04](commits) добавлен `/api/media/transcribe` — это endpoint per-request. У Hermes — fallback-cache: если STT падает, audio файл остаётся доступным. Перенос: `workspace/audio_cache/` с TTL 24h, индексируется в `messages` через `attachment_id`.
 
 ---
 
@@ -378,7 +378,7 @@ enum DeliveryTarget {
 - `acp_adapter/events.py` — bridge `tool_progress_callback` → ACP `session_update`
 - `acp_adapter/permissions.py` — `approval_callback` → ACP `request_permission` RPC
 
-**Когда заниматься:** если планируется HydeClaw VS Code extension. Сейчас preempt не имеет смысла — ACP стандарт молодой, может ещё измениться.
+**Когда заниматься:** если планируется OPEX VS Code extension. Сейчас preempt не имеет смысла — ACP стандарт молодой, может ещё измениться.
 
 ---
 
@@ -393,11 +393,11 @@ enum DeliveryTarget {
 - **Activity callback** для gateway heartbeat (typing indicator)
 - **FileSyncManager**: синхронизация `~/.hermes` для Modal (snapshot persistence) и SSH (file uploads)
 
-**Особо ценные backends для HydeClaw:**
+**Особо ценные backends для OPEX:**
 - **SSH** — `code_exec` на удалённых машинах через ControlMaster persistence
 - **Modal** — serverless code execution с hibernation (idle = near-zero cost)
 
-**В HydeClaw:** сейчас только Docker sandbox. Trait `ExecutionBackend` в Rust + 2 реализации (Docker, SSH) — серьёзная фича для enterprise/research use cases.
+**В OPEX:** сейчас только Docker sandbox. Trait `ExecutionBackend` в Rust + 2 реализации (Docker, SSH) — серьёзная фича для enterprise/research use cases.
 
 ---
 
@@ -413,7 +413,7 @@ enum DeliveryTarget {
 - **Empty-streak backoff**: если provider молчит → exponential backoff, max 8×
 - **Memory write hook**: при добавлении в MEMORY.md → автоматически зеркалится в Honcho conclusion
 
-**В HydeClaw:** trait `MemoryProvider` в Rust, default = pgvector. Async hook chain — уже частично есть (см. `Modularity Roadmap` в memory). Добавление dialectic prefetch требует осторожности в HTTP-driven gateway (TTL-таймауты).
+**В OPEX:** trait `MemoryProvider` в Rust, default = pgvector. Async hook chain — уже частично есть (см. `Modularity Roadmap` в memory). Добавление dialectic prefetch требует осторожности в HTTP-driven gateway (TTL-таймауты).
 
 ---
 
@@ -429,7 +429,7 @@ enum DeliveryTarget {
 
 **Идея:** Probabilistic toolset selection — для A/B экспериментов и batch trajectory generation для RL. Не критично для production, интересно для research-режима.
 
-**В HydeClaw:** опциональная фича в `[agent.experiment]` секции. Полезно если будет RL-фасад (см. P2.5).
+**В OPEX:** опциональная фича в `[agent.experiment]` секции. Полезно если будет RL-фасад (см. P2.5).
 
 ---
 
@@ -444,7 +444,7 @@ enum DeliveryTarget {
 - Phase 1: OpenAI-compatible server (eval, SFT data)
 - Phase 2: VLLM ManagedServer с logprobs (GRPO/PPO)
 
-**Когда заниматься:** только если HydeClaw планирует исследовательский трек. Сейчас — overkill.
+**Когда заниматься:** только если OPEX планирует исследовательский трек. Сейчас — overkill.
 
 ---
 
@@ -459,7 +459,7 @@ enum DeliveryTarget {
 
 Блокирует загрузку при детекте, логирует.
 
-**В HydeClaw:** workspace files читаются как есть. Добавить аналогичный сканер в `workspace.rs::read_file()` — особенно полезно для shared workspace, где один агент может подсадить инъекцию другому.
+**В OPEX:** workspace files читаются как есть. Добавить аналогичный сканер в `workspace.rs::read_file()` — особенно полезно для shared workspace, где один агент может подсадить инъекцию другому.
 
 **⚠️ Частично реализовано:**
 
@@ -477,7 +477,7 @@ enum DeliveryTarget {
 
 **Идея:** Параллельная обработка JSONL датасета с checkpoint resume — устойчивость к перебоям в долгих задачах.
 
-**В HydeClaw:** только при появлении use case (batch evaluation, dataset generation). Сейчас не нужно.
+**В OPEX:** только при появлении use case (batch evaluation, dataset generation). Сейчас не нужно.
 
 ---
 
@@ -485,9 +485,9 @@ enum DeliveryTarget {
 
 **Reference:** `D:/GIT/hermes-agent/plugins/platforms/teams/` (новый plugin в v0.11.0)
 
-**Идея:** Teams adapter как plugin, аналогично Slack в HydeClaw. Необходим для enterprise-окружений.
+**Идея:** Teams adapter как plugin, аналогично Slack в OPEX. Необходим для enterprise-окружений.
 
-**В HydeClaw:** новый TypeScript driver в `channels/src/drivers/teams.ts`, аналогично существующим. Требует регистрации Azure AD приложения + Bot Framework.
+**В OPEX:** новый TypeScript driver в `channels/src/drivers/teams.ts`, аналогично существующим. Требует регистрации Azure AD приложения + Bot Framework.
 
 ---
 
@@ -497,7 +497,7 @@ enum DeliveryTarget {
 
 **Идея:** Унифицированный пайплайн для голосовых сообщений: audio из любой платформы (OGG/Opus/MP3/WAV/M4A/FLAC) → `workspace/audio_cache/` с TTL 24h → STT-тул читает оттуда. Если STT падает, файл остаётся доступным.
 
-**В HydeClaw:** сейчас каждый channel adapter передаёт audio inline в message. Добавить `AudioCacheManager` в toolgate с TTL-очисткой, индексировать через `attachment_id` в messages.
+**В OPEX:** сейчас каждый channel adapter передаёт audio inline в message. Добавить `AudioCacheManager` в toolgate с TTL-очисткой, индексировать через `attachment_id` в messages.
 
 ---
 
@@ -507,13 +507,13 @@ enum DeliveryTarget {
 
 **Идея:** Смена основной и вспомогательной модели прямо из UI без редактирования TOML.
 
-**В HydeClaw:** модель конфигурируется только через `config/agents/{Name}.toml`. Добавить endpoint `PATCH /api/agents/{name}/model` + UI-панель в настройках агента. `set_model_override()` на AgentEngine уже существует — нужен только API + UI.
+**В OPEX:** модель конфигурируется только через `config/agents/{Name}.toml`. Добавить endpoint `PATCH /api/agents/{name}/model` + UI-панель в настройках агента. `set_model_override()` на AgentEngine уже существует — нужен только API + UI.
 
 ---
 
-## 📊 Сравнительная матрица: HydeClaw vs Hermes
+## 📊 Сравнительная матрица: OPEX vs Hermes
 
-| Фича | HydeClaw 2026-05-04 | Hermes |
+| Фича | OPEX 2026-05-04 | Hermes |
 |---|---|---|
 | Trajectory compression (protect+summarize) | ✅ Compressor + 5-phase (Sprint 2) | ✅ продвинутая |
 | DM pairing security | ✅ pairing_codes + /api/access | ✅ TOTP-style codes |

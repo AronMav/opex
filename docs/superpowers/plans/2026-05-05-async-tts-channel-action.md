@@ -16,9 +16,9 @@
 
 | File | Action |
 |---|---|
-| `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs` | **create** — BackgroundTtsTask |
-| `crates/hydeclaw-core/src/agent/pipeline/mod.rs` | modify — `pub mod tts_background` |
-| `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs` | modify — replace `execute_yaml_channel_action` body |
+| `crates/opex-core/src/agent/pipeline/tts_background.rs` | **create** — BackgroundTtsTask |
+| `crates/opex-core/src/agent/pipeline/mod.rs` | modify — `pub mod tts_background` |
+| `crates/opex-core/src/agent/pipeline/channel_actions.rs` | modify — replace `execute_yaml_channel_action` body |
 | `ui/src/components/notification-bell.tsx` | modify — add `tts_ready` / `tts_error` rendering |
 
 ---
@@ -26,12 +26,12 @@
 ### Task 1: Scaffold `tts_background.rs`
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/mod.rs`
+- Create: `crates/opex-core/src/agent/pipeline/tts_background.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/mod.rs`
 
 - [ ] **Step 1: Add module declaration to mod.rs**
 
-In `crates/hydeclaw-core/src/agent/pipeline/mod.rs`, add after the existing `pub mod channel_actions;` line:
+In `crates/opex-core/src/agent/pipeline/mod.rs`, add after the existing `pub mod channel_actions;` line:
 
 ```rust
 pub mod tts_background;
@@ -39,7 +39,7 @@ pub mod tts_background;
 
 - [ ] **Step 2: Create the struct file**
 
-Create `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs`:
+Create `crates/opex-core/src/agent/pipeline/tts_background.rs`:
 
 ```rust
 //! Background TTS task — synthesise audio and deliver it outside the
@@ -88,8 +88,8 @@ Expected: no errors (struct exists, no impl yet — that's fine at this stage).
 - [ ] **Step 4: Commit scaffold**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/tts_background.rs \
-        crates/hydeclaw-core/src/agent/pipeline/mod.rs
+git add crates/opex-core/src/agent/pipeline/tts_background.rs \
+        crates/opex-core/src/agent/pipeline/mod.rs
 git commit -m "feat(tts): scaffold BackgroundTtsTask struct"
 ```
 
@@ -98,7 +98,7 @@ git commit -m "feat(tts): scaffold BackgroundTtsTask struct"
 ### Task 2: Tests — channel-success path
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs` (add `#[cfg(test)]` module)
+- Modify: `crates/opex-core/src/agent/pipeline/tts_background.rs` (add `#[cfg(test)]` module)
 
 - [ ] **Step 1: Add test helpers and channel-success test**
 
@@ -193,7 +193,7 @@ mod tests {
 - [ ] **Step 2: Run to confirm failure (run() not yet implemented)**
 
 ```
-cargo test -p hydeclaw-core tts_background -- --nocapture 2>&1 | head -30
+cargo test -p opex-core tts_background -- --nocapture 2>&1 | head -30
 ```
 
 Expected: compile error — `run()` method does not exist.
@@ -203,7 +203,7 @@ Expected: compile error — `run()` method does not exist.
 ### Task 3: Implement `run()` — channel path
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/tts_background.rs`
 
 - [ ] **Step 1: Add `run()` with channel path**
 
@@ -387,7 +387,7 @@ impl BackgroundTtsTask {
 - [ ] **Step 2: Run channel-success test**
 
 ```
-cargo test -p hydeclaw-core tts_background::tests::channel_success_sends_voice_action -- --nocapture
+cargo test -p opex-core tts_background::tests::channel_success_sends_voice_action -- --nocapture
 ```
 
 Expected: `test tts_background::tests::channel_success_sends_voice_action ... ok`
@@ -395,7 +395,7 @@ Expected: `test tts_background::tests::channel_success_sends_voice_action ... ok
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/tts_background.rs
+git add crates/opex-core/src/agent/pipeline/tts_background.rs
 git commit -m "feat(tts): implement BackgroundTtsTask::run — channel path"
 ```
 
@@ -404,7 +404,7 @@ git commit -m "feat(tts): implement BackgroundTtsTask::run — channel path"
 ### Task 4: Tests — error paths
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/tts_background.rs`
 
 - [ ] **Step 1: Add error-path tests**
 
@@ -475,7 +475,7 @@ Inside the `#[cfg(test)]` `mod tests` block, append:
 - [ ] **Step 2: Run error-path tests**
 
 ```
-cargo test -p hydeclaw-core tts_background -- --nocapture
+cargo test -p opex-core tts_background -- --nocapture
 ```
 
 Expected: all 3 tests pass.
@@ -483,7 +483,7 @@ Expected: all 3 tests pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/tts_background.rs
+git add crates/opex-core/src/agent/pipeline/tts_background.rs
 git commit -m "test(tts): add channel error-path tests for BackgroundTtsTask"
 ```
 
@@ -492,7 +492,7 @@ git commit -m "test(tts): add channel error-path tests for BackgroundTtsTask"
 ### Task 5: Implement `from_ctx` and `spawn`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/tts_background.rs`
 
 - [ ] **Step 1: Add `from_ctx` and `spawn` to the impl block**
 
@@ -562,7 +562,7 @@ Expected: no errors. If the compiler complains about `workspace_dir` type, verif
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/tts_background.rs
+git add crates/opex-core/src/agent/pipeline/tts_background.rs
 git commit -m "feat(tts): add from_ctx and spawn to BackgroundTtsTask"
 ```
 
@@ -571,7 +571,7 @@ git commit -m "feat(tts): add from_ctx and spawn to BackgroundTtsTask"
 ### Task 6: Wire into `execute_yaml_channel_action`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/channel_actions.rs`
 
 - [ ] **Step 1: Replace the body of `execute_yaml_channel_action`**
 
@@ -603,7 +603,7 @@ Remove any imports in `channel_actions.rs` that are now unused (e.g. `base64`, `
 - [ ] **Step 3: Run all pipeline tests**
 
 ```
-cargo test -p hydeclaw-core -- --nocapture 2>&1 | tail -20
+cargo test -p opex-core -- --nocapture 2>&1 | tail -20
 ```
 
 Expected: all existing tests pass, the 3 new tts_background tests pass.
@@ -611,7 +611,7 @@ Expected: all existing tests pass, the 3 new tts_background tests pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs
+git add crates/opex-core/src/agent/pipeline/channel_actions.rs
 git commit -m "feat(tts): wire BackgroundTtsTask into execute_yaml_channel_action"
 ```
 
@@ -800,7 +800,7 @@ git commit -m "feat(ui): add tts_ready audio player and tts_error in notificatio
 After completing all tasks, verify:
 
 - [ ] `make check` passes (no Rust compile errors or warnings about unused imports)
-- [ ] `cargo test -p hydeclaw-core tts_background -- --nocapture` — all 3 tests green
+- [ ] `cargo test -p opex-core tts_background -- --nocapture` — all 3 tests green
 - [ ] `cd ui && npm test` — notification-tts tests pass
 - [ ] `cd ui && npm run build` — no TypeScript errors
 - [ ] Manually: trigger a TTS call via Telegram; agent responds immediately; voice arrives separately

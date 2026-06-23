@@ -1,12 +1,12 @@
-# HydeClaw migration: Raspberry Pi → server (188.246.224.118)
+# OPEX migration: Raspberry Pi → server (188.246.224.118)
 
 - **Date:** 2026-06-18
 - **Status:** Design approved, pending implementation plan
-- **Topic:** Full migration of the HydeClaw agent stack from the Raspberry Pi 4 (`aronmav@192.168.1.82`, aarch64) to the home-lab server (`aronmav@188.246.224.118`, x86_64).
+- **Topic:** Full migration of the OPEX agent stack from the Raspberry Pi 4 (`aronmav@192.168.1.82`, aarch64) to the home-lab server (`aronmav@188.246.224.118`, x86_64).
 
 ## Goal & context
 
-Move the entire HydeClaw stack to the server so it is co-located with the media
+Move the entire OPEX stack to the server so it is co-located with the media
 services (TTS `openedai-speech`, STT `whisper`) it already depends on — removing
 the WireGuard tunnel hop for media calls and consolidating onto one host. The
 server freed ~13–15 GB RAM after the 1C database was removed (now ~17 GB
@@ -19,7 +19,7 @@ available, CPU mostly idle), so it has the headroom.
 | Arch | aarch64 (RPi 4) | x86_64 (i7-8700, 12 threads) |
 | RAM | 7.6 GB | 31 GB (~17 GB free post-1C) |
 | Network | home LAN, reaches server via wg | **public IP** + docker_wg (10.10.1.0/24) + wg-easy + nginx-proxy-manager |
-| HydeClaw | core + memory-worker + watchdog (systemd --user); core spawns toolgate (Python) + channels (Bun); postgres in `docker-postgres-1` (127.0.0.1:5432, db `hydeclaw`) | TTS/STT already here |
+| OPEX | core + memory-worker + watchdog (systemd --user); core spawns toolgate (Python) + channels (Bun); postgres in `docker-postgres-1` (127.0.0.1:5432, db `opex`) | TTS/STT already here |
 
 ## Decisions (from brainstorming)
 
@@ -33,15 +33,15 @@ available, CPU mostly idle), so it has the headroom.
 
 ## End-state architecture
 
-Native systemd stack under `~/hydeclaw/` on the server (same layout as the Pi):
+Native systemd stack under `~/opex/` on the server (same layout as the Pi):
 
-- `hydeclaw-core` (x86_64 binary, `hydeclaw-core.service`) — spawns **toolgate**
+- `opex-core` (x86_64 binary, `opex-core.service`) — spawns **toolgate**
   (Python venv) and **channels** (Bun) as managed child processes; talks to the
   host Docker daemon for `code_exec`/MCP.
-- `hydeclaw-memory-worker.service`, `hydeclaw-watchdog.service`.
+- `opex-memory-worker.service`, `opex-watchdog.service`.
 - **PostgreSQL 17 + pgvector** — Docker container (mirror of `docker-postgres-1`),
   listening on `127.0.0.1:5434` (5434, not 5432, to avoid clashing with any
-  other local pg), db `hydeclaw`.
+  other local pg), db `opex`.
 - Media (`openedai-speech` TTS, `whisper` STT) — already on the server; reached
   locally (no wg hop).
 
@@ -58,8 +58,8 @@ Native systemd stack under `~/hydeclaw/` on the server (same layout as the Pi):
 
 ### `.env` (4 keys)
 
-- `HYDECLAW_MASTER_KEY` — **identical to the Pi** (vault decryption depends on it).
-- `HYDECLAW_AUTH_TOKEN` — same as the Pi (or rotate).
+- `OPEX_MASTER_KEY` — **identical to the Pi** (vault decryption depends on it).
+- `OPEX_AUTH_TOKEN` — same as the Pi (or rotate).
 - `DATABASE_URL` — new, pointing at the local pg on `:5434`.
 - `RUST_LOG` — as-is.
 
@@ -68,12 +68,12 @@ Native systemd stack under `~/hydeclaw/` on the server (same layout as the Pi):
 ### Phase A — Preparation (no downtime; Pi keeps running)
 
 1. Reclaim swap on the server: `sudo swapoff -a && sudo swapon -a`; confirm the
-   RAM budget (HydeClaw ~1–2 GB + its postgres ~1–4 GB fits in ~17 GB free).
+   RAM budget (OPEX ~1–2 GB + its postgres ~1–4 GB fits in ~17 GB free).
 2. Install host deps: bun, ffmpeg, espeak-ng; verify python3.13 + docker.
 3. Stand up the `postgres17+pgvector` container on `127.0.0.1:5434`; create db
-   `hydeclaw` and `CREATE EXTENSION vector`.
+   `opex` and `CREATE EXTENSION vector`.
 4. Cross-build x86_64 binaries locally (core, memory-worker, watchdog) → scp to
-   `~/hydeclaw/`.
+   `~/opex/`.
 5. Copy `config/`, `workspace/` (rsync, ~353 MB), `.env` (new DATABASE_URL);
    copy `toolgate/` + `python -m venv` + `pip install`; copy `channels/` +
    `bun install`.
@@ -82,11 +82,11 @@ Native systemd stack under `~/hydeclaw/` on the server (same layout as the Pi):
 
 ### Phase B — Cutover (maintenance window; downtime ≈ minutes)
 
-1. Stop HydeClaw on the Pi (the 3 units) — frees the Telegram token, quiesces
+1. Stop OPEX on the Pi (the 3 units) — frees the Telegram token, quiesces
    the db.
 2. `pg_dump` (custom format) on the Pi → scp → `pg_restore` into the server db.
 3. Final `rsync` of `workspace/` + `config/agents/` (capture any runtime edits).
-4. Start HydeClaw on the server (core brings up toolgate + channels).
+4. Start OPEX on the server (core brings up toolgate + channels).
 5. Run the verification checklist below.
 
 ### Phase C — Decommission Pi
@@ -99,7 +99,7 @@ Pi for other use.
 The server has a **public IP**, unlike the isolated Pi — so a firewall is
 mandatory:
 
-- nftables/ufw on the public interface (eth0/188.x): **drop** all HydeClaw ports
+- nftables/ufw on the public interface (eth0/188.x): **drop** all OPEX ports
   (`18789` API/UI, `9011` toolgate, `5434` pg, WS ports) from the public
   interface; **allow** from `10.8.0.0/24` (wg) + `10.10.1.0/24` (docker_wg) + LAN.
   Prefer an explicit firewall over bind-address juggling (easier to audit).
@@ -113,7 +113,7 @@ mandatory:
 
 ## Data integrity, verification, rollback
 
-- **Vault (item #1):** `HYDECLAW_MASTER_KEY` must match the Pi verbatim — without
+- **Vault (item #1):** `OPEX_MASTER_KEY` must match the Pi verbatim — without
   it, every secret (channel `CHANNEL_CREDENTIALS`, provider API keys) is
   undecryptable.
 - **pgvector:** install the `vector` extension on the target **before**
@@ -143,5 +143,5 @@ mandatory:
 
 - Public domain + TLS exposure via nginx-proxy-manager (user will do).
 - Optional: repoint the TTS provider `base_url` from `http://10.10.1.42:8000` to
-  a local address once HydeClaw is on the server (drops the wg hop; minor).
+  a local address once OPEX is on the server (drops the wg hop; minor).
 - Repurposing the freed Pi.

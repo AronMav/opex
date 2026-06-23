@@ -21,11 +21,11 @@
 **Files:**
 
 - Create: `migrations/049_rename_session_events_to_timeline.sql`
-- Modify: `crates/hydeclaw-db/src/session_wal.rs` (add an `#[sqlx::test]` integrity test at the bottom of the existing `#[cfg(test)] mod tests` block; we will rename the file in Task 2, but adding the test here keeps Task 1 reviewable in isolation)
+- Modify: `crates/opex-db/src/session_wal.rs` (add an `#[sqlx::test]` integrity test at the bottom of the existing `#[cfg(test)] mod tests` block; we will rename the file in Task 2, but adding the test here keeps Task 1 reviewable in isolation)
 
 - [ ] **Step 1: Write the failing migration-integrity test**
 
-Add to `crates/hydeclaw-db/src/session_wal.rs` inside the existing `mod tests` block (before the closing `}`):
+Add to `crates/opex-db/src/session_wal.rs` inside the existing `mod tests` block (before the closing `}`):
 
 ```rust
     #[sqlx::test(migrations = "../../migrations")]
@@ -61,7 +61,7 @@ Add to `crates/hydeclaw-db/src/session_wal.rs` inside the existing `mod tests` b
 
 - [ ] **Step 2: Run the test, confirm it fails**
 
-Run: `cargo test -p hydeclaw-db m049_renames_session_events_to_session_timeline -- --nocapture`
+Run: `cargo test -p opex-db m049_renames_session_events_to_session_timeline -- --nocapture`
 
 Expected: FAIL because m049 doesn't exist yet — the migration will not run, `session_timeline` will not exist, and the first assertion will fail.
 
@@ -91,13 +91,13 @@ ALTER INDEX  IF EXISTS idx_session_events_type       RENAME TO idx_session_timel
 
 - [ ] **Step 4: Run the test, confirm it passes**
 
-Run: `cargo test -p hydeclaw-db m049_renames_session_events_to_session_timeline -- --nocapture`
+Run: `cargo test -p opex-db m049_renames_session_events_to_session_timeline -- --nocapture`
 
 Expected: PASS. All four assertions hold.
 
 - [ ] **Step 5: Run the existing tests in `session_wal.rs` to confirm they still pass**
 
-Run: `cargo test -p hydeclaw-db --lib session_wal::tests -- --nocapture`
+Run: `cargo test -p opex-db --lib session_wal::tests -- --nocapture`
 
 Expected: PASS for all four existing tests (`log_event_tx_updates_activity_at`, `log_event_tx_debounce_skips_recent`, `log_event_tx_does_not_resurrect_terminal`, `log_event_tx_heartbeats_when_activity_at_is_null`).
 
@@ -105,12 +105,12 @@ Wait — these tests `INSERT INTO sessions ...` and then call `log_event_tx`, wh
 
 For now, only the new test (`m049_renames_...`) needs to pass. The existing tests are temporarily broken and will be fixed atomically with the module rename in Task 2.
 
-To unblock the commit, accept this: run `cargo test -p hydeclaw-db --lib session_wal::tests::m049_renames_session_events_to_session_timeline -- --nocapture` and confirm only that one test passes.
+To unblock the commit, accept this: run `cargo test -p opex-db --lib session_wal::tests::m049_renames_session_events_to_session_timeline -- --nocapture` and confirm only that one test passes.
 
 - [ ] **Step 6: Commit (with bisect-skip marker in body)**
 
 ```bash
-git add migrations/049_rename_session_events_to_timeline.sql crates/hydeclaw-db/src/session_wal.rs
+git add migrations/049_rename_session_events_to_timeline.sql crates/opex-db/src/session_wal.rs
 git commit -m "feat(db): m049 rename session_events to session_timeline [bisect-skip]
 
 Metadata-only rename via ALTER TABLE/INDEX. Old migrations (m013, m030)
@@ -135,35 +135,35 @@ This is the largest single task because the module rename and every consumer of 
 
 **Files** (audited against `grep -rn 'session_events\|session_wal\|WalToolEvent\|warm_up_from_wal' crates/`):
 
-- Rename: `crates/hydeclaw-db/src/session_wal.rs` → `crates/hydeclaw-db/src/session_timeline.rs`
-- Modify: `crates/hydeclaw-db/src/lib.rs` (module declaration)
-- Modify: `crates/hydeclaw-db/src/session_timeline.rs` (post-rename — internal content)
-- Modify: `crates/hydeclaw-db/src/sessions.rs` (6 places — lines 873–877 sibling-module call + lines 1839, 1860, 1927, 2187, 2199–2206, 2292)
-- Modify: `crates/hydeclaw-core/src/db/mod.rs` (line 6 — re-export `pub use hydeclaw_db::session_wal;`)
-- Modify: `crates/hydeclaw-core/src/lib.rs` (line 93 — second re-export `pub use hydeclaw_db::session_wal;`)
-- Modify: `crates/hydeclaw-core/src/agent/tool_loop.rs` (function rename + 6 lines in test fn names + 8 `WalToolEvent` constructor calls)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs:268` (1 import path)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/parallel.rs` (4 call sites + 1 comment at lines 360, 498, 557, 638, 1067)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs:200, 220, 648` (3 SQL strings)
-- Modify: `crates/hydeclaw-core/src/agent/engine/run.rs:447` (1 doc-comment)
-- Modify: `crates/hydeclaw-core/src/agent/history.rs:698` (1 doc-comment)
-- Modify: `crates/hydeclaw-core/src/agent/session_manager.rs` (7 places — lines 166, 244, 290, 319, 344, 473, 549)
-- Modify: `crates/hydeclaw-core/src/agent/request_context.rs:11, 45` (use + call)
-- Modify: `crates/hydeclaw-core/src/skills/evolution.rs:193, 197` (1 comment + 1 SQL string)
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/sessions.rs:170` (1 SQL string `FROM session_events`)
-- Modify: `crates/hydeclaw-core/tests/integration_session_cleanup.rs:14` (1 `use` of `session_wal::log_event_tx` — note: distinct file from `integration_session_events_cleanup.rs` which is handled in Task 7)
+- Rename: `crates/opex-db/src/session_wal.rs` → `crates/opex-db/src/session_timeline.rs`
+- Modify: `crates/opex-db/src/lib.rs` (module declaration)
+- Modify: `crates/opex-db/src/session_timeline.rs` (post-rename — internal content)
+- Modify: `crates/opex-db/src/sessions.rs` (6 places — lines 873–877 sibling-module call + lines 1839, 1860, 1927, 2187, 2199–2206, 2292)
+- Modify: `crates/opex-core/src/db/mod.rs` (line 6 — re-export `pub use opex_db::session_wal;`)
+- Modify: `crates/opex-core/src/lib.rs` (line 93 — second re-export `pub use opex_db::session_wal;`)
+- Modify: `crates/opex-core/src/agent/tool_loop.rs` (function rename + 6 lines in test fn names + 8 `WalToolEvent` constructor calls)
+- Modify: `crates/opex-core/src/agent/pipeline/bootstrap.rs:268` (1 import path)
+- Modify: `crates/opex-core/src/agent/pipeline/parallel.rs` (4 call sites + 1 comment at lines 360, 498, 557, 638, 1067)
+- Modify: `crates/opex-core/src/agent/pipeline/finalize.rs:200, 220, 648` (3 SQL strings)
+- Modify: `crates/opex-core/src/agent/engine/run.rs:447` (1 doc-comment)
+- Modify: `crates/opex-core/src/agent/history.rs:698` (1 doc-comment)
+- Modify: `crates/opex-core/src/agent/session_manager.rs` (7 places — lines 166, 244, 290, 319, 344, 473, 549)
+- Modify: `crates/opex-core/src/agent/request_context.rs:11, 45` (use + call)
+- Modify: `crates/opex-core/src/skills/evolution.rs:193, 197` (1 comment + 1 SQL string)
+- Modify: `crates/opex-core/src/gateway/handlers/sessions.rs:170` (1 SQL string `FROM session_events`)
+- Modify: `crates/opex-core/tests/integration_session_cleanup.rs:14` (1 `use` of `session_wal::log_event_tx` — note: distinct file from `integration_session_events_cleanup.rs` which is handled in Task 7)
 
-The plan's previous draft mistakenly listed `crates/hydeclaw-core/src/agent/pipeline/llm_call.rs` — grep confirmed it has **zero** matches. Removed.
+The plan's previous draft mistakenly listed `crates/opex-core/src/agent/pipeline/llm_call.rs` — grep confirmed it has **zero** matches. Removed.
 
 - [ ] **Step 1: Rename the file**
 
 ```bash
-git mv crates/hydeclaw-db/src/session_wal.rs crates/hydeclaw-db/src/session_timeline.rs
+git mv crates/opex-db/src/session_wal.rs crates/opex-db/src/session_timeline.rs
 ```
 
 - [ ] **Step 2: Update `lib.rs` export**
 
-Edit `crates/hydeclaw-db/src/lib.rs` line 7:
+Edit `crates/opex-db/src/lib.rs` line 7:
 
 ```rust
 // before:
@@ -175,7 +175,7 @@ pub mod session_timeline;
 
 - [ ] **Step 3: Rewrite the module's header doc-comment**
 
-Edit the top of `crates/hydeclaw-db/src/session_timeline.rs` (replace the first 6 lines):
+Edit the top of `crates/opex-db/src/session_timeline.rs` (replace the first 6 lines):
 
 ```rust
 //! Session timeline — chronological log of session lifecycle events.
@@ -197,7 +197,7 @@ Edit the top of `crates/hydeclaw-db/src/session_timeline.rs` (replace the first 
 
 - [ ] **Step 4: Rename `WalToolEvent` to `TimelineToolEvent`**
 
-In `crates/hydeclaw-db/src/session_timeline.rs`, replace the struct definition (line 127):
+In `crates/opex-db/src/session_timeline.rs`, replace the struct definition (line 127):
 
 ```rust
 // before:
@@ -262,13 +262,13 @@ Update the doc-comment at line 69 (`/// Phase 62 RES-03: batched DELETE for sess
 
 The four existing `#[sqlx::test]` tests (`log_event_tx_updates_activity_at`, etc.) don't reference `session_events` directly — they call `log_event_tx`, which itself writes to the table. After Step 5, those tests automatically target the new table. No change needed.
 
-- [ ] **Step 7: Update `crates/hydeclaw-db/src/sessions.rs`**
+- [ ] **Step 7: Update `crates/opex-db/src/sessions.rs`**
 
 This file has **two** clusters of references — the first around line 873 (sibling-module call) and the second from line 1839 onwards (SQL strings + test).
 
 Cluster 1 — sibling-module call (lines 873–877):
 
-- Lines 873–874 doc-comment: `// session_wal is a sibling module ...` → `// session_timeline is a sibling module ...` (also update `hydeclaw-db/src/lib.rs declares both` reference inside the comment — the lib.rs `pub mod` is being updated in Step 2).
+- Lines 873–874 doc-comment: `// session_wal is a sibling module ...` → `// session_timeline is a sibling module ...` (also update `opex-db/src/lib.rs declares both` reference inside the comment — the lib.rs `pub mod` is being updated in Step 2).
 - Line 877: `crate::session_wal::log_event_tx(...)` → `crate::session_timeline::log_event_tx(...)`.
 
 Cluster 2 — SQL strings + test (from line 1839 onwards):
@@ -280,22 +280,22 @@ Cluster 2 — SQL strings + test (from line 1839 onwards):
 - Lines ~2199–2201: the test comment talks about dropping `session_events` to force a WAL insert failure. Replace `session_events` with `session_timeline` in the comment AND in the `DROP TABLE` statement at line 2206: `sqlx::query("DROP TABLE session_events")` → `sqlx::query("DROP TABLE session_timeline")`. Also rewrite the comment: replace "WAL insert (step 4)" with "timeline insert (step 4)".
 - Line ~2292: `"SELECT event_type FROM session_events ...` → `"SELECT event_type FROM session_timeline ...`
 
-After editing, run `grep -n 'session_events\|session_wal' crates/hydeclaw-db/src/sessions.rs` and confirm zero matches.
+After editing, run `grep -n 'session_events\|session_wal' crates/opex-db/src/sessions.rs` and confirm zero matches.
 
-- [ ] **Step 8: Update re-exports in hydeclaw-core (TWO critical lines — without these, every `crate::db::session_wal::` path breaks)**
+- [ ] **Step 8: Update re-exports in opex-core (TWO critical lines — without these, every `crate::db::session_wal::` path breaks)**
 
-- `crates/hydeclaw-core/src/db/mod.rs:6` — `pub use hydeclaw_db::session_wal;` → `pub use hydeclaw_db::session_timeline;`.
-- `crates/hydeclaw-core/src/lib.rs:93` — `pub use hydeclaw_db::session_wal;` → `pub use hydeclaw_db::session_timeline;`.
+- `crates/opex-core/src/db/mod.rs:6` — `pub use opex_db::session_wal;` → `pub use opex_db::session_timeline;`.
+- `crates/opex-core/src/lib.rs:93` — `pub use opex_db::session_wal;` → `pub use opex_db::session_timeline;`.
 
-These are the re-export points that make `crate::db::session_wal::*` and `hydeclaw_core::db::session_wal::*` resolve everywhere else. Skip them and every subsequent file fails to compile.
+These are the re-export points that make `crate::db::session_wal::*` and `opex_core::db::session_wal::*` resolve everywhere else. Skip them and every subsequent file fails to compile.
 
 - [ ] **Step 9: Update all `session_wal::` / `WalToolEvent` / SQL `session_events` consumers in core**
 
 For each file below, replace every `session_wal` with `session_timeline`, every `WalToolEvent` with `TimelineToolEvent`, every `warm_up_from_wal` with `warm_up_from_timeline`, and every SQL `session_events` with `session_timeline`. After each file, run `grep -n 'session_events\|session_wal\|WalToolEvent\|warm_up_from_wal' <file>` and confirm zero matches.
 
-- `crates/hydeclaw-core/src/agent/tool_loop.rs` — 12 places total:
-  1. Line 138 — function declaration `pub fn warm_up_from_wal(...)` → `pub fn warm_up_from_timeline(...)`. Parameter type `&[hydeclaw_db::session_wal::WalToolEvent]` → `&[hydeclaw_db::session_timeline::TimelineToolEvent]`.
-  2. Line 189 — `use hydeclaw_db::session_wal::WalToolEvent;` → `use hydeclaw_db::session_timeline::TimelineToolEvent;`.
+- `crates/opex-core/src/agent/tool_loop.rs` — 12 places total:
+  1. Line 138 — function declaration `pub fn warm_up_from_wal(...)` → `pub fn warm_up_from_timeline(...)`. Parameter type `&[opex_db::session_wal::WalToolEvent]` → `&[opex_db::session_timeline::TimelineToolEvent]`.
+  2. Line 189 — `use opex_db::session_wal::WalToolEvent;` → `use opex_db::session_timeline::TimelineToolEvent;`.
   3. Line 230 — test fn `fn warm_up_from_wal_restores_error_streak()` → `fn warm_up_from_timeline_restores_error_streak()`.
   4. Lines 233, 234 — `WalToolEvent { ... }` → `TimelineToolEvent { ... }`.
   5. Line 236 — `LoopDetector::warm_up_from_wal(...)` → `LoopDetector::warm_up_from_timeline(...)`.
@@ -306,17 +306,17 @@ For each file below, replace every `session_wal` with `session_timeline`, every 
   10. Lines 259, 260, 261 — `WalToolEvent { ... }` constructors → `TimelineToolEvent { ... }`.
   11. Line 263 — `LoopDetector::warm_up_from_wal(...)` → `LoopDetector::warm_up_from_timeline(...)`.
 
-- `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs:268` — `crate::db::session_wal::load_tool_events` → `crate::db::session_timeline::load_tool_events`.
+- `crates/opex-core/src/agent/pipeline/bootstrap.rs:268` — `crate::db::session_wal::load_tool_events` → `crate::db::session_timeline::load_tool_events`.
 
-- `crates/hydeclaw-core/src/agent/pipeline/parallel.rs` — lines 360, 498, 557, 638 (`crate::db::session_wal::log_event` calls) and line 1067 (1 comment mentioning `crate::db::session_wal::log_event(...)`).
+- `crates/opex-core/src/agent/pipeline/parallel.rs` — lines 360, 498, 557, 638 (`crate::db::session_wal::log_event` calls) and line 1067 (1 comment mentioning `crate::db::session_wal::log_event(...)`).
 
-- `crates/hydeclaw-core/src/agent/pipeline/finalize.rs:200, 220, 648` — three SQL string literals `FROM session_events` → `FROM session_timeline`.
+- `crates/opex-core/src/agent/pipeline/finalize.rs:200, 220, 648` — three SQL string literals `FROM session_events` → `FROM session_timeline`.
 
-- `crates/hydeclaw-core/src/agent/engine/run.rs:447` — doc-comment `/// now first-class sessions in messages and session_events.` → `/// now first-class sessions in messages and session_timeline.`.
+- `crates/opex-core/src/agent/engine/run.rs:447` — doc-comment `/// now first-class sessions in messages and session_events.` → `/// now first-class sessions in messages and session_timeline.`.
 
-- `crates/hydeclaw-core/src/agent/history.rs:698` — doc-comment `(mark messages compressed, insert session_events WAL record).` → `(mark messages compressed, insert session_timeline record).`.
+- `crates/opex-core/src/agent/history.rs:698` — doc-comment `(mark messages compressed, insert session_events WAL record).` → `(mark messages compressed, insert session_timeline record).`.
 
-- `crates/hydeclaw-core/src/agent/session_manager.rs` — 7 places:
+- `crates/opex-core/src/agent/session_manager.rs` — 7 places:
   - Line 166 — `crate::db::session_wal::log_event(...)` → `crate::db::session_timeline::log_event(...)`.
   - Line 244 — doc-comment mentioning `session_events` → `session_timeline`.
   - Line 290 — `crate::db::session_wal::log_event(...)` → `crate::db::session_timeline::log_event(...)`.
@@ -325,15 +325,15 @@ For each file below, replace every `session_wal` with `session_timeline`, every 
   - Line 473 — SQL string `FROM session_events` → `FROM session_timeline`.
   - Line 549 — same SQL rename.
 
-- `crates/hydeclaw-core/src/agent/request_context.rs` — line 11 (`use crate::db::session_wal;` → `use crate::db::session_timeline;`) and line 45 (`session_wal::load_tool_events(...)` → `session_timeline::load_tool_events(...)`).
+- `crates/opex-core/src/agent/request_context.rs` — line 11 (`use crate::db::session_wal;` → `use crate::db::session_timeline;`) and line 45 (`session_wal::load_tool_events(...)` → `session_timeline::load_tool_events(...)`).
 
-- `crates/hydeclaw-core/src/skills/evolution.rs:193, 197` — line 193 comment → `// 4. Tool names from session_timeline.`; line 197 SQL `FROM session_events` → `FROM session_timeline`.
+- `crates/opex-core/src/skills/evolution.rs:193, 197` — line 193 comment → `// 4. Tool names from session_timeline.`; line 197 SQL `FROM session_events` → `FROM session_timeline`.
 
-- `crates/hydeclaw-core/src/gateway/handlers/sessions.rs:170` — SQL `FROM session_events \` → `FROM session_timeline \`.
+- `crates/opex-core/src/gateway/handlers/sessions.rs:170` — SQL `FROM session_events \` → `FROM session_timeline \`.
 
-- `crates/hydeclaw-core/tests/integration_session_cleanup.rs:14` — `use hydeclaw_core::db::session_wal::log_event_tx;` → `use hydeclaw_core::db::session_timeline::log_event_tx;`. (This is a **different file** from `integration_session_events_cleanup.rs` handled in Task 7 — do not confuse them.)
+- `crates/opex-core/tests/integration_session_cleanup.rs:14` — `use opex_core::db::session_wal::log_event_tx;` → `use opex_core::db::session_timeline::log_event_tx;`. (This is a **different file** from `integration_session_events_cleanup.rs` handled in Task 7 — do not confuse them.)
 
-After all files: run `grep -rn 'session_events\|session_wal\|WalToolEvent\|warm_up_from_wal' crates/ --include='*.rs'` and confirm only matches are inside `crates/hydeclaw-db/src/session_timeline.rs` (the module itself, which legitimately uses the new names) and possibly inside `migrations/013_session_wal.sql` (handled in Task 8). Anywhere else means a missed reference — fix it.
+After all files: run `grep -rn 'session_events\|session_wal\|WalToolEvent\|warm_up_from_wal' crates/ --include='*.rs'` and confirm only matches are inside `crates/opex-db/src/session_timeline.rs` (the module itself, which legitimately uses the new names) and possibly inside `migrations/013_session_wal.sql` (handled in Task 8). Anywhere else means a missed reference — fix it.
 
 - [ ] **Step 10: Verify the workspace builds**
 
@@ -349,7 +349,7 @@ Expected: PASS for non-DB tests. `#[sqlx::test]` tests will be skipped because `
 
 - [ ] **Step 12: Run DB-backed tests if DATABASE_URL is set**
 
-Run: `cargo test -p hydeclaw-db --lib session_timeline -- --nocapture`
+Run: `cargo test -p opex-db --lib session_timeline -- --nocapture`
 
 Expected: PASS for all 5 tests in the `session_timeline` module (the 4 originals + `m049_renames_session_events_to_session_timeline`). The originals previously inserted into `session_events` via `log_event_tx`; they now insert into `session_timeline` automatically because the SQL string was updated in Step 5.
 
@@ -361,7 +361,7 @@ git commit -m "refactor(db): rename session_wal module to session_timeline
 
 Module file, type WalToolEvent (-> TimelineToolEvent), function
 warm_up_from_wal (-> warm_up_from_timeline), the two re-exports in
-hydeclaw-core (db/mod.rs, lib.rs), and all SQL string literals
+opex-core (db/mod.rs, lib.rs), and all SQL string literals
 referring to the old table name are updated in lockstep with m049.
 Workspace builds and tests pass. Bisect window opened by [bisect-skip]
 in the previous commit closes here."
@@ -373,12 +373,12 @@ in the previous commit closes here."
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/scheduler/mod.rs:465` (function rename + body)
-- Modify: `crates/hydeclaw-core/src/main.rs:1179–1192` (call site + tracing job string)
+- Modify: `crates/opex-core/src/scheduler/mod.rs:465` (function rename + body)
+- Modify: `crates/opex-core/src/main.rs:1179–1192` (call site + tracing job string)
 
 - [ ] **Step 1: Rename the function in `scheduler/mod.rs`**
 
-Edit `crates/hydeclaw-core/src/scheduler/mod.rs` line 465 and the surrounding doc-comment + body:
+Edit `crates/opex-core/src/scheduler/mod.rs` line 465 and the surrounding doc-comment + body:
 
 ```rust
 // before:
@@ -400,7 +400,7 @@ The `crate::db::session_wal::prune_old_events_batched` call at line 484 was alre
 
 - [ ] **Step 2: Update the call site in `main.rs`**
 
-Edit `crates/hydeclaw-core/src/main.rs` lines 1179–1192:
+Edit `crates/opex-core/src/main.rs` lines 1179–1192:
 
 ```rust
 // before:
@@ -447,7 +447,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/scheduler/mod.rs crates/hydeclaw-core/src/main.rs
+git add crates/opex-core/src/scheduler/mod.rs crates/opex-core/src/main.rs
 git commit -m "refactor(scheduler): rename add_session_events_cleanup_hourly
 
 Follows the m049 table rename. The cron job's tracing key
@@ -460,21 +460,21 @@ Follows the m049 table rename. The cron job's tracing key
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/metrics.rs:926–928, 1021`
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/monitoring/mod.rs:146, 182–183, 211, 229`
-- Modify: `crates/hydeclaw-core/tests/integration_dashboard_metrics.rs:149, 166, 190, 212, 263, 315`
+- Modify: `crates/opex-core/src/metrics.rs:926–928, 1021`
+- Modify: `crates/opex-core/src/gateway/handlers/monitoring/mod.rs:146, 182–183, 211, 229`
+- Modify: `crates/opex-core/tests/integration_dashboard_metrics.rs:149, 166, 190, 212, 263, 315`
 
 - [ ] **Step 1: Update the failing test first (TDD on the API rename)**
 
-In `crates/hydeclaw-core/tests/integration_dashboard_metrics.rs`, search-and-replace **`session_events_table_size_bytes`** with **`session_timeline_table_size_bytes`**. The grep above showed 6 occurrences: lines 149 (comment), 166, 190, 212, 263, 315.
+In `crates/opex-core/tests/integration_dashboard_metrics.rs`, search-and-replace **`session_events_table_size_bytes`** with **`session_timeline_table_size_bytes`**. The grep above showed 6 occurrences: lines 149 (comment), 166, 190, 212, 263, 315.
 
-After replacing, run: `cargo test -p hydeclaw-core --test integration_dashboard_metrics`
+After replacing, run: `cargo test -p opex-core --test integration_dashboard_metrics`
 
 Expected: FAIL — compile error because the struct field still has the old name.
 
 - [ ] **Step 2: Rename the struct field and JSON key in `metrics.rs`**
 
-Edit `crates/hydeclaw-core/src/metrics.rs`:
+Edit `crates/opex-core/src/metrics.rs`:
 
 - Lines 926–928: update the doc-comment + field:
 
@@ -502,7 +502,7 @@ Edit `crates/hydeclaw-core/src/metrics.rs`:
 
 - [ ] **Step 3: Update the SQL query and field in `monitoring/mod.rs`**
 
-Edit `crates/hydeclaw-core/src/gateway/handlers/monitoring/mod.rs`:
+Edit `crates/opex-core/src/gateway/handlers/monitoring/mod.rs`:
 
 - Line 146 (doc-comment example): `"session_events_table_size_bytes": <u64>` → `"session_timeline_table_size_bytes": <u64>`.
 - Line 182 (local binding): `let session_events_table_size_bytes: u64 = ...` → `let session_timeline_table_size_bytes: u64 = ...`.
@@ -512,7 +512,7 @@ Edit `crates/hydeclaw-core/src/gateway/handlers/monitoring/mod.rs`:
 
 - [ ] **Step 4: Run the dashboard test, confirm it passes**
 
-Run: `cargo test -p hydeclaw-core --test integration_dashboard_metrics`
+Run: `cargo test -p opex-core --test integration_dashboard_metrics`
 
 Expected: PASS.
 
@@ -525,9 +525,9 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/metrics.rs \
-        crates/hydeclaw-core/src/gateway/handlers/monitoring/mod.rs \
-        crates/hydeclaw-core/tests/integration_dashboard_metrics.rs
+git add crates/opex-core/src/metrics.rs \
+        crates/opex-core/src/gateway/handlers/monitoring/mod.rs \
+        crates/opex-core/tests/integration_dashboard_metrics.rs
 git commit -m "refactor(metrics): rename session_events_table_size_bytes
 
 Public field in GET /api/dashboard/metrics. Operator-visible breaking
@@ -540,13 +540,13 @@ change documented in release notes. UI does not consume this field."
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/config/mod.rs:55, 258–283`
-- Modify: `crates/hydeclaw-core/src/main.rs:1186–1187` (field access on `state.config.config.cleanup`)
-- Modify: `crates/hydeclaw-db/src/session_timeline.rs` (doc-comment mentioning "session_events WAL retention" if any remained after Task 2)
+- Modify: `crates/opex-core/src/config/mod.rs:55, 258–283`
+- Modify: `crates/opex-core/src/main.rs:1186–1187` (field access on `state.config.config.cleanup`)
+- Modify: `crates/opex-db/src/session_timeline.rs` (doc-comment mentioning "session_events WAL retention" if any remained after Task 2)
 
 - [ ] **Step 1: Rename the struct fields and helper fns in `config/mod.rs`**
 
-Edit `crates/hydeclaw-core/src/config/mod.rs` lines 256–283:
+Edit `crates/opex-core/src/config/mod.rs` lines 256–283:
 
 ```rust
 // before:
@@ -622,7 +622,7 @@ Also update the comment at line 55 in `AppConfig`:
 
 - [ ] **Step 2: Update `main.rs` field accesses**
 
-Edit `crates/hydeclaw-core/src/main.rs`:
+Edit `crates/opex-core/src/main.rs`:
 
 - Line 1151 (passed into `add_session_cleanup` for batch size): `state.config.config.cleanup.session_events_batch_size` → `state.config.config.cleanup.session_timeline_batch_size`.
 - Line 1186: `state.config.config.cleanup.session_events_retention_days` → `state.config.config.cleanup.session_timeline_retention_days`.
@@ -637,10 +637,10 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/config/mod.rs crates/hydeclaw-core/src/main.rs
+git add crates/opex-core/src/config/mod.rs crates/opex-core/src/main.rs
 git commit -m "refactor(config): rename [cleanup] keys to session_timeline_*
 
-Operator-visible breaking change: hydeclaw.toml [cleanup] keys
+Operator-visible breaking change: opex.toml [cleanup] keys
 session_events_retention_days/session_events_batch_size are renamed.
 A startup PreCheck for the old keys is added in the next commit so
 operators get a clear error instead of a serde 'unknown field'."
@@ -652,12 +652,12 @@ operators get a clear error instead of a serde 'unknown field'."
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/config/mod.rs:1264–1272` (the `AppConfig::load` function)
-- Modify: `crates/hydeclaw-core/src/config/mod.rs` (add `#[cfg(test)] mod precheck_tests` at the bottom of the file)
+- Modify: `crates/opex-core/src/config/mod.rs:1264–1272` (the `AppConfig::load` function)
+- Modify: `crates/opex-core/src/config/mod.rs` (add `#[cfg(test)] mod precheck_tests` at the bottom of the file)
 
 - [ ] **Step 1: Add the failing PreCheck test**
 
-Append to the end of `crates/hydeclaw-core/src/config/mod.rs` (after the last existing item):
+Append to the end of `crates/opex-core/src/config/mod.rs` (after the last existing item):
 
 ```rust
 #[cfg(test)]
@@ -719,23 +719,23 @@ session_timeline_batch_size = 1000
 }
 ```
 
-`tempfile` is already a `[dev-dependencies]` entry in `crates/hydeclaw-core/Cargo.toml` (currently `tempfile = "3.27.0"`). The test uses it directly via `tempfile::NamedTempFile`. No `Cargo.toml` change needed; verify with:
+`tempfile` is already a `[dev-dependencies]` entry in `crates/opex-core/Cargo.toml` (currently `tempfile = "3.27.0"`). The test uses it directly via `tempfile::NamedTempFile`. No `Cargo.toml` change needed; verify with:
 
 ```bash
-grep -n "tempfile" crates/hydeclaw-core/Cargo.toml
+grep -n "tempfile" crates/opex-core/Cargo.toml
 ```
 
 Expected output: `141:tempfile = "3.27.0"` (or a later version — whatever is committed).
 
 - [ ] **Step 2: Run the test, confirm it fails**
 
-Run: `cargo test -p hydeclaw-core --lib config::precheck_tests -- --nocapture`
+Run: `cargo test -p opex-core --lib config::precheck_tests -- --nocapture`
 
 Expected: FAIL because the PreCheck isn't implemented — `AppConfig::load` will fail with a bare serde "unknown field" error, not the targeted message.
 
 - [ ] **Step 3: Implement the PreCheck in `AppConfig::load`**
 
-Edit `crates/hydeclaw-core/src/config/mod.rs` line 1264. Replace the existing `load` function:
+Edit `crates/opex-core/src/config/mod.rs` line 1264. Replace the existing `load` function:
 
 ```rust
 // before:
@@ -783,7 +783,7 @@ impl AppConfig {
             if found_as_key {
                 anyhow::bail!(
                     "config error: {section} key `{old}` was renamed to \
-                     `{new}` in this release. Update hydeclaw.toml.",
+                     `{new}` in this release. Update opex.toml.",
                 );
             }
         }
@@ -794,7 +794,7 @@ impl AppConfig {
 
 - [ ] **Step 4: Run the tests, confirm they pass**
 
-Run: `cargo test -p hydeclaw-core --lib config::precheck_tests -- --nocapture`
+Run: `cargo test -p opex-core --lib config::precheck_tests -- --nocapture`
 
 Expected: PASS — all three tests.
 
@@ -807,7 +807,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/config/mod.rs
+git add crates/opex-core/src/config/mod.rs
 git commit -m "feat(config): startup PreCheck for renamed [cleanup] keys
 
 Catches the operator using the pre-m049 key names
@@ -822,39 +822,39 @@ an actionable error naming the new keys, instead of the bare serde
 
 **Files:**
 
-- Rename: `crates/hydeclaw-core/tests/integration_session_events_cleanup.rs` → `crates/hydeclaw-core/tests/integration_session_timeline_cleanup.rs`
+- Rename: `crates/opex-core/tests/integration_session_events_cleanup.rs` → `crates/opex-core/tests/integration_session_timeline_cleanup.rs`
 
 - [ ] **Step 1: Rename the file with git mv**
 
 ```bash
-git mv crates/hydeclaw-core/tests/integration_session_events_cleanup.rs \
-       crates/hydeclaw-core/tests/integration_session_timeline_cleanup.rs
+git mv crates/opex-core/tests/integration_session_events_cleanup.rs \
+       crates/opex-core/tests/integration_session_timeline_cleanup.rs
 ```
 
 - [ ] **Step 2: Update file content**
 
-Inside `crates/hydeclaw-core/tests/integration_session_timeline_cleanup.rs`:
+Inside `crates/opex-core/tests/integration_session_timeline_cleanup.rs`:
 
 - Line 1 (header doc-comment): replace `verify batched DELETE prune_old_events_batched against a real PG` framing if it mentions WAL — keep the RES-03 reference, just s/WAL/session timeline/.
-- Line 11: `use hydeclaw_core::db::session_wal::prune_old_events_batched;` → `use hydeclaw_core::db::session_timeline::prune_old_events_batched;`.
+- Line 11: `use opex_core::db::session_wal::prune_old_events_batched;` → `use opex_core::db::session_timeline::prune_old_events_batched;`.
 - Line 16 (doc-comment): `Insert a session row (FK target for session_events) ...` → `Insert a session row (FK target for session_timeline) ...`.
 - Line 32 (doc-comment): `FK churn — session_events.session_id references sessions.id ...` → `FK churn — session_timeline.session_id references sessions.id ...`.
 - Line 38: SQL `INSERT INTO session_events (...)` → `INSERT INTO session_timeline (...)`.
 - Lines 68, 92, 154: SQL `SELECT COUNT(*)::bigint FROM session_events` → `SELECT COUNT(*)::bigint FROM session_timeline`.
-- Line 130 (doc-comment with cargo command): `cargo test -p hydeclaw-core --test integration_session_events_cleanup` → `cargo test -p hydeclaw-core --test integration_session_timeline_cleanup`.
+- Line 130 (doc-comment with cargo command): `cargo test -p opex-core --test integration_session_events_cleanup` → `cargo test -p opex-core --test integration_session_timeline_cleanup`.
 
-Run `grep -n "session_events\|session_wal" crates/hydeclaw-core/tests/integration_session_timeline_cleanup.rs` after editing to confirm zero remaining matches.
+Run `grep -n "session_events\|session_wal" crates/opex-core/tests/integration_session_timeline_cleanup.rs` after editing to confirm zero remaining matches.
 
 - [ ] **Step 3: Run the renamed test**
 
-Run: `cargo test -p hydeclaw-core --test integration_session_timeline_cleanup -- --ignored`
+Run: `cargo test -p opex-core --test integration_session_timeline_cleanup -- --ignored`
 
 Expected: PASS (the `--ignored` flag is required if the test was marked with `#[ignore]` previously; check the file header for the test markers).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/tests/integration_session_timeline_cleanup.rs
+git add crates/opex-core/tests/integration_session_timeline_cleanup.rs
 # Note: git mv records the rename automatically; no separate add needed.
 git commit -m "test(timeline): rename integration test for session_timeline
 
@@ -1067,7 +1067,7 @@ cat > /tmp/bad-cleanup.toml <<'EOF'
 [cleanup]
 session_events_retention_days = 14
 EOF
-cargo run -p hydeclaw-core --bin hydeclaw-core -- --config /tmp/bad-cleanup.toml 2>&1 | head -5
+cargo run -p opex-core --bin opex-core -- --config /tmp/bad-cleanup.toml 2>&1 | head -5
 ```
 
 Expected: the process exits non-zero with output containing `session_events_retention_days was renamed to session_timeline_retention_days`. If the binary doesn't accept `--config`, replace this with a unit-level smoke test of `AppConfig::load("/tmp/bad-cleanup.toml")`. Either way, the message must mention both the old and new key.
@@ -1112,7 +1112,7 @@ This plan was patched on 2026-05-14 after a `/review` pass against `grep -rn 'se
 
 Patches added:
 
-- Four files originally missed: `crates/hydeclaw-core/src/db/mod.rs`, `crates/hydeclaw-core/src/lib.rs`, `crates/hydeclaw-core/src/gateway/handlers/sessions.rs`, `crates/hydeclaw-core/tests/integration_session_cleanup.rs`.
+- Four files originally missed: `crates/opex-core/src/db/mod.rs`, `crates/opex-core/src/lib.rs`, `crates/opex-core/src/gateway/handlers/sessions.rs`, `crates/opex-core/tests/integration_session_cleanup.rs`.
 - Additional lines in already-listed files: `sessions.rs:873–877`, `session_manager.rs:244, 344, 473, 549`, `tool_loop.rs:230, 236, 245, 256, 263`.
 - Removed `llm_call.rs` from the consumer list (false positive — zero matches).
 - Explicit exclusion of dated docs (`docs/architecture/`, `docs/superpowers/plans/`, `docs/superpowers/specs/`) from the grep ACs.

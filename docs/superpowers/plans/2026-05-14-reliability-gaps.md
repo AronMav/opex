@@ -12,31 +12,31 @@
 
 **Commit policy:** Plan approval implies authorization for the `git commit` steps below — the executor SHOULD NOT prompt before each commit but MUST prompt before any `git push`, `gh pr create`, or destructive git operation (reset, force-push, branch delete). Aligns with CLAUDE.md "commit only when requested" by treating plan approval as the request.
 
-**Pre-flight:** Confirm `DATABASE_URL` is exported (so `cargo test` runs `#[sqlx::test]` tests). Without it the endpoint integration tests in Tasks 2 and 7 are silently skipped. Run `echo $DATABASE_URL`; if empty, start the test DB via `make test-db` in a separate terminal or set `DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test`.
+**Pre-flight:** Confirm `DATABASE_URL` is exported (so `cargo test` runs `#[sqlx::test]` tests). Without it the endpoint integration tests in Tasks 2 and 7 are silently skipped. Run `echo $DATABASE_URL`; if empty, start the test DB via `make test-db` in a separate terminal or set `DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test`.
 
 ## File map
 
 **Created:**
 
-- `crates/hydeclaw-core/src/gateway/handlers/monitoring/watchdog_endpoint.rs` — new file holding the `GET /api/watchdog/agent-activity` handler + supporting DB helpers.
-- `crates/hydeclaw-watchdog/src/inactivity.rs` — pure-logic module: `classify`, `reconcile`, `fetch_agent_activity`, `tick`.
-- `crates/hydeclaw-core/tests/integration_watchdog_agent_activity.rs` — `#[sqlx::test]` integration for the new endpoint.
-- `crates/hydeclaw-watchdog/tests/integration_inactivity.rs` — wiremock-driven integration of the watchdog tick.
-- `crates/hydeclaw-core/tests/integration_yaml_cache.rs` — wiremock-driven integration of cache hit/miss/bypass paths.
+- `crates/opex-core/src/gateway/handlers/monitoring/watchdog_endpoint.rs` — new file holding the `GET /api/watchdog/agent-activity` handler + supporting DB helpers.
+- `crates/opex-watchdog/src/inactivity.rs` — pure-logic module: `classify`, `reconcile`, `fetch_agent_activity`, `tick`.
+- `crates/opex-core/tests/integration_watchdog_agent_activity.rs` — `#[sqlx::test]` integration for the new endpoint.
+- `crates/opex-watchdog/tests/integration_inactivity.rs` — wiremock-driven integration of the watchdog tick.
+- `crates/opex-core/tests/integration_yaml_cache.rs` — wiremock-driven integration of cache hit/miss/bypass paths.
 
 **Modified:**
 
-- `crates/hydeclaw-core/src/scheduler/mod.rs` — add `compute_next_heartbeat_at(cron_expr, timezone, last_fire) -> Option<DateTime<Utc>>` helper alongside existing `compute_next_run`.
-- `crates/hydeclaw-core/src/gateway/handlers/monitoring/mod.rs` — register new route.
-- `crates/hydeclaw-watchdog/src/config.rs` — add `stale_activity_timeout_hours` + `missed_heartbeat_grace_minutes` fields with `serde(default)` helpers.
-- `crates/hydeclaw-watchdog/src/main.rs` — allocate `inactivity_state: HashMap<EpisodeKey, AlertState>`, call `inactivity::tick(...)` per loop iteration.
-- `crates/hydeclaw-watchdog/Cargo.toml` — add `wiremock` to `[dev-dependencies]` if not already there.
-- `crates/hydeclaw-core/src/tools/yaml_tools.rs` — promote `ToolExecutionContext` / `CachedResponse` / `build_cache_key` from `#[cfg(test)]` to production; add `max_entries` field; swap `Mutex<HashMap>` for `DashMap`; add batch eviction.
-- `crates/hydeclaw-core/src/agent/agent_config.rs` — add `pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>`.
-- `crates/hydeclaw-core/src/gateway/handlers/agents/lifecycle.rs` — pass `tool_exec_ctx` into `AgentConfig` at construction.
-- `crates/hydeclaw-core/src/config/mod.rs` — add `ToolCacheConfig` struct + `[tools.cache]` section.
-- `crates/hydeclaw-core/src/main.rs` — construct one `Arc<ToolExecutionContext>` from config at startup, thread into `AgentDeps`-equivalent or pass through.
-- `crates/hydeclaw-core/src/agent/engine_dispatch.rs` — add cache lookup + write around the YAML-tool HTTP execution.
+- `crates/opex-core/src/scheduler/mod.rs` — add `compute_next_heartbeat_at(cron_expr, timezone, last_fire) -> Option<DateTime<Utc>>` helper alongside existing `compute_next_run`.
+- `crates/opex-core/src/gateway/handlers/monitoring/mod.rs` — register new route.
+- `crates/opex-watchdog/src/config.rs` — add `stale_activity_timeout_hours` + `missed_heartbeat_grace_minutes` fields with `serde(default)` helpers.
+- `crates/opex-watchdog/src/main.rs` — allocate `inactivity_state: HashMap<EpisodeKey, AlertState>`, call `inactivity::tick(...)` per loop iteration.
+- `crates/opex-watchdog/Cargo.toml` — add `wiremock` to `[dev-dependencies]` if not already there.
+- `crates/opex-core/src/tools/yaml_tools.rs` — promote `ToolExecutionContext` / `CachedResponse` / `build_cache_key` from `#[cfg(test)]` to production; add `max_entries` field; swap `Mutex<HashMap>` for `DashMap`; add batch eviction.
+- `crates/opex-core/src/agent/agent_config.rs` — add `pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>`.
+- `crates/opex-core/src/gateway/handlers/agents/lifecycle.rs` — pass `tool_exec_ctx` into `AgentConfig` at construction.
+- `crates/opex-core/src/config/mod.rs` — add `ToolCacheConfig` struct + `[tools.cache]` section.
+- `crates/opex-core/src/main.rs` — construct one `Arc<ToolExecutionContext>` from config at startup, thread into `AgentDeps`-equivalent or pass through.
+- `crates/opex-core/src/agent/engine_dispatch.rs` — add cache lookup + write around the YAML-tool HTTP execution.
 
 ---
 
@@ -46,7 +46,7 @@ The endpoint in Task 2 needs to compute "next expected heartbeat after the last 
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/scheduler/mod.rs` (add helper near line 1555 where `compute_next_run` lives)
+- Modify: `crates/opex-core/src/scheduler/mod.rs` (add helper near line 1555 where `compute_next_run` lives)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -83,7 +83,7 @@ fn compute_next_heartbeat_at_handles_epoch_fallback() {
 - [ ] **Step 2: Run tests, confirm they fail**
 
 ```bash
-cargo test -p hydeclaw-core --bin hydeclaw-core compute_next_heartbeat_at -- --nocapture
+cargo test -p opex-core --bin opex-core compute_next_heartbeat_at -- --nocapture
 ```
 
 Expected: FAIL with "cannot find function `compute_next_heartbeat_at`" — the helper doesn't exist yet.
@@ -128,7 +128,7 @@ pub fn compute_next_heartbeat_at(
 - [ ] **Step 4: Run tests, confirm they pass**
 
 ```bash
-cargo test -p hydeclaw-core --bin hydeclaw-core compute_next_heartbeat_at -- --nocapture
+cargo test -p opex-core --bin opex-core compute_next_heartbeat_at -- --nocapture
 ```
 
 Expected: PASS for all three tests.
@@ -136,7 +136,7 @@ Expected: PASS for all three tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/scheduler/mod.rs
+git add crates/opex-core/src/scheduler/mod.rs
 git commit -m "$(cat <<'EOF'
 feat(scheduler): compute_next_heartbeat_at helper for watchdog endpoint
 
@@ -153,16 +153,16 @@ EOF
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/gateway/handlers/monitoring/watchdog_endpoint.rs`
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/monitoring/mod.rs` (register route)
-- Create: `crates/hydeclaw-core/tests/integration_watchdog_agent_activity.rs`
+- Create: `crates/opex-core/src/gateway/handlers/monitoring/watchdog_endpoint.rs`
+- Modify: `crates/opex-core/src/gateway/handlers/monitoring/mod.rs` (register route)
+- Create: `crates/opex-core/tests/integration_watchdog_agent_activity.rs`
 
 - [ ] **Step 1: Create the handler file with route and response shape**
 
-Create `crates/hydeclaw-core/src/gateway/handlers/monitoring/watchdog_endpoint.rs`:
+Create `crates/opex-core/src/gateway/handlers/monitoring/watchdog_endpoint.rs`:
 
 ```rust
-//! GET /api/watchdog/agent-activity — feeds the hydeclaw-watchdog
+//! GET /api/watchdog/agent-activity — feeds the opex-watchdog
 //! inactivity check. Returns per-agent latest activity + server-
 //! computed next-expected-heartbeat so the watchdog needs no cron
 //! parsing locally.
@@ -239,7 +239,7 @@ pub(crate) async fn api_watchdog_agent_activity(
 
 - [ ] **Step 2: Register the route**
 
-Edit `crates/hydeclaw-core/src/gateway/handlers/monitoring/mod.rs`. At the top, add `mod watchdog_endpoint;` next to the existing `mod` declarations. Inside the `pub(crate) fn routes() -> Router<AppState>` definition (the function returning the `Router::new().route(...).route(...)` chain near line 43), append one route. The exact line to add:
+Edit `crates/opex-core/src/gateway/handlers/monitoring/mod.rs`. At the top, add `mod watchdog_endpoint;` next to the existing `mod` declarations. Inside the `pub(crate) fn routes() -> Router<AppState>` definition (the function returning the `Router::new().route(...).route(...)` chain near line 43), append one route. The exact line to add:
 
 ```rust
 .route("/api/watchdog/agent-activity", get(watchdog_endpoint::api_watchdog_agent_activity))
@@ -249,7 +249,7 @@ If you can't tell from context where to put it, place it right before the closin
 
 - [ ] **Step 3: Write the integration test**
 
-Create `crates/hydeclaw-core/tests/integration_watchdog_agent_activity.rs`:
+Create `crates/opex-core/tests/integration_watchdog_agent_activity.rs`:
 
 ```rust
 //! Integration: /api/watchdog/agent-activity endpoint.
@@ -309,8 +309,8 @@ async fn endpoint_requires_auth(pool: PgPool) {
 - [ ] **Step 4: Run the tests, confirm they pass**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --test integration_watchdog_agent_activity -- --nocapture
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --test integration_watchdog_agent_activity -- --nocapture
 ```
 
 Expected: both tests PASS.
@@ -326,9 +326,9 @@ Expected: PASS, zero errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/gateway/handlers/monitoring/watchdog_endpoint.rs \
-        crates/hydeclaw-core/src/gateway/handlers/monitoring/mod.rs \
-        crates/hydeclaw-core/tests/integration_watchdog_agent_activity.rs
+git add crates/opex-core/src/gateway/handlers/monitoring/watchdog_endpoint.rs \
+        crates/opex-core/src/gateway/handlers/monitoring/mod.rs \
+        crates/opex-core/tests/integration_watchdog_agent_activity.rs
 git commit -m "$(cat <<'EOF'
 feat(api): GET /api/watchdog/agent-activity endpoint
 
@@ -350,12 +350,12 @@ Pure functions only, no I/O. Unit-tested in isolation. Glue with HTTP / state ha
 
 **Files:**
 
-- Create: `crates/hydeclaw-watchdog/src/inactivity.rs`
-- Modify: `crates/hydeclaw-watchdog/src/main.rs` (add `mod inactivity;` to the module declarations near the top)
+- Create: `crates/opex-watchdog/src/inactivity.rs`
+- Modify: `crates/opex-watchdog/src/main.rs` (add `mod inactivity;` to the module declarations near the top)
 
 - [ ] **Step 1: Create the module skeleton with types**
 
-Create `crates/hydeclaw-watchdog/src/inactivity.rs`:
+Create `crates/opex-watchdog/src/inactivity.rs`:
 
 ```rust
 //! Per-agent inactivity checks (stale activity, missed heartbeat).
@@ -613,7 +613,7 @@ mod tests {
 
 - [ ] **Step 2: Register the module in `main.rs`**
 
-Edit `crates/hydeclaw-watchdog/src/main.rs`. At the top of the file (after the existing `use` statements but before `async fn main`), add the module declaration alongside the other module declarations (you'll see `mod alerter; mod checker; mod config; mod recovery; mod resources; mod status;` or similar near the top):
+Edit `crates/opex-watchdog/src/main.rs`. At the top of the file (after the existing `use` statements but before `async fn main`), add the module declaration alongside the other module declarations (you'll see `mod alerter; mod checker; mod config; mod recovery; mod resources; mod status;` or similar near the top):
 
 ```rust
 mod inactivity;
@@ -622,7 +622,7 @@ mod inactivity;
 - [ ] **Step 3: Run the unit tests, confirm they pass**
 
 ```bash
-cargo test -p hydeclaw-watchdog --bin hydeclaw-watchdog inactivity -- --nocapture
+cargo test -p opex-watchdog --bin opex-watchdog inactivity -- --nocapture
 ```
 
 Expected: PASS — 9 tests in `inactivity::tests` (5 classify_*, 4 reconcile_*).
@@ -638,7 +638,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-watchdog/src/inactivity.rs crates/hydeclaw-watchdog/src/main.rs
+git add crates/opex-watchdog/src/inactivity.rs crates/opex-watchdog/src/main.rs
 git commit -m "$(cat <<'EOF'
 feat(watchdog): inactivity classify + reconcile pure logic
 
@@ -662,13 +662,13 @@ Wraps the pure logic from Task 3 with HTTP I/O and exercises it end-to-end again
 
 **Files:**
 
-- Modify: `crates/hydeclaw-watchdog/src/inactivity.rs` (add `fetch_agent_activity` + `tick`)
-- Modify: `crates/hydeclaw-watchdog/Cargo.toml` (add `wiremock` to `[dev-dependencies]` if absent)
-- Create: `crates/hydeclaw-watchdog/tests/integration_inactivity.rs`
+- Modify: `crates/opex-watchdog/src/inactivity.rs` (add `fetch_agent_activity` + `tick`)
+- Modify: `crates/opex-watchdog/Cargo.toml` (add `wiremock` to `[dev-dependencies]` if absent)
+- Create: `crates/opex-watchdog/tests/integration_inactivity.rs`
 
 - [ ] **Step 1: Add the HTTP-fetch function and orchestration `tick`**
 
-Append to `crates/hydeclaw-watchdog/src/inactivity.rs` (after the `tests` module — production code goes before tests; you'll need to place this code BEFORE the `#[cfg(test)] mod tests` block):
+Append to `crates/opex-watchdog/src/inactivity.rs` (after the `tests` module — production code goes before tests; you'll need to place this code BEFORE the `#[cfg(test)] mod tests` block):
 
 ```rust
 use crate::alerter::{AlertConfig, Alerter};
@@ -764,14 +764,14 @@ fn format_recover_message(r: &Recover) -> String {
 }
 ```
 
-The `Alerter::send(&self, config: &AlertConfig, message: &str, event_type: &str)` method already exists at [alerter.rs:106](crates/hydeclaw-watchdog/src/alerter.rs#L106). It filters by `config.events.contains(event_type)`, so reusing `"down"`/`"recovery"` (already in the default `AlertConfig.events`) means operators get inactivity alerts without UI/config changes. The body text (`"agent X inactive (last activity: ...)"`) disambiguates from real service-down alerts.
+The `Alerter::send(&self, config: &AlertConfig, message: &str, event_type: &str)` method already exists at [alerter.rs:106](crates/opex-watchdog/src/alerter.rs#L106). It filters by `config.events.contains(event_type)`, so reusing `"down"`/`"recovery"` (already in the default `AlertConfig.events`) means operators get inactivity alerts without UI/config changes. The body text (`"agent X inactive (last activity: ...)"`) disambiguates from real service-down alerts.
 
 `AlertConfig` is fetched once at watchdog startup (via `alerter.fetch_config()`) and stored in a local variable `alert_config` in `main.rs`; it's hot-reloaded by the existing config refresh logic. The new `tick` takes `&alert_config` as an explicit parameter — keeps the dependency flow visible.
 
 - [ ] **Step 2: Verify wiremock is a dev-dep, add if missing**
 
 ```bash
-grep -n "wiremock" crates/hydeclaw-watchdog/Cargo.toml
+grep -n "wiremock" crates/opex-watchdog/Cargo.toml
 ```
 
 If absent, add to `[dev-dependencies]`:
@@ -784,7 +784,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 - [ ] **Step 3: Write the integration test**
 
-Create `crates/hydeclaw-watchdog/tests/integration_inactivity.rs`:
+Create `crates/opex-watchdog/tests/integration_inactivity.rs`:
 
 ```rust
 //! Integration: watchdog inactivity::tick against a wiremock-mocked
@@ -800,7 +800,7 @@ Create `crates/hydeclaw-watchdog/tests/integration_inactivity.rs`:
 //! for binary crates].
 //!
 //! Step 1 of this test setup, if not already done in Task 3: create
-//! `crates/hydeclaw-watchdog/src/lib.rs` with:
+//! `crates/opex-watchdog/src/lib.rs` with:
 //!
 //! ```rust
 //! pub mod alerter;
@@ -809,9 +809,9 @@ Create `crates/hydeclaw-watchdog/tests/integration_inactivity.rs`:
 //! ```
 //!
 //! and update `Cargo.toml` to declare both the lib and the bin (the
-//! bin already has `[[bin]] name = "hydeclaw-watchdog" path = "src/main.rs"`;
-//! add `[lib] name = "hydeclaw_watchdog" path = "src/lib.rs"`).
-//! `main.rs` then imports its modules via `use hydeclaw_watchdog::...`
+//! bin already has `[[bin]] name = "opex-watchdog" path = "src/main.rs"`;
+//! add `[lib] name = "opex_watchdog" path = "src/lib.rs"`).
+//! `main.rs` then imports its modules via `use opex_watchdog::...`
 //! OR keeps `mod alerter; mod config; mod inactivity;` — both work.
 //!
 //! Simpler alternative if lib re-export feels heavy: relocate this
@@ -821,9 +821,9 @@ Create `crates/hydeclaw-watchdog/tests/integration_inactivity.rs`:
 
 use std::collections::HashMap;
 
-use hydeclaw_watchdog::alerter::{AlertConfig, Alerter};
-use hydeclaw_watchdog::config::WatchdogSettings;
-use hydeclaw_watchdog::inactivity::{self, EpisodeKey, AlertState};
+use opex_watchdog::alerter::{AlertConfig, Alerter};
+use opex_watchdog::config::WatchdogSettings;
+use opex_watchdog::inactivity::{self, EpisodeKey, AlertState};
 
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -955,12 +955,12 @@ async fn tick_tolerates_endpoint_500() {
 }
 ```
 
-> **Implementer setup note:** if `crates/hydeclaw-watchdog/` doesn't yet have `src/lib.rs`, add it during Task 3 Step 1 with the three `pub mod` lines above and add a `[lib]` section to `Cargo.toml` pointing at it. The single-file diff is trivial and unlocks integration tests cleanly. The existing `main.rs` continues to `mod alerter; mod config; mod inactivity;` — those work alongside the lib (Rust allows a crate to be both `[lib]` and `[[bin]]`).
+> **Implementer setup note:** if `crates/opex-watchdog/` doesn't yet have `src/lib.rs`, add it during Task 3 Step 1 with the three `pub mod` lines above and add a `[lib]` section to `Cargo.toml` pointing at it. The single-file diff is trivial and unlocks integration tests cleanly. The existing `main.rs` continues to `mod alerter; mod config; mod inactivity;` — those work alongside the lib (Rust allows a crate to be both `[lib]` and `[[bin]]`).
 
 - [ ] **Step 4: Run the unit tests + integration test, confirm they pass**
 
 ```bash
-cargo test -p hydeclaw-watchdog -- --nocapture
+cargo test -p opex-watchdog -- --nocapture
 ```
 
 Expected: previous 9 unit tests (one of which is `reconcile_silent_cleanup_on_disappeared_agent`) + the new integration test PASS.
@@ -968,7 +968,7 @@ Expected: previous 9 unit tests (one of which is `reconcile_silent_cleanup_on_di
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-watchdog/
+git add crates/opex-watchdog/
 git commit -m "$(cat <<'EOF'
 feat(watchdog): inactivity::tick HTTP fetch + alert dispatch
 
@@ -989,12 +989,12 @@ EOF
 
 **Files:**
 
-- Modify: `crates/hydeclaw-watchdog/src/config.rs`
-- Modify: `crates/hydeclaw-watchdog/src/main.rs`
+- Modify: `crates/opex-watchdog/src/config.rs`
+- Modify: `crates/opex-watchdog/src/main.rs`
 
 - [ ] **Step 1: Add config fields**
 
-Edit `crates/hydeclaw-watchdog/src/config.rs`. Find the `WatchdogSettings` struct (around line 13) and add two fields with `#[serde(default = "...")]` attributes:
+Edit `crates/opex-watchdog/src/config.rs`. Find the `WatchdogSettings` struct (around line 13) and add two fields with `#[serde(default = "...")]` attributes:
 
 ```rust
     #[serde(default = "default_stale_activity_timeout_hours")]
@@ -1020,7 +1020,7 @@ Update the existing `parse_minimal_config` test (around line 100) to assert the 
 
 - [ ] **Step 2: Allocate state + call tick in `main.rs`**
 
-Edit `crates/hydeclaw-watchdog/src/main.rs`. Find the block initialising state maps (around line 55 where `was_down`, `was_resource_warning` are declared) and add:
+Edit `crates/opex-watchdog/src/main.rs`. Find the block initialising state maps (around line 55 where `was_down`, `was_resource_warning` are declared) and add:
 
 ```rust
     let mut inactivity_state: HashMap<inactivity::EpisodeKey, inactivity::AlertState> = HashMap::new();
@@ -1047,7 +1047,7 @@ Inside the main `loop` (around line 75+), after the existing `resources::check_r
 - [ ] **Step 3: Run config tests**
 
 ```bash
-cargo test -p hydeclaw-watchdog --bin hydeclaw-watchdog config -- --nocapture
+cargo test -p opex-watchdog --bin opex-watchdog config -- --nocapture
 ```
 
 Expected: existing config tests pass with the two new assertions.
@@ -1063,7 +1063,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-watchdog/src/config.rs crates/hydeclaw-watchdog/src/main.rs
+git add crates/opex-watchdog/src/config.rs crates/opex-watchdog/src/main.rs
 git commit -m "$(cat <<'EOF'
 feat(watchdog): wire inactivity::tick into main loop + add config
 
@@ -1086,11 +1086,11 @@ Drops the `#[cfg(test)]` gates, swaps `Mutex<HashMap>` for `DashMap`, adds `max_
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/tools/yaml_tools.rs`
+- Modify: `crates/opex-core/src/tools/yaml_tools.rs`
 
 - [ ] **Step 1: Update the test that validates current behaviour**
 
-In `crates/hydeclaw-core/src/tools/yaml_tools.rs` find the `mod tests` block and locate the existing `execution_context_cache_basic` test. Add three new tests next to it (these will fail until the production code is written):
+In `crates/opex-core/src/tools/yaml_tools.rs` find the `mod tests` block and locate the existing `execution_context_cache_basic` test. Add three new tests next to it (these will fail until the production code is written):
 
 ```rust
     #[tokio::test]
@@ -1149,14 +1149,14 @@ In `crates/hydeclaw-core/src/tools/yaml_tools.rs` find the `mod tests` block and
 - [ ] **Step 2: Run tests to confirm they fail to compile**
 
 ```bash
-cargo test -p hydeclaw-core --lib tools::yaml_tools -- --nocapture
+cargo test -p opex-core --lib tools::yaml_tools -- --nocapture
 ```
 
 Expected: FAIL (compile error) — `ToolExecutionContext::new` doesn't take a number, `cache_len()` doesn't exist, etc.
 
 - [ ] **Step 3: Promote the cache types and methods**
 
-In `crates/hydeclaw-core/src/tools/yaml_tools.rs`, find the `#[cfg(test)]` blocks that wrap `CachedResponse`, `ToolExecutionContext`, the `impl ToolExecutionContext`, `build_cache_key` etc. (currently around lines 180–250 after the previous refactor — verify with grep). Replace them with production versions:
+In `crates/opex-core/src/tools/yaml_tools.rs`, find the `#[cfg(test)]` blocks that wrap `CachedResponse`, `ToolExecutionContext`, the `impl ToolExecutionContext`, `build_cache_key` etc. (currently around lines 180–250 after the previous refactor — verify with grep). Replace them with production versions:
 
 Remove the `#[cfg(test)]` line above `struct CachedResponse`:
 
@@ -1274,7 +1274,7 @@ The existing `execution_context_cache_basic` test was written against the old `T
 - [ ] **Step 4: Run the tests, confirm they pass**
 
 ```bash
-cargo test -p hydeclaw-core --lib tools::yaml_tools -- --nocapture
+cargo test -p opex-core --lib tools::yaml_tools -- --nocapture
 ```
 
 Expected: PASS — basic + three new tests.
@@ -1290,7 +1290,7 @@ Expected: PASS. No other call sites depend on these symbols yet (they were `#[cf
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/tools/yaml_tools.rs
+git add crates/opex-core/src/tools/yaml_tools.rs
 git commit -m "$(cat <<'EOF'
 feat(tools): promote YAML cache infrastructure to production
 
@@ -1318,10 +1318,10 @@ EOF
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/agent/agent_config.rs`
-- Modify: `crates/hydeclaw-core/src/config/mod.rs` (add `ToolCacheConfig`)
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/agents/lifecycle.rs` (pass field)
-- Modify: `crates/hydeclaw-core/src/main.rs` (construct once at startup)
+- Modify: `crates/opex-core/src/agent/agent_config.rs`
+- Modify: `crates/opex-core/src/config/mod.rs` (add `ToolCacheConfig`)
+- Modify: `crates/opex-core/src/gateway/handlers/agents/lifecycle.rs` (pass field)
+- Modify: `crates/opex-core/src/main.rs` (construct once at startup)
 
 - [ ] **Step 1: Add `ToolCacheConfig` to `config/mod.rs`**
 
@@ -1357,7 +1357,7 @@ And nest it under `AppConfig` as part of a `ToolsConfig` (which may need to be i
 
 - [ ] **Step 2: Add the field on `AgentConfig`**
 
-Edit `crates/hydeclaw-core/src/agent/agent_config.rs`. Near the `pub metrics: Arc<crate::metrics::MetricsRegistry>,` field (around line 56), add:
+Edit `crates/opex-core/src/agent/agent_config.rs`. Near the `pub metrics: Arc<crate::metrics::MetricsRegistry>,` field (around line 56), add:
 
 ```rust
     /// Shared YAML-tool response cache (process-wide).
@@ -1366,7 +1366,7 @@ Edit `crates/hydeclaw-core/src/agent/agent_config.rs`. Near the `pub metrics: Ar
 
 - [ ] **Step 3: Add `tool_exec_ctx` field to `AgentDeps`**
 
-Edit `crates/hydeclaw-core/src/gateway/state.rs`. Find the `pub struct AgentDeps { ... }` block (around line 53) and add:
+Edit `crates/opex-core/src/gateway/state.rs`. Find the `pub struct AgentDeps { ... }` block (around line 53) and add:
 
 ```rust
     /// Shared YAML-tool response cache (process-wide singleton).
@@ -1379,7 +1379,7 @@ Update the test-only `AgentDeps::for_test()` / similar constructor (around line 
 
 - [ ] **Step 4: Construct the cache once at startup and thread into `AgentDeps`**
 
-Edit `crates/hydeclaw-core/src/main.rs`. Find the place where `AgentDeps { ... }` is constructed (search for `AgentDeps {` — should be one or two call sites). Add construction:
+Edit `crates/opex-core/src/main.rs`. Find the place where `AgentDeps { ... }` is constructed (search for `AgentDeps {` — should be one or two call sites). Add construction:
 
 ```rust
     let tool_exec_ctx = std::sync::Arc::new(
@@ -1399,7 +1399,7 @@ placed before the `AgentDeps { ... }` literal. Then add to the literal:
 
 - [ ] **Step 5: Pass the field at `AgentConfig` construction**
 
-Edit `crates/hydeclaw-core/src/gateway/handlers/agents/lifecycle.rs:152`. The `AgentConfig { ... }` block needs:
+Edit `crates/opex-core/src/gateway/handlers/agents/lifecycle.rs:152`. The `AgentConfig { ... }` block needs:
 
 ```rust
         tool_exec_ctx: deps.tool_exec_ctx.clone(),
@@ -1426,7 +1426,7 @@ If `AgentConfig` is built in test fixtures or unit tests, they need the new fiel
 - [ ] **Step 7: Run the full tests**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
   cargo test --workspace --lib 2>&1 | grep -E "test result|FAILED"
 ```
 
@@ -1435,11 +1435,11 @@ Expected: no failures attributable to the new field.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/agent_config.rs \
-        crates/hydeclaw-core/src/config/mod.rs \
-        crates/hydeclaw-core/src/gateway/handlers/agents/lifecycle.rs \
-        crates/hydeclaw-core/src/gateway/state.rs \
-        crates/hydeclaw-core/src/main.rs
+git add crates/opex-core/src/agent/agent_config.rs \
+        crates/opex-core/src/config/mod.rs \
+        crates/opex-core/src/gateway/handlers/agents/lifecycle.rs \
+        crates/opex-core/src/gateway/state.rs \
+        crates/opex-core/src/main.rs
 git commit -m "$(cat <<'EOF'
 feat(config): thread Arc<ToolExecutionContext> through AgentConfig
 
@@ -1460,12 +1460,12 @@ EOF
 
 **Files:**
 
-- Modify: `crates/hydeclaw-core/src/agent/engine_dispatch.rs`
-- Create: `crates/hydeclaw-core/tests/integration_yaml_cache.rs`
+- Modify: `crates/opex-core/src/agent/engine_dispatch.rs`
+- Create: `crates/opex-core/tests/integration_yaml_cache.rs`
 
 - [ ] **Step 1: Write the failing integration test**
 
-Create `crates/hydeclaw-core/tests/integration_yaml_cache.rs`:
+Create `crates/opex-core/tests/integration_yaml_cache.rs`:
 
 ```rust
 //! Integration: YAML tool response cache hit/miss against wiremock.
@@ -1597,15 +1597,15 @@ async fn pagination_bypasses_cache() {
 - [ ] **Step 2: Run the tests to confirm they fail**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --test integration_yaml_cache -- --nocapture
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --test integration_yaml_cache -- --nocapture
 ```
 
 Expected: FAIL — `cache_hit_skips_http_call` will show wiremock expected 1 call but got 2.
 
 - [ ] **Step 3: Wire cache lookup into `execute_tool_call_inner`**
 
-Edit `crates/hydeclaw-core/src/agent/engine_dispatch.rs`. Inside `execute_tool_call_inner`, find the YAML tool path (around lines 169–215 where `find_yaml_tool` resolves and the HTTP client is selected). Just BEFORE the `client = ...` selection (around line 213), add:
+Edit `crates/opex-core/src/agent/engine_dispatch.rs`. Inside `execute_tool_call_inner`, find the YAML tool path (around lines 169–215 where `find_yaml_tool` resolves and the HTTP client is selected). Just BEFORE the `client = ...` selection (around line 213), add:
 
 ```rust
                 // YAML tool cache — pre-execution lookup.
@@ -1645,8 +1645,8 @@ After the HTTP execution returns (you'll see the `yaml_tool.execute_oauth(...)` 
 - [ ] **Step 4: Run the tests, confirm they pass**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
-  cargo test -p hydeclaw-core --test integration_yaml_cache -- --nocapture
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
+  cargo test -p opex-core --test integration_yaml_cache -- --nocapture
 ```
 
 Expected: all three tests PASS.
@@ -1654,7 +1654,7 @@ Expected: all three tests PASS.
 - [ ] **Step 5: Run the full workspace tests**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
   cargo test --workspace 2>&1 | grep -E "test result|FAILED"
 ```
 
@@ -1663,8 +1663,8 @@ Expected: no new failures.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/engine_dispatch.rs \
-        crates/hydeclaw-core/tests/integration_yaml_cache.rs
+git add crates/opex-core/src/agent/engine_dispatch.rs \
+        crates/opex-core/tests/integration_yaml_cache.rs
 git commit -m "$(cat <<'EOF'
 feat(tools): wire YAML response cache into engine_dispatch
 
@@ -1695,7 +1695,7 @@ Verification-only task.
 
 ```bash
 echo "AC1 — endpoint returns 200 with valid token:"
-curl -sf -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+curl -sf -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   http://localhost:18789/api/watchdog/agent-activity | python3 -m json.tool | head -20
 
 echo "AC2 — without token, expect 401:"
@@ -1716,7 +1716,7 @@ Expected: either no output (no current alerts) or fire/recover lines — never "
 - [ ] **Step 3: Force an alert by aging a session**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
   psql -c "UPDATE sessions SET activity_at = NOW() - INTERVAL '7 hours', last_message_at = NOW() - INTERVAL '7 hours' WHERE agent_id = (SELECT agent_id FROM sessions LIMIT 1);"
 ```
 
@@ -1724,7 +1724,7 @@ Wait one watchdog interval (default 60 s). Expect exactly one alert message in t
 
 - [ ] **Step 4: All AC #1–#7 for Part B**
 
-Manually craft a YAML tool with `cache: { ttl: 300 }` and invoke it twice via `cargo run --bin hydeclaw-core` against a public API. Tail the core log:
+Manually craft a YAML tool with `cache: { ttl: 300 }` and invoke it twice via `cargo run --bin opex-core` against a public API. Tail the core log:
 
 ```bash
 make logs 2>&1 | grep "yaml tool cache hit"
@@ -1736,7 +1736,7 @@ Expected: one cache-hit line for the second invocation.
 
 ```bash
 cargo build --workspace --all-targets
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
   cargo test --workspace 2>&1 | grep -E "test result"
 ```
 

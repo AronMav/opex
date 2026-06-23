@@ -8,15 +8,15 @@
 
 ## Context
 
-HydeClaw has a working compaction system (`history.rs`, `pipeline/context.rs`,
+OPEX has a working compaction system (`history.rs`, `pipeline/context.rs`,
 `pipeline/llm_call.rs`) but it fires only reactively — on 400 overflow from the
 LLM provider. This means the agent hits the context wall before any action is
 taken, wastes a round-trip, and the 3-attempt retry loop is the only safety net.
 
 Hermes implements a proactive, session-stateful compressor that checks token
 usage after every LLM response and compresses before the next call if needed.
-P0.1 brings HydeClaw to full Hermes parity while preserving the unique
-HydeClaw feature of extracting facts into pgvector memory alongside the
+P0.1 brings OPEX to full Hermes parity while preserving the unique
+OPEX feature of extracting facts into pgvector memory alongside the
 in-context summary.
 
 The reactive overflow recovery in `llm_call.rs` is kept as a backstop for edge
@@ -72,7 +72,7 @@ protect_first_n = 3            # head: system + first user + first assistant
 summary_target_ratio = 0.20    # tail budget = threshold_tokens * ratio
 anti_thrash_min_savings = 0.10 # skip if compression saves < 10%
 anti_thrash_max_skips = 2      # stop after N consecutive ineffective compressions
-extract_to_memory = true       # keep HydeClaw fact extraction to pgvector
+extract_to_memory = true       # keep OPEX fact extraction to pgvector
 ```
 
 Default for agents without `[agent.compaction]` section: `enabled = false`
@@ -418,13 +418,13 @@ It will rarely fire with proactive compression in place.
 
 | File | Change |
 |---|---|
-| `crates/hydeclaw-core/src/agent/compressor.rs` | **NEW** — Compressor struct |
-| `crates/hydeclaw-core/src/agent/history.rs` | Update: 5-phase algo, Hermes template, iterative update |
-| `crates/hydeclaw-core/src/config/mod.rs` | Update: 5 new CompactionConfig fields |
-| `crates/hydeclaw-core/src/agent/pipeline/execute.rs` | Update: proactive trigger + update_token_count |
-| `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | Update: load compaction_state |
-| `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` | Update: save compaction_state |
-| `crates/hydeclaw-core/src/db/sessions.rs` | Update: get/set compaction_state |
+| `crates/opex-core/src/agent/compressor.rs` | **NEW** — Compressor struct |
+| `crates/opex-core/src/agent/history.rs` | Update: 5-phase algo, Hermes template, iterative update |
+| `crates/opex-core/src/config/mod.rs` | Update: 5 new CompactionConfig fields |
+| `crates/opex-core/src/agent/pipeline/execute.rs` | Update: proactive trigger + update_token_count |
+| `crates/opex-core/src/agent/pipeline/bootstrap.rs` | Update: load compaction_state |
+| `crates/opex-core/src/agent/pipeline/finalize.rs` | Update: save compaction_state |
+| `crates/opex-core/src/db/sessions.rs` | Update: get/set compaction_state |
 | `migrations/NNN_sessions_compaction_state.sql` | **NEW** — ADD COLUMN compaction_state JSONB |
 
 ---

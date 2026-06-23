@@ -16,9 +16,9 @@
 - `ui/src/stores/__tests__/message-order-stability.test.ts`
 
 **Modify:**
-- `crates/hydeclaw-core/src/agent/pipeline/execute.rs` — change `msg_id` from `"msg_{uuid}"` string to real `Uuid`; add `assistant_message_id: Uuid` to `ExecuteOutcome`
-- `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` — add `assistant_message_id: Uuid` to `FinalizeContext` and `finalize_context_from_engine`; use `save_message_ex_with_id` in `Done` branch
-- `crates/hydeclaw-core/src/agent/engine/run.rs` — pass `outcome.assistant_message_id` at the 3 after-execute call sites; `Uuid::new_v4()` at the 3 slash-command call sites
+- `crates/opex-core/src/agent/pipeline/execute.rs` — change `msg_id` from `"msg_{uuid}"` string to real `Uuid`; add `assistant_message_id: Uuid` to `ExecuteOutcome`
+- `crates/opex-core/src/agent/pipeline/finalize.rs` — add `assistant_message_id: Uuid` to `FinalizeContext` and `finalize_context_from_engine`; use `save_message_ex_with_id` in `Done` branch
+- `crates/opex-core/src/agent/engine/run.rs` — pass `outcome.assistant_message_id` at the 3 after-execute call sites; `Uuid::new_v4()` at the 3 slash-command call sites
 - `ui/src/stores/chat-types.ts` — add `"finishing"` variant to `MessageSource`; update `getLiveMessages`
 - `ui/src/stores/chat-selectors.ts` — handle `"finishing"` in `selectRenderMessages`, `selectIsLive`, `selectLiveHasContent`
 - `ui/src/stores/chat-overlay-dedup.ts` — replace 137 lines with 15-line ID-based dedup
@@ -35,9 +35,9 @@
 ## Task 1: Backend — thread assistant UUID from execute to finalize
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/execute.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
-- Modify: `crates/hydeclaw-core/src/agent/engine/run.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/execute.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/finalize.rs`
+- Modify: `crates/opex-core/src/agent/engine/run.rs`
 
 ### Context
 
@@ -52,7 +52,7 @@ The `"msg_"` prefix means the frontend's `assistantId` (e.g. `"msg_550e8400-..."
 
 - [ ] **Step 1: Read the relevant execute.rs section**
 
-Open `crates/hydeclaw-core/src/agent/pipeline/execute.rs` and locate:
+Open `crates/opex-core/src/agent/pipeline/execute.rs` and locate:
 - Line ~40: `ExecuteOutcome` struct definition (fields: `status`, `final_text`, `thinking_json`, `messages_len_at_end`, `final_parent_msg_id`)
 - Line ~107: the `msg_id` generation + `MessageStart` emit
 
@@ -96,7 +96,7 @@ There are several early-return `ExecuteOutcome { ... }` constructions in `execut
 
 Grep to find all `ExecuteOutcome {` in the file:
 ```
-grep -n "ExecuteOutcome {" crates/hydeclaw-core/src/agent/pipeline/execute.rs
+grep -n "ExecuteOutcome {" crates/opex-core/src/agent/pipeline/execute.rs
 ```
 
 Add `assistant_message_id: uuid::Uuid::nil()` to the pre-loop early return (the one before `msg_id` is defined), and `assistant_message_id: assistant_msg_id` to all others.
@@ -129,7 +129,7 @@ The final `return Ok(ExecuteOutcome { ... })` at the end of the loop also needs 
 
 - [ ] **Step 5: Add `assistant_message_id` to `FinalizeContext` in finalize.rs**
 
-Open `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` and find `pub struct FinalizeContext` (~line 289). Add the field:
+Open `crates/opex-core/src/agent/pipeline/finalize.rs` and find `pub struct FinalizeContext` (~line 289). Add the field:
 
 ```rust
 pub struct FinalizeContext {
@@ -224,9 +224,9 @@ Leave the `Failed` and `Interrupted` branches unchanged — they still call `sm.
 
 - [ ] **Step 8: Update all 6 call sites of `finalize_context_from_engine` in run.rs**
 
-Open `crates/hydeclaw-core/src/agent/engine/run.rs`. There are 6 calls to `finalize_context_from_engine`. Run:
+Open `crates/opex-core/src/agent/engine/run.rs`. There are 6 calls to `finalize_context_from_engine`. Run:
 ```
-grep -n "finalize_context_from_engine" crates/hydeclaw-core/src/agent/engine/run.rs
+grep -n "finalize_context_from_engine" crates/opex-core/src/agent/engine/run.rs
 ```
 
 For the 3 calls that come AFTER `execute()` returns (the lines directly after `let outcome = execute::execute(...).await?`), pass `outcome.assistant_message_id`:
@@ -264,7 +264,7 @@ Expected: compilation succeeds. If there are `match non-exhaustive` or struct in
 - [ ] **Step 10: Run Rust tests**
 
 ```
-cargo test --package hydeclaw-core 2>&1 | tail -20
+cargo test --package opex-core 2>&1 | tail -20
 ```
 
 Expected: all tests pass.
@@ -272,9 +272,9 @@ Expected: all tests pass.
 - [ ] **Step 11: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/execute.rs \
-        crates/hydeclaw-core/src/agent/pipeline/finalize.rs \
-        crates/hydeclaw-core/src/agent/engine/run.rs
+git add crates/opex-core/src/agent/pipeline/execute.rs \
+        crates/opex-core/src/agent/pipeline/finalize.rs \
+        crates/opex-core/src/agent/engine/run.rs
 git commit -m "feat(pipeline): thread pre-allocated assistant UUID from execute to finalize for SSE-DB ID sync"
 ```
 
@@ -811,7 +811,7 @@ Expected: cross-compilation succeeds, binary and UI deployed to Pi, service rest
 
 - [ ] **Step 7: Smoke test on Pi**
 
-Open the chat UI in a browser connected to the Pi (`http://hydeclaw.local` or `http://192.168.1.82`). Send a message and observe:
+Open the chat UI in a browser connected to the Pi (`http://opex.local` or `http://192.168.1.82`). Send a message and observe:
 
 1. **No flash** at stream finish — the assistant response stays visible continuously (fixes b/d)
 2. **No duplicate bubbles** — the live assistant message and DB history row merge into one (fixes c)

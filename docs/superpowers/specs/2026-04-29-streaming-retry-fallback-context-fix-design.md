@@ -121,8 +121,8 @@ let resp = crate::agent::providers_http::send_with_retry(
 
 ### Files Changed
 
-- `crates/hydeclaw-core/src/agent/providers_http.rs` — add `send_with_retry()`; slim down `retry_http_post_custom()` to delegate to it
-- `crates/hydeclaw-core/src/agent/providers_openai.rs` — replace send block in `chat_stream()`
+- `crates/opex-core/src/agent/providers_http.rs` — add `send_with_retry()`; slim down `retry_http_post_custom()` to delegate to it
+- `crates/opex-core/src/agent/providers_openai.rs` — replace send block in `chat_stream()`
 
 ---
 

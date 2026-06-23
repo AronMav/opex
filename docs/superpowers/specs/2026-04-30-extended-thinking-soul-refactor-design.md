@@ -55,7 +55,7 @@ Split into two files:
 ### Design
 
 ```rust
-// crates/hydeclaw-core/src/agent/providers.rs
+// crates/opex-core/src/agent/providers.rs
 
 #[derive(Default, Clone, Copy)]
 pub struct CallOptions {

@@ -115,7 +115,7 @@ distinguishes preview from real runs.
 
 ### New function `reactivate_skill()`
 
-**File:** `crates/hydeclaw-core/src/skills/mod.rs`
+**File:** `crates/opex-core/src/skills/mod.rs`
 
 ```rust
 /// Restore an archived skill to active state and update last_used_at.
@@ -187,7 +187,7 @@ available.
 
 ### `load_skills_all_states()`
 
-**File:** `crates/hydeclaw-core/src/skills/mod.rs`
+**File:** `crates/opex-core/src/skills/mod.rs`
 
 New function that returns all skills including archived. Reuses the existing file
 glob + parse logic from `load_skills()`, just removes the archived filter.
@@ -198,15 +198,15 @@ glob + parse logic from `load_skills()`, just removes the archived filter.
 
 | Action | Path | Responsibility |
 | --- | --- | --- |
-| Modify | `crates/hydeclaw-core/src/curator/mod.rs` | Add `dry_run: bool` to `run_curator()` |
-| Modify | `crates/hydeclaw-core/src/curator/phase_transitions.rs` | Add `dry_run` gate around writes |
-| Modify | `crates/hydeclaw-core/src/curator/phase_repairs.rs` | Add `dry_run` reporting path |
-| Modify | `crates/hydeclaw-core/src/curator/phase_consolidation.rs` | Add `dry_run` gate around executor |
-| Modify | `crates/hydeclaw-core/src/gateway/handlers/curator.rs` | Add `POST /api/curator/preview`, `dry_run` field in DB row |
+| Modify | `crates/opex-core/src/curator/mod.rs` | Add `dry_run: bool` to `run_curator()` |
+| Modify | `crates/opex-core/src/curator/phase_transitions.rs` | Add `dry_run` gate around writes |
+| Modify | `crates/opex-core/src/curator/phase_repairs.rs` | Add `dry_run` reporting path |
+| Modify | `crates/opex-core/src/curator/phase_consolidation.rs` | Add `dry_run` gate around executor |
+| Modify | `crates/opex-core/src/gateway/handlers/curator.rs` | Add `POST /api/curator/preview`, `dry_run` field in DB row |
 | New migration | `migrations/` | `ALTER TABLE curator_runs ADD COLUMN dry_run BOOLEAN NOT NULL DEFAULT false` |
-| Modify | `crates/hydeclaw-core/src/skills/mod.rs` | Add `reactivate_skill()` + `load_skills_all_states()` |
-| Modify | `crates/hydeclaw-core/src/agent/context_builder.rs` | Trigger match includes archived; spawn reactivation |
-| Modify | `crates/hydeclaw-core/src/agent/engine_dispatch.rs` | Intercept `action="load"` for archived reactivation (dispatch-level, no handler sig change) |
+| Modify | `crates/opex-core/src/skills/mod.rs` | Add `reactivate_skill()` + `load_skills_all_states()` |
+| Modify | `crates/opex-core/src/agent/context_builder.rs` | Trigger match includes archived; spawn reactivation |
+| Modify | `crates/opex-core/src/agent/engine_dispatch.rs` | Intercept `action="load"` for archived reactivation (dispatch-level, no handler sig change) |
 
 ---
 

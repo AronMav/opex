@@ -1,12 +1,12 @@
-# HydeClaw Architecture
+# OPEX Architecture
 
 ## Overview
 
-HydeClaw is a self-hosted AI gateway and multi-agent platform written in Rust. Primary deployment target is Raspberry Pi 4 (ARM64). The stack consists of three Rust binaries (`hydeclaw-core`, `hydeclaw-watchdog`, `hydeclaw-memory-worker`) running as independent systemd services, with two managed child processes (`channels` in Bun/TypeScript, `toolgate` in Python/FastAPI) spawned by Core at startup.
+OPEX is a self-hosted AI gateway and multi-agent platform written in Rust. Primary deployment target is Raspberry Pi 4 (ARM64). The stack consists of three Rust binaries (`opex-core`, `opex-watchdog`, `opex-memory-worker`) running as independent systemd services, with two managed child processes (`channels` in Bun/TypeScript, `toolgate` in Python/FastAPI) spawned by Core at startup.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        hydeclaw-core (systemd)                          │
+│                        opex-core (systemd)                              │
 │                                                                         │
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────────┐  │
 │  │AgentEngine │  │AgentEngine │  │ Scheduler  │  │   Gateway/Axum   │  │
@@ -35,7 +35,7 @@ HydeClaw is a self-hosted AI gateway and multi-agent platform written in Rust. P
             └────────────────┘   └────────────────┘
 
 ┌────────────────────┐  ┌──────────────────────┐
-│ hydeclaw-watchdog  │  │ hydeclaw-memory-      │
+│ opex-watchdog      │  │ opex-memory-          │
 │ (systemd)          │  │ worker (systemd)      │
 │ health monitor     │  │ LISTEN/NOTIFY + poll  │
 │ alert routing      │  │ embedding reindex     │
@@ -56,9 +56,9 @@ HydeClaw is a self-hosted AI gateway and multi-agent platform written in Rust. P
 
 | Binary | Role |
 |--------|------|
-| `hydeclaw-core` | Main process: HTTP gateway, agent engines, scheduler, secrets, MCP, channels WS |
-| `hydeclaw-memory-worker` | Background indexing via PostgreSQL LISTEN/NOTIFY + poll safety net |
-| `hydeclaw-watchdog` | External health monitor — agent inactivity and managed process health alerts |
+| `opex-core` | Main process: HTTP gateway, agent engines, scheduler, secrets, MCP, channels WS |
+| `opex-memory-worker` | Background indexing via PostgreSQL LISTEN/NOTIFY + poll safety net |
+| `opex-watchdog` | External health monitor — agent inactivity and managed process health alerts |
 
 **Stack:** axum 0.8, tokio (4 worker threads), sqlx 0.8 (async PostgreSQL), bollard 0.18 (Docker), reqwest 0.12 (rustls-tls only, no OpenSSL). Binary size ~14 MB, idle RAM ~2.2 MB.
 
@@ -66,13 +66,13 @@ HydeClaw is a self-hosted AI gateway and multi-agent platform written in Rust. P
 
 ## Binaries & Processes
 
-### hydeclaw-core
+### opex-core
 
-Entry point: `crates/hydeclaw-core/src/main.rs`.
+Entry point: `crates/opex-core/src/main.rs`.
 
 Startup sequence:
-1. Load `.env` from binary dir (auto-generate if missing with `HYDECLAW_AUTH_TOKEN`, `HYDECLAW_MASTER_KEY`, `DATABASE_URL`)
-2. Load `config/hydeclaw.toml`
+1. Load `.env` from binary dir (auto-generate if missing with `OPEX_AUTH_TOKEN`, `OPEX_MASTER_KEY`, `DATABASE_URL`)
+2. Load `config/opex.toml`
 3. Run sqlx migrations (`migrations/*.sql`) automatically
 4. Stale `session_timeline` entries from a previous crash are not replayed; LoopDetector is warmed from tool_end events only.
 5. Bootstrap `SecretsManager` (decrypt `secrets` table into in-memory cache)
@@ -84,9 +84,9 @@ Startup sequence:
 11. Start `ChannelActionRouter`, `SessionAgentPool` map, `StreamRegistry`
 12. Bind Axum router on `0.0.0.0:18789`
 
-### hydeclaw-memory-worker
+### opex-memory-worker
 
-Entry point: `crates/hydeclaw-memory-worker/src/main.rs`.
+Entry point: `crates/opex-memory-worker/src/main.rs`.
 
 - Runs as `tokio::main(flavor = "current_thread")` (single-threaded async)
 - DB pool: 3 connections
@@ -95,12 +95,12 @@ Entry point: `crates/hydeclaw-memory-worker/src/main.rs`.
 - Sends `sd_notify(READY=1)` on Linux for systemd watchdog integration
 - Task type: `reindex` — reads workspace files, calls `POST /v1/embeddings` on Toolgate, inserts/updates `memory_chunks`
 
-### hydeclaw-watchdog
+### opex-watchdog
 
-Entry point: `crates/hydeclaw-watchdog/src/main.rs`.
+Entry point: `crates/opex-watchdog/src/main.rs`.
 
 - Monitors agent inactivity and managed process health
-- Alert configuration stored in `watchdog_settings` DB table (not `hydeclaw.toml`)
+- Alert configuration stored in `watchdog_settings` DB table (not `config/opex.toml`)
 - Sends alerts via `POST /api/channels/notify` (body: `{"channel_id": "uuid", "text": "..."}`)
 - API: `GET/PUT /api/watchdog/settings`, `GET /api/watchdog/status`, `GET/PUT /api/watchdog/config`
 
@@ -137,7 +137,7 @@ Entry point: `toolgate/app.py`.
 
 ### Architecture After Decomposition (Phase 66)
 
-`AgentEngine` is the central object per agent. It is constructed once at startup, stored in `Arc<AgentEngine>`, and shared across concurrent requests. After Phase 66 decomposition, the monolithic `engine.rs` is split into submodules under `crates/hydeclaw-core/src/agent/engine/`:
+`AgentEngine` is the central object per agent. It is constructed once at startup, stored in `Arc<AgentEngine>`, and shared across concurrent requests. After Phase 66 decomposition, the monolithic `engine.rs` is split into submodules under `crates/opex-core/src/agent/engine/`:
 
 | File | Role |
 |------|------|
@@ -150,7 +150,7 @@ Entry point: `toolgate/app.py`.
 | `loop_detector_integration.rs` | `LoopDetector` warm-up from session timeline on session entry |
 | `stream.rs` | `ProcessingGuard`, `ProcessingPhase` enum |
 
-`AgentConfig` (`crates/hydeclaw-core/src/agent/agent_config.rs`) is an immutable snapshot holding all engine dependencies, grouped into five concern areas:
+`AgentConfig` (`crates/opex-core/src/agent/agent_config.rs`) is an immutable snapshot holding all engine dependencies, grouped into five concern areas:
 - **Identity**: `agent: AgentSettings`, `workspace_dir`, `default_timezone`, `app_config`
 - **LLM**: `provider: Arc<dyn LlmProvider>`, `compaction_provider`
 - **Data**: `db: PgPool`, `memory_store`, `embedder`
@@ -169,7 +169,7 @@ All four entry points (`run.rs`) construct an `EventSink` and delegate to `pipel
 
 ### Pipeline: bootstrap → execute → finalize
 
-The unified pipeline lives in `crates/hydeclaw-core/src/agent/pipeline/`.
+The unified pipeline lives in `crates/opex-core/src/agent/pipeline/`.
 
 **`sink.rs`** defines the transport abstraction:
 ```rust
@@ -254,7 +254,7 @@ When the context window approaches capacity:
    - Continues in child session B
 6. `CompressorState` is serialized to `sessions.compaction_state` (JSONB). Child state resets `ineffective_count` and `compression_count` but preserves `previous_summary`.
 
-### Hook System (`crates/hydeclaw-core/src/agent/hooks.rs`)
+### Hook System (`crates/opex-core/src/agent/hooks.rs`)
 
 `HookRegistry` intercepts engine events for policy enforcement:
 
@@ -350,7 +350,7 @@ background: knowledge extraction (≥5 messages)
 
 ### Sub-Router Pattern
 
-`crates/hydeclaw-core/src/gateway/mod.rs` composes the router via `.merge()` of 31 handler modules. Each handler module exports `pub(crate) fn routes() -> Router<AppState>`.
+`crates/opex-core/src/gateway/mod.rs` composes the router via `.merge()` of 31 handler modules. Each handler module exports `pub(crate) fn routes() -> Router<AppState>`.
 
 **Current handler modules** (`src/gateway/handlers/`):
 
@@ -441,7 +441,7 @@ All memory storage is in PostgreSQL. No separate vector DB process.
 
 ### Hybrid Search: 3-Way RRF
 
-`MemoryStore.search()` (`crates/hydeclaw-core/src/memory/store.rs`) runs three branches in parallel via `tokio::join!` and merges with weighted Reciprocal Rank Fusion:
+`MemoryStore.search()` (`crates/opex-core/src/memory/store.rs`) runs three branches in parallel via `tokio::join!` and merges with weighted Reciprocal Rank Fusion:
 
 ```
 query
@@ -542,7 +542,7 @@ Each `workspace/tools/*.yaml` defines one tool. 30-second in-memory cache to avo
 3. Auth:
    bearer_env | basic_env | api_key_header | api_key_query |
    custom (${VAR} substitution) | oauth_refresh | oauth_provider | none
-4. Execute via reqwest with **conditional SSRF**: `engine_dispatch.rs` checks the tool's `endpoint` against `tools::ssrf::is_internal_endpoint`. Internal endpoints (toolgate:9011, browser-renderer, etc. — admin-configured and trusted) use the standard `http_client()`. External endpoints (any URL not on the internal allow-list) use `ssrf_http_client()` with DNS-level private-IP blocking.
+4. Execute via reqwest with **conditional SSRF**: `engine_dispatch.rs` checks the tool's `endpoint` against `tools::ssrf::is_internal_endpoint`. Internal endpoints (toolgate:9011, browser-renderer, etc. — admin-configured and trusted) use the standard `http_client()`. External endpoints (any URL not on the internal allow-list) use `ssrf_http_client()` with private-IP blocking.
 5. response_transform: optional JSONPath extraction ("$.path.to.field")
 6. If channel_action → route binary result to ChannelActionRouter instead of LLM
 7. Return text result to LLM context
@@ -552,7 +552,7 @@ Auth keys resolved via `SecretsEnvResolver`: agent-scoped → global → env var
 
 `required_base: true` — tool only available to agents with `base = true`.
 
-### SSRF Guard (`crates/hydeclaw-core/src/net/ssrf.rs`)
+### SSRF Guard (`crates/opex-core/src/net/ssrf.rs`)
 
 Phase 64 unified guard for user-supplied URLs (`web_fetch`, `fetch_url_content`):
 
@@ -605,7 +605,7 @@ Channel adapters connect to Core via `GET /ws/channel/{agent_name}`. All communi
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                       hydeclaw-core                             │
+│                       opex-core                                 │
 │                                                                 │
 │   channels process (Bun)              AgentEngine              │
 │   ┌───────────────────────────┐       ┌─────────────────────┐  │
@@ -673,7 +673,7 @@ Session mirroring (`sessions.mirror_to_session()`, migration m043): cron deliver
 
 ## Scheduler
 
-### `Scheduler` struct (`crates/hydeclaw-core/src/scheduler/mod.rs`)
+### `Scheduler` struct (`crates/opex-core/src/scheduler/mod.rs`)
 
 ```rust
 struct Scheduler {
@@ -744,7 +744,7 @@ run_once, run_at, tool_policy (JSONB override)
 
 ## Database Schema
 
-PostgreSQL 17 + pgvector. Migrations in `migrations/*.sql` (sqlx). Auto-run on startup. No ORM — raw sqlx queries in `crates/hydeclaw-core/src/db/`.
+PostgreSQL 17 + pgvector. Migrations in `migrations/*.sql` (sqlx). Auto-run on startup. No ORM — raw sqlx queries in `crates/opex-core/src/db/`.
 
 **Current migration state:** m001 through m051 (latest migration in `migrations/`); some numbers in the sequence were never committed (count of `.sql` files is the source of truth).
 
@@ -793,7 +793,7 @@ secrets table
   nonce: bytea            (12 bytes, random per write)
 ```
 
-Each write generates a unique 12-byte random nonce. Master key (`HYDECLAW_MASTER_KEY`, 32-byte hex) never stored in DB. In-memory cache: `RwLock<HashMap<(name, scope), String>>`.
+Each write generates a unique 12-byte random nonce. Master key (`OPEX_MASTER_KEY`, 32-byte hex) never stored in DB. In-memory cache: `RwLock<HashMap<(name, scope), String>>`.
 
 **Scoped resolution** (`get_scoped(name, scope)`):
 ```
@@ -894,13 +894,13 @@ Requires `otel` feature flag. Config:
 ```toml
 [otel]
 enabled = true
-service_name = "hydeclaw-core"    # default
+service_name = "opex-core"    # default
 ```
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` env var for collector address. `tracing-opentelemetry` bridges tracing spans to OTLP.
 
 ### W3C Trace Context (Phase 65 OBS-04)
 
-`trace_context` middleware (`hydeclaw_gateway_util::trace_context`) parses `traceparent` header from inbound requests and injects it into the tracing span context, enabling distributed trace propagation across services.
+`trace_context` middleware (`opex_gateway_util::trace_context`) parses `traceparent` header from inbound requests and injects it into the tracing span context, enabling distributed trace propagation across services.
 
 ### Metrics Registry (Phase 65 OBS-02)
 
@@ -913,7 +913,7 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` env var for collector address. `tracing-opente
 
 ## Process Manager
 
-`ProcessManager` (`crates/hydeclaw-core/src/process_manager/`) manages long-lived child processes.
+`ProcessManager` (`crates/opex-core/src/process_manager/`) manages long-lived child processes.
 
 ### Spawn
 
@@ -982,14 +982,14 @@ script needed.
 ## Configuration
 
 **Three required `.env` keys (only these):**
-- `HYDECLAW_AUTH_TOKEN` — HTTP API bearer token
-- `HYDECLAW_MASTER_KEY` — vault encryption key (32-byte hex)
+- `OPEX_AUTH_TOKEN` — HTTP API bearer token
+- `OPEX_MASTER_KEY` — vault encryption key (32-byte hex)
 - `DATABASE_URL` — PostgreSQL connection string
 
-All other configuration goes in `config/hydeclaw.toml` or the secrets vault.
+All other configuration goes in `config/opex.toml` or the secrets vault.
 
 **Key config files:**
-- `config/hydeclaw.toml` — `AppConfig`: gateway, database, limits, subagents, memory, docker, otel, managed_process, agent defaults, backup, curator, cleanup, shutdown, uploads, agent_tool timeouts
+- `config/opex.toml` — `AppConfig`: gateway, database, limits, subagents, memory, docker, otel, managed_process, agent defaults, backup, curator, cleanup, shutdown, uploads, agent_tool timeouts
 - `config/agents/{Name}.toml` — per-agent `AgentConfig` (case-sensitive filename = agent name)
 - `workspace/tools/*.yaml` — YAML tool definitions
 - `workspace/skills/*.md` — shared agent skills
@@ -997,6 +997,6 @@ All other configuration goes in `config/hydeclaw.toml` or the secrets vault.
 - `workspace/mcp/*.yaml` — MCP server definitions
 - `config/services/*.yaml` — service registry (browser-renderer, toolgate, STT, TTS, etc.)
 
-**Hot reload:** config file watcher (notify crate) reloads `hydeclaw.toml` and agent configs without restart. Agent rename is transactional (updates 19+ DB tables).
+**Hot reload:** config file watcher (notify crate) reloads `config/opex.toml` and agent configs without restart. Agent rename is transactional (updates 19+ DB tables).
 
 For complete configuration reference see `docs/CONFIGURATION.md`.

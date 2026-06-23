@@ -1,11 +1,11 @@
 # Observability — OTel + Jaeger Setup
 
-How to enable distributed tracing for HydeClaw Core on the Pi (or any host)
+How to enable distributed tracing for OPEX Core on the Pi (or any host)
 and how to validate that spans actually arrive at Jaeger under load.
 
 ## Prerequisites
 
-- HydeClaw deployed via the standard `make deploy` workflow.
+- OPEX deployed via the standard `make deploy` workflow.
 - Docker daemon running on the host (Pi or local).
 - ~512 MB free RAM for Jaeger all-in-one.
 
@@ -21,7 +21,7 @@ The pipeline is already instrumented at three hot paths:
 
 These spans are emitted via `tracing::instrument` and propagated to OTLP only
 when the `otel` feature is built in **and** `[otel] enabled = true` in
-`hydeclaw.toml`.
+`opex.toml`.
 
 ## Local Development Workflow
 
@@ -30,22 +30,22 @@ when the `otel` feature is built in **and** `[otel] enabled = true` in
 docker compose -f docker/docker-compose.observability.yml up -d
 
 # 2. Build core with the otel feature
-cargo build --features otel -p hydeclaw-core --release
+cargo build --features otel -p opex-core --release
 
 # 3. Run core pointing at the local collector
 OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 \
-  ./target/release/hydeclaw-core
+  ./target/release/opex-core
 
 # 4. Open Jaeger UI
 open http://localhost:16686
 ```
 
-In `config/hydeclaw.toml`, set:
+In `config/opex.toml`, set:
 
 ```toml
 [otel]
 enabled = true
-service_name = "hydeclaw-core"
+service_name = "opex-core"
 ```
 
 ## Pi Production Workflow
@@ -57,14 +57,14 @@ make jaeger-up
 # 2. Build + deploy OTel-instrumented binary
 make deploy-binary-otel
 
-# 3. Edit /etc/systemd/system/hydeclaw-core.service to add:
+# 3. Edit /etc/systemd/system/opex-core.service to add:
 #    Environment="OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317"
-#    (or in ~/hydeclaw/.env if loaded by the unit)
+#    (or in ~/opex/.env if loaded by the unit)
 
-# 4. Set [otel] enabled = true in ~/hydeclaw/config/hydeclaw.toml on Pi
+# 4. Set [otel] enabled = true in ~/opex/config/opex.toml on Pi
 
 # 5. Restart core to pick up env + config
-ssh $PI_HOST "systemctl --user restart hydeclaw-core"
+ssh $PI_HOST "systemctl --user restart opex-core"
 
 # 6. Tunnel + open the Jaeger UI from your laptop
 ssh -L 16686:127.0.0.1:16686 $PI_HOST
@@ -94,14 +94,14 @@ generate enough spans to detect drops:
 
 ```bash
 for i in {1..20}; do
-  HYDECLAW_AUTH_TOKEN=<token> python3 tests/integration/pi/test-pi-chaos.py &
+  OPEX_AUTH_TOKEN=<token> python3 tests/integration/pi/test-pi-chaos.py &
 done
 wait
 ```
 
 After the loop completes, in Jaeger UI:
 
-- Service: `hydeclaw-core`
+- Service: `opex-core`
 - Operation: `pipeline.execute`
 - Lookback: 1h
 - Limit: 100
@@ -115,7 +115,7 @@ chaos drop happened before finalize fired.
 - The OTel exporter is **batching** (`with_batch_exporter`) — spans are
   not flushed on every call. Expect ~1–5s latency between span creation
   and visibility in Jaeger.
-- On Pi, the `hydeclaw-core` binary grows by ~3 MB with the `otel`
+- On Pi, the `opex-core` binary grows by ~3 MB with the `otel`
   feature enabled (extra dependency: `opentelemetry-otlp` + `tonic`).
 - Memory: Jaeger all-in-one is configured for 50k spans in memory
   (~50–100 MB at saturation). Oldest spans evict first.
@@ -128,14 +128,14 @@ chaos drop happened before finalize fired.
 **Spans don't appear in Jaeger UI:**
 
 1. Confirm core was built with `--features otel`:
-   `~/hydeclaw/hydeclaw-core-aarch64 --version 2>&1 | head -1` should
+   `~/opex/opex-core-aarch64 --version 2>&1 | head -1` should
    show `[otel]` in the boot log.
 2. Confirm `OTEL_EXPORTER_OTLP_ENDPOINT` env var is set on Pi:
-   `systemctl --user show hydeclaw-core | grep OTEL`.
+   `systemctl --user show opex-core | grep OTEL`.
 3. Confirm Jaeger is up and listening on 4317:
    `ss -tlnp | grep 4317` should show docker-proxy or jaeger-all-in-one.
 4. Tail Core logs for `[otel]` boot messages:
-   `journalctl --user -u hydeclaw-core --no-pager | grep otel | tail`.
+   `journalctl --user -u opex-core --no-pager | grep otel | tail`.
 
 **Jaeger UI shows no service:**
 
@@ -150,7 +150,7 @@ chaos drop happened before finalize fired.
 - `service.name` in `[otel] service_name` is the only piece of identity
   that surfaces in Jaeger's service dropdown. If you run multiple Core
   instances against the same collector, give each a distinct
-  `service_name` (e.g. `hydeclaw-core-prod` vs `hydeclaw-core-dev`).
+  `service_name` (e.g. `opex-core-prod` vs `opex-core-dev`).
 
 ### Cross-process tracing (Core ↔ Toolgate ↔ Channels)
 
@@ -185,10 +185,10 @@ Core continues into the Toolgate `POST /v1/embeddings` and Channels
   is wrapped manually if you need spans there.
 
 To enable observability for the managed processes on Pi, add these
-keys to the `[[managed_process]]` `env_extra` in `hydeclaw.toml`:
+keys to the `[[managed_process]]` `env_extra` in `opex.toml`:
 
 ```toml
-# Inline-table form used by hydeclaw.toml — service_name is "toolgate"
+# Inline-table form used by opex.toml — service_name is "toolgate"
 # for the toolgate process and "channels" for the channels process.
 env_extra = { ...,
     OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317",

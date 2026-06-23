@@ -6,7 +6,7 @@
 
 ## Summary
 
-**Part A — Watchdog agent inactivity alerts.** CLAUDE.md and `docs/ARCHITECTURE.md` both claim the watchdog "monitors agent inactivity". Reality: it only monitors managed-service health (HTTP `/health` checks), system resources (disk/RAM/CPU), and stuck sessions (sessions in `running` past a stale threshold). Nothing watches an *agent* (the Hyde / Alma / Arty config) for "has this agent done anything in the last N hours?" Add two new alert types — `stale_activity` (no recent activity at all) and `missed_heartbeat` (heartbeat-configured agent whose cron didn't fire) — bolted on as a sibling check inside the existing `hydeclaw-watchdog` binary, kept HTTP-only (no DB driver added to the watchdog crate).
+**Part A — Watchdog agent inactivity alerts.** CLAUDE.md and `docs/ARCHITECTURE.md` both claim the watchdog "monitors agent inactivity". Reality: it only monitors managed-service health (HTTP `/health` checks), system resources (disk/RAM/CPU), and stuck sessions (sessions in `running` past a stale threshold). Nothing watches an *agent* (the Hyde / Alma / Arty config) for "has this agent done anything in the last N hours?" Add two new alert types — `stale_activity` (no recent activity at all) and `missed_heartbeat` (heartbeat-configured agent whose cron didn't fire) — bolted on as a sibling check inside the existing `opex-watchdog` binary, kept HTTP-only (no DB driver added to the watchdog crate).
 
 **Part B — YAML tool response cache.** `YamlToolDef.cache: Option<YamlCacheConfig>` parses from YAML (with `ttl` and `key_params`) and is exposed through the operator-facing schema. The whole runtime — `ToolExecutionContext`, `get_cached`, `set_cached`, `build_cache_key`, plus the `CachedResponse` struct — exists but is gated by `#[cfg(test)]`, so it's compiled only into test binaries. Operators who set `cache: { ttl: 300 }` on a YAML tool get nothing. Promote the cache runtime to production, wire it into the YAML-tool dispatch path in `agent/engine_dispatch.rs`, place a shared `ToolExecutionContext` in `InfraServices`.
 
@@ -31,12 +31,12 @@ The two features are *conceptually* independent but the user grouped them under 
 
 ### A.1 Architecture: watchdog stays HTTP-only
 
-The watchdog binary has **no database driver** (`crates/hydeclaw-watchdog/Cargo.toml` carries only `tokio`, `reqwest`, `serde`, `chrono`, `tracing`, `sd-notify`). Every health signal it reads today comes via HTTP from core (`/health` of services, `/api/watchdog/settings`, `/api/sessions/stuck`). Episode state for existing alerts (`was_down`, `was_resource_warning`, `was_container_unhealthy`) lives in `HashMap<String, bool>` in `main.rs`.
+The watchdog binary has **no database driver** (`crates/opex-watchdog/Cargo.toml` carries only `tokio`, `reqwest`, `serde`, `chrono`, `tracing`, `sd-notify`). Every health signal it reads today comes via HTTP from core (`/health` of services, `/api/watchdog/settings`, `/api/sessions/stuck`). Episode state for existing alerts (`was_down`, `was_resource_warning`, `was_container_unhealthy`) lives in `HashMap<String, bool>` in `main.rs`.
 
 This spec preserves that pattern. We add:
 
 - One new HTTP endpoint in core: `GET /api/watchdog/agent-activity`
-- One new module in the watchdog: `crates/hydeclaw-watchdog/src/inactivity.rs`
+- One new module in the watchdog: `crates/opex-watchdog/src/inactivity.rs`
 - One new `HashMap<EpisodeKey, AlertState>` in watchdog `main.rs` for episode dedup
 
 **No new DB table.** Episode state stays in-memory; on watchdog restart, currently-inactive agents will re-fire a single alert. Watchdog rarely restarts (managed by systemd), so the cost is one false-positive per restart — acceptable.
@@ -75,7 +75,7 @@ The endpoint is added under `gateway/handlers/monitoring/` (next to the existing
 
 ### A.3 Watchdog config
 
-Two new fields in `WatchdogSettings` in `crates/hydeclaw-watchdog/src/config.rs`:
+Two new fields in `WatchdogSettings` in `crates/opex-watchdog/src/config.rs`:
 
 ```rust
 #[serde(default = "default_stale_activity_timeout_hours")]
@@ -155,7 +155,7 @@ pub(crate) async fn tick(
 ) -> Result<()>;
 ```
 
-`auth_token` and `core_url` are existing `&str` values constructed in `main.rs:34-46` (from `HYDECLAW_AUTH_TOKEN` / `HYDECLAW_CORE_URL` env vars), the same way the existing `Alerter` already receives them. No new env vars, no new config fields for auth.
+`auth_token` and `core_url` are existing `&str` values constructed in `main.rs:34-46` (from `OPEX_AUTH_TOKEN` / `OPEX_CORE_URL` env vars), the same way the existing `Alerter` already receives them. No new env vars, no new config fields for auth.
 
 ### A.5 Classification logic
 
@@ -225,7 +225,7 @@ The two existing `#[cfg(test)]` cache tests (`execution_context_cache_basic` plu
 
 ### B.2 Shared placement
 
-Add `pub tool_exec_ctx: Arc<ToolExecutionContext>` to `AgentConfig` (`crates/hydeclaw-core/src/agent/agent_config.rs`). The struct is what `AgentEngine` exposes via `self.cfg()` — already the access path for shared resources inside the engine (`self.cfg().metrics: Arc<MetricsRegistry>` is the existing precedent at `agent_config.rs:56`). All agents constructed at startup receive the *same* `Arc` clone, so the cache is truly process-wide despite living "per-agent" in the config struct.
+Add `pub tool_exec_ctx: Arc<ToolExecutionContext>` to `AgentConfig` (`crates/opex-core/src/agent/agent_config.rs`). The struct is what `AgentEngine` exposes via `self.cfg()` — already the access path for shared resources inside the engine (`self.cfg().metrics: Arc<MetricsRegistry>` is the existing precedent at `agent_config.rs:56`). All agents constructed at startup receive the *same* `Arc` clone, so the cache is truly process-wide despite living "per-agent" in the config struct.
 
 Construction order: `main.rs` builds one `Arc<ToolExecutionContext>` from `[tools.cache]` config, passes it into the `AgentConfig` builder used for each agent. Same pattern as how `Arc<MetricsRegistry>` is threaded today.
 
@@ -233,7 +233,7 @@ Construction order: `main.rs` builds one `Arc<ToolExecutionContext>` from `[tool
 
 ### B.3 Config
 
-New optional section in `hydeclaw.toml`:
+New optional section in `opex.toml`:
 
 ```toml
 [tools.cache]
@@ -268,7 +268,7 @@ fn default_tool_cache_max_entries() -> usize { 1000 }
 
 ### B.5 Dispatch integration
 
-In `crates/hydeclaw-core/src/agent/engine_dispatch.rs::execute_tool_call_inner` (~line 213, immediately before the `client = ...` selection):
+In `crates/opex-core/src/agent/engine_dispatch.rs::execute_tool_call_inner` (~line 213, immediately before the `client = ...` selection):
 
 ```rust
 // YAML tool cache — pre-execution lookup.
@@ -364,7 +364,7 @@ No background sweeper. Untouched expired entries linger until eviction kicks in 
 
 ### Watchdog tests (Part A)
 
-**Unit (`crates/hydeclaw-watchdog/src/inactivity.rs`)**
+**Unit (`crates/opex-watchdog/src/inactivity.rs`)**
 
 - `classify_stale_activity_triggers`: agent with `latest_activity_at < now - 6h` → returns `[StaleActivity]`.
 - `classify_stale_activity_respects_enabled_false`: disabled agent → empty.
@@ -377,13 +377,13 @@ No background sweeper. Untouched expired entries linger until eviction kicks in 
 - `reconcile_independent_alert_types`: state has only `StaleActivity` open, classified returns `[StaleActivity, MissedHeartbeat]` → 0 Fire for stale (already open), 1 Fire for missed.
 - `reconcile_silent_cleanup_on_disappeared_agent`: state has `(Hyde, StaleActivity)` open, but `known_agents` no longer contains "Hyde" (agent renamed or deleted) → entry removed silently, 0 Fire, 0 Recover.
 
-**Integration (`crates/hydeclaw-watchdog/tests/integration_inactivity.rs`)**
+**Integration (`crates/opex-watchdog/tests/integration_inactivity.rs`)**
 
 - Use `wiremock` to mock `GET /api/watchdog/agent-activity` and `POST /api/channels/notify`. Verify a full tick → expected number of notifies for various agent shapes.
 - `tick_skips_disabled_agents`: mock returns 3 agents, 2 enabled-and-stale, 1 disabled-but-stale → 2 fire notifies.
 - `tick_handles_endpoint_down`: mock returns 500 → tick returns Ok(()), no notifies, error logged.
 
-**Endpoint test (`crates/hydeclaw-core/tests/integration_watchdog_agent_activity.rs`)**
+**Endpoint test (`crates/opex-core/tests/integration_watchdog_agent_activity.rs`)**
 
 - `#[sqlx::test]` — insert agents (with and without `[agent.heartbeat]` config), insert sessions (some `channel='heartbeat'`, some other channels), call `GET /api/watchdog/agent-activity`, assert:
   - `latest_activity_at` aggregates correctly across all session channels per agent.
@@ -402,7 +402,7 @@ No background sweeper. Untouched expired entries linger until eviction kicks in 
 - `eviction_at_soft_cap`: fill to `max_entries`, write one more → ~10 % of oldest entries evicted, total len < `max_entries`.
 - `lazy_ttl_returns_none_on_expired`: insert with `ttl_secs = 0`, sleep 1 ms (or use mock clock), `get_cached` returns `None` and removes entry.
 
-**Integration (`crates/hydeclaw-core/tests/integration_yaml_cache.rs` with `wiremock`)**
+**Integration (`crates/opex-core/tests/integration_yaml_cache.rs` with `wiremock`)**
 
 - `cache_hit_skips_http_call`: `wiremock::MockServer` expecting `1` call, YAML tool with `cache: { ttl: 60 }`, invoke twice with identical args → mock received exactly 1 request, second invocation logs `"yaml tool cache hit"`.
 - `cache_miss_on_distinct_args`: same tool, different `query` param both times → mock receives 2 calls.
@@ -420,7 +420,7 @@ No background sweeper. Untouched expired entries linger until eviction kicks in 
 4. An agent with `[agent.heartbeat] cron = "0 * * * *"` whose `next_expected_heartbeat_at` (computed server-side) is older than `now - grace_minutes` produces a `MissedHeartbeat` alert independent of whether `StaleActivity` is also firing.
 5. `GET /api/watchdog/agent-activity` returns 200 + valid JSON with the documented shape, given a valid Bearer token; returns 401 without one.
 6. Watchdog tolerates core being unreachable (returns 500 / connection refused on the endpoint) — logs a warn, continues looping, does not crash.
-7. `cargo test --workspace --lib` and `make test-db` are green; `cargo test -p hydeclaw-watchdog --tests` runs the integration tests above.
+7. `cargo test --workspace --lib` and `make test-db` are green; `cargo test -p opex-watchdog --tests` runs the integration tests above.
 
 ### Part B
 
@@ -461,7 +461,7 @@ Steps 1–3 are Part A end-to-end. Steps 4–5 are Part B end-to-end. They can s
 ## Known risks and mitigations
 
 1. **Cron parser edge cases (server-side).** The existing `scheduler::convert_cron_to_utc()` shifts cron hours by a fixed offset per timezone, which is wrong across DST transitions (e.g. Europe/Samara doesn't observe DST but Europe/Moscow does — for DST-observing zones the offset varies). The endpoint inherits this behaviour. Mitigation: this spec does not change `convert_cron_to_utc()`; if a DST-related off-by-an-hour `MissedHeartbeat` ever fires, the existing helper is the place to fix, not anything new in this design. Acceptable for the targeted timezones today.
-2. **Watchdog ↔ core auth.** The endpoint needs a Bearer token. Verified: `main.rs:34` reads `HYDECLAW_AUTH_TOKEN` from env into a local `auth_token: String`, threaded into `Alerter::new(&core_url, &auth_token)` and used as `Authorization: Bearer {auth_token}` on every existing core call. `inactivity::tick(...)` receives the same `&str auth_token` parameter and uses the same header format — zero new auth surface.
+2. **Watchdog ↔ core auth.** The endpoint needs a Bearer token. Verified: `main.rs:34` reads `OPEX_AUTH_TOKEN` from env into a local `auth_token: String`, threaded into `Alerter::new(&core_url, &auth_token)` and used as `Authorization: Bearer {auth_token}` on every existing core call. `inactivity::tick(...)` receives the same `&str auth_token` parameter and uses the same header format — zero new auth surface.
 3. **Cache-key collision on nested params.** `Value::to_string()` on objects gives a JSON repr, but key order inside nested objects is technically not stable in `serde_json` (it depends on `Map` impl, which is `BTreeMap` by default in this crate — verify at impl time; if the dependency switched to `IndexMap` for preserve-order, sort manually).
 4. **Episode state lost on watchdog restart.** Acceptable: one false-positive re-fire per restart. Watchdog restarts are rare and human-triggered.
 5. **Cache poisoning across agents.** Shared cache means agent A's cached response is served to agent B for the same `(tool, method, endpoint, params)` key. This is *intentional* — same HTTP call should return the same body regardless of which agent asked. The cache is keyed by API call shape, not by agent identity. If an external API ever returns per-caller-different bodies based on something other than the request URL/params (e.g., session cookies), we'd need to extend the key, but no such tool exists today.

@@ -1,145 +1,148 @@
-# HydeClaw
+# OPEX
 
 <p align="center">
-  <strong>Self-hosted AI gateway built to be changed.</strong>
+  <strong>Самостоятельно развёртываемый AI-шлюз, созданный для изменений.</strong><br>
+  <em>Произносится «ОРЕХ»</em>
 </p>
 
 <p align="center">
-  <a href="https://github.com/AronMav/hydeclaw/actions/workflows/ci.yml?branch=master"><img src="https://img.shields.io/github/actions/workflow/status/AronMav/hydeclaw/ci.yml?branch=master&style=for-the-badge" alt="CI"></a>
-  <a href="https://github.com/AronMav/hydeclaw/releases"><img src="https://img.shields.io/github/v/release/AronMav/hydeclaw?style=for-the-badge" alt="Release"></a>
+  <a href="https://github.com/AronMav/opex/actions/workflows/ci.yml?branch=master"><img src="https://img.shields.io/github/actions/workflow/status/AronMav/opex/ci.yml?branch=master&style=for-the-badge" alt="CI"></a>
+  <a href="https://github.com/AronMav/opex/releases"><img src="https://img.shields.io/github/v/release/AronMav/opex?style=for-the-badge" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" alt="MIT"></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-2024_edition-orange?logo=rust&logoColor=white&style=for-the-badge" alt="Rust"></a>
-  <a href="https://github.com/AronMav/hydeclaw/releases"><img src="https://img.shields.io/badge/platform-ARM64%20%7C%20x86__64-blue?logo=linux&logoColor=white&style=for-the-badge" alt="Platform"></a>
+  <a href="https://github.com/AronMav/opex/releases"><img src="https://img.shields.io/badge/platform-ARM64%20%7C%20x86__64-blue?logo=linux&logoColor=white&style=for-the-badge" alt="Platform"></a>
 </p>
 
-HydeClaw is a self-hosted AI gateway designed around one idea: every layer should be replaceable without touching the core. Agent behavior lives in Markdown. Tools are YAML files. Providers swap with one config line. Channels are a separate process. Nothing is baked in that doesn't have to be.
+[English version →](README.en.md)
 
-[Docs](docs/) · [API Reference](docs/API.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Security](SECURITY.md)
+OPEX — самостоятельно развёртываемый AI-шлюз, построенный вокруг одной идеи: каждый слой должен быть заменяем без изменения ядра. Поведение агентов живёт в Markdown. Инструменты — YAML-файлы. Провайдеры меняются одной строкой конфига. Каналы — отдельный процесс. Ничто не зашито намертво без необходимости.
 
-New install? Run `./setup.sh` — it handles everything.
+[Документация](docs/) · [API](docs/API.md) · [Архитектура](docs/ARCHITECTURE.md) · [Конфигурация](docs/CONFIGURATION.md) · [Безопасность](SECURITY.md)
+
+Новая установка? Запустите `./setup.sh` — он сделает всё сам.
 
 ---
 
-## Install
+## Установка
 
 ```bash
-tar xzf hydeclaw-v<VERSION>.tar.gz
-cd hydeclaw
+tar xzf opex-v<VERSION>.tar.gz
+cd opex
 ./setup.sh
 ```
 
-The installer handles Docker, Bun, Python 3, PostgreSQL, `.env` generation, and systemd services.
-Open `http://your-server:18789` when done.
+Установщик настраивает Docker, Bun, Python 3, PostgreSQL, генерирует `.env` и создаёт systemd-сервисы.
+После завершения откройте `http://your-server:18789`.
 
-Building from source: clone the repo and run `./setup.sh` — it detects missing toolchains and compiles.
-
----
-
-## The Layers
-
-HydeClaw is organized into independent layers. Each layer can be changed, extended, or replaced without touching the others.
-
-**Agent behavior — TOML + Markdown files.**
-An agent is a TOML config and a folder of Markdown files. Personality, memory, tone, and background tasks are plain text files in `workspace/agents/{Name}/`. Change a file, change the agent — on the next request, no restart.
-
-**Tools — YAML files.**
-Drop a YAML file in `workspace/tools/` and the tool is live immediately. Supports auth injection (Bearer, API key, header), JSONPath response transforms, binary responses (photos, voice), and SSRF protection. No code, no restart.
-
-**Skills — Markdown files loaded on demand.**
-Skills are behavioral instructions injected at inference time, not baked into the system prompt. Agents discover them via `skill_use(action="list")` and load them when needed. Add a skill file and agents start using it. Remove it and it's gone.
-
-**Providers — a unified registry.**
-All LLM backends and media services (STT, TTS, Vision, ImageGen, Embedding) go through a provider registry editable from the Web UI or API. Switching an agent to a different model is one line in a TOML file. Any OpenAI-compatible endpoint works out of the box.
-
-**Channels — a separate process.**
-Telegram, Discord, Matrix, IRC, and Slack adapters run as a TypeScript/Bun subprocess. The core doesn't know or care about messaging protocols — adapters send `IncomingMessage` objects over an internal WebSocket and get results back. Add a new adapter without touching Rust.
+Сборка из исходников: клонируйте репозиторий и запустите `./setup.sh` — он обнаружит отсутствующие toolchain и скомпилирует.
 
 ---
 
-## What changes without a restart
+## Слои
 
-| Layer                  | Takes effect              |
-| ---------------------- | ------------------------- |
-| SOUL.md / IDENTITY.md  | Next message              |
-| Skill files            | Next message              |
-| YAML tools             | Next request (30 s cache) |
-| Agent TOML config      | Hot-reload (file watcher) |
-| Provider settings      | Immediately via API       |
-| Channel configuration  | On adapter reconnect      |
+OPEX организован в независимые слои. Каждый слой можно изменить, расширить или заменить, не затрагивая остальные.
 
----
+**Поведение агентов — TOML + Markdown-файлы.**
+Агент — это TOML-конфиг и папка с Markdown-файлами. Личность, память, тон и фоновые задачи — простые текстовые файлы в `workspace/agents/{Name}/`. Измените файл — измените агента, без перезапуска.
 
-## Highlights
+**Инструменты — YAML-файлы.**
+Положите YAML-файл в `workspace/tools/` — инструмент сразу доступен. Поддерживаются инъекция авторизации (Bearer, API key, заголовок), JSONPath-трансформации ответов, бинарные ответы (фото, голос) и SSRF-защита. Без кода, без перезапуска.
 
-- **Multi-agent orchestration** — agents collaborate in shared sessions with @-mention routing; session-scoped pools with run/async/message/status/kill lifecycle
-- **Long-term memory** — PostgreSQL + pgvector hybrid search (semantic + FTS) with MMR reranking; two tiers: raw (time-decay) and pinned (permanent)
-- **MCP protocol** — any MCP server runs as an on-demand Docker container; tools are auto-discovered and injected into agent context
-- **Skills system** — Markdown-based instructions loaded at runtime; server-side trigger matching injects a hint into the system prompt when a user message matches a skill's keywords
-- **Cron scheduler** — per-agent scheduled tasks with timezone support and jitter; jobs are creatable via API at runtime
-- **Secrets vault** — ChaCha20Poly1305 encryption, per-agent scoping, env var fallback; credentials never touch config files
-- **Tool approval** — configurable human-in-the-loop before execution of sensitive operations
-- **Context compaction** — when conversation history exceeds the model window, the oldest turns are compressed and key facts are extracted to long-term memory
-- **Web UI** — Next.js 16 dashboard: multi-agent chat, agent/provider/tool management, workspace canvas, memory explorer, audit log
-- **Network discovery** — WAN IP, Tailscale status, LAN interfaces, mDNS (`hydeclaw.local`) for zero-config LAN access
-- **Doctor diagnostics** — `GET /api/doctor` with severity levels and actionable remediation hints
+**Навыки — Markdown-файлы, загружаемые по требованию.**
+Навыки — поведенческие инструкции, внедряемые во время инференса, а не зашитые в системный промпт. Агенты обнаруживают их через `skill_use(action="list")` и загружают по мере необходимости. Добавьте файл навыка — агенты начнут им пользоваться. Удалите — он исчезнет.
+
+**Провайдеры — единый реестр.**
+Все LLM-бэкенды и медиасервисы (STT, TTS, Vision, ImageGen, Embedding) проходят через реестр провайдеров, редактируемый из Web UI или API. Переключить агента на другую модель — одна строка в TOML-файле. Любой OpenAI-совместимый эндпоинт работает сразу.
+
+**Каналы — отдельный процесс.**
+Адаптеры Telegram, Discord, Matrix, IRC и Slack работают как TypeScript/Bun-субпроцесс. Ядро не знает о протоколах обмена сообщениями — адаптеры отправляют объекты `IncomingMessage` через внутренний WebSocket и получают результаты обратно. Добавьте новый адаптер без изменений в Rust.
 
 ---
 
-## Architecture
+## Что меняется без перезапуска
 
-Three Rust binaries + two managed child processes + Docker infrastructure.
+| Слой                   | Вступает в силу            |
+| ---------------------- | -------------------------- |
+| SOUL.md / IDENTITY.md  | Следующее сообщение        |
+| Файлы навыков          | Следующее сообщение        |
+| YAML-инструменты       | Следующий запрос (кэш 30с) |
+| TOML-конфиг агента     | Hot-reload (file watcher)  |
+| Настройки провайдеров  | Немедленно через API       |
+| Конфигурация канала    | При переподключении адаптера |
+
+---
+
+## Возможности
+
+- **Мультиагентная оркестрация** — агенты совместно работают в общих сессиях с маршрутизацией через @-упоминания; пулы агентов с жизненным циклом run/async/message/status/kill
+- **Долгосрочная память** — PostgreSQL + pgvector гибридный поиск (семантический + FTS) с MMR-ранжированием; два уровня: сырой (с временным затуханием) и закреплённый (постоянный)
+- **MCP-протокол** — любой MCP-сервер работает как on-demand Docker-контейнер; инструменты автоматически обнаруживаются и внедряются в контекст агента
+- **Система навыков** — инструкции на основе Markdown, загружаемые в runtime; серверное сопоставление триггеров внедряет подсказку в системный промпт при совпадении запроса с ключевыми словами навыка
+- **Cron-планировщик** — задачи по расписанию на уровне агента с поддержкой часовых поясов и джиттером; задания создаются через API во время работы
+- **Хранилище секретов** — шифрование ChaCha20Poly1305, область видимости per-agent, fallback на env-переменные; учётные данные никогда не касаются конфигурационных файлов
+- **Подтверждение инструментов** — настраиваемое участие человека перед выполнением чувствительных операций
+- **Сжатие контекста** — когда история разговора превышает окно модели, старые витки сжимаются, а ключевые факты извлекаются в долгосрочную память
+- **Web UI** — дашборд на Next.js 16: мультиагентный чат, управление агентами/провайдерами/инструментами, canvas рабочего пространства, проводник памяти, журнал аудита
+- **Обнаружение сети** — WAN IP, статус Tailscale, LAN-интерфейсы, mDNS (`opex.local`) для доступа в LAN без настройки
+- **Диагностика** — `GET /api/doctor` с уровнями важности и подсказками по устранению проблем
+
+---
+
+## Архитектура
+
+Три Rust-бинарника + два управляемых дочерних процесса + Docker-инфраструктура.
 
 ```text
-hydeclaw-core       — HTTP API, agent lifecycle, LLM calls, tool dispatch,
-  │                   memory, secrets, scheduler
-  ├── channels/     — chat adapters (TypeScript/Bun, managed child process)
-  └── toolgate/     — media hub: STT, TTS, Vision, ImageGen, Embeddings
-                      (Python/FastAPI, managed child process)
+opex-core       — HTTP API, жизненный цикл агентов, LLM-вызовы, диспетчер инструментов,
+  │               память, секреты, планировщик
+  ├── channels/ — адаптеры чатов (TypeScript/Bun, управляемый дочерний процесс)
+  └── toolgate/ — медиа-хаб: STT, TTS, Vision, ImageGen, Embeddings
+                  (Python/FastAPI, управляемый дочерний процесс)
 
-hydeclaw-watchdog        — external health monitor with channel alerting
-hydeclaw-memory-worker   — background embedding reindex via PostgreSQL task queue
+opex-watchdog        — внешний монитор здоровья с оповещением через каналы
+opex-memory-worker   — фоновая переиндексация через очередь задач PostgreSQL
 
-PostgreSQL 17 + pgvector — sessions, messages, memory, cron, secrets
-SearXNG                  — meta-search engine for web search tools
-browser-renderer         — headless browser for automation
-MCP servers              — started on-demand via Docker API
-code sandbox             — isolated Docker containers for non-base agent code execution
+PostgreSQL 17 + pgvector — сессии, сообщения, память, cron, секреты
+SearXNG                  — мета-поисковик для инструментов веб-поиска
+browser-renderer         — headless-браузер для автоматизации
+MCP-серверы              — запускаются on-demand через Docker API
+code sandbox             — изолированные Docker-контейнеры для выполнения кода non-base агентами
 ```
 
-The Rust core speaks no messaging protocol and has no provider SDK embedded. Every external surface — channels, media services, LLM backends, MCP tools — is connected through a defined protocol boundary. This is what makes individual layers swappable.
+Rust-ядро не знает ни одного протокола обмена сообщениями и не содержит встроенного SDK провайдеров. Каждая внешняя поверхность — каналы, медиасервисы, LLM-бэкенды, MCP-инструменты — подключена через определённую границу протокола. Именно это делает отдельные слои заменяемыми.
 
 ---
 
-## Security
+## Безопасность
 
-- **Workspace isolation** — path canonicalization guard with symlink resolution; agents cannot escape their directory or reach another agent's files
-- **SSRF protection** — DNS-level private IP blocking (RFC 1918, link-local, CGNAT, Teredo, 6to4, IPv4-mapped) on every outbound YAML tool request; internal service blocklist
-- **Sandbox** — non-base agents execute code in isolated Docker containers; base agents run on the host with explicit opt-in
-- **Tool approval** — per-tool human confirmation workflow; approval state persisted in PostgreSQL
-- **PII redaction** — automatic filtering of tokens, keys, passwords in code execution output
-- **Prompt injection detection** — inbound content scanned for override patterns; external content wrapped in boundary markers
+- **Изоляция рабочего пространства** — защита с канонизацией путей и разрешением симлинков; агенты не могут выйти за пределы своей директории или получить доступ к файлам другого агента
+- **SSRF-защита** — блокировка приватных IP на уровне DNS (RFC 1918, link-local, CGNAT, Teredo, 6to4, IPv4-mapped) для каждого исходящего запроса YAML-инструмента; блок-лист внутренних сервисов
+- **Sandbox** — non-base агенты выполняют код в изолированных Docker-контейнерах; base-агенты работают на хосте с явным разрешением
+- **Подтверждение инструментов** — рабочий процесс подтверждения человеком per-tool; состояние подтверждения хранится в PostgreSQL
+- **Скрытие PII** — автоматическая фильтрация токенов, ключей, паролей в выводе выполнения кода
+- **Обнаружение prompt injection** — входящий контент сканируется на шаблоны переопределения; внешний контент обёртывается в маркеры границ
 
 > [!IMPORTANT]
-> Back up `HYDECLAW_MASTER_KEY`. It is required for vault decryption and cannot be recovered if lost.
+> Сохраните резервную копию `OPEX_MASTER_KEY`. Он необходим для расшифровки хранилища и не может быть восстановлен при потере.
 
 ---
 
-## Configuration
+## Конфигурация
 
-Three variables in `.env`. Everything else goes into the encrypted vault.
+Три переменные в `.env`. Всё остальное хранится в зашифрованном хранилище.
 
 ```bash
-HYDECLAW_AUTH_TOKEN=...   # API authentication
-HYDECLAW_MASTER_KEY=...   # ChaCha20Poly1305 vault key
-DATABASE_URL=...          # PostgreSQL connection string
+OPEX_AUTH_TOKEN=...   # аутентификация API
+OPEX_MASTER_KEY=...   # ключ хранилища ChaCha20Poly1305
+DATABASE_URL=...      # строка подключения PostgreSQL
 ```
 
-Agent config lives in `config/agents/{Name}.toml` and hot-reloads on change:
+Конфиг агента живёт в `config/agents/{Name}.toml` и горячо перезагружается при изменении:
 
 ```toml
 [agent]
 name = "Assistant"
-language = "en"
+language = "ru"
 provider = "openai"
 model = "gpt-4o-mini"
 temperature = 0.7
@@ -151,48 +154,48 @@ detect_loops = true
 
 ---
 
-## Development
+## Разработка
 
 ```bash
 make check          # cargo check --all-targets
 make test           # cargo test
 make lint           # cargo clippy -- -D warnings
-make build-arm64    # cross-compile for Raspberry Pi / AWS Graviton
-make deploy         # binary + UI + migrations → remote server
-make doctor         # GET /api/doctor on remote
-make logs           # journalctl tail on remote
+make build-arm64    # кросс-компиляция для Raspberry Pi / AWS Graviton
+make deploy         # бинарники + UI + миграции → удалённый сервер
+make doctor         # GET /api/doctor на удалённом сервере
+make logs           # journalctl tail на удалённом сервере
 ```
 
-Requirements from source: Rust 1.85+ (edition 2024), Node.js 22+, Docker, Bun 1.x, Python 3, [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) (ARM64 only).
+Требования из исходников: Rust 1.85+ (edition 2024), Node.js 22+, Docker, Bun 1.x, Python 3, [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) (только для ARM64).
 
 ```text
-hydeclaw/
+opex/
 ├── crates/
-│   ├── hydeclaw-core/          # Main binary
-│   ├── hydeclaw-watchdog/      # Health monitor
-│   ├── hydeclaw-memory-worker/ # Background tasks
-│   └── hydeclaw-types/         # Shared types
-├── channels/                   # Channel adapters (TypeScript/Bun)
-├── toolgate/                   # Media hub (Python/FastAPI)
-├── ui/                         # Web UI (Next.js 16)
-├── workspace/                  # Runtime: tools/, skills/, agents/
-├── config/                     # Agent + system TOML configs
-├── migrations/                 # PostgreSQL migrations (auto-applied on start)
-└── docker/                     # Compose + Dockerfiles
+│   ├── opex-core/          # Основной бинарник
+│   ├── opex-watchdog/      # Монитор здоровья
+│   ├── opex-memory-worker/ # Фоновые задачи
+│   └── opex-types/         # Общие типы
+├── channels/               # Адаптеры каналов (TypeScript/Bun)
+├── toolgate/               # Медиа-хаб (Python/FastAPI)
+├── ui/                     # Web UI (Next.js 16)
+├── workspace/              # Runtime: tools/, skills/, agents/
+├── config/                 # Конфиги агентов и системы в формате TOML
+├── migrations/             # Миграции PostgreSQL (применяются автоматически при запуске)
+└── docker/                 # Compose + Dockerfile
 ```
 
 ---
 
-## Updating
+## Обновление
 
 ```bash
-~/hydeclaw/update.sh hydeclaw-v<VERSION>.tar.gz
+~/opex/update.sh opex-v<VERSION>.tar.gz
 ```
 
-Preserves `.env`, `config/`, `workspace/`, and the database. Run `GET /api/doctor` after to verify.
+Сохраняет `.env`, `config/`, `workspace/` и базу данных. После завершения проверьте через `GET /api/doctor`.
 
 ---
 
-## License
+## Лицензия
 
-MIT — see [LICENSE](LICENSE).
+MIT — см. [LICENSE](LICENSE).

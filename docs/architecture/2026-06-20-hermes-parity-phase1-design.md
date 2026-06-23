@@ -3,11 +3,11 @@
 - **Date:** 2026-06-20
 - **Status:** Approved (design); pending implementation plan
 - **Branch:** `feat/hermes-parity-phase1`
-- **Origin:** Gap analysis of HydeClaw vs current Hermes (`D:/GIT/hermes-agent` @ `b88d0007c`). See memory `reference_hermes_agent.md`.
+- **Origin:** Gap analysis of OPEX vs current Hermes (`D:/GIT/hermes-agent` @ `b88d0007c`). See memory `reference_hermes_agent.md`.
 
 ## Context & motivation
 
-A workflow-driven comparison of HydeClaw against the latest Hermes surfaced a ranked
+A workflow-driven comparison of OPEX against the latest Hermes surfaced a ranked
 list of missing functionality. This spec covers **Phase 1** — the four items that
 deliver real value *and* are locally verifiable with `cargo test` / `pytest`:
 
@@ -41,7 +41,7 @@ channels stack and cannot be fully verified locally; each warrants its own desig
 `channels/src/drivers/email.ts` exists and is registered in the adapter switch, but
 `POST /api/agents/{name}/channels` with `channel_type="email"` returns **400** because
 `"email"` is absent from the `SUPPORTED` allowlist in
-`crates/hydeclaw-core/src/gateway/handlers/channels.rs:122`. Credentials handling already
+`crates/opex-core/src/gateway/handlers/channels.rs:122`. Credentials handling already
 covers email: the secret is the `password` field, which `extract_credentials` already
 captures into the vault; `imap_host`/`smtp_host`/`imap_user` are non-secret config.
 
@@ -51,7 +51,7 @@ captures into the vault; `imap_host`/`smtp_host`/`imap_user` are non-secret conf
 2. Add `"email"` to it.
 
 ### Files
-- `crates/hydeclaw-core/src/gateway/handlers/channels.rs`
+- `crates/opex-core/src/gateway/handlers/channels.rs`
 
 ### Tests
 - `cargo test`: assert `SUPPORTED_CHANNEL_TYPES` contains `"email"` (and the existing six).
@@ -91,7 +91,7 @@ plus the tool schema; the Rust handler is unchanged.
 - New `AutomationRequest` fields: `key`, `dx`, `dy`, `to`, `to_selector`, `accept`,
   `prompt_text`.
 
-**Rust — `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs`:**
+**Rust — `crates/opex-core/src/agent/pipeline/tool_defs.rs`:**
 - Extend the `browser_action` `action` enum with `scroll`, `hover`, `drag`, `back`,
   `press`, `set_dialog`.
 - Add schema properties: `key`, `dx`, `dy`, `to`, `to_selector`, `accept`, `prompt_text`,
@@ -100,7 +100,7 @@ plus the tool schema; the Rust handler is unchanged.
 ### Files
 - `docker/browser-renderer/app.py`
 - `docker/browser-renderer/test_dispatch.py` (new)
-- `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs`
+- `crates/opex-core/src/agent/pipeline/tool_defs.rs`
 
 ### Tests
 - `pytest docker/browser-renderer/test_dispatch.py`: inject a fake `Page` into a session,
@@ -122,7 +122,7 @@ free-form `notes/todo.md` (unstructured, agent-scoped, lost after compaction). M
 task reliability suffers.
 
 ### Design — storage decision: **DB-backed** (approved)
-DB-backed beats in-memory because HydeClaw resumes sessions across restarts and is
+DB-backed beats in-memory because OPEX resumes sessions across restarts and is
 DB-centric; a todo list must survive a restart to be trustworthy.
 
 **Migration `migrations/054_session_todos.sql`:**
@@ -140,7 +140,7 @@ CREATE TABLE session_todos (
 );
 ```
 
-**`crates/hydeclaw-core/src/db/todos.rs` (new):**
+**`crates/opex-core/src/db/todos.rs` (new):**
 - `list_todos(db, session_id) -> Vec<TodoItem>` (ordered by `position`).
 - `replace_todos(db, session_id, items)` — full replace in a transaction.
 - `merge_todos(db, session_id, items)` — upsert by `item_id`.
@@ -156,17 +156,17 @@ CREATE TABLE session_todos (
 `format_for_injection(items) -> String` live as pure functions (no DB) so they are
 unit-tested without Postgres.
 
-**Context injection** (`crates/hydeclaw-core/src/agent/context_builder.rs`): each turn,
+**Context injection** (`crates/opex-core/src/agent/context_builder.rs`): each turn,
 load the session's todos and, if non-empty, append an `## Active TODO` block to the built
 context. This keeps the list present every turn regardless of compaction.
 
 ### Files
 - `migrations/054_session_todos.sql` (new)
-- `crates/hydeclaw-core/src/db/todos.rs` (new) + `db/mod.rs` export
-- `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs`
-- `crates/hydeclaw-core/src/agent/pipeline/handlers.rs`
-- `crates/hydeclaw-core/src/agent/context_builder.rs`
-- `crates/hydeclaw-types` if a shared `TodoItem` type is needed
+- `crates/opex-core/src/db/todos.rs` (new) + `db/mod.rs` export
+- `crates/opex-core/src/agent/pipeline/tool_defs.rs`
+- `crates/opex-core/src/agent/pipeline/handlers.rs`
+- `crates/opex-core/src/agent/context_builder.rs`
+- `crates/opex-types` if a shared `TodoItem` type is needed
 
 ### Tests
 - Unit (no DB, local): merge vs replace reconciliation; `format_for_injection`; limit
@@ -193,7 +193,7 @@ match — substitute the offending content with a placeholder and emit a warning
 workspace files keep the existing **warn-only** behaviour (avoid false positives breaking
 legitimate notes/docs).
 
-**`crates/hydeclaw-core/src/tools/content_security.rs`:**
+**`crates/opex-core/src/tools/content_security.rs`:**
 - Add `enum Severity { Low, High }`; each entry in `INJECTION_PATTERNS` carries a severity.
 - Extend patterns with new classes (High severity):
   - **C2 / Brainworm**: `register (yourself )?as a node`, `beacon`/`heartbeat` to URL,
@@ -205,14 +205,14 @@ legitimate notes/docs).
 - New `scan_for_block(content) -> BlockVerdict { highest_severity, matched: Vec<String> }`.
 - Keep existing `detect_prompt_injection` for the warn path (backward compatible).
 
-**`crates/hydeclaw-core/src/agent/workspace.rs`:** when loading a priority identity file
+**`crates/opex-core/src/agent/workspace.rs`:** when loading a priority identity file
 into context, run `scan_for_block`; if `High`, replace the file's contributed content with
 a placeholder (e.g. `[CONTENT BLOCKED: potential prompt injection detected]`), `warn!`, and
 do not abort the rest of context building. Non-priority files: unchanged `scan_and_warn`.
 
 ### Files
-- `crates/hydeclaw-core/src/tools/content_security.rs`
-- `crates/hydeclaw-core/src/agent/workspace.rs`
+- `crates/opex-core/src/tools/content_security.rs`
+- `crates/opex-core/src/agent/workspace.rs`
 
 ### Tests
 - `cargo test` (pure, local): High-severity patterns → block verdict; Low-severity → warn
