@@ -86,7 +86,7 @@ async fn discover_postgres_container(configured: &str) -> String {
     }
 }
 
-/// Discover tables tagged as ephemeral via `COMMENT ON TABLE ... IS '@hydeclaw:ephemeral...'`.
+/// Discover tables tagged as ephemeral via `COMMENT ON TABLE ... IS '@opex:ephemeral...'`.
 /// Used by `run_pg_dump` to build the `--exclude-table` list.
 ///
 /// The tag must be at the start of the comment (anchored LIKE pattern).
@@ -99,7 +99,7 @@ async fn ephemeral_tables(container: &str) -> anyhow::Result<Vec<String>> {
              JOIN pg_namespace n ON n.oid = c.relnamespace \
              JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0 \
              WHERE n.nspname='public' AND c.relkind='r' \
-               AND d.description LIKE '@hydeclaw:ephemeral%' \
+               AND d.description LIKE '@opex:ephemeral%' \
              ORDER BY c.relname",
         ])
         .output().await
