@@ -230,7 +230,7 @@ export default function WebhooksPage() {
                   ))}
                 </div>
                 <div className="flex items-center gap-2">
-                  <code className="font-mono text-[11px] text-muted-foreground/60 bg-muted/30 px-2 py-0.5 rounded border border-border/40 truncate max-w-[360px]">
+                  <code className="font-mono text-[11px] text-muted-foreground/60 bg-muted/30 px-2 py-0.5 rounded border border-border/40 truncate max-w-full">
                     {webhookUrl(w.name)}
                   </code>
                   <button
@@ -301,7 +301,7 @@ export default function WebhooksPage() {
 
       {/* Create / Edit dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-xl max-h-[90dvh] overflow-y-auto">
           <DialogHeader className="p-6 border-b border-border/50">
             <DialogTitle className="text-base font-bold text-foreground">
               {editId ? t("webhooks.editing") : t("webhooks.new_dialog")}
@@ -404,7 +404,7 @@ export default function WebhooksPage() {
 
       {/* Secret reveal dialog */}
       <Dialog open={!!createdSecret} onOpenChange={(o) => { if (!o) setCreatedSecret(null); }}>
-        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-lg max-h-[90vh] overflow-y-auto overscroll-contain">
+        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-lg max-h-[90dvh] overflow-y-auto overscroll-contain">
           <DialogHeader className="p-6 border-b border-border/50">
             <DialogTitle className="text-base font-bold text-foreground">
               {t("webhooks.secret_created_title")}

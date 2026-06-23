@@ -764,8 +764,10 @@ export default function ChatPage() {
         {/* Mobile/tablet floating actions — visible below lg */}
         <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-1.5 px-3 py-2 bg-background/90 backdrop-blur-sm border-b border-border/30 lg:hidden">
           <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform md:hidden shrink-0" />
-          {agentSelector}
-          <ChatCanvasTabs />
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+            {agentSelector}
+            <ChatCanvasTabs />
+          </div>
           <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
             <SheetTrigger asChild>
               <Button

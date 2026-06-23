@@ -742,7 +742,7 @@ export default function IntegrationsPage() {
                       value={currentValue}
                       onValueChange={(v) => handleBindingChange(provider, v)}
                     >
-                      <SelectTrigger className="h-8 w-52 text-xs font-mono">
+                      <SelectTrigger className="h-8 w-full sm:w-52 text-xs font-mono">
                         <SelectValue placeholder={t("integrations.none")} />
                       </SelectTrigger>
                       <SelectContent>

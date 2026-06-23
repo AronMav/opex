@@ -278,7 +278,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {!continuesPrevious && (
           <div className="message-header flex items-center justify-between min-h-[18px]">
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 truncate max-w-[120px]">
                 {agentName || t("chat.assistant")}
               </span>

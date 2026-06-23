@@ -15,7 +15,7 @@ export const FileDataPartView = memo(function FileDataPartView({ data }: { data:
     return <AudioPlayer src={safeUrl} />;
   }
   if (mediaType.startsWith("video/")) {
-    return <video controls src={safeUrl} className="max-w-md rounded-xl border border-border" />;
+    return <video controls src={safeUrl} className="max-w-[min(28rem,100%)] rounded-xl border border-border" />;
   }
   return (
     <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline">

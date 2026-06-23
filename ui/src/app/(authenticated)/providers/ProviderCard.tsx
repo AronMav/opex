@@ -50,7 +50,7 @@ export function ProviderCard({
           {CATEGORY_ICONS[cap] ?? <Link2 className="h-4 w-4" />}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 min-w-0">
             <p className="font-semibold text-sm font-mono truncate">
               {provider.name}
             </p>

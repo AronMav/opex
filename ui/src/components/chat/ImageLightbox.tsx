@@ -61,7 +61,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
         className="cursor-zoom-in"
         aria-label="Open image"
       >
-        <img src={src} alt={alt} className={cn("max-w-md rounded-xl border border-border", className)} loading="lazy" />
+        <img src={src} alt={alt} className={cn("max-w-[min(28rem,100%)] rounded-xl border border-border", className)} loading="lazy" />
       </button>
 
       {open && (
@@ -118,7 +118,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
           <img
             src={src}
             alt={alt}
-            className="max-h-[90vh] max-w-[90vw] object-contain transition-transform duration-200"
+            className="max-h-[90dvh] max-w-[90vw] object-contain transition-transform duration-200"
             style={{ transform: `scale(${zoom})` }}
             onClick={(e) => e.stopPropagation()}
           />

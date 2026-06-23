@@ -739,7 +739,7 @@ function InfoRow({
   mono?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-border/50 py-2.5">
+    <div className="flex items-center justify-between border-b border-border/50 py-2.5 overflow-hidden">
       <span className="text-sm text-muted-foreground">{label}</span>
       <span
         className={`max-w-[60%] truncate text-right font-medium transition-colors group-hover:text-foreground ${mono ? "font-mono text-sm text-foreground/80" : "text-foreground text-sm"}`}

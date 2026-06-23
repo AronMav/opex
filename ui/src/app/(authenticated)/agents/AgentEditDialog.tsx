@@ -199,7 +199,7 @@ export function AgentEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex flex-col max-h-[90vh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-2xl rounded-xl">
+      <DialogContent className="flex flex-col max-h-[90dvh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-2xl rounded-xl">
         <DialogHeader className="px-5 pt-4 pb-0 border-b-0 bg-muted/20">
           <DialogTitle className="text-sm font-bold text-foreground truncate pb-3">
             {editName ? t("agents.editing", { name: editName }) : t("agents.new_agent_dialog")}
@@ -761,7 +761,7 @@ export function ChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-sm max-h-[90vh] overflow-y-auto rounded-xl p-0">
+      <DialogContent className="border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-sm max-h-[90dvh] overflow-y-auto rounded-xl p-0">
         <DialogHeader className="px-5 py-4 border-b border-border bg-muted/20">
           <DialogTitle className="text-sm font-bold">{channelDialogId ? t("agents.channel_edit") : t("agents.channel_add_dialog")}</DialogTitle>
         </DialogHeader>

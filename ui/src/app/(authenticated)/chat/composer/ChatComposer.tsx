@@ -420,8 +420,8 @@ export function ChatComposer() {
               </button>
             </div>
           )}
-          <div className="flex items-center justify-between px-3 pb-3">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between px-3 pb-3">
+            <div className="flex min-w-0 items-center gap-2">
               <input
                 ref={fileInputRef}
                 type="file"

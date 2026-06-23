@@ -332,13 +332,13 @@ export default function CronPage() {
         )}
 
       <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { setToolPolicyAllow(""); setToolPolicyDeny(""); } }}>
-        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-xl max-h-[90vh] overflow-hidden p-0">
+        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-xl max-h-[90dvh] overflow-hidden p-0">
           <DialogHeader className="p-6 border-b border-border/50">
             <DialogTitle className="text-base font-bold text-foreground">
               {editId ? t("cron.editing_task") : t("cron.new_task_dialog")}
             </DialogTitle>
           </DialogHeader>
-          <div className="max-h-[60vh] sm:max-h-[70vh] overflow-y-auto overscroll-contain">
+          <div className="max-h-[60dvh] sm:max-h-[70dvh] overflow-y-auto overscroll-contain">
           <div className="p-6 space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label={t("cron.field_name")}>

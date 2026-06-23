@@ -21,7 +21,7 @@ export function PageHeader({ title, description, actions, className }: PageHeade
           <p className="text-sm text-muted-foreground">{description}</p>
         )}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap items-center gap-2 min-w-0">{actions}</div>}
     </div>
   )
 }

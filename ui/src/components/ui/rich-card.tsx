@@ -70,14 +70,14 @@ export function MetricCard({ data }: { data: Record<string, unknown> }) {
         : "text-muted-foreground";
 
   return (
-    <div className="inline-flex flex-col gap-1 rounded-xl border border-border/60 bg-card/50 px-5 py-4">
+    <div className="inline-flex flex-col gap-1 rounded-xl border border-border/60 bg-card/50 px-5 py-4 overflow-hidden min-w-0">
       {title && (
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
           {title}
         </span>
       )}
       <div className="flex items-baseline gap-3">
-        <span className="text-3xl font-bold tabular-nums text-foreground">
+        <span className="text-3xl font-bold tabular-nums text-foreground break-all max-w-full">
           {value ?? "—"}
         </span>
         {trend && (
