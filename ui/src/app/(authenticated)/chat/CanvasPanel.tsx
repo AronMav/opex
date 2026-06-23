@@ -85,7 +85,7 @@ export function CanvasPanel({ agent }: CanvasPanelProps) {
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
         {canvas.contentType === "markdown" && (
-          <div className="prose prose-sm dark:prose-invert max-w-none">
+          <div className="prose prose-sm dark:prose-invert max-w-4xl mx-auto [&_table]:block [&_table]:overflow-x-auto [&_table]:w-full [&_pre]:overflow-x-auto">
             <ErrorBoundary>
               <Markdown>{canvas.content}</Markdown>
             </ErrorBoundary>

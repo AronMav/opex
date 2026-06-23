@@ -62,7 +62,7 @@ export function CompactChainBanner({ activeSessionId, onNavigate }: CompactChain
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer",
                 ].join(" ")}
               >
-                <span className="truncate flex-1">
+                <span className="truncate flex-1 min-w-0">
                   {entry.title ?? `session ${entry.id.slice(0, 8)}`}
                 </span>
                 <span className="text-[10px] text-muted-foreground shrink-0">

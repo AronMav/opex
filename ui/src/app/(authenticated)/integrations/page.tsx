@@ -207,7 +207,7 @@ function GmailSection({
       <div className="flex flex-col gap-2">
         <p className="text-[11px] text-muted-foreground">
           {t("integrations.pubsub_hint")}{" "}
-          <span className="font-mono">
+          <span className="font-mono break-all">
             {callbackUrl.replace("/oauth/callback", "/triggers/email/push")}
           </span>
         </p>

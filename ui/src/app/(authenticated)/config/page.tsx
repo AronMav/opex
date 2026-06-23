@@ -324,7 +324,7 @@ export default function ConfigPage() {
           }
           return (
             <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
                 {subagents && (
                   <div className="neu-flat p-4 md:p-5">
                     <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">

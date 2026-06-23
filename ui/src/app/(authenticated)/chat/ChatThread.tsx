@@ -275,7 +275,11 @@ export function ChatThread({
       className="flex flex-1 flex-col min-h-0 relative"
       style={keyboardHeight > 0 ? { paddingBottom: keyboardHeight } : undefined}
     >
-      {search.isOpen && <SearchBar search={search} />}
+      {search.isOpen && (
+        <div className="pt-14 lg:pt-0">
+          <SearchBar search={search} />
+        </div>
+      )}
       <MessageList
         agent={currentAgent}
         messages={allMessages}

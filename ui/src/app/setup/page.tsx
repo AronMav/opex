@@ -392,7 +392,7 @@ export default function SetupPage() {
   const hasWarn = allChecks.some((c) => c.check.status === "warn");
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-background p-4">
+    <div className="flex h-dvh overflow-y-auto items-start justify-center bg-background p-4 py-8">
       <div className="w-full max-w-lg">
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-8">

@@ -711,7 +711,7 @@ export function AgentEditDialog({
                               <p className="text-xs font-semibold truncate text-foreground">{ch.display_name}</p>
                               <p className="text-[10px] text-muted-foreground font-mono uppercase">{ch.channel_type}</p>
                             </div>
-                            <span className="text-[9px] font-mono text-muted-foreground/40">{ch.id.slice(0, 8)}</span>
+                            <span className="text-[10px] font-mono text-muted-foreground/40">{ch.id.slice(0, 8)}</span>
                           </div>
                         ))}
                       </div>

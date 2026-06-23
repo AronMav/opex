@@ -66,7 +66,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm overflow-auto"
           onClick={handleClose}
           role="dialog"
           aria-modal="true"
@@ -74,7 +74,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
         >
           {/* Toolbar */}
           <div
-            className="absolute top-4 right-4 flex items-center gap-2 z-10"
+            className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 z-10"
             onClick={(e) => e.stopPropagation()}
           >
             <button

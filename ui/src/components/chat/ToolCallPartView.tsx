@@ -146,13 +146,13 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           <span className="text-muted-foreground/50"><ToolIcon toolName={toolName} /></span>
 
           {/* tool name */}
-          <span className="font-mono text-[11px] font-semibold shrink-0 truncate text-foreground/80">
+          <span className="font-mono text-[11px] font-semibold min-w-0 truncate text-foreground/80">
             {toolName}
           </span>
 
           {/* file / detail */}
           {detail && (
-            <span className="text-[10px] text-muted-foreground/50 flex-1 truncate">
+            <span className="text-[10px] text-muted-foreground/50 flex-1 min-w-0 truncate">
               {detail}
             </span>
           )}

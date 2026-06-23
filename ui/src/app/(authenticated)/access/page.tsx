@@ -225,7 +225,7 @@ export default function AccessPage() {
                   <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 shrink-0">
                     <ShieldCheck className="h-4 w-4 text-primary" />
                   </div>
-                  <span className="font-mono text-sm font-bold tracking-tight text-foreground truncate flex-1">{agent}</span>
+                  <span className="font-mono text-sm font-bold tracking-tight text-foreground truncate flex-1 min-w-0">{agent}</span>
 
                   {/* Status pills */}
                   <div className="flex items-center gap-2 shrink-0">
@@ -308,13 +308,13 @@ export default function AccessPage() {
                           <span className="text-xs font-semibold text-warning">{t("access.pending_approvals")}</span>
                         </div>
                         {agentPending.map((p) => (
-                          <div key={p.code} className="flex flex-col xs:flex-row xs:items-center justify-between gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2">
+                          <div key={p.code} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="font-semibold text-xs truncate">{p.display_name || t("access.unknown_user")}</span>
                               <Badge variant="outline" className="font-mono text-[10px] px-1 py-0 bg-background shrink-0">{p.code}</Badge>
                               <span className="font-mono text-[10px] text-muted-foreground/50 truncate hidden sm:inline">{p.channel_user_id}</span>
                             </div>
-                            <div className="flex gap-1.5 shrink-0 self-end xs:self-auto">
+                            <div className="flex gap-1.5 shrink-0 self-end sm:self-auto">
                               <Button size="sm" onClick={() => approve(agent, p.code)} className="h-6 px-2 text-[10px] bg-success text-success-foreground hover:bg-success/90">
                                 {t("access.approve")}
                               </Button>

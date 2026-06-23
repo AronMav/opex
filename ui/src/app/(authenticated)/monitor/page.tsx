@@ -311,7 +311,7 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
                   </div>
                 </div>
                 {showLabel ? (
-                  <div className="text-[9px] text-muted-foreground/60 text-center mt-1 truncate">
+                  <div className="text-[10px] text-muted-foreground/60 text-center mt-1 truncate">
                     {shortDate}
                   </div>
                 ) : (
@@ -635,7 +635,7 @@ function MonitorPageInner() {
   return (
     <div className="flex h-full flex-col">
       <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0">
-        <div className="border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0">
+        <div className="border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0 overflow-x-auto scrollbar-none">
           <TabsList className="h-9">
             <TabsTrigger value="watchdog" className="text-xs">{t("monitor.tab_watchdog")}</TabsTrigger>
             <TabsTrigger value="doctor" className="text-xs">{t("monitor.tab_doctor")}</TabsTrigger>
@@ -774,10 +774,10 @@ function MonitorPageInner() {
                           <span className="text-[10px] text-destructive truncate" title={svc.error}>{svc.error}</span>
                         )}
                         {svc.flapping && (
-                          <Badge variant="outline" className="text-[9px] w-fit border-warning/30 text-warning">{t("watchdog.flapping")}</Badge>
+                          <Badge variant="outline" className="text-[10px] w-fit border-warning/30 text-warning">{t("watchdog.flapping")}</Badge>
                         )}
                         {svc.last_restart && (
-                          <Badge variant="outline" className="text-[9px] w-fit border-warning/30 text-warning">{t("watchdog.restarted")}</Badge>
+                          <Badge variant="outline" className="text-[10px] w-fit border-warning/30 text-warning">{t("watchdog.restarted")}</Badge>
                         )}
                       </div>
                     ))}
@@ -1708,9 +1708,9 @@ function CuratorTab() {
   }
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 overflow-x-auto scrollbar-none">
       {/* Header row */}
-      <div className="grid grid-cols-[1fr_80px_60px_60px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide border-b border-border/50">
+      <div className="grid grid-cols-[minmax(120px,2fr)_80px_60px_60px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide border-b border-border/50 min-w-[400px]">
         <span>{t("monitor.curator.col_time")}</span>
         <span>{t("monitor.curator.col_trigger")}</span>
         <span>{t("monitor.curator.col_status")}</span>
@@ -1738,7 +1738,7 @@ function CuratorTab() {
         return (
           <div key={run.id} className="rounded-lg border border-border/50 overflow-hidden">
             <button
-              className="w-full grid grid-cols-[1fr_80px_60px_60px_60px] gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors items-center"
+              className="w-full grid grid-cols-[minmax(120px,2fr)_80px_60px_60px_60px] gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors items-center min-w-[400px]"
               onClick={() => setExpandedId(isExpanded ? null : run.id)}
             >
               <span className="text-xs text-muted-foreground font-mono truncate">

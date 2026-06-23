@@ -42,7 +42,7 @@ export function ProviderCard({
 
   return (
     <div
-      className={`neu-card neu-hover p-5 space-y-4 ${isActive ? "ring-1 ring-primary/30" : ""}`}
+      className={`neu-card neu-hover p-5 space-y-4 overflow-hidden ${isActive ? "ring-1 ring-primary/30" : ""}`}
     >
       {/* Header */}
       <div className="flex items-start gap-3">

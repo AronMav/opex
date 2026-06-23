@@ -628,7 +628,7 @@ parameters:
         {errorMsg && <ErrorBanner error={errorMsg} />}
 
         {loading ? (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             {[1, 2, 3, 4, 5, 6].map((i) => (
               <Skeleton key={i} className="h-40 rounded-xl border border-border bg-muted/20" />
             ))}
@@ -684,7 +684,7 @@ parameters:
                     <h3 className="text-sm font-semibold text-foreground">{t("tools.infrastructure_services")}</h3>
                     <Badge variant="secondary" className="text-xs">{standaloneServices.length}</Badge>
                   </div>
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                     {standaloneServices.map((svc) => {
                       const pending = actionPending === svc.name;
                       return (
@@ -751,7 +751,7 @@ parameters:
                     <Badge variant="outline" className="text-[10px]">{t("tools.managed")}</Badge>
                   )}
                 </div>
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                   {(() => {
                     const pending = actionPending === svc.name;
                     return (
@@ -902,7 +902,7 @@ parameters:
                     <h3 className="text-sm font-semibold text-foreground">{t("tools.external_apis")}</h3>
                     <Badge variant="secondary" className="text-xs">{unmatchedTools.length}</Badge>
                   </div>
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                     {unmatchedTools.map((tool, idx) => {
                       const pending = actionPending === tool.name;
                       return (
@@ -985,7 +985,7 @@ parameters:
                   <h3 className="text-sm font-semibold text-foreground">{t("tools.mcp_servers")}</h3>
                   <Badge variant="secondary" className="text-xs">{mcpServers.length}</Badge>
                 </div>
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                   {mcpServers.map((s) => {
                     const isRunning = s.status === "running";
                     const active = s.enabled && isRunning;

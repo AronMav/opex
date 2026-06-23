@@ -379,7 +379,7 @@ export function ChatComposer() {
           ))}
           {pendingMessage && (
             <div className="flex items-center gap-2 px-4 pt-2 pb-1 text-xs text-muted-foreground border-b border-border/30">
-              <span className="flex-1 truncate">
+              <span className="flex-1 min-w-0 truncate">
                 {t("chat.queue_prefix", { content: `${pendingMessage.content.slice(0, 60)}${pendingMessage.content.length > 60 ? "…" : ""}` })}
               </span>
               <button

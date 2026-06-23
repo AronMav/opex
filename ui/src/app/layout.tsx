@@ -51,7 +51,7 @@ export default function RootLayout({
           <TooltipProvider>
             {children}
           </TooltipProvider>
-          <Toaster />
+          <Toaster position="top-center" />
           <LanguageSync />
         </ThemeProvider>
       </body>

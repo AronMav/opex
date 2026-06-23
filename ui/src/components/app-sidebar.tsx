@@ -128,11 +128,11 @@ export function AppSidebar() {
                     <SidebarMenuButton
                       asChild
                       isActive={pathname.startsWith(item.href)}
-                      className="group/nav relative h-10 px-3 transition-colors duration-150 hover:bg-accent active:bg-accent/80 active:scale-[0.99] overflow-hidden rounded-md"
+                      className="group/nav relative h-10 md:h-10 px-3 transition-colors duration-150 hover:bg-accent active:bg-accent/80 active:scale-[0.99] overflow-hidden rounded-md"
                     >
                       <Link href={item.href} onClick={() => isMobile && setOpenMobile(false)} className="flex items-center gap-3 w-full">
                         <item.icon className={`transition-colors duration-150 ${pathname.startsWith(item.href) ? "text-primary" : "text-muted-foreground group-hover/nav:text-foreground"}`} />
-                        <span className={`font-medium tracking-tight text-sm transition-colors duration-150 ${pathname.startsWith(item.href) ? "text-foreground font-bold" : "text-muted-foreground group-hover/nav:text-foreground"}`}>
+                        <span className={`font-medium tracking-tight text-sm truncate min-w-0 transition-colors duration-150 ${pathname.startsWith(item.href) ? "text-foreground font-bold" : "text-muted-foreground group-hover/nav:text-foreground"}`}>
                           {t(item.labelKey)}
                         </span>
 

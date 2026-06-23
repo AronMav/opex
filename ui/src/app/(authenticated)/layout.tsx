@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
 import { apiGet, apiPost } from "@/lib/api";
 import { queryClient } from "@/lib/query-client";
@@ -24,6 +24,7 @@ export default function AuthenticatedLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const token = useAuthStore((s) => s.token);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const restore = useAuthStore((s) => s.restore);
@@ -137,7 +138,8 @@ export default function AuthenticatedLayout({
     <SidebarProvider>
       <AppSidebar />
       <SidebarInset className="flex flex-col h-[100dvh] min-h-0 bg-transparent relative">
-        {/* Unified Mobile Header */}
+        {/* Unified Mobile Header — hidden on chat and workspace (they have their own headers) */}
+        {pathname !== "/chat" && pathname !== "/workspace" && (
         <div className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-border bg-background px-3 md:hidden">
           <div className="flex items-center gap-2">
             <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform" />
@@ -153,11 +155,12 @@ export default function AuthenticatedLayout({
 
           <Badge variant={connected ? "outline-success" : "outline-destructive"} className="gap-1.5">
             <span className={`h-1.5 w-1.5 rounded-full ${connected ? "bg-success" : "bg-destructive"}`} />
-            <span className="font-mono text-[9px] font-bold uppercase tracking-tight leading-none">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-tight leading-none">
               {connected ? t("common.live") : t("common.offline")}
             </span>
           </Badge>
         </div>
+        )}
 
         <main className="flex-1 flex flex-col min-h-0 min-w-0 overflow-y-auto">
           {children}

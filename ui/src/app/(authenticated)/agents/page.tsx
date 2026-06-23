@@ -569,7 +569,7 @@ export default function AgentsPage() {
       {error && <ErrorBanner error={error} />}
 
       {loading ? (
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {[1, 2, 3].map((i) => (
             <Skeleton key={i} className="h-64 rounded-xl" />
           ))}
@@ -577,7 +577,7 @@ export default function AgentsPage() {
       ) : agents.length === 0 ? (
         <EmptyState icon={Bot} text={t("agents.no_active_agents")} height="h-64" className="rounded-2xl" />
       ) : (
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {agents.filter((a) => !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase())).map((a) => (
             <div key={a.name} className="group neu-card neu-hover p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col">
               <div className="flex items-start gap-3 mb-4 min-w-0">

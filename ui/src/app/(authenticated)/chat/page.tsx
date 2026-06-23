@@ -21,6 +21,7 @@ import { Virtuoso } from "react-virtuoso";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
   Select,
   SelectContent,
@@ -601,7 +602,7 @@ export default function ChatPage() {
                     </button>
                     <button
                       onClick={() => handleSelectSession(s)}
-                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-4 py-3 pr-10 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
+                      className={`relative flex w-full min-w-0 flex-col gap-1.5 rounded-lg px-4 py-3 pr-14 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background overflow-hidden ${
                         activeSessionId === s.id
                         ? "bg-accent shadow-inner"
                         : "hover:bg-accent/40"
@@ -619,12 +620,12 @@ export default function ChatPage() {
                             {s.channel}
                           </span>
                           {(activeSessionIds.includes(s.id) || s.run_status === "running") ? (
-                            <span className="ml-1.5 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider bg-success/15 text-success flex items-center gap-1 shrink-0">
+                            <span className="ml-1.5 rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider bg-success/15 text-success flex items-center gap-1 shrink-0">
                               <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
                               {t("chat.status_running")}
                             </span>
                           ) : (s.run_status === "interrupted" || s.run_status === "timeout" || s.run_status === "failed") ? (
-                            <span className="ml-1 rounded px-1 py-0.5 font-mono text-[9px] uppercase tracking-wider bg-destructive/15 text-destructive/80 shrink-0">
+                            <span className="ml-1 rounded px-1 py-0.5 font-mono text-[10px] uppercase tracking-wider bg-destructive/15 text-destructive/80 shrink-0">
                               {s.run_status === "interrupted" ? t("chat.status_interrupted") : s.run_status === "timeout" ? t("chat.status_timeout") : t("chat.status_failed")}
                             </span>
                           ) : null}
@@ -737,8 +738,8 @@ export default function ChatPage() {
       {/* Chat area */}
       <div className="flex min-w-0 flex-1 flex-col relative h-full">
         {/* Desktop header */}
-        <div className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-4 border-b border-border/50 bg-background/90 backdrop-blur-sm px-6 lg:flex">
-          <div className="flex items-center gap-3">
+        <div className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-2 lg:gap-4 border-b border-border/50 bg-background/90 backdrop-blur-sm px-4 lg:px-6 lg:flex">
+          <div className="flex items-center gap-3 min-w-0 shrink-0">
             {agentSelector}
             <ChatCanvasTabs />
           </div>
@@ -753,7 +754,7 @@ export default function ChatPage() {
           />
           {/* HISTORY / Return to live badge removed — confusing for users during agent switch */}
           {streamError && (
-            <div className="ml-auto flex items-center gap-1 text-destructive/60">
+            <div className="ml-auto flex items-center gap-1 text-destructive/60 shrink-0">
               <div className="h-2 w-2 rounded-full bg-destructive/60 animate-pulse" />
               <span className="text-[10px] font-mono uppercase tracking-wider">{t("chat.error")}</span>
             </div>
@@ -761,7 +762,8 @@ export default function ChatPage() {
         </div>
 
         {/* Mobile/tablet floating actions — visible below lg */}
-        <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-center gap-1.5 px-3 py-2 bg-background/90 backdrop-blur-sm border-b border-border/30 lg:hidden">
+        <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-1.5 px-3 py-2 bg-background/90 backdrop-blur-sm border-b border-border/30 lg:hidden">
+          <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform md:hidden shrink-0" />
           {agentSelector}
           <ChatCanvasTabs />
           <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
