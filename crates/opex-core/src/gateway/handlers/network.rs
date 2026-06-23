@@ -186,7 +186,7 @@ pub(crate) async fn fetch_network_summary(status: &StatusMonitor) -> serde_json:
         None => serde_json::Value::Null,
     };
 
-    let mdns = json!({ "hostname": "hydeclaw.local" });
+    let mdns = json!({ "hostname": "opex.local" });
 
     json!({
         "wan": wan,

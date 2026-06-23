@@ -92,9 +92,9 @@ impl PgHarness {
     }
 }
 
-/// Write a minimal hydeclaw.toml to a temp dir so the worker can `load_config`.
+/// Write a minimal opex.toml to a temp dir so the worker can `load_config`.
 fn write_worker_config(tempdir: &std::path::Path, pg_url: &str) -> Result<PathBuf> {
-    let path = tempdir.join("hydeclaw.toml");
+    let path = tempdir.join("opex.toml");
     let body = format!(
         r#"
 [database]

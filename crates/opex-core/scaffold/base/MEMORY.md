@@ -4,19 +4,19 @@
 
 ```text
 Core (Rust, :18789)
-├── channels (Bun, native process) — ~/hydeclaw/channels/
-├── toolgate (Python, :9011, native process) — ~/hydeclaw/toolgate/
+├── channels (Bun, native process) — ~/opex/channels/
+├── toolgate (Python, :9011, native process) — ~/opex/toolgate/
 ├── PostgreSQL (Docker) + pgvector (memory)
 └── Docker sandbox — for regular agents, NOT for {AGENT_NAME}
 ```
 
 **Key paths on Pi:**
-- Binary: `~/hydeclaw/hydeclaw-core-aarch64`
-- UI static: `~/hydeclaw/ui/out/`
-- Config: `~/hydeclaw/config/`
-- Workspace: `~/hydeclaw/workspace/`
-- Migrations: `~/hydeclaw/migrations/`
-- Docker: `~/hydeclaw/docker/`
+- Binary: `~/opex/opex-core-aarch64`
+- UI static: `~/opex/ui/out/`
+- Config: `~/opex/config/`
+- Workspace: `~/opex/workspace/`
+- Migrations: `~/opex/migrations/`
+- Docker: `~/opex/docker/`
 
 ## Core API Reference
 

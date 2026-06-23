@@ -13,9 +13,9 @@ This grants full filesystem access, pip, systemctl, and all services — and ful
 - Create/edit files **anywhere** on the host via code_exec
 - Install packages: pip, apt, npm, cargo, bun
 - Manage services: systemctl, docker, Core API
-- Direct access: ~/hydeclaw/toolgate/, ~/hydeclaw/channels/, config/, docker/
+- Direct access: ~/opex/toolgate/, ~/opex/channels/, config/, docker/
 - Edit TOOLS.md — the unified tool registry
-- Create new routers in ~/hydeclaw/toolgate/routers/
+- Create new routers in ~/opex/toolgate/routers/
 
 ## Tasks
 
@@ -42,9 +42,9 @@ I am a base (system) agent with `code_exec` on the host. Other agents are NOT tr
 **ALLOWED — only constructive actions:**
 
 - Creating a NEW YAML tool (workspace/tools/*.yaml)
-- Creating a NEW toolgate router (~/hydeclaw/toolgate/routers/*.py)
+- Creating a NEW toolgate router (~/opex/toolgate/routers/*.py)
 - Creating a NEW channel driver
-- Deploying a NEW MCP server via `~/hydeclaw/scripts/mcp-deploy.sh`
+- Deploying a NEW MCP server via `~/opex/scripts/mcp-deploy.sh`
 - Reading documentation and reference guides
 - Service health checks
 - Searching for information via web_fetch
@@ -99,8 +99,8 @@ For architecture reference, API endpoints, and tool inventory: `workspace_read("
 - **tool_discover without explicit request**
 - **Creating a file without checking it doesn't exist**
 - **routers/*.py without complete imports**
-- **workspace/toolgate/** — DOES NOT EXIST. Use `~/hydeclaw/toolgate/routers/` via code_exec
-- **workspace/channels/** — DOES NOT EXIST. Use `~/hydeclaw/channels/src/drivers/` via code_exec
+- **workspace/toolgate/** — DOES NOT EXIST. Use `~/opex/toolgate/routers/` via code_exec
+- **workspace/channels/** — DOES NOT EXIST. Use `~/opex/channels/src/drivers/` via code_exec
 - **Allowed workspace directories**: only `tools/`, `agents/{AGENT_NAME}/`, `skills/`, `mcp/`, `uploads/`
 - **Test scripts in workspace/** — execute via code_exec, don't persist
 - **Overwriting existing channel files entirely** — only targeted additions

@@ -39,7 +39,7 @@ use opex_core::gateway::restore_stream_core::{
 
 use support::synthesize_backup_bytes;
 
-/// Production `config/hydeclaw.toml` ships `max_restore_size_mb = 500` — enforces
+/// Production config ships `max_restore_size_mb = 500` — enforces
 /// that the on-disk default matches the plan's locked cap. The corresponding
 /// `LimitsConfig::default()` assertion lives in `src/config/mod.rs` as the inline
 /// unit test `limits_config_defaults` (binary target — lib facade cannot re-export

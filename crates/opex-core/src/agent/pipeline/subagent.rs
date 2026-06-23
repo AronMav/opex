@@ -142,7 +142,7 @@ pub async fn fetch_url_content(
     let text = if is_core_api {
         let resp = http_client
             .get(url)
-            .header("User-Agent", "HydeClaw/0.1 (link-preview)")
+            .header("User-Agent", "OPEX/0.1 (link-preview)")
             .timeout(std::time::Duration::from_secs(10))
             .send()
             .await?;
@@ -278,7 +278,7 @@ pub async fn handle_web_fetch(
         // Core API self-call — bypass toolgate, fetch raw body directly.
         let resp = match http_client
             .get(url)
-            .header("User-Agent", "HydeClaw/1.0")
+            .header("User-Agent", "OPEX/1.0")
             .timeout(std::time::Duration::from_secs(30))
             .send()
             .await

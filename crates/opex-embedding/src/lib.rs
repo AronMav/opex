@@ -1,4 +1,4 @@
-//! HTTP transport-layer for HydeClaw embeddings (Toolgate proxy).
+//! HTTP transport-layer for OPEX embeddings (Toolgate proxy).
 //!
 //! Used by both `opex-core` (via `ToolgateEmbedder`) and
 //! `opex-memory-worker` (via direct `ToolgateClient` calls).

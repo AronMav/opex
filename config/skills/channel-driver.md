@@ -16,8 +16,8 @@ Load the full guide first: `skill_use(action="load", name="channels-guide")`
 
 ## Workflow
 
-1. Create driver file: `~/hydeclaw/channels/src/drivers/{name}.ts` via code_exec
-2. **Add import and case** to `~/hydeclaw/channels/src/index.ts`
+1. Create driver file: `~/opex/channels/src/drivers/{name}.ts` via code_exec
+2. **Add import and case** to `~/opex/channels/src/index.ts`
 3. **Verify case was added**: grep for the new name in index.ts
 4. **Do NOT modify formatting.ts** — new channels use standard CommonMark
 5. Restart channels: `POST /api/services/channels/restart`

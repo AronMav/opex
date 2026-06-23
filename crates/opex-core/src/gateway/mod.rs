@@ -136,7 +136,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     let Some(token) = auth_token else {
         tracing::error!("FATAL: no auth token configured — refusing to start unauthenticated gateway");
         tracing::error!("set gateway.auth_token_env in config and provide the env var");
-        anyhow::bail!("gateway requires auth token — set gateway.auth_token_env in hydeclaw.toml");
+        anyhow::bail!("gateway requires auth token — set gateway.auth_token_env in opex.toml");
     };
     // First-router wins; subsequent constructions reuse the same Arc.
     let _ = SHARED_TOKEN.set(Arc::from(token.as_str()));

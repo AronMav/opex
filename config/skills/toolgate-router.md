@@ -18,9 +18,9 @@ Load the full guide first: `skill_use(action="load", name="toolgate-guide")`
 
 ## Workflow (strict order)
 
-1. Check existing: `workspace_list("tools/")` + `code_exec("ls ~/hydeclaw/toolgate/routers/")`
+1. Check existing: `workspace_list("tools/")` + `code_exec("ls ~/opex/toolgate/routers/")`
 2. If analog exists — report name, don't create duplicate
-3. Write router file: `code_exec` to create `~/hydeclaw/toolgate/routers/name.py`
+3. Write router file: `code_exec` to create `~/opex/toolgate/routers/name.py`
    - All imports, BaseModel, `router = APIRouter()` — self-contained
 4. **Write YAML tool immediately** (before restart): `workspace_write("tools/name.yaml", ...)`
 5. Register in app.py: `from routers import name` + `app.include_router(name.router)`

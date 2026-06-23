@@ -1,4 +1,4 @@
-//! Shared test harness for HydeClaw integration tests.
+//! Shared test harness for OPEX integration tests.
 //!
 //! Each test binary under `tests/` opts in via `mod support;` and uses the re-exports below.
 //! Wave-2 plans (approval_race, sse_lifecycle, shutdown_drain) build on this module.

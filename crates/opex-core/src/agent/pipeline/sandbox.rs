@@ -130,7 +130,7 @@ pub async fn handle_code_exec(
 // ── Host code execution (base agents only) ──────────────────────────────────
 
 /// Execute code directly on host (base agents only, no Docker sandbox).
-/// Runs in the hydeclaw working directory with full host access.
+/// Runs in the opex working directory with full host access.
 async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> String {
     use tokio::process::Command;
 

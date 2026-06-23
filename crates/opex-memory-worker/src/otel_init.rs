@@ -78,7 +78,7 @@ pub fn init() {
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    let tracer = opentelemetry::trace::TracerProvider::tracer(&tracer_provider, "hydeclaw");
+    let tracer = opentelemetry::trace::TracerProvider::tracer(&tracer_provider, "opex");
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
     tracing_subscriber::registry()

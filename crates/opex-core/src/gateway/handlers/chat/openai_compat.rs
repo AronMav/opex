@@ -31,7 +31,7 @@ pub(crate) struct ChatCompletionRequest {
     temperature: Option<f64>,
     #[serde(default)]
     stream: bool,
-    /// Agent to route to (`HydeClaw` extension). Defaults to first available.
+    /// Agent to route to (`OPEX` extension). Defaults to first available.
     agent: Option<String>,
 }
 

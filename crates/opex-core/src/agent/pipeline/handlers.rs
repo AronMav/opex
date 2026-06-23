@@ -322,7 +322,7 @@ pub async fn handle_todo(
 /// `upload_key` is the HKDF-derived per-domain key obtained via
 /// `SecretsManager::get_upload_hmac_key()`; callers MUST NOT pass raw master
 /// bytes here. `base_url` should be the public base (no trailing slash) —
-/// e.g. `https://hydeclaw.example.com` or `http://localhost:18789`.
+/// e.g. `https://opex.example.com` or `http://localhost:18789`.
 pub async fn save_binary_to_uploads(
     pool: &sqlx::PgPool,
     retention_days: u32,
