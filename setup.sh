@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# HydeClaw — one-script setup for Linux.
+# OPEX — one-script setup for Linux.
 # Detects context (pre-built release or git clone), installs everything needed,
 # builds if necessary, configures, and starts.
 #
-# Pre-built release:  tar xzf hydeclaw-v*.tar.gz && cd hydeclaw && ./setup.sh
-# From source:        git clone ... && cd hydeclaw && ./setup.sh
+# Pre-built release:  tar xzf opex-v*.tar.gz && cd opex && ./setup.sh
+# From source:        git clone ... && cd opex && ./setup.sh
 #
 # Options:
 #   --verbose       Show full command output instead of spinners
@@ -106,7 +106,7 @@ cd "$ROOT"
 VERSION=""; [[ -f VERSION ]] && VERSION="$(cat VERSION)"
 
 IS_RELEASE=false
-ls hydeclaw-core-* &>/dev/null 2>&1 && IS_RELEASE=true
+ls opex-core-* &>/dev/null 2>&1 && IS_RELEASE=true
 
 is_root() { [[ "$(id -u)" -eq 0 ]]; }
 maybe_sudo() { if is_root; then "$@"; else sudo "$@"; fi; }
@@ -176,7 +176,7 @@ bootstrap_gum() {
 bootstrap_gum || true
 
 if [[ -n "$GUM" ]]; then
-  local_title="$("$GUM" style --foreground "#6495ed" --bold "⚡ HydeClaw Setup")"
+  local_title="$("$GUM" style --foreground "#6495ed" --bold "⚡ OPEX Setup")"
   local_sub="$("$GUM" style --foreground "#5a6480" "${VERSION:+v${VERSION} · }one-script installer")"
   "$GUM" style --border rounded --border-foreground "#6495ed" --padding "1 2" "$(printf '%s\n%s' "$local_title" "$local_sub")"
 else
@@ -308,7 +308,7 @@ if [[ "$IS_RELEASE" == true ]]; then
     *)             ARCH_SHORT="x86_64" ;;
   esac
 
-  for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
+  for CRATE in opex-core opex-watchdog opex-memory-worker; do
     BIN="$ROOT/${CRATE}-${ARCH_SHORT}"
     if [[ -f "$BIN" ]]; then
       chmod +x "$BIN"
@@ -317,25 +317,25 @@ if [[ "$IS_RELEASE" == true ]]; then
       warn "$CRATE not found (optional)"
     fi
   done
-  BINARY_CORE="$ROOT/hydeclaw-core-${ARCH_SHORT}"
-  BINARY_WATCHDOG="$ROOT/hydeclaw-watchdog-${ARCH_SHORT}"
-  BINARY_WORKER="$ROOT/hydeclaw-memory-worker-${ARCH_SHORT}"
-  [[ -f "$BINARY_CORE" ]] || { err "hydeclaw-core binary not found"; exit 1; }
+  BINARY_CORE="$ROOT/opex-core-${ARCH_SHORT}"
+  BINARY_WATCHDOG="$ROOT/opex-watchdog-${ARCH_SHORT}"
+  BINARY_WORKER="$ROOT/opex-memory-worker-${ARCH_SHORT}"
+  [[ -f "$BINARY_CORE" ]] || { err "opex-core binary not found"; exit 1; }
 
-  if [[ -f hydeclaw-ui.tar.gz ]] && [[ ! -d ui/out ]]; then
-    mkdir -p ui && tar xzf hydeclaw-ui.tar.gz -C ui
+  if [[ -f opex-ui.tar.gz ]] && [[ ! -d ui/out ]]; then
+    mkdir -p ui && tar xzf opex-ui.tar.gz -C ui
     ok "UI extracted"
   elif [[ -d ui/out ]]; then
     ok "UI ready"
   fi
 else
-  for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
+  for CRATE in opex-core opex-watchdog opex-memory-worker; do
     run_step "Compiling $CRATE" cargo build --release -p "$CRATE"
     ok "$CRATE ($(du -h "target/release/$CRATE" | cut -f1))"
   done
-  BINARY_CORE="$ROOT/target/release/hydeclaw-core"
-  BINARY_WATCHDOG="$ROOT/target/release/hydeclaw-watchdog"
-  BINARY_WORKER="$ROOT/target/release/hydeclaw-memory-worker"
+  BINARY_CORE="$ROOT/target/release/opex-core"
+  BINARY_WATCHDOG="$ROOT/target/release/opex-watchdog"
+  BINARY_WORKER="$ROOT/target/release/opex-memory-worker"
 
   run_step "Building Next.js UI" bash -c "cd ui && npm install --silent && npm run build"
   ok "UI built"
@@ -451,7 +451,7 @@ fi
 # MCP bridge base image (required by on-demand MCP containers)
 if [[ -f docker/mcp-bridge/Dockerfile ]]; then
   info "Building MCP bridge base image..."
-  docker build -f docker/mcp-bridge/Dockerfile -t hydeclaw-mcp-bridge:latest docker/mcp-bridge/ 2>&1 | tail -3 || true
+  docker build -f docker/mcp-bridge/Dockerfile -t opex-mcp-bridge:latest docker/mcp-bridge/ 2>&1 | tail -3 || true
   # Pre-create on-demand MCP containers so Core can start them without docker-compose
   info "Creating on-demand MCP containers..."
   docker compose -f docker/docker-compose.yml --profile on-demand create --no-recreate 2>&1 | grep -E '(Created|Error|error)' || true
@@ -620,7 +620,7 @@ fi
 stage "Verify & launch"
 # ════════════════════════════════════════════════════════════════
 
-# Stop any existing hydeclaw processes before starting fresh
+# Stop any existing OPEX processes before starting fresh
 for svc in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
   systemctl --user stop "$svc" 2>/dev/null || true
 done
@@ -636,9 +636,9 @@ sleep 1
 
 # Quick verification
 VERIFY_OK=true
-[[ -x "$BINARY_CORE" ]] && ok "hydeclaw-core" || { err "hydeclaw-core not executable"; VERIFY_OK=false; }
-[[ -f "$BINARY_WATCHDOG" ]] && ok "hydeclaw-watchdog" || warn "hydeclaw-watchdog missing (optional)"
-[[ -f "$BINARY_WORKER" ]] && ok "hydeclaw-memory-worker" || warn "hydeclaw-memory-worker missing (optional)"
+[[ -x "$BINARY_CORE" ]] && ok "opex-core" || { err "opex-core not executable"; VERIFY_OK=false; }
+[[ -f "$BINARY_WATCHDOG" ]] && ok "opex-watchdog" || warn "opex-watchdog missing (optional)"
+[[ -f "$BINARY_WORKER" ]] && ok "opex-memory-worker" || warn "opex-memory-worker missing (optional)"
 [[ -d ui/out ]] && ok "UI present" || warn "UI missing — web interface unavailable"
 [[ -f .env ]] && ok ".env configured" || { err ".env missing"; VERIFY_OK=false; }
 docker compose -f docker/docker-compose.yml exec -T postgres pg_isready -q 2>/dev/null && ok "PostgreSQL reachable" || { err "PostgreSQL unreachable"; VERIFY_OK=false; }

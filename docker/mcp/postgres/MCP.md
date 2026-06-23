@@ -1,6 +1,6 @@
 # PostgreSQL MCP
 
-Read-only access to the HydeClaw database.
+Read-only access to the OPEX database.
 
 ## Tools
 

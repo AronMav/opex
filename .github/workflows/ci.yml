@@ -195,12 +195,12 @@ jobs:
           cache-on-failure: true
 
       - name: Generate channel WS fixtures
-        run: cargo test -p hydeclaw-types --test channels_wire
+        run: cargo test -p opex-types --test channels_wire
 
       - name: Check no fixture drift
         run: |
           git diff --exit-code channels/src/__tests__/fixtures/ \
-            || (echo "::error::Channel WS fixtures drifted. Run 'cargo test -p hydeclaw-types --test channels_wire' locally and commit the regenerated fixtures." && exit 1)
+            || (echo "::error::Channel WS fixtures drifted. Run 'cargo test -p opex-types --test channels_wire' locally and commit the regenerated fixtures." && exit 1)
 
   sse-fixtures-drift:
     name: SSE round-trip fixtures drift check
@@ -217,9 +217,9 @@ jobs:
           cache-on-failure: true
 
       - name: Generate SSE fixtures
-        run: cargo test -p hydeclaw-types --test sse_wire
+        run: cargo test -p opex-types --test sse_wire
 
       - name: Check no fixture drift
         run: |
           git diff --exit-code ui/src/__tests__/fixtures/sse/ \
-            || (echo "::error::SSE fixtures drifted. Run 'cargo test -p hydeclaw-types --test sse_wire' locally and commit the regenerated fixtures." && exit 1)
+            || (echo "::error::SSE fixtures drifted. Run 'cargo test -p opex-types --test sse_wire' locally and commit the regenerated fixtures." && exit 1)

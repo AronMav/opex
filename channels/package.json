@@ -1,6 +1,6 @@
 {
-  "name": "hydeclaw-channels",
-  "version": "0.30.0",
+  "name": "opex-channels",
+  "version": "0.31.0",
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",

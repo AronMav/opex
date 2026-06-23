@@ -28,7 +28,7 @@ def _headers() -> dict:
 
 
 async def get_secret(name: str, scope: str = "") -> str:
-    """Read a secret from HydeClaw vault by name.
+    """Read a secret from OPEX vault by name.
 
     Usage in a workspace router:
         from workspace_helpers import get_secret
@@ -42,7 +42,7 @@ async def get_secret(name: str, scope: str = "") -> str:
 
 
 async def core_api(method: str, path: str, json: dict | None = None) -> dict:
-    """Call HydeClaw core API.
+    """Call OPEX core API.
 
     Usage: data = await core_api("GET", "/api/agents")
     """

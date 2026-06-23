@@ -1,5 +1,5 @@
 /**
- * HydeClaw Channels — unified connector v2.1.
+ * OPEX Channels — unified connector v2.1.
  * Reads channel configuration from Core API (DB).
  * Credentials come from channel config JSON (bot_token field).
  */
@@ -200,7 +200,7 @@ async function doReconcile(envConfig: ReturnType<typeof buildEnvConfig>) {
 }
 
 async function main() {
-  console.log("HydeClaw Channels v2.1.0 starting (DB-driven)...");
+  console.log("OPEX Channels v2.1.0 starting (DB-driven)...");
 
   const envConfig = buildEnvConfig(process.env as Record<string, string | undefined>);
 

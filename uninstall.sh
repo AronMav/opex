@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# HydeClaw — complete uninstaller.
-# After this script, NOTHING hydeclaw-related remains on the system
+# OPEX — complete uninstaller.
+# After this script, NOTHING opex-related remains on the system
 # (except Docker engine itself and system packages).
 #
 # Usage: ./uninstall.sh [--yes]
@@ -21,7 +21,7 @@ warn() { echo -e "${C_WARN}!${NC} $*"; }
 err()  { echo -e "${C_ERR}✗${NC} $*"; }
 info() { echo -e "${C_MUTED}·${NC} $*"; }
 
-# Determine hydeclaw root: prefer directory containing this script,
+# Determine OPEX root: prefer directory containing this script,
 # but if script is in /tmp or other external location, use $PWD
 _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [[ -f "$_SCRIPT_DIR/config/hydeclaw.toml" ]]; then
@@ -29,7 +29,7 @@ if [[ -f "$_SCRIPT_DIR/config/hydeclaw.toml" ]]; then
 elif [[ -f "$PWD/config/hydeclaw.toml" ]]; then
   ROOT="$PWD"
 else
-  echo "Error: cannot find hydeclaw installation. Run from the hydeclaw directory."
+  echo "Error: cannot find OPEX installation. Run from the installation directory."
   exit 1
 fi
 confirm() {
@@ -43,12 +43,12 @@ echo "  ╦ ╦╔╗╔╦╔╗╔╔═╗╔╦╗╔═╗╦  ╦  "
 echo "  ║ ║║║║║║║║╚═╗ ║ ╠═╣║  ║  "
 echo "  ╚═╝╝╚╝╩╝╚╝╚═╝ ╩ ╩ ╩╩═╝╩═╝"
 echo -e "${NC}"
-echo -e "  ${C_ERR}This will permanently remove HydeClaw and all its data.${NC}"
+echo -e "  ${C_ERR}This will permanently remove OPEX and all its data.${NC}"
 echo ""
 echo "  Directory: $ROOT"
 echo ""
 echo "  Will remove:"
-echo "    • All hydeclaw systemd services"
+echo "    • All OPEX systemd services"
 echo "    • ALL Docker containers (compose infra + bollard-managed MCP/agents)"
 echo "    • PostgreSQL data (Docker volume)"
 echo "    • The entire $ROOT directory"
@@ -79,7 +79,7 @@ systemctl --user reset-failed 2>/dev/null || true
 
 # Kill remaining processes (match binary name prefix — covers both
 # hydeclaw-core and hydeclaw-core-aarch64 release naming)
-for proc in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
+for proc in opex-core opex-watchdog opex-memory-worker; do
   pkill -f "/${proc}" 2>/dev/null || true
 done
 # Also kill managed child processes (bun channels, uvicorn toolgate)
@@ -111,8 +111,8 @@ if command -v docker &>/dev/null; then
   docker network rm hydeclaw 2>/dev/null || true
   docker volume rm docker_pgdata 2>/dev/null || true
 
-  # 2d. Remove HydeClaw Docker images (hydeclaw-*, browser-renderer, searxng)
-  for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^(hydeclaw-|browser-renderer|searxng/)' || true); do
+  # 2d. Remove OPEX Docker images (opex-*, browser-renderer, searxng)
+  for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^(opex-|hydeclaw-|browser-renderer|searxng/)' || true); do
     docker rmi "$img" 2>/dev/null || true
   done
 
@@ -157,7 +157,7 @@ fi
 rm -f /tmp/hydeclaw-watchdog.json /tmp/hydeclaw-docker-env.bak 2>/dev/null || true
 
 echo ""
-echo -e "${C_OK}${BOLD}HydeClaw completely uninstalled.${NC}"
+echo -e "${C_OK}${BOLD}OPEX completely uninstalled.${NC}"
 echo ""
 echo -e "${C_MUTED}Remaining on system (not removed):${NC}"
 echo -e "${C_MUTED}  • Docker engine${NC}"

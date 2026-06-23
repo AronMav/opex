@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build versioned release artifacts for HydeClaw.
+# Build versioned release artifacts for OPEX.
 #
 # Usage:
 #   ./release.sh 1.0.0        # build for host architecture
@@ -8,9 +8,9 @@
 # Version is the single required argument. It is synced to Cargo.toml,
 # ui/package.json, and channels/package.json before building.
 #
-# Output: release/hydeclaw-v{VERSION}.tar.gz
-#   hydeclaw-core-{arch}      — Rust binary per platform
-#   hydeclaw-ui.tar.gz        — pre-built Next.js static UI
+# Output: release/opex-v{VERSION}.tar.gz
+#   opex-core-{arch}      — Rust binary per platform
+#   opex-ui.tar.gz        — pre-built Next.js static UI
 #   config/                   — default config files
 #   migrations/               — database schema
 #   workspace/                — tools, skills, MCP definitions
@@ -42,7 +42,7 @@ done
 
 # ── Version ──
 [ -n "$VERSION" ] || err "Usage: ./release.sh <version> [--all]  (e.g. ./release.sh 0.2.0 --all)"
-RELEASE_DIR="$ROOT/release/hydeclaw"
+RELEASE_DIR="$ROOT/release/opex"
 
 # ── Sync version across all manifests ──
 info "Syncing version ${VERSION} across manifests..."
@@ -51,7 +51,7 @@ sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" ui/package.json
 sed -i "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" channels/package.json
 
 echo -e "${BOLD}"
-echo "  Building HydeClaw v${VERSION}"
+echo "  Building OPEX v${VERSION}"
 echo -e "${NC}"
 
 # ── Clean ──
@@ -74,10 +74,10 @@ fi
 # ── Build Rust binaries ──
 for TARGET in "${TARGETS[@]}"; do
   ARCH_SHORT="${TARGET%%-*}"  # aarch64 or x86_64
-  info "Building hydeclaw-core for ${TARGET}..."
+  info "Building opex-core for ${TARGET}..."
 
   # Build all 3 binaries for this target
-  for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
+  for CRATE in opex-core opex-watchdog opex-memory-worker; do
     info "  ${CRATE} for ${TARGET}..."
     if [ "$TARGET" = "$(rustc -vV 2>/dev/null | grep host | cut -d' ' -f2)" ]; then
       cargo build --release -p "$CRATE"
@@ -102,9 +102,9 @@ done
 # ── Build UI ──
 info "Building Next.js UI..."
 (cd ui && npm install --silent && npm run build) || err "UI build failed"
-tar czf "$RELEASE_DIR/hydeclaw-ui.tar.gz" -C ui out
-UI_SIZE=$(du -h "$RELEASE_DIR/hydeclaw-ui.tar.gz" | cut -f1)
-ok "hydeclaw-ui.tar.gz (${UI_SIZE})"
+tar czf "$RELEASE_DIR/opex-ui.tar.gz" -C ui out
+UI_SIZE=$(du -h "$RELEASE_DIR/opex-ui.tar.gz" | cut -f1)
+ok "opex-ui.tar.gz (${UI_SIZE})"
 
 # ── Copy runtime files ──
 info "Packaging runtime files..."
@@ -167,9 +167,9 @@ cp README.md "$RELEASE_DIR/README.md" 2>/dev/null || true
 echo "$VERSION" > "$RELEASE_DIR/VERSION"
 
 # ── Create archive ──
-ARCHIVE="$ROOT/release/hydeclaw-v${VERSION}.tar.gz"
+ARCHIVE="$ROOT/release/opex-v${VERSION}.tar.gz"
 info "Creating archive..."
-tar czf "$ARCHIVE" -C "$ROOT/release" "hydeclaw"
+tar czf "$ARCHIVE" -C "$ROOT/release" "opex"
 ARCHIVE_SIZE=$(du -h "$ARCHIVE" | cut -f1)
 
 # Clean up — only the archive remains
@@ -179,16 +179,16 @@ rm -rf "$RELEASE_DIR"
 echo ""
 echo -e "${BOLD}━━━ Release v${VERSION} ━━━${NC}"
 echo ""
-echo -e "  Archive: ${BOLD}${ARCHIVE_SIZE}${NC} → release/hydeclaw-v${VERSION}.tar.gz"
+echo -e "  Archive: ${BOLD}${ARCHIVE_SIZE}${NC} → release/opex-v${VERSION}.tar.gz"
 echo ""
 info "Fresh install:"
 echo ""
-echo "  scp release/hydeclaw-v${VERSION}.tar.gz user@server:~/"
+echo "  scp release/opex-v${VERSION}.tar.gz user@server:~/"
 echo "  ssh user@server"
-echo "  tar xzf hydeclaw-v${VERSION}.tar.gz && cd hydeclaw && ./setup.sh"
+echo "  tar xzf opex-v${VERSION}.tar.gz && cd opex && ./setup.sh"
 echo ""
 info "Update existing:"
 echo ""
-echo "  scp release/hydeclaw-v${VERSION}.tar.gz user@server:~/"
+echo "  scp release/opex-v${VERSION}.tar.gz user@server:~/"
 echo "  ssh user@server"
-echo "  ~/hydeclaw/update.sh hydeclaw-v${VERSION}.tar.gz"
+echo "  ~/hydeclaw/update.sh opex-v${VERSION}.tar.gz"

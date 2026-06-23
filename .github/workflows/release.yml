@@ -52,8 +52,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: HydeClaw v${{ steps.ver.outputs.version }}
-          files: release/hydeclaw-*.tar.gz
+          name: OPEX v${{ steps.ver.outputs.version }}
+          files: release/opex-*.tar.gz
           # Explicitly disable any automatic release notes generation.
           # The release body is authored manually after the workflow
           # finishes (`gh release edit <tag> --notes-file ...`). This

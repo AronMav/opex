@@ -1,6 +1,6 @@
 /**
  * Shared utilities for all channel drivers.
- * Port of crates/hydeclaw-channel/src/channels/common.rs
+ * Port of crates/opex-channel/src/channels/common.rs
  */
 
 // ── splitText ───────────────────────────────────────────────────────────

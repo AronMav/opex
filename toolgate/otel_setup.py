@@ -9,7 +9,7 @@ The collector endpoint defaults to ``http://127.0.0.1:4317`` (gRPC OTLP),
 matching the Jaeger all-in-one setup wired by
 ``docker/docker-compose.observability.yml``. Service name is taken from
 ``OTEL_SERVICE_NAME`` (default ``toolgate``) so the Jaeger UI shows it as a
-distinct row alongside ``hydeclaw-core``.
+distinct row alongside ``opex-core``.
 
 Three things get instrumented:
 

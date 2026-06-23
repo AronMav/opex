@@ -11,7 +11,7 @@ MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 # CGNAT / carrier-grade NAT range (RFC 6598). Python's ipaddress stdlib
 # does NOT classify this as private/reserved; mirror Rust
-# crates/hydeclaw-core/src/net/ssrf.rs::is_private_ip.
+# crates/opex-core/src/net/ssrf.rs::is_private_ip.
 _CGNAT_V4 = ipaddress.IPv4Network("100.64.0.0/10")
 
 

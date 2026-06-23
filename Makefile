@@ -9,7 +9,7 @@ AUTH          ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN
 # ── Codegen ──────────────────────────────────────────────────────────────────
 
 gen-types:
-	cargo run --features ts-gen --bin gen_ts_types -p hydeclaw-core
+	cargo run --features ts-gen --bin gen_ts_types -p opex-core
 
 # ── Development ──────────────────────────────────────────────────────────────
 
@@ -21,7 +21,7 @@ test:
 
 # Run only the gemini_cloudcode oauth subtree (useful during isolated OAuth development).
 test-gemini:
-	cargo test -p hydeclaw-core --features gemini-cloudcode gemini_cloudcode::
+	cargo test -p opex-core --features gemini-cloudcode gemini_cloudcode::
 
 # Coverage report — requires cargo-llvm-cov (`cargo install cargo-llvm-cov`).
 # Generates an HTML report and opens it in the default browser.
@@ -56,7 +56,7 @@ test-db-down:
 	cd docker && docker compose -f docker-compose.test.yml down -v
 
 test-db: test-db-up
-	DATABASE_URL=$(TEST_DB_URL) cargo test --bin hydeclaw-core
+	DATABASE_URL=$(TEST_DB_URL) cargo test --bin opex-core
 	@echo "test-db complete (postgres-test still up; run 'make test-db-down' to clean up)"
 
 lint:
@@ -75,7 +75,7 @@ build:
 # x86_64 production server build (home-lab box). Same workspace, no OpenSSL —
 # all crates pinned to rustls.
 build-x86_64:
-	cargo zigbuild --release --target $(SERVER_TARGET) -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker
+	cargo zigbuild --release --target $(SERVER_TARGET) -p opex-core -p opex-watchdog -p opex-memory-worker
 
 ui:
 	cd ui && npm run build
@@ -95,7 +95,7 @@ remote-deploy:
 
 # Build only (no swap, no restart). Useful for CI-style verification.
 remote-build:
-	ssh $(SERVER_HOST) 'cd ~/hydeclaw-src && git pull --ff-only && . ~/.cargo/env && cargo build --release -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker'
+	ssh $(SERVER_HOST) 'cd ~/hydeclaw-src && git pull --ff-only && . ~/.cargo/env && cargo build --release -p opex-core -p opex-watchdog -p opex-memory-worker'
 
 # Skip rebuild: redeploy from existing target/release on the server.
 deploy-remote: remote-deploy
@@ -106,7 +106,7 @@ deploy-remote: remote-deploy
 # Prefer `make remote-deploy` for the normal workflow; use this only when a
 # push-to-remote build is undesired or the server is busy.
 deploy-binary-server: build-x86_64
-	@for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do \
+	@for CRATE in opex-core opex-watchdog opex-memory-worker; do \
 		BIN=target/$(SERVER_TARGET)/release/$$CRATE; \
 		if [ -f "$$BIN" ]; then \
 			scp $$BIN $(SERVER_HOST):$(SERVER_DIR)/$${CRATE}-x86_64.new && \
@@ -114,7 +114,7 @@ deploy-binary-server: build-x86_64
 			echo "  deployed $$CRATE"; \
 		fi; \
 	done
-	ssh $(SERVER_HOST) "chmod +x $(SERVER_DIR)/hydeclaw-*-x86_64; for SVC in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
+	ssh $(SERVER_HOST) "chmod +x $(SERVER_DIR)/opex-*-x86_64; for SVC in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
 
 # ── Remote ops ───────────────────────────────────────────────────────────────
 # Operational targets run against the live SERVER_HOST.
