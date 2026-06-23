@@ -377,7 +377,7 @@ export default function ProvidersPage() {
                       </Tooltip>
                       <span className="text-xs text-muted-foreground/60">({capProviders.length})</span>
                       {isCapabilityGroup && cap !== "websearch" && (
-                        <span className="text-[11px] text-muted-foreground/60">
+                        <span className="text-[11px] text-muted-foreground/60 truncate min-w-0">
                           {t("providers.group_hint")}
                         </span>
                       )}

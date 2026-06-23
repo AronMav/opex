@@ -140,7 +140,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           type="button"
           disabled={!canExpand}
           aria-label={`${toolName}${detail ? `: ${detail}` : ""} — ${isRunning ? t("chat.tool_running") : isComplete ? t("chat.tool_result") : hasError ? t("chat.tool_error") : isDenied ? t("chat.tool_denied") : ""}`}
-          className="flex w-full items-center gap-2 rounded-xl border border-border/60 bg-card/50 px-2.5 py-1.5 text-left transition-colors hover:border-border disabled:cursor-default dark:bg-card/30 dark:hover:bg-card/50"
+          className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-card/50 px-2.5 py-1.5 text-left transition-colors hover:border-border disabled:cursor-default dark:bg-card/30 dark:hover:bg-card/50"
         >
           {/* tool type icon */}
           <span className="text-muted-foreground/50"><ToolIcon toolName={toolName} /></span>

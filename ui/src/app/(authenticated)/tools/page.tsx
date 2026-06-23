@@ -745,7 +745,7 @@ parameters:
                     ? <Wifi className="h-4 w-4 text-success" />
                     : <WifiOff className="h-4 w-4 text-destructive" />}
                   <h3 className="text-sm font-semibold text-foreground">{svc.name}</h3>
-                  <span className="text-xs text-muted-foreground font-mono">{svc.url}</span>
+                  <span className="text-xs text-muted-foreground font-mono truncate min-w-0">{svc.url}</span>
                   <Badge variant="secondary" className="text-xs">{linkedTools.length} {t("tools.yaml_tools_short")}</Badge>
                   {svc.managed && (
                     <Badge variant="outline" className="text-[10px]">{t("tools.managed")}</Badge>

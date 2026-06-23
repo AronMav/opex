@@ -19,7 +19,7 @@ export function MentionAutocomplete({ query, agents, onSelect }: {
     <div
       role="listbox"
       aria-label="Agent mentions"
-      className="absolute bottom-full mb-1 left-0 max-h-[50vh] overflow-y-auto bg-popover border border-border rounded-lg shadow-lg p-1 z-50 w-full max-w-[280px]"
+      className="absolute bottom-full mb-1 left-0 max-h-[50dvh] overflow-y-auto bg-popover border border-border rounded-lg shadow-lg p-1 z-50 w-full max-w-[min(280px,calc(100vw-1.5rem))]"
     >
       {filtered.map((name, i) => (
         <button

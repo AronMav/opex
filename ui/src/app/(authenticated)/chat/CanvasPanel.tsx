@@ -74,7 +74,7 @@ export function CanvasPanel({ agent }: CanvasPanelProps) {
           <span className="font-display text-sm font-bold truncate">
             {canvas.title ?? t("canvas.title")}
           </span>
-          <span className="text-[10px] font-mono text-muted-foreground/50 uppercase">{agent}</span>
+          <span className="text-[10px] font-mono text-muted-foreground/50 uppercase truncate">{agent}</span>
         </div>
         <Button variant="ghost" size="xs" className="text-muted-foreground hover:text-destructive" onClick={() => clearCanvas(canvasKey)}>
           <Trash2 size={12} className="mr-1" />

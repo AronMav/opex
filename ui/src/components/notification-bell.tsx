@@ -241,7 +241,7 @@ export function NotificationBell() {
           </div>
         </div>
         {/* List */}
-        <div className="max-h-96 overflow-y-auto overscroll-contain">
+        <div className="max-h-[min(24rem,calc(100dvh-8rem))] overflow-y-auto overscroll-contain">
           {notifications.length === 0 ? (
             <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
               {t("notifications.empty")}

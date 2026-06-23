@@ -683,7 +683,7 @@ function MonitorPageInner() {
                     </SelectContent>
                   </Select>
                   {res && (
-                    <div className="flex items-center gap-4 bg-muted/20 px-4 py-2 rounded-lg border border-border">
+                    <div className="flex flex-wrap items-center gap-4 bg-muted/20 px-4 py-2 rounded-lg border border-border">
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-muted-foreground">{t("watchdog.resource.disk")}</span>
                         <span className={`font-mono text-sm font-bold ${res.disk_critical ? "text-destructive" : res.disk_warning ? "text-warning" : "text-foreground"}`}>{res.disk_free_gb.toFixed(0)}GB</span>
@@ -709,7 +709,7 @@ function MonitorPageInner() {
 
               {wdError && <ErrorBanner error={wdError} />}
 
-              <div className="grid grid-cols-2 gap-3 md:gap-5 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-5 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                 <MetricCard
                   label={t("dashboard.status")}
                   value={wdChecks.length > 0 ? (allHealthy && (!watchdog?.containers || watchdog.containers.every(c => c.healthy)) ? "OK" : "ISSUES") : (s?.status?.toUpperCase() || "...")}
@@ -1342,7 +1342,7 @@ function MonitorPageInner() {
                                 </span>
                               </div>
                             </div>
-                            <div className="flex gap-4 sm:gap-6 text-right ml-11 sm:ml-0">
+                            <div className="flex gap-4 sm:gap-6 text-right sm:ml-0">
                               <div>
                                 <div className="text-xs text-muted-foreground">{t("usage.input_short")}</div>
                                 <div className="text-sm font-mono font-bold text-blue-500">{formatTokens(agentInput)}</div>
@@ -1559,7 +1559,7 @@ function MonitorPageInner() {
               <EmptyState icon={CheckCircle2} text={t("monitor.failures.empty")} />
             ) : (
               <div className="rounded-lg border border-border bg-card overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm min-w-[700px]">
                   <thead className="bg-muted/30 text-xs text-muted-foreground">
                     <tr>
                       <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_time")}</th>
@@ -1709,8 +1709,9 @@ function CuratorTab() {
 
   return (
     <div className="space-y-1 overflow-x-auto scrollbar-none">
+      <div className="min-w-[400px]">
       {/* Header row */}
-      <div className="grid grid-cols-[minmax(120px,2fr)_80px_60px_60px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide border-b border-border/50 min-w-[400px]">
+      <div className="grid grid-cols-[minmax(120px,2fr)_80px_60px_60px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide border-b border-border/50">
         <span>{t("monitor.curator.col_time")}</span>
         <span>{t("monitor.curator.col_trigger")}</span>
         <span>{t("monitor.curator.col_status")}</span>
@@ -1738,7 +1739,7 @@ function CuratorTab() {
         return (
           <div key={run.id} className="rounded-lg border border-border/50 overflow-hidden">
             <button
-              className="w-full grid grid-cols-[minmax(120px,2fr)_80px_60px_60px_60px] gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors items-center min-w-[400px]"
+              className="w-full grid grid-cols-[minmax(120px,2fr)_80px_60px_60px_60px] gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors items-center"
               onClick={() => setExpandedId(isExpanded ? null : run.id)}
             >
               <span className="text-xs text-muted-foreground font-mono truncate">
@@ -1781,6 +1782,7 @@ function CuratorTab() {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
