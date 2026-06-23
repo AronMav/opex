@@ -1,0 +1,107 @@
+---
+source: crates/opex-core/src/gateway/handlers/agents/dto.rs
+expression: dto
+---
+{
+  "name": "SnapshotFull",
+  "language": "en",
+  "provider": "anthropic",
+  "model": "claude-3-5-sonnet-20241022",
+  "provider_connection": "main-claude",
+  "fallback_provider": "openai-fallback",
+  "tts_provider": null,
+  "imagegen_provider": null,
+  "temperature": 0.8,
+  "max_tokens": 4096,
+  "access": {
+    "mode": "restricted",
+    "owner_id": "123456"
+  },
+  "heartbeat": {
+    "cron": "0 9 * * 1-5",
+    "timezone": "Europe/Moscow",
+    "announce_to": "telegram"
+  },
+  "tools": {
+    "allow": [
+      "workspace_read",
+      "workspace_write"
+    ],
+    "deny": [
+      "code_exec"
+    ],
+    "allow_all": false,
+    "deny_all_others": true,
+    "groups": {
+      "git": true,
+      "tool_management": false,
+      "skill_editing": true,
+      "session_tools": true
+    }
+  },
+  "compaction": {
+    "enabled": true,
+    "threshold": 0.75,
+    "preserve_tool_calls": true,
+    "preserve_last_n": 5,
+    "max_context_tokens": 200000
+  },
+  "skill_review": null,
+  "session": {
+    "dm_scope": "per-peer",
+    "ttl_days": 14,
+    "max_messages": 200,
+    "prune_tool_output_after_turns": 3
+  },
+  "icon_url": null,
+  "max_tools_in_context": 20,
+  "tool_loop": {
+    "max_iterations": 30,
+    "compact_on_overflow": false,
+    "detect_loops": true,
+    "warn_threshold": 3,
+    "break_threshold": 7,
+    "max_consecutive_failures": 2,
+    "max_auto_continues": 3,
+    "max_loop_nudges": 2,
+    "ngram_cycle_length": 4
+  },
+  "tool_dispatcher": {
+    "enabled": false,
+    "core_extra": [],
+    "promotion_max": 8
+  },
+  "approval": {
+    "enabled": true,
+    "require_for": [
+      "workspace_write"
+    ],
+    "require_for_categories": [
+      "destructive"
+    ],
+    "timeout_seconds": 120
+  },
+  "routing": [
+    {
+      "condition": "long_context",
+      "connection": "openai-gpt4",
+      "model": "gpt-4o",
+      "temperature": 0.5,
+      "cooldown_secs": 30
+    }
+  ],
+  "watchdog": {
+    "inactivity_secs": 300
+  },
+  "hooks": {
+    "log_all_tool_calls": true,
+    "block_tools": [
+      "shell_exec"
+    ]
+  },
+  "max_history_messages": 100,
+  "daily_budget_tokens": 500000,
+  "max_failover_attempts": 2,
+  "is_running": false,
+  "config_dirty": false
+}
