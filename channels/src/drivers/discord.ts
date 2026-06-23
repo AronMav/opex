@@ -1,6 +1,6 @@
 /**
  * Discord channel driver using discord.js.
- * Port of crates/hydeclaw-channel/src/channels/discord.rs
+ * Port of crates/opex-channel/src/channels/discord.rs
  */
 
 import {

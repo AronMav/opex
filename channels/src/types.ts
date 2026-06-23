@@ -4,8 +4,8 @@
 // types.generated.ts so existing imports `from "./types"` continue
 // to resolve unchanged.
 //
-// Source of truth: crates/hydeclaw-types/src/lib.rs (registered for
-// codegen in crates/hydeclaw-core/src/dto_export/channels_ts.rs).
+// Source of truth: crates/opex-types/src/lib.rs (registered for
+// codegen in crates/opex-core/src/dto_export/channels_ts.rs).
 
 export type {
   ChannelActionDto,

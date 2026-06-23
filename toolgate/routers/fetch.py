@@ -27,7 +27,7 @@ async def _read(http, url: str, timeout: int) -> dict:
     """Lightweight fetch + readability extraction."""
     raw_bytes, raw_ct = await download_limited(
         http, url, max_bytes=2 * 1024 * 1024,
-        headers={"User-Agent": "HydeClaw/0.1 (link-preview)"},
+        headers={"User-Agent": "OPEX/0.1 (link-preview)"},
         timeout=timeout,
     )
     content_type = raw_ct

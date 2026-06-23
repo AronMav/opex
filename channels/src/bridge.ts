@@ -1,6 +1,6 @@
 /**
  * BridgeHandle — manages pending WS requests between channel drivers and core.
- * Port of crates/hydeclaw-channel/src/bridge.rs
+ * Port of crates/opex-channel/src/bridge.rs
  */
 
 import type {

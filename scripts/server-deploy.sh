@@ -16,7 +16,7 @@ set -euo pipefail
 
 SRC_DIR="${HOME}/hydeclaw-src"
 RUN_DIR="${HOME}/hydeclaw"
-CRATES=(hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker)
+CRATES=(opex-core opex-watchdog opex-memory-worker)
 SUFFIX="x86_64"
 
 # Load Rust env (cargo on PATH)
@@ -29,8 +29,8 @@ if [[ "${1:-}" != "--skip-build" ]]; then
 
     echo "==> cargo build --release (with gemini-cloudcode feature)"
     (cd "${SRC_DIR}" && cargo build --release \
-        --features hydeclaw-core/gemini-cloudcode \
-        -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker)
+        --features opex-core/gemini-cloudcode \
+        -p opex-core -p opex-watchdog -p opex-memory-worker)
 fi
 
 echo "==> atomic swap binaries"

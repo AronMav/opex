@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# HydeClaw — update an existing installation to a new version.
+# OPEX — update an existing installation to a new version.
 #
 # Usage:
-#   ~/hydeclaw/update.sh hydeclaw-v0.2.0.tar.gz
+#   ~/hydeclaw/update.sh opex-v0.2.0.tar.gz
 #
 # The script:
 #   1. Stops all services
@@ -25,12 +25,12 @@ err()  { echo -e "${C_ERR}✗${NC} $*"; exit 1; }
 info() { echo -e "${C_MUTED}·${NC} $*"; }
 
 ARCHIVE="${1:-}"
-[[ -n "$ARCHIVE" ]] || err "Usage: $0 <hydeclaw-v*.tar.gz>"
+[[ -n "$ARCHIVE" ]] || err "Usage: $0 <opex-v*.tar.gz>"
 [[ -f "$ARCHIVE" ]] || err "File not found: $ARCHIVE"
 
 # Installation directory = where this script lives
 DEST="$(cd "$(dirname "$0")" && pwd)"
-[[ -f "$DEST/.env" ]] || err "$DEST/.env not found — not a valid HydeClaw installation"
+[[ -f "$DEST/.env" ]] || err "$DEST/.env not found — not a valid OPEX installation"
 [[ -f "$DEST/config/hydeclaw.toml" ]] || err "$DEST/config/hydeclaw.toml not found"
 
 OLD_VERSION="unknown"
@@ -43,12 +43,12 @@ trap "rm -rf '$TMPDIR'" EXIT
 info "Extracting archive..."
 tar xzf "$ARCHIVE" -C "$TMPDIR"
 
-# Find the extracted directory (hydeclaw/)
-SRC="$TMPDIR/hydeclaw"
-[[ -d "$SRC" ]] || err "Archive does not contain hydeclaw/ directory"
+# Find the extracted directory (opex/)
+SRC="$TMPDIR/opex"
+[[ -d "$SRC" ]] || err "Archive does not contain opex/ directory"
 [[ -f "$SRC/VERSION" ]] || err "VERSION file not found in archive"
 NEW_VERSION="$(tr -d '[:space:]' < "$SRC/VERSION")"
-ls "$SRC"/hydeclaw-core-* &>/dev/null 2>&1 || err "No binaries found in archive"
+ls "$SRC"/opex-core-* &>/dev/null 2>&1 || err "No binaries found in archive"
 
 # ── Banner ──
 echo -e "${BOLD}${C_ACCENT}"
@@ -98,7 +98,7 @@ ok "Services stopped"
 
 # ── 2. Replace binaries ──
 info "Updating binaries..."
-for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
+for CRATE in opex-core opex-watchdog opex-memory-worker; do
   BIN="$SRC/${CRATE}-${ARCH_SHORT}"
   if [[ -f "$BIN" ]]; then
     cp "$BIN" "$DEST/${CRATE}-${ARCH_SHORT}"
@@ -108,11 +108,11 @@ for CRATE in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
 done
 
 # ── 3. Replace UI ──
-if [[ -f "$SRC/hydeclaw-ui.tar.gz" ]]; then
+if [[ -f "$SRC/opex-ui.tar.gz" ]]; then
   info "Updating UI..."
   rm -rf "$DEST/ui/out"
   mkdir -p "$DEST/ui"
-  tar xzf "$SRC/hydeclaw-ui.tar.gz" -C "$DEST/ui"
+  tar xzf "$SRC/opex-ui.tar.gz" -C "$DEST/ui"
   ok "UI updated"
 fi
 
@@ -159,7 +159,7 @@ if [[ -d "$SRC/docker" ]]; then
     (cd "$DEST" && docker build -f docker/Dockerfile.sandbox -t hydeclaw-sandbox:latest . 2>&1 | tail -3) || true
   # MCP bridge base image (required by on-demand MCP containers)
   [[ -f "$DEST/docker/mcp-bridge/Dockerfile" ]] && \
-    (cd "$DEST" && docker build -f docker/mcp-bridge/Dockerfile -t hydeclaw-mcp-bridge:latest docker/mcp-bridge/ 2>&1 | tail -3) || true
+    (cd "$DEST" && docker build -f docker/mcp-bridge/Dockerfile -t opex-mcp-bridge:latest docker/mcp-bridge/ 2>&1 | tail -3) || true
   # Re-create on-demand MCP containers (--no-recreate skips already-created ones)
   (cd "$DEST" && docker compose -f docker/docker-compose.yml --profile on-demand create --no-recreate 2>&1 | grep -E '(Created|Error|error)') || true
   ok "Docker compose and images updated"

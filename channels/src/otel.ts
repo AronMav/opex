@@ -24,7 +24,7 @@
  * OTLP), matching the Jaeger all-in-one setup wired by
  * `docker/docker-compose.observability.yml`. Service name is taken
  * from `OTEL_SERVICE_NAME` (default: `channels`) so it appears as a
- * distinct row alongside `hydeclaw-core` and `toolgate` in Jaeger.
+ * distinct row alongside `opex-core` and `toolgate` in Jaeger.
  */
 
 let started = false;

@@ -1,6 +1,6 @@
 /**
  * Slack channel driver using @slack/bolt (Socket Mode).
- * Port of crates/hydeclaw-channel/src/channels/slack.rs
+ * Port of crates/opex-channel/src/channels/slack.rs
  */
 
 import { App } from "@slack/bolt";

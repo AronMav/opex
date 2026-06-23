@@ -1,6 +1,6 @@
 /**
  * IRC channel driver using plain TCP.
- * Port of crates/hydeclaw-channel/src/channels/irc.rs
+ * Port of crates/opex-channel/src/channels/irc.rs
  */
 
 import { connect, type Socket } from "net";
@@ -117,7 +117,7 @@ export function createIrcDriver(
       socket = connect(port, server, () => {
         if (password) sendRaw(`PASS ${password}`);
         sendRaw(`NICK ${nick}`);
-        sendRaw(`USER ${nick} 0 * :HydeClaw Bot`);
+        sendRaw(`USER ${nick} 0 * :OPEX Bot`);
         resolve();
       });
 
@@ -159,7 +159,7 @@ export function createIrcDriver(
           if (line.includes("\x01VERSION\x01")) {
             const fromMatch = line.match(/^:([^!]+)/);
             if (fromMatch) {
-              sendRaw(`NOTICE ${fromMatch[1]} :\x01VERSION HydeClaw IRC 1.0.0\x01`);
+              sendRaw(`NOTICE ${fromMatch[1]} :\x01VERSION OPEX IRC 1.0.0\x01`);
             }
           }
         }

@@ -1,6 +1,6 @@
 /**
  * Localized UI strings for channel adapters.
- * Port of crates/hydeclaw-channel/src/localization.rs
+ * Port of crates/opex-channel/src/localization.rs
  */
 
 export interface Strings {

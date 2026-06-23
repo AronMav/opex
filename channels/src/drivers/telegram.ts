@@ -1,6 +1,6 @@
 /**
  * Telegram channel driver using grammy.
- * Port of crates/hydeclaw-channel/src/channels/telegram.rs
+ * Port of crates/opex-channel/src/channels/telegram.rs
  */
 
 import { Bot, Context, InlineKeyboard } from "grammy";

@@ -1,6 +1,6 @@
 /**
  * WhatsApp Cloud API channel driver.
- * Port of crates/hydeclaw-channel/src/channels/whatsapp.rs
+ * Port of crates/opex-channel/src/channels/whatsapp.rs
  *
  * Uses Meta Graph API v21.0:
  * - Incoming: Bun.serve() webhook

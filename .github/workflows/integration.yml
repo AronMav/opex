@@ -49,7 +49,7 @@ jobs:
           docker info
 
       - name: Build all test binaries
-        run: cargo build --tests -p hydeclaw-core
+        run: cargo build --tests -p opex-core
 
       # Full test suite. testcontainers-backed tests (integration_smoke, plus
       # Wave-2 binaries created by Plans 03/04/05) will spin up ephemeral PG
@@ -58,7 +58,7 @@ jobs:
       - name: Run integration tests
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/hydeclaw_test
-        run: cargo test -p hydeclaw-core --tests
+        run: cargo test -p opex-core --tests
 
   # Phase 65 OBS-06: rustls-only invariant — no OpenSSL in the transitive
   # dep graph under EITHER feature configuration. Protects against silent
@@ -160,13 +160,13 @@ jobs:
           run: |
             source "$HOME/.cargo/env"
             cd /workspace
-            cargo build --tests -p hydeclaw-core
+            cargo build --tests -p opex-core
             # Run ALL integration binaries that DO NOT need Docker.
             # Each is a separate cargo invocation so individual failures
             # produce a clear log signature.
-            cargo test -p hydeclaw-core --test integration_mock_provider
-            cargo test -p hydeclaw-core --test integration_sse_lifecycle
-            cargo test -p hydeclaw-core --test integration_shutdown_drain
+            cargo test -p opex-core --test integration_mock_provider
+            cargo test -p opex-core --test integration_sse_lifecycle
+            cargo test -p opex-core --test integration_shutdown_drain
 
   # Phase 64 SEC-02: cross-platform path canonicalization matrix.
   # Runs the symlink-escape / .. traversal / mixed-case / UNC matrix on
@@ -189,5 +189,5 @@ jobs:
           cache-on-failure: true
           key: path-canonicalize-${{ matrix.os }}
       - name: Run path canonicalize integration test
-        run: cargo test -p hydeclaw-core --test integration_path_canonicalize -- --nocapture
+        run: cargo test -p opex-core --test integration_path_canonicalize -- --nocapture
         shell: bash

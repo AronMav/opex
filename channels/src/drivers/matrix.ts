@@ -1,6 +1,6 @@
 /**
  * Matrix channel driver using fetch (Matrix Client-Server API).
- * Port of crates/hydeclaw-channel/src/channels/matrix.rs
+ * Port of crates/opex-channel/src/channels/matrix.rs
  */
 
 import type { BridgeHandle } from "../bridge";
