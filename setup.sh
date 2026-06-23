@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # OPEX — one-script setup for Linux.
 # Detects context (pre-built release or git clone), installs everything needed,
 # builds if necessary, configures, and starts.
@@ -621,6 +621,7 @@ stage "Verify & launch"
 # ════════════════════════════════════════════════════════════════
 
 # Stop any existing OPEX processes before starting fresh
+# NOTE: unit names stay hydeclaw-* until PR2 (systemd service files unchanged).
 for svc in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
   systemctl --user stop "$svc" 2>/dev/null || true
 done

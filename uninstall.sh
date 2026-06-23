@@ -78,7 +78,7 @@ systemctl --user daemon-reload 2>/dev/null || true
 systemctl --user reset-failed 2>/dev/null || true
 
 # Kill remaining processes (match binary name prefix — covers both
-# hydeclaw-core and hydeclaw-core-aarch64 release naming)
+# opex-core and opex-core-x86_64 release naming)
 for proc in opex-core opex-watchdog opex-memory-worker; do
   pkill -f "/${proc}" 2>/dev/null || true
 done
@@ -90,7 +90,7 @@ sleep 1
 ok "Systemd services and processes stopped"
 
 # ════════════════════════════════════════════════════════════
-# 2. Docker — stop EVERYTHING hydeclaw-related
+# 2. Docker — stop EVERYTHING opex-related
 # ════════════════════════════════════════════════════════════
 if command -v docker &>/dev/null; then
   info "Stopping Docker containers..."
