@@ -15,12 +15,12 @@ priority: 5
 state: active
 ---
 
-Channels is a TypeScript/Bun process, the channel adapter for HydeClaw. Bun runs TypeScript directly — no compilation needed.
+Channels is a TypeScript/Bun process, the channel adapter for OPEX. Bun runs TypeScript directly — no compilation needed.
 
 ## Adding a New Driver
 
-1. Create `~/hydeclaw/channels/src/drivers/{type}.ts` via code_exec
-2. Add to `~/hydeclaw/channels/src/index.ts`:
+1. Create `~/opex/channels/src/drivers/{type}.ts` via code_exec
+2. Add to `~/opex/channels/src/index.ts`:
    - import: `import { createXxxDriver } from "./drivers/xxx";`
    - case in `getDriverFactory()`: `case "xxx": return createXxxDriver;`
 3. Restart channels via Core API

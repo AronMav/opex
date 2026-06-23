@@ -48,7 +48,7 @@ Each prompt entry has: `name`, `prompt`, `negative_prompt`, `tags`, `preview_url
 Check if `workspace/refs/image-prompts-manifest.json` exists and was modified within the last 7 days using `workspace_read`. If missing or stale, fetch it:
 
 ```
-process(action="start", command="mkdir -p ~/hydeclaw/workspace/refs && curl -sL 'https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/manifest.json' -o ~/hydeclaw/workspace/refs/image-prompts-manifest.json")
+process(action="start", command="mkdir -p ~/opex/workspace/refs && curl -sL 'https://raw.githubusercontent.com/YouMind-OpenLab/nano-banana-pro-prompts-recommend-skill/main/references/manifest.json' -o ~/opex/workspace/refs/image-prompts-manifest.json")
 ```
 
 Then read the manifest to see available categories and their slugs.
@@ -139,7 +139,7 @@ After showing the result:
 
 The `model` parameter accepts provider-specific identifiers. Omit it to use the system default.
 
-Common values (depend on what's configured on this HydeClaw instance):
+Common values (depend on what's configured on this OPEX instance):
 - `dall-e-3` — OpenAI DALL-E 3
 - `flux-pro`, `flux-dev`, `flux-schnell` — FLUX family
 - `sd3-large`, `sd3-medium` — Stable Diffusion 3

@@ -185,7 +185,7 @@ fn init_tracing(log_tx: tokio::sync::broadcast::Sender<String>, cfg: &config::Ap
             //
             // Ratio 1.0 (default) → AlwaysOn semantics for compatibility with
             // existing Pi setups. Production-scale should set 0.05–0.2 in
-            // hydeclaw.toml `[otel] sampling_ratio = 0.1`.
+            // opex.toml `[otel] sampling_ratio = 0.1`.
             let ratio = cfg.otel.sampling_ratio.clamp(0.0, 1.0);
             let sampler = opentelemetry_sdk::trace::Sampler::ParentBased(Box::new(
                 opentelemetry_sdk::trace::Sampler::TraceIdRatioBased(ratio),
@@ -225,7 +225,7 @@ fn init_tracing(log_tx: tokio::sync::broadcast::Sender<String>, cfg: &config::Ap
                     ));
                     let tracer = opentelemetry::trace::TracerProvider::tracer(
                         &tracer_provider,
-                        "hydeclaw",
+                        "opex",
                     );
                     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
                     tracing_subscriber::registry()
@@ -246,7 +246,7 @@ fn init_tracing(log_tx: tokio::sync::broadcast::Sender<String>, cfg: &config::Ap
             // Retain handles for graceful shutdown.
             let _ = OTEL_PROVIDERS.set((tracer_provider.clone(), meter_provider));
 
-            let tracer = opentelemetry::trace::TracerProvider::tracer(&tracer_provider, "hydeclaw");
+            let tracer = opentelemetry::trace::TracerProvider::tracer(&tracer_provider, "opex");
             let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
             tracing_subscriber::registry()
@@ -283,7 +283,7 @@ async fn main() -> Result<()> {
     // Structured logging with broadcast layer for UI + optional OTEL
     init_tracing(log_tx.clone(), &cfg);
 
-    tracing::info!(listen = %cfg.gateway.listen, "HydeClaw Core starting...");
+    tracing::info!(listen = %cfg.gateway.listen, "OPEX Core starting...");
 
     // Multi-agent timeout invariant: warn (don't reject) on config that lets
     // the outer safety net fire before the inner sync deadlines.
@@ -306,7 +306,7 @@ async fn main() -> Result<()> {
         watcher_cancel.clone(),
     );
 
-    // Database pool — DATABASE_URL env var overrides hydeclaw.toml value
+    // Database pool — DATABASE_URL env var overrides opex.toml value
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| cfg.database.url.clone());
     let db_pool = db::create_pool(&db_url).await?;
     tracing::info!("database connected, running migrations...");
@@ -749,7 +749,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    // ── mDNS: advertise _hydeclaw._tcp.local. ──
+    // ── mDNS: advertise _opex._tcp.local. ──
     let _mdns_daemon = setup_mdns(&cfg);
 
     // Tailscale Funnel setup
@@ -789,7 +789,7 @@ async fn main() -> Result<()> {
     // Phase 62 RES-05: extracted into `shutdown::drain_agents_with_scheduler`.
     // Fixes v0.18.0 lock-during-drain bug (read lock held across wait_drain
     // await). Drain timeout is configurable via [shutdown] drain_timeout_secs
-    // in hydeclaw.toml (default 30s); systemd TimeoutStopSec should be
+    // in opex.toml (default 30s); systemd TimeoutStopSec should be
     // drain_timeout_secs + 10s buffer (40s) so SIGKILL never races the drain.
     let drain_timeout = std::time::Duration::from_secs(cfg.shutdown.drain_timeout_secs);
     crate::shutdown::drain_agents_with_scheduler(
@@ -828,7 +828,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    tracing::info!("HydeClaw Core shutting down");
+    tracing::info!("OPEX Core shutting down");
     Ok(())
 }
 
@@ -1475,9 +1475,9 @@ fn setup_mdns(cfg: &config::AppConfig) -> Option<mdns_sd::ServiceDaemon> {
     
     ServiceDaemon::new().ok().and_then(|daemon| {
         let props = [("version", env!("CARGO_PKG_VERSION"))].into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        ServiceInfo::new("_hydeclaw._tcp.local.", "hydeclaw", "hydeclaw.local.", (), port, Some(props)).ok().and_then(|info| {
+        ServiceInfo::new("_opex._tcp.local.", "opex", "opex.local.", (), port, Some(props)).ok().and_then(|info| {
             daemon.register(info).ok()?;
-            tracing::info!(port, "mDNS registered: hydeclaw._hydeclaw._tcp.local.");
+            tracing::info!(port, "mDNS registered: opex._opex._tcp.local.");
             Some(daemon)
         })
     })

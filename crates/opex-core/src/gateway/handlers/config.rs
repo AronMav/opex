@@ -533,7 +533,7 @@ pub(crate) async fn api_restart(req: Request<Body>) -> impl IntoResponse {
 
 // ── Config Export/Import ──
 
-/// Replace the single `hydeclaw.toml.bak` file with timestamped rotation.
+/// Replace the single `opex.toml.bak` file with timestamped rotation.
 ///
 /// Creates `{config_path}.bak.{YYYY-MM-DDTHH-MM-SSZ}` and keeps the newest
 /// `CONFIG_BACKUP_MAX` backups. Older backups are silently deleted.
@@ -551,7 +551,7 @@ async fn rotate_config_backups(config_path: &str) {
         return;
     }
 
-    // Collect existing timestamped backup files (prefix: "hydeclaw.toml.bak.")
+    // Collect existing timestamped backup files (prefix: "opex.toml.bak.")
     let base = std::path::Path::new(config_path);
     let dir = base.parent().unwrap_or(std::path::Path::new("."));
     let stem = base
@@ -566,8 +566,8 @@ async fn rotate_config_backups(config_path: &str) {
         Ok(mut entries) => {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let name = entry.file_name().to_string_lossy().to_string();
-                // Match ONLY the timestamped pattern: "hydeclaw.toml.bak.YYYY-..."
-                // This avoids deleting the legacy "hydeclaw.toml.bak" file (no trailing dot/timestamp)
+                // Match ONLY the timestamped pattern: "opex.toml.bak.YYYY-..."
+                // This avoids deleting the legacy "opex.toml.bak" file (no trailing dot/timestamp)
                 if name.starts_with(&prefix) {
                     backups.push(entry.path());
                 }

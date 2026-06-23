@@ -87,7 +87,7 @@ pub struct SecurityConfig {
 /// Signed-URL configuration for uploads and workspace-files.
 ///
 /// Enforced since v0.26.0 (default `true`). Set to `false` in your
-/// `hydeclaw.toml` only if you need to serve unsigned legacy URLs.
+/// `opex.toml` only if you need to serve unsigned legacy URLs.
 ///
 /// **Scope:** `signed_url_ttl_secs` governs (a) `POST /api/media/upload`
 /// (client_upload rows) and (b) workspace-files URLs. It does NOT govern
@@ -1029,7 +1029,7 @@ pub struct CompactionConfig {
     /// Stop attempting compression after this many consecutive ineffective compressions.
     #[serde(default = "CompactionConfig::default_anti_thrash_max_skips")]
     pub anti_thrash_max_skips: u8,
-    /// Keep HydeClaw's pgvector fact extraction alongside the Hermes summary.
+    /// Keep OPEX's pgvector fact extraction alongside the Hermes summary.
     #[serde(default = "CompactionConfig::default_extract_to_memory")]
     pub extract_to_memory: bool,
 }
@@ -1136,7 +1136,7 @@ impl Default for SessionConfig {
 /// Configuration for the code execution sandbox (`code_exec` tool).
 /// Requires Docker to be available.
 ///
-/// Configured under `[sandbox]` in hydeclaw.toml:
+/// Configured under `[sandbox]` in opex.toml:
 /// ```toml
 /// [sandbox]
 /// enabled = true
@@ -1267,7 +1267,7 @@ impl AppConfig {
             if found_as_key {
                 anyhow::bail!(
                     "config error: {section} key `{old}` was renamed to \
-                     `{new}` in this release. Update hydeclaw.toml.",
+                     `{new}` in this release. Update opex.toml.",
                 );
             }
         }
@@ -1732,7 +1732,7 @@ pub struct AgentDefaultsConfig {
     pub max_tokens: Option<u32>,
 }
 
-/// Wrapper for the [agent] section in hydeclaw.toml (global defaults).
+/// Wrapper for the [agent] section in opex.toml (global defaults).
 #[derive(Debug, Clone, Deserialize, Serialize, Default, JsonSchema)]
 pub struct AgentSectionConfig {
     #[serde(default)]
@@ -2218,7 +2218,7 @@ listen = "127.0.0.1:9999"
 auth_token_env = "MY_TOKEN"
 
 [database]
-url = "postgres://user:pass@db:5432/hydeclaw"
+url = "postgres://user:pass@db:5432/opex"
 
 [limits]
 max_requests_per_minute = 200
@@ -2237,7 +2237,7 @@ funnel = true
         let cfg: AppConfig = toml::from_str(toml_str).expect("failed to parse AppConfig with overrides");
         assert_eq!(cfg.gateway.listen, "127.0.0.1:9999");
         assert_eq!(cfg.gateway.auth_token_env.as_deref(), Some("MY_TOKEN"));
-        assert_eq!(cfg.database.url, "postgres://user:pass@db:5432/hydeclaw");
+        assert_eq!(cfg.database.url, "postgres://user:pass@db:5432/opex");
         assert_eq!(cfg.limits.max_requests_per_minute, 200);
         assert_eq!(cfg.limits.max_tool_concurrency, 20);
         assert!(cfg.sandbox.enabled);

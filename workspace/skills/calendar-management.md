@@ -53,6 +53,6 @@ Tools are in draft mode — to activate:
 1. Create a Google Cloud project + enable Calendar API
 2. Create a Service Account, download the JSON key
 3. Share the calendar with the service account email
-4. Place the JSON key on Pi: ~/hydeclaw/config/google-service-account.json
+4. Place the JSON key on Pi: ~/opex/config/google-service-account.json
 5. Add GOOGLE_CALENDAR_ID to secrets
 6. Verify tools via UI

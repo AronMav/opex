@@ -1,6 +1,6 @@
 ---
 name: mcp-docker-pattern
-description: Use when deploying new MCP servers to HydeClaw via Docker containers and mcp-deploy.sh script
+description: Use when deploying new MCP servers to OPEX via Docker containers and mcp-deploy.sh script
 triggers:
   - mcp сервер
   - подключи mcp
@@ -14,7 +14,7 @@ state: active
 
 # MCP Server Deployment
 
-How to connect new MCP servers to HydeClaw.
+How to connect new MCP servers to OPEX.
 
 ## Critical Rules
 
@@ -26,24 +26,24 @@ How to connect new MCP servers to HydeClaw.
 
 ## Automated Deployment via Script
 
-The Pi has `~/hydeclaw/scripts/mcp-deploy.sh` which handles everything automatically: build, container create, workspace YAML, verify.
+The Pi has `~/opex/scripts/mcp-deploy.sh` which handles everything automatically: build, container create, workspace YAML, verify.
 
 ### Type 1: Node.js stdio MCP (official mcp/* images)
 
 ```
-process(action="start", command="~/hydeclaw/scripts/mcp-deploy.sh stdio-node mcp/fetch:latest fetch 9011")
+process(action="start", command="~/opex/scripts/mcp-deploy.sh stdio-node mcp/fetch:latest fetch 9011")
 ```
 
 The script automatically:
 - Pulls the image (with --platform linux/amd64 for ARM compatibility)
 - Detects the entrypoint from the image
-- Creates a 3-line Dockerfile based on hydeclaw-mcp-bridge
+- Creates a 3-line Dockerfile based on opex-mcp-bridge
 - Builds, creates container, YAML, verifies
 
 ### Type 2: Python stdio MCP (pip package)
 
 ```
-process(action="start", command="~/hydeclaw/scripts/mcp-deploy.sh stdio-python mcp-server-git git 9012 mcp-server-git")
+process(action="start", command="~/opex/scripts/mcp-deploy.sh stdio-python mcp-server-git git 9012 mcp-server-git")
 ```
 
 Format: `stdio-python <pip-package> <name> <port> [command-name]`
@@ -51,7 +51,7 @@ Format: `stdio-python <pip-package> <name> <port> [command-name]`
 ### Type 3: External HTTP MCP (no Docker)
 
 ```
-process(action="start", command="~/hydeclaw/scripts/mcp-deploy.sh url https://context7.com/mcp context7")
+process(action="start", command="~/opex/scripts/mcp-deploy.sh url https://context7.com/mcp context7")
 ```
 
 Only creates `workspace/mcp/name.yaml` with the URL.
@@ -59,7 +59,7 @@ Only creates `workspace/mcp/name.yaml` with the URL.
 ### Removal
 
 ```
-process(action="start", command="~/hydeclaw/scripts/mcp-deploy.sh remove fetch")
+process(action="start", command="~/opex/scripts/mcp-deploy.sh remove fetch")
 ```
 
 ## Verifying the Result
@@ -106,7 +106,7 @@ Use ports starting from 9040, 9041, 9042... for new MCPs. Skip already occupied 
 For servers requiring API tokens, pass env vars as the 5th argument:
 
 ```
-process(action="start", command="~/hydeclaw/scripts/mcp-deploy.sh stdio-node mcp/slack:latest slack 9047 'SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}'")
+process(action="start", command="~/opex/scripts/mcp-deploy.sh stdio-node mcp/slack:latest slack 9047 'SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}'")
 ```
 
 The token is added later via `secret_set`. The server deploys but returns errors when called without a token — this is expected.

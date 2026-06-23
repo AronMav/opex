@@ -14,7 +14,7 @@ pub(crate) async fn list_models(State(agents): State<AgentCore>) -> Json<Value> 
                 "id": name,
                 "object": "model",
                 "created": 0,
-                "owned_by": "hydeclaw"
+                "owned_by": "opex"
             })
         })
         .collect();

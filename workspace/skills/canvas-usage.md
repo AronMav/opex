@@ -24,7 +24,7 @@ state: active
 
 # Canvas
 
-Canvas is a dedicated UI panel in HydeClaw for displaying visual content: HTML pages, charts, dashboards, markdown documents, tables, and embedded URLs.
+Canvas is a dedicated UI panel in OPEX for displaying visual content: HTML pages, charts, dashboards, markdown documents, tables, and embedded URLs.
 
 ## When to Use Canvas
 

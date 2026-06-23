@@ -296,7 +296,7 @@ impl CodeSandbox {
             Some(git_env.to_vec())
         };
 
-        // Only base agents get network access to the hydeclaw Docker network.
+        // Only base agents get network access to the opex Docker network.
         // Non-base agents run fully network-isolated to prevent access to
         // internal infrastructure (postgres, toolgate, searxng, etc.).
         let network_mode = if base { Some("hydeclaw".to_string()) } else { None };

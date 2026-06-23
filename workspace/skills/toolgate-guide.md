@@ -37,7 +37,7 @@ Constructor always: `(base_url, api_key, model, options)`.
 
 ## Creating a Router
 
-File at `~/hydeclaw/toolgate/routers/name.py` via code_exec. Required: `router = APIRouter()`. Secrets via `workspace_helpers.get_secret(name)`. Register in `app.py`: import + `app.include_router(name.router)`. Restart toolgate.
+File at `~/opex/toolgate/routers/name.py` via code_exec. Required: `router = APIRouter()`. Secrets via `workspace_helpers.get_secret(name)`. Register in `app.py`: import + `app.include_router(name.router)`. Restart toolgate.
 
 ## Secrets Access
 

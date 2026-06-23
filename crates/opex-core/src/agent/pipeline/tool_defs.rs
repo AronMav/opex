@@ -997,7 +997,7 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
                     },
                     "working_directory": {
                         "type": "string",
-                        "description": "Working directory (for start, default: HydeClaw binary dir)"
+                        "description": "Working directory (for start, default: OPEX binary dir)"
                     },
                     "process_id": {
                         "type": "string",

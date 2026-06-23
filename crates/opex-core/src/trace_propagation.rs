@@ -85,7 +85,7 @@ pub fn inject_trace_context(builder: RequestBuilder) -> RequestBuilder {
 /// a single Jaeger trace spans the upstream caller → Core → Toolgate path.
 ///
 /// Without this, an external client that already carries a `traceparent`
-/// (e.g. a future agent-to-agent call originating in another HydeClaw
+/// (e.g. a future agent-to-agent call originating in another OPEX
 /// instance, or a synthetic load-test rig that wants its trace to follow
 /// the request) would have its context dropped at the gateway boundary
 /// and Core would start a fresh, unrelated trace.

@@ -754,7 +754,7 @@ pub(crate) async fn api_doctor(
             let mut cr = CheckResult::warn(
                 "automatic backups disabled",
                 0,
-                Some("enable in hydeclaw.toml: [backup] enabled = true".into()),
+                Some("enable in opex.toml: [backup] enabled = true".into()),
             );
             cr.details = Some(json!({
                 "enabled": false,
