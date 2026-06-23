@@ -84,6 +84,58 @@ cargo check -p opex-core --tests  → Finished dev (no errors)
 
 ## Known PR2 items left
 
-1. `gateway/handlers/config.rs` — PUT /api/config and helpers still hardcode `config/hydeclaw.toml`; config-edit UI will fail at runtime until PR2 wires resolver.
-2. `gateway/handlers/curator.rs` — same issue for curator endpoint.
-3. `setup.sh`, `uninstall.sh`, `update.sh` — deploy scripts; explicit PR2 scope per brief.
+1. `setup.sh`, `uninstall.sh`, `update.sh` — deploy scripts; explicit PR2 scope per brief.
+
+---
+
+## Fix: config writers dual-path
+
+### Sites changed
+
+**`crates/opex-core/src/gateway/handlers/config.rs`**
+
+- `api_update_config` (~line 303): `let config_path = "config/hydeclaw.toml"` → `let config_path = opex_gateway_util::config_path::resolve_config_path()`. All downstream uses in the function body updated to `&config_path`: backup read (`tokio::fs::read_to_string`), `restore_and_fail!` macro (`tokio::fs::write`), `update_service_urls`, `update_memory_config`, `update_subagents_enabled`, `update_limits_config`, `update_public_url`, `update_backup_config`, `update_curator_config`, `update_agent_tool_config`, validation `AppConfig::load`, restore write on validation failure, hot-reload `AppConfig::load`.
+- `api_export_config` (~line 600): added `let config_path = opex_gateway_util::config_path::resolve_config_path();`; read changed to `&config_path`.
+- `api_import_config` (~lines 648-649): added `let config_path = opex_gateway_util::config_path::resolve_config_path();`; `rotate_config_backups` and `std::fs::write` both changed to `&config_path`.
+
+**`crates/opex-core/src/gateway/handlers/curator.rs`**
+
+- `api_curator_config_put` (~lines 94, 109): added `let config_path = opex_gateway_util::config_path::resolve_config_path();` before first use; both `update_curator_config` and hot-reload `AppConfig::load` changed to `&config_path`.
+
+### Type plumbing
+
+`resolve_config_path()` returns `String`. All call sites that previously took `&str` now receive `&config_path` (coerces `String → &str`). The macro `restore_and_fail!` captures `config_path` from the enclosing scope and also uses `&config_path`. One `resolve_config_path()` call per handler — reads and writes within each handler are guaranteed to hit the same file.
+
+### Build check results
+
+```
+cargo check -p opex-core          → Finished dev [unoptimized + debuginfo] (no errors)
+cargo check -p opex-core --tests  → Finished dev [unoptimized + debuginfo] (no errors)
+```
+
+### Deferred-test command (server only)
+
+```
+cargo test -p opex-core -- config 2>&1 | tail -30
+```
+
+Runs the config API integration tests; links the opex-core test binary — requires live Postgres + `DATABASE_URL` set; OOMs locally on Windows.
+
+### Residual `config/hydeclaw.toml` hits in `crates/opex-core/src`
+
+`grep -rn 'config/hydeclaw.toml' crates/opex-core/src` → **no output** (zero hits).
+
+Previously deferred items from task-3 that are now resolved:
+
+- `config.rs:303,345,354,366,373,383,391,408,426,459,600,648,649` — all fixed.
+- `curator.rs:94,109` — fixed.
+
+Remaining legitimately deferred items (no handler code, not runtime paths):
+
+- `crates/opex-core/src/gateway/handlers/config.rs:536,554,569,570` — comments inside `rotate_config_backups` describing the naming pattern; prose only, not runtime strings.
+- `crates/opex-core/src/gateway/mod.rs:139` — user-facing bail! error message; prose, PR2/brand phase.
+- `crates/opex-core/src/gateway/handlers/monitoring/doctor.rs:757` — doctor check help text; prose string.
+- `crates/opex-core/src/config/mod.rs:90,1139,1270,1735` — doc comment prose only.
+- `crates/opex-core/src/main.rs:188,309,792` — inline code comments.
+
+These are all confirmed non-runtime-path strings — not fix targets per brief.
