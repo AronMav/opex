@@ -218,6 +218,7 @@ export function AgentEditDialog({
                   className={`
                     relative flex items-center gap-1.5 px-2.5 sm:px-3 py-2 text-xs font-medium whitespace-nowrap
                     transition-colors rounded-t-md shrink-0
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset
                     ${isActive
                       ? "text-foreground bg-background border-t border-l border-r border-border"
                       : "text-muted-foreground hover:text-foreground hover:bg-muted/30"
@@ -292,8 +293,8 @@ export function AgentEditDialog({
                           <Bot className="h-4 w-4" />
                         </div>
                       )}
-                      <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Camera className="h-3.5 w-3.5 text-white" />
+                      <div className="absolute inset-0 flex items-center justify-center rounded-lg bg-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Camera className="h-3.5 w-3.5 text-background" />
                       </div>
                     </button>
                   </div>
@@ -490,7 +491,7 @@ export function AgentEditDialog({
                           ["toolGroupSessionTools", t("agents.tool_group_sessions")] as const,
                         ]).map(([key, label]) => (
                           <label key={key} className="flex items-center gap-2 text-xs cursor-pointer">
-                            <input type="checkbox" checked={form[key] as boolean} onChange={(e) => upd({ [key]: e.target.checked })} className="rounded border-border" />
+                            <input type="checkbox" checked={form[key] as boolean} onChange={(e) => upd({ [key]: e.target.checked })} className="rounded border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                             <span>{label}</span>
                           </label>
                         ))}
@@ -509,7 +510,7 @@ export function AgentEditDialog({
                               <input type="checkbox" checked={form.approvalCategories.includes(cat)} onChange={(e) => {
                                 const next = e.target.checked ? [...form.approvalCategories, cat] : form.approvalCategories.filter((c: string) => c !== cat);
                                 upd({ approvalCategories: next });
-                              }} className="rounded border-border" />
+                              }} className="rounded border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                               <span className="font-mono">{cat}</span>
                               <span className="text-muted-foreground/60 text-[10px]">
                                 {cat === "system" ? "(shell, code, git)" : cat === "destructive" ? "(write, delete, edit)" : "(all other tools)"}

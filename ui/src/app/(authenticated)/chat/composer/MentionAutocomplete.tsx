@@ -26,7 +26,7 @@ export function MentionAutocomplete({ query, agents, onSelect }: {
           key={name}
           role="option"
           aria-selected={i === activeIdx}
-          className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md hover:bg-muted w-full text-left"
+          className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md hover:bg-muted w-full text-left ${i === activeIdx ? "bg-muted/50" : ""}`}
           onMouseDown={(e) => { e.preventDefault(); onSelect(name); }}
         >
           <span className="font-semibold">@{name}</span>

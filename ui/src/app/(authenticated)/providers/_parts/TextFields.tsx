@@ -150,7 +150,7 @@ export function TextFields({
                 ))}
               </SelectContent>
             </Select>
-            <Button variant="outline" size="icon" className="shrink-0 h-9 w-9" onClick={onDiscoverModels} disabled={modelsLoading}>
+            <Button variant="outline" size="icon" className="shrink-0 h-9 w-9" onClick={onDiscoverModels} disabled={modelsLoading} aria-label={t("providers.discover")} title={t("providers.discover")}>
               <RefreshCw className={`h-3.5 w-3.5 ${modelsLoading ? "animate-spin" : ""}`} />
             </Button>
           </div>
@@ -164,9 +164,8 @@ export function TextFields({
               className="font-mono text-sm"
             />
             {selectedType?.supports_model_listing && form.provider_type && (
-              <Button variant="outline" size="sm" className="shrink-0 h-9 text-xs" onClick={onDiscoverModels} disabled={modelsLoading}>
-                {modelsLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-                {t("providers.discover")}
+              <Button variant="outline" size="icon" className="shrink-0 h-9 w-9" onClick={onDiscoverModels} disabled={modelsLoading} aria-label={t("providers.discover")} title={t("providers.discover")}>
+                <RefreshCw className={`h-3.5 w-3.5 ${modelsLoading ? "animate-spin" : ""}`} />
               </Button>
             )}
           </div>
@@ -203,7 +202,7 @@ export function TextFields({
 
       {/* Max retries — hidden for CLI providers */}
       {!isCli && (
-        <fieldset className="border rounded-md p-3 space-y-2">
+        <fieldset className="neu-inset rounded-lg p-3 space-y-2">
           <legend className="text-sm font-medium">
             {t("providers.max_retries_section")}
           </legend>

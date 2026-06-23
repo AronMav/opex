@@ -9,9 +9,10 @@ import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { EmptyState } from "@/components/ui/empty-state";
 import { getLangFromFilename } from "@/components/workspace/code-editor";
 import { useTranslation } from "@/hooks/use-translation";
-import { Folder, FileCode, Save, Trash2, FilePlus, Menu, CornerDownRight, FolderMinus } from "lucide-react";
+import { Folder, FileCode, Save, Trash2, FilePlus, FolderTree, CornerDownRight, FolderMinus } from "lucide-react";
 import type { FileEntry } from "@/types/api";
 
 const MarkdownEditor = dynamic(
@@ -164,7 +165,7 @@ export default function WorkspacePage() {
     <div className="flex h-full flex-col bg-card/50">
       <div className="flex items-center justify-between p-4 border-b border-border/50">
         <span className="text-sm font-semibold text-foreground">{t("workspace.title")}</span>
-        <Button variant="ghost" size="icon-sm" className="hover:bg-primary/10" onClick={() => setShowNewFile(true)}>
+        <Button variant="ghost" size="icon-sm" aria-label={t("workspace.create")} className="hover:bg-primary/10" onClick={() => setShowNewFile(true)}>
           <FilePlus className="h-4 w-4" />
         </Button>
       </div>
@@ -173,7 +174,7 @@ export default function WorkspacePage() {
           {currentPath && (
             <button
               onClick={navigateUp}
-              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left font-mono text-sm text-muted-foreground hover:bg-muted/50 transition-colors"
+              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left font-mono text-sm text-muted-foreground hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
             >
               <CornerDownRight className="h-4 w-4 rotate-180" />
               <span className="opacity-60">..</span>
@@ -186,7 +187,7 @@ export default function WorkspacePage() {
                 if (f.is_dir) navigateTo(f.name);
                 else loadFile(f.name);
               }}
-              className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left font-mono text-sm transition-all ${
+              className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-left font-mono text-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${
                 !f.is_dir && selectedFile.endsWith(f.name) && selectedFile === (currentPath ? `${currentPath}/${f.name}` : f.name)
                   ? "bg-primary/20 text-primary font-bold shadow-sm"
                   : f.is_dir
@@ -230,11 +231,11 @@ export default function WorkspacePage() {
       {/* Header / Breadcrumbs */}
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/40 px-4 md:px-6">
         <div className="flex items-center gap-3 overflow-hidden min-w-0">
-          <SidebarTrigger className="md:hidden shrink-0" />
+          <SidebarTrigger className="md:hidden shrink-0 h-9 w-9" />
           <Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="md:hidden shrink-0">
-                <Menu className="h-5 w-5" />
+              <Button variant="ghost" size="icon" aria-label={t("workspace.open_explorer")} className="md:hidden shrink-0 h-9 w-9">
+                <FolderTree className="h-5 w-5" />
               </Button>
             </SheetTrigger>
             <SheetContent side="left" className="p-0 w-[75vw] md:w-[280px] border-r border-border bg-sidebar">
@@ -245,12 +246,12 @@ export default function WorkspacePage() {
           <div className="flex items-center gap-2 font-mono text-sm overflow-hidden">
             <Folder className="h-4 w-4 text-primary shrink-0" />
             <div className="flex items-center whitespace-nowrap overflow-x-auto scrollbar-none pb-0.5">
-              <button onClick={() => { setCurrentPath(""); setSelectedFile(""); }} className="text-muted-foreground hover:text-primary transition-colors">{t("workspace.breadcrumb_root")}</button>
+              <button onClick={() => { setCurrentPath(""); setSelectedFile(""); }} className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">{t("workspace.breadcrumb_root")}</button>
               <span className="mx-1 text-muted-foreground/30">/</span>
               {breadcrumbs.map((seg, i) => (
                 <span key={i} className="flex items-center">
                   <button
-                    className="text-muted-foreground hover:text-primary transition-colors"
+                    className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                     onClick={() => {
                       setSelectedFile("");
                       setContent("");
@@ -333,17 +334,17 @@ export default function WorkspacePage() {
               </div>
             </>
           ) : (
-            <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-              <div className="relative mb-6">
-                <div className="absolute inset-0 bg-primary/10 blur-3xl rounded-full" />
-                <FileCode className="h-16 w-16 text-muted-foreground/20 relative" />
-              </div>
-              <h3 className="text-base font-semibold text-muted-foreground/60">{t("workspace.no_file_selected")}</h3>
-              <p className="mt-2 text-sm text-muted-foreground/60 max-w-[240px]">{t("workspace.no_file_hint")}</p>
-              <Button variant="outline" className="mt-6 md:hidden" onClick={() => setIsSidebarOpen(true)}>
-                {t("workspace.open_explorer")}
-              </Button>
-            </div>
+            <EmptyState
+              icon={FileCode}
+              text={t("workspace.no_file_selected")}
+              height="flex-1"
+              className="p-8"
+              hint={
+                <Button variant="outline" className="mt-6 md:hidden" onClick={() => setIsSidebarOpen(true)}>
+                  {t("workspace.open_explorer")}
+                </Button>
+              }
+            />
           )}
         </div>
       </div>

@@ -92,7 +92,7 @@ export function MarkdownEditor({ value, onChange, onSave }: MarkdownEditorProps)
   }, [value, editor, setContent]);
 
   return (
-    <div className="flex-1 overflow-y-auto bg-background text-sm">
+    <div className="flex-1 overflow-y-auto bg-background text-sm focus-within:ring-1 focus-within:ring-primary/40">
       <EditorContent editor={editor} className="min-h-full" />
     </div>
   );

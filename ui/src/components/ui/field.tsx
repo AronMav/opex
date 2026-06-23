@@ -19,11 +19,10 @@ export function Field({ label, hint, error, htmlFor, className, labelClassName, 
   const id = htmlFor ?? (childProps.id ?? autoId);
   const descId = `${id}-desc`;
   const hasError = Boolean(error);
-  const describedBy = hasError
-    ? descId
-    : hint
-      ? descId
-      : childProps["aria-describedby"];
+  const describedBy =
+    [hasError || hint ? descId : null, childProps["aria-describedby"]]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
   return (
     <div className={cn("space-y-2", className)}>

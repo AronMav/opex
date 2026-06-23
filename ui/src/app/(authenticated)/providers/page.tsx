@@ -318,7 +318,7 @@ export default function ProvidersPage() {
               <RefreshCw className="h-4 w-4" />
               {t("common.refresh")}
             </Button>
-            <Button size="sm" onClick={openCreate} className="gap-1.5">
+            <Button size="lg" onClick={openCreate} className="w-full md:w-auto gap-2">
               <Plus className="h-4 w-4" />
               {t("providers.add")}
             </Button>
@@ -364,7 +364,7 @@ export default function ProvidersPage() {
                 <Collapsible key={cap} open={!isCollapsed} onOpenChange={() => toggleGroup(cap)}>
                   {/* Group header */}
                   <div className="flex items-center gap-2">
-                    <CollapsibleTrigger className="flex items-center gap-2 group/trigger">
+                    <CollapsibleTrigger className="flex items-center gap-2 group/trigger rounded outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                       <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
                       <Tooltip>
                         <TooltipTrigger asChild>

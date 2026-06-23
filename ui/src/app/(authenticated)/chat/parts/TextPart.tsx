@@ -36,7 +36,7 @@ function HighlightedText({ text, ranges, isActive }: { text: string; ranges: Hig
     parts.push(
       <mark
         key={`h-${range.start}`}
-        className={isActive ? "bg-yellow-400/80 rounded-sm" : "bg-yellow-300/60 rounded-sm"}
+        className={isActive ? "bg-highlight-active text-foreground rounded-sm" : "bg-highlight text-foreground rounded-sm"}
       >
         {text.slice(range.start, range.end)}
       </mark>,

@@ -59,14 +59,14 @@ function StateBadge({ state }: { state: SkillEntry["state"] }) {
   const { t } = useTranslation();
   if (state === "active") {
     return (
-      <Badge className="text-[10px] px-1.5 py-0 bg-green-500/15 text-green-700 dark:text-green-400 border-green-500/30 shrink-0">
+      <Badge variant="success" className="text-[10px] px-1.5 py-0 shrink-0">
         {t("skills.state_active")}
       </Badge>
     );
   }
   if (state === "stale") {
     return (
-      <Badge className="text-[10px] px-1.5 py-0 bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30 shrink-0">
+      <Badge variant="warning" className="text-[10px] px-1.5 py-0 shrink-0">
         {t("skills.state_stale")}
       </Badge>
     );
@@ -87,8 +87,9 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
   if (decision.action === "reject") {
     return (
       <Badge
+        variant="warning"
         title={decision.reason ?? ""}
-        className="text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20 shrink-0 cursor-help"
+        className="text-[10px] px-1.5 py-0 shrink-0 cursor-help"
       >
         {t("skills.curator_rejected")}
       </Badge>
@@ -117,7 +118,7 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
 function PinBadge() {
   const { t } = useTranslation();
   return (
-    <Badge className="text-[10px] px-1.5 py-0 bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/20 shrink-0">
+    <Badge variant="default" className="text-[10px] px-1.5 py-0 shrink-0">
       {t("skills.badge_pinned")}
     </Badge>
   );
@@ -241,11 +242,8 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                     className="flex items-start gap-2 rounded-md border border-border/40 bg-card/30 px-3 py-2"
                   >
                     <Badge
-                      className={
-                        d.action === "reject"
-                          ? "text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20 shrink-0 mt-0.5"
-                          : "text-[10px] px-1.5 py-0 bg-muted text-muted-foreground border-border/50 shrink-0 mt-0.5"
-                      }
+                      variant={d.action === "reject" ? "warning" : "secondary"}
+                      className="text-[10px] px-1.5 py-0 shrink-0 mt-0.5"
                     >
                       {d.action}
                     </Badge>
@@ -477,7 +475,7 @@ export default function SkillsPage() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-border/60 bg-card/50 p-6 space-y-5">
+          <div className="neu-flat p-6 space-y-5">
             <Field label={`${t("skills.field_name")} *`} labelClassName="text-xs">
               <Input
                 type="text"
@@ -579,8 +577,8 @@ export default function SkillsPage() {
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               {t("common.refresh")}
             </Button>
-            <Button size="sm" onClick={openNew}>
-              <Plus className="h-3.5 w-3.5" />
+            <Button size="lg" onClick={openNew} className="w-full md:w-auto gap-2">
+              <Plus className="h-4 w-4" />
               {t("skills.new_skill")}
             </Button>
           </div>
@@ -738,7 +736,7 @@ export default function SkillsPage() {
                       title={skill.pinned ? "Remove Curator protection" : "Protect from Curator"}
                     >
                       {skill.pinned
-                        ? <Lock className="h-3 w-3 text-blue-500" />
+                        ? <Lock className="h-3 w-3 text-primary" />
                         : <LockOpen className="h-3 w-3" />
                       }
                     </Button>

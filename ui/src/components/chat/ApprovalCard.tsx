@@ -122,7 +122,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
           <CollapsibleTrigger asChild>
             <button
               type="button"
-              className="p-0.5 text-muted-foreground/40 hover:text-foreground transition-colors group"
+              className="p-0.5 text-muted-foreground/40 hover:text-foreground transition-colors group rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={t("common.expand")}
             >
               <ChevronRight className="h-4 w-4 transition-transform duration-300 group-data-[state=open]:rotate-90" />
@@ -196,9 +196,9 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
               )}
             </Button>
             <Button
-              variant="default"
+              variant="success"
               size="sm"
-              className="flex-1 sm:flex-none bg-success hover:bg-success/90 text-white"
+              className="flex-1 sm:flex-none"
               aria-label={`${t("chat.approval_approve")} ${part.toolName}`}
               onClick={handleApprove}
               disabled={isSubmitting}

@@ -397,7 +397,7 @@ export default function SetupPage() {
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-8">
           <Bot className="h-8 w-8 text-primary" />
-          <span className="font-display text-2xl font-black tracking-wide uppercase">OPEX</span>
+          <span className="font-display text-2xl font-bold tracking-wide">OPEX</span>
         </div>
 
         {/* Step indicators */}
@@ -423,7 +423,7 @@ export default function SetupPage() {
         </div>
 
         {/* Card */}
-        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+        <div className="neu-card p-6">
           <h2 className="text-lg font-bold mb-1">{t(STEPS[currentIdx].labelKey)}</h2>
 
           {error && (
@@ -447,14 +447,14 @@ export default function SetupPage() {
                   {allChecks.map(({ key, label, check }) => (
                     <div
                       key={key}
-                      className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3"
+                      className="flex items-start gap-3 rounded-lg neu-inset p-3"
                     >
                       <div className="mt-0.5 shrink-0">
                         {check.status === "ok" && (
-                          <CheckCircle2 className="h-4 w-4 text-green-500" />
+                          <CheckCircle2 className="h-4 w-4 text-success" />
                         )}
                         {check.status === "warn" && (
-                          <AlertTriangle className="h-4 w-4 text-amber-500" />
+                          <AlertTriangle className="h-4 w-4 text-warning" />
                         )}
                         {check.status === "error" && (
                           <XCircle className="h-4 w-4 text-destructive" />
@@ -464,7 +464,7 @@ export default function SetupPage() {
                         <p className="text-sm font-medium">{label}</p>
                         <p className="text-xs text-muted-foreground mt-0.5">{check.message}</p>
                         {check.fix_hint && (
-                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 font-mono">
+                          <p className="text-xs text-warning mt-1 font-mono">
                             {check.fix_hint}
                           </p>
                         )}
@@ -474,12 +474,12 @@ export default function SetupPage() {
 
                   {/* Summary banner */}
                   {!hasError && !hasWarn && (
-                    <div className="rounded-lg bg-green-500/10 border border-green-500/20 p-3 text-sm text-green-600 dark:text-green-400">
+                    <div className="rounded-lg bg-success/10 border border-success/20 p-3 text-sm text-success">
                       {t("setup.requirements_pass")}
                     </div>
                   )}
                   {!hasError && hasWarn && (
-                    <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-sm text-amber-600 dark:text-amber-400">
+                    <div className="rounded-lg bg-warning/10 border border-warning/20 p-3 text-sm text-warning">
                       {t("setup.requirements_warn")}
                     </div>
                   )}
@@ -498,12 +498,12 @@ export default function SetupPage() {
                       {requirements.cli_tools.map((tool) => (
                         <div
                           key={tool.name}
-                          className={`flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 ${tool.status !== "ok" ? "opacity-50" : ""
+                          className={`flex items-start gap-3 rounded-lg neu-inset p-3 ${tool.status !== "ok" ? "opacity-50" : ""
                             }`}
                         >
                           <div className="mt-0.5 shrink-0">
                             {tool.status === "ok" ? (
-                              <CheckCircle2 className="h-4 w-4 text-green-500" />
+                              <CheckCircle2 className="h-4 w-4 text-success" />
                             ) : (
                               <XCircle className="h-4 w-4 text-muted-foreground" />
                             )}
@@ -581,7 +581,7 @@ export default function SetupPage() {
                           <span className="flex items-center gap-2">
                             {pt.name || pt.id}
                             {detectedClis.includes(pt.id) && (
-                              <span className="text-[10px] font-semibold px-1.5 py-0 rounded bg-green-500/10 text-green-600 border border-green-500/20">
+                              <span className="text-[10px] font-semibold px-1.5 py-0 rounded bg-success/10 text-success border border-success/20">
                                 {t("setup.cli_detected")}
                               </span>
                             )}
@@ -779,7 +779,7 @@ export default function SetupPage() {
                       <span className="text-xs text-muted-foreground">{t("setup.network_wan")}:</span>
                       <span className="ml-2 font-mono text-xs">{networkData.wan.ip}</span>
                       {networkData.wan.is_cgnat && (
-                        <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">
+                        <span className="ml-2 text-xs text-warning">
                           ({t("setup.network_cgnat")})
                         </span>
                       )}

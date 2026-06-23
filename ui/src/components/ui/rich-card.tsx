@@ -14,7 +14,7 @@ export function TableCard({ data }: { data: Record<string, unknown> }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border/60 bg-card/50">
+    <div className="neu-flat overflow-hidden">
       {title && (
         <div className="border-b border-border/40 px-4 py-2.5">
           <span className="text-sm font-semibold text-foreground">{title}</span>
@@ -70,7 +70,7 @@ export function MetricCard({ data }: { data: Record<string, unknown> }) {
         : "text-muted-foreground";
 
   return (
-    <div className="inline-flex flex-col gap-1 rounded-xl border border-border/60 bg-card/50 px-5 py-4 overflow-hidden min-w-0">
+    <div className="neu-flat inline-flex flex-col gap-1 px-5 py-4 overflow-hidden min-w-0">
       {title && (
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
           {title}

@@ -371,7 +371,7 @@ export function ChatComposer() {
                 type="button"
                 aria-label={t("chat.remove_attachment")}
                 onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X size={12} />
               </button>
@@ -386,7 +386,7 @@ export function ChatComposer() {
                 type="button"
                 aria-label={t("chat.cancel_queue")}
                 onClick={() => useChatStore.getState().clearPending()}
-                className="shrink-0 rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                className="shrink-0 rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X size={12} />
               </button>
@@ -414,7 +414,7 @@ export function ChatComposer() {
                 type="button"
                 aria-label={t("chat.clear_mention")}
                 onClick={clearResolvedMention}
-                className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+                className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X size={12} />
               </button>
@@ -436,7 +436,7 @@ export function ChatComposer() {
               <button
                 type="button"
                 aria-label={t("chat.attach")}
-                className="rounded p-3 md:p-2 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+                className="rounded p-3 md:p-2 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Paperclip className="h-4 w-4" />
@@ -459,7 +459,7 @@ export function ChatComposer() {
                   disabled={voice.state === "transcribing"}
                   onClick={handleMicClick}
                   className={cn(
-                    "rounded p-3 md:p-2 transition-colors",
+                    "rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     voice.state === "recording"
                       ? "text-destructive animate-pulse ring-2 ring-destructive/40 rounded-full"
                       : voice.state === "transcribing"
@@ -487,7 +487,7 @@ export function ChatComposer() {
                   type="button"
                   title={t("chat.export_session_tooltip")}
                   aria-label={t("chat.export_session")}
-                  className="rounded p-3 md:p-2 text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+                  className="rounded p-3 md:p-2 text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => useChatStore.getState().exportSession()}
                 >
                   <Download className="h-4 w-4" />

@@ -164,10 +164,11 @@ export default function WebhooksPage() {
         description={t("webhooks.subtitle")}
         actions={
           <Button
+            size="lg"
             onClick={openCreate}
-            className="w-full md:w-auto h-11 px-6 text-sm font-semibold transition-all duration-200 active:scale-95"
+            className="w-full md:w-auto gap-2"
           >
-            <Plus className="mr-2 h-4 w-4" /> {t("webhooks.new_webhook")}
+            <Plus className="h-4 w-4" /> {t("webhooks.new_webhook")}
           </Button>
         }
       />
@@ -267,7 +268,7 @@ export default function WebhooksPage() {
                   size="icon"
                   onClick={() => regenerateSecret(w.id)}
                   disabled={mutating}
-                  className="text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10"
+                  className="text-muted-foreground hover:text-warning hover:bg-warning/10"
                   title={t("webhooks.regenerate_secret")}
                   aria-label={t("common.regenerate_secret")}
                 >

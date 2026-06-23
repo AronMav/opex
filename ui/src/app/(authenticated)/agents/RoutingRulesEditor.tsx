@@ -6,6 +6,7 @@ import type { TranslationKey } from "@/i18n/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Field } from "@/components/ui/field";
 import type { Provider, RoutingRule } from "@/types/api";
 import { Link2, Settings, Plus, ChevronDown, ChevronUp, X } from "lucide-react";
 
@@ -51,21 +52,6 @@ export const FALLBACK_MODELS: Record<string, string[]> = {
   "claude-cli": [],
   together: [],
 };
-
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-medium text-muted-foreground">{label}</label>
-      {children}
-    </div>
-  );
-}
 
 function RoutingRuleRow({
   rule,
@@ -168,7 +154,7 @@ function RoutingRuleRow({
       </div>
       {expanded && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 animate-in fade-in duration-200">
-          <Field label={t("agents.routing_field_temperature")}>
+          <Field label={t("agents.routing_field_temperature")} labelClassName="text-xs">
             <Input
               type="number"
               step="0.1"
@@ -204,7 +190,7 @@ export function RoutingRulesEditor({
   const { t } = useTranslation();
 
   return (
-    <div className="space-y-3 border-t border-border/50 pt-5">
+    <div className="space-y-2 border-t border-border/30 pt-3">
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">
           {t("agents.section_routing_rules")}

@@ -259,7 +259,7 @@ export default function SecretsPage() {
                   <Button
                     variant="ghost"
                     size="icon-lg"
-                    className="w-full md:w-auto text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10"
+                    className="w-full md:w-auto text-muted-foreground hover:text-warning hover:bg-warning/10"
                     onClick={() => revealSecret(s.name, s.scope || "")}
                     disabled={isLoading || mutating}
                     title={t("secrets.reveal")}

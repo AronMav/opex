@@ -2,6 +2,7 @@
 import * as React from "react";
 import type { TimeoutsConfig } from "@/types/api";
 import { useTranslation } from "@/hooks/use-translation";
+import { Input } from "@/components/ui/input";
 
 const DEFAULTS: TimeoutsConfig = {
   connect_secs: 10,
@@ -50,13 +51,13 @@ export function TimeoutsSection({ value, onChange }: Props) {
           <label key={k} htmlFor={fid} className="flex items-center justify-between gap-4">
             <span className="text-sm">{label}</span>
             <div className="flex items-center gap-2">
-              <input
+              <Input
                 id={fid}
                 type="number"
                 aria-label={label}
                 value={value[k] ?? DEFAULTS[k]}
                 onChange={(e) => onChange({ ...value, [k]: Number(e.target.value) })}
-                className="w-24 rounded border bg-background px-2 py-1 text-sm"
+                className="w-24 h-8 text-sm"
                 min={BOUNDS[k][0]}
                 max={BOUNDS[k][1]}
               />
