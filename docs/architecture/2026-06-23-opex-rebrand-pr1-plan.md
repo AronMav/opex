@@ -32,8 +32,8 @@
 ## File Structure
 
 **Новый код:**
-- `crates/opex-core/src/util/env.rs` — dual-read env helper (`env_var`).
-- `crates/opex-core/src/util/config_path.rs` — dual-path резолвер пути конфига.
+- `crates/opex-gateway-util/src/env.rs` — dual-read env helper (`env_var`) + dual-path резолвер (`resolve_config_path`/`resolve_config_path_in`). Размещаем в **gateway-util, НЕ в core**: фасад `opex-core/src/lib.rs` имеет жёсткий cap на число pub-модулей (нельзя вводить новый public-surface); core уже зависит от gateway-util. `main.rs` (отдельный bin-крейт) ссылается как `opex_gateway_util::…`.
+- watchdog получает **локальную** 3-строчную копию dual-read (нет внутренних крейт-зависимостей; подключать gateway-util = тянуть axum/sqlx).
 - `crates/opex-migrate-checksums/` — новый бинарный крейт-хелпер (печатает `UPDATE _sqlx_migrations …`); используется в PR2, но компилируется в PR1.
 - `migrations/051_rename_ephemeral_tag.sql` — переписывает ephemeral-комментари на `@opex:ephemeral`.
 - `README.en.md` — англоязычный README (бывший `README.md`).
@@ -124,19 +124,20 @@ git commit -m "refactor: переименование крейтов hydeclaw-* 
 ## Task 2: Dual-read env helper для продакшен-ключей
 
 **Files:**
-- Create: `crates/opex-core/src/util/env.rs`
-- Modify: `crates/opex-core/src/util/mod.rs` (или `lib.rs` — добавить `pub mod util;`/`pub mod env;` по факту)
+- Create: `crates/opex-gateway-util/src/env.rs`
+- Modify: `crates/opex-gateway-util/src/lib.rs` (добавить `pub mod env;`)
 - Modify: `crates/opex-core/src/main.rs:50` (autogen), `:1023` (master key), `:890` (DISABLE_REDRIVE)
-- Modify: `crates/opex-watchdog/src/main.rs:37,42` (AUTH_TOKEN, CORE_URL)
-- Test: `crates/opex-core/src/util/env.rs` (`#[cfg(test)]`)
+- Modify: `crates/opex-core/src/gateway/handlers/email_triggers.rs:171` (AUTH_TOKEN) ← **было пропущено**
+- Modify: `crates/opex-watchdog/src/main.rs:37,42` (AUTH_TOKEN, CORE_URL) — локальная инлайн-копия
+- Test: `crates/opex-gateway-util/src/env.rs` (`#[cfg(test)]`)
 
 **Interfaces:**
-- Produces: `pub fn env_var(suffix: &str) -> Option<String>` — читает `OPEX_{suffix}`, при отсутствии `HYDECLAW_{suffix}`.
+- Produces: `pub fn env_var(suffix: &str) -> Option<String>` в крейте `opex_gateway_util` — читает `OPEX_{suffix}`, при отсутствии `HYDECLAW_{suffix}`. Lib-код core и `main.rs` вызывают `opex_gateway_util::env_var(...)`. watchdog держит локальную копию той же функции.
 
 - [ ] **Step 1: Написать падающий тест**
 
 ```rust
-// crates/opex-core/src/util/env.rs
+// crates/opex-gateway-util/src/env.rs
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,7 +167,7 @@ Expected: FAIL — `cannot find function env_var`.
 - [ ] **Step 3: Реализовать helper**
 
 ```rust
-// crates/opex-core/src/util/env.rs (верх файла)
+// crates/opex-gateway-util/src/env.rs (верх файла)
 //! Dual-read env: читает OPEX_<suffix>, при отсутствии — HYDECLAW_<suffix>.
 //! Fallback удаляется в PR3 после миграции .env на сервере.
 
@@ -178,7 +179,7 @@ pub fn env_var(suffix: &str) -> Option<String> {
 }
 ```
 
-Зарегистрировать модуль (если `util` ещё нет — создать `crates/opex-core/src/util/mod.rs` с `pub mod env;` и добавить `pub mod util;` в `lib.rs`).
+Зарегистрировать модуль: добавить `pub mod env;` в `crates/opex-gateway-util/src/lib.rs`.
 
 - [ ] **Step 4: Запустить тест — убедиться, что проходит**
 
@@ -187,11 +188,14 @@ Expected: PASS.
 
 - [ ] **Step 5: Применить helper к местам чтения**
 
-В `crates/opex-core/src/main.rs`:
-- `:1023` `std::env::var("HYDECLAW_MASTER_KEY")` → `crate::util::env::env_var("MASTER_KEY")` (сохранить ветку auto-generate; `Result`→`Option` — заменить `.unwrap_or_else(|_| …)` на `match … { Some(v)=>v, None=>{…} }`).
-- `:890` `std::env::var("HYDECLAW_DISABLE_REDRIVE").is_ok()` → `crate::util::env::env_var("DISABLE_REDRIVE").is_some()`.
+В `crates/opex-core/src/main.rs` (bin-крейт → ссылается на lib по имени крейта):
+- `:1023` `std::env::var("HYDECLAW_MASTER_KEY")` → `opex_gateway_util::env_var("MASTER_KEY")` (сохранить ветку auto-generate; `Result`→`Option` — заменить `.unwrap_or_else(|_| …)` на `match … { Some(v)=>v, None=>{…} }`).
+- `:890` `std::env::var("HYDECLAW_DISABLE_REDRIVE").is_ok()` → `opex_gateway_util::env_var("DISABLE_REDRIVE").is_some()`.
 
-В `crates/opex-watchdog/src/main.rs` (helper в core; продублировать минимальную копию в watchdog `src/` либо вынести в `opex-gateway-util`; выбрать существующий общий крейт). Простейшее: добавить такую же `env_var` в watchdog локально:
+В `crates/opex-core/src/gateway/handlers/email_triggers.rs:171` (lib-код):
+- `std::env::var("HYDECLAW_AUTH_TOKEN").unwrap_or_default()` → `opex_gateway_util::env_var("AUTH_TOKEN").unwrap_or_default()`.
+
+В `crates/opex-watchdog/src/main.rs` — добавить локальную копию `fn env_var` (watchdog не зависит от gateway-util; подключать его = тянуть axum/sqlx):
 - `:37` `std::env::var("HYDECLAW_AUTH_TOKEN").unwrap_or_default()` → `env_var("AUTH_TOKEN").unwrap_or_default()`.
 - `:42` `std::env::var("HYDECLAW_CORE_URL")` → `env_var("CORE_URL")`.
 
@@ -234,11 +238,12 @@ git commit -m "feat: dual-read env (OPEX_* с fallback на HYDECLAW_*) + autoge
 ## Task 3: Dual-path загрузчик конфига + переименование файла
 
 **Files:**
-- Create: `crates/opex-core/src/util/config_path.rs`
+- Create: `crates/opex-gateway-util/src/config_path.rs`
+- Modify: `crates/opex-gateway-util/src/lib.rs` (`pub mod config_path;`)
 - Modify: `crates/opex-core/src/main.rs:278,303`
-- Modify: `crates/opex-memory-worker/src/main.rs:40`
+- Modify: `crates/opex-memory-worker/src/main.rs:40` (если memory-worker не зависит от gateway-util — локальная копия резолвера)
 - Rename: `config/hydeclaw.toml` → `config/opex.toml`
-- Test: `crates/opex-core/src/util/config_path.rs`
+- Test: `crates/opex-gateway-util/src/config_path.rs`
 
 **Interfaces:**
 - Produces: `pub fn resolve_config_path() -> String` — возвращает `config/opex.toml` если файл существует, иначе `config/hydeclaw.toml`.
@@ -246,7 +251,7 @@ git commit -m "feat: dual-read env (OPEX_* с fallback на HYDECLAW_*) + autoge
 - [ ] **Step 1: Написать падающий тест**
 
 ```rust
-// crates/opex-core/src/util/config_path.rs
+// crates/opex-gateway-util/src/config_path.rs
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,7 +280,7 @@ Expected: FAIL — функция не найдена.
 - [ ] **Step 3: Реализовать**
 
 ```rust
-// crates/opex-core/src/util/config_path.rs
+// crates/opex-gateway-util/src/config_path.rs
 //! Dual-path конфиг: предпочитает config/opex.toml, fallback config/hydeclaw.toml.
 //! Fallback удаляется в PR3 после переименования файла на сервере.
 use std::path::Path;
@@ -295,7 +300,7 @@ pub fn resolve_config_path_in(base: &Path) -> String {
 }
 ```
 
-Добавить `pub mod config_path;` в `util/mod.rs`. Добавить `tempfile` в `[dev-dependencies]` крейта `opex-core` (если ещё нет).
+Добавить `pub mod config_path;` в `crates/opex-gateway-util/src/lib.rs`. Добавить `tempfile` в `[dev-dependencies]` крейта `opex-gateway-util` (если ещё нет).
 
 - [ ] **Step 4: Запустить — убедиться, что проходит**
 
@@ -304,9 +309,9 @@ Expected: PASS.
 
 - [ ] **Step 5: Подключить в местах загрузки**
 
-`crates/opex-core/src/main.rs:278`: `config::AppConfig::load("config/hydeclaw.toml")?` → `config::AppConfig::load(&crate::util::config_path::resolve_config_path())?`.
-`crates/opex-core/src/main.rs:303`: строку `"config/hydeclaw.toml".to_string()` → `crate::util::config_path::resolve_config_path()`.
-`crates/opex-memory-worker/src/main.rs:40`: дефолт-аргумент `unwrap_or("config/hydeclaw.toml".into())` → fallback-логика: если аргумент не задан, выбрать `config/opex.toml` при наличии, иначе `config/hydeclaw.toml`.
+`crates/opex-core/src/main.rs:278`: `config::AppConfig::load("config/hydeclaw.toml")?` → `config::AppConfig::load(&opex_gateway_util::resolve_config_path())?`.
+`crates/opex-core/src/main.rs:303`: строку `"config/hydeclaw.toml".to_string()` → `opex_gateway_util::resolve_config_path()`.
+`crates/opex-memory-worker/src/main.rs:40`: дефолт-аргумент `unwrap_or("config/hydeclaw.toml".into())` → fallback-логика: если аргумент не задан, выбрать `config/opex.toml` при наличии, иначе `config/hydeclaw.toml` (через `opex_gateway_util::resolve_config_path()` если есть зависимость, иначе локальная копия).
 
 - [ ] **Step 6: Переименовать файл конфига**
 
@@ -444,6 +449,7 @@ license.workspace = true
 
 [dependencies]
 sqlx = { workspace = true }
+tokio = { workspace = true }   # нужен для #[tokio::main] + async Migrator::new
 ```
 
 Добавить `"crates/opex-migrate-checksums"` в `Cargo.toml` `members`.
@@ -508,7 +514,11 @@ sed -i 's/hydeclaw\.local/opex.local/g' crates/opex-core/src/gateway/handlers/ne
 grep -rl 'HydeClaw' --include='*.rs' --include='*.ts' --include='*.tsx' . | xargs sed -i 's/HydeClaw/OPEX/g'
 # Прочие нижнерегистровые текстовые упоминания в коде (комментарии/строки), исключая migrations/
 grep -rl 'hydeclaw' --include='*.rs' --include='*.ts' --include='*.tsx' . | xargs sed -i 's/hydeclaw/opex/g'
+# B4: имя docker-сети в sandbox.rs — runtime-coupling, ДОЛЖНО остаться hydeclaw до PR2
+sed -i 's/Some("opex".to_string())/Some("hydeclaw".to_string())/' crates/opex-core/src/containers/sandbox.rs
 ```
+
+Примечание: реальная регистрация mDNS — `main.rs:1475` (`_hydeclaw._tcp.local.`, `hydeclaw.local.`) — переворачивается этим же blanket-sed (безопасно), как и OTEL-имена `main.rs:228/249` и `otel_init.rs:81`. `network.rs:189` уже обработан в Step 1.
 
 - [ ] **Step 3: Scaffold и skills**
 
@@ -711,7 +721,11 @@ git commit -m "docs: README на русском (+README.en.md), перевод 
 - [ ] `cargo test` (+ `make test-db` при наличии Postgres) — зелёное
 - [ ] `cd ui && npm run build && npm test` — зелёное
 - [ ] `cd channels && bun test` — зелёное
-- [ ] `grep -rin 'hydeclaw' . | grep -v -E 'migrations/0[0-4][0-9]_|migrations/050_|\.git/|target/|node_modules/'` — остаются только **старые файлы миграций** и **deploy-инфра** (`.deploy.env`, `deploy/server/*.service`, `docker/docker-compose.yml`, серверные пути в `Makefile`/скриптах) → это объём **PR2**.
+- [ ] `grep -rin 'hydeclaw' . | grep -v -E 'migrations/0[0-4][0-9]_|migrations/050_|\.git/|target/|node_modules/'` — ожидаемый остаток = объём **PR2**:
+  - старые файлы миграций (комментарии);
+  - deploy-инфра: `.deploy.env`, `deploy/server/*.service`, `docker/docker-compose.yml`, `docker/.env.example`, серверные пути/юниты в `Makefile`/скриптах;
+  - `config/opex.toml` [database].url (`postgresql://hydeclaw:hydeclaw@…/hydeclaw`) — имя БД, меняется при ренейме БД в PR2;
+  - `crates/opex-core/src/containers/sandbox.rs` — имя docker-сети (синхронно с PR2).
 - [ ] Деплой-репетиция (опц., если уместно): `make remote-deploy` — сервис поднимается на **старом** `.env`/конфиге/путях (доказательство dual-read/dual-path).
 
 ---
