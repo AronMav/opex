@@ -1,7 +1,8 @@
 //! Credential file persistence for the Gemini Cloud Code OAuth provider.
 //!
 //! **Path resolution (in priority order):**
-//! 1. `OPEX_OAUTH_CREDENTIALS_PATH` env var — used by tests and operators.
+//! 1. `OPEX_OAUTH_CREDENTIALS_PATH` env var (fallback: `HYDECLAW_OAUTH_CREDENTIALS_PATH`) —
+//!    read via `opex_gateway_util::env::env_var`; used by tests and operators.
 //! 2. Platform default:
 //!    - Linux/macOS: `~/.config/hydeclaw/google_oauth.json`
 //!    - Windows:     `%APPDATA%\hydeclaw\google_oauth.json`
@@ -27,15 +28,12 @@ use super::types::{GoogleCredentials, OauthError};
 
 // ── Path resolution ───────────────────────────────────────────────────────────
 
-/// Environment variable that overrides the credentials file path.
-/// Intended for tests and operator-managed deployments.
-const CREDENTIALS_PATH_ENV: &str = "OPEX_OAUTH_CREDENTIALS_PATH";
-
 /// Resolve the credentials file path.
 ///
-/// Priority: `OPEX_OAUTH_CREDENTIALS_PATH` env var → platform default.
+/// Priority: `OPEX_OAUTH_CREDENTIALS_PATH` (then `HYDECLAW_OAUTH_CREDENTIALS_PATH`
+/// via dual-read helper) → platform default.
 pub fn credentials_path() -> PathBuf {
-    if let Ok(p) = std::env::var(CREDENTIALS_PATH_ENV)
+    if let Some(p) = opex_gateway_util::env::env_var("OAUTH_CREDENTIALS_PATH")
         && !p.is_empty()
     {
         return PathBuf::from(p);
@@ -245,25 +243,28 @@ mod tests {
         }
     }
 
+    /// The env var the dual-read helper checks first for the credentials path.
+    const TEST_CREDS_ENV: &str = "OPEX_OAUTH_CREDENTIALS_PATH";
+
     /// Run a closure with `OPEX_OAUTH_CREDENTIALS_PATH` set to a temp-dir
     /// path, then restore the env var (or remove it if it wasn't set).
     fn with_tmp_path<F: FnOnce(PathBuf)>(f: F) {
         let dir = tempfile::tempdir().expect("tempdir");
         let creds_path = dir.path().join("google_oauth.json");
-        let prev = std::env::var(CREDENTIALS_PATH_ENV).ok();
+        let prev = std::env::var(TEST_CREDS_ENV).ok();
 
         // SAFETY: test-only mutation; serial_test / thread sequencing prevents
         // races between tests that touch the same env var.
         unsafe {
-            std::env::set_var(CREDENTIALS_PATH_ENV, &creds_path);
+            std::env::set_var(TEST_CREDS_ENV, &creds_path);
         }
 
         f(creds_path);
 
         unsafe {
             match &prev {
-                Some(v) => std::env::set_var(CREDENTIALS_PATH_ENV, v),
-                None => std::env::remove_var(CREDENTIALS_PATH_ENV),
+                Some(v) => std::env::set_var(TEST_CREDS_ENV, v),
+                None => std::env::remove_var(TEST_CREDS_ENV),
             }
         }
     }

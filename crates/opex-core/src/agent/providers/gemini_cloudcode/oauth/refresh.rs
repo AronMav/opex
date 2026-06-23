@@ -189,7 +189,7 @@ mod tests {
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
-    /// Env var that overrides the credentials file path (mirrors `storage::CREDENTIALS_PATH_ENV`).
+    /// Env var that overrides the credentials file path (read first by the dual-read helper in `storage::credentials_path`).
     const CREDS_PATH_ENV: &str = "OPEX_OAUTH_CREDENTIALS_PATH";
 
     /// Set `OPEX_OAUTH_CREDENTIALS_PATH` to a fresh temp path, run `f`, restore.
