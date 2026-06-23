@@ -75,15 +75,16 @@ export default function LoginPage() {
                   disabled={loading}
                   className="h-12 border-border bg-background font-mono text-sm placeholder:text-muted-foreground/50 focus:border-primary/40 rounded-xl neu-inset pr-12"
                 />
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={() => setShowToken((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   aria-label={t("login.show_token")}
-                  tabIndex={-1}
                 >
                   {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
+                </Button>
               </div>
             </div>
 

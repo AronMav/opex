@@ -134,7 +134,7 @@ function VirtuosoFooter({ turnLimitMessage }: { turnLimitMessage: string | null 
       {turnLimitMessage && (
         <div
           data-testid="turn-limit-message"
-          className="flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 dark:bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400 my-3 animate-in fade-in slide-in-from-bottom-2 duration-200"
+          className="flex items-center gap-3 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning my-3 animate-in fade-in slide-in-from-bottom-2 duration-200"
         >
           <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
@@ -160,6 +160,7 @@ export function MessageList({
   onLoadEarlier,
   searchMatchIds,
   searchActive,
+  searchOpen,
 }: {
   agent?: string;
   messages: ChatMessage[];
@@ -175,8 +176,18 @@ export function MessageList({
   searchMatchIds?: Set<string>;
   /** When true, non-matching messages are dimmed. */
   searchActive?: boolean;
+  /**
+   * True when the in-app SearchBar is open. The SearchBar wrapper already
+   * supplies the mobile pt-14 offset above this list, so the list must NOT
+   * add it again (avoids a double mobile-header offset). Desktop (lg) is
+   * unaffected — lg:pt-0 is a no-op either way.
+   */
+  searchOpen?: boolean;
 }) {
   const { t } = useTranslation();
+  // Mobile-header offset. Suppressed when the SearchBar is open because its
+  // wrapper already provides pt-14; desktop (lg) is always lg:pt-0.
+  const topOffset = searchOpen ? "" : "pt-14 lg:pt-0";
   const storeAgent = useChatStore((s) => s.currentAgent);
   const currentAgent = agent || storeAgent;
   const activeSessionId = useChatStore((s) => s.agents[currentAgent]?.activeSessionId ?? null);
@@ -237,7 +248,7 @@ export function MessageList({
 
   if (isLoadingHistory && messages.length === 0) {
     return (
-      <div className="flex flex-1 flex-col overflow-y-auto pt-14 lg:pt-0">
+      <div className={cn("flex flex-1 flex-col overflow-y-auto", topOffset)}>
         <MessageListSkeleton />
       </div>
     );
@@ -245,14 +256,14 @@ export function MessageList({
 
   if (messages.length === 0 && !showThinking) {
     return (
-      <div className="flex flex-1 flex-col overflow-y-auto pt-14 lg:pt-0">
+      <div className={cn("flex flex-1 flex-col overflow-y-auto", topOffset)}>
         {emptyState}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-1 flex-col pt-14 lg:pt-0 relative overflow-hidden overscroll-contain">
+    <div className={cn("flex flex-1 flex-col relative overflow-hidden overscroll-contain", topOffset)}>
       <Virtuoso
         ref={virtuosoRef}
         scrollerRef={(el) => setScrollerEl(el as HTMLElement)}

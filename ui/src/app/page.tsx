@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
+import { CircularLoader } from "@/components/ui/loader";
 
 export default function RootPage() {
   const router = useRouter();
@@ -21,7 +22,7 @@ export default function RootPage() {
 
   return (
     <div className="flex h-dvh items-center justify-center">
-      <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      <CircularLoader size="md" />
     </div>
   );
 }

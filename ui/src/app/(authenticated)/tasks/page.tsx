@@ -15,6 +15,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
 import { CircularLoader } from "@/components/ui/loader";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -51,7 +52,7 @@ import { isValidCron } from "@/lib/cron";
 export default function CronPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const { data: jobs = [], error } = useCronJobs();
+  const { data: jobs = [], isLoading, error } = useCronJobs();
   const [actionError, setActionError] = useState("");
   const [formOpen, setFormOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -170,22 +171,29 @@ export default function CronPage() {
           description={t("cron.subtitle")}
           actions={
             <Button
+              size="lg"
               onClick={openCreate}
-              className="w-full md:w-auto h-11 px-6 text-sm font-semibold transition-all duration-200 active:scale-95"
+              className="w-full md:w-auto gap-2"
             >
-              <Plus className="mr-2 h-4 w-4" /> {t("cron.new_task")}
+              <Plus className="h-4 w-4" /> {t("cron.new_task")}
             </Button>
           }
         />
 
         {errorMessage && <ErrorBanner error={errorMessage} />}
 
-        {jobs.length === 0 ? (
+        {isLoading ? (
+          <div className="grid gap-4 md:gap-6">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-32 rounded-xl" />
+            ))}
+          </div>
+        ) : jobs.length === 0 ? (
           <EmptyState icon={Clock} text={t("cron.no_tasks")} />
         ) : (
           <div className="grid gap-4 md:gap-6">
             {jobs.map((j) => (
-              <div key={j.id} className={`group relative flex flex-col md:flex-row md:items-stretch gap-4 neu-card p-5 transition-all duration-300 ${
+              <div key={j.id} className={`group relative flex flex-col md:flex-row md:flex-wrap md:items-stretch gap-4 neu-card p-5 transition-all duration-300 ${
                 j.enabled
                   ? "hover:shadow-lg"
                   : "opacity-70 hover:opacity-100"

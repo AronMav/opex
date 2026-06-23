@@ -538,10 +538,10 @@ export default function ChatPage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 px-3 border-border/50 bg-muted/30 text-xs font-medium transition-all hover:bg-primary/15 hover:text-primary hover:border-primary/30"
+            className="h-8 px-3 border-primary/30 bg-primary/10 text-primary text-xs font-medium transition-all hover:bg-primary/15 hover:text-primary hover:border-primary/30"
             onClick={handleNewChat}
           >
-            <Plus className="mr-1.5 h-3.5 w-3.5" /> {t("chat.new")}
+            <Plus className="mr-1.5 h-4 w-4" /> {t("chat.new")}
           </Button>
         </div>
       </div>
@@ -585,7 +585,7 @@ export default function ChatPage() {
                   <div className="group relative pb-1.5 flex items-stretch gap-1 min-w-0 overflow-hidden">
                     <button
                       onClick={() => toggleSessionSelection(s.id)}
-                      className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer ${
+                      className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
                         isSelected
                           ? "bg-primary border-primary"
                           : "border-border/60 bg-transparent hover:border-primary/40"
@@ -655,7 +655,7 @@ export default function ChatPage() {
                             }
                             setRenamingSessionId(null);
                           }}
-                          className="w-full truncate text-sm bg-transparent border-b border-primary outline-none text-foreground placeholder:text-muted-foreground/50"
+                          className="w-full truncate text-sm bg-transparent border-b border-primary outline-none focus-visible:ring-1 focus-visible:ring-ring text-foreground placeholder:text-muted-foreground/50"
                           placeholder={t("chat.rename_session")}
                         />
                       ) : (

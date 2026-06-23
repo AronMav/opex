@@ -9,6 +9,9 @@ import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
 import {
   Select,
   SelectContent,
@@ -183,9 +186,11 @@ function GmailSection({
                   </p>
                 )}
               </div>
-              <button
-                type="button"
-                className="ml-3 shrink-0 text-muted-foreground hover:text-destructive transition-colors"
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={t("integrations.stop")}
+                className="ml-3 shrink-0 hover:text-destructive"
                 onClick={async () => {
                   try {
                     await apiDelete(`/api/triggers/email/${trigger.id}`);
@@ -195,10 +200,9 @@ function GmailSection({
                     console.error(e);
                   }
                 }}
-                title={t("integrations.stop")}
               >
                 <X className="h-3.5 w-3.5" />
-              </button>
+              </Button>
             </div>
           ))}
         </div>
@@ -303,14 +307,15 @@ function GitHubReposInline({ agent }: { agent: string }) {
                 <span className="font-mono text-xs font-semibold truncate min-w-0">
                   {r.owner}/{r.repo}
                 </span>
-                <button
-                  type="button"
-                  className="ml-3 shrink-0 text-muted-foreground hover:text-destructive transition-colors"
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t("integrations.remove")}
+                  className="ml-3 shrink-0 hover:text-destructive"
                   onClick={() => handleDelete(r.id)}
-                  title={t("integrations.remove")}
                 >
                   <X className="h-3.5 w-3.5" />
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -361,7 +366,6 @@ export default function IntegrationsPage() {
   const { t, locale } = useTranslation();
   const agents = useAuthStore((s) => s.agents);
   const [selectedAgent, setSelectedAgent] = useState<string>("");
-  const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addForm, setAddForm] = useState({ provider: "github" as Provider, displayName: "", clientId: "", clientSecret: "" });
   const [addSaving, setAddSaving] = useState(false);
@@ -384,10 +388,10 @@ export default function IntegrationsPage() {
     const error = searchParams.get("error");
     if (connected) {
       const label = PROVIDER_LABEL[connected as Provider] ?? connected;
-      setToast({ msg: t("integrations.connected_success", { provider: label }), type: "ok" });
+      toast.success(t("integrations.connected_success", { provider: label }));
       queryClient.invalidateQueries({ queryKey: qk.oauthAccounts });
     } else if (error) {
-      setToast({ msg: t("integrations.oauth_error", { error: decodeURIComponent(error) }), type: "err" });
+      toast.error(t("integrations.oauth_error", { error: decodeURIComponent(error) }));
     }
   }, [searchParams, queryClient, t]);
 
@@ -410,9 +414,9 @@ export default function IntegrationsPage() {
       queryClient.invalidateQueries({ queryKey: qk.oauthAccounts });
       setAddForm({ provider: "github", displayName: "", clientId: "", clientSecret: "" });
       setAddOpen(false);
-      setToast({ msg: t("integrations.account_added"), type: "ok" });
+      toast.success(t("integrations.account_added"));
     } catch (e) {
-      setToast({ msg: t("integrations.add_failed", { error: `${e}` }), type: "err" });
+      toast.error(t("integrations.add_failed", { error: `${e}` }));
     } finally {
       setAddSaving(false);
     }
@@ -426,7 +430,7 @@ export default function IntegrationsPage() {
       );
       window.location.href = res.auth_url;
     } catch (e) {
-      setToast({ msg: t("integrations.connection_error", { error: `${e}` }), type: "err" });
+      toast.error(t("integrations.connection_error", { error: `${e}` }));
     }
   };
 
@@ -435,9 +439,9 @@ export default function IntegrationsPage() {
       await apiPost(`/api/oauth/accounts/${accountId}/revoke`, {});
       queryClient.invalidateQueries({ queryKey: qk.oauthAccounts });
       queryClient.invalidateQueries({ queryKey: qk.oauthBindings(selectedAgent) });
-      setToast({ msg: t("integrations.account_revoked"), type: "ok" });
+      toast.success(t("integrations.account_revoked"));
     } catch (e) {
-      setToast({ msg: t("integrations.revoke_error", { error: `${e}` }), type: "err" });
+      toast.error(t("integrations.revoke_error", { error: `${e}` }));
     }
   };
 
@@ -446,9 +450,9 @@ export default function IntegrationsPage() {
       await apiDelete(`/api/oauth/accounts/${accountId}`);
       queryClient.invalidateQueries({ queryKey: qk.oauthAccounts });
       queryClient.invalidateQueries({ queryKey: qk.oauthBindings(selectedAgent) });
-      setToast({ msg: t("integrations.account_deleted"), type: "ok" });
+      toast.success(t("integrations.account_deleted"));
     } catch (e) {
-      setToast({ msg: t("integrations.delete_failed", { error: `${e}` }), type: "err" });
+      toast.error(t("integrations.delete_failed", { error: `${e}` }));
     }
   };
 
@@ -465,9 +469,9 @@ export default function IntegrationsPage() {
         });
       }
       queryClient.invalidateQueries({ queryKey: qk.oauthBindings(selectedAgent) });
-      setToast({ msg: t("integrations.binding_updated"), type: "ok" });
+      toast.success(t("integrations.binding_updated"));
     } catch (e) {
-      setToast({ msg: t("integrations.binding_failed", { error: `${e}` }), type: "err" });
+      toast.error(t("integrations.binding_failed", { error: `${e}` }));
     }
   };
 
@@ -490,23 +494,13 @@ export default function IntegrationsPage() {
       <PageHeader
         title={t("integrations.title")}
         description={t("integrations.subtitle")}
+        actions={
+          <Button size="lg" onClick={() => setAddOpen((v) => !v)} className="w-full md:w-auto gap-2">
+            <Plus className="h-4 w-4" />
+            {t("integrations.add_account")}
+          </Button>
+        }
       />
-
-      {/* Toast */}
-      {toast && (
-        <div
-          className={`mb-5 flex items-center justify-between gap-3 px-4 py-3 rounded-xl border text-sm font-medium ${
-            toast.type === "ok"
-              ? "bg-success/10 text-success border-success/30"
-              : "bg-destructive/10 text-destructive border-destructive/30"
-          }`}
-        >
-          <span>{toast.msg}</span>
-          <button className="opacity-60 hover:opacity-100 transition-opacity" onClick={() => setToast(null)}>
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
 
       {/* Agent selector */}
       <div className="mb-6 flex items-center gap-3">
@@ -531,10 +525,6 @@ export default function IntegrationsPage() {
       <div className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-display font-bold text-sm tracking-tight">{t("integrations.oauth_accounts")}</h3>
-          <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={() => setAddOpen((v) => !v)}>
-            <Plus className="h-3 w-3" />
-            {t("integrations.add_account")}
-          </Button>
         </div>
 
         {/* Add Account form */}
@@ -618,16 +608,19 @@ export default function IntegrationsPage() {
 
         {/* Accounts list */}
         {accountsLoading && (
-          <p className="text-xs text-muted-foreground">{t("integrations.loading_accounts")}</p>
+          <div className="grid gap-3">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+          </div>
         )}
 
         {!accountsLoading && accounts.length === 0 && !addOpen && (
-          <div className="neu-card px-5 py-6 text-center">
-            <p className="text-sm text-muted-foreground">{t("integrations.no_accounts")}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {t("integrations.no_accounts_hint")}
-            </p>
-          </div>
+          <EmptyState
+            icon={Link2}
+            text={t("integrations.no_accounts")}
+            hint={<p className="text-xs mt-1 opacity-60">{t("integrations.no_accounts_hint")}</p>}
+          />
         )}
 
         <div className="grid gap-3">
@@ -684,14 +677,15 @@ export default function IntegrationsPage() {
                       {t("integrations.reconnect")}
                     </Button>
                   )}
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={t("integrations.delete_account")}
+                    className="hover:text-destructive"
                     onClick={() => handleDeleteAccount(account.id)}
-                    title={t("integrations.delete_account")}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
-                  </button>
+                  </Button>
                 </div>
               </div>
               {account.connected_at && (

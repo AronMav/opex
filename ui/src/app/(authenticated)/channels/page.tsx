@@ -266,8 +266,8 @@ export default function ChannelsPage() {
           title={t("channels.title")}
           description={t("channels.subtitle")}
           actions={
-            <Button size="sm" onClick={openCreate} className="gap-1.5 w-full md:w-auto">
-              <Plus className="h-3.5 w-3.5" />
+            <Button size="lg" onClick={openCreate} className="w-full md:w-auto gap-2">
+              <Plus className="h-4 w-4" />
               {t("channels.add")}
             </Button>
           }

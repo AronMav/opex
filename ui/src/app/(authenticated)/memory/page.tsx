@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Markdown } from "@/components/ui/markdown";
 import { Brain, Search, Trash2, Pin, PinOff, ChevronLeft, ChevronRight, ExternalLink, ArrowLeft, Copy, Check, X, MessageSquare, FileText } from "lucide-react";
@@ -159,22 +160,13 @@ export default function MemoryPage() {
   }
 
   return (
-    <div className="flex flex-col h-full p-4 md:p-8 max-w-6xl mx-auto w-full overflow-hidden">
-      <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4 shrink-0">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-primary/10 text-primary">
-              <Brain className="h-6 w-6" />
-            </div>
-            <h2 className="font-display text-lg font-bold tracking-tight text-foreground">{t("memory.title")}</h2>
-          </div>
-          <span className="text-xs text-muted-foreground ml-11">
-            {t("memory.subtitle")}
-          </span>
-        </div>
-
-        <div className="flex flex-wrap items-stretch gap-3 md:gap-6">
-          {stats && (
+    <div className="flex flex-col h-full p-4 md:p-6 lg:p-8 max-w-6xl mx-auto w-full overflow-hidden">
+      <PageHeader
+        title={t("memory.title")}
+        description={t("memory.subtitle")}
+        className="shrink-0"
+        actions={
+          stats && (
             <div className="flex items-center gap-4 px-4 py-2 bg-muted/30 rounded-xl border border-border/50">
               <div className="flex flex-col">
                 <span className="text-xs text-muted-foreground">{t("memory.documents")}</span>
@@ -195,9 +187,9 @@ export default function MemoryPage() {
                 </>
               )}
             </div>
-          )}
-        </div>
-      </div>
+          )
+        }
+      />
 
       {error && <ErrorBanner error={error} className="mb-4 shrink-0" />}
 
@@ -233,7 +225,7 @@ export default function MemoryPage() {
                 ))}
               </div>
             ) : chunks.length === 0 ? (
-              <EmptyState icon={Brain} text={t("memory.nothing_found")} height="h-64" className="rounded-3xl" />
+              <EmptyState icon={Brain} text={t("memory.nothing_found")} height="h-64" />
             ) : (
               <div className="grid gap-3">
                 {chunks.map((doc) => (
@@ -275,7 +267,7 @@ export default function MemoryPage() {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
                         <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => router.push(`/memory?doc=${doc.id}`)}>
                           <ExternalLink className="h-3 w-3 mr-1.5" /> {t("memory.show_full_document")}
                         </Button>

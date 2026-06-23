@@ -712,20 +712,20 @@ parameters:
                           </div>
                           <div className="flex flex-col gap-1.5 pt-1">
                             <div className="flex gap-1.5">
-                              <button disabled={pending} onClick={() => startEditService(svc)}
-                                className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed">
+                              <Button variant="outline" size="sm" disabled={pending} onClick={() => startEditService(svc)} className="flex-1">
                                 <Pencil className="h-3 w-3" /> {t("common.edit")}
-                              </button>
-                              <button disabled={pending} onClick={() => setDeleteConfirm({ kind: "service", name: svc.name })}
-                                className="flex items-center justify-center rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                              </Button>
+                              <Button variant="outline-destructive" size="sm" disabled={pending} aria-label={t("common.delete")}
+                                onClick={() => setDeleteConfirm({ kind: "service", name: svc.name })}>
                                 <Trash2 className="h-3 w-3" />
-                              </button>
+                              </Button>
                             </div>
                             {svc.ui_path && (
-                              <a href={resolveUiUrl(svc.url, svc.ui_path)} target="_blank" rel="noopener noreferrer"
-                                className="flex w-full items-center justify-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20">
-                                <ExternalLink className="h-3 w-3" /> {t("tools.open_ui")}
-                              </a>
+                              <Button asChild variant="outline" size="sm" className="w-full">
+                                <a href={resolveUiUrl(svc.url, svc.ui_path)} target="_blank" rel="noopener noreferrer">
+                                  <ExternalLink className="h-3 w-3" /> {t("tools.open_ui")}
+                                </a>
+                              </Button>
                             )}
                           </div>
                         </div>
@@ -800,27 +800,25 @@ parameters:
 
                         <div className="flex flex-col gap-1.5 pt-1">
                           <div className="flex gap-1.5">
-                            <button disabled={pending} onClick={() => startEditService(svc)}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed">
+                            <Button variant="outline" size="sm" disabled={pending} onClick={() => startEditService(svc)} className="flex-1">
                               <Pencil className="h-3 w-3" /> {t("common.edit")}
-                            </button>
-                            <button disabled={pending} onClick={() => setDeleteConfirm({ kind: "service", name: svc.name })}
-                              title={t("common.delete")}
-                              className="flex items-center justify-center gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                            </Button>
+                            <Button variant="outline-destructive" size="sm" disabled={pending} aria-label={t("common.delete")}
+                              onClick={() => setDeleteConfirm({ kind: "service", name: svc.name })}>
                               <Trash2 className="h-3 w-3" />
-                            </button>
+                            </Button>
                           </div>
                           {svc.ui_path && (
-                            <a href={resolveUiUrl(svc.url, svc.ui_path)} target="_blank" rel="noopener noreferrer"
-                              className="flex w-full items-center justify-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20">
-                              <ExternalLink className="h-3 w-3" /> {t("tools.open_ui")}
-                            </a>
+                            <Button asChild variant="outline" size="sm" className="w-full">
+                              <a href={resolveUiUrl(svc.url, svc.ui_path)} target="_blank" rel="noopener noreferrer">
+                                <ExternalLink className="h-3 w-3" /> {t("tools.open_ui")}
+                              </a>
+                            </Button>
                           )}
                           {svc.managed && (
-                            <button onClick={() => setRestartConfirm({ name: svc.name, action: "restart" })}
-                              className="flex w-full items-center justify-center gap-1 rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+                            <Button variant="outline" size="sm" onClick={() => setRestartConfirm({ name: svc.name, action: "restart" })} className="w-full">
                               <RotateCcw className="h-3 w-3" /> {t("services.restart")}
-                            </button>
+                            </Button>
                           )}
                         </div>
                       </div>
@@ -831,7 +829,7 @@ parameters:
                     const pending = actionPending === tool.name;
                     return (
                       <div key={`yaml-${tool.name}-${idx}`}
-                        className={`flex flex-col gap-3 rounded-xl border-2 border-border/60 p-5 min-w-0 overflow-hidden ${tool.status === "disabled" ? "opacity-50" : ""}`}>
+                        className={`flex flex-col gap-3 neu-flat p-5 min-w-0 overflow-hidden ${tool.status === "disabled" ? "opacity-50" : ""}`}>
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-center gap-3 min-w-0">
                             <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${
@@ -856,35 +854,30 @@ parameters:
                           <p className="text-xs text-muted-foreground line-clamp-2">{tool.description}</p>
                         )}
                         <div className="flex gap-1.5 pt-1 mt-auto">
-                          <button disabled={pending} onClick={() => startEditYaml(tool.name)}
-                            className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed">
+                          <Button variant="outline" size="sm" disabled={pending} onClick={() => startEditYaml(tool.name)} className="flex-1">
                             <Pencil className="h-3 w-3" /> {t("common.edit")}
-                          </button>
+                          </Button>
                           {tool.status === "draft" && (
-                            <button disabled={pending} onClick={() => handleVerify(tool.name)}
-                              title={t("tools.verify")}
-                              className="flex items-center justify-center gap-1 rounded-md border border-success/30 bg-success/10 px-2.5 py-1.5 text-xs font-medium text-success hover:bg-success/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <Button variant="outline-success" size="sm" disabled={pending} aria-label={t("tools.verify")}
+                              onClick={() => handleVerify(tool.name)}>
                               <CheckCircle2 className="h-3 w-3" />
-                            </button>
+                            </Button>
                           )}
                           {tool.status === "disabled" ? (
-                            <button disabled={pending} onClick={() => handleEnable(tool.name)}
-                              title={t("tools.enable")}
-                              className="flex items-center justify-center gap-1 rounded-md border border-success/30 bg-success/10 px-2.5 py-1.5 text-xs font-medium text-success hover:bg-success/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <Button variant="outline-success" size="sm" disabled={pending} aria-label={t("tools.enable")}
+                              onClick={() => handleEnable(tool.name)}>
                               <Play className="h-3 w-3" />
-                            </button>
+                            </Button>
                           ) : (
-                            <button disabled={pending} onClick={() => handleDisable(tool.name)}
-                              title={t("tools.disable")}
-                              className="flex items-center justify-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning hover:bg-warning/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <Button variant="outline-warning" size="sm" disabled={pending} aria-label={t("tools.disable")}
+                              onClick={() => handleDisable(tool.name)}>
                               <Square className="h-3 w-3" />
-                            </button>
+                            </Button>
                           )}
-                          <button disabled={pending} onClick={() => setDeleteConfirm({ kind: "yaml", name: tool.name })}
-                            title={t("common.delete")}
-                            className="flex items-center justify-center gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                          <Button variant="outline-destructive" size="sm" disabled={pending} aria-label={t("common.delete")}
+                            onClick={() => setDeleteConfirm({ kind: "yaml", name: tool.name })}>
                             <Trash2 className="h-3 w-3" />
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     );
@@ -907,7 +900,7 @@ parameters:
                       const pending = actionPending === tool.name;
                       return (
                         <div key={`yaml-ext-${tool.name}-${idx}`}
-                          className={`flex flex-col gap-3 rounded-xl border-2 border-border/60 p-5 min-w-0 overflow-hidden ${tool.status === "disabled" ? "opacity-50" : ""}`}>
+                          className={`flex flex-col gap-3 neu-flat p-5 min-w-0 overflow-hidden ${tool.status === "disabled" ? "opacity-50" : ""}`}>
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex items-center gap-3 min-w-0">
                               <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${
@@ -938,35 +931,30 @@ parameters:
                             </div>
                           </div>
                           <div className="flex gap-1.5 pt-1">
-                            <button disabled={pending} onClick={() => startEditYaml(tool.name)}
-                              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed">
+                            <Button variant="outline" size="sm" disabled={pending} onClick={() => startEditYaml(tool.name)} className="flex-1">
                               <Pencil className="h-3 w-3" /> {t("common.edit")}
-                            </button>
+                            </Button>
                             {tool.status === "draft" && (
-                              <button disabled={pending} onClick={() => handleVerify(tool.name)}
-                                title={t("tools.verify")}
-                                className="flex items-center justify-center gap-1 rounded-md border border-success/30 bg-success/10 px-2.5 py-1.5 text-xs font-medium text-success hover:bg-success/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                              <Button variant="outline-success" size="sm" disabled={pending} aria-label={t("tools.verify")}
+                                onClick={() => handleVerify(tool.name)}>
                                 <CheckCircle2 className="h-3 w-3" />
-                              </button>
+                              </Button>
                             )}
                             {tool.status === "disabled" ? (
-                              <button disabled={pending} onClick={() => handleEnable(tool.name)}
-                                title={t("tools.enable")}
-                                className="flex items-center justify-center gap-1 rounded-md border border-success/30 bg-success/10 px-2.5 py-1.5 text-xs font-medium text-success hover:bg-success/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                              <Button variant="outline-success" size="sm" disabled={pending} aria-label={t("tools.enable")}
+                                onClick={() => handleEnable(tool.name)}>
                                 <Play className="h-3 w-3" />
-                              </button>
+                              </Button>
                             ) : (
-                              <button disabled={pending} onClick={() => handleDisable(tool.name)}
-                                title={t("tools.disable")}
-                                className="flex items-center justify-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning hover:bg-warning/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                              <Button variant="outline-warning" size="sm" disabled={pending} aria-label={t("tools.disable")}
+                                onClick={() => handleDisable(tool.name)}>
                                 <Square className="h-3 w-3" />
-                              </button>
+                              </Button>
                             )}
-                            <button disabled={pending} onClick={() => setDeleteConfirm({ kind: "yaml", name: tool.name })}
-                              title={t("common.delete")}
-                              className="flex items-center justify-center gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <Button variant="outline-destructive" size="sm" disabled={pending} aria-label={t("common.delete")}
+                              onClick={() => setDeleteConfirm({ kind: "yaml", name: tool.name })}>
                               <Trash2 className="h-3 w-3" />
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       );
@@ -1024,31 +1012,28 @@ parameters:
                           </div>
                         </div>
                         <div className="flex gap-1.5 pt-1">
-                          <button disabled={pending} onClick={() => startEditMcp(s)}
-                            className="flex flex-1 items-center justify-center gap-1 rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed">
+                          <Button variant="outline" size="sm" disabled={pending} onClick={() => startEditMcp(s)} className="flex-1">
                             <Pencil className="h-3 w-3" /> {t("common.edit")}
-                          </button>
+                          </Button>
                           {s.enabled && s.status === "running" && (
-                            <button disabled={pending} onClick={() => reloadMcp(s.name)}
-                              title={t("tools.reload")}
-                              className="flex items-center justify-center gap-1 rounded-md border border-border bg-muted/20 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed">
+                            <Button variant="outline" size="sm" disabled={pending} aria-label={t("tools.reload")}
+                              onClick={() => reloadMcp(s.name)}>
                               <RotateCcw className={`h-3 w-3 ${actionPending === "reload:" + s.name ? "animate-spin" : ""}`} />
-                            </button>
+                            </Button>
                           )}
-                          <button disabled={pending} onClick={() => toggleMcp(s.name)}
-                            title={s.enabled ? t("tools.disable") : t("tools.enable")}
-                            className={`flex items-center justify-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
-                              s.enabled
-                                ? "border-warning/30 bg-warning/10 text-warning hover:bg-warning/20"
-                                : "border-success/30 bg-success/10 text-success hover:bg-success/20"
-                            }`}>
+                          <Button
+                            variant={s.enabled ? "outline-warning" : "outline-success"}
+                            size="sm"
+                            disabled={pending}
+                            aria-label={s.enabled ? t("tools.disable") : t("tools.enable")}
+                            onClick={() => toggleMcp(s.name)}
+                          >
                             {s.enabled ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-                          </button>
-                          <button disabled={pending} onClick={() => setDeleteConfirm({ kind: "mcp", name: s.name })}
-                            title={t("common.delete")}
-                            className="flex items-center justify-center gap-1 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                          </Button>
+                          <Button variant="outline-destructive" size="sm" disabled={pending} aria-label={t("common.delete")}
+                            onClick={() => setDeleteConfirm({ kind: "mcp", name: s.name })}>
                             <Trash2 className="h-3 w-3" />
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     );

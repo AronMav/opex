@@ -288,7 +288,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
                 </span>
               )}
               {message.isMirror && (
-                <span className="text-[10px] text-orange-500 ml-1">↩ cron</span>
+                <span className="text-[10px] text-cron ml-1">↩ cron</span>
               )}
             </div>
             <MessageActions message={message} showReload />

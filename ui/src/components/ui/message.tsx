@@ -18,6 +18,7 @@ export function MessageContent({
   markdown = false,
   className,
   isStreaming,
+  components,
   ...props
 }: MessageContentProps) {
   const { t } = useTranslation()
@@ -28,7 +29,7 @@ export function MessageContent({
 
   return markdown ? (
     <ErrorBoundary fallback={<div className={cn(classNames, "border-destructive text-destructive")}>{t("chat.render_error")}</div>}>
-      <Markdown className={classNames} isStreaming={isStreaming} {...props}>
+      <Markdown className={classNames} isStreaming={isStreaming} components={components} {...props}>
         {children as string}
       </Markdown>
     </ErrorBoundary>

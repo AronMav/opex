@@ -20,7 +20,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { AgentInfo, AgentDetail, ChannelRow, SecretInfo, Provider } from "@/types/api";
-import { Settings, LogOut, Bot, Search } from "lucide-react";
+import { Settings, LogOut, Bot, Search, Plus } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -555,11 +555,8 @@ export default function AgentsPage() {
                 className="w-full h-9 pl-8 pr-3"
               />
             </div>
-            <Button
-              size="lg"
-              onClick={openCreate}
-              className="shrink-0 font-semibold"
-            >
+            <Button size="lg" onClick={openCreate} className="w-full md:w-auto gap-2">
+              <Plus className="h-4 w-4" />
               {t("agents.new_agent")}
             </Button>
           </div>
@@ -642,10 +639,10 @@ export default function AgentsPage() {
                 </Button>
                 {!a.base && (
                   <Button
-                    variant="outline"
+                    variant="outline-destructive"
                     onClick={() => setDeleteTarget(a.name)}
                     disabled={saving}
-                    className="h-8 border-destructive/20 bg-destructive/5 text-destructive hover:text-destructive hover:bg-destructive/20 font-mono text-[10px] uppercase tracking-wider"
+                    className="h-8 font-mono text-[10px] uppercase tracking-wider"
                     aria-label={t("agents.delete_agent_aria", { name: a.name })}
                   >
                     {saving ? <Loader variant="circular" size="sm" /> : <LogOut className="h-3.5 w-3.5 rotate-90 mr-1" />}

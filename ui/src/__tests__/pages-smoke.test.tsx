@@ -35,7 +35,7 @@ vi.mock("lucide-react", () => {
     CornerDownRight: Icon, Cpu: Icon, Database: Icon, DollarSign: Icon,
     Download: Icon, Edit3: Icon, ExternalLink: Icon, Eye: Icon,
     FileCode: Icon, FileCode2: Icon, FilePlus: Icon, FileText: Icon,
-    Folder: Icon, FolderMinus: Icon, Gamepad2: Icon, Gauge: Icon,
+    Folder: Icon, FolderMinus: Icon, FolderTree: Icon, Gamepad2: Icon, Gauge: Icon,
     GitBranch: Icon, Globe: Icon, Hammer: Icon, Hash: Icon, HeartPulse: Icon,
     History: Icon, Image: Icon, ImageIcon: Icon, InfoIcon: Icon,
     Key: Icon, KeyRound: Icon, Keyboard: Icon, Languages: Icon,

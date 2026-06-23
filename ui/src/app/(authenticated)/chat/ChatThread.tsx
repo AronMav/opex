@@ -15,6 +15,7 @@ const EMPTY_ACTIVE_IDS: string[] = [];
 
 import { MessageList, MessageSkeleton } from "./MessageList";
 import { SearchBar } from "./SearchBar";
+import { Button } from "@/components/ui/button";
 import { ReconnectingIndicator } from "@/components/chat/ReconnectingIndicator";
 import { ChatWelcomeScreen as EmptyState } from "./ChatWelcomeScreen";
 import { ReadOnlyFooter } from "./read-only/ReadOnlyFooter";
@@ -59,12 +60,13 @@ class ThreadErrorBoundary extends Component<ThreadErrorBoundaryProps, ThreadErro
       return (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <p className="text-sm text-muted-foreground/70 font-mono">{this.state.error}</p>
-          <button
-            className="px-4 py-2 text-sm rounded-lg border border-border bg-card hover:bg-muted transition-colors"
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => this.setState({ error: null })}
           >
             {this.props.retryLabel || "Retry"}
-          </button>
+          </Button>
         </div>
       );
     }
@@ -286,6 +288,7 @@ export function ChatThread({
         isStreaming={isStreaming}
         isTextStreaming={isTextStreaming}
         showThinking={showThinking}
+        searchOpen={search.isOpen}
 
         isLoadingHistory={(historyLoading && !liveHasContent) || isScrollLoadingHistory}
         emptyState={<EmptyState />}

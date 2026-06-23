@@ -29,7 +29,7 @@ function StepBadge({ step }: { step: TaskStep }) {
       );
     case "done":
       return (
-        <Badge className="bg-green-600 text-white gap-1">
+        <Badge variant="success" className="gap-1">
           <CheckCircle className="h-3 w-3" />
           {t("common.done")}
         </Badge>

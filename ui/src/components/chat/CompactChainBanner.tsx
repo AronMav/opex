@@ -69,7 +69,7 @@ export function CompactChainBanner({ activeSessionId, onNavigate }: CompactChain
                   {new Date(entry.started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </span>
                 {entry.end_reason === "compression" && (
-                  <span className="text-[10px] text-orange-500 shrink-0">↩</span>
+                  <span className="text-[10px] text-cron shrink-0">↩</span>
                 )}
                 {isCurrent && (
                   <span className="text-[10px] text-primary shrink-0">←</span>

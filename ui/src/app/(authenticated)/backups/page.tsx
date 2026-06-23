@@ -15,6 +15,7 @@ import { CronSchedulePicker } from "@/components/ui/cron-schedule-picker";
 import type { CronPreset } from "@/lib/cron";
 import { Archive, Download, RefreshCw, Plus, RotateCcw, Trash2, Settings2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { apiDelete } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -107,7 +108,7 @@ function BackupSettings() {
   const hasChanges = cron5to6(editCron) !== config.cron || Number(editRetention) !== config.retention_days;
 
   return (
-    <div className="rounded-lg border border-border bg-card text-card-foreground shadow-sm p-4 space-y-4">
+    <div className="neu-flat p-4 space-y-4">
       <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
         <Settings2 className="h-4 w-4" />
         {t("backups.settings")}
@@ -274,7 +275,7 @@ export default function BackupsPage() {
           title={t("backups.title")}
           description={t("backups.subtitle")}
           actions={
-            <div className="grid grid-cols-2 md:flex gap-2">
+            <div className="flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -285,11 +286,12 @@ export default function BackupsPage() {
                 {t("common.refresh")}
               </Button>
               <Button
-                size="sm"
+                size="lg"
                 onClick={() => createBackup.mutate()}
                 disabled={isLoading || mutating}
+                className="w-full md:w-auto gap-2"
               >
-                <Plus className="mr-2 h-4 w-4" />
+                <Plus className="h-4 w-4" />
                 {createBackup.isPending ? t("backups.creating") : t("backups.create")}
               </Button>
             </div>
@@ -300,7 +302,13 @@ export default function BackupsPage() {
 
         {combinedError && <ErrorBanner error={combinedError} className="mt-6" />}
 
-        {backups.length === 0 ? (
+        {isLoading ? (
+          <div className="mt-6 space-y-3">
+            {[1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-20 w-full rounded-xl" />
+            ))}
+          </div>
+        ) : backups.length === 0 ? (
           <EmptyState icon={Archive} text={t("backups.empty")} height="h-40" className="mt-6" />
         ) : (
           <div className="mt-6 space-y-3 pb-8">
@@ -317,7 +325,7 @@ export default function BackupsPage() {
                     <span className="break-all font-mono text-sm font-bold text-foreground group-hover:text-primary transition-colors">
                       {b.filename}
                     </span>
-                    <span className="font-mono text-xs text-muted-foreground/40 tabular-nums">
+                    <span className="font-mono text-xs text-muted-foreground tabular-nums">
                       {b.created_at ? formatDate(b.created_at, locale) : "—"}
                     </span>
                   </div>

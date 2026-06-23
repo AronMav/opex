@@ -234,18 +234,18 @@ export default function AccessPage() {
                         {agentPending.length} {t("access.pending")}
                       </Badge>
                     )}
-                    <Badge
-                      variant="secondary"
-                      className={`text-[10px] px-1.5 py-0 ${
-                        settings.enabled
-                          ? settings.mode === "restricted"
-                            ? "text-amber-600 bg-amber-500/10 border border-amber-500/20"
-                            : "text-green-600 bg-green-500/10 border border-green-500/20"
-                          : "text-muted-foreground"
-                      }`}
-                    >
-                      {settings.enabled ? (settings.mode === "restricted" ? t("access.restricted") : t("access.open")) : t("access.disabled")}
-                    </Badge>
+                    {settings.enabled ? (
+                      <Badge
+                        variant={settings.mode === "restricted" ? "outline-warning" : "outline-success"}
+                        className="text-[10px] px-1.5 py-0"
+                      >
+                        {settings.mode === "restricted" ? t("access.restricted") : t("access.open")}
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 text-muted-foreground">
+                        {t("access.disabled")}
+                      </Badge>
+                    )}
                     <span className="text-[11px] text-muted-foreground/50 font-mono">{t("access.users_count", { count: agentUsers.length })}</span>
                     <ChevronDown className={`h-4 w-4 text-muted-foreground/40 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
                   </div>
@@ -352,7 +352,8 @@ export default function AccessPage() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-6 w-6 text-muted-foreground/30 hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                                aria-label={t("access.revoke")}
+                                className="h-6 w-6 text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-70 group-hover:opacity-100 transition-opacity shrink-0"
                                 onClick={() => setRemoveTarget({ agent, userId: u.channel_user_id, name: u.display_name || u.channel_user_id })}
                               >
                                 <UserX className="h-3.5 w-3.5" />

@@ -18,6 +18,7 @@ import {
 import { useAuthStore } from "@/stores/auth-store";
 import { useWsStore } from "@/stores/ws-store";
 import { useTranslation } from "@/hooks/use-translation";
+import { Button } from "@/components/ui/button";
 import { ModeToggle } from "@/components/mode-toggle";
 import { LanguageToggle } from "@/components/language-toggle";
 import { NotificationBell } from "@/components/notification-bell";
@@ -164,17 +165,19 @@ export function AppSidebar() {
             <LanguageToggle />
             <ModeToggle />
             <NotificationBell />
-            <button
+            <Button
+              variant="ghost"
+              size="icon-sm"
               onClick={() => {
                 logout();
                 window.location.href = "/login/";
               }}
-              className="group flex h-9 w-9 items-center justify-center rounded-md transition-colors duration-150 hover:bg-destructive/10 hover:text-destructive text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              className="group text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
               title={t("nav.logout")}
               aria-label={t("nav.logout")}
             >
               <LogOut className="transition-transform active:translate-x-0.5" size={20} />
-            </button>
+            </Button>
           </div>
         </div>
       </SidebarFooter>

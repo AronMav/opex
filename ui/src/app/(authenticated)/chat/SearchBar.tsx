@@ -71,7 +71,7 @@ export function SearchBar({ search }: SearchBarProps) {
         onClick={prev}
         disabled={matches.length === 0}
         aria-label={t("chat.search_prev")}
-        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30"
+        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <ChevronUp className="h-3.5 w-3.5" />
       </button>
@@ -80,7 +80,7 @@ export function SearchBar({ search }: SearchBarProps) {
         onClick={next}
         disabled={matches.length === 0}
         aria-label={t("chat.search_next")}
-        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30"
+        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
@@ -88,7 +88,7 @@ export function SearchBar({ search }: SearchBarProps) {
         type="button"
         onClick={close}
         aria-label={t("chat.search_close")}
-        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors"
+        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <X className="h-3.5 w-3.5" />
       </button>

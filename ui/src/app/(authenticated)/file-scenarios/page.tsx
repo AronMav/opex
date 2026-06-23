@@ -160,7 +160,7 @@ export default function FileScenariosPage() {
               <RefreshCw className="h-4 w-4" />
               {t("common.refresh")}
             </Button>
-            <Button size="sm" onClick={openCreate} className="gap-1.5">
+            <Button size="lg" onClick={openCreate} className="w-full md:w-auto gap-2">
               <Plus className="h-4 w-4" />
               {t("file_scenarios.add")}
             </Button>

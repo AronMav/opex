@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
+import { CircularLoader } from "@/components/ui/loader";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select,
@@ -28,7 +30,7 @@ import {
   Activity, Clock, Brain, Bot, User, Wrench, Zap, RefreshCw, Calendar, Database,
   CheckCircle2, XCircle, HeartPulse, AlertTriangle, Stethoscope,
   BarChart3, Cpu, ArrowUpRight, ArrowDownRight, DollarSign,
-  ShieldCheck, Check, X, ChevronRight,
+  ShieldCheck, Check, X, ChevronRight, ScrollText, Sparkles,
   type LucideProps,
 } from "lucide-react";
 import type { StatusInfo, StatsInfo, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry, CuratorRun } from "@/types/api";
@@ -152,7 +154,7 @@ function CheckSection({
   checks: { name: string; result: CheckResult }[];
 }) {
   return (
-    <div className="rounded-lg border border-border bg-card text-card-foreground shadow-sm">
+    <div className="neu-card">
       <div className="px-4 py-3 border-b border-border">
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
       </div>
@@ -265,8 +267,8 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
   const maxTokens = Math.max(1, ...entries.map(([, v]) => v.input + v.output));
 
   return (
-    <div className="mb-8 rounded-xl border border-border bg-card/80 overflow-hidden">
-      <div className="flex items-center gap-3 px-4 sm:px-5 py-4 border-b border-border/50 bg-muted/20">
+    <div className="mb-8 rounded-xl border border-border bg-card/80">
+      <div className="flex items-center gap-3 px-4 sm:px-5 py-4 border-b border-border/50 bg-muted/20 rounded-t-xl">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
           <Calendar className="h-4 w-4 text-primary" />
         </div>
@@ -384,7 +386,7 @@ const AUDIT_PAGE_SIZE = 50;
 // ── Failures helpers ────────────────────────────────────────────────────────
 
 const FAILURE_KIND_BADGE: Record<string, string> = {
-  sub_agent_timeout: "bg-orange-500/15 text-orange-600 border-orange-500/30",
+  sub_agent_timeout: "bg-warning/15 text-warning border-warning/30",
   provider_error: "bg-destructive/15 text-destructive border-destructive/30",
   llm_error: "bg-destructive/15 text-destructive border-destructive/30",
   max_iterations: "bg-warning/15 text-warning border-warning/30",
@@ -659,7 +661,7 @@ function MonitorPageInner() {
             <div>
               <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex flex-col gap-1">
-                  <h2 className="font-display text-base font-bold tracking-tight flex items-center gap-2">
+                  <h2 className="font-display text-lg font-bold tracking-tight flex items-center gap-2">
                     <HeartPulse className="h-5 w-5 text-primary" />
                     {t("watchdog.title")}
                   </h2>
@@ -873,8 +875,8 @@ function MonitorPageInner() {
                 <div className="flex items-center gap-3">
                   <Stethoscope className="text-primary" size={20} />
                   <div>
-                    <h2 className="text-base font-bold">{t("doctor.title")}</h2>
-                    <p className="text-xs text-muted-foreground">{t("doctor.subtitle")}</p>
+                    <h2 className="font-display text-lg font-bold tracking-tight">{t("doctor.title")}</h2>
+                    <p className="text-sm text-muted-foreground">{t("doctor.subtitle")}</p>
                   </div>
                 </div>
                 <Button
@@ -892,8 +894,8 @@ function MonitorPageInner() {
                 <div
                   className={`rounded-md p-3 text-sm font-medium mb-4 ${
                     doctorData.ok
-                      ? "bg-green-50 text-green-800 dark:bg-green-950 dark:text-green-200"
-                      : "bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-200"
+                      ? "border border-success/40 bg-success/10 text-success"
+                      : "border border-destructive/50 bg-destructive/10 text-destructive"
                   }`}
                 >
                   {doctorData.ok ? t("doctor.all_ok") : t("doctor.needs_attention")}
@@ -905,9 +907,7 @@ function MonitorPageInner() {
               )}
 
               {doctorError && (
-                <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive mb-4">
-                  {t("doctor.error")}
-                </div>
+                <ErrorBanner error={t("doctor.error")} onRetry={doctorRefetch} />
               )}
 
               <div className="space-y-4">
@@ -1126,13 +1126,10 @@ function MonitorPageInner() {
             <div className="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-thin">
               {auditLoading && auditEvents.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
-                  <p className="text-sm text-muted-foreground animate-pulse">{t("common.loading")}</p>
+                  <CircularLoader size="lg" />
                 </div>
               ) : filteredAudit.length === 0 ? (
-                <div className="flex h-full flex-col items-center justify-center gap-4 opacity-40">
-                  <div className="h-16 w-px bg-gradient-to-b from-transparent via-primary/50 to-transparent" />
-                  <p className="text-sm text-muted-foreground">{t("audit.no_events")}</p>
-                </div>
+                <EmptyState icon={ScrollText} text={t("audit.no_events")} />
               ) : (
                 <div className="flex flex-col gap-2">
                   {filteredAudit.map((e: AuditEvent) => (
@@ -1316,11 +1313,11 @@ function MonitorPageInner() {
                 {dailyData && dailyData.daily.length > 0 && <DailyChart data={dailyData.daily} />}
 
                 {usage.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-                    <BarChart3 className="h-12 w-12 mb-3 opacity-30" />
-                    <p className="text-sm font-medium">{t("usage.no_data")}</p>
-                    <p className="text-xs mt-1 opacity-60">{t("usage.tracking_hint")}</p>
-                  </div>
+                  <EmptyState
+                    icon={BarChart3}
+                    text={t("usage.no_data")}
+                    hint={<p className="text-xs mt-1 opacity-60">{t("usage.tracking_hint")}</p>}
+                  />
                 ) : (
                   <div className="space-y-6">
                     {Array.from(byAgent.entries()).map(([agent, rows]) => {
@@ -1692,7 +1689,7 @@ function CuratorTab() {
     return (
       <div className="space-y-3">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="h-12 rounded-lg border border-border bg-muted/20 animate-pulse" />
+          <Skeleton key={i} className="h-12 rounded-lg" />
         ))}
       </div>
     );
@@ -1700,10 +1697,11 @@ function CuratorTab() {
 
   if (runs.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 text-center">
-        <p className="text-sm text-muted-foreground">{t("monitor.curator.empty")}</p>
-        <p className="text-xs text-muted-foreground/60 mt-1">{t("monitor.curator.no_runs")}</p>
-      </div>
+      <EmptyState
+        icon={Sparkles}
+        text={t("monitor.curator.empty")}
+        hint={<p className="text-xs text-muted-foreground/60 mt-1">{t("monitor.curator.no_runs")}</p>}
+      />
     );
   }
 
@@ -1726,7 +1724,7 @@ function CuratorTab() {
           ? "text-destructive"
           : isSkipped
           ? "text-muted-foreground"
-          : "text-green-600 dark:text-green-400";
+          : "text-success";
         const statusLabel = isError
           ? t("monitor.curator.status_error")
           : isSkipped
@@ -1789,7 +1787,7 @@ function CuratorTab() {
 
 export default function MonitorPage() {
   return (
-    <Suspense fallback={<div className="flex h-full items-center justify-center"><span className="text-sm text-muted-foreground">Loading...</span></div>}>
+    <Suspense fallback={<div className="flex h-full items-center justify-center"><CircularLoader size="lg" /></div>}>
       <MonitorPageInner />
     </Suspense>
   );
