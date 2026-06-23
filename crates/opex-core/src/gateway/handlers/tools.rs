@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{get, post, put},
@@ -16,8 +16,7 @@ include!("tools_dto_structs.rs");
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/tool-definitions", get(api_tool_definitions))
-        .route("/api/tools", get(api_list_tools).post(api_tool_service_create))
-        .route("/api/tools/{name}", put(api_tool_service_update).delete(api_tool_service_delete))
+        .route("/api/tools", get(api_list_tools))
         .route("/api/mcp", get(api_list_mcp).post(api_mcp_create))
         .route("/api/mcp/{name}", put(api_mcp_update).delete(api_mcp_delete))
         .route("/api/mcp/{name}/reload", post(api_mcp_reload))
@@ -79,61 +78,6 @@ pub(crate) async fn api_list_tools(
         }).ok()
     }).collect();
     Json(json!({ "tools": tools }))
-}
-
-pub(crate) async fn reload_tool_registry(agents: &AgentCore) {
-    let map = crate::tools::service_registry::load_service_map(crate::config::WORKSPACE_DIR).await;
-    agents.tools.reload(&map).await;
-}
-
-pub(crate) async fn api_tool_service_create(
-    State(agents): State<AgentCore>,
-    Json(body): Json<Value>,
-) -> impl IntoResponse {
-    let entry: crate::tools::service_registry::ServiceFileEntry = match serde_json::from_value(body) {
-        Ok(e) => e,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))).into_response(),
-    };
-    match crate::tools::service_registry::save_service_entry(crate::config::WORKSPACE_DIR, &entry).await {
-        Ok(()) => {
-            reload_tool_registry(&agents).await;
-            Json(json!({"ok": true, "name": entry.name})).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    }
-}
-
-pub(crate) async fn api_tool_service_update(
-    State(agents): State<AgentCore>,
-    Path(name): Path<String>,
-    Json(body): Json<Value>,
-) -> impl IntoResponse {
-    let mut entry: crate::tools::service_registry::ServiceFileEntry = match serde_json::from_value(body) {
-        Ok(e) => e,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))).into_response(),
-    };
-    entry.name = name;
-    match crate::tools::service_registry::save_service_entry(crate::config::WORKSPACE_DIR, &entry).await {
-        Ok(()) => {
-            reload_tool_registry(&agents).await;
-            Json(json!({"ok": true})).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    }
-}
-
-pub(crate) async fn api_tool_service_delete(
-    State(agents): State<AgentCore>,
-    Path(name): Path<String>,
-) -> impl IntoResponse {
-    match crate::tools::service_registry::delete_service_entry(crate::config::WORKSPACE_DIR, &name).await {
-        Ok(true) => {
-            reload_tool_registry(&agents).await;
-            Json(json!({"ok": true})).into_response()
-        }
-        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-    }
 }
 
 pub(crate) async fn api_list_mcp(State(agents): State<AgentCore>) -> Json<Value> {

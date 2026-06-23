@@ -8,18 +8,9 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import {
-  Collapsible,
-  CollapsibleTrigger,
-  CollapsibleContent,
-} from "@/components/ui/collapsible";
-import {
-  Tooltip,
-  TooltipTrigger,
-  TooltipContent,
-  TooltipProvider,
-} from "@/components/ui/tooltip";
-import { Plus, RefreshCw, Zap, ChevronDown } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Plus, RefreshCw, Zap } from "lucide-react";
 import { toast } from "sonner";
 import type { Provider, CreateProviderInput, ProviderOptions } from "@/types/api";
 import { apiGet, apiPost } from "@/lib/api";
@@ -39,7 +30,7 @@ export { sortActiveRows, buildActiveListAfterToggle, buildProviderBody, getOpts 
 export { ALL_CATEGORIES, ALL_CAPABILITIES } from "./_parts/constants";
 export type { ProviderCategory } from "./_parts/constants";
 
-import { ALL_CATEGORIES, ALL_CAPABILITIES, CATEGORY_BADGE_CLASS, CATEGORY_ICONS, EMPTY_FORM } from "./_parts/constants";
+import { ALL_CATEGORIES, ALL_CAPABILITIES, CATEGORY_ICONS, EMPTY_FORM } from "./_parts/constants";
 import type { ProviderCategory } from "./_parts/constants";
 import { sortActiveRows, buildProviderBody } from "./_parts/helpers";
 import { ProviderCard } from "./ProviderCard";
@@ -103,8 +94,6 @@ export default function ProvidersPage() {
 
   // Per-capability draft priority overrides
   const [draftPriority, setDraftPriority] = useState<Record<string, Record<string, number>>>({});
-  // Collapsed groups
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const getDraftPriority = (cap: string, providerName: string, fallback: number): number =>
     draftPriority[cap]?.[providerName] ?? fallback;
@@ -114,15 +103,6 @@ export default function ProvidersPage() {
       ...prev,
       [cap]: { ...(prev[cap] ?? {}), [providerName]: value },
     }));
-  };
-
-  const toggleGroup = (cap: string) => {
-    setCollapsedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(cap)) next.delete(cap);
-      else next.add(cap);
-      return next;
-    });
   };
 
   // ── Active helpers ────────────────────────────────────────────────────────
@@ -337,13 +317,25 @@ export default function ProvidersPage() {
         </div>
       ) : providers.length === 0 ? (
         <EmptyState icon={Zap} text={t("providers.empty")} height="h-48" />
-      ) : (
-        <TooltipProvider>
-          <div className="flex flex-col gap-6">
-            {ALL_CATEGORIES.map((cap) => {
-              const capProviders = providersForCapability(cap);
-              if (capProviders.length === 0) return null;
+      ) : (() => {
+        const visibleCategories = ALL_CATEGORIES.filter((cap) => providersForCapability(cap).length > 0);
+        if (visibleCategories.length === 0) {
+          return <EmptyState icon={Zap} text={t("providers.empty")} height="h-48" />;
+        }
+        return (
+          <Tabs defaultValue={visibleCategories[0]}>
+            <TabsList className="h-auto flex-wrap">
+              {visibleCategories.map((cap) => (
+                <TabsTrigger key={cap} value={cap}>
+                  {CATEGORY_ICONS[cap]}
+                  {capLabel(cap)}
+                  <Badge variant="secondary" className="ml-1.5 text-[10px]">{providersForCapability(cap).length}</Badge>
+                </TabsTrigger>
+              ))}
+            </TabsList>
 
+            {visibleCategories.map((cap) => {
+              const capProviders = providersForCapability(cap);
               const activeRows = sortActiveRows(active, cap);
               const activeNames = new Set(activeRows.map((r) => r.provider_name).filter(Boolean) as string[]);
 
@@ -356,97 +348,79 @@ export default function ProvidersPage() {
                   .sort((a, b) => a.name.localeCompare(b.name)),
               ];
 
-              const badgeClass = CATEGORY_BADGE_CLASS[cap] ?? "bg-muted text-muted-foreground border-border";
               const isCapabilityGroup = (ALL_CAPABILITIES as readonly string[]).includes(cap);
-              const isCollapsed = collapsedGroups.has(cap);
 
               return (
-                <Collapsible key={cap} open={!isCollapsed} onOpenChange={() => toggleGroup(cap)}>
-                  {/* Group header */}
-                  <div className="flex items-center gap-2">
-                    <CollapsibleTrigger className="flex items-center gap-2 group/trigger rounded outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-                      <ChevronDown className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded border cursor-help ${badgeClass}`}>
-                            {CATEGORY_ICONS[cap]}
-                            {capLabel(cap)}
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent>{t(CAP_DESC_KEY[cap] as Parameters<typeof t>[0])}</TooltipContent>
-                      </Tooltip>
-                      <span className="text-xs text-muted-foreground/60">({capProviders.length})</span>
-                      {isCapabilityGroup && cap !== "websearch" && (
-                        <span className="text-[11px] text-muted-foreground/60 truncate min-w-0">
-                          {t("providers.group_hint")}
-                        </span>
-                      )}
-                    </CollapsibleTrigger>
-                  </div>
+                <TabsContent key={cap} value={cap} className="mt-6">
+                  {/* Capability description + active-routing hint */}
+                  <p className="text-xs text-muted-foreground mb-4">
+                    {t(CAP_DESC_KEY[cap] as Parameters<typeof t>[0])}
+                    {isCapabilityGroup && cap !== "websearch" && (
+                      <span className="text-muted-foreground/60"> · {t("providers.group_hint")}</span>
+                    )}
+                  </p>
 
                   {/* Provider cards */}
-                  <CollapsibleContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-3">
-                      {sorted.map((provider) => {
-                        const isActive = activeNames.has(provider.name);
-                        const activeRow = activeRows.find((r) => r.provider_name === provider.name);
-                        const currentPriority = activeRow?.priority ?? 10;
-                        const draftPrio = getDraftPriority(cap, provider.name, currentPriority);
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {sorted.map((provider) => {
+                      const isActive = activeNames.has(provider.name);
+                      const activeRow = activeRows.find((r) => r.provider_name === provider.name);
+                      const currentPriority = activeRow?.priority ?? 10;
+                      const draftPrio = getDraftPriority(cap, provider.name, currentPriority);
 
-                        const typeLabel = cap === "text"
-                          ? (providerTypes.find((pt) => pt.id === provider.provider_type)?.name ?? provider.provider_type)
-                          : provider.provider_type;
+                      const typeLabel = cap === "text"
+                        ? (providerTypes.find((pt) => pt.id === provider.provider_type)?.name ?? provider.provider_type)
+                        : provider.provider_type;
 
-                        const toggleActive = () => {
-                          if (isActive) {
-                            const next = activeRows
-                              .filter((r) => r.provider_name !== provider.name)
-                              .map((r) => ({ provider_name: r.provider_name as string, priority: r.priority }));
-                            setCapabilityActive(cap, next);
-                          } else {
-                            const next = [
-                              ...activeRows.map((r) => ({ provider_name: r.provider_name as string, priority: r.priority })),
-                              { provider_name: provider.name, priority: draftPrio },
-                            ];
-                            setCapabilityActive(cap, next);
-                          }
-                        };
-
-                        const applyPriority = (newPrio: number) => {
-                          if (!isActive) return;
-                          const next = activeRows.map((r) =>
-                            r.provider_name === provider.name
-                              ? { provider_name: provider.name, priority: newPrio }
-                              : { provider_name: r.provider_name as string, priority: r.priority },
-                          );
+                      const toggleActive = () => {
+                        if (isActive) {
+                          const next = activeRows
+                            .filter((r) => r.provider_name !== provider.name)
+                            .map((r) => ({ provider_name: r.provider_name as string, priority: r.priority }));
                           setCapabilityActive(cap, next);
-                        };
+                        } else {
+                          const next = [
+                            ...activeRows.map((r) => ({ provider_name: r.provider_name as string, priority: r.priority })),
+                            { provider_name: provider.name, priority: draftPrio },
+                          ];
+                          setCapabilityActive(cap, next);
+                        }
+                      };
 
-                        return (
-                          <ProviderCard
-                            key={provider.id}
-                            provider={provider}
-                            cap={cap}
-                            isActive={isActive}
-                            draftPrio={draftPrio}
-                            typeLabel={typeLabel}
-                            isCapabilityGroup={isCapabilityGroup}
-                            onToggleActive={toggleActive}
-                            onApplyPriority={applyPriority}
-                            onDraftPriority={(n) => setDraftPriorityFor(cap, provider.name, n)}
-                            onEdit={() => openEdit(provider)}
-                            onDelete={() => setDeleteTarget(provider)}
-                          />
+                      const applyPriority = (newPrio: number) => {
+                        if (!isActive) return;
+                        const next = activeRows.map((r) =>
+                          r.provider_name === provider.name
+                            ? { provider_name: provider.name, priority: newPrio }
+                            : { provider_name: r.provider_name as string, priority: r.priority },
                         );
-                      })}
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
+                        setCapabilityActive(cap, next);
+                      };
+
+                      return (
+                        <ProviderCard
+                          key={provider.id}
+                          provider={provider}
+                          cap={cap}
+                          isActive={isActive}
+                          draftPrio={draftPrio}
+                          typeLabel={typeLabel}
+                          isCapabilityGroup={isCapabilityGroup}
+                          onToggleActive={toggleActive}
+                          onApplyPriority={applyPriority}
+                          onDraftPriority={(n) => setDraftPriorityFor(cap, provider.name, n)}
+                          onEdit={() => openEdit(provider)}
+                          onDelete={() => setDeleteTarget(provider)}
+                        />
+                      );
+                    })}
+                  </div>
+                </TabsContent>
               );
             })}
-          </div>
-        </TooltipProvider>
-      )}
+          </Tabs>
+        );
+      })()}
 
       {/* ── Add / Edit Dialog ──────────────────────────────────────────────── */}
       <ProviderDialog

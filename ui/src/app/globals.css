@@ -197,6 +197,15 @@
   @apply bg-muted-foreground/20 rounded-full hover:bg-muted-foreground/40 transition-colors;
 }
 
+/* Hide the scrollbar while keeping the element scrollable (used by virtualized
+   lists and overflow toolbars). Overrides the global thin scrollbar above. */
+@utility scrollbar-none {
+  scrollbar-width: none; /* Firefox */
+  &::-webkit-scrollbar {
+    display: none; /* Chromium / WebKit */
+  }
+}
+
 /* --- Card Utility Classes --- */
 .neu-card, .neu-flat {
   border-radius: var(--radius-xl);

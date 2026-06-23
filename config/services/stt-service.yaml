@@ -1,4 +1,0 @@
-name: stt-service
-type: external
-url: http://your-whisper-host:8300/v1
-max_concurrent: 1

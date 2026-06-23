@@ -80,23 +80,6 @@ impl ToolRegistry {
         }
     }
 
-    /// Reload registry from config, preserving health status for unchanged tools.
-    pub async fn reload(&self, tools: &HashMap<String, ToolConfig>) {
-        let new_map = Self::build_map(tools);
-        let mut guard = self.tools.write().await;
-        // Preserve health status for tools that still exist with same URL
-        for (name, new_entry) in &new_map {
-            if let Some(old) = guard.get(name)
-                && old.url == new_entry.url {
-                    new_entry.available.store(
-                        old.available.load(Ordering::Relaxed),
-                        Ordering::Relaxed,
-                    );
-                }
-        }
-        *guard = new_map;
-    }
-
     pub async fn len(&self) -> usize {
         self.tools.read().await.len()
     }

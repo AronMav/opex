@@ -2,7 +2,6 @@
 ///
 /// Service configs live flat in `workspace/tools/*.yaml` alongside YAML tools.
 /// Each file defines one service endpoint: name, type, url, `max_concurrent`, healthcheck.
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -95,51 +94,6 @@ pub async fn load_service_map(workspace_dir: &str) -> HashMap<String, ToolConfig
         .into_iter()
         .map(|e| (e.name.clone(), e.to_tool_config()))
         .collect()
-}
-
-/// Reject any name containing characters that would let `{name}.yaml` escape
-/// the services dir or shadow files outside it (e.g. `../agents/Foo`,
-/// `..\..\.env`). Mirrors `mcp_workspace::save_mcp_entry` and the
-/// `[a-zA-Z0-9_-]` rule documented in CLAUDE.md.
-fn validate_service_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        anyhow::bail!("service entry name must not be empty");
-    }
-    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        anyhow::bail!("invalid service entry name: '{name}'");
-    }
-    Ok(())
-}
-
-/// Write/update a service config file.
-pub async fn save_service_entry(workspace_dir: &str, entry: &ServiceFileEntry) -> Result<()> {
-    validate_service_name(&entry.name)?;
-
-    let dir = services_dir(workspace_dir);
-    tokio::fs::create_dir_all(&dir).await
-        .with_context(|| format!("failed to create services dir: {}", dir.display()))?;
-
-    let yaml = serde_yaml::to_string(entry)
-        .with_context(|| format!("failed to serialize service entry '{}'", entry.name))?;
-
-    let path = dir.join(format!("{}.yaml", entry.name));
-    tokio::fs::write(&path, yaml).await
-        .with_context(|| format!("failed to write service config: {}", path.display()))?;
-
-    Ok(())
-}
-
-/// Delete a service config file. Returns true if the file existed and was deleted.
-pub async fn delete_service_entry(workspace_dir: &str, name: &str) -> Result<bool> {
-    validate_service_name(name)?;
-
-    let path = services_dir(workspace_dir).join(format!("{name}.yaml"));
-    if !path.exists() {
-        return Ok(false);
-    }
-    tokio::fs::remove_file(&path).await
-        .with_context(|| format!("failed to delete service config: {}", path.display()))?;
-    Ok(true)
 }
 
 #[cfg(test)]
