@@ -145,7 +145,7 @@ export default function AuthenticatedLayout({
             <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform" />
             <div className="flex items-center gap-2 pr-2 border-r border-border/20">
               <Bot className="h-4 w-4 text-primary" />
-              <span className="font-display text-sm font-black tracking-wide uppercase text-foreground/90">HydeClaw</span>
+              <span className="font-display text-sm font-black tracking-wide uppercase text-foreground/90">OPEX</span>
             </div>
 
             <div id="mobile-page-actions" className="flex items-center gap-1">

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { devtools, persist, subscribeWithSelector, createJSONStorage } from "zustand/middleware";
+import { readWithLegacy } from "@/stores/ls-migration";
 
 export type LoginResult = true | "invalid" | "rate_limited" | "error";
 
@@ -80,7 +81,7 @@ export const useAuthStore = create<AuthState>()(
               lastFetched: 0,
             });
             // Clear cached API data from IndexedDB to prevent data leakage after logout
-            import("idb-keyval").then(({ del }) => del("hydeclaw-rq")).catch((e) => console.warn("[auth] IDB cache clear failed:", e));
+            import("idb-keyval").then(({ del }) => del("opex-rq")).catch((e) => console.warn("[auth] IDB cache clear failed:", e));
           },
 
           restore: async () => {
@@ -102,22 +103,23 @@ export const useAuthStore = create<AuthState>()(
           },
         }),
         {
-          name: "hydeclaw.auth.token",
+          name: "opex.auth.token",
           partialize: (state) => ({ token: state.token }),
           // Security: auth token stored in localStorage for cross-tab login persistence.
           // Accepted trade-off for a personal home server: XSS would expose the token
           // persistently, but the alternative (sessionStorage) requires re-login on every tab.
-          // Legacy migration below moves any old sessionStorage token to localStorage.
+          // Legacy migration: moves sessionStorage or old hydeclaw.* key to new opex.* key.
           storage: createJSONStorage(() => {
-            // Migrate any token that was previously stored in sessionStorage back to localStorage.
-            // localStorage keeps the user logged in across tabs and page refreshes, which is
-            // appropriate for a personal home server where the user is the only operator.
-            const key = "hydeclaw.auth.token";
-            const sessionVal = sessionStorage.getItem(key);
+            // Migrate token from sessionStorage (old pattern) to localStorage.
+            const oldKey = "hydeclaw.auth.token";
+            const newKey = "opex.auth.token";
+            const sessionVal = sessionStorage.getItem(oldKey);
             if (sessionVal) {
-              if (!localStorage.getItem(key)) localStorage.setItem(key, sessionVal);
-              sessionStorage.removeItem(key);
+              if (!localStorage.getItem(newKey)) localStorage.setItem(newKey, sessionVal);
+              sessionStorage.removeItem(oldKey);
             }
+            // Migrate from legacy localStorage key (hydeclaw → opex) via shim.
+            readWithLegacy(newKey, oldKey);
             return localStorage;
           }),
         },

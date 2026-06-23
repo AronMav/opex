@@ -102,7 +102,7 @@ interface NetworkAddresses {
 
 // ── localStorage key ──────────────────────────────────────────────────────
 
-const WIZARD_STORAGE_KEY = "hydeclaw_wizard_progress";
+const WIZARD_STORAGE_KEY = "opex_wizard_progress";
 
 type Step = "requirements" | "provider" | "agent" | "channel";
 
@@ -397,7 +397,7 @@ export default function SetupPage() {
         {/* Logo */}
         <div className="flex items-center justify-center gap-3 mb-8">
           <Bot className="h-8 w-8 text-primary" />
-          <span className="font-display text-2xl font-black tracking-wide uppercase">HydeClaw</span>
+          <span className="font-display text-2xl font-black tracking-wide uppercase">OPEX</span>
         </div>
 
         {/* Step indicators */}

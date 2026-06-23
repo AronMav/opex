@@ -7,13 +7,13 @@ describe("Draft persistence helpers", () => {
     localStorage.clear();
   });
 
-  it("saveDraft writes to localStorage key hydeclaw.draft.{agent}", () => {
+  it("saveDraft writes to localStorage key opex.draft.{agent}", () => {
     saveDraft("Aria", "Hello world");
-    expect(localStorage.getItem("hydeclaw.draft.Aria")).toBe("Hello world");
+    expect(localStorage.getItem("opex.draft.Aria")).toBe("Hello world");
   });
 
   it("loadDraft returns stored text", () => {
-    localStorage.setItem("hydeclaw.draft.Aria", "Stored text");
+    localStorage.setItem("opex.draft.Aria", "Stored text");
     expect(loadDraft("Aria")).toBe("Stored text");
   });
 
@@ -22,15 +22,15 @@ describe("Draft persistence helpers", () => {
   });
 
   it("saveDraft with empty string removes the key", () => {
-    localStorage.setItem("hydeclaw.draft.Aria", "Some text");
+    localStorage.setItem("opex.draft.Aria", "Some text");
     saveDraft("Aria", "");
-    expect(localStorage.getItem("hydeclaw.draft.Aria")).toBeNull();
+    expect(localStorage.getItem("opex.draft.Aria")).toBeNull();
   });
 
   it("clearDraft removes the key", () => {
-    localStorage.setItem("hydeclaw.draft.Aria", "Some text");
+    localStorage.setItem("opex.draft.Aria", "Some text");
     clearDraft("Aria");
-    expect(localStorage.getItem("hydeclaw.draft.Aria")).toBeNull();
+    expect(localStorage.getItem("opex.draft.Aria")).toBeNull();
   });
 
   it("draft keys are per-agent (no cross-agent contamination)", () => {

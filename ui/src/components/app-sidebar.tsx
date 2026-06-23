@@ -99,7 +99,7 @@ export function AppSidebar() {
           <div className="flex items-center gap-2">
             <Bot className="text-primary" size={20} />
             <span className="font-display text-base font-bold tracking-wide text-foreground">
-              HydeClaw
+              OPEX
             </span>
           </div>
           <div className="flex items-center gap-2 px-0.5">

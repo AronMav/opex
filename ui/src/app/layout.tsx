@@ -30,7 +30,7 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "HydeClaw",
+  title: "OPEX",
   description: "AI Gateway Control Panel",
 };
 

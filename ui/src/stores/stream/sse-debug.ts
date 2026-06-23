@@ -3,10 +3,10 @@
  * in live streams. Disabled by default — incurs zero cost when off.
  *
  * Enable in the browser console once:
- *   localStorage.setItem("hydeclaw_debug_sse", "1"); location.reload();
+ *   localStorage.setItem("opex_debug_sse", "1"); location.reload();
  *
  * Disable:
- *   localStorage.removeItem("hydeclaw_debug_sse"); location.reload();
+ *   localStorage.removeItem("opex_debug_sse"); location.reload();
  *
  * What it logs:
  *  • Every SSE event received (type, key fields, raw delta text up to 80 chars)
@@ -15,8 +15,8 @@
  *
  * Logs go to console with `[SSE]` prefix so they can be filtered. The last
  * N entries are also retained in memory and accessible via:
- *   window.__hydeclawDebugSSE() — returns the in-memory log array
- *   window.__hydeclawDebugSSECopy() — copies the JSON dump to clipboard
+ *   window.__opexDebugSSE() — returns the in-memory log array
+ *   window.__opexDebugSSECopy() — copies the JSON dump to clipboard
  */
 
 const RING_BUFFER_SIZE = 1000;
@@ -37,7 +37,7 @@ function isEnabled(): boolean {
       enabled = false;
     } else {
       try {
-        enabled = window.localStorage.getItem("hydeclaw_debug_sse") === "1";
+        enabled = window.localStorage.getItem("opex_debug_sse") === "1";
       } catch {
         enabled = false;
       }
@@ -52,9 +52,9 @@ function isEnabled(): boolean {
 function installGlobals() {
   if (typeof window === "undefined") return;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__hydeclawDebugSSE = () => ring.slice();
+  (window as any).__opexDebugSSE = () => ring.slice();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (window as any).__hydeclawDebugSSECopy = async () => {
+  (window as any).__opexDebugSSECopy = async () => {
     const text = JSON.stringify(ring, null, 2);
     try {
       await navigator.clipboard.writeText(text);
@@ -66,7 +66,7 @@ function installGlobals() {
     }
   };
   // eslint-disable-next-line no-console
-  console.log("[SSE] debug enabled. window.__hydeclawDebugSSECopy() to copy log.");
+  console.log("[SSE] debug enabled. window.__opexDebugSSECopy() to copy log.");
 }
 
 export function sseLog(agent: string, msg: string, data?: unknown): void {

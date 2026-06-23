@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Basic E2E test suite for HydeClaw Chat.
+ * Basic E2E test suite for OPEX Chat.
  * These tests focus on core functionality and user flows.
  */
 test.describe('Chat Core Flows', () => {

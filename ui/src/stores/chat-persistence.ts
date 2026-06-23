@@ -1,7 +1,7 @@
 // ── chat-persistence.ts ─────────────────────────────────────────────────────
 // localStorage helpers for persisting last-selected agent and session.
 
-const LAST_SESSION_KEY = "hydeclaw.chat.lastSession";
+const LAST_SESSION_KEY = "opex.chat.lastSession";
 
 interface LastSessionData {
   agent?: string;
