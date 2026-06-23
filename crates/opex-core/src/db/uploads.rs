@@ -195,13 +195,13 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn agent_icon_upsert_inserts_then_replaces(pool: PgPool) {
-        let id1 = upsert_agent_icon(&pool, "Hyde", "image/png", b"first").await.unwrap();
-        let id2 = upsert_agent_icon(&pool, "Hyde", "image/jpeg", b"second-and-larger").await.unwrap();
+        let id1 = upsert_agent_icon(&pool, "Opex", "image/png", b"first").await.unwrap();
+        let id2 = upsert_agent_icon(&pool, "Opex", "image/jpeg", b"second-and-larger").await.unwrap();
         assert_ne!(id1, id2, "upsert must produce new id on replace");
 
         // Only one row remains for the agent.
         let count: i64 = sqlx::query_scalar(
-            r#"SELECT COUNT(*) FROM uploads WHERE owner_type = 'agent_icon' AND owner_id = 'Hyde'"#,
+            r#"SELECT COUNT(*) FROM uploads WHERE owner_type = 'agent_icon' AND owner_id = 'Opex'"#,
         )
         .fetch_one(&pool)
         .await
@@ -216,19 +216,19 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn lookup_agent_icon_id_returns_current(pool: PgPool) {
-        assert!(lookup_agent_icon_id(&pool, "Hyde").await.unwrap().is_none());
-        let id = upsert_agent_icon(&pool, "Hyde", "image/png", b"x").await.unwrap();
-        assert_eq!(lookup_agent_icon_id(&pool, "Hyde").await.unwrap(), Some(id));
+        assert!(lookup_agent_icon_id(&pool, "Opex").await.unwrap().is_none());
+        let id = upsert_agent_icon(&pool, "Opex", "image/png", b"x").await.unwrap();
+        assert_eq!(lookup_agent_icon_id(&pool, "Opex").await.unwrap(), Some(id));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn list_agent_icon_ids_batch(pool: PgPool) {
-        upsert_agent_icon(&pool, "Hyde", "image/png", b"h").await.unwrap();
+        upsert_agent_icon(&pool, "Opex", "image/png", b"h").await.unwrap();
         upsert_agent_icon(&pool, "Alma", "image/png", b"a").await.unwrap();
-        let names = vec!["Hyde".to_string(), "Alma".to_string(), "Missing".to_string()];
+        let names = vec!["Opex".to_string(), "Alma".to_string(), "Missing".to_string()];
         let map = list_agent_icon_ids(&pool, &names).await.unwrap();
         assert_eq!(map.len(), 2);
-        assert!(map.contains_key("Hyde"));
+        assert!(map.contains_key("Opex"));
         assert!(map.contains_key("Alma"));
         assert!(!map.contains_key("Missing"));
     }
@@ -241,10 +241,10 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn delete_agent_icon_returns_count(pool: PgPool) {
-        assert_eq!(delete_agent_icon(&pool, "Hyde").await.unwrap(), 0);
-        upsert_agent_icon(&pool, "Hyde", "image/png", b"x").await.unwrap();
-        assert_eq!(delete_agent_icon(&pool, "Hyde").await.unwrap(), 1);
-        assert!(lookup_agent_icon_id(&pool, "Hyde").await.unwrap().is_none());
+        assert_eq!(delete_agent_icon(&pool, "Opex").await.unwrap(), 0);
+        upsert_agent_icon(&pool, "Opex", "image/png", b"x").await.unwrap();
+        assert_eq!(delete_agent_icon(&pool, "Opex").await.unwrap(), 1);
+        assert!(lookup_agent_icon_id(&pool, "Opex").await.unwrap().is_none());
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -293,7 +293,7 @@ mod tests {
             r#"INSERT INTO uploads (id, owner_type, owner_id, mime, data, sha256, size_bytes, expires_at)
                VALUES (gen_random_uuid(), 'tool_output', NULL, 'a', '\x00', '\x00', 1, NOW() - INTERVAL '1 day'),
                       (gen_random_uuid(), 'tool_output', NULL, 'a', '\x00', '\x00', 1, NOW() + INTERVAL '1 day'),
-                      (gen_random_uuid(), 'agent_icon', 'Hyde', 'a', '\x00', '\x00', 1, NULL)"#,
+                      (gen_random_uuid(), 'agent_icon', 'Opex', 'a', '\x00', '\x00', 1, NULL)"#,
         )
         .execute(&pool).await.unwrap();
 

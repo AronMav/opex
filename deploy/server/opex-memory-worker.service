@@ -1,20 +1,20 @@
 [Unit]
-Description=HydeClaw Memory Worker
+Description=Opex Memory Worker
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/aronmav/hydeclaw
-ExecStart=/home/aronmav/hydeclaw/hydeclaw-memory-worker-x86_64
-EnvironmentFile=/home/aronmav/hydeclaw/.env
+WorkingDirectory=/home/aronmav/opex
+ExecStart=/home/aronmav/opex/opex-memory-worker-x86_64
+EnvironmentFile=/home/aronmav/opex/.env
 Environment=HTTP_PROXY=http://10.10.1.37:1081
 Environment=HTTPS_PROXY=http://10.10.1.37:1081
 Environment=http_proxy=http://10.10.1.37:1081
 Environment=https_proxy=http://10.10.1.37:1081
 Environment=NO_PROXY=localhost,127.0.0.1,::1,10.10.1.42
 Environment=no_proxy=localhost,127.0.0.1,::1,10.10.1.42
-StandardOutput=append:/home/aronmav/hydeclaw/logs/memory-worker.log
-StandardError=append:/home/aronmav/hydeclaw/logs/memory-worker.log
+StandardOutput=append:/home/aronmav/opex/logs/memory-worker.log
+StandardError=append:/home/aronmav/opex/logs/memory-worker.log
 Restart=always
 RestartSec=5
 

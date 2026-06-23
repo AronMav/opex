@@ -231,7 +231,7 @@ export function createTelegramDriver(
     { command: "compact", description: strings.cmdCompact },
     { command: "stop", description: strings.cmdStop },
     { command: "think", description: strings.cmdThink },
-  ]).catch(() => {});
+  ]).catch(() => { });
 
   // Message handler
   bot.on("message", async (ctx) => {
@@ -252,7 +252,7 @@ export function createTelegramDriver(
         const topicName = (msg.text || msg.caption || "").slice(0, 50).trim();
         if (topicName) {
           bot.api.editForumTopic(chatId, msg.message_thread_id, { name: topicName })
-            .catch(() => {}); // Best-effort, don't block
+            .catch(() => { }); // Best-effort, don't block
         }
       }
     }
@@ -280,7 +280,7 @@ export function createTelegramDriver(
       await ctx.reply(strings.accessRestricted(code), {
         parse_mode: "MarkdownV2",
         reply_parameters: safeReplyParams(msg.message_id),
-      }).catch(() => {});
+      }).catch(() => { });
 
       // Notify owner
       if (bridge.ownerId) {
@@ -289,7 +289,7 @@ export function createTelegramDriver(
           await bot.api.sendMessage(
             ownerChatId,
             strings.accessRequest(displayName, userId, code),
-          ).catch(() => {});
+          ).catch(() => { });
         }
       }
       return;
@@ -314,7 +314,7 @@ export function createTelegramDriver(
         } else {
           await ctx.reply(strings.noActiveRequest, {
             reply_parameters: safeReplyParams(msg.message_id),
-          }).catch(() => {});
+          }).catch(() => { });
         }
         return;
       }
@@ -323,12 +323,12 @@ export function createTelegramDriver(
           state.thinkState.delete(key);
           await ctx.reply(strings.thinkModeOff, {
             reply_parameters: safeReplyParams(msg.message_id),
-          }).catch(() => {});
+          }).catch(() => { });
         } else {
           state.thinkState.add(key);
           await ctx.reply(strings.thinkModeOn, {
             reply_parameters: safeReplyParams(msg.message_id),
-          }).catch(() => {});
+          }).catch(() => { });
         }
         return;
       }
@@ -418,7 +418,7 @@ export function createTelegramDriver(
       // adapter layer.
       const access = await bridge.checkAccess(userId);
       if (!access.isOwner) {
-        await ctx.answerCallbackQuery({ text: strings.approvalForbidden }).catch(() => {});
+        await ctx.answerCallbackQuery({ text: strings.approvalForbidden }).catch(() => { });
         return;
       }
 
@@ -427,11 +427,11 @@ export function createTelegramDriver(
       const label = status === "approved" ? strings.approvalApproved : strings.approvalRejected;
 
       // Answer callback immediately to stop Telegram spinner
-      await ctx.answerCallbackQuery({ text: label }).catch(() => {});
+      await ctx.answerCallbackQuery({ text: label }).catch(() => { });
 
       // Call Core API to resolve approval
-      const coreUrl = (process.env.HYDECLAW_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
-      const authToken = process.env.HYDECLAW_AUTH_TOKEN || "";
+      const coreUrl = (process.env.OPEX_CORE_WS || "ws://localhost:18789").replace("ws://", "http://");
+      const authToken = process.env.OPEX_AUTH_TOKEN || "";
       try {
         const resp = await fetch(`${coreUrl}/api/approvals/${approvalId}/resolve`, {
           method: "POST",
@@ -452,7 +452,7 @@ export function createTelegramDriver(
         const origText = ctx.callbackQuery.message?.text || "";
         // Replace the 🔐 header with result
         const resultText = origText.replace(/^🔐[^\n]*/, label);
-        await retryTg(() => bot.api.editMessageText(chatId, msgId, resultText)).catch(() => {});
+        await retryTg(() => bot.api.editMessageText(chatId, msgId, resultText)).catch(() => { });
       }
       return;
     }
@@ -462,12 +462,12 @@ export function createTelegramDriver(
     if (!allowed && !isOwner) {
       const displayName = ctx.callbackQuery.from.first_name || userId;
       const code = await bridge.createPairingCode(userId, displayName);
-      await ctx.answerCallbackQuery().catch(() => {});
-      await ctx.reply(strings.accessRestricted(code), { parse_mode: "MarkdownV2" }).catch(() => {});
+      await ctx.answerCallbackQuery().catch(() => { });
+      await ctx.reply(strings.accessRestricted(code), { parse_mode: "MarkdownV2" }).catch(() => { });
       return;
     }
 
-    await ctx.answerCallbackQuery().catch(() => {});
+    await ctx.answerCallbackQuery().catch(() => { });
     bridge.sendMessage({
       user_id: userId,
       text: data,
@@ -572,7 +572,7 @@ async function dispatchOrQueue(
     await bot.api.setMessageReaction(
       chatId, msg.message_id,
       [{ type: "emoji", emoji: "⏳" as any }],
-    ).catch(() => {});
+    ).catch(() => { });
     return;
   }
 
@@ -613,7 +613,7 @@ async function processMessage(
   // Immediate ack — user sees we received their message.
   // Deliberately placed BEFORE reUploadAttachments so the ack is instant,
   // even if media re-upload is slow.
-  await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👀" as any }]).catch(() => {});
+  await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👀" as any }]).catch(() => { });
 
   // Re-upload media for stable URLs
   const stableAttachments = await reUploadAttachments(bridge, attachments);
@@ -657,13 +657,13 @@ async function processMessage(
     stallLevel = 0;
     try {
       if (phase === "thinking") {
-        await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "🤔" }]).catch(() => {});
+        await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "🤔" }]).catch(() => { });
       } else if (phase === "calling_tool") {
         const emoji = toolEmoji(toolName);
-        await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: emoji as any }]).catch(() => {});
+        await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: emoji as any }]).catch(() => { });
         await retryTg(() => bot.api.sendChatAction(chatId, "typing"), 3, "sendChatAction");
       } else if (phase === "composing") {
-        await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "⚡" }]).catch(() => {});
+        await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "⚡" }]).catch(() => { });
       }
     } catch {
       // cosmetic, ok to fail silently
@@ -674,10 +674,10 @@ async function processMessage(
     const elapsed = Date.now() - lastPhaseTime;
     if (elapsed >= 30_000 && stallLevel < 2) {
       stallLevel = 2;
-      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "😨" }]).catch(() => {});
+      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "😨" }]).catch(() => { });
     } else if (elapsed >= 10_000 && stallLevel < 1) {
       stallLevel = 1;
-      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "🥱" }]).catch(() => {});
+      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "🥱" }]).catch(() => { });
     }
   }, 5000);
 
@@ -723,7 +723,7 @@ async function processMessage(
       clearInterval(stallCheck);
       console.warn("[tg] stream stalled for 60s, aborting");
       const notice = fullText ? fullText + "\n\n\u26A0\uFE0F Stream stalled" : "\u26A0\uFE0F Response timed out";
-      if (streamMsgId) editWithMarkdown(bot, chatId, streamMsgId, notice).catch(() => {});
+      if (streamMsgId) editWithMarkdown(bot, chatId, streamMsgId, notice).catch(() => { });
     }
   }, 10_000);
 
@@ -735,7 +735,7 @@ async function processMessage(
     clearInterval(stallCheck);
     if (phaseTimer) clearInterval(phaseTimer);
     // Wait for last streaming edit to finish before sending formatted version
-    await lastStreamEdit.catch(() => {});
+    await lastStreamEdit.catch(() => { });
 
     if (response) {
       if (streamMsgId) {
@@ -746,9 +746,9 @@ async function processMessage(
       }
 
       // Thumbs up → clear after 3s
-      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👍" }]).catch(() => {});
+      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👍" }]).catch(() => { });
       setTimeout(async () => {
-        await bot.api.setMessageReaction(chatId, msg.message_id, []).catch(() => {});
+        await bot.api.setMessageReaction(chatId, msg.message_id, []).catch(() => { });
       }, 3000);
     }
   } catch (err: any) {
@@ -757,14 +757,14 @@ async function processMessage(
     if (phaseTimer) clearInterval(phaseTimer);
 
     if (err.message === "cancelled") {
-      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "🛑" as any }]).catch(() => {});
+      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "🛑" as any }]).catch(() => { });
     } else {
-      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👎" }]).catch(() => {});
+      await bot.api.setMessageReaction(chatId, msg.message_id, [{ type: "emoji", emoji: "👎" }]).catch(() => { });
       const isGroup = chatId < 0;
       await bot.api.sendMessage(chatId, strings.errorMessage(err.message), {
         reply_parameters: safeReplyParams(msg.message_id),
         disable_notification: isGroup,
-      }).catch(() => {});
+      }).catch(() => { });
     }
   }
 
@@ -779,9 +779,9 @@ async function processMessage(
     const merged = queued.map((q) => q.text).filter(Boolean).join("\n\n---\n\n");
     const last = queued[queued.length - 1];
     const allAttachments = queued.flatMap((q) => q.attachments);
-    await bot.api.setMessageReaction(last.chatId, last.msg.message_id, []).catch(() => {});
+    await bot.api.setMessageReaction(last.chatId, last.msg.message_id, []).catch(() => { });
     setImmediate(() => {
-      processMessage(bot, last.msg, last.userId, last.chatId, merged, allAttachments, bridge, strings, state, errorCooldownMs, errorPolicy).catch(() => {});
+      processMessage(bot, last.msg, last.userId, last.chatId, merged, allAttachments, bridge, strings, state, errorCooldownMs, errorPolicy).catch(() => { });
     });
   }
 }
@@ -808,7 +808,7 @@ async function sendMarkdownReply(
       console.warn(`[telegram] MarkdownV2 send failed: ${e.message?.slice(0, 200)}`);
       await bot.api.sendMessage(chatId, parts[i], {
         reply_parameters: replyParams,
-      }).catch(() => {});
+      }).catch(() => { });
     }
 
     if (i < parts.length - 1) {
@@ -829,7 +829,7 @@ async function editWithMarkdown(
       await bot.api.editMessageText(chatId, messageId, md2, { parse_mode: "MarkdownV2" });
     } catch (e: any) {
       console.warn(`[telegram] MarkdownV2 edit failed: ${e.message?.slice(0, 200)}`);
-      await bot.api.editMessageText(chatId, messageId, text).catch(() => {});
+      await bot.api.editMessageText(chatId, messageId, text).catch(() => { });
     }
     return;
   }
@@ -841,7 +841,7 @@ async function editWithMarkdown(
     await bot.api.editMessageText(chatId, messageId, firstMd2, { parse_mode: "MarkdownV2" });
   } catch (e: any) {
     console.warn(`[telegram] MarkdownV2 edit (split) failed: ${e.message?.slice(0, 200)}`);
-    await bot.api.editMessageText(chatId, messageId, parts[0]).catch(() => {});
+    await bot.api.editMessageText(chatId, messageId, parts[0]).catch(() => { });
   }
   for (let i = 1; i < parts.length; i++) {
     const md2 = commonMarkToMarkdownV2(parts[i]);
@@ -849,7 +849,7 @@ async function editWithMarkdown(
       await bot.api.sendMessage(chatId, md2, { parse_mode: "MarkdownV2" });
     } catch (e: any) {
       console.warn(`[telegram] MarkdownV2 send (split) failed: ${e.message?.slice(0, 200)}`);
-      await bot.api.sendMessage(chatId, parts[i]).catch(() => {});
+      await bot.api.sendMessage(chatId, parts[i]).catch(() => { });
     }
     await Bun.sleep(100);
   }
@@ -873,7 +873,7 @@ async function handleOwnerCommand(
       : (result.error === "expired" ? strings.codeExpired : strings.codeNotFound);
     await ctx.reply(reply, {
       reply_parameters: safeReplyParams(ctx.message?.message_id),
-    }).catch(() => {});
+    }).catch(() => { });
     return true;
   }
 
@@ -882,7 +882,7 @@ async function handleOwnerCommand(
     bridge.rejectPairing(code);
     await ctx.reply(strings.requestRejected, {
       reply_parameters: safeReplyParams(ctx.message?.message_id),
-    }).catch(() => {});
+    }).catch(() => { });
     return true;
   }
 
@@ -891,7 +891,7 @@ async function handleOwnerCommand(
     if (users.length === 0) {
       await ctx.reply(strings.noApprovedUsers, {
         reply_parameters: safeReplyParams(ctx.message?.message_id),
-      }).catch(() => {});
+      }).catch(() => { });
       return true;
     }
     let out = strings.approvedUsersHeader;
@@ -904,7 +904,7 @@ async function handleOwnerCommand(
     out += strings.revokeHint;
     await ctx.reply(out, {
       reply_parameters: safeReplyParams(ctx.message?.message_id),
-    }).catch(() => {});
+    }).catch(() => { });
     return true;
   }
 
@@ -914,7 +914,7 @@ async function handleOwnerCommand(
     const reply = success ? strings.userRevoked(targetId) : strings.userNotFound;
     await ctx.reply(reply, {
       reply_parameters: safeReplyParams(ctx.message?.message_id),
-    }).catch(() => {});
+    }).catch(() => { });
     return true;
   }
 
@@ -998,147 +998,147 @@ async function executeAction(
   }
 
   switch (action.action) {
-      case "react":
-        if (messageId) {
-          await bot.api.setMessageReaction(chatId, messageId, [
-            { type: "emoji", emoji: (action.params.emoji as string) as any },
-          ]);
-        }
-        break;
+    case "react":
+      if (messageId) {
+        await bot.api.setMessageReaction(chatId, messageId, [
+          { type: "emoji", emoji: (action.params.emoji as string) as any },
+        ]);
+      }
+      break;
 
-      case "pin":
-        if (messageId) {
-          await bot.api.pinChatMessage(chatId, messageId);
-        }
-        break;
+    case "pin":
+      if (messageId) {
+        await bot.api.pinChatMessage(chatId, messageId);
+      }
+      break;
 
-      case "edit":
-        if (messageId) {
-          const editText = action.params.text as string;
-          const editMd2 = commonMarkToMarkdownV2(editText);
-          try {
-            await bot.api.editMessageText(chatId, messageId, editMd2, { parse_mode: "MarkdownV2" });
-          } catch (e) {
-            console.warn("[telegram] action edit MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
-            await bot.api.editMessageText(chatId, messageId, editText).catch(() => {});
-          }
-        }
-        break;
-
-      case "delete":
-        if (messageId) {
-          await bot.api.deleteMessage(chatId, messageId);
-        }
-        break;
-
-      case "reply": {
-        const replyText = action.params.text as string;
-        const replyMd2 = commonMarkToMarkdownV2(replyText);
+    case "edit":
+      if (messageId) {
+        const editText = action.params.text as string;
+        const editMd2 = commonMarkToMarkdownV2(editText);
         try {
-          await bot.api.sendMessage(chatId, replyMd2, {
-            parse_mode: "MarkdownV2",
-            reply_parameters: safeReplyParams(messageId),
-          });
+          await bot.api.editMessageText(chatId, messageId, editMd2, { parse_mode: "MarkdownV2" });
         } catch (e) {
-          console.warn("[telegram] action reply MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
-          await bot.api.sendMessage(chatId, replyText, {
-            reply_parameters: safeReplyParams(messageId),
-          }).catch(() => {});
+          console.warn("[telegram] action edit MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
+          await bot.api.editMessageText(chatId, messageId, editText).catch(() => { });
         }
-        break;
       }
+      break;
 
-      case "send_message": {
-        const text = action.params.text as string;
-        const parts = splitText(text, MAX_MESSAGE_LEN, true);
-        for (const part of parts) {
-          const md2 = commonMarkToMarkdownV2(part);
-          try {
-            await bot.api.sendMessage(chatId, md2, { parse_mode: "MarkdownV2" });
-          } catch (e) {
-            console.warn("[telegram] action send_message MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
-            await bot.api.sendMessage(chatId, part).catch(() => {});
-          }
-        }
-        break;
+    case "delete":
+      if (messageId) {
+        await bot.api.deleteMessage(chatId, messageId);
       }
+      break;
 
-      case "send_voice": {
-        // Core sends raw bytes as base64. Upload via tgUpload (FormData + Blob,
-        // Content-Length) rather than grammy's InputFile — the latter streams
-        // the body chunked and the egress proxy stalls on it (see tgUpload doc).
-        const audioBase64 = action.params.audio_base64 as string | undefined;
-        if (!audioBase64) break;
-        const buffer = Buffer.from(audioBase64, "base64");
-        const rp = safeReplyParams(messageId);
-        await tgUpload(apiRoot, bot.token, "sendVoice", "voice", "voice.ogg", "audio/ogg", buffer, {
-          chat_id: String(chatId),
-          caption: action.params.caption as string | undefined,
-          reply_parameters: rp ? JSON.stringify(rp) : undefined,
+    case "reply": {
+      const replyText = action.params.text as string;
+      const replyMd2 = commonMarkToMarkdownV2(replyText);
+      try {
+        await bot.api.sendMessage(chatId, replyMd2, {
+          parse_mode: "MarkdownV2",
+          reply_parameters: safeReplyParams(messageId),
         });
-        break;
+      } catch (e) {
+        console.warn("[telegram] action reply MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
+        await bot.api.sendMessage(chatId, replyText, {
+          reply_parameters: safeReplyParams(messageId),
+        }).catch(() => { });
       }
+      break;
+    }
 
-      case "send_photo": {
-        // Same Content-Length upload contract as send_voice (tgUpload avoids the
-        // chunked-multipart proxy stall). Core also saves to /uploads/ for the UI.
-        const imageBase64 = action.params.image_base64 as string | undefined;
-        if (!imageBase64) break;
-        const buffer = Buffer.from(imageBase64, "base64");
-        const rp = safeReplyParams(messageId);
-        await tgUpload(apiRoot, bot.token, "sendPhoto", "photo", "photo.png", "image/png", buffer, {
-          chat_id: String(chatId),
-          caption: action.params.caption as string | undefined,
-          reply_parameters: rp ? JSON.stringify(rp) : undefined,
-        });
-        break;
-      }
-
-      case "approval_request": {
-        const toolName = action.params.tool_name as string;
-        const args = action.params.args as Record<string, unknown> | undefined;
-        const approvalId = action.params.approval_id as string;
-
-        // Format args as readable lines
-        let argsText = "";
-        if (args && typeof args === "object") {
-          const lines = Object.entries(args)
-            .map(([k, v]) => {
-              const val = typeof v === "string"
-                ? (v.length > 80 ? v.slice(0, 77) + "…" : v)
-                : JSON.stringify(v);
-              return `  • ${k}: ${val}`;
-            });
-          if (lines.length > 0) argsText = "\n" + lines.join("\n");
+    case "send_message": {
+      const text = action.params.text as string;
+      const parts = splitText(text, MAX_MESSAGE_LEN, true);
+      for (const part of parts) {
+        const md2 = commonMarkToMarkdownV2(part);
+        try {
+          await bot.api.sendMessage(chatId, md2, { parse_mode: "MarkdownV2" });
+        } catch (e) {
+          console.warn("[telegram] action send_message MarkdownV2 failed:", (e as Error).message?.slice(0, 100));
+          await bot.api.sendMessage(chatId, part).catch(() => { });
         }
+      }
+      break;
+    }
 
-        if (!strings) { console.error("[tg] approval_request requires strings"); break; }
-        const s = strings;
-        const text = `${s.approvalHeader(toolName)}${argsText}`;
-        const keyboard = new InlineKeyboard()
-          .text(s.approvalApprove, `approve:${approvalId}`).row()
-          .text(s.approvalReject, `reject:${approvalId}`);
+    case "send_voice": {
+      // Core sends raw bytes as base64. Upload via tgUpload (FormData + Blob,
+      // Content-Length) rather than grammy's InputFile — the latter streams
+      // the body chunked and the egress proxy stalls on it (see tgUpload doc).
+      const audioBase64 = action.params.audio_base64 as string | undefined;
+      if (!audioBase64) break;
+      const buffer = Buffer.from(audioBase64, "base64");
+      const rp = safeReplyParams(messageId);
+      await tgUpload(apiRoot, bot.token, "sendVoice", "voice", "voice.ogg", "audio/ogg", buffer, {
+        chat_id: String(chatId),
+        caption: action.params.caption as string | undefined,
+        reply_parameters: rp ? JSON.stringify(rp) : undefined,
+      });
+      break;
+    }
 
-        await bot.api.sendMessage(chatId, text, {
+    case "send_photo": {
+      // Same Content-Length upload contract as send_voice (tgUpload avoids the
+      // chunked-multipart proxy stall). Core also saves to /uploads/ for the UI.
+      const imageBase64 = action.params.image_base64 as string | undefined;
+      if (!imageBase64) break;
+      const buffer = Buffer.from(imageBase64, "base64");
+      const rp = safeReplyParams(messageId);
+      await tgUpload(apiRoot, bot.token, "sendPhoto", "photo", "photo.png", "image/png", buffer, {
+        chat_id: String(chatId),
+        caption: action.params.caption as string | undefined,
+        reply_parameters: rp ? JSON.stringify(rp) : undefined,
+      });
+      break;
+    }
+
+    case "approval_request": {
+      const toolName = action.params.tool_name as string;
+      const args = action.params.args as Record<string, unknown> | undefined;
+      const approvalId = action.params.approval_id as string;
+
+      // Format args as readable lines
+      let argsText = "";
+      if (args && typeof args === "object") {
+        const lines = Object.entries(args)
+          .map(([k, v]) => {
+            const val = typeof v === "string"
+              ? (v.length > 80 ? v.slice(0, 77) + "…" : v)
+              : JSON.stringify(v);
+            return `  • ${k}: ${val}`;
+          });
+        if (lines.length > 0) argsText = "\n" + lines.join("\n");
+      }
+
+      if (!strings) { console.error("[tg] approval_request requires strings"); break; }
+      const s = strings;
+      const text = `${s.approvalHeader(toolName)}${argsText}`;
+      const keyboard = new InlineKeyboard()
+        .text(s.approvalApprove, `approve:${approvalId}`).row()
+        .text(s.approvalReject, `reject:${approvalId}`);
+
+      await bot.api.sendMessage(chatId, text, {
+        reply_markup: keyboard,
+        reply_parameters: safeReplyParams(messageId),
+      });
+      break;
+    }
+
+    case "send_buttons": {
+      const buttons = action.params.buttons as Array<{ text: string; data: string }>;
+      if (buttons) {
+        const keyboard = new InlineKeyboard();
+        for (const btn of buttons) {
+          keyboard.text(btn.text, btn.data);
+        }
+        await bot.api.sendMessage(chatId, (action.params.text as string) ?? strings?.choose ?? "Choose:", {
           reply_markup: keyboard,
           reply_parameters: safeReplyParams(messageId),
         });
-        break;
       }
-
-      case "send_buttons": {
-        const buttons = action.params.buttons as Array<{ text: string; data: string }>;
-        if (buttons) {
-          const keyboard = new InlineKeyboard();
-          for (const btn of buttons) {
-            keyboard.text(btn.text, btn.data);
-          }
-          await bot.api.sendMessage(chatId, (action.params.text as string) ?? strings?.choose ?? "Choose:", {
-            reply_markup: keyboard,
-            reply_parameters: safeReplyParams(messageId),
-          });
-        }
-        break;
-      }
+      break;
+    }
   }
 }

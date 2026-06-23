@@ -178,7 +178,7 @@ export default function SetupPage() {
   useEffect(() => {
     apiGet<NetworkAddresses>("/api/network/addresses")
       .then(setNetworkData)
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   // ── localStorage: restore on mount ───────────────────────────────────
@@ -347,7 +347,7 @@ export default function SetupPage() {
 
   const finishSetup = async () => {
     // Mark setup as complete in DB — prevents redirect loop
-    await apiPost("/api/setup/complete", {}).catch(() => {});
+    await apiPost("/api/setup/complete", {}).catch(() => { });
     localStorage.removeItem(WIZARD_STORAGE_KEY);
     // Use window.location instead of router.replace to avoid React suspense
     // boundary error (#185) when transitioning from unauthenticated to authenticated layout
@@ -382,10 +382,10 @@ export default function SetupPage() {
   const reqChecks = requirements?.checks;
   const allChecks = reqChecks
     ? [
-        { key: "docker", label: t("setup.req_docker"), check: reqChecks.docker },
-        { key: "postgresql", label: t("setup.req_postgresql"), check: reqChecks.postgresql },
-        { key: "disk_space", label: t("setup.req_disk_space"), check: reqChecks.disk_space },
-      ]
+      { key: "docker", label: t("setup.req_docker"), check: reqChecks.docker },
+      { key: "postgresql", label: t("setup.req_postgresql"), check: reqChecks.postgresql },
+      { key: "disk_space", label: t("setup.req_disk_space"), check: reqChecks.disk_space },
+    ]
     : [];
 
   const hasError = allChecks.some((c) => c.check.status === "error");
@@ -410,11 +410,10 @@ export default function SetupPage() {
               <div key={s.key} className="flex items-center gap-2">
                 {i > 0 && <div className={`h-px w-8 ${done ? "bg-primary" : "bg-border"}`} />}
                 <div
-                  className={`flex h-9 w-9 items-center justify-center rounded-full border-2 transition-all ${
-                    done ? "border-primary bg-primary text-primary-foreground" :
-                    active ? "border-primary bg-primary/10 text-primary" :
-                    "border-border text-muted-foreground"
-                  }`}
+                  className={`flex h-9 w-9 items-center justify-center rounded-full border-2 transition-all ${done ? "border-primary bg-primary text-primary-foreground" :
+                      active ? "border-primary bg-primary/10 text-primary" :
+                        "border-border text-muted-foreground"
+                    }`}
                 >
                   {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
                 </div>
@@ -499,9 +498,8 @@ export default function SetupPage() {
                       {requirements.cli_tools.map((tool) => (
                         <div
                           key={tool.name}
-                          className={`flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 ${
-                            tool.status !== "ok" ? "opacity-50" : ""
-                          }`}
+                          className={`flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 ${tool.status !== "ok" ? "opacity-50" : ""
+                            }`}
                         >
                           <div className="mt-0.5 shrink-0">
                             {tool.status === "ok" ? (
@@ -731,7 +729,7 @@ export default function SetupPage() {
                     value={agentName}
                     onChange={(e) => setAgentName(e.target.value)}
                     className="font-mono text-sm"
-                    placeholder="Hyde"
+                    placeholder="Opex"
                   />
                 </Field>
                 <div className="space-y-2">

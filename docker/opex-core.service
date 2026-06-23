@@ -1,14 +1,14 @@
 [Unit]
-Description=HydeClaw Core — AI Gateway
+Description=Opex Core — AI Gateway
 After=network.target docker.service
 Wants=docker.service
 
 [Service]
 Type=notify
 WatchdogSec=120
-ExecStart=%h/hydeclaw/hydeclaw-core
-WorkingDirectory=%h/hydeclaw
-EnvironmentFile=%h/hydeclaw/.env
+ExecStart=%h/opex/opex-core
+WorkingDirectory=%h/opex
+EnvironmentFile=%h/opex/.env
 TimeoutStopSec=40
 Restart=on-failure
 RestartSec=5

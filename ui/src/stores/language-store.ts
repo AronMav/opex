@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { devtools, persist, subscribeWithSelector } from "zustand/middleware";
-import { readWithLegacy } from "@/stores/ls-migration";
 
 export type Locale = "ru" | "en";
 
@@ -14,11 +13,10 @@ interface LanguageState {
   setLocale: (locale: Locale) => void;
 }
 
-// Migrate legacy key so existing users keep their language preference.
 function getInitialLocale(): Locale {
   if (typeof window === "undefined") return "ru";
-  const migrated = readWithLegacy("opex.language", "hydeclaw.language");
-  if (migrated === "en" || migrated === "ru") return migrated;
+  const stored = localStorage.getItem("opex.language");
+  if (stored === "en" || stored === "ru") return stored;
   return "ru";
 }
 

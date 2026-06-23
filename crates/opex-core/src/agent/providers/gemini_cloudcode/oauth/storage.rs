@@ -1,11 +1,11 @@
 //! Credential file persistence for the Gemini Cloud Code OAuth provider.
 //!
 //! **Path resolution (in priority order):**
-//! 1. `OPEX_OAUTH_CREDENTIALS_PATH` env var (fallback: `HYDECLAW_OAUTH_CREDENTIALS_PATH`) —
+//! 1. `OPEX_OAUTH_CREDENTIALS_PATH` env var (fallback: `OPEX_OAUTH_CREDENTIALS_PATH`) —
 //!    read via `opex_gateway_util::env::env_var`; used by tests and operators.
 //! 2. Platform default:
-//!    - Linux/macOS: `~/.config/hydeclaw/google_oauth.json`
-//!    - Windows:     `%APPDATA%\hydeclaw\google_oauth.json`
+//!    - Linux/macOS: `~/.config/opex/google_oauth.json`
+//!    - Windows:     `%APPDATA%\opex\google_oauth.json`
 //!
 //! **Safety properties:**
 //! - Atomic write: data written to `<file>.tmp` then renamed over the target.
@@ -30,7 +30,7 @@ use super::types::{GoogleCredentials, OauthError};
 
 /// Resolve the credentials file path.
 ///
-/// Priority: `OPEX_OAUTH_CREDENTIALS_PATH` (then `HYDECLAW_OAUTH_CREDENTIALS_PATH`
+/// Priority: `OPEX_OAUTH_CREDENTIALS_PATH` (then `OPEX_OAUTH_CREDENTIALS_PATH`
 /// via dual-read helper) → platform default.
 pub fn credentials_path() -> PathBuf {
     if let Some(p) = opex_gateway_util::env::env_var("OAUTH_CREDENTIALS_PATH")
@@ -41,15 +41,15 @@ pub fn credentials_path() -> PathBuf {
     default_credentials_path()
 }
 
-/// Platform-default path: `~/.config/hydeclaw/google_oauth.json` (Linux/macOS)
-/// or `%APPDATA%\hydeclaw\google_oauth.json` (Windows).
+/// Platform-default path: `~/.config/opex/google_oauth.json` (Linux/macOS)
+/// or `%APPDATA%\opex\google_oauth.json` (Windows).
 fn default_credentials_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| {
             // Fallback: use home dir if config_dir() is unavailable.
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
         })
-        .join("hydeclaw")
+        .join("opex")
         .join("google_oauth.json")
 }
 

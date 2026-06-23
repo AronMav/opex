@@ -35,7 +35,7 @@ async fn tick_fires_alert_for_stale_agent() {
         .and(path("/api/watchdog/agent-activity"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
-                "agent_id": "Hyde",
+                "agent_id": "Opex",
                 "latest_activity_at": very_old.to_rfc3339(),
                 "next_expected_heartbeat_at": null
             }
@@ -84,7 +84,7 @@ async fn tick_emits_recovery_when_agent_returns() {
         .and(path("/api/watchdog/agent-activity"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
             {
-                "agent_id": "Hyde",
+                "agent_id": "Opex",
                 "latest_activity_at": fresh.to_rfc3339(),
                 "next_expected_heartbeat_at": null
             }
@@ -110,7 +110,7 @@ async fn tick_emits_recovery_when_agent_returns() {
 
     let mut state: HashMap<EpisodeKey, AlertState> = HashMap::new();
     state.insert(
-        ("Hyde".to_string(), AlertType::StaleActivity),
+        ("Opex".to_string(), AlertType::StaleActivity),
         AlertState {
             fired_at: chrono::Utc::now() - chrono::Duration::hours(1),
         },

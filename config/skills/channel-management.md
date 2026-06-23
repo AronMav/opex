@@ -25,7 +25,7 @@ Tokens are stored encrypted in the vault automatically.
 ```bash
 # Telegram
 curl -sf -X POST http://localhost:18789/api/agents/AgentName/channels \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "channel_type": "telegram",
@@ -35,7 +35,7 @@ curl -sf -X POST http://localhost:18789/api/agents/AgentName/channels \
 
 # Discord
 curl -sf -X POST http://localhost:18789/api/agents/AgentName/channels \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "channel_type": "discord",
@@ -45,7 +45,7 @@ curl -sf -X POST http://localhost:18789/api/agents/AgentName/channels \
 
 # Matrix
 curl -sf -X POST http://localhost:18789/api/agents/AgentName/channels \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "channel_type": "matrix",
@@ -58,7 +58,7 @@ curl -sf -X POST http://localhost:18789/api/agents/AgentName/channels \
 
 ```bash
 curl -sf http://localhost:18789/api/agents/AgentName/channels \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
 ```
 
 ## Update / Delete / Restart channel
@@ -66,17 +66,17 @@ curl -sf http://localhost:18789/api/agents/AgentName/channels \
 ```bash
 # Update
 curl -sf -X PUT http://localhost:18789/api/agents/AgentName/channels/CHANNEL_UUID \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"display_name": "New Name", "config": {"bot_token": "new-token"}}'
 
 # Delete
 curl -sf -X DELETE http://localhost:18789/api/agents/AgentName/channels/CHANNEL_UUID \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
 
 # Restart
 curl -sf -X POST http://localhost:18789/api/agents/AgentName/channels/CHANNEL_UUID/restart \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
 ```
 
 ## Checklist

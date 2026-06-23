@@ -229,7 +229,11 @@ fn format_recover_message(r: &Recover) -> String {
 mod tests {
     use super::*;
 
-    fn agent(name: &str, latest: Option<DateTime<Utc>>, next_hb: Option<DateTime<Utc>>) -> AgentActivity {
+    fn agent(
+        name: &str,
+        latest: Option<DateTime<Utc>>,
+        next_hb: Option<DateTime<Utc>>,
+    ) -> AgentActivity {
         AgentActivity {
             agent_id: name.to_string(),
             latest_activity_at: latest,
@@ -258,7 +262,11 @@ mod tests {
     #[test]
     fn classify_missed_heartbeat_triggers() {
         // expected 30 min ago, grace 10 min → overdue by 20 min → fire
-        let a = agent("A", Some(Utc::now()), Some(Utc::now() - Duration::minutes(30)));
+        let a = agent(
+            "A",
+            Some(Utc::now()),
+            Some(Utc::now() - Duration::minutes(30)),
+        );
         let result = classify(&a, Utc::now(), Duration::hours(6), Duration::minutes(10));
         assert_eq!(result, vec![AlertType::MissedHeartbeat]);
     }
@@ -266,7 +274,11 @@ mod tests {
     #[test]
     fn classify_missed_heartbeat_respects_grace() {
         // expected 5 min ago, grace 10 min → still in grace → no fire
-        let a = agent("A", Some(Utc::now()), Some(Utc::now() - Duration::minutes(5)));
+        let a = agent(
+            "A",
+            Some(Utc::now()),
+            Some(Utc::now() - Duration::minutes(5)),
+        );
         let result = classify(&a, Utc::now(), Duration::hours(6), Duration::minutes(10));
         assert!(result.is_empty());
     }
@@ -292,7 +304,10 @@ mod tests {
         assert!(recs1.is_empty());
 
         let (fires2, recs2) = reconcile(classified, &activity, &known, &mut state, now);
-        assert!(fires2.is_empty(), "second pass with same input must not re-fire");
+        assert!(
+            fires2.is_empty(),
+            "second pass with same input must not re-fire"
+        );
         assert!(recs2.is_empty());
     }
 
@@ -300,7 +315,10 @@ mod tests {
     fn reconcile_recovers_on_resolution() {
         let mut state: HashMap<EpisodeKey, AlertState> = HashMap::new();
         let now = Utc::now();
-        state.insert(("A".to_string(), AlertType::StaleActivity), AlertState { fired_at: now });
+        state.insert(
+            ("A".to_string(), AlertType::StaleActivity),
+            AlertState { fired_at: now },
+        );
         let activity = HashMap::from([("A".to_string(), agent("A", Some(now), None))]);
         let known: HashSet<String> = ["A".to_string()].into_iter().collect();
 
@@ -315,15 +333,25 @@ mod tests {
     fn reconcile_independent_alert_types() {
         let mut state: HashMap<EpisodeKey, AlertState> = HashMap::new();
         let now = Utc::now();
-        state.insert(("A".to_string(), AlertType::StaleActivity), AlertState { fired_at: now });
+        state.insert(
+            ("A".to_string(), AlertType::StaleActivity),
+            AlertState { fired_at: now },
+        );
 
         let mut classified: HashMap<String, Vec<AlertType>> = HashMap::new();
-        classified.insert("A".to_string(), vec![AlertType::StaleActivity, AlertType::MissedHeartbeat]);
+        classified.insert(
+            "A".to_string(),
+            vec![AlertType::StaleActivity, AlertType::MissedHeartbeat],
+        );
         let activity = HashMap::from([("A".to_string(), agent("A", Some(t(10)), Some(t(1))))]);
         let known: HashSet<String> = ["A".to_string()].into_iter().collect();
 
         let (fires, recs) = reconcile(classified, &activity, &known, &mut state, now);
-        assert_eq!(fires.len(), 1, "stale already open, only missed_heartbeat is new");
+        assert_eq!(
+            fires.len(),
+            1,
+            "stale already open, only missed_heartbeat is new"
+        );
         assert_eq!(fires[0].alert_type, AlertType::MissedHeartbeat);
         assert!(recs.is_empty());
     }
@@ -332,15 +360,24 @@ mod tests {
     fn reconcile_silent_cleanup_on_disappeared_agent() {
         let mut state: HashMap<EpisodeKey, AlertState> = HashMap::new();
         let now = Utc::now();
-        state.insert(("Hyde".to_string(), AlertType::StaleActivity), AlertState { fired_at: now });
+        state.insert(
+            ("Opex".to_string(), AlertType::StaleActivity),
+            AlertState { fired_at: now },
+        );
 
-        // Hyde no longer in endpoint response (renamed / deleted).
+        // Opex no longer in endpoint response (renamed / deleted).
         let known: HashSet<String> = ["Alma".to_string()].into_iter().collect();
         let activity: HashMap<String, AgentActivity> = HashMap::new();
 
         let (fires, recs) = reconcile(HashMap::new(), &activity, &known, &mut state, now);
         assert!(fires.is_empty());
-        assert!(recs.is_empty(), "silent cleanup must NOT emit Recover for vanished agent");
-        assert!(state.is_empty(), "vanished agent's episode entry must be removed");
+        assert!(
+            recs.is_empty(),
+            "silent cleanup must NOT emit Recover for vanished agent"
+        );
+        assert!(
+            state.is_empty(),
+            "vanished agent's episode entry must be removed"
+        );
     }
 }

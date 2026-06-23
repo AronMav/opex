@@ -191,7 +191,7 @@ impl MediaKind {
 // ── Per-kind routing ─────────────────────────────────────────────────────────
 
 /// Resolve the per-agent provider override header for this media kind.
-/// Returns `Some(("X-Hydeclaw-Provider", value))` when the agent has a
+/// Returns `Some(("X-Opex-Provider", value))` when the agent has a
 /// non-empty override for the kind's capability; `None` otherwise.
 ///
 /// Each kind reads only its own provider field — Voice never reads
@@ -209,7 +209,7 @@ pub fn provider_header_for(
         MediaKind::Video | MediaKind::Other => None,
     };
     prov.filter(|s| !s.is_empty())
-        .map(|p| ("X-Hydeclaw-Provider".to_string(), p.to_string()))
+        .map(|p| ("X-Opex-Provider".to_string(), p.to_string()))
 }
 
 // ── BackgroundMediaTask ──────────────────────────────────────────────────────
@@ -755,13 +755,13 @@ mod tests {
     #[test]
     fn provider_header_voice_with_tts_provider_returns_header() {
         let h = provider_header_for(MediaKind::Voice, Some("nova-cloud"), None);
-        assert_eq!(h, Some(("X-Hydeclaw-Provider".into(), "nova-cloud".into())));
+        assert_eq!(h, Some(("X-Opex-Provider".into(), "nova-cloud".into())));
     }
 
     #[test]
     fn provider_header_photo_with_imagegen_provider_returns_header() {
         let h = provider_header_for(MediaKind::Photo, None, Some("flux-pro"));
-        assert_eq!(h, Some(("X-Hydeclaw-Provider".into(), "flux-pro".into())));
+        assert_eq!(h, Some(("X-Opex-Provider".into(), "flux-pro".into())));
     }
 
     #[test]

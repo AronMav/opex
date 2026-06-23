@@ -20,7 +20,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: hydeclaw_test
+          POSTGRES_DB: opex_test
         ports:
           - 5432:5432
         options: >-
@@ -29,7 +29,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/hydeclaw_test
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/opex_test
     steps:
       - uses: actions/checkout@v4
 
@@ -144,7 +144,7 @@ jobs:
         # `formatting.test.ts` reads workspace/prompts/formatting/*.md;
         # those files ARE tracked in git, so a fresh checkout on the
         # runner provides them. (Locally on Pi the tests fail because
-        # deploy never copies workspace/prompts/ to ~/hydeclaw/ — that
+        # deploy never copies workspace/prompts/ to ~/opex/ — that
         # path is intentionally agent-state-managed, not a deploy
         # artifact.)
         run: bun test

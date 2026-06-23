@@ -14,7 +14,7 @@
 --    column is only written, never consulted during lookup.
 --
 -- The companion code removal:
---   * delete crates/hydeclaw-core/src/db/skill_metrics.rs
+--   * delete crates/opex-core/src/db/skill_metrics.rs
 --   * drop `pub mod skill_metrics;` from db/mod.rs
 --   * remove record_outcome call in skills/evolution.rs
 --   * remove query_text from semantic_cache::store INSERT

@@ -1,6 +1,6 @@
 # SSE Fixture Capture Notes
 
-Fixtures captured on 2026-04-19 from Pi (hydeclaw-core 0.19.5,
+Fixtures captured on 2026-04-19 from Pi (opex-core 0.19.5,
 MiniMax-M2.7 provider, Arty agent).
 
 ## Files

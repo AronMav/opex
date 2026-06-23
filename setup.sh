@@ -370,14 +370,14 @@ if [[ "$SKIP_ENV" != "1" ]]; then
   AUTH_TOKEN=$(openssl rand -hex 32)
   MASTER_KEY=$(openssl rand -hex 32)
   cat > .env << EOF
-HYDECLAW_AUTH_TOKEN=${AUTH_TOKEN}
-HYDECLAW_MASTER_KEY=${MASTER_KEY}
-DATABASE_URL=postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw
+OPEX_AUTH_TOKEN=${AUTH_TOKEN}
+OPEX_MASTER_KEY=${MASTER_KEY}
+DATABASE_URL=postgresql://opex:opex@localhost:5432/opex
 EOF
   ok "Generated .env"
 else
-  AUTH_TOKEN=$(grep '^HYDECLAW_AUTH_TOKEN=' .env | cut -d= -f2)
-  MASTER_KEY=$(grep '^HYDECLAW_MASTER_KEY=' .env | cut -d= -f2)
+  AUTH_TOKEN=$(grep '^OPEX_AUTH_TOKEN=' .env | cut -d= -f2)
+  MASTER_KEY=$(grep '^OPEX_MASTER_KEY=' .env | cut -d= -f2)
   ok "Using existing .env"
 fi
 
@@ -390,20 +390,20 @@ if [[ ! -f docker/.env ]]; then
     err "could not generate random POSTGRES_PASSWORD (openssl/xxd missing)"
     exit 1
   fi
-  printf 'POSTGRES_USER=hydeclaw\nPOSTGRES_PASSWORD=%s\n' "$PG_PASS" > docker/.env
+  printf 'POSTGRES_USER=opex\nPOSTGRES_PASSWORD=%s\n' "$PG_PASS" > docker/.env
   chmod 600 docker/.env
-  # Sync to config/hydeclaw.toml [database].url so Core can connect.
-  if [[ -f config/hydeclaw.toml ]]; then
+  # Sync to config/opex.toml [database].url so Core can connect.
+  if [[ -f config/opex.toml ]]; then
     # Only rewrite if the toml still carries the published default. Otherwise
     # an operator has already customised it — don't clobber.
-    if grep -qE '^url *= *"postgres://hydeclaw:hydeclaw@' config/hydeclaw.toml; then
+    if grep -qE '^url *= *"postgres://opex:opex@' config/opex.toml; then
       sed -i.bak \
-        -E "s|postgres://hydeclaw:hydeclaw@|postgres://hydeclaw:${PG_PASS}@|" \
-        config/hydeclaw.toml
-      rm -f config/hydeclaw.toml.bak
-      ok "Generated random POSTGRES_PASSWORD and synced to config/hydeclaw.toml"
+        -E "s|postgres://opex:opex@|postgres://opex:${PG_PASS}@|" \
+        config/opex.toml
+      rm -f config/opex.toml.bak
+      ok "Generated random POSTGRES_PASSWORD and synced to config/opex.toml"
     else
-      warn "POSTGRES_PASSWORD generated; update config/hydeclaw.toml [database].url manually"
+      warn "POSTGRES_PASSWORD generated; update config/opex.toml [database].url manually"
     fi
   fi
 fi
@@ -442,7 +442,7 @@ fi
 # Agent sandbox image
 if [[ -f docker/Dockerfile.sandbox ]]; then
   info "Building sandbox image (this may take a few minutes)..."
-  docker build -f docker/Dockerfile.sandbox -t hydeclaw-sandbox:latest . 2>&1 | \
+  docker build -f docker/Dockerfile.sandbox -t opex-sandbox:latest . 2>&1 | \
     grep -E '^(Step |#[0-9]+ (DONE|ERROR)|Successfully|WARN)' || true
   ok "Docker images built (postgres, browser-renderer, sandbox)"
 else
@@ -482,7 +482,7 @@ ok "Docker infrastructure started"
 #   connect-src 'self' ws: wss:; style-src 'self' 'unsafe-inline'; \
 #   img-src 'self' data: blob:; font-src 'self' data:
 #
-# If you front hydeclaw-core with nginx, add this INSIDE the `location /` block:
+# If you front opex-core with nginx, add this INSIDE the `location /` block:
 #
 #   # Phase 64 SEC-05: CSP observation mode (report-only). Switch to Content-Security-Policy when ready.
 #   add_header Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ws: wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; report-uri /api/csp-report" always;
@@ -492,13 +492,13 @@ ok "Docker infrastructure started"
 # itself is non-2xx.
 
 configure_nginx_csp() {
-  # Only act when nginx is present AND a hydeclaw site config exists.
+  # Only act when nginx is present AND a opex site config exists.
   [[ -d /etc/nginx ]] || return 0
   local site=""
-  for candidate in /etc/nginx/sites-available/hydeclaw /etc/nginx/conf.d/hydeclaw.conf; do
+  for candidate in /etc/nginx/sites-available/opex /etc/nginx/conf.d/opex.conf; do
     if [[ -f "$candidate" ]]; then site="$candidate"; break; fi
   done
-  [[ -z "$site" ]] && { info "nginx present but no hydeclaw site config — skipping CSP header"; return 0; }
+  [[ -z "$site" ]] && { info "nginx present but no opex site config — skipping CSP header"; return 0; }
 
   # Skip if already configured (idempotent).
   if grep -q 'Content-Security-Policy-Report-Only' "$site" 2>/dev/null; then
@@ -534,8 +534,8 @@ if [[ -d /etc/nginx ]]; then configure_nginx_csp; fi
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")
 PUBLIC_URL="http://${LAN_IP}:18789"
 
-[[ -f config/hydeclaw.toml ]] && \
-  sed -i "s|public_url = \"http://your-server:18789\"|public_url = \"${PUBLIC_URL}\"|" config/hydeclaw.toml
+[[ -f config/opex.toml ]] && \
+  sed -i "s|public_url = \"http://your-server:18789\"|public_url = \"${PUBLIC_URL}\"|" config/opex.toml
 ok "public_url = ${PUBLIC_URL}"
 
 # ════════════════════════════════════════════════════════════════
@@ -546,9 +546,9 @@ if [[ "$NO_SYSTEMD" != "1" ]]; then
     mkdir -p ~/.config/systemd/user
 
     # Core (main gateway + agent engine)
-    cat > ~/.config/systemd/user/hydeclaw-core.service << SEOF
+    cat > ~/.config/systemd/user/opex-core.service << SEOF
 [Unit]
-Description=HydeClaw Core
+Description=Opex Core
 After=network.target
 
 [Service]
@@ -566,17 +566,17 @@ SEOF
 
     # Watchdog (health monitor + auto-restart + alerting)
     if [[ -f "$BINARY_WATCHDOG" ]]; then
-      cat > ~/.config/systemd/user/hydeclaw-watchdog.service << SEOF
+      cat > ~/.config/systemd/user/opex-watchdog.service << SEOF
 [Unit]
-Description=HydeClaw Watchdog
-After=hydeclaw-core.service
+Description=Opex Watchdog
+After=opex-core.service
 
 [Service]
 Type=notify
 WorkingDirectory=${ROOT}
 ExecStart=${BINARY_WATCHDOG} config/watchdog.toml
 EnvironmentFile=${ROOT}/.env
-Environment=HYDECLAW_CORE_URL=http://localhost:18789
+Environment=OPEX_CORE_URL=http://localhost:18789
 WatchdogSec=120
 Restart=always
 RestartSec=10
@@ -588,10 +588,10 @@ SEOF
 
     # Memory Worker (async embedding + reindex tasks)
     if [[ -f "$BINARY_WORKER" ]]; then
-      cat > ~/.config/systemd/user/hydeclaw-memory-worker.service << SEOF
+      cat > ~/.config/systemd/user/opex-memory-worker.service << SEOF
 [Unit]
-Description=HydeClaw Memory Worker
-After=hydeclaw-core.service
+Description=Opex Memory Worker
+After=opex-core.service
 
 [Service]
 Type=notify
@@ -608,10 +608,10 @@ SEOF
     fi
 
     systemctl --user daemon-reload
-    systemctl --user enable hydeclaw-core
-    ok "hydeclaw-core service enabled"
-    [[ -f "$BINARY_WATCHDOG" ]] && { systemctl --user enable hydeclaw-watchdog; ok "hydeclaw-watchdog service enabled (Type=notify, WatchdogSec=120)"; }
-    [[ -f "$BINARY_WORKER" ]] && { systemctl --user enable hydeclaw-memory-worker; ok "hydeclaw-memory-worker service enabled"; }
+    systemctl --user enable opex-core
+    ok "opex-core service enabled"
+    [[ -f "$BINARY_WATCHDOG" ]] && { systemctl --user enable opex-watchdog; ok "opex-watchdog service enabled (Type=notify, WatchdogSec=120)"; }
+    [[ -f "$BINARY_WORKER" ]] && { systemctl --user enable opex-memory-worker; ok "opex-memory-worker service enabled"; }
 else
   info "Skipped (--no-systemd)"
 fi
@@ -621,8 +621,8 @@ stage "Verify & launch"
 # ════════════════════════════════════════════════════════════════
 
 # Stop any existing OPEX processes before starting fresh
-# NOTE: unit names stay hydeclaw-* until PR2 (systemd service files unchanged).
-for svc in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
+# NOTE: unit names stay opex-* until PR2 (systemd service files unchanged).
+for svc in opex-core opex-watchdog opex-memory-worker; do
   systemctl --user stop "$svc" 2>/dev/null || true
 done
 # Kill orphaned managed processes (channels, toolgate) that may survive Core shutdown
@@ -656,14 +656,14 @@ ok "All checks passed!"
 echo ""
 kv "Web UI" "${PUBLIC_URL}"
 kv "Auth token" "${AUTH_TOKEN}"
-kv "Config" "${ROOT}/config/hydeclaw.toml"
+kv "Config" "${ROOT}/config/opex.toml"
 echo ""
 
-if [[ -f ~/.config/systemd/user/hydeclaw-core.service ]]; then
-  systemctl --user start hydeclaw-core
-  ok "hydeclaw-core started"
-  [[ -f ~/.config/systemd/user/hydeclaw-watchdog.service ]] && { systemctl --user start hydeclaw-watchdog; ok "hydeclaw-watchdog started"; }
-  [[ -f ~/.config/systemd/user/hydeclaw-memory-worker.service ]] && { systemctl --user start hydeclaw-memory-worker; ok "hydeclaw-memory-worker started"; }
+if [[ -f ~/.config/systemd/user/opex-core.service ]]; then
+  systemctl --user start opex-core
+  ok "opex-core started"
+  [[ -f ~/.config/systemd/user/opex-watchdog.service ]] && { systemctl --user start opex-watchdog; ok "opex-watchdog started"; }
+  [[ -f ~/.config/systemd/user/opex-memory-worker.service ]] && { systemctl --user start opex-memory-worker; ok "opex-memory-worker started"; }
 else
   info "Starting core... (Ctrl+C to stop)"
   echo ""
@@ -671,4 +671,4 @@ else
 fi
 
 echo ""
-info "View logs:       journalctl --user -u hydeclaw-core -f"
+info "View logs:       journalctl --user -u opex-core -f"

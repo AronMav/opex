@@ -142,7 +142,7 @@ async function apiAbortSession(page: Page, sessionId: string): Promise<void> {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-      }).catch(() => {});
+      }).catch(() => { });
     },
     { sid: sessionId, token: TOKEN }
   );
@@ -153,7 +153,7 @@ async function apiAbortSession(page: Page, sessionId: string): Promise<void> {
  * leaves "running"/"streaming".
  *
  * Reads the current agent name from the agent selector element in the page.
- * Falls back to "HYDE" if the selector is not accessible.
+ * Falls back to "OPEX" if the selector is not accessible.
  *
  * Returns the final status string, or null if it was never determinable.
  */
@@ -163,10 +163,10 @@ async function waitForSessionFinished(
   timeoutMs: number
 ): Promise<string | null> {
   // Read the current agent name from the page using textContent (NOT innerText).
-  // innerText applies CSS text-transform (e.g. "uppercase" renders "Hyde" as "HYDE"),
-  // but the API is case-sensitive and expects the original name ("Hyde", not "HYDE").
+  // innerText applies CSS text-transform (e.g. "uppercase" renders "Opex" as "OPEX"),
+  // but the API is case-sensitive and expects the original name ("Opex", not "OPEX").
   // textContent returns the raw DOM text without CSS transforms.
-  let agentName = "Hyde"; // safe default for this Pi instance
+  let agentName = "Opex"; // safe default for this Pi instance
   try {
     const fromDom = await page.evaluate(() => {
       const trigger = document.querySelector('[aria-label="Switch agent"] button');
@@ -181,7 +181,7 @@ async function waitForSessionFinished(
       agentName = fromDom;
     }
   } catch {
-    // Use default "Hyde"
+    // Use default "Opex"
   }
   console.log(`[pollSessionStatus] Using agent name: "${agentName}" for session ${sessionId}`);
 
@@ -259,8 +259,8 @@ test("abort mid-stream marks session interrupted", async ({ page }) => {
   await sendMessage(
     page,
     "Напиши очень длинный подробный рассказ про горный Алтай минимум 6000 слов. " +
-      "Включи подробное описание природы, истории, народов, рек, гор, животных и растений. " +
-      "Пиши без остановки, очень подробно, каждый абзац минимум 10 предложений."
+    "Включи подробное описание природы, истории, народов, рек, гор, животных и растений. " +
+    "Пиши без остановки, очень подробно, каждый абзац минимум 10 предложений."
   );
 
   // Wait for session ID to be assigned
@@ -294,8 +294,8 @@ test("abort mid-stream marks session interrupted", async ({ page }) => {
     test.skip(
       true,
       `Stop button never appeared after 60s. Session status: ${statusCheck ?? "unknown"}. ` +
-        `Composer buttons: ${debugInfo?.slice(0, 200) ?? "none"}. ` +
-        `The model may complete very fast or the selector needs updating.`
+      `Composer buttons: ${debugInfo?.slice(0, 200) ?? "none"}. ` +
+      `The model may complete very fast or the selector needs updating.`
     );
     return;
   }
@@ -334,7 +334,7 @@ test("abort mid-stream marks session interrupted", async ({ page }) => {
     // The model finished before the 30s graceful drain window — not a bug.
     console.warn(
       `[abort test] Session completed as "done" before abort took effect. ` +
-        `Pi LLM may generate too fast for the 30s drain window. Not a bug.`
+      `Pi LLM may generate too fast for the 30s drain window. Not a bug.`
     );
     // Test passes — we verified no error status
   } else {

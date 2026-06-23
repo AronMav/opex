@@ -1108,12 +1108,12 @@ mod tests {
     fn redrive_events_counter_accumulates() {
         let reg = MetricsRegistry::new();
         assert!(reg.snapshot_redrive_events().is_empty());
-        reg.record_redrive_event("Hyde", "cron_redrive_started");
-        reg.record_redrive_event("Hyde", "cron_redrive_started");
+        reg.record_redrive_event("Opex", "cron_redrive_started");
+        reg.record_redrive_event("Opex", "cron_redrive_started");
         reg.record_redrive_event("Alma", "interactive_goal_notified");
         let snap = reg.snapshot_redrive_events();
         assert_eq!(
-            snap.get(&("Hyde".to_string(), "cron_redrive_started".to_string())),
+            snap.get(&("Opex".to_string(), "cron_redrive_started".to_string())),
             Some(&2)
         );
         assert_eq!(

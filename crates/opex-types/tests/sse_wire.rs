@@ -19,10 +19,7 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(manifest).join("../../ui/src/__tests__/fixtures/sse")
 }
 
-fn write_fixture<T: serde::Serialize + serde::de::DeserializeOwned>(
-    name: &str,
-    value: &T,
-) {
+fn write_fixture<T: serde::Serialize + serde::de::DeserializeOwned>(name: &str, value: &T) {
     let json = serde_json::to_string_pretty(value).unwrap();
     let parsed: T = serde_json::from_str(&json).unwrap();
     let json2 = serde_json::to_string_pretty(&parsed).unwrap();
@@ -50,7 +47,7 @@ fn sse_data_session_id_fixture() {
 fn sse_start_fixture() {
     let ev = SseEvent::Start {
         message_id: MessageId::from(Uuid::nil()),
-        agent_name: "Hyde".to_string(),
+        agent_name: "Opex".to_string(),
     };
     write_fixture("start", &ev);
 }
@@ -60,7 +57,7 @@ fn sse_step_start_fixture() {
     let ev = SseEvent::StepStart {
         step_id: "step_2".to_string(),
         message_id: MessageId::from(Uuid::nil()),
-        agent_name: "Hyde".to_string(),
+        agent_name: "Opex".to_string(),
     };
     write_fixture("step-start", &ev);
 }
@@ -69,7 +66,7 @@ fn sse_step_start_fixture() {
 fn sse_text_start_fixture() {
     let ev = SseEvent::TextStart {
         id: "text-1".to_string(),
-        agent_name: "Hyde".to_string(),
+        agent_name: "Opex".to_string(),
     };
     write_fixture("text-start", &ev);
 }
@@ -96,7 +93,7 @@ fn sse_tool_input_start_fixture() {
     let ev = SseEvent::ToolInputStart {
         tool_call_id: ToolCallId::from("tc-abc-1".to_string()),
         tool_name: "code_exec".to_string(),
-        agent_name: "Hyde".to_string(),
+        agent_name: "Opex".to_string(),
         parallel_batch_id: Some(ParallelBatchId::from(Uuid::nil())),
     };
     write_fixture("tool-input-start", &ev);
@@ -197,7 +194,7 @@ fn sse_tool_approval_resolved_fixture() {
 #[test]
 fn sse_finish_fixture() {
     let ev = SseEvent::Finish {
-        agent_name: "Hyde".to_string(),
+        agent_name: "Opex".to_string(),
     };
     write_fixture("finish", &ev);
 }
@@ -250,7 +247,7 @@ fn sse_usage_fixture() {
     let ev = SseEvent::Usage(UsagePayload {
         input_tokens: 100,
         output_tokens: 50,
-        agent_name: "Hyde".to_string(),
+        agent_name: "Opex".to_string(),
         cache_read_tokens: Some(20),
         cache_creation_tokens: Some(5),
         reasoning_tokens: Some(3),

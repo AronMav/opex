@@ -1,4 +1,4 @@
--- HydeClaw — consolidated database schema
+-- Opex — consolidated database schema
 -- Clean install: creates all tables, indexes, and triggers from scratch.
 
 -- ── Extensions ──────────────────────────────────────────────

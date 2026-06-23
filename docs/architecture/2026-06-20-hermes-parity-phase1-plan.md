@@ -22,9 +22,11 @@
 ### Task 1: Email channel allowlist fix (Component A)
 
 **Files:**
+
 - Modify: `crates/opex-core/src/gateway/handlers/channels.rs` (inline `SUPPORTED` at ~122 → module const; test module at ~723)
 
 **Interfaces:**
+
 - Produces: `pub(crate) const SUPPORTED_CHANNEL_TYPES: &[&str]`
 
 - [ ] **Step 1: Write the failing test** — add to the `mod tests` block (channels.rs:723):
@@ -80,9 +82,11 @@ git commit -m "fix(channels): accept email channel_type (driver existed but was 
 ### Task 2: Severity-tagged injection patterns + `scan_for_block` (Component D, part 1)
 
 **Files:**
+
 - Modify: `crates/opex-core/src/tools/content_security.rs`
 
 **Interfaces:**
+
 - Produces: `pub enum Severity { Low, High }`, `pub fn scan_for_block(text: &str) -> bool`
 - Preserves: `pub fn detect_prompt_injection(text: &str) -> Vec<&'static str>` (unchanged signature)
 
@@ -223,9 +227,11 @@ git commit -m "feat(security): tag injection patterns with severity + add scan_f
 ### Task 3: Block identity files in the system prompt (Component D, part 2)
 
 **Files:**
+
 - Modify: `crates/opex-core/src/agent/workspace.rs` (prompt assembly ~196-270; test module at ~1059)
 
 **Interfaces:**
+
 - Consumes: `crate::tools::content_security::scan_for_block`
 - Produces (private): `fn redact_if_blocked(agent_name: &str, file: &str, content: String) -> String`
 
@@ -241,7 +247,7 @@ git commit -m "feat(security): tag injection patterns with severity + add scan_f
 
     #[test]
     fn passes_clean_identity_file() {
-        let clean = "I am Hyde, a helpful assistant.".to_string();
+        let clean = "I am Opex, a helpful assistant.".to_string();
         assert_eq!(redact_if_blocked("a", "IDENTITY.md", clean.clone()), clean);
     }
 
@@ -311,11 +317,13 @@ git commit -m "feat(security): block high-severity prompt injection in SOUL.md/I
 ### Task 4: `session_todos` table + storage module (Component C, part 1)
 
 **Files:**
+
 - Create: `migrations/054_session_todos.sql`
 - Create: `crates/opex-core/src/db/todos.rs`
 - Modify: `crates/opex-core/src/db/mod.rs` (add `pub mod todos;`)
 
 **Interfaces:**
+
 - Produces: `pub struct TodoItem { pub id: String, pub content: String, pub status: String }`
 - Produces: `list_todos(db, session_id) -> Result<Vec<TodoItem>>`, `replace_todos(db, session_id, &[TodoItem]) -> Result<()>`, `merge_todos(db, session_id, &[TodoItem]) -> Result<()>`, `clear_todos(db, session_id) -> Result<()>`
 
@@ -500,9 +508,11 @@ git commit -m "feat(todo): session_todos table + storage module (list/replace/me
 ### Task 5: `todo` parse + format pure logic (Component C, part 2)
 
 **Files:**
+
 - Modify: `crates/opex-core/src/db/todos.rs` (add pure functions + local unit tests)
 
 **Interfaces:**
+
 - Consumes: `TodoItem` (Task 4)
 - Produces: `parse_items(args: &serde_json::Value) -> Result<Vec<TodoItem>, String>`, `format_for_injection(items: &[TodoItem]) -> String`
 
@@ -618,6 +628,7 @@ git commit -m "feat(todo): parse_items validation + format_for_injection renderi
 ### Task 6: `session_id` in ToolDeps + `todo` tool handler + schema (Component C, part 3)
 
 **Files:**
+
 - Modify: `crates/opex-core/src/agent/tool_registry.rs` (add `session_id` field + set in `from_engine`; register `todo`)
 - Create: `crates/opex-core/src/agent/tool_handlers/todo.rs`
 - Modify: `crates/opex-core/src/agent/tool_handlers/mod.rs` (declare module + register)
@@ -625,6 +636,7 @@ git commit -m "feat(todo): parse_items validation + format_for_injection renderi
 - Modify: `crates/opex-core/src/agent/pipeline/tool_defs.rs` (add `todo` ToolDefinition)
 
 **Interfaces:**
+
 - Consumes: `db::todos::{list_todos, replace_todos, merge_todos, parse_items, format_for_injection}`
 - Produces: `ToolDeps.session_id: Option<uuid::Uuid>`, `handle_todo(db, session_id, args) -> String`, `TodoHandler`
 
@@ -764,10 +776,12 @@ git commit -m "feat(todo): wire todo tool (handler, registration, schema) with s
 ### Task 7: Inject the TODO block into context (Component C, part 4)
 
 **Files:**
+
 - Modify: `crates/opex-core/src/agent/context_builder.rs` (trait method + call in `build`)
 - Modify: `crates/opex-core/src/agent/engine/context_builder.rs` (impl for `AgentEngine`)
 
 **Interfaces:**
+
 - Consumes: `db::todos::{list_todos, format_for_injection}`
 - Produces: `ContextBuilderDeps::session_todo_block(&self, session_id: Uuid) -> Option<String>`
 
@@ -827,12 +841,14 @@ git commit -m "feat(todo): inject Active TODO block into system prompt each turn
 ### Task 8: Browser-renderer new actions + dialog handling (Component B, part 1)
 
 **Files:**
+
 - Create: `docker/browser-renderer/automation_actions.py` (testable dispatch, no playwright import at module top)
 - Modify: `docker/browser-renderer/app.py` (new request fields, dialog handler at create_session, delegate to `dispatch_action`)
 - Create: `docker/browser-renderer/test_dispatch.py`
 - Create: `docker/browser-renderer/requirements-dev.txt` (`pytest`, `pytest-asyncio`)
 
 **Interfaces:**
+
 - Produces: `async def dispatch_action(page, req, sid, session_dialog)` handling all non-`create_session` actions, including new `scroll`/`hover`/`drag`/`back`/`press`/`set_dialog`.
 
 - [ ] **Step 1: Create `requirements-dev.txt`:**
@@ -1159,6 +1175,7 @@ SID=$(curl -s localhost:<port>/automation -d '{"action":"create_session"}' -H 'c
 curl -s localhost:<port>/automation -d "{\"action\":\"navigate\",\"session_id\":\"$SID\",\"url\":\"https://example.com\"}" -H 'content-type: application/json'
 curl -s localhost:<port>/automation -d "{\"action\":\"scroll\",\"session_id\":\"$SID\",\"to\":\"bottom\"}" -H 'content-type: application/json'
 ```
+
 Expected: `{"status":"scrolled","to":"bottom"}`.
 
 - [ ] **Step 8: Commit**
@@ -1173,9 +1190,11 @@ git commit -m "feat(browser): add scroll/hover/drag/back/press + dialog handling
 ### Task 9: Expose new browser actions in the Rust tool schema (Component B, part 2)
 
 **Files:**
+
 - Modify: `crates/opex-core/src/agent/pipeline/tool_defs.rs` (the `browser_action` ToolDefinition at ~847)
 
 **Interfaces:**
+
 - Consumes: the browser-renderer actions from Task 8 (the Rust handler is an unchanged pass-through).
 
 - [ ] **Step 1: Extend the `action` enum** in the `browser_action` schema:

@@ -150,7 +150,7 @@ export async function processSSEStream(
               });
               // Persist so the value survives page refresh (restored on agent init).
               if (contextLimit != null) {
-                try { localStorage.setItem(`ctx_limit:${agent}`, String(contextLimit)); } catch {}
+                try { localStorage.setItem(`ctx_limit:${agent}`, String(contextLimit)); } catch { }
               }
               callbacks.onSessionId(sid);
 
@@ -372,7 +372,7 @@ export async function processSSEStream(
             const isErrorLike = syncStatus === "error" || syncStatus === "interrupted";
             const phase: ConnectionPhase =
               isErrorLike ? "error" :
-              syncStatus === "finished" ? "idle" : "streaming";
+                syncStatus === "finished" ? "idle" : "streaming";
             const errorText = isErrorLike ? (event.error ?? null) : null;
 
             // Single writeDraft — message + connectionPhase + error fields are atomic (fixes bugs b and c)
@@ -441,7 +441,7 @@ export async function processSSEStream(
           case "usage": {
             // Write input/output + extended fields to AgentState so the ContextBar
             // can render a breakdown tooltip. Extended fields are subsets of
-            // input/output (NOT additive) — see TokenUsage doc in hydeclaw-types.
+            // input/output (NOT additive) — see TokenUsage doc in opex-types.
             //
             // Route by event.agentName, not by the session's bound agent. In a
             // multi-agent flow (AgentSwitch / cron-driven peer responses), a

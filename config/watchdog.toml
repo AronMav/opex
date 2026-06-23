@@ -9,11 +9,11 @@ flap_threshold = 3
 [[checks]]
 name = "core"
 url = "http://localhost:18789/health"
-restart_cmd = "systemctl --user restart hydeclaw-core"
+restart_cmd = "systemctl --user restart opex-core"
 
 [[checks]]
 name = "postgres"
-check_cmd = "docker exec docker-postgres-1 pg_isready -U hydeclaw"
+check_cmd = "docker exec docker-postgres-1 pg_isready -U opex"
 restart_cmd = "docker restart docker-postgres-1"
 
 [[checks]]
@@ -28,8 +28,8 @@ restart_cmd = "curl -sf -X POST http://localhost:18789/api/services/toolgate/res
 
 [[checks]]
 name = "memory"
-check_cmd = "systemctl --user is-active hydeclaw-memory-worker"
-restart_cmd = "systemctl --user restart hydeclaw-memory-worker"
+check_cmd = "systemctl --user is-active opex-memory-worker"
+restart_cmd = "systemctl --user restart opex-memory-worker"
 
 [resources]
 disk_warning_gb = 5

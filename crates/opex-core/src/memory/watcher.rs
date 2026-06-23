@@ -76,7 +76,7 @@ pub fn spawn_workspace_watcher(
                         // Skip files in system directories. Check ANY path
                         // component — belt-and-suspenders over strip_prefix
                         // against the canonical watch_dir, so a nested file
-                        // like `workspace/agents/Hyde/SOUL.md` is caught even
+                        // like `workspace/agents/Opex/SOUL.md` is caught even
                         // if the prefix comparison fails.
                         let in_excluded_dir = p.strip_prefix(&watch_dir_path)
                             .ok()

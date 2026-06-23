@@ -43,7 +43,7 @@ async def _aload_config_from_api() -> ProvidersConfig | None:
     if not core_url:
         return None
     # Read token at call time (not import time)
-    auth_token = os.environ.get("HYDECLAW_AUTH_TOKEN", os.environ.get("AUTH_TOKEN", ""))
+    auth_token = os.environ.get("OPEX_AUTH_TOKEN", os.environ.get("AUTH_TOKEN", ""))
     try:
         headers: dict[str, str] = {}
         if auth_token:

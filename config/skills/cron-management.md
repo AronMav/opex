@@ -42,7 +42,7 @@ Before creating a cron task that sends notifications, verify the target agent ha
 
 ```bash
 curl -sf http://localhost:18789/api/agents/AgentName \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" | \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" | \
   python3 -c "import sys,json; print(json.load(sys.stdin).get('access',{}).get('owner_id'))"
 ```
 

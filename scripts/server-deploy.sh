@@ -2,24 +2,24 @@
 # Server-side deploy: build + atomic swap + service restart.
 #
 # Designed to be invoked via `make remote-deploy` or directly:
-#   ssh server '~/hydeclaw-src/scripts/server-deploy.sh'
+#   ssh server '~/opex-src/scripts/server-deploy.sh'
 #
 # Assumes:
 #   - Rust toolchain installed at ~/.cargo/bin
-#   - Source tree at ~/hydeclaw-src (cloned from github.com/AronMav/hydeclaw.git)
-#   - Runtime at ~/hydeclaw with systemd --user units enabled
+#   - Source tree at ~/opex-src (cloned from github.com/AronMav/opex.git)
+#   - Runtime at ~/opex with systemd --user units enabled
 #
 # Skip-build mode: pass --skip-build to deploy from existing target/release
 # without rebuilding (useful for re-deploy after manual cargo build).
 
 set -euo pipefail
 
-SRC_DIR="${HOME}/hydeclaw-src"
-RUN_DIR="${HOME}/hydeclaw"
+SRC_DIR="${HOME}/opex-src"
+RUN_DIR="${HOME}/opex"
 # Build artifact names (cargo crate/binary names — renamed in PR1).
 CRATES=(opex-core opex-watchdog opex-memory-worker)
-# Install/unit names stay hydeclaw-* until PR2 (server dir + systemd units unchanged).
-RUN_NAMES=(hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker)
+# Install/unit names stay opex-* until PR2 (server dir + systemd units unchanged).
+RUN_NAMES=(opex-core opex-watchdog opex-memory-worker)
 SUFFIX="x86_64"
 
 # Load Rust env (cargo on PATH)

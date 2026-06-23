@@ -2,7 +2,7 @@
 //!
 //! Resolution order (first match wins):
 //!  1. Environment variables `OPEX_GEMINI_CLIENT_ID` /
-//!     `OPEX_GEMINI_CLIENT_SECRET` (or legacy `HYDECLAW_*` fallback).
+//!     `OPEX_GEMINI_CLIENT_SECRET` (or legacy `OPEX_*` fallback).
 //!  2. Scrape the `~/.npm-global/lib/node_modules/@google/gemini-cli/...` bundle
 //!     (best-effort; silently skipped if the file is absent or unreadable).
 //!  3. The published public OAuth client credentials bundled with gemini-cli.
@@ -65,7 +65,7 @@ impl OauthClientCreds {
 /// Never fails — falls through to the published public defaults if both
 /// env-var and scrape tiers are unavailable.
 pub fn resolve_client_creds() -> OauthClientCreds {
-    // Tier 1: explicit env override (OPEX_* preferred, HYDECLAW_* fallback).
+    // Tier 1: explicit env override (OPEX_* preferred, OPEX_* fallback).
     if let (Some(id), Some(secret)) = (
         opex_gateway_util::env::env_var(ENV_CLIENT_ID_SUFFIX),
         opex_gateway_util::env::env_var(ENV_CLIENT_SECRET_SUFFIX),

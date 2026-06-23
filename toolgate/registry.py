@@ -179,7 +179,7 @@ class ProviderRegistry:
             if self.config.providers and (now - self._last_fetch) < 30:
                 return
 
-            token = os.environ.get("HYDECLAW_AUTH_TOKEN") or os.environ.get("AUTH_TOKEN", "")
+            token = os.environ.get("OPEX_AUTH_TOKEN") or os.environ.get("AUTH_TOKEN", "")
             headers: dict[str, str] = {}
             if token:
                 headers["Authorization"] = f"Bearer {token}"

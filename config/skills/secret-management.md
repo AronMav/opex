@@ -20,7 +20,7 @@ Secrets are encrypted with ChaCha20Poly1305 in the database. Never hardcode keys
 
 ```bash
 curl -sf -X POST http://localhost:18789/api/secrets \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "OPENAI_API_KEY", "value": "sk-..."}'
 ```
@@ -35,7 +35,7 @@ secret_set(name="OPENAI_API_KEY", value="sk-...")
 
 ```bash
 curl -sf -X POST http://localhost:18789/api/secrets \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name": "BOT_TOKEN", "value": "token-value", "scope": "AgentName"}'
 ```
@@ -44,7 +44,7 @@ curl -sf -X POST http://localhost:18789/api/secrets \
 
 ```bash
 curl -sf http://localhost:18789/api/secrets \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
 ```
 
 ## Resolution order

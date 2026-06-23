@@ -7,4 +7,4 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 RUN cargo build --release
 FROM scratch
-COPY --from=builder /app/target/release/hydeclaw-core /hydeclaw-core
+COPY --from=builder /app/target/release/opex-core /opex-core

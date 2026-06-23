@@ -1,12 +1,12 @@
 [Unit]
-Description=HydeClaw Core
+Description=Opex Core
 After=network.target docker.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/aronmav/hydeclaw
-ExecStart=/home/aronmav/hydeclaw/hydeclaw-core-x86_64
-EnvironmentFile=/home/aronmav/hydeclaw/.env
+WorkingDirectory=/home/aronmav/opex
+ExecStart=/home/aronmav/opex/opex-core-x86_64
+EnvironmentFile=/home/aronmav/opex/.env
 Environment=PATH=/home/aronmav/.bun/bin:/home/aronmav/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Egress via the xray HTTP proxy — this server's direct internet is region-blocked
 # (Telegram etc. unreachable). Internal targets (localhost services, the openedai
@@ -17,8 +17,8 @@ Environment=http_proxy=http://10.10.1.37:1081
 Environment=https_proxy=http://10.10.1.37:1081
 Environment=NO_PROXY=localhost,127.0.0.1,::1,10.10.1.42
 Environment=no_proxy=localhost,127.0.0.1,::1,10.10.1.42
-StandardOutput=append:/home/aronmav/hydeclaw/logs/core.log
-StandardError=append:/home/aronmav/hydeclaw/logs/core.log
+StandardOutput=append:/home/aronmav/opex/logs/core.log
+StandardError=append:/home/aronmav/opex/logs/core.log
 Restart=always
 RestartSec=5
 

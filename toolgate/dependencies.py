@@ -16,7 +16,7 @@ class _DegradedResponse(Exception):
 def require_provider(capability: str):
     """FastAPI dependency returning the active provider, or raising a structured 503.
 
-    Per-agent override: when the request carries `X-Hydeclaw-Provider: <name>`,
+    Per-agent override: when the request carries `X-Opex-Provider: <name>`,
     that specific provider instance is returned (its capability is trusted —
     Core is the gatekeeper). This lets each agent route TTS to its own provider
     (and thus its own voice) without changing the global `provider_active` map.
@@ -28,7 +28,7 @@ def require_provider(capability: str):
     (`aget_active`/`aget_instance`) — there is no /reload endpoint anymore."""
     async def _dep(request: Request):
         registry = request.app.state.registry
-        override = request.headers.get("x-hydeclaw-provider")
+        override = request.headers.get("x-opex-provider")
         if override:
             provider = await registry.aget_instance(override)
             if provider is not None:

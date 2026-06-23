@@ -9,6 +9,7 @@ How system prompt content is governed across layers.
 **Controls:** Runtime mechanics, operating mode, tool usage rules, task completion behavior.
 
 **Sections assembled in code:**
+
 - `# Runtime` -- agent name, channel, model, datetime, language, connected channels
 - `# Project Context` -- injects workspace file contents (SOUL.md, IDENTITY.md, MEMORY.md, TOOLS.md, AGENTS.md, USER.md)
 - `# Available Tools & Capabilities` -- MCP tool schemas
@@ -24,12 +25,14 @@ How system prompt content is governed across layers.
 **Controls:** Agent identity, core principles, methodology mindset.
 
 **What belongs here:**
+
 - Who the agent is (name, role, personality)
 - Capabilities and access level
 - Hard rules (security boundaries, behavioral constraints)
 - Core methodology principles (concise -- "what to think about", not "how to do it step by step")
 
 **What does NOT belong here:**
+
 - Detailed procedures (use skills instead)
 - Tool schemas or runtime info (engine handles this)
 - Operating mode rules (engine handles this)
@@ -43,11 +46,13 @@ How system prompt content is governed across layers.
 **Controls:** Detailed methodology, procedures, frameworks, protocols.
 
 **What belongs here:**
+
 - Step-by-step procedures (architecture design, code review, research strategy)
 - Decision frameworks (discovery levels, task sizing, quality gates)
 - Domain-specific knowledge (verification protocols, error recovery playbooks)
 
 **What does NOT belong here:**
+
 - Agent identity or personality (SOUL.md handles this)
 - Runtime configuration (engine handles this)
 - Core principles (SOUL.md handles this -- skills elaborate, not define)
@@ -73,10 +78,12 @@ tracing::info!(agent, prompt_bytes, prompt_approx_tokens, "system_prompt_size")
 ```
 
 Visible in:
+
 - UI Logs page (real-time)
-- `journalctl --user -u hydeclaw-core` on Pi
+- `journalctl --user -u opex-core` on Pi
 - Grep: `grep system_prompt_size` in logs
 
 Target budgets:
+
 - SOUL.md: ~2K tokens (~8KB) across all phases
 - Total system prompt: monitor per model context window (no hard limit)

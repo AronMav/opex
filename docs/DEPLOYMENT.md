@@ -114,6 +114,7 @@ make ui
 ```
 
 Скрипт:
+
 1. Синхронизирует версию в `Cargo.toml`, `ui/package.json`, `channels/package.json`
 2. Компилирует все три бинарника для каждого target
 3. Собирает Next.js UI
@@ -165,6 +166,7 @@ cd opex
 ```
 
 `setup.sh` в автоматическом режиме:
+
 1. Обнаруживает пакетный менеджер (apt/dnf/pacman/apk)
 2. Устанавливает Docker (если нет) через `curl -fsSL https://get.docker.com | sh`
 3. Устанавливает Bun через `curl -fsSL https://bun.sh/install | bash`
@@ -180,6 +182,7 @@ cd opex
 13. Запускает все три сервиса
 
 **Параметры setup.sh:**
+
 ```bash
 ./setup.sh --verbose    # показывать полный вывод вместо спиннеров
 ./setup.sh --dry-run    # показать план без изменений
@@ -202,7 +205,7 @@ cd opex
 # ~/.env (или ~/opex/.env)
 OPEX_AUTH_TOKEN=$(openssl rand -hex 32)
 OPEX_MASTER_KEY=$(openssl rand -hex 32)
-DATABASE_URL=postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw
+DATABASE_URL=postgresql://opex:opex@localhost:5432/opex
 ```
 
 > **ВАЖНО:** `OPEX_MASTER_KEY` шифрует secrets vault (ChaCha20-Poly1305).
@@ -247,6 +250,7 @@ make deploy
 ```
 
 Выполняет последовательно:
+
 1. `make build-arm64` — zigbuild всех трёх бинарников
 2. `make deploy-binary` — scp бинарников + `systemctl --user restart` каждого сервиса
 3. `make deploy-ui` — `npm run build`, удаление старого `ui/out` на Pi, tar-архив и распаковка
@@ -457,6 +461,7 @@ sudo systemctl daemon-reload && sudo systemctl restart docker
 ## Nginx (Static UI Serving)
 
 Core сам отдаёт статику из `ui/out/` при отсутствии nginx. Nginx нужен для:
+
 - TLS termination
 - Кастомных заголовков (CSP)
 - Кэширования статики
@@ -541,6 +546,7 @@ ssh aronmav@192.168.1.82 "~/opex/update.sh ~/opex-v<VERSION>.tar.gz"
 ```
 
 `update.sh` выполняет:
+
 1. Создаёт бэкап `.env` (`→ .env.bak`)
 2. Останавливает все сервисы + убивает orphaned процессы (bun, uvicorn)
 3. Заменяет бинарники (по arch)
@@ -582,10 +588,10 @@ systemctl --user restart opex-core
 
 ```bash
 # Бэкап
-docker exec -t docker-postgres-1 pg_dump -U hydeclaw hydeclaw > backup-$(date +%Y%m%d).sql
+docker exec -t docker-postgres-1 pg_dump -U opex opex > backup-$(date +%Y%m%d).sql
 
 # Восстановление
-docker exec -i docker-postgres-1 psql -U hydeclaw hydeclaw < backup-20260504.sql
+docker exec -i docker-postgres-1 psql -U opex opex < backup-20260504.sql
 ```
 
 ### Полная переустановка
@@ -605,6 +611,7 @@ docker exec -i docker-postgres-1 psql -U hydeclaw hydeclaw < backup-20260504.sql
 ```
 
 Удаляет:
+
 - Все systemd-юниты `opex*.service`
 - Все Docker контейнеры (compose + bollard-managed `hc-*`, `mcp-*`)
 - Docker volume `pgdata` (все данные БД)
@@ -620,6 +627,7 @@ docker exec -i docker-postgres-1 psql -U hydeclaw hydeclaw < backup-20260504.sql
 
 После первого запуска открой Web UI по адресу `http://your-server:18789`.
 4-шаговый wizard:
+
 1. Requirements check (Docker, PostgreSQL, disk space)
 2. Провайдер + тест API ключа
 3. Создание первого агента (`base = true`, `access.mode = "restricted"`)
@@ -685,6 +693,7 @@ journalctl --user -u opex-core -f --no-pager
 ```
 
 Частые причины:
+
 - PostgreSQL не запущен: `docker ps | grep postgres`
 - Неверный `DATABASE_URL` в `.env`
 - Порт 18789 занят другим процессом
@@ -698,6 +707,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/doctor
 ```
 
 Смотри `channels.ok`. Если false:
+
 - Bun не установлен: `bun --version`
 - Директория `channels/` или `node_modules` отсутствует
 - WebSocket connection refused (смотри логи core)
@@ -709,11 +719,14 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/doctor
 ```
 
 Смотри `toolgate.*`. Если проблема:
+
 - toolgate venv не создан: `ls ~/opex/toolgate/.venv`
 - Toolgate упал: перезапусти через API
+
   ```bash
   curl -X POST -H "Authorization: Bearer $TOKEN" http://localhost:18789/api/services/toolgate/restart
   ```
+
 - Провайдер embedding не настроен в Active Providers
 
 ### Memory Worker завис

@@ -2,7 +2,7 @@
 # OPEX — update an existing installation to a new version.
 #
 # Usage:
-#   ~/hydeclaw/update.sh opex-v0.2.0.tar.gz
+#   ~/opex/update.sh opex-v0.2.0.tar.gz
 #
 # The script:
 #   1. Stops all services
@@ -31,7 +31,7 @@ ARCHIVE="${1:-}"
 # Installation directory = where this script lives
 DEST="$(cd "$(dirname "$0")" && pwd)"
 [[ -f "$DEST/.env" ]] || err "$DEST/.env not found — not a valid OPEX installation"
-[[ -f "$DEST/config/hydeclaw.toml" ]] || err "$DEST/config/hydeclaw.toml not found"
+[[ -f "$DEST/config/opex.toml" ]] || err "$DEST/config/opex.toml not found"
 
 OLD_VERSION="unknown"
 [[ -f "$DEST/VERSION" ]] && OLD_VERSION="$(tr -d '[:space:]' < "$DEST/VERSION")"
@@ -80,7 +80,7 @@ ok ".env backed up"
 
 # ── 1. Stop services ──
 info "Stopping services..."
-for svc in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
+for svc in opex-core opex-watchdog opex-memory-worker; do
   systemctl --user stop "$svc" 2>/dev/null || true
 done
 sleep 2
@@ -144,19 +144,19 @@ fi
 if [[ -d "$SRC/docker" ]]; then
   info "Updating docker compose..."
   # Preserve docker/.env and Docker-owned config files
-  [[ -f "$DEST/docker/.env" ]] && cp "$DEST/docker/.env" /tmp/hydeclaw-docker-env.bak
+  [[ -f "$DEST/docker/.env" ]] && cp "$DEST/docker/.env" /tmp/opex-docker-env.bak
   # Use rsync to skip Docker-owned files (searxng config written by container at runtime)
   if command -v rsync &>/dev/null; then
     rsync -a --exclude 'config/searxng/' "$SRC/docker/" "$DEST/docker/"
   else
     cp -r "$SRC/docker/"* "$DEST/docker/" 2>/dev/null || true
   fi
-  [[ -f /tmp/hydeclaw-docker-env.bak ]] && mv /tmp/hydeclaw-docker-env.bak "$DEST/docker/.env"
+  [[ -f /tmp/opex-docker-env.bak ]] && mv /tmp/opex-docker-env.bak "$DEST/docker/.env"
   # Rebuild images if Dockerfiles changed
   info "Rebuilding Docker images..."
   (cd "$DEST" && docker compose -f docker/docker-compose.yml build postgres browser-renderer 2>&1 | tail -3) || true
   [[ -f "$DEST/docker/Dockerfile.sandbox" ]] && \
-    (cd "$DEST" && docker build -f docker/Dockerfile.sandbox -t hydeclaw-sandbox:latest . 2>&1 | tail -3) || true
+    (cd "$DEST" && docker build -f docker/Dockerfile.sandbox -t opex-sandbox:latest . 2>&1 | tail -3) || true
   # MCP bridge base image (required by on-demand MCP containers)
   [[ -f "$DEST/docker/mcp-bridge/Dockerfile" ]] && \
     (cd "$DEST" && docker build -f docker/mcp-bridge/Dockerfile -t opex-mcp-bridge:latest docker/mcp-bridge/ 2>&1 | tail -3) || true
@@ -200,7 +200,7 @@ rm -f "$DEST/.env.bak"
 # ── 11. Restart services ──
 info "Starting services..."
 systemctl --user daemon-reload 2>/dev/null || true
-for svc in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do
+for svc in opex-core opex-watchdog opex-memory-worker; do
   if [[ -f ~/.config/systemd/user/${svc}.service ]]; then
     systemctl --user start "$svc" 2>/dev/null && ok "$svc started" || warn "$svc failed to start"
   fi
@@ -213,7 +213,7 @@ for i in $(seq 1 20); do
     ok "Core is healthy"
     break
   fi
-  [[ "$i" -eq 20 ]] && warn "Core not responding yet — check logs: journalctl --user -u hydeclaw-core -f"
+  [[ "$i" -eq 20 ]] && warn "Core not responding yet — check logs: journalctl --user -u opex-core -f"
   sleep 1
 done
 
@@ -221,4 +221,4 @@ done
 echo ""
 echo -e "${BOLD}${C_OK}Update complete: v${OLD_VERSION} → v${NEW_VERSION}${NC}"
 echo ""
-info "Logs: journalctl --user -u hydeclaw-core -f"
+info "Logs: journalctl --user -u opex-core -f"
