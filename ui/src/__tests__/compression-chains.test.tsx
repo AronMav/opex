@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
+import { useLanguageStore } from "@/stores/language-store";
 
 // ── SessionChainEntry type checks ─────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ function makeChain(currentId: string, parentId: string) {
 describe("CompactChainBanner", () => {
   beforeEach(() => {
     localStorage.clear();
+    useLanguageStore.setState({ locale: "en" });
   });
 
   it("renders nothing when session has no parent (root session)", () => {
@@ -116,6 +118,7 @@ describe("ParentBadge", () => {
 describe("CompactChainBanner extended", () => {
   beforeEach(() => {
     localStorage.clear();
+    useLanguageStore.setState({ locale: "en" });
   });
 
   it("CompactChainBanner_not_rendered_when_isMirror_true — no banner for root (no parent_session_id)", () => {

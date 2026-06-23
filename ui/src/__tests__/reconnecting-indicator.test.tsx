@@ -1,7 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { ReconnectingIndicator } from "@/components/chat/ReconnectingIndicator";
+import { useLanguageStore } from "@/stores/language-store";
+
+beforeEach(() => {
+  useLanguageStore.setState({ locale: "en" });
+});
 
 describe("ReconnectingIndicator", () => {
   it("renders pulsating dot and reconnecting text", () => {
