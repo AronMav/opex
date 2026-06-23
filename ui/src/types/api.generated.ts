@@ -1,5 +1,5 @@
 // @generated — do not edit by hand.
-// Source of truth: types annotated with #[ts(export)] in crates/hydeclaw-core/.
+// Source of truth: types annotated with #[ts(export)] in crates/opex-core/.
 // Regenerate with: make gen-types
 
 export type ActiveChannelDto = { agent_name: string, channel_id: string | null, channel_type: string, display_name: string, adapter_version: string, connected_at: string, last_activity: string, };

@@ -22,7 +22,7 @@ export interface StatsInfo {
 }
 
 // AgentInfo is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/agents/dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/agents/dto_structs.rs
 // Regenerate: make gen-types
 export type { AgentInfoDto as AgentInfo } from "./api.generated";
 
@@ -40,12 +40,12 @@ export interface RoutingRule {
 }
 
 // AgentDetail is now generated from Rust DTOs via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/agents/dto.rs
+// Source: crates/opex-core/src/gateway/handlers/agents/dto.rs
 // Regenerate: make gen-types
 export type { AgentDetailDto as AgentDetail } from "./api.generated";
 
 // SessionRow is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/db/sessions.rs
+// Source: crates/opex-core/src/db/sessions.rs
 // Regenerate: make gen-types
 import type { Session as _Session } from "./api.generated";
 // last_input_tokens and segment_count are appended server-side (not in the ts-rs DTO).
@@ -56,7 +56,7 @@ export type SessionRow = _Session & {
 
 // MessageRow is now generated from Rust DTO via ts-rs codegen.
 // Note: feedback is number | null (DB-accurate); the old type had number (incorrect).
-// Source: crates/hydeclaw-core/src/db/sessions.rs
+// Source: crates/opex-core/src/db/sessions.rs
 // Regenerate: make gen-types
 export type { MessageRow } from "./api.generated";
 
@@ -74,29 +74,29 @@ export interface MessagesResponse {
 }
 
 // CronJob is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/cron_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/cron_dto_structs.rs
 // Regenerate: make gen-types
 export type { CronJobDto as CronJob } from "./api.generated";
 
 // CronRun is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/cron_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/cron_dto_structs.rs
 // Regenerate: make gen-types
 export type { CronRunDto as CronRun } from "./api.generated";
 
 // MemoryDocument is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/memory_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/memory_dto_structs.rs
 // Regenerate: make gen-types
 export type { MemoryDocumentDto as MemoryDocument } from "./api.generated";
 
 // MemoryStats is now generated from Rust DTO via ts-rs codegen.
 // Drift fix: tasks field (pending/processing/done/failed) was emitted by handler but absent from TS type.
-// Source: crates/hydeclaw-core/src/gateway/handlers/memory_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/memory_dto_structs.rs
 // Regenerate: make gen-types
 export type { MemoryStatsDto as MemoryStats } from "./api.generated";
 
 // ToolEntry is now generated from Rust DTO via ts-rs codegen.
 // Drift fixes: concurrency_limit is number (not number | null); managed is boolean (not optional).
-// Source: crates/hydeclaw-core/src/gateway/handlers/tools_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/tools_dto_structs.rs
 // Regenerate: make gen-types
 export type { ToolEntryDto as ToolEntry } from "./api.generated";
 
@@ -178,7 +178,7 @@ export interface YamlToolEntry {
 }
 
 // McpEntry is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/tools_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/tools_dto_structs.rs
 // Regenerate: make gen-types
 export type { McpEntryDto as McpEntry } from "./api.generated";
 
@@ -274,28 +274,28 @@ export interface AuditEvent {
 }
 
 // ChannelRow is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/channels_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/channels_dto_structs.rs
 // Regenerate: make gen-types
 export type { ChannelRowDto as ChannelRow } from "./api.generated";
 
 // ActiveChannel is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/channels_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/channels_dto_structs.rs
 // Regenerate: make gen-types
 export type { ActiveChannelDto as ActiveChannel } from "./api.generated";
 
 // BackupEntry is now generated from Rust DTO via ts-rs codegen.
 // Drift fix: created_at is string | null (filesystem mtime can be absent).
-// Source: crates/hydeclaw-core/src/gateway/handlers/backup_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/backup_dto_structs.rs
 // Regenerate: make gen-types
 export type { BackupEntryDto as BackupEntry } from "./api.generated";
 
 // WebhookEntry is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/webhooks_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/webhooks_dto_structs.rs
 // Regenerate: make gen-types
 export type { WebhookEntryDto as WebhookEntry } from "./api.generated";
 
 // ApprovalEntry is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/gateway/handlers/agents/approvals_dto_structs.rs
+// Source: crates/opex-core/src/gateway/handlers/agents/approvals_dto_structs.rs
 // Regenerate: make gen-types
 export type { ApprovalEntryDto as ApprovalEntry } from "./api.generated";
 
@@ -365,7 +365,7 @@ export interface MediaDriverInfo {
 }
 
 // NotificationRow is now generated from Rust DTO via ts-rs codegen.
-// Source: crates/hydeclaw-core/src/db/notifications.rs
+// Source: crates/opex-core/src/db/notifications.rs
 // Regenerate: make gen-types
 export type { Notification as NotificationRow } from "./api.generated";
 
@@ -394,7 +394,7 @@ export interface AgentTask {
 }
 
 // ── Session failures ──────────────────────────────────────────────────────────
-// Source: crates/hydeclaw-core/src/gateway/handlers/session_failures.rs
+// Source: crates/opex-core/src/gateway/handlers/session_failures.rs
 // Backed by migration 034.
 
 export type SessionFailureKind =
@@ -433,7 +433,7 @@ export interface SessionFailuresResponse {
  * `[agent_tool]` section of `AppConfig` — multi-agent timeouts.
  *
  * Field names mirror the Rust `AgentToolConfig` struct in
- * `crates/hydeclaw-core/src/config/mod.rs` exactly.
+ * `crates/opex-core/src/config/mod.rs` exactly.
  */
 export interface AgentToolConfig {
   message_wait_for_idle_secs: number;
@@ -458,7 +458,7 @@ export interface SessionChainResponse {
 }
 
 // ── File Scenario Engine (Phase 8) ────────────────────────────────────────────
-// Source: crates/hydeclaw-core/src/db/file_scenarios.rs (FileScenarioRow)
+// Source: crates/opex-core/src/db/file_scenarios.rs (FileScenarioRow)
 // Aligned to serde-serialized JSON (no rename_all, all fields snake_case).
 
 export interface FileScenario {
