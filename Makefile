@@ -106,15 +106,16 @@ deploy-remote: remote-deploy
 # Prefer `make remote-deploy` for the normal workflow; use this only when a
 # push-to-remote build is undesired or the server is busy.
 deploy-binary-server: build-x86_64
-	@for CRATE in opex-core opex-watchdog opex-memory-worker; do \
+	@for PAIR in opex-core:hydeclaw-core opex-watchdog:hydeclaw-watchdog opex-memory-worker:hydeclaw-memory-worker; do \
+		CRATE=$${PAIR%%:*}; RUN=$${PAIR##*:}; \
 		BIN=target/$(SERVER_TARGET)/release/$$CRATE; \
 		if [ -f "$$BIN" ]; then \
-			scp $$BIN $(SERVER_HOST):$(SERVER_DIR)/$${CRATE}-x86_64.new && \
-			ssh $(SERVER_HOST) "mv -f $(SERVER_DIR)/$${CRATE}-x86_64.new $(SERVER_DIR)/$${CRATE}-x86_64" && \
-			echo "  deployed $$CRATE"; \
+			scp $$BIN $(SERVER_HOST):$(SERVER_DIR)/$${RUN}-x86_64.new && \
+			ssh $(SERVER_HOST) "mv -f $(SERVER_DIR)/$${RUN}-x86_64.new $(SERVER_DIR)/$${RUN}-x86_64" && \
+			echo "  deployed $$CRATE -> $${RUN}-x86_64"; \
 		fi; \
 	done
-	ssh $(SERVER_HOST) "chmod +x $(SERVER_DIR)/opex-*-x86_64; for SVC in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
+	ssh $(SERVER_HOST) "chmod +x $(SERVER_DIR)/hydeclaw-*-x86_64; for SVC in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
 
 # ── Remote ops ───────────────────────────────────────────────────────────────
 # Operational targets run against the live SERVER_HOST.

@@ -16,7 +16,10 @@ set -euo pipefail
 
 SRC_DIR="${HOME}/hydeclaw-src"
 RUN_DIR="${HOME}/hydeclaw"
+# Build artifact names (cargo crate/binary names — renamed in PR1).
 CRATES=(opex-core opex-watchdog opex-memory-worker)
+# Install/unit names stay hydeclaw-* until PR2 (server dir + systemd units unchanged).
+RUN_NAMES=(hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker)
 SUFFIX="x86_64"
 
 # Load Rust env (cargo on PATH)
@@ -34,9 +37,11 @@ if [[ "${1:-}" != "--skip-build" ]]; then
 fi
 
 echo "==> atomic swap binaries"
-for CRATE in "${CRATES[@]}"; do
+for i in "${!CRATES[@]}"; do
+    CRATE="${CRATES[$i]}"
+    RUN_NAME="${RUN_NAMES[$i]}"
     SRC_BIN="${SRC_DIR}/target/release/${CRATE}"
-    DST_BIN="${RUN_DIR}/${CRATE}-${SUFFIX}"
+    DST_BIN="${RUN_DIR}/${RUN_NAME}-${SUFFIX}"
     if [[ ! -f "${SRC_BIN}" ]]; then
         echo "  MISSING: ${SRC_BIN}"
         exit 1
@@ -44,7 +49,7 @@ for CRATE in "${CRATES[@]}"; do
     cp "${SRC_BIN}" "${DST_BIN}.new"
     mv -f "${DST_BIN}.new" "${DST_BIN}"
     chmod +x "${DST_BIN}"
-    echo "  swapped ${CRATE}"
+    echo "  swapped ${CRATE} -> ${RUN_NAME}-${SUFFIX}"
 done
 
 # Migrations are loaded at RUNTIME from ${RUN_DIR}/migrations (main.rs:
@@ -62,7 +67,7 @@ echo "  synced $(ls "${SRC_DIR}"/migrations/*.sql | wc -l) files (latest: $(base
 #   (cd ${RUN_DIR}/docker && docker compose build <svc> && docker compose up -d <svc>)
 
 echo "==> restart systemd units"
-for SVC in "${CRATES[@]}"; do
+for SVC in "${RUN_NAMES[@]}"; do
     if systemctl --user is-enabled "${SVC}" >/dev/null 2>&1; then
         systemctl --user restart "${SVC}"
         echo "  restarted ${SVC}"
