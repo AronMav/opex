@@ -1140,188 +1140,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "hydeclaw-core"
-version = "0.30.0"
-dependencies = [
- "anyhow",
- "arc-swap",
- "async-stream",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "bollard",
- "bytes",
- "chacha20poly1305",
- "chrono",
- "cron",
- "dashmap",
- "dirs",
- "dotenv",
- "dunce",
- "fs2",
- "futures-util",
- "hex",
- "hkdf",
- "hmac",
- "hydeclaw-db",
- "hydeclaw-embedding",
- "hydeclaw-gateway-util",
- "hydeclaw-types",
- "if-addrs 0.14.0",
- "infer",
- "insta",
- "inventory",
- "lru",
- "mdns-sd",
- "mime_guess",
- "notify",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "percent-encoding",
- "public-ip-address",
- "rand 0.9.2",
- "regex",
- "reqwest",
- "rstest",
- "schemars 1.2.1",
- "sd-notify",
- "serde",
- "serde_json",
- "serde_yaml",
- "serial_test",
- "sha2",
- "sqlx",
- "struson",
- "subtle",
- "tempfile",
- "testcontainers",
- "testcontainers-modules",
- "thiserror 2.0.18",
- "tokio",
- "tokio-cron-scheduler",
- "tokio-stream",
- "tokio-util",
- "toml",
- "toml_edit 0.22.27",
- "tower",
- "tower-http",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "ts-rs",
- "url",
- "urlencoding",
- "uuid",
- "webbrowser",
- "wiremock",
- "zeroize",
-]
-
-[[package]]
-name = "hydeclaw-db"
-version = "0.30.0"
-dependencies = [
- "anyhow",
- "chrono",
- "hydeclaw-types",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
-name = "hydeclaw-embedding"
-version = "0.30.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "wiremock",
-]
-
-[[package]]
-name = "hydeclaw-gateway-util"
-version = "0.30.0"
-dependencies = [
- "axum",
- "dashmap",
- "futures-util",
- "serde_json",
- "struson",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "hydeclaw-memory-worker"
-version = "0.30.0"
-dependencies = [
- "anyhow",
- "chrono",
- "dotenv",
- "hydeclaw-embedding",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "reqwest",
- "sd-notify",
- "serde",
- "serde_json",
- "sqlx",
- "tempfile",
- "testcontainers",
- "testcontainers-modules",
- "tokio",
- "toml",
- "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "hydeclaw-types"
-version = "0.30.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "sqlx",
- "ts-rs",
- "uuid",
-]
-
-[[package]]
-name = "hydeclaw-watchdog"
-version = "0.30.0"
-dependencies = [
- "anyhow",
- "chrono",
- "reqwest",
- "sd-notify",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "wiremock",
-]
-
-[[package]]
 name = "hyper"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2232,6 +2050,188 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+]
+
+[[package]]
+name = "opex-core"
+version = "0.30.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bollard",
+ "bytes",
+ "chacha20poly1305",
+ "chrono",
+ "cron",
+ "dashmap",
+ "dirs",
+ "dotenv",
+ "dunce",
+ "fs2",
+ "futures-util",
+ "hex",
+ "hkdf",
+ "hmac",
+ "if-addrs 0.14.0",
+ "infer",
+ "insta",
+ "inventory",
+ "lru",
+ "mdns-sd",
+ "mime_guess",
+ "notify",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "opex-db",
+ "opex-embedding",
+ "opex-gateway-util",
+ "opex-types",
+ "percent-encoding",
+ "public-ip-address",
+ "rand 0.9.2",
+ "regex",
+ "reqwest",
+ "rstest",
+ "schemars 1.2.1",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "sha2",
+ "sqlx",
+ "struson",
+ "subtle",
+ "tempfile",
+ "testcontainers",
+ "testcontainers-modules",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-cron-scheduler",
+ "tokio-stream",
+ "tokio-util",
+ "toml",
+ "toml_edit 0.22.27",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "ts-rs",
+ "url",
+ "urlencoding",
+ "uuid",
+ "webbrowser",
+ "wiremock",
+ "zeroize",
+]
+
+[[package]]
+name = "opex-db"
+version = "0.30.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "opex-types",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "opex-embedding"
+version = "0.30.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "wiremock",
+]
+
+[[package]]
+name = "opex-gateway-util"
+version = "0.30.0"
+dependencies = [
+ "axum",
+ "dashmap",
+ "futures-util",
+ "serde_json",
+ "struson",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "opex-memory-worker"
+version = "0.30.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dotenv",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "opex-embedding",
+ "reqwest",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "testcontainers",
+ "testcontainers-modules",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "opex-types"
+version = "0.30.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "opex-watchdog"
+version = "0.30.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "reqwest",
+ "sd-notify",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]

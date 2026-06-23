@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/hydeclaw-core",
-    "crates/hydeclaw-types",
-    "crates/hydeclaw-watchdog",
-    "crates/hydeclaw-memory-worker",
-    "crates/hydeclaw-db",
-    "crates/hydeclaw-embedding",
-    "crates/hydeclaw-gateway-util",
+    "crates/opex-core",
+    "crates/opex-types",
+    "crates/opex-watchdog",
+    "crates/opex-memory-worker",
+    "crates/opex-db",
+    "crates/opex-embedding",
+    "crates/opex-gateway-util",
 ]
 
 [workspace.package]
@@ -97,4 +97,4 @@ url = "2"
 base64 = "0.22"
 
 # Internal crates
-hydeclaw-types = { path = "crates/hydeclaw-types" }
+opex-types = { path = "crates/opex-types" }

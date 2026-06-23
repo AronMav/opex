@@ -1,0 +1,25 @@
+[package]
+name = "opex-watchdog"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "opex_watchdog"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = "0.4"
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

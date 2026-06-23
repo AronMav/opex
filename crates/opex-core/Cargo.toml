@@ -1,0 +1,183 @@
+[package]
+name = "opex-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "opex_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "opex-core"
+path = "src/main.rs"
+
+[[bin]]
+name = "gen_ts_types"
+path = "src/bin/gen_ts_types.rs"
+required-features = ["ts-gen"]
+
+[dependencies]
+# Workspace deps
+tokio = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+sqlx = { workspace = true }
+reqwest = { workspace = true }
+infer = { workspace = true }
+mime_guess = { workspace = true }
+bollard = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+toml_edit = { workspace = true }
+schemars = { workspace = true }
+notify = { workspace = true }
+tokio-cron-scheduler = { workspace = true }
+cron = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+dotenv = { workspace = true }
+
+# Streaming
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+async-stream = "0.3"
+# `bytes` is transitively pulled by reqwest/tokio; expose directly so
+# stream helpers can name `bytes::Bytes` in public signatures.
+bytes = "1"
+
+# URL parsing
+url = { workspace = true }
+urlencoding = "2"
+percent-encoding = "2"
+
+# Encoding
+base64 = { workspace = true }
+
+# Secrets vault
+chacha20poly1305 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+
+# YAML parsing (for YAML tool definitions)
+serde_yaml = "0.9"
+
+# Error classification
+regex = "1"
+
+# mDNS service discovery (pure Rust — no OpenSSL, ARM64-safe)
+mdns-sd = "0.19"
+
+# Network interface enumeration (pure Rust, no OpenSSL)
+if-addrs = "0.14"
+
+# WAN/public IP detection (rustls-tls only — no OpenSSL)
+public-ip-address = { version = "0.4", default-features = false, features = ["rustls-tls"] }
+
+# Security
+subtle = "2"
+hmac = "0.12"
+sha2 = "0.10"
+dashmap = "6"
+
+# Phase 64 SEC-02: cross-platform path canonicalization (pure Rust, no system deps;
+# wraps std::fs::canonicalize with Windows `\\?\` prefix removal). No openssl.
+dunce = "1.0"
+
+# Phase 64 SEC-04: streaming JSON pull parser (bounded-memory, pure Rust).
+# Used by the backup-restore size-cap path to avoid loading the whole body. No openssl.
+# `serde` feature enables JsonReader::deserialize_next<T: DeserializeOwned> — the
+# section-by-section walker lets us bound peak RSS to the largest single section.
+struson = { workspace = true }
+
+# Phase 64 SEC-03: HKDF-SHA256 for domain-separated upload-HMAC key derivation.
+# Pairs with existing `sha2 = "0.10"` and `hmac = "0.12"`. Pure Rust. No openssl.
+hkdf = "0.12"
+
+# Zeroize master key material on drop — reduces exposure via coredumps, /proc/<pid>/mem,
+# migration snapshots. Already a transitive dep of chacha20poly1305; exposed directly
+# here so SecretsManager can derive ZeroizeOnDrop on the [u8; 32] master key field.
+zeroize = { version = "1", features = ["derive"] }
+
+# Internal
+opex-types = { workspace = true, features = ["sqlx"] }
+opex-db           = { path = "../opex-db" }
+opex-gateway-util = { path = "../opex-gateway-util" }
+opex-embedding    = { path = "../opex-embedding" }
+
+# Lock-free atomic swap for hot-reloadable shared state (e.g. ToolgateEmbedder
+# rotating the upstream URL without taking a mutex on every embedding call).
+arc-swap = "1"
+# Bounded in-memory LRU cache (used by tool-embedding cache to cap RSS while
+# preserving hit rate for frequently re-asked queries).
+lru = "0.12"
+
+# OpenTelemetry (optional, behind `otel` feature)
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+# TypeScript codegen (optional, behind `ts-gen` feature)
+ts-rs = { version = "12", optional = true, features = ["chrono-impl", "serde-json-impl", "uuid-impl"] }
+inventory = { version = "0.3", optional = true }
+
+# Cross-platform home-dir lookup (gemini-cloudcode oauth scrape tier).
+# Optional so it is excluded from all non-gemini builds.
+dirs = { version = "5", optional = true }
+
+# Cross-process file locking for credential storage (gemini-cloudcode oauth).
+# Optional; activated only for the gemini-cloudcode feature.
+fs2 = { version = "0.4", optional = true }
+
+# Browser launcher for the authorization-code flow CLI wrapper.
+# Optional; activated only for the gemini-cloudcode feature.
+webbrowser = { version = "1", optional = true }
+
+[features]
+default = []
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
+ts-gen = ["dep:ts-rs", "dep:inventory", "opex-types/ts-gen", "opex-db/ts-gen"]
+gemini-cloudcode = ["dep:dirs", "dep:fs2", "dep:webbrowser"]
+
+# Systemd watchdog (Linux-only)
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = { workspace = true }
+
+[dev-dependencies]
+opex-db           = { path = "../opex-db" }
+opex-gateway-util = { path = "../opex-gateway-util" }
+tempfile = "3.27.0"
+# Serialize tests that mutate process-global state (current_dir, env vars).
+# `cargo test` runs tests in parallel by default; `#[serial]` enforces a
+# critical section across the named lock so std::env::set_current_dir
+# calls can't trample each other.
+serial_test = "3"
+insta = { version = "1", features = ["json"] }
+# Phase 64 SEC-05: in-process axum integration via Router::oneshot (no TCP server).
+tower = { workspace = true }
+# Integration test harness (Phase 61 Plan 01).
+# NOTE: testcontainers pinned to 0.23 (not 0.27 as originally planned) because testcontainers 0.24+
+# requires bollard 0.19+ / 0.20+, which has breaking API changes vs. our workspace bollard 0.18
+# (used by src/containers/{sandbox,mod}.rs). Upgrading bollard would require production src changes
+# explicitly forbidden by Phase 61 scope. 0.23 pulls bollard 0.18.1 — compatible drop-in.
+# testcontainers-modules 0.11 targets testcontainers 0.23. API surface used by the harness
+# (GenericImage, AsyncRunner, ImageExt, WaitFor, IntoContainerPort) is identical across 0.23-0.27.
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+rstest = "0.26.1"
+wiremock = "0.6.5"
+# Integration tests compile as separate crates — they need explicit deps even if the lib re-exports them.
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread", "time"] }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+# Phase 61 Plan 03 — approval race test uses Uuid directly.
+uuid = { workspace = true }

@@ -1,0 +1,39 @@
+---
+source: crates/opex-core/src/gateway/handlers/agents/dto.rs
+expression: dto
+---
+{
+  "name": "SnapshotMin",
+  "language": "ru",
+  "provider": "anthropic",
+  "model": "claude-3-5-sonnet-20241022",
+  "provider_connection": null,
+  "fallback_provider": null,
+  "tts_provider": null,
+  "imagegen_provider": null,
+  "temperature": 1.0,
+  "max_tokens": null,
+  "access": null,
+  "heartbeat": null,
+  "tools": null,
+  "compaction": null,
+  "skill_review": null,
+  "session": null,
+  "icon_url": null,
+  "max_tools_in_context": null,
+  "tool_loop": null,
+  "tool_dispatcher": {
+    "enabled": false,
+    "core_extra": [],
+    "promotion_max": 8
+  },
+  "approval": null,
+  "routing": [],
+  "watchdog": null,
+  "hooks": null,
+  "max_history_messages": null,
+  "daily_budget_tokens": 0,
+  "max_failover_attempts": 3,
+  "is_running": false,
+  "config_dirty": false
+}
