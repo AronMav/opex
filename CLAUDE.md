@@ -165,7 +165,7 @@ Axum HTTP API on port 18789. **Sub-router pattern:** 31 handler modules each exp
 - **Conditional SSRF:** `engine_dispatch.rs` picks the HTTP client by endpoint: `tools::ssrf::is_internal_endpoint(&yaml_tool.endpoint)` returns true for trusted admin-configured services (toolgate, browser-renderer, core itself, …) which use the standard `http_client()`. Every other endpoint uses `ssrf_http_client()` with DNS-level private-IP blocking. Path params are URL-encoded, body templates are JSON-escaped. Binary responses limited to 50MB.
 - **Tool name validation:** API handlers enforce `[a-zA-Z0-9_-]` on tool and MCP entry names (prevents path traversal)
 
-**Service registry:** `config/services/*.yaml` — internal service definitions (browser-renderer, toolgate, STT, TTS, embedding, vision). These are infrastructure entries (URL, healthcheck, concurrency), NOT agent tools. Loaded by `service_registry.rs`.
+**Service registry:** `config/services/*.yaml` — infrastructure endpoint definitions (browser-renderer, toolgate). These are infrastructure entries (URL, healthcheck, concurrency), NOT agent tools. Loaded by `service_registry.rs`. Only `toolgate` (fallback for `toolgate_url`) and `browser-renderer` are read by name in the engine. **STT/TTS/embedding/vision are NOT service-registry entries** — those capabilities are resolved through the provider registry (`providers`/`provider_active` tables, UI → Active Providers) and proxied by toolgate.
 
 **Agent skills:** `workspace/skills/*.md` — shared skills for all agents.
 `config/skills/*.md` — system skills only available to base agents

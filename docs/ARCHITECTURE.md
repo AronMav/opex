@@ -995,7 +995,7 @@ All other configuration goes in `config/opex.toml` or the secrets vault.
 - `workspace/skills/*.md` — shared agent skills
 - `config/skills/*.md` — system skills (base agents only)
 - `workspace/mcp/*.yaml` — MCP server definitions
-- `config/services/*.yaml` — service registry (browser-renderer, toolgate, STT, TTS, etc.)
+- `config/services/*.yaml` — service registry for infrastructure endpoints (browser-renderer, toolgate). STT/TTS/embedding/vision are NOT here — they go through the provider registry (`providers`/`provider_active` tables) proxied by toolgate.
 
 **Hot reload:** config file watcher (notify crate) reloads `config/opex.toml` and agent configs without restart. Agent rename is transactional (updates 19+ DB tables).
 

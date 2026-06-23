@@ -1,4 +1,0 @@
-name: vision-service
-type: external
-url: http://your-ollama-host:11434/v1
-max_concurrent: 1

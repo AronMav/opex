@@ -275,7 +275,7 @@ async fn main() -> Result<()> {
     load_env();
 
     // Load config BEFORE tracing init (OTEL layer depends on config)
-    let cfg = config::AppConfig::load(&opex_gateway_util::config_path::resolve_config_path())?;
+    let cfg = config::AppConfig::load(opex_gateway_util::config_path::resolve_config_path())?;
 
     // Broadcast channel for real-time log streaming (created before tracing init)
     let (log_tx, _) = tokio::sync::broadcast::channel::<String>(256);

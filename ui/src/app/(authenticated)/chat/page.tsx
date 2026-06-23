@@ -577,7 +577,7 @@ export default function ChatPage() {
           <>
             <Virtuoso
               data={filteredSessions}
-              className="!h-full"
+              className="!h-full scrollbar-none"
               itemContent={(_index, s) => {
                 const isSelected = selectedSessions.has(s.id);
                 const displayTitle = s.title || s.user_id || t("chat.no_title");
