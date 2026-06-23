@@ -2,6 +2,6 @@
   "type": "tool-input-start",
   "toolCallId": "tc-abc-1",
   "toolName": "code_exec",
-  "agentName": "Hyde",
+  "agentName": "Opex",
   "parallelBatchId": "00000000-0000-0000-0000-000000000000"
 }

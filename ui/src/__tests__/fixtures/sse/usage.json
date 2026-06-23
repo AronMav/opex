@@ -2,7 +2,7 @@
   "type": "usage",
   "inputTokens": 100,
   "outputTokens": 50,
-  "agentName": "Hyde",
+  "agentName": "Opex",
   "cacheReadTokens": 20,
   "cacheCreationTokens": 5,
   "reasoningTokens": 3

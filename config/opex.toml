@@ -5,11 +5,11 @@ toolgate_url = "http://localhost:9011"
 
 [gateway]
 listen = "0.0.0.0:18789"
-auth_token_env = "HYDECLAW_AUTH_TOKEN"
+auth_token_env = "OPEX_AUTH_TOKEN"
 public_url = "http://your-server:18789"
 
 [database]
-url = "postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw"
+url = "postgresql://opex:opex@localhost:5432/opex"
 
 [limits]
 max_requests_per_minute = 100
@@ -48,8 +48,8 @@ rebuild_timeout_secs = 300
 name = "channels"
 command = ["bun", "run", "src/index.ts"]
 working_dir = "channels"
-env_passthrough = ["HYDECLAW_AUTH_TOKEN"]
-env_extra = { HYDECLAW_CORE_WS = "ws://localhost:18789", HEALTH_PORT = "3100" }
+env_passthrough = ["OPEX_AUTH_TOKEN"]
+env_extra = { OPEX_CORE_WS = "ws://localhost:18789", HEALTH_PORT = "3100" }
 health_url = "http://localhost:3100/health"
 port = 3100
 memory_max = "256M"
@@ -58,8 +58,8 @@ memory_max = "256M"
 name = "toolgate"
 command = [".venv/bin/python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9011", "--workers", "1", "--loop", "asyncio", "--limit-concurrency", "50"]
 working_dir = "toolgate"
-env_passthrough = ["HYDECLAW_AUTH_TOKEN"]
-env_extra = { AUTH_TOKEN = "${HYDECLAW_AUTH_TOKEN}", INTERNAL_NETWORK = "127.0.0.0/8", CORE_API_URL = "http://localhost:18789" }
+env_passthrough = ["OPEX_AUTH_TOKEN"]
+env_extra = { AUTH_TOKEN = "${OPEX_AUTH_TOKEN}", INTERNAL_NETWORK = "127.0.0.0/8", CORE_API_URL = "http://localhost:18789" }
 health_url = "http://localhost:9011/health"
 port = 9011
 memory_max = "256M"
@@ -68,7 +68,7 @@ memory_max = "256M"
 
 [sandbox]
 enabled = true
-image = "hydeclaw-sandbox:latest"
+image = "opex-sandbox:latest"
 extra_binds = []
 
 # ═══ Memory (embedding via toolgate) ═══

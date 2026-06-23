@@ -35,7 +35,7 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     if (parsed.type !== "tool-input-start") throw new Error("unreachable");
     expect(parsed.toolCallId).toBe("tc-abc-1");
     expect(parsed.toolName).toBe("code_exec");
-    expect(parsed.agentName).toBe("Hyde");
+    expect(parsed.agentName).toBe("Opex");
     expect(parsed.parallelBatchId).toBe("00000000-0000-0000-0000-000000000000");
   });
 
@@ -113,7 +113,7 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     if (parsed.type !== "usage") throw new Error("unreachable");
     expect(parsed.inputTokens).toBe(100);
     expect(parsed.outputTokens).toBe(50);
-    expect(parsed.agentName).toBe("Hyde");
+    expect(parsed.agentName).toBe("Opex");
     expect(parsed.cacheReadTokens).toBe(20);
     expect(parsed.cacheCreationTokens).toBe(5);
     expect(parsed.reasoningTokens).toBe(3);
@@ -141,7 +141,7 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     const parsed = JSON.parse(raw) as SseEvent;
     if (parsed.type !== "start") throw new Error("unreachable");
     expect(parsed.messageId).toBeDefined();
-    expect(parsed.agentName).toBe("Hyde");
+    expect(parsed.agentName).toBe("Opex");
   });
 
   test("step-start fixture has stepId + messageId + agentName", () => {
@@ -149,7 +149,7 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     const parsed = JSON.parse(raw) as SseEvent;
     if (parsed.type !== "step-start") throw new Error("unreachable");
     expect(parsed.stepId).toBe("step_2");
-    expect(parsed.agentName).toBe("Hyde");
+    expect(parsed.agentName).toBe("Opex");
   });
 
   test("text-start fixture has id + agentName", () => {
@@ -157,7 +157,7 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     const parsed = JSON.parse(raw) as SseEvent;
     if (parsed.type !== "text-start") throw new Error("unreachable");
     expect(parsed.id).toBe("text-1");
-    expect(parsed.agentName).toBe("Hyde");
+    expect(parsed.agentName).toBe("Opex");
   });
 
   test("text-end fixture has id", () => {
@@ -200,7 +200,7 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     const raw = readFileSync(join(FIXTURES, "finish.json"), "utf-8");
     const parsed = JSON.parse(raw) as SseEvent;
     if (parsed.type !== "finish") throw new Error("unreachable");
-    expect(parsed.agentName).toBe("Hyde");
+    expect(parsed.agentName).toBe("Opex");
   });
 
   test("error fixture has errorText", () => {

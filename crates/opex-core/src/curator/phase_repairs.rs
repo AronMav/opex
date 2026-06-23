@@ -81,7 +81,7 @@ async fn apply_repair(
             let existing = tokio::fs::read_to_string(&path).await
                 .map_err(|_| anyhow::anyhow!("skill file not found: {}", repair.skill_name))?;
 
-            // Snapshot the current version before handing off to Hyde
+            // Snapshot the current version before handing off to Opex
             let _ = crate::db::skill_versions::save_version(
                 db, &repair.skill_name, &existing, "repair", None, Some("curator:repair:fix"),
             ).await;
@@ -120,7 +120,7 @@ async fn apply_repair(
             );
             crate::curator::run_agent_task(agents, agent_name, &task).await?;
 
-            // Try to snapshot the new file Hyde just wrote; log warning if unavailable
+            // Try to snapshot the new file Opex just wrote; log warning if unavailable
             let new_path = skills_dir.join(format!("{new_safe}.md"));
             match tokio::fs::read_to_string(&new_path).await {
                 Ok(content) => {
@@ -149,7 +149,7 @@ async fn apply_repair(
             );
             crate::curator::run_agent_task(agents, agent_name, &task).await?;
 
-            // Try to snapshot the new file Hyde just wrote
+            // Try to snapshot the new file Opex just wrote
             let new_path = skills_dir.join(format!("{safe_name}.md"));
             match tokio::fs::read_to_string(&new_path).await {
                 Ok(content) => {

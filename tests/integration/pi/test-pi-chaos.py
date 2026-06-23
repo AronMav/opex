@@ -14,7 +14,7 @@ Approach:
      - all step-start messageIds unique
 
 Run on Pi where docker-postgres is reachable:
-  HYDECLAW_AUTH_TOKEN=<token> python3 test-pi-chaos.py
+  OPEX_AUTH_TOKEN=<token> python3 test-pi-chaos.py
 """
 import json
 import os
@@ -24,7 +24,7 @@ import time
 import urllib.request
 
 PI = "http://192.168.1.82:18789"
-TOKEN = os.environ["HYDECLAW_AUTH_TOKEN"]
+TOKEN = os.environ["OPEX_AUTH_TOKEN"]
 AGENT = "Arty"
 
 

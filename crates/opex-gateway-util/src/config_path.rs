@@ -1,19 +1,14 @@
-//! Dual-path конфиг: предпочитает config/opex.toml, fallback config/hydeclaw.toml.
-//! Fallback удаляется в PR3 после переименования файла на сервере.
+//! Config path resolution. The app config lives at `config/opex.toml`.
 use std::path::Path;
 
-/// Резолвит путь конфига относительно текущей рабочей директории.
+/// Path to the app config file (relative to the working directory).
 pub fn resolve_config_path() -> String {
-    resolve_config_path_in(Path::new("."))
+    "config/opex.toml".to_string()
 }
 
-/// Тестируемое ядро: резолвит относительно `base`.
+/// Test/compat seam — resolves relative to `base`.
 pub fn resolve_config_path_in(base: &Path) -> String {
-    if base.join("config/opex.toml").exists() {
-        "config/opex.toml".to_string()
-    } else {
-        "config/hydeclaw.toml".to_string()
-    }
+    base.join("config/opex.toml").to_string_lossy().into_owned()
 }
 
 #[cfg(test)]
@@ -21,17 +16,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn falls_back_when_new_missing() {
-        // chooses_existing: при наличии только legacy выбирается legacy
-        let dir = tempfile::tempdir().unwrap();
-        let legacy = dir.path().join("config/hydeclaw.toml");
-        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        std::fs::write(&legacy, "x").unwrap();
-        assert_eq!(
-            resolve_config_path_in(dir.path()),
-            "config/hydeclaw.toml"
-        );
-        std::fs::write(dir.path().join("config/opex.toml"), "y").unwrap();
-        assert_eq!(resolve_config_path_in(dir.path()), "config/opex.toml");
+    fn returns_opex_config_path() {
+        assert_eq!(resolve_config_path(), "config/opex.toml");
+        // _in is a compat seam; just assert it embeds the fixed config name.
+        assert!(resolve_config_path_in(Path::new("base")).ends_with("opex.toml"));
     }
 }

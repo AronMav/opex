@@ -3,7 +3,7 @@
 
 Send a chat request to Core with a known `traceparent` header. Wait for
 spans to flush, then query Jaeger for that exact trace_id and assert it
-contains spans from BOTH `hydeclaw-core` and any downstream service.
+contains spans from BOTH `opex-core` and any downstream service.
 
 Without `extract_trace_context_layer`, Core would generate a fresh
 trace_id and our supplied trace_id would have zero spans associated. With
@@ -12,7 +12,7 @@ etc.) become children of OUR span and Jaeger groups them under our
 trace_id.
 
 Run on Pi:
-  HYDECLAW_AUTH_TOKEN=<token> python3 test-pi-trace-correlation.py
+  OPEX_AUTH_TOKEN=<token> python3 test-pi-trace-correlation.py
 """
 
 import json
@@ -24,7 +24,7 @@ import urllib.request
 
 PI = os.environ.get("PI_URL", "http://127.0.0.1:18789")
 JAEGER = os.environ.get("JAEGER_URL", "http://127.0.0.1:16686")
-TOKEN = os.environ["HYDECLAW_AUTH_TOKEN"]
+TOKEN = os.environ["OPEX_AUTH_TOKEN"]
 AGENT = "Arty"
 
 
@@ -122,8 +122,8 @@ def main():
         print("   traceparent but pipeline didn't emit children under it.")
         return 1
 
-    if "hydeclaw-core" not in services:
-        print("\n❌ trace doesn't contain hydeclaw-core spans")
+    if "opex-core" not in services:
+        print("\n❌ trace doesn't contain opex-core spans")
         return 1
 
     print("\n✅ TRACE CORRELATION PASSED — external traceparent honoured")

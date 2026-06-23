@@ -18,8 +18,8 @@ import requests
 import psycopg2
 
 PI_HOST = os.environ.get("PI_HOST", "192.168.1.82")
-TOKEN = os.environ.get("HYDECLAW_AUTH_TOKEN")
-DB_URL = os.environ.get("PI_DB_URL", f"postgresql://hydeclaw@{PI_HOST}:5432/hydeclaw")
+TOKEN = os.environ.get("OPEX_AUTH_TOKEN")
+DB_URL = os.environ.get("PI_DB_URL", f"postgresql://opex@{PI_HOST}:5432/opex")
 
 
 def parse_step_index(s: str) -> int:
@@ -166,7 +166,7 @@ def test_approval_id_flows_sse_to_db():
 
 
 if __name__ == "__main__":
-    assert TOKEN, "HYDECLAW_AUTH_TOKEN env var required"
+    assert TOKEN, "OPEX_AUTH_TOKEN env var required"
     failures = []
     for test in [
         test_assistant_message_id_flows_sse_to_db,

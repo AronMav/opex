@@ -12,7 +12,7 @@ finalize like the SSE path. This script:
 5. Cleans up the test cron job.
 
 Run on Pi:
-  HYDECLAW_AUTH_TOKEN=<token> python3 test-pi-cron-pipeline.py
+  OPEX_AUTH_TOKEN=<token> python3 test-pi-cron-pipeline.py
 """
 import json
 import os
@@ -23,7 +23,7 @@ import urllib.request
 
 PI = os.environ.get("PI_URL", "http://127.0.0.1:18789")
 JAEGER = os.environ.get("JAEGER_URL", "http://127.0.0.1:16686")
-TOKEN = os.environ["HYDECLAW_AUTH_TOKEN"]
+TOKEN = os.environ["OPEX_AUTH_TOKEN"]
 AGENT = os.environ.get("AGENT", "Arty")
 
 
@@ -38,9 +38,9 @@ def api(path: str, method: str = "GET", body: dict | None = None):
 
 
 def jaeger_search(operation: str, lookback: str = "10m") -> list[dict]:
-    """List recent traces for a given operation on hydeclaw-core service."""
+    """List recent traces for a given operation on opex-core service."""
     url = (
-        f"{JAEGER}/api/traces?service=hydeclaw-core"
+        f"{JAEGER}/api/traces?service=opex-core"
         f"&operation={operation}&limit=20&lookback={lookback}"
     )
     try:

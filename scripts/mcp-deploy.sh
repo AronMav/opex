@@ -1,5 +1,5 @@
 #!/bin/bash
-# mcp-deploy.sh — Deploy MCP servers for HydeClaw (one-command)
+# mcp-deploy.sh — Deploy MCP servers for Opex (one-command)
 #
 # Usage:
 #   mcp-deploy.sh stdio-node <source-image> <name> <port>
@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-BASE_DIR="${HOME}/hydeclaw"
+BASE_DIR="${HOME}/opex"
 DOCKER_DIR="${BASE_DIR}/docker"
 MCP_DIR="${DOCKER_DIR}/mcp"
 WORKSPACE_MCP="${BASE_DIR}/workspace/mcp"
@@ -28,10 +28,10 @@ die() { echo "[mcp-deploy] ERROR: $*" >&2; exit 1; }
 
 # Ensure base bridge image exists
 ensure_bridge() {
-    if ! docker image inspect hydeclaw-mcp-bridge:latest >/dev/null 2>&1; then
+    if ! docker image inspect opex-mcp-bridge:latest >/dev/null 2>&1; then
         log "Building base bridge image..."
         [ -f "${BRIDGE_DIR}/Dockerfile" ] || die "Missing ${BRIDGE_DIR}/Dockerfile"
-        docker build -t hydeclaw-mcp-bridge:latest "${BRIDGE_DIR}" || die "Bridge image build failed"
+        docker build -t opex-mcp-bridge:latest "${BRIDGE_DIR}" || die "Bridge image build failed"
         log "Bridge image built OK"
     fi
 }
@@ -75,7 +75,7 @@ insert_compose_service() {
 
     local block="  ${svc_name}:\\n"
     block+="    container_name: ${svc_name}\\n"
-    block+="    image: hydeclaw-${svc_name}:latest\\n"
+    block+="    image: opex-${svc_name}:latest\\n"
     block+="    build: ./mcp/${name}\\n"
     block+="    ports:\\n"
     block+="      - \"${port}:8000\"\\n"
@@ -193,7 +193,7 @@ cmd_stdio_node() {
 
         mkdir -p "${build_dir}"
         cat > "${build_dir}/Dockerfile" <<DOCKERFILE
-FROM hydeclaw-mcp-bridge:latest
+FROM opex-mcp-bridge:latest
 RUN pip install --no-cache-dir ${cmd_name}
 ENV MCP_COMMAND='["${cmd_name}"]'
 DOCKERFILE
@@ -239,7 +239,7 @@ DOCKERFILE
         mkdir -p "${build_dir}"
         cat > "${build_dir}/Dockerfile" <<DOCKERFILE
 FROM --platform=linux/amd64 ${source_image} AS mcp
-FROM hydeclaw-mcp-bridge:latest
+FROM opex-mcp-bridge:latest
 COPY --from=mcp /usr/local/lib/node_modules /mcp_modules
 ENV MCP_COMMAND='${mcp_cmd}'
 DOCKERFILE
@@ -263,7 +263,7 @@ DOCKERFILE
         mkdir -p "${build_dir}"
         cat > "${build_dir}/Dockerfile" <<DOCKERFILE
 FROM --platform=linux/amd64 ${source_image} AS mcp
-FROM hydeclaw-mcp-bridge:latest
+FROM opex-mcp-bridge:latest
 COPY --from=mcp ${workdir} /mcp_server
 ENV MCP_COMMAND='${mcp_cmd}'
 DOCKERFILE
@@ -271,8 +271,8 @@ DOCKERFILE
     fi
 
     # Build image
-    log "Building hydeclaw-mcp-${name}:latest..."
-    docker build -t "hydeclaw-mcp-${name}:latest" "${build_dir}" || die "Build failed"
+    log "Building opex-mcp-${name}:latest..."
+    docker build -t "opex-mcp-${name}:latest" "${build_dir}" || die "Build failed"
 
     # Remove old container if exists
     docker rm -f "mcp-${name}" 2>/dev/null || true
@@ -282,10 +282,10 @@ DOCKERFILE
     docker compose -f "${COMPOSE_FILE}" create --no-recreate "mcp-${name}" 2>/dev/null || \
     docker create --name "mcp-${name}" \
         -p "${port}:8000" \
-        --network hydeclaw \
+        --network opex \
         --memory=256m \
         --restart unless-stopped \
-        "hydeclaw-mcp-${name}:latest"
+        "opex-mcp-${name}:latest"
 
     # Create workspace YAML
     create_yaml "${name}" "${port}"
@@ -313,16 +313,16 @@ cmd_stdio_python() {
 
     mkdir -p "${build_dir}"
     cat > "${build_dir}/Dockerfile" <<DOCKERFILE
-FROM hydeclaw-mcp-bridge:latest
+FROM opex-mcp-bridge:latest
 RUN pip install --no-cache-dir ${pip_pkg}
 ENV MCP_COMMAND='["${cmd_name}"]'
 DOCKERFILE
 
-    docker build -t "hydeclaw-mcp-${name}:latest" "${build_dir}" || die "Build failed"
+    docker build -t "opex-mcp-${name}:latest" "${build_dir}" || die "Build failed"
     docker rm -f "mcp-${name}" 2>/dev/null || true
     insert_compose_service "${name}" "${port}"
     docker compose -f "${COMPOSE_FILE}" create --no-recreate "mcp-${name}" 2>/dev/null || \
-    docker create --name "mcp-${name}" -p "${port}:8000" --network hydeclaw --memory=256m "hydeclaw-mcp-${name}:latest"
+    docker create --name "mcp-${name}" -p "${port}:8000" --network opex --memory=256m "opex-mcp-${name}:latest"
     create_yaml "${name}" "${port}"
     docker start "mcp-${name}"
     sleep 3

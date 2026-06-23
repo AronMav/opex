@@ -490,13 +490,13 @@ mod tests {
     #[should_panic(expected = "caller must skip")]
     fn from_agent_switch_panics_caller_must_skip() {
         let _ = SseEvent::from(StreamEvent::AgentSwitch {
-            agent_name: "Hyde".to_string(),
+            agent_name: "Opex".to_string(),
         });
     }
 
     #[test]
     fn writer_session_id_with_context_limit() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let json = w.build_session_id("sess-1".to_string(), Some(8000));
         assert!(json.contains(r#""type":"data-session-id""#));
         assert!(json.contains(r#""sessionId":"sess-1""#));
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn writer_session_id_without_context_limit() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let json = w.build_session_id("sess-1".to_string(), None);
         // context_limit is Option, skip_serializing_if = is_none.
         assert!(!json.contains("contextLimit"));
@@ -514,29 +514,29 @@ mod tests {
 
     #[test]
     fn writer_start_includes_agent_name_and_message_id() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let mid = MessageId::from(Uuid::nil());
         let json = w.build_start(mid);
         assert!(json.contains(r#""type":"start""#));
         assert!(json.contains(r#""messageId":"00000000-0000-0000-0000-000000000000""#));
-        assert!(json.contains(r#""agentName":"Hyde""#));
+        assert!(json.contains(r#""agentName":"Opex""#));
     }
 
     #[test]
     fn writer_step_start_formats_step_id_and_includes_agent() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let iter = IterationId {
             index: 3,
             message_id: MessageId::from(Uuid::nil()),
         };
         let json = w.build_step_start(iter);
         assert!(json.contains(r#""stepId":"step_3""#));
-        assert!(json.contains(r#""agentName":"Hyde""#));
+        assert!(json.contains(r#""agentName":"Opex""#));
     }
 
     #[test]
     fn writer_text_delta_emits_start_then_delta_on_first_call() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let (start_json, delta_json) = w.build_text_delta("hello".to_string());
         let s_json = start_json.expect("first delta opens a block");
         assert!(s_json.contains(r#""type":"text-start""#));
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn writer_text_delta_subsequent_calls_reuse_block_id() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let _ = w.build_text_delta("first".to_string());
         let (start_json, delta_json) = w.build_text_delta(" second".to_string());
         assert!(start_json.is_none(), "second delta does not open new block");
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn writer_text_end_if_open_emits_when_open_else_none() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         assert!(w.build_text_end_if_open().is_none());
         let _ = w.build_text_delta("x".to_string());
         let e_json = w.build_text_end_if_open().expect("block was open");
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn writer_tool_input_start_remembers_tool_name_for_later_lookup() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let id = ToolCallId::from("tc-1".to_string());
         let _ = w.build_tool_input_start(id.clone(), "code_exec".to_string(), None);
         // Synthetic tool-input-available looks up tool_name via map:
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn writer_tool_input_start_with_parallel_batch_id() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let id = ToolCallId::from("tc-1".to_string());
         let batch = ParallelBatchId::from(Uuid::nil());
         let json = w.build_tool_input_start(
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn writer_tool_input_start_without_parallel_batch_id_omits_field() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let id = ToolCallId::from("tc-1".to_string());
         let json = w.build_tool_input_start(id, "code_exec".to_string(), None);
         assert!(!json.contains("parallelBatchId"));
@@ -601,11 +601,11 @@ mod tests {
 
     #[test]
     fn writer_finish_includes_agent_and_resets_text_state() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let _ = w.build_text_delta("x".to_string()); // opens text block
         let json = w.build_finish();
         assert!(json.contains(r#""type":"finish""#));
-        assert!(json.contains(r#""agentName":"Hyde""#));
+        assert!(json.contains(r#""agentName":"Opex""#));
         // After finish, text counter resets so next stream starts at text-1:
         let (start_json, _) = w.build_text_delta("y".to_string());
         let s_json = start_json.unwrap();
@@ -614,9 +614,9 @@ mod tests {
 
     #[test]
     fn writer_usage_includes_agent_and_omits_none_extended_fields() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let json = w.build_usage(100, 50, None, None, None);
-        assert!(json.contains(r#""agentName":"Hyde""#));
+        assert!(json.contains(r#""agentName":"Opex""#));
         assert!(!json.contains("cacheReadTokens"));
         assert!(!json.contains("cacheCreationTokens"));
         assert!(!json.contains("reasoningTokens"));
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn writer_usage_emits_extended_fields_when_present() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let json = w.build_usage(100, 50, Some(20), Some(5), Some(3));
         assert!(json.contains(r#""cacheReadTokens":20"#));
         assert!(json.contains(r#""cacheCreationTokens":5"#));
@@ -633,7 +633,7 @@ mod tests {
 
     #[test]
     fn writer_rich_card_known_table_routes_correctly() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let json = w.build_rich_card(
             "table".to_string(),
             serde_json::json!({"columns": ["a"], "rows": []}),
@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn writer_rich_card_unknown_falls_back_to_other() {
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let json = w.build_rich_card(
             "future_card".to_string(),
             serde_json::json!({"foo": 1}),
@@ -655,7 +655,7 @@ mod tests {
     #[test]
     fn writer_file_scenario_chips_emits_camelcase_wire() {
         use opex_types::sse::ScenarioChoice;
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let json = w.build_file_scenario_chips(
             MessageId::from(Uuid::nil()),
             Uuid::nil(),
@@ -675,7 +675,7 @@ mod tests {
         // Guards against re-introducing the double-wrapping bug:
         // frame() must return ONLY JSON. axum::Event::data(...) adds
         // the `id:`/`data:` framing in the converter macro.
-        let mut w = SseStreamWriter::new("Hyde".to_string());
+        let mut w = SseStreamWriter::new("Opex".to_string());
         let f1 = w.build_session_id("s1".to_string(), None);
         let f2 = w.build_start(MessageId::from(Uuid::nil()));
         assert!(f1.starts_with('{'), "frame must be raw JSON, got: {f1}");

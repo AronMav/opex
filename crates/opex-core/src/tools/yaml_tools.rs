@@ -20,9 +20,10 @@ pub trait EnvResolver: Send + Sync {
 /// Resolve an env var: try the resolver first, then fall back to `std::env::var`.
 async fn resolve_env(key: &str, resolver: Option<&dyn EnvResolver>) -> Result<String> {
     if let Some(r) = resolver
-        && let Some(val) = r.resolve(key).await {
-            return Ok(val);
-        }
+        && let Some(val) = r.resolve(key).await
+    {
+        return Ok(val);
+    }
     std::env::var(key).with_context(|| format!("env var '{key}' not set"))
 }
 use std::path::Path;
@@ -34,9 +35,8 @@ use tokio::fs;
 /// `http_client` does NOT block private IPs and must never be used for
 /// user-controlled URLs. 60s timeout matches the multipart-fetch budget.
 fn ssrf_multipart_client() -> &'static reqwest::Client {
-    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-        crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(60))
-    });
+    static CLIENT: LazyLock<reqwest::Client> =
+        LazyLock::new(|| crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(60)));
     &CLIENT
 }
 
@@ -134,12 +134,22 @@ pub struct YamlRetryConfig {
     pub retry_on: Vec<u16>,
 }
 
-fn default_max_attempts() -> u32 { 1 }
-fn default_backoff_base() -> u64 { 1000 }
-fn default_retry_on() -> Vec<u16> { vec![429, 500, 502, 503, 504] }
+fn default_max_attempts() -> u32 {
+    1
+}
+fn default_backoff_base() -> u64 {
+    1000
+}
+fn default_retry_on() -> Vec<u16> {
+    vec![429, 500, 502, 503, 504]
+}
 
-fn default_timeout() -> u64 { 60 }
-fn default_content_type() -> String { "application/json".to_string() }
+fn default_timeout() -> u64 {
+    60
+}
+fn default_content_type() -> String {
+    "application/json".to_string()
+}
 
 // ── Cache config ─────────────────────────────────────────────────────────────
 
@@ -336,23 +346,33 @@ struct RawSortBy {
 
 impl<'de> Deserialize<'de> for ResponsePipelineStep {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: serde::Deserializer<'de> {
+    where
+        D: serde::Deserializer<'de>,
+    {
         let raw = RawPipelineStep::deserialize(deserializer)?;
         if let Some(path) = raw.jsonpath {
             Ok(ResponsePipelineStep::Jsonpath(path))
         } else if let Some(fields) = raw.pick_fields {
             Ok(ResponsePipelineStep::PickFields(fields))
         } else if let Some(sort) = raw.sort_by {
-            Ok(ResponsePipelineStep::SortBy { field: sort.field, desc: sort.desc })
+            Ok(ResponsePipelineStep::SortBy {
+                field: sort.field,
+                desc: sort.desc,
+            })
         } else if let Some(count) = raw.limit {
             Ok(ResponsePipelineStep::Limit(count))
         } else {
-            Err(serde::de::Error::custom("pipeline step must have exactly one key: jsonpath, pick_fields, sort_by, or limit"))
+            Err(serde::de::Error::custom(
+                "pipeline step must have exactly one key: jsonpath, pick_fields, sort_by, or limit",
+            ))
         }
     }
 }
 
-fn apply_pipeline(value: serde_json::Value, pipeline: &[ResponsePipelineStep]) -> serde_json::Value {
+fn apply_pipeline(
+    value: serde_json::Value,
+    pipeline: &[ResponsePipelineStep],
+) -> serde_json::Value {
     let mut current = value;
     for step in pipeline {
         current = match step {
@@ -361,17 +381,21 @@ fn apply_pipeline(value: serde_json::Value, pipeline: &[ResponsePipelineStep]) -
             }
             ResponsePipelineStep::PickFields(fields) => {
                 if let Some(arr) = current.as_array() {
-                    let filtered: Vec<serde_json::Value> = arr.iter().map(|item| {
-                        if let Some(obj) = item.as_object() {
-                            let picked: serde_json::Map<String, serde_json::Value> = obj.iter()
-                                .filter(|(k, _)| fields.contains(k))
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect();
-                            serde_json::Value::Object(picked)
-                        } else {
-                            item.clone()
-                        }
-                    }).collect();
+                    let filtered: Vec<serde_json::Value> = arr
+                        .iter()
+                        .map(|item| {
+                            if let Some(obj) = item.as_object() {
+                                let picked: serde_json::Map<String, serde_json::Value> = obj
+                                    .iter()
+                                    .filter(|(k, _)| fields.contains(k))
+                                    .map(|(k, v)| (k.clone(), v.clone()))
+                                    .collect();
+                                serde_json::Value::Object(picked)
+                            } else {
+                                item.clone()
+                            }
+                        })
+                        .collect();
                     serde_json::Value::Array(filtered)
                 } else {
                     current
@@ -381,10 +405,19 @@ fn apply_pipeline(value: serde_json::Value, pipeline: &[ResponsePipelineStep]) -
                 if let Some(arr) = current.as_array() {
                     let mut sorted = arr.clone();
                     sorted.sort_by(|a, b| {
-                        let va = a.get(field).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-                        let vb = b.get(field).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-                        if *desc { vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal) }
-                        else { va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal) }
+                        let va = a
+                            .get(field)
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(0.0);
+                        let vb = b
+                            .get(field)
+                            .and_then(serde_json::Value::as_f64)
+                            .unwrap_or(0.0);
+                        if *desc {
+                            vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+                        } else {
+                            va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+                        }
                     });
                     serde_json::Value::Array(sorted)
                 } else {
@@ -423,7 +456,7 @@ pub struct ChannelActionConfig {
 /// Full YAML tool definition loaded from a file.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)] // YAML schema fields (extends/created_by/cache) are accepted on
-                    // parse for forward-compat; runtime enforcement lives elsewhere.
+// parse for forward-compat; runtime enforcement lives elsewhere.
 pub struct YamlToolDef {
     #[serde(default)]
     pub extends: Option<String>,
@@ -495,7 +528,10 @@ impl YamlToolDef {
 
         for (param_name, param) in &self.parameters {
             let mut prop = serde_json::Map::new();
-            prop.insert("type".into(), serde_json::Value::String(param.param_type.clone()));
+            prop.insert(
+                "type".into(),
+                serde_json::Value::String(param.param_type.clone()),
+            );
 
             let mut desc = param.description.clone();
             if !param.examples.is_empty() {
@@ -507,7 +543,11 @@ impl YamlToolDef {
                 prop.insert(
                     "enum".into(),
                     serde_json::Value::Array(
-                        param.enum_values.iter().map(|v| serde_json::Value::String(v.clone())).collect(),
+                        param
+                            .enum_values
+                            .iter()
+                            .map(|v| serde_json::Value::String(v.clone()))
+                            .collect(),
                     ),
                 );
             }
@@ -515,14 +555,20 @@ impl YamlToolDef {
                 prop.insert("default".into(), default.clone());
             }
             if let Some(min) = param.minimum {
-                prop.insert("minimum".into(), serde_json::Value::Number(
-                    serde_json::Number::from_f64(min).unwrap_or(serde_json::Number::from(0)),
-                ));
+                prop.insert(
+                    "minimum".into(),
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(min).unwrap_or(serde_json::Number::from(0)),
+                    ),
+                );
             }
             if let Some(max) = param.maximum {
-                prop.insert("maximum".into(), serde_json::Value::Number(
-                    serde_json::Number::from_f64(max).unwrap_or(serde_json::Number::from(0)),
-                ));
+                prop.insert(
+                    "maximum".into(),
+                    serde_json::Value::Number(
+                        serde_json::Number::from_f64(max).unwrap_or(serde_json::Number::from(0)),
+                    ),
+                );
             }
 
             properties.insert(param_name.clone(), serde_json::Value::Object(prop));
@@ -549,10 +595,11 @@ impl YamlToolDef {
             description.push_str(&format!(" [requires secret: {secret}]"));
         }
         if let Some(ref rs) = self.response_schema
-            && let Ok(pretty) = serde_json::to_string_pretty(rs) {
-                description.push_str("\n\nResponse schema: ");
-                description.push_str(&pretty);
-            }
+            && let Ok(pretty) = serde_json::to_string_pretty(rs)
+        {
+            description.push_str("\n\nResponse schema: ");
+            description.push_str(&pretty);
+        }
 
         ToolDefinition {
             name: self.name.clone(),
@@ -593,9 +640,12 @@ impl YamlToolDef {
                 }
             }
             if let Some(v) = val
-                && param.param_type == "integer" && !v.is_number() && !v.is_null() {
-                    anyhow::bail!("parameter '{name}' must be integer, got {v}");
-                }
+                && param.param_type == "integer"
+                && !v.is_number()
+                && !v.is_null()
+            {
+                anyhow::bail!("parameter '{name}' must be integer, got {v}");
+            }
         }
 
         // 1. Build URL with path parameter substitution
@@ -691,15 +741,18 @@ impl YamlToolDef {
                 "oauth_refresh" => {
                     if let (Some(key), Some(token_url)) = (&auth.key, &auth.token_url) {
                         let refresh_token = resolve_env(key, env_resolver).await?;
-                        let body = auth.token_body.as_deref().unwrap_or(
-                            "grant_type=refresh_token&refresh_token={{bearer}}"
-                        ).replace("{{bearer}}", &refresh_token);
+                        let body = auth
+                            .token_body
+                            .as_deref()
+                            .unwrap_or("grant_type=refresh_token&refresh_token={{bearer}}")
+                            .replace("{{bearer}}", &refresh_token);
                         let token_field = auth.token_field.as_deref().unwrap_or("access_token");
 
                         // SSRF protection: validate token_url before fetching
                         crate::tools::ssrf::validate_url_scheme(token_url)?;
 
-                        let resp = http_client.post(token_url)
+                        let resp = http_client
+                            .post(token_url)
                             .header("Content-Type", "application/x-www-form-urlencoded")
                             .body(body)
                             .send()
@@ -710,23 +763,36 @@ impl YamlToolDef {
                             let status = resp.status();
                             let body = resp.text().await.unwrap_or_default();
                             // Bug 8: redact secrets from OAuth error body before logging
-                            anyhow::bail!("oauth token endpoint returned {status}: {}", crate::redact::redact_secrets(&body));
+                            anyhow::bail!(
+                                "oauth token endpoint returned {status}: {}",
+                                crate::redact::redact_secrets(&body)
+                            );
                         }
 
-                        let json: serde_json::Value = resp.json().await
+                        let json: serde_json::Value = resp
+                            .json()
+                            .await
                             .map_err(|e| anyhow::anyhow!("oauth token response not JSON: {e}"))?;
-                        let access_token = json.get(token_field)
+                        let access_token = json
+                            .get(token_field)
                             .and_then(|v| v.as_str())
-                            .ok_or_else(|| anyhow::anyhow!("oauth response missing '{token_field}' field"))?;
-                        auth_headers.push(("Authorization".into(), format!("Bearer {access_token}")));
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("oauth response missing '{token_field}' field")
+                            })?;
+                        auth_headers
+                            .push(("Authorization".into(), format!("Bearer {access_token}")));
                     }
                 }
                 "oauth_provider" => {
-                    let provider = auth.key.as_deref()
-                        .ok_or_else(|| anyhow::anyhow!("oauth_provider auth requires 'key' field (provider name)"))?;
+                    let provider = auth.key.as_deref().ok_or_else(|| {
+                        anyhow::anyhow!("oauth_provider auth requires 'key' field (provider name)")
+                    })?;
                     let ctx = oauth_context
                         .ok_or_else(|| anyhow::anyhow!("oauth_provider auth for '{provider}' requires OAuth connection — connect via /integrations"))?;
-                    let token = ctx.manager.get_token(provider, &ctx.agent_id).await
+                    let token = ctx
+                        .manager
+                        .get_token(provider, &ctx.agent_id)
+                        .await
                         .map_err(|e| anyhow::anyhow!("OAuth token for {provider}: {e}"))?;
                     auth_headers.push(("Authorization".into(), format!("Bearer {token}")));
                 }
@@ -753,7 +819,7 @@ impl YamlToolDef {
         for (k, v) in auth_headers {
             builder = builder.header(k, v);
         }
-        // Caller-injected headers (e.g. X-Hydeclaw-Provider for per-agent TTS routing).
+        // Caller-injected headers (e.g. X-Opex-Provider for per-agent TTS routing).
         // Applied LAST so they take precedence over anything declared in the YAML def.
         for (k, v) in injected_headers {
             builder = builder.header(k, v);
@@ -832,20 +898,27 @@ impl YamlToolDef {
                             // would otherwise let an agent fetch
                             // http://169.254.169.254/... or any internal
                             // service.
-                            crate::net::ssrf::validate_url_scheme(&val_str)
-                                .map_err(|e| anyhow::anyhow!(
+                            crate::net::ssrf::validate_url_scheme(&val_str).map_err(|e| {
+                                anyhow::anyhow!(
                                     "rejected file URL '{val_str}' for multipart upload: {e}"
-                                ))?;
+                                )
+                            })?;
                             let ssrf_client = ssrf_multipart_client();
-                            let bytes = ssrf_client.get(&val_str).send().await
+                            let bytes = ssrf_client
+                                .get(&val_str)
+                                .send()
+                                .await
                                 .context("failed to download file for multipart")?
-                                .bytes().await.context("failed to read file bytes")?;
-                            let filename = body_params.get("file_name")
+                                .bytes()
+                                .await
+                                .context("failed to read file bytes")?;
+                            let filename = body_params
+                                .get("file_name")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("file")
                                 .to_string();
-                            let part = reqwest::multipart::Part::bytes(bytes.to_vec())
-                                .file_name(filename);
+                            let part =
+                                reqwest::multipart::Part::bytes(bytes.to_vec()).file_name(filename);
                             form = form.part(name.clone(), part);
                         } else {
                             form = form.text(name.clone(), val_str);
@@ -853,13 +926,16 @@ impl YamlToolDef {
                     }
                     builder = builder.multipart(form);
                 } else if self.content_type == "application/x-www-form-urlencoded" {
-                    let form_body: Vec<(String, String)> = body_params.iter().map(|(k, v)| {
-                        let val_str = match v {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        (k.clone(), val_str)
-                    }).collect();
+                    let form_body: Vec<(String, String)> = body_params
+                        .iter()
+                        .map(|(k, v)| {
+                            let val_str = match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                other => other.to_string(),
+                            };
+                            (k.clone(), val_str)
+                        })
+                        .collect();
                     builder = builder.form(&form_body);
                 } else {
                     builder = builder.json(&serde_json::Value::Object(body_params));
@@ -868,13 +944,10 @@ impl YamlToolDef {
         }
 
         // Apply per-tool timeout
-        tokio::time::timeout(
-            std::time::Duration::from_secs(self.timeout),
-            builder.send(),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("tool '{}' timed out after {}s", self.name, self.timeout))?
-        .context("HTTP request failed")
+        tokio::time::timeout(std::time::Duration::from_secs(self.timeout), builder.send())
+            .await
+            .map_err(|_| anyhow::anyhow!("tool '{}' timed out after {}s", self.name, self.timeout))?
+            .context("HTTP request failed")
     }
 
     /// Max retry attempts (from config or default 1 = no retry).
@@ -884,7 +957,9 @@ impl YamlToolDef {
 
     /// Check if status code is retryable.
     fn is_retryable(&self, status: u16) -> bool {
-        self.retry.as_ref().is_some_and(|r| r.retry_on.contains(&status))
+        self.retry
+            .as_ref()
+            .is_some_and(|r| r.retry_on.contains(&status))
     }
 
     /// Backoff base in ms.
@@ -900,7 +975,8 @@ impl YamlToolDef {
         env_resolver: Option<&dyn EnvResolver>,
         oauth_context: Option<&OAuthContext>,
     ) -> Result<String> {
-        self.execute_with_ctx(params, http_client, env_resolver, oauth_context, &[]).await
+        self.execute_with_ctx(params, http_client, env_resolver, oauth_context, &[])
+            .await
     }
 
     /// Execute the tool, injecting OAuth bearer credentials when `oauth_context` is provided.
@@ -916,7 +992,16 @@ impl YamlToolDef {
     ) -> Result<String> {
         // Pagination: auto-fetch multiple pages if configured
         if let Some(ref pagination) = self.pagination {
-            return self.execute_paginated(params, http_client, env_resolver, pagination, oauth_context, injected_headers).await;
+            return self
+                .execute_paginated(
+                    params,
+                    http_client,
+                    env_resolver,
+                    pagination,
+                    oauth_context,
+                    injected_headers,
+                )
+                .await;
         }
 
         let start = std::time::Instant::now();
@@ -925,16 +1010,30 @@ impl YamlToolDef {
 
         for attempt in 0..max {
             if attempt > 0 {
-                let delay = self.backoff_base_ms().saturating_mul(2u64.saturating_pow(attempt.min(63) - 1));
+                let delay = self
+                    .backoff_base_ms()
+                    .saturating_mul(2u64.saturating_pow(attempt.min(63) - 1));
                 tracing::warn!(tool = %self.name, attempt, delay_ms = delay, "retrying yaml tool");
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let resp = match self.send_request(params, http_client, env_resolver, oauth_context, injected_headers).await {
+            let resp = match self
+                .send_request(
+                    params,
+                    http_client,
+                    env_resolver,
+                    oauth_context,
+                    injected_headers,
+                )
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     last_err = Some(e);
-                    if attempt + 1 < max { continue; }                    break;
+                    if attempt + 1 < max {
+                        continue;
+                    }
+                    break;
                 }
             };
             let status = resp.status();
@@ -952,22 +1051,24 @@ impl YamlToolDef {
                 let mut result_body = body;
                 if let Some(ref path) = self.response_transform
                     && let Ok(json) = serde_json::from_str::<serde_json::Value>(&result_body)
-                        && let Some(extracted) = apply_jsonpath(&json, path) {
-                            result_body = match extracted {
-                                serde_json::Value::String(s) => s,
-                                other => other.to_string(),
-                            };
-                        }
+                    && let Some(extracted) = apply_jsonpath(&json, path)
+                {
+                    result_body = match extracted {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                }
 
                 // Apply response pipeline if configured
                 if !self.response_pipeline.is_empty()
-                    && let Ok(json) = serde_json::from_str::<serde_json::Value>(&result_body) {
-                        let transformed = apply_pipeline(json, &self.response_pipeline);
-                        result_body = match transformed {
-                            serde_json::Value::String(s) => s,
-                            other => other.to_string(),
-                        };
-                    }
+                    && let Ok(json) = serde_json::from_str::<serde_json::Value>(&result_body)
+                {
+                    let transformed = apply_pipeline(json, &self.response_pipeline);
+                    result_body = match transformed {
+                        serde_json::Value::String(s) => s,
+                        other => other.to_string(),
+                    };
+                }
 
                 return Ok(result_body);
             }
@@ -975,15 +1076,27 @@ impl YamlToolDef {
             // Check if retryable
             if attempt + 1 < max && self.is_retryable(status.as_u16()) {
                 // Bug 10: redact secrets from audit/retry error bodies
-                last_err = Some(anyhow::anyhow!("tool '{}' returned HTTP {}: {}", self.name, status, crate::redact::redact_secrets(&body)));
+                last_err = Some(anyhow::anyhow!(
+                    "tool '{}' returned HTTP {}: {}",
+                    self.name,
+                    status,
+                    crate::redact::redact_secrets(&body)
+                ));
                 continue;
             }
 
             // Bug 7: redact secrets from error response bodies
-            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, crate::redact::redact_secrets(&body));
+            anyhow::bail!(
+                "tool '{}' returned HTTP {}: {}",
+                self.name,
+                status,
+                crate::redact::redact_secrets(&body)
+            );
         }
 
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)))
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)
+        }))
     }
 
     /// Execute with automatic pagination.
@@ -1034,7 +1147,10 @@ impl YamlToolDef {
                     }
                     "cursor" => {
                         if let Some(ref c) = cursor {
-                            obj.insert(pagination.param.clone(), serde_json::Value::String(c.clone()));
+                            obj.insert(
+                                pagination.param.clone(),
+                                serde_json::Value::String(c.clone()),
+                            );
                         } else if page > 0 {
                             break; // No next cursor
                         }
@@ -1047,7 +1163,15 @@ impl YamlToolDef {
             }
 
             // Use a clone without pagination to avoid recursion
-            let body = self.execute_single(&page_params, http_client, env_resolver, oauth_context, injected_headers).await?;
+            let body = self
+                .execute_single(
+                    &page_params,
+                    http_client,
+                    env_resolver,
+                    oauth_context,
+                    injected_headers,
+                )
+                .await?;
 
             // Bug 9: enforce per-page size contribution to the total-bytes cap.
             total_bytes += body.len();
@@ -1060,7 +1184,8 @@ impl YamlToolDef {
                     "pagination total size cap reached; returning partial results"
                 );
                 // Still parse and include the current page up to the cap, then stop.
-                let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
+                let json: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
                 let items = if let Some(ref rp) = pagination.results_path {
                     apply_jsonpath(&json, rp).unwrap_or(json.clone())
                 } else {
@@ -1072,7 +1197,8 @@ impl YamlToolDef {
             }
 
             // Extract results
-            let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
+            let json: serde_json::Value =
+                serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
             let items = if let Some(ref rp) = pagination.results_path {
                 apply_jsonpath(&json, rp).unwrap_or(json.clone())
             } else {
@@ -1087,7 +1213,9 @@ impl YamlToolDef {
 
             // Extract next cursor
             if pagination.pagination_type == "cursor" {
-                cursor = pagination.next_path.as_ref()
+                cursor = pagination
+                    .next_path
+                    .as_ref()
                     .and_then(|np| apply_jsonpath(&json, np))
                     .and_then(|v| v.as_str().map(std::string::ToString::to_string));
                 if cursor.is_none() {
@@ -1114,15 +1242,29 @@ impl YamlToolDef {
 
         for attempt in 0..max {
             if attempt > 0 {
-                let delay = self.backoff_base_ms().saturating_mul(2u64.saturating_pow(attempt.min(63) - 1));
+                let delay = self
+                    .backoff_base_ms()
+                    .saturating_mul(2u64.saturating_pow(attempt.min(63) - 1));
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let resp = match self.send_request(params, http_client, env_resolver, oauth_context, injected_headers).await {
+            let resp = match self
+                .send_request(
+                    params,
+                    http_client,
+                    env_resolver,
+                    oauth_context,
+                    injected_headers,
+                )
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     last_err = Some(e);
-                    if attempt + 1 < max { continue; }                    break;
+                    if attempt + 1 < max {
+                        continue;
+                    }
+                    break;
                 }
             };
             let status = resp.status();
@@ -1133,14 +1275,24 @@ impl YamlToolDef {
             }
             if attempt + 1 < max && self.is_retryable(status.as_u16()) {
                 // Bug 10: redact secrets from error bodies surfaced by pagination sub-calls
-                last_err = Some(anyhow::anyhow!("HTTP {status}: {}", crate::redact::redact_secrets(&body)));
+                last_err = Some(anyhow::anyhow!(
+                    "HTTP {status}: {}",
+                    crate::redact::redact_secrets(&body)
+                ));
                 continue;
             }
             // Bug 7: redact secrets from error response bodies
-            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, crate::redact::redact_secrets(&body));
+            anyhow::bail!(
+                "tool '{}' returned HTTP {}: {}",
+                self.name,
+                status,
+                crate::redact::redact_secrets(&body)
+            );
         }
 
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)))
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)
+        }))
     }
 
     /// Execute this tool and return the raw binary response body.
@@ -1158,15 +1310,29 @@ impl YamlToolDef {
 
         for attempt in 0..max {
             if attempt > 0 {
-                let delay = self.backoff_base_ms().saturating_mul(2u64.saturating_pow(attempt.min(63) - 1));
+                let delay = self
+                    .backoff_base_ms()
+                    .saturating_mul(2u64.saturating_pow(attempt.min(63) - 1));
                 tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
 
-            let resp = match self.send_request(params, http_client, env_resolver, oauth_context, injected_headers).await {
+            let resp = match self
+                .send_request(
+                    params,
+                    http_client,
+                    env_resolver,
+                    oauth_context,
+                    injected_headers,
+                )
+                .await
+            {
                 Ok(r) => r,
                 Err(e) => {
                     last_err = Some(e);
-                    if attempt + 1 < max { continue; }                    break;
+                    if attempt + 1 < max {
+                        continue;
+                    }
+                    break;
                 }
             };
             let status = resp.status();
@@ -1174,10 +1340,14 @@ impl YamlToolDef {
             if status.is_success() {
                 const MAX_BINARY_SIZE: usize = 50 * 1024 * 1024; // 50MB
                 if let Some(cl) = resp.content_length()
-                    && cl > MAX_BINARY_SIZE as u64 {
-                        anyhow::bail!("response too large: {cl} bytes (max {MAX_BINARY_SIZE})");
-                    }
-                let bytes = resp.bytes().await.context("failed to read response bytes")?;
+                    && cl > MAX_BINARY_SIZE as u64
+                {
+                    anyhow::bail!("response too large: {cl} bytes (max {MAX_BINARY_SIZE})");
+                }
+                let bytes = resp
+                    .bytes()
+                    .await
+                    .context("failed to read response bytes")?;
                 if bytes.len() > MAX_BINARY_SIZE {
                     anyhow::bail!(
                         "binary response too large: {} bytes (max {})",
@@ -1191,15 +1361,27 @@ impl YamlToolDef {
             let body = resp.text().await.unwrap_or_default();
             if attempt + 1 < max && self.is_retryable(status.as_u16()) {
                 // Bug 10: redact secrets from binary-tool error bodies
-                last_err = Some(anyhow::anyhow!("tool '{}' returned HTTP {}: {}", self.name, status, crate::redact::redact_secrets(&body)));
+                last_err = Some(anyhow::anyhow!(
+                    "tool '{}' returned HTTP {}: {}",
+                    self.name,
+                    status,
+                    crate::redact::redact_secrets(&body)
+                ));
                 continue;
             }
 
             // Bug 7: redact secrets from binary-tool error response bodies
-            anyhow::bail!("tool '{}' returned HTTP {}: {}", self.name, status, crate::redact::redact_secrets(&body));
+            anyhow::bail!(
+                "tool '{}' returned HTTP {}: {}",
+                self.name,
+                status,
+                crate::redact::redact_secrets(&body)
+            );
         }
 
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)))
+        Err(last_err.unwrap_or_else(|| {
+            anyhow::anyhow!("tool '{}' failed after {} attempts", self.name, max)
+        }))
     }
 }
 
@@ -1211,7 +1393,9 @@ fn apply_jsonpath(value: &serde_json::Value, path: &str) -> Option<serde_json::V
     }
     let mut current = value.clone();
     for segment in path.split('.') {
-        if segment.is_empty() { continue; }
+        if segment.is_empty() {
+            continue;
+        }
         // Handle array index: "items[0]", "items[*]", "items[-1]", "items[0:3]"
         if let Some(bracket) = segment.find('[') {
             let key = &segment[..bracket];
@@ -1222,14 +1406,19 @@ fn apply_jsonpath(value: &serde_json::Value, path: &str) -> Option<serde_json::V
 
             if idx_str == "*" {
                 // Return all elements as-is (already an array)
-                if !current.is_array() { return None; }
+                if !current.is_array() {
+                    return None;
+                }
                 // Continue processing — current is the array
             } else if idx_str.contains(':') {
                 // Slice: [start:end]
                 let arr = current.as_array()?;
                 let parts: Vec<&str> = idx_str.splitn(2, ':').collect();
                 let start: usize = parts[0].parse().unwrap_or(0);
-                let end: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(arr.len());
+                let end: usize = parts
+                    .get(1)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(arr.len());
                 let end = end.min(arr.len());
                 return Some(serde_json::Value::Array(arr[start..end].to_vec()));
             } else if idx_str.starts_with('-') {
@@ -1251,38 +1440,57 @@ fn apply_jsonpath(value: &serde_json::Value, path: &str) -> Option<serde_json::V
 }
 
 /// Process conditional blocks: {{#if param}}...{{/if}} and {{#unless param}}...{{/unless}}.
-fn process_conditionals(template: &str, params: &serde_json::Map<String, serde_json::Value>) -> String {
+fn process_conditionals(
+    template: &str,
+    params: &serde_json::Map<String, serde_json::Value>,
+) -> String {
     let mut result = template.to_string();
 
     // Process {{#if param}}...{{/if}}
     while let Some(start) = result.find("{{#if ") {
         let after_tag = start + 6; // length of "{{#if "
-        let Some(close_tag) = result[after_tag..].find("}}") else { break };
+        let Some(close_tag) = result[after_tag..].find("}}") else {
+            break;
+        };
         let param_name = &result[after_tag..after_tag + close_tag];
         let block_start = after_tag + close_tag + 2;
         let end_tag = "{{/if}}";
-        let Some(end_pos) = result[block_start..].find(end_tag) else { break };
+        let Some(end_pos) = result[block_start..].find(end_tag) else {
+            break;
+        };
         let block_content = &result[block_start..block_start + end_pos];
         let full_end = block_start + end_pos + end_tag.len();
 
         let has_value = params.get(param_name).is_some_and(|v| !v.is_null());
-        let replacement = if has_value { block_content.to_string() } else { String::new() };
+        let replacement = if has_value {
+            block_content.to_string()
+        } else {
+            String::new()
+        };
         result = format!("{}{}{}", &result[..start], replacement, &result[full_end..]);
     }
 
     // Process {{#unless param}}...{{/unless}}
     while let Some(start) = result.find("{{#unless ") {
         let after_tag = start + 10; // length of "{{#unless "
-        let Some(close_tag) = result[after_tag..].find("}}") else { break };
+        let Some(close_tag) = result[after_tag..].find("}}") else {
+            break;
+        };
         let param_name = &result[after_tag..after_tag + close_tag];
         let block_start = after_tag + close_tag + 2;
         let end_tag = "{{/unless}}";
-        let Some(end_pos) = result[block_start..].find(end_tag) else { break };
+        let Some(end_pos) = result[block_start..].find(end_tag) else {
+            break;
+        };
         let block_content = &result[block_start..block_start + end_pos];
         let full_end = block_start + end_pos + end_tag.len();
 
         let has_value = params.get(param_name).is_some_and(|v| !v.is_null());
-        let replacement = if has_value { String::new() } else { block_content.to_string() };
+        let replacement = if has_value {
+            String::new()
+        } else {
+            block_content.to_string()
+        };
         result = format!("{}{}{}", &result[..start], replacement, &result[full_end..]);
     }
 
@@ -1320,9 +1528,13 @@ pub(crate) async fn render_body_template(
     let mut start = 0;
     while let Some(open) = after_env[start..].find("${") {
         let abs_open = start + open;
-        let Some(close_rel) = after_env[abs_open..].find('}') else { break };
+        let Some(close_rel) = after_env[abs_open..].find('}') else {
+            break;
+        };
         let var_name = &after_env[abs_open + 2..abs_open + close_rel];
-        let raw = resolve_env(var_name, env_resolver).await.unwrap_or_default();
+        let raw = resolve_env(var_name, env_resolver)
+            .await
+            .unwrap_or_default();
         let escaped = json_escape(&raw);
         after_env = format!(
             "{}{}{}",
@@ -1355,8 +1567,15 @@ async fn resolve_env_template(template: &str, env_resolver: Option<&dyn EnvResol
         let abs_open = start + open;
         if let Some(close) = result[abs_open..].find('}') {
             let var_name = &result[abs_open + 2..abs_open + close];
-            let value = resolve_env(var_name, env_resolver).await.unwrap_or_default();
-            result = format!("{}{}{}", &result[..abs_open], value, &result[abs_open + close + 1..]);
+            let value = resolve_env(var_name, env_resolver)
+                .await
+                .unwrap_or_default();
+            result = format!(
+                "{}{}{}",
+                &result[..abs_open],
+                value,
+                &result[abs_open + close + 1..]
+            );
             start = abs_open + value.len();
         } else {
             break;
@@ -1372,10 +1591,7 @@ async fn resolve_env_template(template: &str, env_resolver: Option<&dyn EnvResol
 /// Status is determined by the `status` field in each YAML file.
 /// When `include_draft` is true, also includes draft tools.
 /// Disabled tools are never loaded.
-pub async fn load_yaml_tools(
-    workspace_dir: &str,
-    include_draft: bool,
-) -> Vec<YamlToolDef> {
+pub async fn load_yaml_tools(workspace_dir: &str, include_draft: bool) -> Vec<YamlToolDef> {
     let dir = Path::new(workspace_dir).join("tools");
     let mut tools = load_from_dir(&dir).await;
 
@@ -1439,10 +1655,11 @@ async fn load_from_dir(dir: &Path) -> Vec<YamlToolDef> {
                 .unwrap_or("")
                 .to_string();
             if let Ok(content) = fs::read_to_string(&path).await
-                && let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
-                    tracing::debug!(template = %name, "loaded YAML tool template");
-                    templates.insert(name, val);
-                }
+                && let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&content)
+            {
+                tracing::debug!(template = %name, "loaded YAML tool template");
+                templates.insert(name, val);
+            }
         }
     }
 
@@ -1522,10 +1739,7 @@ pub async fn load_all_yaml_tools(workspace_dir: &str) -> Vec<YamlToolDef> {
 }
 
 /// Find a YAML tool by name, searching root, verified, and draft directories.
-pub async fn find_yaml_tool(
-    workspace_dir: &str,
-    tool_name: &str,
-) -> Option<YamlToolDef> {
+pub async fn find_yaml_tool(workspace_dir: &str, tool_name: &str) -> Option<YamlToolDef> {
     let tools = load_yaml_tools(workspace_dir, true).await;
     tools.into_iter().find(|t| t.name == tool_name)
 }
@@ -1548,21 +1762,34 @@ pub fn openapi_security_to_yaml_auth(scheme: &serde_json::Value) -> Option<YamlA
     match scheme_type {
         "apiKey" => {
             let location = scheme.get("in")?.as_str()?;
-            let name = scheme.get("name").and_then(|n| n.as_str()).map(String::from);
+            let name = scheme
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(String::from);
             match location {
                 "header" => Some(YamlAuth {
                     auth_type: "api_key_header".into(),
                     header_name: name,
-                    key: None, username_key: None, password_key: None,
-                    param_name: None, headers: None, token_url: None,
-                    token_body: None, token_field: None,
+                    key: None,
+                    username_key: None,
+                    password_key: None,
+                    param_name: None,
+                    headers: None,
+                    token_url: None,
+                    token_body: None,
+                    token_field: None,
                 }),
                 "query" => Some(YamlAuth {
                     auth_type: "api_key_query".into(),
                     param_name: name,
-                    key: None, username_key: None, password_key: None,
-                    header_name: None, headers: None, token_url: None,
-                    token_body: None, token_field: None,
+                    key: None,
+                    username_key: None,
+                    password_key: None,
+                    header_name: None,
+                    headers: None,
+                    token_url: None,
+                    token_body: None,
+                    token_field: None,
                 }),
                 _ => None,
             }
@@ -1572,24 +1799,42 @@ pub fn openapi_security_to_yaml_auth(scheme: &serde_json::Value) -> Option<YamlA
             match http_scheme {
                 "bearer" => Some(YamlAuth {
                     auth_type: "bearer_env".into(),
-                    key: None, username_key: None, password_key: None,
-                    header_name: None, param_name: None, headers: None,
-                    token_url: None, token_body: None, token_field: None,
+                    key: None,
+                    username_key: None,
+                    password_key: None,
+                    header_name: None,
+                    param_name: None,
+                    headers: None,
+                    token_url: None,
+                    token_body: None,
+                    token_field: None,
                 }),
                 "basic" => Some(YamlAuth {
                     auth_type: "basic_env".into(),
-                    key: None, username_key: None, password_key: None,
-                    header_name: None, param_name: None, headers: None,
-                    token_url: None, token_body: None, token_field: None,
+                    key: None,
+                    username_key: None,
+                    password_key: None,
+                    header_name: None,
+                    param_name: None,
+                    headers: None,
+                    token_url: None,
+                    token_body: None,
+                    token_field: None,
                 }),
                 _ => None,
             }
         }
         "oauth2" => Some(YamlAuth {
             auth_type: "oauth_refresh".into(),
-            key: None, username_key: None, password_key: None,
-            header_name: None, param_name: None, headers: None,
-            token_url: None, token_body: None, token_field: None,
+            key: None,
+            username_key: None,
+            password_key: None,
+            header_name: None,
+            param_name: None,
+            headers: None,
+            token_url: None,
+            token_body: None,
+            token_field: None,
         }),
         _ => None,
     }
@@ -1623,7 +1868,10 @@ mod tests {
         // Bug 7/8/10: Bearer tokens in error bodies must be redacted.
         let input = r#"{"error":"invalid request","Authorization":"Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"}"#;
         let out = crate::redact::redact_secrets(input);
-        assert!(!out.contains("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"), "raw JWT must not appear: {out}");
+        assert!(
+            !out.contains("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"),
+            "raw JWT must not appear: {out}"
+        );
         assert!(out.contains("[REDACTED]"), "must contain [REDACTED]: {out}");
     }
 
@@ -1640,7 +1888,11 @@ mod tests {
         // Bodies longer than ERROR_BODY_MAX_CHARS must be truncated.
         let long = "x".repeat(ERROR_BODY_MAX_CHARS + 100);
         let out = crate::redact::redact_secrets(&long);
-        assert_eq!(out.len(), ERROR_BODY_MAX_CHARS, "output must be truncated to {ERROR_BODY_MAX_CHARS} chars");
+        assert_eq!(
+            out.len(),
+            ERROR_BODY_MAX_CHARS,
+            "output must be truncated to {ERROR_BODY_MAX_CHARS} chars"
+        );
     }
 
     #[test]
@@ -1654,7 +1906,10 @@ mod tests {
     fn redact_secrets_api_key_pattern_redacted() {
         let input = "invalid api_key abcdef123456 provided";
         let out = crate::redact::redact_secrets(input);
-        assert!(!out.contains("abcdef123456"), "api_key value must be redacted: {out}");
+        assert!(
+            !out.contains("abcdef123456"),
+            "api_key value must be redacted: {out}"
+        );
         assert!(out.contains("[REDACTED]"), "must contain [REDACTED]: {out}");
     }
 
@@ -1718,13 +1973,17 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_env_template_no_pattern() {
-        assert_eq!(resolve_env_template("plain string", None).await, "plain string");
+        assert_eq!(
+            resolve_env_template("plain string", None).await,
+            "plain string"
+        );
     }
 
     #[tokio::test]
     async fn resolve_env_template_nonexistent_var() {
         // Use a var name that is extremely unlikely to exist
-        let result = resolve_env_template("prefix-${__HYDECLAW_TEST_NONEXISTENT_XYZ__}-suffix", None).await;
+        let result =
+            resolve_env_template("prefix-${__OPEX_TEST_NONEXISTENT_XYZ__}-suffix", None).await;
         assert_eq!(result, "prefix--suffix");
     }
 
@@ -1738,13 +1997,15 @@ mod tests {
                 self.0.get(key).cloned()
             }
         }
-        let resolver = MapResolver(HashMap::from([
-            ("__HYDECLAW_YAML_TOOLS_TEST_VAR__".into(), "resolved_value".into()),
-        ]));
+        let resolver = MapResolver(HashMap::from([(
+            "__OPEX_YAML_TOOLS_TEST_VAR__".into(),
+            "resolved_value".into(),
+        )]));
         let result = resolve_env_template(
-            "Bearer ${__HYDECLAW_YAML_TOOLS_TEST_VAR__}",
+            "Bearer ${__OPEX_YAML_TOOLS_TEST_VAR__}",
             Some(&resolver),
-        ).await;
+        )
+        .await;
         assert_eq!(result, "Bearer resolved_value");
     }
 
@@ -1842,8 +2103,14 @@ mod tests {
         let required = td.input_schema["required"].as_array().unwrap();
         let required_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
         assert!(required_names.contains(&"query"), "query must be required");
-        assert!(!required_names.contains(&"format"), "format must not be required");
-        assert!(!required_names.contains(&"count"), "count must not be required");
+        assert!(
+            !required_names.contains(&"format"),
+            "format must not be required"
+        );
+        assert!(
+            !required_names.contains(&"count"),
+            "count must not be required"
+        );
     }
 
     #[test]
@@ -1901,7 +2168,10 @@ mod tests {
     #[test]
     fn tool_file_path_builds_correct_path() {
         let path = tool_file_path("/workspace", &ToolStatus::Verified, "my_tool");
-        assert_eq!(path, std::path::PathBuf::from("/workspace/tools/my_tool.yaml"));
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/workspace/tools/my_tool.yaml")
+        );
     }
 
     #[test]
@@ -1973,7 +2243,11 @@ method: GET
         #[async_trait]
         impl EnvResolver for TestResolver {
             async fn resolve(&self, key: &str) -> Option<String> {
-                if key == "MY_SCOPED_KEY" { Some("scoped_value".into()) } else { None }
+                if key == "MY_SCOPED_KEY" {
+                    Some("scoped_value".into())
+                } else {
+                    None
+                }
             }
         }
         let result = resolve_env_template("Bearer ${MY_SCOPED_KEY}", Some(&TestResolver)).await;
@@ -1986,13 +2260,21 @@ method: GET
         struct EmptyResolver;
         #[async_trait]
         impl EnvResolver for EmptyResolver {
-            async fn resolve(&self, _: &str) -> Option<String> { None }
+            async fn resolve(&self, _: &str) -> Option<String> {
+                None
+            }
         }
         // EmptyResolver returns None -> resolve_env falls back to std::env::var
         let result = resolve_env_template("x${PATH}y", Some(&EmptyResolver)).await;
         // PATH always exists and is non-empty, so result should be "x<PATH_VALUE>y"
-        assert!(result.starts_with("x"), "result should start with 'x': {result}");
-        assert!(result.ends_with("y"), "result should end with 'y': {result}");
+        assert!(
+            result.starts_with("x"),
+            "result should start with 'x': {result}"
+        );
+        assert!(
+            result.ends_with("y"),
+            "result should end with 'y': {result}"
+        );
         assert!(result.len() > 2, "PATH should be non-empty");
         assert!(!result.contains("${PATH}"), "variable should be resolved");
     }
@@ -2165,66 +2447,83 @@ pagination:
     #[test]
     fn jsonpath_negative_index() {
         let val = serde_json::json!({"items": [10, 20, 30]});
-        assert_eq!(apply_jsonpath(&val, "$.items[-1]"), Some(serde_json::json!(30)));
+        assert_eq!(
+            apply_jsonpath(&val, "$.items[-1]"),
+            Some(serde_json::json!(30))
+        );
     }
 
     #[test]
     fn jsonpath_negative_index_first() {
         let val = serde_json::json!({"items": [10, 20, 30]});
-        assert_eq!(apply_jsonpath(&val, "$.items[-3]"), Some(serde_json::json!(10)));
+        assert_eq!(
+            apply_jsonpath(&val, "$.items[-3]"),
+            Some(serde_json::json!(10))
+        );
     }
 
     #[test]
     fn jsonpath_slice() {
         let val = serde_json::json!({"items": [10, 20, 30, 40]});
-        assert_eq!(apply_jsonpath(&val, "$.items[0:2]"), Some(serde_json::json!([10, 20])));
+        assert_eq!(
+            apply_jsonpath(&val, "$.items[0:2]"),
+            Some(serde_json::json!([10, 20]))
+        );
     }
 
     #[test]
     fn jsonpath_slice_open_end() {
         let val = serde_json::json!({"items": [10, 20, 30]});
-        assert_eq!(apply_jsonpath(&val, "$.items[1:]"), Some(serde_json::json!([20, 30])));
+        assert_eq!(
+            apply_jsonpath(&val, "$.items[1:]"),
+            Some(serde_json::json!([20, 30]))
+        );
     }
 
     // ── Phase 3: conditional templates ───────────────────────────────────────
 
     #[test]
     fn conditional_if_present() {
-        let params = serde_json::json!({"ticker": "AAPL", "period": "1d"}).as_object().unwrap().clone();
+        let params = serde_json::json!({"ticker": "AAPL", "period": "1d"})
+            .as_object()
+            .unwrap()
+            .clone();
         let result = process_conditionals(
             r#"{"ticker":"{{ticker}}"{{#if period}},"period":"{{period}}"{{/if}}}"#,
-            &params
+            &params,
         );
         assert!(result.contains("period"));
     }
 
     #[test]
     fn conditional_if_absent() {
-        let params = serde_json::json!({"ticker": "AAPL"}).as_object().unwrap().clone();
+        let params = serde_json::json!({"ticker": "AAPL"})
+            .as_object()
+            .unwrap()
+            .clone();
         let result = process_conditionals(
             r#"{"ticker":"{{ticker}}"{{#if period}},"period":"{{period}}"{{/if}}}"#,
-            &params
+            &params,
         );
         assert!(!result.contains("period"));
     }
 
     #[test]
     fn conditional_unless_present() {
-        let params = serde_json::json!({"limit": 10}).as_object().unwrap().clone();
-        let result = process_conditionals(
-            "base{{#unless limit}},default_limit{{/unless}}",
-            &params
-        );
+        let params = serde_json::json!({"limit": 10})
+            .as_object()
+            .unwrap()
+            .clone();
+        let result =
+            process_conditionals("base{{#unless limit}},default_limit{{/unless}}", &params);
         assert_eq!(result, "base");
     }
 
     #[test]
     fn conditional_unless_absent() {
         let params = serde_json::Map::new();
-        let result = process_conditionals(
-            "base{{#unless limit}},default_limit{{/unless}}",
-            &params
-        );
+        let result =
+            process_conditionals("base{{#unless limit}},default_limit{{/unless}}", &params);
         assert_eq!(result, "base,default_limit");
     }
 
@@ -2233,7 +2532,8 @@ pagination:
     #[test]
     fn response_schema_appended_to_description() {
         let mut tool = make_test_tool();
-        tool.response_schema = Some(serde_json::json!({"type": "object", "fields": {"price": "current price"}}));
+        tool.response_schema =
+            Some(serde_json::json!({"type": "object", "fields": {"price": "current price"}}));
         let td = tool.to_tool_definition();
         assert!(td.description.contains("Response schema:"));
         assert!(td.description.contains("price"));
@@ -2258,7 +2558,10 @@ variables:
         let cfg: YamlGraphqlConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(cfg.query.contains("stock"));
         assert!(cfg.variables.is_some());
-        assert_eq!(cfg.variables.as_ref().unwrap().get("t").unwrap(), "{{ticker}}");
+        assert_eq!(
+            cfg.variables.as_ref().unwrap().get("t").unwrap(),
+            "{{ticker}}"
+        );
     }
 
     #[test]
@@ -2312,9 +2615,10 @@ graphql:
             {"name": "A", "val": 10},
             {"name": "C", "val": 20},
         ]);
-        let pipeline = vec![
-            ResponsePipelineStep::SortBy { field: "val".into(), desc: false },
-        ];
+        let pipeline = vec![ResponsePipelineStep::SortBy {
+            field: "val".into(),
+            desc: false,
+        }];
         let result = apply_pipeline(data, &pipeline);
         let arr = result.as_array().unwrap();
         assert_eq!(arr[0]["name"], "A");
@@ -2328,9 +2632,10 @@ graphql:
             {"name": "B", "val": 30},
             {"name": "A", "val": 10},
         ]);
-        let pipeline = vec![
-            ResponsePipelineStep::SortBy { field: "val".into(), desc: true },
-        ];
+        let pipeline = vec![ResponsePipelineStep::SortBy {
+            field: "val".into(),
+            desc: true,
+        }];
         let result = apply_pipeline(data, &pipeline);
         let arr = result.as_array().unwrap();
         assert_eq!(arr[0]["name"], "B");
@@ -2447,7 +2752,10 @@ graphql:
         let resolver = MapResolver { map: secrets };
 
         let mut params = serde_json::Map::new();
-        params.insert("to".to_string(), serde_json::Value::String("x@y.com".to_string()));
+        params.insert(
+            "to".to_string(),
+            serde_json::Value::String("x@y.com".to_string()),
+        );
 
         let template = r#"{"server":"${SMTP_HOST}","to":"{{to}}"}"#;
         let rendered = render_body_template(template, &params, Some(&resolver)).await;
@@ -2461,7 +2769,9 @@ graphql:
     #[tokio::test]
     async fn render_body_template_missing_secret_is_empty() {
         use std::collections::HashMap;
-        let resolver = MapResolver { map: HashMap::new() };
+        let resolver = MapResolver {
+            map: HashMap::new(),
+        };
         let params = serde_json::Map::new();
         let template = r#"{"host":"${MISSING}"}"#;
         let rendered = render_body_template(template, &params, Some(&resolver)).await;
@@ -2471,9 +2781,14 @@ graphql:
     #[tokio::test]
     async fn render_body_template_param_with_quotes_is_escaped() {
         use std::collections::HashMap;
-        let resolver = MapResolver { map: HashMap::new() };
+        let resolver = MapResolver {
+            map: HashMap::new(),
+        };
         let mut params = serde_json::Map::new();
-        params.insert("body".to_string(), serde_json::Value::String(r#"hello "world""#.to_string()));
+        params.insert(
+            "body".to_string(),
+            serde_json::Value::String(r#"hello "world""#.to_string()),
+        );
         let template = r#"{"body":"{{body}}"}"#;
         let rendered = render_body_template(template, &params, Some(&resolver)).await;
         let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
@@ -2492,8 +2807,9 @@ graphql:
         let template = r#"{"password":"${PASS}"}"#;
         let rendered = render_body_template(template, &params, Some(&resolver)).await;
 
-        let parsed: serde_json::Value = serde_json::from_str(&rendered)
-            .unwrap_or_else(|e| panic!("render produced invalid JSON with escaped secret: {e} — got: {rendered}"));
+        let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap_or_else(|e| {
+            panic!("render produced invalid JSON with escaped secret: {e} — got: {rendered}")
+        });
         assert_eq!(parsed["password"], r#"p@ss"with\backslash"#);
     }
 
@@ -2509,7 +2825,10 @@ graphql:
         let resolver = MapResolver { map: secrets };
 
         let mut params = serde_json::Map::new();
-        params.insert("to".to_string(), serde_json::Value::String("x@y.com".to_string()));
+        params.insert(
+            "to".to_string(),
+            serde_json::Value::String("x@y.com".to_string()),
+        );
 
         let template = r#"{"smtp":"${SMTP_HOST}","imap":"${IMAP_HOST}","user":"${EMAIL_USER}","pass":"${EMAIL_PASS}","to":"{{to}}"}"#;
         let rendered = render_body_template(template, &params, Some(&resolver)).await;
@@ -2527,9 +2846,14 @@ graphql:
         // when the agent omitted the optional `description` param. Conditional blocks
         // must be stripped if the referenced param is absent.
         use std::collections::HashMap;
-        let resolver = MapResolver { map: HashMap::new() };
+        let resolver = MapResolver {
+            map: HashMap::new(),
+        };
         let mut params = serde_json::Map::new();
-        params.insert("summary".to_string(), serde_json::Value::String("Meet".to_string()));
+        params.insert(
+            "summary".to_string(),
+            serde_json::Value::String("Meet".to_string()),
+        );
         // `description` intentionally absent.
 
         let template = r#"{"summary":"{{summary}}"{{#if description}},"description":"{{description}}"{{/if}}}"#;
@@ -2538,16 +2862,28 @@ graphql:
         let parsed: serde_json::Value = serde_json::from_str(&rendered)
             .unwrap_or_else(|e| panic!("rendered body is not valid JSON: {e} — got: {rendered}"));
         assert_eq!(parsed["summary"], "Meet");
-        assert!(parsed.get("description").is_none(), "description should be absent, was: {:?}", parsed.get("description"));
+        assert!(
+            parsed.get("description").is_none(),
+            "description should be absent, was: {:?}",
+            parsed.get("description")
+        );
     }
 
     #[tokio::test]
     async fn render_body_template_conditional_includes_present_param() {
         use std::collections::HashMap;
-        let resolver = MapResolver { map: HashMap::new() };
+        let resolver = MapResolver {
+            map: HashMap::new(),
+        };
         let mut params = serde_json::Map::new();
-        params.insert("summary".to_string(), serde_json::Value::String("Meet".to_string()));
-        params.insert("description".to_string(), serde_json::Value::String("Weekly sync".to_string()));
+        params.insert(
+            "summary".to_string(),
+            serde_json::Value::String("Meet".to_string()),
+        );
+        params.insert(
+            "description".to_string(),
+            serde_json::Value::String("Weekly sync".to_string()),
+        );
 
         let template = r#"{"summary":"{{summary}}"{{#if description}},"description":"{{description}}"{{/if}}}"#;
         let rendered = render_body_template(template, &params, Some(&resolver)).await;
@@ -2562,9 +2898,14 @@ graphql:
         // Regression: search_web.yaml body_template must not leak literal {{max_results}}
         // or {{provider}} when the model omits those optional params.
         use std::collections::HashMap;
-        let resolver = MapResolver { map: HashMap::new() };
+        let resolver = MapResolver {
+            map: HashMap::new(),
+        };
         let mut params = serde_json::Map::new();
-        params.insert("query".to_string(), serde_json::Value::String("rust".to_string()));
+        params.insert(
+            "query".to_string(),
+            serde_json::Value::String("rust".to_string()),
+        );
         // max_results and provider intentionally absent.
 
         let template = r#"{"query": "{{query}}"{{#if max_results}}, "max_results": {{max_results}}{{/if}}{{#if provider}}, "provider": "{{provider}}"{{/if}}}"#;
@@ -2577,18 +2918,37 @@ graphql:
         let parsed: serde_json::Value = serde_json::from_str(&rendered)
             .unwrap_or_else(|e| panic!("rendered body is not valid JSON: {e} — got: {rendered}"));
         assert_eq!(parsed["query"], "rust");
-        assert!(parsed.get("provider").is_none(), "provider should be absent, was: {:?}", parsed.get("provider"));
-        assert!(parsed.get("max_results").is_none(), "max_results should be absent, was: {:?}", parsed.get("max_results"));
+        assert!(
+            parsed.get("provider").is_none(),
+            "provider should be absent, was: {:?}",
+            parsed.get("provider")
+        );
+        assert!(
+            parsed.get("max_results").is_none(),
+            "max_results should be absent, was: {:?}",
+            parsed.get("max_results")
+        );
     }
 
     #[tokio::test]
     async fn search_web_body_template_includes_all_params_when_present() {
         use std::collections::HashMap;
-        let resolver = MapResolver { map: HashMap::new() };
+        let resolver = MapResolver {
+            map: HashMap::new(),
+        };
         let mut params = serde_json::Map::new();
-        params.insert("query".to_string(), serde_json::Value::String("rust".to_string()));
-        params.insert("max_results".to_string(), serde_json::Value::Number(10.into()));
-        params.insert("provider".to_string(), serde_json::Value::String("searxng".to_string()));
+        params.insert(
+            "query".to_string(),
+            serde_json::Value::String("rust".to_string()),
+        );
+        params.insert(
+            "max_results".to_string(),
+            serde_json::Value::Number(10.into()),
+        );
+        params.insert(
+            "provider".to_string(),
+            serde_json::Value::String("searxng".to_string()),
+        );
 
         let template = r#"{"query": "{{query}}"{{#if max_results}}, "max_results": {{max_results}}{{/if}}{{#if provider}}, "provider": "{{provider}}"{{/if}}}"#;
         let rendered = render_body_template(template, &params, Some(&resolver)).await;
@@ -2623,9 +2983,7 @@ graphql:
         http: &reqwest::Client,
     ) -> Result<String, String> {
         let cache_key = match &tool.cache {
-            Some(cfg)
-                if tool.channel_action.is_none() && tool.pagination.is_none() =>
-            {
+            Some(cfg) if tool.channel_action.is_none() && tool.pagination.is_none() => {
                 Some(build_cache_key(
                     &tool.name,
                     &tool.method,
@@ -2680,8 +3038,12 @@ graphql:
         let http = reqwest::Client::new();
         let args = serde_json::json!({"q": "hello"});
 
-        let r1 = dispatch_with_cache(&tool, &args, &ctx, &http).await.expect("call 1");
-        let r2 = dispatch_with_cache(&tool, &args, &ctx, &http).await.expect("call 2");
+        let r1 = dispatch_with_cache(&tool, &args, &ctx, &http)
+            .await
+            .expect("call 1");
+        let r2 = dispatch_with_cache(&tool, &args, &ctx, &http)
+            .await
+            .expect("call 2");
         assert_eq!(r1, r2, "second call must return same body from cache");
     }
 
@@ -2742,8 +3104,13 @@ graphql:
         let args = serde_json::json!({"q": "x"});
         let r1 = dispatch_with_cache(&tool, &args, &ctx, &http).await;
         assert!(r1.is_err(), "first call returns Err for 500");
-        let r2 = dispatch_with_cache(&tool, &args, &ctx, &http).await.expect("call 2");
-        assert!(r2.contains("ok"), "second call must hit the 200 branch, not a cached 500");
+        let r2 = dispatch_with_cache(&tool, &args, &ctx, &http)
+            .await
+            .expect("call 2");
+        assert!(
+            r2.contains("ok"),
+            "second call must hit the 200 branch, not a cached 500"
+        );
     }
 
     #[tokio::test]
@@ -2753,9 +3120,7 @@ graphql:
         let mock = MockServer::start().await;
         Mock::given(wm_method("GET"))
             .and(wm_path("/v"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_bytes(vec![0x01, 0x02, 0x03]),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x01, 0x02, 0x03]))
             .expect(2)
             .mount(&mock)
             .await;

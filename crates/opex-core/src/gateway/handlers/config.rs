@@ -76,13 +76,13 @@ pub(crate) async fn api_tts_voices(
     };
     let url = format!("{}/audio/voices", base.trim_end_matches('/'));
     let client = TOOLGATE_CLIENT.get_or_init(reqwest::Client::new);
-    // Optional provider override: ?provider=<name> → X-Hydeclaw-Provider header.
+    // Optional provider override: ?provider=<name> → X-Opex-Provider header.
     // toolgate's require_provider("tts") honors this header and uses the named
     // provider instead of the global active one — letting the UI fetch voice
     // lists for any TTS provider, not only the currently active one.
     let mut req = client.get(&url).timeout(std::time::Duration::from_secs(5));
     if let Some(prov) = params.get("provider").filter(|s| !s.is_empty()) {
-        req = req.header("X-Hydeclaw-Provider", prov);
+        req = req.header("X-Opex-Provider", prov);
     }
     match req.send().await {
         Ok(resp) if resp.status().is_success() => {

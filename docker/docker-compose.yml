@@ -3,7 +3,7 @@ services:
   # Infrastructure (always on)
   # ═══════════════════════════════════════════════════
   postgres:
-    image: hydeclaw-pg:17-age-pgvector
+    image: opex-pg:17-age-pgvector
     mem_limit: ${POSTGRES_MEM_LIMIT:-2g}
     cpus: ${POSTGRES_CPUS:-1.5}
     build:
@@ -12,7 +12,7 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_DB: hydeclaw
+      POSTGRES_DB: opex
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
@@ -20,11 +20,11 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U hydeclaw" ]
+      test: [ "CMD-SHELL", "pg_isready -U opex" ]
       interval: 5s
       timeout: 3s
       retries: 5
-    networks: [ hydeclaw ]
+    networks: [ opex ]
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════
@@ -45,11 +45,11 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    networks: [ hydeclaw ]
+    networks: [ opex ]
     restart: unless-stopped
 
   tts-silero:
-    image: hydeclaw-tts-silero:latest
+    image: opex-tts-silero:latest
     mem_limit: ${TTS_SILERO_MEM_LIMIT:-2g}
     cpus: ${TTS_SILERO_CPUS:-4}
     build: ./tts-silero
@@ -70,7 +70,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 120s
-    networks: [ hydeclaw ]
+    networks: [ opex ]
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════
@@ -94,7 +94,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    networks: [ hydeclaw ]
+    networks: [ opex ]
     profiles: [ "on-demand" ]
 
   # ═══════════════════════════════════════════════════
@@ -102,7 +102,7 @@ services:
   # ═══════════════════════════════════════════════════
   mcp-stock-analysis:
     container_name: mcp-stock-analysis
-    image: hydeclaw-mcp-stocks:latest
+    image: opex-mcp-stocks:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/stock-analysis
@@ -115,7 +115,7 @@ services:
 
   mcp-weather:
     container_name: mcp-weather
-    image: hydeclaw-mcp-weather:latest
+    image: opex-mcp-weather:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/weather
@@ -128,7 +128,7 @@ services:
 
   mcp-obsidian:
     container_name: mcp-obsidian
-    image: hydeclaw-mcp-obsidian:latest
+    image: opex-mcp-obsidian:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/obsidian
@@ -142,7 +142,7 @@ services:
 
   mcp-browser-cdp:
     container_name: mcp-browser-cdp
-    image: hydeclaw-mcp-browser-cdp:latest
+    image: opex-mcp-browser-cdp:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/browser-cdp
@@ -155,26 +155,26 @@ services:
 
   mcp-postgres:
     container_name: mcp-postgres
-    image: hydeclaw-mcp-postgres:latest
+    image: opex-mcp-postgres:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/postgres
     ports:
       - "127.0.0.1:9007:8000"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/hydeclaw
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/opex
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     depends_on:
       postgres:
         condition: service_healthy
-    networks: [ hydeclaw ]
+    networks: [ opex ]
     profiles: [ "on-demand" ]
 
   mcp-fetch:
     container_name: mcp-fetch
-    image: hydeclaw-mcp-fetch:latest
+    image: opex-mcp-fetch:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/fetch
@@ -187,7 +187,7 @@ services:
 
   mcp-memory:
     container_name: mcp-memory
-    image: hydeclaw-mcp-memory:latest
+    image: opex-mcp-memory:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/memory
@@ -200,7 +200,7 @@ services:
 
   mcp-sequential-thinking:
     container_name: mcp-sequential-thinking
-    image: hydeclaw-mcp-sequential-thinking:latest
+    image: opex-mcp-sequential-thinking:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/sequential-thinking
@@ -213,7 +213,7 @@ services:
 
   mcp-youtube-transcript:
     container_name: mcp-youtube-transcript
-    image: hydeclaw-mcp-youtube-transcript:latest
+    image: opex-mcp-youtube-transcript:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/youtube-transcript
@@ -226,7 +226,7 @@ services:
 
   mcp-time:
     container_name: mcp-time
-    image: hydeclaw-mcp-time:latest
+    image: opex-mcp-time:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/time
@@ -239,21 +239,21 @@ services:
 
   mcp-filesystem:
     container_name: mcp-filesystem
-    image: hydeclaw-mcp-filesystem:latest
+    image: opex-mcp-filesystem:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/filesystem
     ports:
       - "127.0.0.1:9045:8000"
     volumes:
-      - ~/hydeclaw/workspace:/workspace:rw
+      - ~/opex/workspace:/workspace:rw
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     profiles: [ "on-demand" ]
 
   mcp-git:
     container_name: mcp-git
-    image: hydeclaw-mcp-git:latest
+    image: opex-mcp-git:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/git
@@ -266,7 +266,7 @@ services:
 
   mcp-notion:
     container_name: mcp-notion
-    image: hydeclaw-mcp-notion:latest
+    image: opex-mcp-notion:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/notion
@@ -279,7 +279,7 @@ services:
 
   mcp-todoist:
     container_name: mcp-todoist
-    image: hydeclaw-mcp-todoist:latest
+    image: opex-mcp-todoist:latest
     mem_limit: ${MCP_DEFAULT_MEM_LIMIT:-384m}
     cpus: ${MCP_DEFAULT_CPUS:-0.5}
     build: ./mcp/todoist
@@ -291,8 +291,8 @@ services:
     profiles: [ "on-demand" ]
 
 networks:
-  hydeclaw:
-    name: hydeclaw
+  opex:
+    name: opex
     driver: bridge
 
 volumes:

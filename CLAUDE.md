@@ -29,20 +29,20 @@ cd channels && bun test
 ## Deploy
 
 **Canonical workflow (since 2026-06-18): build on the production server.**
-HydeClaw runs on `aronmav@188.246.224.118` (x86_64, i7-8700 / 12T / 31GB). Source tree is cloned at `~/hydeclaw-src` on the server. The Pi is out of the ecosystem (no longer deployed to); all Pi-specific make targets / `PI_HOST` config were removed. Configure the server in `.deploy.env` (`SERVER_HOST`, `SERVER_DIR`).
+OPEX runs on `aronmav@188.246.224.118` (x86_64, i7-8700 / 12T / 31GB). Source tree is cloned at `~/opex-src` on the server. The Pi is out of the ecosystem (no longer deployed to); all Pi-specific make targets / `PI_HOST` config were removed. Configure the server in `.deploy.env` (`SERVER_HOST`, `SERVER_DIR`).
 
 ```bash
 make remote-deploy      # git pull on server → cargo build --release → atomic swap + restart
 make remote-build       # build only on server (no swap, no restart) — for CI-style checks
 make doctor             # GET /api/doctor health check
-make logs               # journalctl --user -u hydeclaw-core -f
+make logs               # journalctl --user -u opex-core -f
 ```
 
-`remote-deploy` shells out to `~/hydeclaw-src/scripts/server-deploy.sh`. The script does:
+`remote-deploy` shells out to `~/opex-src/scripts/server-deploy.sh`. The script does:
 
-1. `git pull --ff-only` in `~/hydeclaw-src`
-2. `cargo build --release -p hydeclaw-core -p hydeclaw-watchdog -p hydeclaw-memory-worker`
-3. Atomic mv each binary into `~/hydeclaw/{crate}-x86_64` (`.new` + `mv -f` — overwrite-safe for mmap'd binaries)
+1. `git pull --ff-only` in `~/opex-src`
+2. `cargo build --release -p opex-core -p opex-watchdog -p opex-memory-worker`
+3. Atomic mv each binary into `~/opex/{crate}-x86_64` (`.new` + `mv -f` — overwrite-safe for mmap'd binaries)
 4. `systemctl --user restart` for each of the 3 services
 
 Build time on the server: ~2m 50s cold, ~10–60s incremental.
@@ -70,34 +70,34 @@ make deploy-binary-server      # build x86_64 + scp + restart on SERVER_HOST (ma
 **Scripts in release archive:**
 
 - `setup.sh` — interactive installer (fresh install)
-- `update.sh` — one-command updater (`~/hydeclaw/update.sh hydeclaw-v0.2.0.tar.gz`)
+- `update.sh` — one-command updater (`~/opex/update.sh opex-v0.2.0.tar.gz`)
 - `uninstall.sh` — complete removal
 
 **Install paths (server, x86_64):**
 
-- Binary: `~/hydeclaw/hydeclaw-core-x86_64`
-- Watchdog: `~/hydeclaw/hydeclaw-watchdog-x86_64`
-- Memory worker: `~/hydeclaw/hydeclaw-memory-worker-x86_64`
-- UI static: `~/hydeclaw/ui/out/`
-- Config: `~/hydeclaw/config/`
-- Workspace: `~/hydeclaw/workspace/`
-- Migrations: `~/hydeclaw/migrations/`
-- Docker: `~/hydeclaw/docker/`
+- Binary: `~/opex/opex-core-x86_64`
+- Watchdog: `~/opex/opex-watchdog-x86_64`
+- Memory worker: `~/opex/opex-memory-worker-x86_64`
+- UI static: `~/opex/ui/out/`
+- Config: `~/opex/config/`
+- Workspace: `~/opex/workspace/`
+- Migrations: `~/opex/migrations/`
+- Docker: `~/opex/docker/`
 
 ## Architecture
 
-HydeClaw is a Rust-based AI gateway. The core binary (`crates/hydeclaw-core`) handles everything: HTTP API, agent lifecycle, LLM calls, tool execution, channel bridging, memory, and secrets.
+OPEX is a Rust-based AI gateway. The core binary (`crates/opex-core`) handles everything: HTTP API, agent lifecycle, LLM calls, tool execution, channel bridging, memory, and secrets.
 
 ### Agent Engine (`src/agent/`)
 
-Four entry points on `AgentEngine`, all thin adapters in [engine/run.rs](crates/hydeclaw-core/src/agent/engine/run.rs) that construct an `EventSink` and delegate to `pipeline::execute`:
+Four entry points on `AgentEngine`, all thin adapters in [engine/run.rs](crates/opex-core/src/agent/engine/run.rs) that construct an `EventSink` and delegate to `pipeline::execute`:
 
 - `handle_sse` — web SSE via `SseSink` (over `EngineEventSender`/flume)
 - `handle_with_status` — channel adapters (Telegram/Discord) with typing indicator via `ChannelStatusSink` (two `UnboundedSender` channels)
 - `handle_streaming` — plain-chunk text via `ChunkSink`
 - `handle_isolated_via_pipeline` — RPC-style cron/agent-to-agent calls via `NoopSink`; returns final assistant text. Constructs `BehaviourLayers::for_cron(...)` so fallback provider, auto-continue, session-corruption recovery, tool-policy override, and forced-final LLM call all engage with cron-defaults.
 
-Unified pipeline lives in [src/agent/pipeline/](crates/hydeclaw-core/src/agent/pipeline/):
+Unified pipeline lives in [src/agent/pipeline/](crates/opex-core/src/agent/pipeline/):
 
 - `sink.rs` — `EventSink` trait, `PipelineEvent` (`Stream(StreamEvent)` | `Phase(ProcessingPhase)`), `SinkError`, four production sinks (`SseSink`, `ChannelStatusSink`, `ChunkSink`, `NoopSink`)
 - `bootstrap.rs` — session entry, user-message persist, timeline `running`, `ProcessingGuard`, slash-command detection. Same code path drives both SSE (`use_history=true`) and cron (`force_new_session=true, use_history=false`)
@@ -175,7 +175,7 @@ Phase 1 never transitions it Active→Stale→Archived, Phase 3 Analyst never
 proposes archive/merge/fix. Toggle via `PATCH /api/skills/{name}/pin` or the
 lock icon in the Skills UI.
 
-**Agent scaffold:** `crates/hydeclaw-core/scaffold/base/` and `scaffold/regular/` — template SOUL.md, IDENTITY.md, HEARTBEAT.md created for new agents. Base agent gets full system template (capabilities, security rules, API reference). Regular agents get lighter template that delegates system tasks to base. Templates use `{AGENT_NAME}` placeholder.
+**Agent scaffold:** `crates/opex-core/scaffold/base/` and `scaffold/regular/` — template SOUL.md, IDENTITY.md, HEARTBEAT.md created for new agents. Base agent gets full system template (capabilities, security rules, API reference). Regular agents get lighter template that delegates system tasks to base. Templates use `{AGENT_NAME}` placeholder.
 
 **MCP tools:** external MCP servers run as Docker containers (on-demand via bollard).
 
@@ -183,7 +183,7 @@ lock icon in the Skills UI.
 
 In-process channel adapter: `InProcessChannelManager` manages channel lifecycle. TypeScript code in `channels/` runs as a managed child process (NOT Docker). Communication via internal WebSocket loopback.
 
-**Handshake protocol:** On connection, adapter sends `Ready { adapter_type, version, formatting_prompt? }` FIRST. Core replies with `Config { language, owner_id?, typing_mode }`. Adapter MUST wait for `Config` before sending any `Message` events (to receive language preference). See `ChannelInbound` enum doc comment in `crates/hydeclaw-types/src/channels.rs` for the canonical sequence.
+**Handshake protocol:** On connection, adapter sends `Ready { adapter_type, version, formatting_prompt? }` FIRST. Core replies with `Config { language, owner_id?, typing_mode }`. Adapter MUST wait for `Config` before sending any `Message` events (to receive language preference). See `ChannelInbound` enum doc comment in `crates/opex-types/src/channels.rs` for the canonical sequence.
 
 Channel credentials (`bot_token`, `access_token`, `password`, `app_token`) are extracted from the config on create/update and stored in the encrypted vault under key `CHANNEL_CREDENTIALS`, scope = channel UUID string. The JSONB `config` column in `agent_channels` never contains credential values — they are redacted before DB insert and re-injected from vault on `GET ?reveal=true`.
 
@@ -204,7 +204,7 @@ Agent opts in via TOML: `[agent.channel.telegram] enabled = true`
 
 ### Memory (`src/memory.rs`)
 
-PostgreSQL pgvector. Hybrid search: semantic (halfvec) + FTS. MMR reranking. Two tiers: raw (time-decay) + pinned permanent. Embedding is delegated to Toolgate (`POST /v1/embeddings`), which proxies to the configured embedding backend via the `providers` table. Core never calls Ollama or any embedding service directly. Config: `[memory]` section in `hydeclaw.toml` — no `embed_url`/`embed_model` keys (those are managed through the providers registry). `embed_dim` is auto-detected at startup.
+PostgreSQL pgvector. Hybrid search: semantic (halfvec) + FTS. MMR reranking. Two tiers: raw (time-decay) + pinned permanent. Embedding is delegated to Toolgate (`POST /v1/embeddings`), which proxies to the configured embedding backend via the `providers` table. Core never calls Ollama or any embedding service directly. Config: `[memory]` section in `opex.toml` — no `embed_url`/`embed_model` keys (those are managed through the providers registry). `embed_dim` is auto-detected at startup.
 
 **Text normalization SoT:** TTS-specific normalization (numbers→words, English→Cyrillic transliteration) lives in `toolgate/normalize.py` and is **NOT** reused for indexing — it is destructive for embedding/search by design.
 
@@ -212,8 +212,8 @@ PostgreSQL pgvector. Hybrid search: semantic (halfvec) + FTS. MMR reranking. Two
 
 - `workspace/agents/{Agent}/MEMORY.md` (and other workspace `.md`/`.txt` files) — **hand-edited agent state**, the canonical source of truth. Lives in git-friendly text files. Agents read it on every session start.
 - `memory_chunks` (PostgreSQL + pgvector) — **searchable index** of the same content plus runtime knowledge (session summaries, extracted facts). Powers hybrid semantic+FTS search.
-- Sync is one-way (file → DB) and event-driven: [memory/watcher.rs](crates/hydeclaw-core/src/memory/watcher.rs) listens for workspace file `Create`/`Modify` events and re-indexes the changed file as `scope='shared'` by calling `MemoryStore::index` **directly** (synchronous embedding HTTP call + chunk upsert in the watcher's tokio task). It does NOT go through the `memory_tasks` queue. Editing `MEMORY.md` updates `memory_chunks`; editing `memory_chunks` directly does NOT update `MEMORY.md`.
-- **First-run bootstrap:** the watcher is delta-only (no initial scan). On startup, if `memory_chunks` has zero `scope='shared'` rows, [main.rs](crates/hydeclaw-core/src/main.rs) enqueues a one-shot reindex task into `memory_tasks` (after a toolgate-readiness probe) so workspace files get indexed without manual intervention. This bootstrap path AND the explicit `POST /api/memory/reindex` endpoint are the only two routes that use the memory-worker queue; live file edits skip it. Subsequent restarts skip the bootstrap. Operator can re-trigger anytime via the `memory.reindex` agent action.
+- Sync is one-way (file → DB) and event-driven: [memory/watcher.rs](crates/opex-core/src/memory/watcher.rs) listens for workspace file `Create`/`Modify` events and re-indexes the changed file as `scope='shared'` by calling `MemoryStore::index` **directly** (synchronous embedding HTTP call + chunk upsert in the watcher's tokio task). It does NOT go through the `memory_tasks` queue. Editing `MEMORY.md` updates `memory_chunks`; editing `memory_chunks` directly does NOT update `MEMORY.md`.
+- **First-run bootstrap:** the watcher is delta-only (no initial scan). On startup, if `memory_chunks` has zero `scope='shared'` rows, [main.rs](crates/opex-core/src/main.rs) enqueues a one-shot reindex task into `memory_tasks` (after a toolgate-readiness probe) so workspace files get indexed without manual intervention. This bootstrap path AND the explicit `POST /api/memory/reindex` endpoint are the only two routes that use the memory-worker queue; live file edits skip it. Subsequent restarts skip the bootstrap. Operator can re-trigger anytime via the `memory.reindex` agent action.
 
 ### Secrets (`src/secrets.rs`)
 
@@ -233,7 +233,7 @@ PostgreSQL-backed notification system with real-time WebSocket broadcast. Notifi
 
 ### Network Discovery (`src/gateway/handlers/network.rs`)
 
-`GET /api/network/addresses` returns WAN IP (with CGNAT detection), Tailscale status, LAN interfaces, mDNS hostname (`hydeclaw.local`). WAN IP cached for 5 minutes. mDNS registered at startup via `mdns-sd` crate.
+`GET /api/network/addresses` returns WAN IP (with CGNAT detection), Tailscale status, LAN interfaces, mDNS hostname (`opex.local`). WAN IP cached for 5 minutes. mDNS registered at startup via `mdns-sd` crate.
 
 ### Setup Wizard
 
@@ -270,17 +270,17 @@ File events: tool handlers emit `FILE_PREFIX = "__file__:"` inline in tool resul
 
 ## Configuration
 
-**Main config:** `config/hydeclaw.toml` — server, DB, embedding, managed processes.
+**Main config:** `config/opex.toml` — server, DB, embedding, managed processes.
 
 **Agent config:** `config/agents/{Name}.toml` — case-sensitive filename matches agent name.
 
 **Environment:** `.env` in binary dir (auto-loaded). **Policy: only 3 keys belong in `.env`:**
 
-- `HYDECLAW_AUTH_TOKEN` — HTTP API auth token
-- `HYDECLAW_MASTER_KEY` — vault encryption key
+- `OPEX_AUTH_TOKEN` — HTTP API auth token
+- `OPEX_MASTER_KEY` — vault encryption key
 - `DATABASE_URL` — PostgreSQL connection string
 
-All other configuration (service URLs, API keys, tokens) must go into the secrets vault or `config/hydeclaw.toml`. Never add extra keys to `.env`.
+All other configuration (service URLs, API keys, tokens) must go into the secrets vault or `config/opex.toml`. Never add extra keys to `.env`.
 
 ## Frontend (`ui/`)
 
@@ -323,18 +323,18 @@ Key tables: `sessions`, `messages`, `session_timeline` (chronological lifecycle 
 - **channels** (`channels/` — TypeScript/Bun): Telegram/Discord/Matrix/IRC/Slack adapters. Started by Core, communicates via internal WebSocket loopback.
 - **toolgate** (`toolgate/` — Python/FastAPI): Media hub (STT, Vision, TTS, ImageGen, Embeddings). Started by Core with `--workers 1 --loop asyncio` (single process, no multiprocessing workers). Key endpoints: `POST /describe-url`, `POST /transcribe-url`, `POST /v1/audio/speech`, `POST /v1/embeddings`.
 
-Config in `config/hydeclaw.toml` under `[[managed_process]]`. Restart via `POST /api/services/{name}/restart`. Container restart API has a whitelist — only non-sensitive containers (browser-renderer, searxng, mcp-*) can be restarted; postgres is excluded.
+Config in `config/opex.toml` under `[[managed_process]]`. Restart via `POST /api/services/{name}/restart`. Container restart API has a whitelist — only non-sensitive containers (browser-renderer, searxng, mcp-*) can be restarted; postgres is excluded.
 
-On Pi: `toolgate` source is at `~/hydeclaw/toolgate/` (NOT Docker). To deploy toolgate changes: `scp` changed `.py` files to Pi + `POST /api/services/toolgate/restart`. No Docker build needed.
+On Pi: `toolgate` source is at `~/opex/toolgate/` (NOT Docker). To deploy toolgate changes: `scp` changed `.py` files to Pi + `POST /api/services/toolgate/restart`. No Docker build needed.
 
 TTS voices: Qwen3-TTS server natively accepts OpenAI voice names (nova, alloy, echo, fable, onyx, shimmer) — no alias mapping in toolgate. Available voices: `GET /v1/audio/voices` on the TTS server. Default voice: `clone:Arty`. TTS server URL is configured via the providers registry.
 
-## Memory Worker (`crates/hydeclaw-memory-worker/`)
+## Memory Worker (`crates/opex-memory-worker/`)
 
-Separate binary (`hydeclaw-memory-worker`) that handles heavy memory tasks asynchronously via a PostgreSQL task queue. Core enqueues tasks; the worker polls and processes them independently.
+Separate binary (`opex-memory-worker`) that handles heavy memory tasks asynchronously via a PostgreSQL task queue. Core enqueues tasks; the worker polls and processes them independently.
 
 - Runs as a separate process (own systemd unit or launched alongside core)
-- Config: `[memory_worker]` section in `hydeclaw.toml` (`enabled`, `poll_interval_secs`)
+- Config: `[memory_worker]` section in `opex.toml` (`enabled`, `poll_interval_secs`)
 - Uses `toolgate_url` to call `POST /v1/embeddings` for reindex tasks
 - Recovers stuck `'processing'` tasks on startup (crash safety)
 - Task types: `reindex` (rebuild embeddings for workspace files)
@@ -342,7 +342,7 @@ Separate binary (`hydeclaw-memory-worker`) that handles heavy memory tasks async
 
 ## Watchdog Alerting
 
-Watchdog monitors agent inactivity and managed process health. Alert configuration is DB-backed via the `watchdog_settings` table (not in `hydeclaw.toml`).
+Watchdog monitors agent inactivity and managed process health. Alert configuration is DB-backed via the `watchdog_settings` table (not in `opex.toml`).
 
 - `GET /api/watchdog/settings` — read current alert settings
 - `PUT /api/watchdog/settings` — update settings; allowed keys: `alert_channel_ids`, `alert_events`
@@ -357,9 +357,9 @@ On SIGTERM/SIGINT: drains all running agents (calls `handle.shutdown()` on each)
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project
 
-**HydeClaw Stability Audit**
+**OPEX Stability Audit**
 
-HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безопасной архитектурой). Единый бинарник обрабатывает HTTP API, жизненный цикл агентов, LLM-вызовы, инструменты, каналы, память и секреты. Проект уже функционирует, цель текущей работы — превентивный аудит и исправление найденных проблем.
+OPEX — Rust-based AI gateway (аналог OpenClaw с более безопасной архитектурой). Единый бинарник обрабатывает HTTP API, жизненный цикл агентов, LLM-вызовы, инструменты, каналы, память и секреты. Проект уже функционирует, цель текущей работы — превентивный аудит и исправление найденных проблем.
 
 **Core Value:** Стабильность и безопасность: найти и устранить баги, несостыковки API, уязвимости и мёртвый код до того, как они проявятся в продакшене.
 
@@ -374,7 +374,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 ## Technology Stack
 
 ## Languages
-- Rust 2024 edition - Core application (`crates/hydeclaw-core`), type definitions, watchdog, memory worker
+- Rust 2024 edition - Core application (`crates/opex-core`), type definitions, watchdog, memory worker
 - TypeScript/Bun - Channel adapters and protocol drivers (`channels/`)
 - Python 3 - Media hub and tool gateway (`toolgate/`)
 - TypeScript/React - Web UI (`ui/`)
@@ -447,10 +447,10 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - regex 1 - Pattern matching for error classification
 ## Configuration
 - `.env` file (auto-generated on first run if missing)
-- Only 3 keys required: `HYDECLAW_AUTH_TOKEN`, `HYDECLAW_MASTER_KEY`, `DATABASE_URL`
+- Only 3 keys required: `OPEX_AUTH_TOKEN`, `OPEX_MASTER_KEY`, `DATABASE_URL`
 - Auto-loaded from binary directory or current working directory
 - In production: via systemd `EnvironmentFile=`
-- `config/hydeclaw.toml` - Server, database, limits, Docker, memory, managed processes
+- `config/opex.toml` - Server, database, limits, Docker, memory, managed processes
 - `config/agents/{Name}.toml` - Individual agent configuration (case-sensitive filename)
 - `Makefile` - Build/deploy targets (`make check`, `make test`, `make build-x86_64`, `make remote-deploy`)
 - `release.sh` - Multi-architecture release build (aarch64 + x86_64)
@@ -472,7 +472,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Docker (for compose, sandbox, MCP containers)
 - PostgreSQL 17 with pgvector extension
 - Make (or manual commands from Makefile)
-- Binary deployment: `hydeclaw-core`, `hydeclaw-watchdog`, `hydeclaw-memory-worker`
+- Binary deployment: `opex-core`, `opex-watchdog`, `opex-memory-worker`
 - Systemd service units (on Linux)
 - PostgreSQL 17 + pgvector (managed via docker-compose or external)
 - Bun runtime for channel adapters (native process, not Docker)
@@ -573,7 +573,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 ## Architecture
 
 ## Pattern Overview
-- A single Axum HTTP API (`hydeclaw-core`) handles all requests
+- A single Axum HTTP API (`opex-core`) handles all requests
 - Each agent runs as an independent tokio task in a long-running LLM loop
 - Tool execution is sequential with optional semaphore-limited concurrency
 - Communication with external services (Telegram, Discord, Ollama, Toolgate) happens through managed child processes and HTTP clients
@@ -587,61 +587,61 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Configuration is declarative (TOML for agents + system, YAML for tools)
 ## Layers
 - Purpose: Accept incoming requests, route to agent engines, stream responses back to clients
-- Location: `crates/hydeclaw-core/src/gateway/`
+- Location: `crates/opex-core/src/gateway/`
 - Contains: Axum router, middleware (auth, CORS, rate limit), SSE event marshalling, handler dispatch
 - Depends on: Agent engine, database, config, memory, secrets
 - Used by: All external clients (web UI, OpenAI-compatible APIs, channel adapters, webhooks)
 - Purpose: Main request handler - calls LLM, parses tool calls, executes tools, streams results
-- Location: `crates/hydeclaw-core/src/agent/`
+- Location: `crates/opex-core/src/agent/`
 - Contains: `engine/` (entry adapters + dispatch, ~600 LoC mod.rs), `pipeline/` (bootstrap/execute/finalize + behaviour layers), `providers/` (LlmProvider trait + 4 impls + factory + routing + http util), tool execution, workspace reading, memory augmentation
 - Depends on: LLM providers, tools, workspace, memory, secrets, database
 - Used by: Gateway handlers (chat, channel, webhooks)
 - Purpose: Execute user-requested operations (workspace edit, web search, code execution, custom HTTP calls)
-- Location: `crates/hydeclaw-core/src/tools/`
+- Location: `crates/opex-core/src/tools/`
 - Contains: YAML tool loader, HTTP client wrappers, SSRF protection, embedding service client
 - System tools: registered via `agent/tool_registry.rs` SystemToolRegistry (memory_write, workspace_write, workspace_edit, code_exec, agent, browser_action, etc.)
 - YAML tools: loaded from `workspace/tools/*.yaml`, define HTTP API calls with response transforms
 - Depends on: Workspace, memory, HTTP client, docker sandbox
 - Used by: Agent engine tool execution loop
 - Purpose: Store and retrieve contextual information - workspace files, external knowledge, user history
-- Location: `crates/hydeclaw-core/src/memory.rs`
+- Location: `crates/opex-core/src/memory.rs`
 - Contains: pgvector queries (semantic + FTS), MMR reranking, embedding delegation to Toolgate
 - Depends on: PostgreSQL (pgvector), Toolgate (embeddings proxy)
 - Used by: Agent engine (build_context)
 - Purpose: Persistent storage - sessions, messages, agents, channels, secrets, usage logs, memory chunks
-- Location: `crates/hydeclaw-core/src/db/` (query functions), `migrations/` (schema)
+- Location: `crates/opex-core/src/db/` (query functions), `migrations/` (schema)
 - Contains: sqlx queries (sessions, messages, approvals, audit, usage, providers, etc.), auto-run migrations on startup
 - Tables: sessions, messages, memory_chunks, scheduled_jobs, secrets, agent_channels, usage_log, providers, provider_active, webhooks, approvals, audit_log, and 15+ more
 - Depends on: None (consumed by all layers)
 - Used by: Gateway, engine, memory, scheduler
 - Purpose: File-based state - agent configs, YAML tools, workspace files (memory.md, secrets.md, etc.)
-- Location: `crates/hydeclaw-core/src/agent/workspace.rs`, `crates/hydeclaw-core/src/config/mod.rs`
+- Location: `crates/opex-core/src/agent/workspace.rs`, `crates/opex-core/src/config/mod.rs`
 - Contains: File I/O (read/write protection), hot-reload monitoring, path validation
 - Depends on: Filesystem, notify crate (file watcher)
 - Used by: Agent engine, tools, gateway
 - Purpose: Spawn and supervise long-running native services (Channels TypeScript, Toolgate Python)
-- Location: `crates/hydeclaw-core/src/process_manager/`
+- Location: `crates/opex-core/src/process_manager/`
 - Contains: Process spawning, restart logic, signal handling, stdio capture
 - Services: `channels/` (Telegram/Discord/Matrix/IRC/Slack adapters), `toolgate/` (STT/Vision/TTS/ImageGen/Embeddings)
 - Depends on: std::process, tokio
 - Used by: Main startup routine
 - Purpose: Run code in sandbox and MCP servers on-demand
-- Location: `crates/hydeclaw-core/src/containers/`
+- Location: `crates/opex-core/src/containers/`
 - Contains: bollard Docker client, code sandbox for `code_exec` tool, MCP server launch
 - Depends on: Docker daemon, bollard crate
 - Used by: Engine (code_exec tool), handlers (MCP startup)
 - Purpose: Protect API keys, passwords, credentials (channel bot_token, provider API keys, etc.)
-- Location: `crates/hydeclaw-core/src/secrets.rs`
+- Location: `crates/opex-core/src/secrets.rs`
 - Contains: ChaCha20Poly1305 encryption, scoped resolution (agent + global), env var fallback
 - Depends on: PostgreSQL secrets table, chacha20poly1305 crate
 - Used by: Agents (resolve auth in YAML tools), gateway handlers (store/retrieve)
 - Purpose: Monitor agent inactivity, managed process health, send alerts via channels
-- Location: `crates/hydeclaw-watchdog/src/main.rs` (separate binary)
+- Location: `crates/opex-watchdog/src/main.rs` (separate binary)
 - Contains: Cron-based monitoring, alert routing to channels
 - Depends on: Database, channel router
 - Used by: systemd (separate unit)
 - Purpose: Handle heavy async memory tasks (embedding reindex) without blocking core
-- Location: `crates/hydeclaw-memory-worker/src/main.rs` (separate binary)
+- Location: `crates/opex-memory-worker/src/main.rs` (separate binary)
 - Contains: PostgreSQL task queue polling, embedding calls to Toolgate
 - Depends on: Database, Toolgate, tokio
 - Used by: systemd (separate unit)
@@ -660,7 +660,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Channel credentials: Stored in secrets vault under `CHANNEL_CREDENTIALS` (not in agent_channels config column).
 ## Key Abstractions
 - Purpose: Abstract LLM backends so engine doesn't care if it's OpenAI, Anthropic, Google, or custom HTTP
-- Examples: `crates/hydeclaw-core/src/agent/providers/{mod,openai,anthropic,google,claude_cli,http,factory,routing,registry}.rs`
+- Examples: `crates/opex-core/src/agent/providers/{mod,openai,anthropic,google,claude_cli,http,factory,routing,registry}.rs`
 - Pattern: Implement `chat()` / `chat_stream()` from the `LlmProvider` trait. Engine calls repeatedly in the LLM-loop (`pipeline::execute`).
 - Purpose: Unified representation of all events emitted during message processing (text, tool call, file, error, etc.)
 - Examples: `TextDelta("hello")`, `ToolCallStart { id, name }`, `File { url, media_type }`, `Finish { reason }`
@@ -676,19 +676,19 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Purpose: Track session-scoped agents spawned by `agent` tool, allow status checks and lifecycle management
 - Pattern: `SessionAgentPool` per session in `AppState.session_pools`. Each `LiveAgent` runs as a tokio task with cancellation token. Polling-based communication via `agent(action: "status")`.
 ## Entry Points
-- Location: `crates/hydeclaw-core/src/main.rs` (~43KB), `crates/hydeclaw-core/src/gateway/mod.rs`
+- Location: `crates/opex-core/src/main.rs` (~43KB), `crates/opex-core/src/gateway/mod.rs`
 - Triggers: Startup (`cargo run` or systemd service)
 - Responsibilities: Load config, run migrations, spawn agent engines, start process_manager, bind Axum router to port 18789
-- Location: `crates/hydeclaw-core/src/agent/engine/run.rs` function `handle_sse()` → `pipeline::execute`
+- Location: `crates/opex-core/src/agent/engine/run.rs` function `handle_sse()` → `pipeline::execute`
 - Triggers: POST `/api/chat`, resumed via `/api/chat/{id}/stream`, webhook tools
 - Responsibilities: Build context (bootstrap), call LLM (execute), loop tool execution, stream results (sink), persist session (finalize)
-- Location: `crates/hydeclaw-core/src/agent/pipeline/execute.rs` — tool call dispatch
+- Location: `crates/opex-core/src/agent/pipeline/execute.rs` — tool call dispatch
 - Triggers: LLM returns tool_calls in response
 - Responsibilities: Dispatch by tool type, handle approval workflow, capture result, continue LLM loop
-- Location: `crates/hydeclaw-watchdog/src/main.rs`
+- Location: `crates/opex-watchdog/src/main.rs`
 - Triggers: systemd unit or manual start
 - Responsibilities: Poll DB for agent inactivity, send alerts via channel router, restart stale processes
-- Location: `crates/hydeclaw-memory-worker/src/main.rs`
+- Location: `crates/opex-memory-worker/src/main.rs`
 - Triggers: systemd unit or manual start
 - Responsibilities: Poll task queue (reindex jobs), call Toolgate embeddings, update memory chunks
 - Location: `ui/src/app/(authenticated)/chat/page.tsx`
@@ -710,7 +710,7 @@ HydeClaw — Rust-based AI gateway (аналог OpenClaw с более безо
 - Tool names: API enforces `[a-zA-Z0-9_-]` pattern (prevents path traversal in workspace/tools lookup)
 - Workspace paths: `workspace.rs:is_read_only()` prevents tool from writing outside allowed dirs
 - SSRF: external YAML tool endpoints use `ssrf_http_client()` with a custom DNS resolver that blocks private IP ranges (169.254.x.x, 10.x.x.x, 127.x, 172.16-31.x, 192.168.x); admin-configured internal endpoints recognised by `tools::ssrf::is_internal_endpoint` (toolgate, browser-renderer, …) use the standard client
-- API Token: Single bearer token (env var HYDECLAW_AUTH_TOKEN) checked by middleware
+- API Token: Single bearer token (env var OPEX_AUTH_TOKEN) checked by middleware
 - Session ID: Opaque UUID, returned first in SSE (data-session-id event)
 - WebSocket Ticket: One-time ticket issued by POST `/api/auth/ws-ticket`, consumed by WS connection
 - Channel OAuth: Separate OAuth2 flow in `oauth.rs` for Telegram, Discord, etc.

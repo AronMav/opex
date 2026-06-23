@@ -26,15 +26,15 @@ FOOTER = """
 
 Download the architecture-matching tarball from this release page:
 
-* `hydeclaw-aarch64-*.tar.gz` — Raspberry Pi 4/5 and other ARM64 Linux hosts.
-* `hydeclaw-x86_64-*.tar.gz` — generic 64-bit Linux servers.
+* `opex-aarch64-*.tar.gz` — Raspberry Pi 4/5 and other ARM64 Linux hosts.
+* `opex-x86_64-*.tar.gz` — generic 64-bit Linux servers.
 
 Fresh install: extract, run `./setup.sh`. Upgrade in place: extract, run
-`~/hydeclaw/update.sh <tarball>`. Both scripts handle service restart and
+`~/opex/update.sh <tarball>`. Both scripts handle service restart and
 migration apply.
 
-Configuration source of truth lives in `~/hydeclaw/config/hydeclaw.toml`
-and `~/hydeclaw/.env`; nothing in the tarball overwrites them.
+Configuration source of truth lives in `~/opex/config/opex.toml`
+and `~/opex/.env`; nothing in the tarball overwrites them.
 """
 
 

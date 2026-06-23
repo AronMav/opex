@@ -924,7 +924,7 @@ pub async fn ensure_workspace_scaffold(workspace_dir: &str, agent_name: &str, is
     fs::create_dir_all(&agent_dir).await?;
 
     // Build scaffold files with agent name and role-appropriate content.
-    // Base agent gets full system agent template (based on proven Hyde config).
+    // Base agent gets full system agent template (based on proven Opex config).
     // Non-base agents get a lighter template that delegates system tasks to base.
     let soul_content = if is_base {
         include_str!("../../scaffold/base/SOUL.md").replace("{AGENT_NAME}", agent_name)
@@ -1090,7 +1090,7 @@ mod tests {
 
     #[test]
     fn passes_clean_identity_file() {
-        let clean = "I am Hyde, a helpful assistant.".to_string();
+        let clean = "I am Opex, a helpful assistant.".to_string();
         assert_eq!(redact_if_blocked("a", "IDENTITY.md", clean.clone()), clean);
     }
 
@@ -1292,15 +1292,15 @@ mod tests {
     async fn subdir_path_redirects_to_agent_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("workspace");
-        std::fs::create_dir_all(ws.join("agents").join("Hyde")).unwrap();
+        std::fs::create_dir_all(ws.join("agents").join("Opex")).unwrap();
 
         let ws_str = ws.to_str().unwrap();
-        let result = validate_workspace_path(ws_str, "Hyde", "notes/ui_test.md").await;
+        let result = validate_workspace_path(ws_str, "Opex", "notes/ui_test.md").await;
         assert!(result.is_ok(), "notes/ui_test.md must be accepted: {:?}", result);
         let path = result.unwrap();
         assert!(
-            path.ends_with("agents/Hyde/notes/ui_test.md"),
-            "must land under agents/Hyde/: {}", path.display()
+            path.ends_with("agents/Opex/notes/ui_test.md"),
+            "must land under agents/Opex/: {}", path.display()
         );
     }
 
@@ -1312,7 +1312,7 @@ mod tests {
         std::fs::create_dir_all(ws.join("tools")).unwrap();
 
         let ws_str = ws.to_str().unwrap();
-        let result = validate_workspace_path(ws_str, "Hyde", "tools/my.yaml").await;
+        let result = validate_workspace_path(ws_str, "Opex", "tools/my.yaml").await;
         assert!(result.is_ok(), "tools/my.yaml must be accepted: {:?}", result);
         let path = result.unwrap();
         assert!(
@@ -1327,12 +1327,12 @@ mod tests {
     async fn write_creates_subdir_in_agent_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().join("workspace");
-        std::fs::create_dir_all(ws.join("agents").join("Hyde")).unwrap();
+        std::fs::create_dir_all(ws.join("agents").join("Opex")).unwrap();
 
         let ws_str = ws.to_str().unwrap();
-        let result = write_workspace_file(ws_str, "Hyde", "notes/report.md", "hello", false).await;
+        let result = write_workspace_file(ws_str, "Opex", "notes/report.md", "hello", false).await;
         assert!(result.is_ok(), "write to notes/report.md must succeed: {:?}", result);
-        let expected = ws.join("agents").join("Hyde").join("notes").join("report.md");
+        let expected = ws.join("agents").join("Opex").join("notes").join("report.md");
         assert!(expected.exists(), "file must exist at {}", expected.display());
         assert_eq!(std::fs::read_to_string(&expected).unwrap(), "hello");
     }

@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
  * These tests focus on core functionality and user flows.
  */
 test.describe('Chat Core Flows', () => {
-  
+
   test.beforeEach(async ({ page }) => {
     // Inject a test token to bypass the setup wizard and login
     await page.addInitScript(() => {
@@ -31,11 +31,11 @@ test.describe('Chat Core Flows', () => {
     const sendButton = page.locator('button[title="Send message"]');
 
     // Type and send
-    await composer.fill('Hello HydeClaw, tell me about yourself.');
+    await composer.fill('Hello Opex, tell me about yourself.');
     await sendButton.click();
 
     // Verify user message appears
-    await expect(page.getByText('Hello HydeClaw, tell me about yourself.')).toBeVisible();
+    await expect(page.getByText('Hello Opex, tell me about yourself.')).toBeVisible();
 
     // Wait for assistant response (streamed)
     // We expect at least some assistant message container to appear

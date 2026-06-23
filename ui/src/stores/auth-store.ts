@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { devtools, persist, subscribeWithSelector, createJSONStorage } from "zustand/middleware";
-import { readWithLegacy } from "@/stores/ls-migration";
 
 export type LoginResult = true | "invalid" | "rate_limited" | "error";
 
@@ -108,18 +107,14 @@ export const useAuthStore = create<AuthState>()(
           // Security: auth token stored in localStorage for cross-tab login persistence.
           // Accepted trade-off for a personal home server: XSS would expose the token
           // persistently, but the alternative (sessionStorage) requires re-login on every tab.
-          // Legacy migration: moves sessionStorage or old hydeclaw.* key to new opex.* key.
           storage: createJSONStorage(() => {
             // Migrate token from sessionStorage (old pattern) to localStorage.
-            const oldKey = "hydeclaw.auth.token";
-            const newKey = "opex.auth.token";
-            const sessionVal = sessionStorage.getItem(oldKey);
+            const key = "opex.auth.token";
+            const sessionVal = sessionStorage.getItem(key);
             if (sessionVal) {
-              if (!localStorage.getItem(newKey)) localStorage.setItem(newKey, sessionVal);
-              sessionStorage.removeItem(oldKey);
+              if (!localStorage.getItem(key)) localStorage.setItem(key, sessionVal);
+              sessionStorage.removeItem(key);
             }
-            // Migrate from legacy localStorage key (hydeclaw → opex) via shim.
-            readWithLegacy(newKey, oldKey);
             return localStorage;
           }),
         },

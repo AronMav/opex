@@ -9,17 +9,17 @@ import { test, expect, type Page } from "@playwright/test";
  *
  * Run:
  *   PLAYWRIGHT_BASE_URL=https://192.168.1.82 \
- *   HYDECLAW_AUTH_TOKEN=<token> \
+ *   OPEX_AUTH_TOKEN=<token> \
  *   npx playwright test src/__e2e__/architecture.spec.ts --project=chromium
  */
 
-const TOKEN = process.env.HYDECLAW_AUTH_TOKEN ?? "";
+const TOKEN = process.env.OPEX_AUTH_TOKEN ?? "";
 
 test.describe.configure({ mode: "serial" });
 
 test.beforeAll(() => {
   if (!TOKEN) {
-    throw new Error("HYDECLAW_AUTH_TOKEN env var required for e2e architecture tests");
+    throw new Error("OPEX_AUTH_TOKEN env var required for e2e architecture tests");
   }
 });
 

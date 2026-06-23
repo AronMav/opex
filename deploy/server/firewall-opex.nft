@@ -1,12 +1,12 @@
 #!/usr/sbin/nft -f
-# HydeClaw runs natively on the host (0.0.0.0:18789). The server's host firewall
+# Opex runs natively on the host (0.0.0.0:18789). The server's host firewall
 # is `table inet filter` with `hook input priority filter; policy drop` — it only
 # allows an explicit set of ports, so 18789 is dropped for EVERYONE by default,
 # including docker_wg containers (so nginx-proxy-manager can't reach it) and the
 # public interface (good — public stays blocked).
 #
 # This file APPENDS one allow to that existing input chain so docker_wg containers
-# (notably nginx-proxy-manager at 10.10.1.6) can reach the HydeClaw API and
+# (notably nginx-proxy-manager at 10.10.1.6) can reach the Opex API and
 # reverse-proxy it. Public access remains blocked by the policy drop. Loaded after
 # /etc/nftables.conf via the `include "/etc/nftables.d/*.nft"` line.
 #

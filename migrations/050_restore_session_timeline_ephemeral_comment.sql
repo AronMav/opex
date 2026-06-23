@@ -1,6 +1,6 @@
--- Migration 050: restore @hydeclaw:ephemeral comment on session_timeline.
+-- Migration 050: restore @opex:ephemeral comment on session_timeline.
 --
--- m030 attached COMMENT ON TABLE session_events IS '@hydeclaw:ephemeral ...'
+-- m030 attached COMMENT ON TABLE session_events IS '@opex:ephemeral ...'
 -- to mark the table as excluded from pg_dump backups. m049's ALTER TABLE
 -- ... RENAME TO transferred the table catalog entry but dropped the
 -- comment (PostgreSQL stores comments by object identity that includes
@@ -9,4 +9,4 @@
 -- diagnostics, not user data.
 
 COMMENT ON TABLE session_timeline IS
-    '@hydeclaw:ephemeral session timeline (chronological lifecycle log)';
+    '@opex:ephemeral session timeline (chronological lifecycle log)';

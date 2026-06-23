@@ -221,7 +221,7 @@ _TRANSLIT_DICT = {
     "anthropic": "энтропик", "grok": "грок", "llama": "лама",
     "mistral": "мистраль", "nvidia": "энвидиа", "deepseek": "дипсик",
     "kimi": "кими", "copilot": "копайлот", "iphone": "айфон", "ipad": "айпад",
-    "macos": "макос", "nano": "нано", "silero": "силеро", "hydeclaw": "хайдкло",
+    "macos": "макос", "nano": "нано", "silero": "силеро", "opex": "хайдкло",
     "pull": "пул", "request": "реквест", "issue": "ишью", "feedback": "фидбэк",
     "weekend": "уикенд", "meeting": "митинг", "deploy": "деплой",
 }

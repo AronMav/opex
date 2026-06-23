@@ -373,7 +373,7 @@ async fn main() -> Result<()> {
 
     // No hardcoded secrets — user creates all secrets via UI.
     // Channel-specific secrets (bot tokens) are auto-seeded when agents are created.
-    // HYDECLAW_AUTH_TOKEN and HYDECLAW_MASTER_KEY stay in .env only (bootstrap).
+    // OPEX_AUTH_TOKEN and OPEX_MASTER_KEY stay in .env only (bootstrap).
 
     let secrets_manager = Arc::new(secrets_manager);
     tracing::info!(count = secrets_count, "secrets vault loaded");
@@ -1018,7 +1018,7 @@ async fn notify_interrupted_interactive_goals(state: gateway::AppState, db: sqlx
     tracing::info!(notified, total = goals.len(), "interrupted interactive goals notified");
 }
 
-/// Load OPEX_MASTER_KEY (or legacy HYDECLAW_MASTER_KEY) from environment or auto-generate and save to .env.
+/// Load OPEX_MASTER_KEY (or legacy OPEX_MASTER_KEY) from environment or auto-generate and save to .env.
 fn get_master_key() -> String {
     match opex_gateway_util::env::env_var("MASTER_KEY") {
         Some(v) => v,

@@ -30,6 +30,7 @@
 | `config/services/*.yaml` | Service registry (URL, healthcheck, concurrency) | Нет |
 
 **Расположение конфигов на Pi:**
+
 - Binary: `~/opex/opex-core-aarch64`
 - Config: `~/opex/config/`
 - Workspace: `~/opex/workspace/`
@@ -52,7 +53,7 @@
 |-----------|-------------|----------|
 | `OPEX_AUTH_TOKEN` | Да | Bearer-токен для всех API-запросов. Используется UI, channel-адаптерами, Makefile. Автогенерируется как 32-байтный hex. |
 | `OPEX_MASTER_KEY` | Да | 64-символьный hex (32 байта) для ChaCha20-Poly1305 шифрования secrets vault. **Никогда не меняется после первого запуска.** |
-| `DATABASE_URL` | Да | PostgreSQL connection string. Пример: `postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw`. |
+| `DATABASE_URL` | Да | PostgreSQL connection string. Пример: `postgresql://opex:opex@localhost:5432/opex`. |
 
 > **Все остальные секреты** (API-ключи, токены ботов, пароли провайдеров) хранятся в зашифрованном vault через UI или API. Никогда не добавляйте дополнительные переменные в `.env`.
 
@@ -88,7 +89,7 @@ public_url = "http://192.168.1.82:18789"
 
 ```toml
 [database]
-url = "postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw"
+url = "postgresql://opex:opex@localhost:5432/opex"
 ```
 
 ### [limits]
@@ -239,7 +240,7 @@ retention_days = 7
 | `stale_after_days` | u32 | `30` | Навыки старше N дней считаются устаревшими |
 | `archive_after_days` | u32 | `90` | Навыки старше N дней архивируются |
 | `max_repairs_per_run` | u32 | `10` | Максимум ремонтов за один запуск |
-| `agent_name` | String | `"Hyde"` | Имя агента, выполняющего ревизию |
+| `agent_name` | String | `"Opex"` | Имя агента, выполняющего ревизию |
 
 ### [cleanup]
 
@@ -444,7 +445,7 @@ blocked_tools_extra = ["code_exec"]
 | `preserve_last_n` | u32 | `10` | Количество последних сообщений, которые никогда не сжимаются |
 | `max_context_tokens` | Option\<u32\> | — | Переопределение максимума контекстных токенов (авто-определяется из имени модели) |
 | `protect_first_n` | usize | `3` | Head protection: первые N сообщений (system + first user + first assistant) всегда сохраняются |
-| `summary_target_ratio` | f64 | `0.20` | Доля бюджета токенов для tail (tail_budget = context_limit * threshold * ratio) |
+| `summary_target_ratio` | f64 | `0.20` | Доля бюджета токенов для tail (tail_budget = context_limit *threshold* ratio) |
 | `anti_thrash_min_savings` | f64 | `0.10` | Минимальное сокращение (доля) для применения сжатия. Защита от thrashing. |
 | `anti_thrash_max_skips` | u8 | `2` | Максимум неэффективных сжатий подряд до пропуска |
 | `extract_to_memory` | bool | `true` | Извлекать факты в pgvector рядом с summary |
@@ -546,7 +547,7 @@ connection = "claude-sonnet"
 
 ```toml
 [agent]
-name = "Hyde"
+name = "Opex"
 language = "ru"
 provider = "anthropic"
 model = "claude-sonnet-4-5"
@@ -663,6 +664,7 @@ inactivity_secs = 600
 ### Примеры инструментов
 
 **Внешний API с auth:**
+
 ```yaml
 name: tavily_search
 description: "AI-optimized web search via Tavily."
@@ -686,6 +688,7 @@ status: draft
 ```
 
 **Path-параметры + Bearer auth:**
+
 ```yaml
 name: ha_call_service
 endpoint: "http://homeassistant.local:8123/api/services/{domain}/{service}"
@@ -705,6 +708,7 @@ auth:
 ```
 
 **Channel action (голосовой ответ):**
+
 ```yaml
 name: synthesize_speech
 endpoint: "http://localhost:9011/v1/audio/speech"

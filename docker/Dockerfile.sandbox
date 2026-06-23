@@ -1,11 +1,11 @@
-# HydeClaw agent sandbox — Python + Node.js + AI CLI tools
+# Opex agent sandbox — Python + Node.js + AI CLI tools
 # Used as the base image for per-agent Docker containers (hc-agent-{name}).
 #
 # Build:
-#   docker build -f docker/Dockerfile.sandbox -t hydeclaw-sandbox:latest .
+#   docker build -f docker/Dockerfile.sandbox -t opex-sandbox:latest .
 #
 # On Pi (ARM64):
-#   docker build -f docker/Dockerfile.sandbox -t hydeclaw-sandbox:latest .
+#   docker build -f docker/Dockerfile.sandbox -t opex-sandbox:latest .
 
 FROM node:20-slim
 

@@ -13,7 +13,7 @@ import urllib.request
 import uuid
 
 PI_HOST = "http://192.168.1.82:18789"
-TOKEN = os.environ["HYDECLAW_AUTH_TOKEN"]
+TOKEN = os.environ["OPEX_AUTH_TOKEN"]
 AGENT = "Arty"
 
 

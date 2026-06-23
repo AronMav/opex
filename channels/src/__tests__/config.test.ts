@@ -3,7 +3,7 @@ import { buildEnvConfig, wsToHttp } from "../config";
 
 describe("buildEnvConfig", () => {
   test("reads defaults", () => {
-    const env = buildEnvConfig({ HYDECLAW_AUTH_TOKEN: "token123" });
+    const env = buildEnvConfig({ OPEX_AUTH_TOKEN: "token123" });
     expect(env.coreWs).toBe("ws://localhost:18789");
     expect(env.reconnectInterval).toBe(5);
     expect(env.authToken).toBe("token123");
@@ -11,16 +11,16 @@ describe("buildEnvConfig", () => {
 
   test("reads overrides", () => {
     const env = buildEnvConfig({
-      HYDECLAW_CORE_WS: "ws://localhost:9999",
-      HYDECLAW_AUTH_TOKEN: "mytoken",
+      OPEX_CORE_WS: "ws://localhost:9999",
+      OPEX_AUTH_TOKEN: "mytoken",
       RECONNECT_INTERVAL: "10",
     });
     expect(env.coreWs).toBe("ws://localhost:9999");
     expect(env.reconnectInterval).toBe(10);
   });
 
-  test("requires HYDECLAW_AUTH_TOKEN", () => {
-    expect(() => buildEnvConfig({})).toThrow("HYDECLAW_AUTH_TOKEN");
+  test("requires OPEX_AUTH_TOKEN", () => {
+    expect(() => buildEnvConfig({})).toThrow("OPEX_AUTH_TOKEN");
   });
 });
 

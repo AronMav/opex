@@ -24,9 +24,9 @@ info() { echo -e "${C_MUTED}·${NC} $*"; }
 # Determine OPEX root: prefer directory containing this script,
 # but if script is in /tmp or other external location, use $PWD
 _SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [[ -f "$_SCRIPT_DIR/config/hydeclaw.toml" ]]; then
+if [[ -f "$_SCRIPT_DIR/config/opex.toml" ]]; then
   ROOT="$_SCRIPT_DIR"
-elif [[ -f "$PWD/config/hydeclaw.toml" ]]; then
+elif [[ -f "$PWD/config/opex.toml" ]]; then
   ROOT="$PWD"
 else
   echo "Error: cannot find OPEX installation. Run from the installation directory."
@@ -65,8 +65,8 @@ echo ""
 # ════════════════════════════════════════════════════════════
 info "Stopping systemd services..."
 
-# Use wildcard glob for any hydeclaw-* unit
-for unit_file in ~/.config/systemd/user/hydeclaw*.service; do
+# Use wildcard glob for any opex-* unit
+for unit_file in ~/.config/systemd/user/opex*.service; do
   [[ -f "$unit_file" ]] || continue
   svc="$(basename "$unit_file" .service)"
   systemctl --user stop "$svc" 2>/dev/null || true
@@ -108,11 +108,11 @@ if command -v docker &>/dev/null; then
   done
 
   # 2c. Remove Docker network and volumes
-  docker network rm hydeclaw 2>/dev/null || true
+  docker network rm opex 2>/dev/null || true
   docker volume rm docker_pgdata 2>/dev/null || true
 
   # 2d. Remove OPEX Docker images (opex-*, browser-renderer, searxng)
-  for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^(opex-|hydeclaw-|browser-renderer|searxng/)' || true); do
+  for img in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^(opex-|opex-|browser-renderer|searxng/)' || true); do
     docker rmi "$img" 2>/dev/null || true
   done
 
@@ -129,7 +129,7 @@ info "Removing $ROOT ..."
 # Safety: never delete / or /home or /home/user
 case "$ROOT" in
   /|/home|/home/*)
-    # Only allow if it's at least 3 levels deep (/home/user/hydeclaw)
+    # Only allow if it's at least 3 levels deep (/home/user/opex)
     depth=$(echo "$ROOT" | tr -cd '/' | wc -c)
     if [[ "$depth" -lt 3 ]]; then
       err "Refusing to delete $ROOT (too shallow). Remove manually."
@@ -154,7 +154,7 @@ fi
 # ════════════════════════════════════════════════════════════
 # 4. Clean up stray files outside the directory
 # ════════════════════════════════════════════════════════════
-rm -f /tmp/hydeclaw-watchdog.json /tmp/hydeclaw-docker-env.bak 2>/dev/null || true
+rm -f /tmp/opex-watchdog.json /tmp/opex-docker-env.bak 2>/dev/null || true
 
 echo ""
 echo -e "${C_OK}${BOLD}OPEX completely uninstalled.${NC}"

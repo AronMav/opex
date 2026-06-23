@@ -113,9 +113,15 @@ pub struct UploadsConfig {
     pub max_upload_bytes: u64,
 }
 
-fn default_signed_url_ttl() -> u64 { 86_400 }
-fn default_require_signature() -> bool { true }
-fn default_max_upload_bytes() -> u64 { 52_428_800 }
+fn default_signed_url_ttl() -> u64 {
+    86_400
+}
+fn default_require_signature() -> bool {
+    true
+}
+fn default_max_upload_bytes() -> u64 {
+    52_428_800
+}
 
 impl Default for UploadsConfig {
     fn default() -> Self {
@@ -165,9 +171,15 @@ pub struct AgentToolConfig {
     pub safety_timeout_secs: u64,
 }
 
-fn default_message_wait_for_idle_secs() -> u64 { 60 }
-fn default_message_result_secs() -> u64 { 300 }
-fn default_safety_timeout_secs() -> u64 { 600 }
+fn default_message_wait_for_idle_secs() -> u64 {
+    60
+}
+fn default_message_result_secs() -> u64 {
+    300
+}
+fn default_safety_timeout_secs() -> u64 {
+    600
+}
 
 impl Default for AgentToolConfig {
     fn default() -> Self {
@@ -186,7 +198,9 @@ impl AgentToolConfig {
     /// override this — we only emit a warning.
     pub fn invariant_holds(&self) -> bool {
         self.safety_timeout_secs
-            > self.message_wait_for_idle_secs.saturating_add(self.message_result_secs)
+            > self
+                .message_wait_for_idle_secs
+                .saturating_add(self.message_result_secs)
     }
 
     /// Emit a `tracing::warn` if the invariant is violated. Called from
@@ -227,9 +241,15 @@ pub struct BackupConfig {
     pub postgres_container: String,
 }
 
-fn default_backup_cron() -> String { "0 0 5 * * *".to_string() }
-fn default_backup_retention_days() -> u32 { 7 }
-fn default_postgres_container() -> String { "docker-postgres-1".to_string() }
+fn default_backup_cron() -> String {
+    "0 0 5 * * *".to_string()
+}
+fn default_backup_retention_days() -> u32 {
+    7
+}
+fn default_postgres_container() -> String {
+    "docker-postgres-1".to_string()
+}
 
 impl Default for BackupConfig {
     fn default() -> Self {
@@ -263,12 +283,24 @@ pub struct CuratorConfig {
     pub agent_name: String,
 }
 
-fn default_curator_cron() -> String { "0 3 * * 0".to_string() }
-fn default_curator_min_idle_minutes() -> u32 { 30 }
-fn default_curator_stale_after_days() -> u32 { 30 }
-fn default_curator_archive_after_days() -> u32 { 90 }
-fn default_curator_max_repairs_per_run() -> u32 { 10 }
-fn default_curator_agent_name() -> String { "Hyde".to_string() }
+fn default_curator_cron() -> String {
+    "0 3 * * 0".to_string()
+}
+fn default_curator_min_idle_minutes() -> u32 {
+    30
+}
+fn default_curator_stale_after_days() -> u32 {
+    30
+}
+fn default_curator_archive_after_days() -> u32 {
+    90
+}
+fn default_curator_max_repairs_per_run() -> u32 {
+    10
+}
+fn default_curator_agent_name() -> String {
+    "Opex".to_string()
+}
 
 impl Default for CuratorConfig {
     fn default() -> Self {
@@ -305,9 +337,15 @@ pub struct CleanupConfig {
     pub uploads_retention_days: u32,
 }
 
-fn default_session_timeline_retention_days() -> u32 { 7 }
-fn default_session_timeline_batch_size() -> i64 { 5000 }
-fn default_uploads_retention_days() -> u32 { 30 }
+fn default_session_timeline_retention_days() -> u32 {
+    7
+}
+fn default_session_timeline_batch_size() -> i64 {
+    5000
+}
+fn default_uploads_retention_days() -> u32 {
+    30
+}
 
 impl Default for CleanupConfig {
     fn default() -> Self {
@@ -334,7 +372,9 @@ pub struct ShutdownConfig {
     pub drain_timeout_secs: u64,
 }
 
-fn default_drain_timeout_secs() -> u64 { 30 }
+fn default_drain_timeout_secs() -> u64 {
+    30
+}
 
 impl Default for ShutdownConfig {
     fn default() -> Self {
@@ -356,11 +396,15 @@ pub struct ToolCacheConfig {
     pub max_entries: usize,
 }
 
-fn default_tool_cache_max_entries() -> usize { 1000 }
+fn default_tool_cache_max_entries() -> usize {
+    1000
+}
 
 impl Default for ToolCacheConfig {
     fn default() -> Self {
-        Self { max_entries: default_tool_cache_max_entries() }
+        Self {
+            max_entries: default_tool_cache_max_entries(),
+        }
     }
 }
 
@@ -384,8 +428,12 @@ pub struct OtelConfig {
     pub sampling_ratio: f64,
 }
 
-fn default_otel_service() -> String { "opex-core".to_string() }
-fn default_otel_sampling_ratio() -> f64 { 1.0 }
+fn default_otel_service() -> String {
+    "opex-core".to_string()
+}
+fn default_otel_sampling_ratio() -> f64 {
+    1.0
+}
 
 impl Default for OtelConfig {
     fn default() -> Self {
@@ -454,11 +502,21 @@ pub struct LimitsConfig {
     pub max_sessions_per_agent: u32,
 }
 
-fn default_max_requests() -> u32 { 300 }
-fn default_max_tool_concurrency() -> u32 { 10 }
-fn default_request_timeout() -> u64 { 300 }
-fn default_max_restore_size_mb() -> u64 { 500 }
-fn default_max_sessions_per_agent() -> u32 { 500 }
+fn default_max_requests() -> u32 {
+    300
+}
+fn default_max_tool_concurrency() -> u32 {
+    10
+}
+fn default_request_timeout() -> u64 {
+    300
+}
+fn default_max_restore_size_mb() -> u64 {
+    500
+}
+fn default_max_sessions_per_agent() -> u32 {
+    500
+}
 
 impl Default for LimitsConfig {
     fn default() -> Self {
@@ -472,7 +530,9 @@ impl Default for LimitsConfig {
     }
 }
 
-pub(crate) fn default_true() -> bool { true }
+pub(crate) fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct SubagentsConfig {
@@ -486,8 +546,12 @@ pub struct SubagentsConfig {
     pub in_process_timeout: String,
 }
 
-fn default_subagents_enabled() -> bool { true }
-fn default_in_process_timeout() -> String { "2m".to_string() }
+fn default_subagents_enabled() -> bool {
+    true
+}
+fn default_in_process_timeout() -> String {
+    "2m".to_string()
+}
 
 impl Default for SubagentsConfig {
     fn default() -> Self {
@@ -515,7 +579,9 @@ pub struct ToolConfig {
     pub ui_path: Option<String>,
 }
 
-fn default_max_concurrent() -> u32 { 5 }
+fn default_max_concurrent() -> u32 {
+    5
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[allow(dead_code)] // Deserialized from TOML; protocol field reserved for MCP/HTTP routing
@@ -536,8 +602,12 @@ pub struct McpConfig {
     pub enabled: bool,
 }
 
-fn default_mcp_mode() -> String { "on-demand".to_string() }
-fn default_protocol() -> String { "mcp".to_string() }
+fn default_mcp_mode() -> String {
+    "on-demand".to_string()
+}
+fn default_protocol() -> String {
+    "mcp".to_string()
+}
 
 /// One MCP server entry as stored in workspace/mcp/NAME.yaml.
 /// Identical to `McpConfig` but includes the server name.
@@ -572,7 +642,6 @@ impl McpFileEntry {
             enabled: self.enabled,
         }
     }
-
 }
 
 // ── Agent config (separate TOML files) ──
@@ -631,9 +700,13 @@ impl ProviderRouteConfig {
     }
 }
 
-fn default_cooldown_secs() -> u64 { 60 }
+fn default_cooldown_secs() -> u64 {
+    60
+}
 
-fn default_condition() -> String { "default".to_string() }
+fn default_condition() -> String {
+    "default".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct AgentSettings {
@@ -653,7 +726,7 @@ pub struct AgentSettings {
     #[serde(default)]
     pub fallback_provider: Option<String>,
     /// Optional TTS provider name override. When set, channel actions calling YAML
-    /// tools with `channel_action: send_voice` inject `X-Hydeclaw-Provider: <name>`
+    /// tools with `channel_action: send_voice` inject `X-Opex-Provider: <name>`
     /// so toolgate routes the synth request to this specific TTS provider instead
     /// of the global `provider_active[tts]`. Each TTS provider's `options.voice`
     /// determines the voice. Useful for per-agent voice personalities.
@@ -661,7 +734,7 @@ pub struct AgentSettings {
     pub tts_provider: Option<String>,
     /// Optional image-generation provider name override. When set, channel actions
     /// calling YAML tools with `channel_action: send_photo` inject
-    /// `X-Hydeclaw-Provider: <name>` so toolgate routes the generation request
+    /// `X-Opex-Provider: <name>` so toolgate routes the generation request
     /// to this specific imagegen provider instead of the global
     /// `provider_active[imagegen]`. Useful for per-agent visual styles.
     #[serde(default)]
@@ -738,7 +811,9 @@ pub struct AgentSettings {
     pub tool_dispatcher: ToolDispatcherConfig,
 }
 
-fn default_max_failover_attempts() -> u32 { 3 }
+fn default_max_failover_attempts() -> u32 {
+    3
+}
 
 /// Per-agent hooks configuration (TOML: `[agent.hooks]`).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
@@ -801,13 +876,27 @@ pub struct ToolLoopSettings {
     pub error_break_threshold: Option<usize>,
 }
 
-fn default_tool_loop_max() -> usize { 50 }
-fn default_tool_loop_warn() -> usize { 5 }
-fn default_tool_loop_break() -> usize { 10 }
-fn default_max_consecutive_failures() -> usize { 3 }
-fn default_max_auto_continues() -> u8 { 5 }
-fn default_max_loop_nudges() -> usize { 3 }
-fn default_ngram_cycle_length() -> usize { 6 }
+fn default_tool_loop_max() -> usize {
+    50
+}
+fn default_tool_loop_warn() -> usize {
+    5
+}
+fn default_tool_loop_break() -> usize {
+    10
+}
+fn default_max_consecutive_failures() -> usize {
+    3
+}
+fn default_max_auto_continues() -> u8 {
+    5
+}
+fn default_max_loop_nudges() -> usize {
+    3
+}
+fn default_ngram_cycle_length() -> usize {
+    6
+}
 
 /// Approval system configuration for an agent.
 /// When enabled, certain tool calls require owner confirmation before execution.
@@ -827,10 +916,16 @@ pub struct ApprovalConfig {
     pub timeout_seconds: u64,
 }
 
-fn default_approval_timeout() -> u64 { 300 }
+fn default_approval_timeout() -> u64 {
+    300
+}
 
-fn default_language() -> String { "ru".to_string() }
-fn default_temperature() -> f64 { 1.0 }
+fn default_language() -> String {
+    "ru".to_string()
+}
+fn default_temperature() -> f64 {
+    1.0
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct AgentAccessConfig {
@@ -841,7 +936,9 @@ pub struct AgentAccessConfig {
     pub owner_id: Option<String>,
 }
 
-fn default_access_open() -> String { "open".to_string() }
+fn default_access_open() -> String {
+    "open".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct HeartbeatConfig {
@@ -921,7 +1018,9 @@ pub struct DelegationConfig {
     pub subagent_dispatcher_enabled: Option<bool>,
 }
 
-fn default_max_depth() -> u8 { 1 }
+fn default_max_depth() -> u8 {
+    1
+}
 
 impl Default for DelegationConfig {
     fn default() -> Self {
@@ -953,7 +1052,9 @@ impl DelegationConfig {
         // Validation here is best-effort syntactic — semantic existence check happens at filter time.
         let valid_tool_name = |name: &str| -> bool {
             !name.is_empty()
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         };
 
         for name in self.blocked_tools_extra.iter() {
@@ -992,7 +1093,9 @@ pub struct ToolDispatcherConfig {
     pub promotion_max: u32,
 }
 
-fn default_promotion_max() -> u32 { 8 }
+fn default_promotion_max() -> u32 {
+    8
+}
 
 impl Default for ToolDispatcherConfig {
     fn default() -> Self {
@@ -1052,16 +1155,32 @@ impl Default for CompactionConfig {
 }
 
 impl CompactionConfig {
-    fn default_protect_first_n() -> usize { 3 }
-    fn default_summary_target_ratio() -> f64 { 0.20 }
-    fn default_anti_thrash_min_savings() -> f64 { 0.10 }
-    fn default_anti_thrash_max_skips() -> u8 { 2 }
-    fn default_extract_to_memory() -> bool { true }
+    fn default_protect_first_n() -> usize {
+        3
+    }
+    fn default_summary_target_ratio() -> f64 {
+        0.20
+    }
+    fn default_anti_thrash_min_savings() -> f64 {
+        0.10
+    }
+    fn default_anti_thrash_max_skips() -> u8 {
+        2
+    }
+    fn default_extract_to_memory() -> bool {
+        true
+    }
 }
 
-fn default_threshold() -> f64 { 0.8 }
-fn default_preserve_last_n() -> u32 { 10 }
-fn default_false() -> bool { false }
+fn default_threshold() -> f64 {
+    0.8
+}
+fn default_preserve_last_n() -> u32 {
+    10
+}
+fn default_false() -> bool {
+    false
+}
 
 /// Per-agent session skill review config (TOML: `[agent.skill_review]`).
 ///
@@ -1077,11 +1196,18 @@ pub struct SkillReviewConfig {
 }
 
 impl SkillReviewConfig {
-    fn default_min_tool_calls() -> u32 { 3 }
+    fn default_min_tool_calls() -> u32 {
+        3
+    }
 }
 
 impl Default for SkillReviewConfig {
-    fn default() -> Self { Self { enabled: false, min_tool_calls: 3 } }
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_tool_calls: 3,
+        }
+    }
 }
 
 /// Session management config (per-agent).
@@ -1105,8 +1231,12 @@ pub struct SessionConfig {
     pub prune_tool_output_after_turns: Option<usize>,
 }
 
-fn default_dm_scope() -> String { "per-channel-peer".to_string() }
-fn default_session_ttl_days() -> u32 { 30 }
+fn default_dm_scope() -> String {
+    "per-channel-peer".to_string()
+}
+fn default_session_ttl_days() -> u32 {
+    30
+}
 
 /// Watchdog configuration for stuck session detection.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -1118,7 +1248,9 @@ pub struct WatchdogConfig {
     pub inactivity_secs: u64,
 }
 
-fn default_watchdog_inactivity_secs() -> u64 { 600 }
+fn default_watchdog_inactivity_secs() -> u64 {
+    600
+}
 
 impl Default for SessionConfig {
     fn default() -> Self {
@@ -1167,10 +1299,18 @@ pub struct SandboxConfig {
     pub extra_binds: Vec<String>,
 }
 
-fn default_sandbox_image() -> String { "python:3.12-slim".to_string() }
-fn default_sandbox_timeout() -> u64 { 30 }
-fn default_sandbox_memory() -> u32 { 256 }
-fn default_sandbox_cpu() -> f64 { 1.0 }
+fn default_sandbox_image() -> String {
+    "python:3.12-slim".to_string()
+}
+fn default_sandbox_timeout() -> u64 {
+    30
+}
+fn default_sandbox_memory() -> u32 {
+    256
+}
+fn default_sandbox_cpu() -> f64 {
+    1.0
+}
 
 impl Default for SandboxConfig {
     fn default() -> Self {
@@ -1200,8 +1340,12 @@ pub struct DockerConfig {
     pub rebuild_timeout_secs: u64,
 }
 
-fn default_compose_file() -> String { "docker/docker-compose.yml".into() }
-fn default_rebuild_timeout() -> u64 { 300 }
+fn default_compose_file() -> String {
+    "docker/docker-compose.yml".into()
+}
+fn default_rebuild_timeout() -> u64 {
+    300
+}
 
 impl Default for DockerConfig {
     fn default() -> Self {
@@ -1233,14 +1377,13 @@ pub struct TailscaleConfig {
     pub funnel: bool,
 }
 
-
 impl AppConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("failed to read config: {}", path.as_ref().display()))?;
         Self::check_renamed_keys(&content)?;
-        let config: Self = toml::from_str(&content)
-            .with_context(|| "failed to parse config TOML")?;
+        let config: Self =
+            toml::from_str(&content).with_context(|| "failed to parse config TOML")?;
         Ok(config)
     }
 
@@ -1249,8 +1392,16 @@ impl AppConfig {
     fn check_renamed_keys(raw_toml: &str) -> Result<()> {
         const RENAMES: &[(&str, &str, &str)] = &[
             // (old key, new key, section)
-            ("session_events_retention_days", "session_timeline_retention_days", "[cleanup]"),
-            ("session_events_batch_size",     "session_timeline_batch_size",     "[cleanup]"),
+            (
+                "session_events_retention_days",
+                "session_timeline_retention_days",
+                "[cleanup]",
+            ),
+            (
+                "session_events_batch_size",
+                "session_timeline_batch_size",
+                "[cleanup]",
+            ),
         ];
         for (old, new, section) in RENAMES {
             // Match the old key at the start of a line (allowing leading
@@ -1279,8 +1430,8 @@ impl AgentConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("failed to read agent config: {}", path.as_ref().display()))?;
-        let config: Self = toml::from_str(&content)
-            .with_context(|| "failed to parse agent config TOML")?;
+        let config: Self =
+            toml::from_str(&content).with_context(|| "failed to parse agent config TOML")?;
 
         // Validate delegation policy. Errors here block agent load — misconfigured
         // delegation is a security/correctness concern, not a tunable.
@@ -1332,14 +1483,12 @@ pub fn load_agent_configs(dir: &str) -> Result<Vec<AgentConfig>> {
 
 /// Update service URLs in the TOML config file.
 /// Uses `toml_edit` to preserve comments and formatting.
-pub fn update_service_urls(
-    config_path: &str,
-    toolgate_url: Option<&str>,
-) -> Result<()> {
+pub fn update_service_urls(config_path: &str, toolgate_url: Option<&str>) -> Result<()> {
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
 
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .with_context(|| "failed to parse config TOML for editing")?;
 
     // toolgate_url: top-level key + [tools.toolgate].url
@@ -1351,9 +1500,10 @@ pub fn update_service_urls(
         }
         // Also update [tools.toolgate].url (used by ToolRegistry health checks)
         if let Some(tools) = doc.get_mut("tools")
-            && let Some(mp) = tools.get_mut("toolgate") {
-                mp["url"] = toml_edit::value(if url.is_empty() { "" } else { url });
-            }
+            && let Some(mp) = tools.get_mut("toolgate")
+        {
+            mp["url"] = toml_edit::value(if url.is_empty() { "" } else { url });
+        }
     }
 
     std::fs::write(config_path, doc.to_string())
@@ -1374,7 +1524,8 @@ pub fn update_memory_config(
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
 
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .with_context(|| "failed to parse config TOML for editing")?;
 
     // Ensure [memory] section exists
@@ -1432,14 +1583,12 @@ pub fn update_memory_config(
     Ok(())
 }
 
-pub fn update_subagents_enabled(
-    config_path: &str,
-    enabled: bool,
-) -> Result<()> {
+pub fn update_subagents_enabled(config_path: &str, enabled: bool) -> Result<()> {
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
 
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .with_context(|| "failed to parse config TOML for editing")?;
 
     if doc.get("subagents").is_none() {
@@ -1463,7 +1612,8 @@ pub fn update_limits_config(
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
 
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .with_context(|| "failed to parse config TOML for editing")?;
 
     if doc.get("limits").is_none() {
@@ -1485,14 +1635,12 @@ pub fn update_limits_config(
 }
 
 /// Update [gateway].`public_url` in TOML config file.
-pub fn update_public_url(
-    config_path: &str,
-    public_url: &str,
-) -> Result<()> {
+pub fn update_public_url(config_path: &str, public_url: &str) -> Result<()> {
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
 
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .with_context(|| "failed to parse config TOML for editing")?;
 
     if doc.get("gateway").is_none() {
@@ -1523,7 +1671,8 @@ pub fn update_backup_config(
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
 
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .with_context(|| "failed to parse config TOML for editing")?;
 
     if doc.get("backup").is_none() {
@@ -1562,20 +1711,35 @@ pub fn update_curator_config(
 ) -> Result<()> {
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .with_context(|| "failed to parse config TOML for editing")?;
 
     if doc.get("curator").is_none() {
         doc["curator"] = toml_edit::Item::Table(toml_edit::Table::new());
     }
 
-    if let Some(v) = enabled { doc["curator"]["enabled"] = toml_edit::value(v); }
-    if let Some(v) = cron { doc["curator"]["cron"] = toml_edit::value(v); }
-    if let Some(v) = min_idle_minutes { doc["curator"]["min_idle_minutes"] = toml_edit::value(i64::from(v)); }
-    if let Some(v) = stale_after_days { doc["curator"]["stale_after_days"] = toml_edit::value(i64::from(v)); }
-    if let Some(v) = archive_after_days { doc["curator"]["archive_after_days"] = toml_edit::value(i64::from(v)); }
-    if let Some(v) = max_repairs_per_run { doc["curator"]["max_repairs_per_run"] = toml_edit::value(i64::from(v)); }
-    if let Some(v) = agent_name { doc["curator"]["agent_name"] = toml_edit::value(v); }
+    if let Some(v) = enabled {
+        doc["curator"]["enabled"] = toml_edit::value(v);
+    }
+    if let Some(v) = cron {
+        doc["curator"]["cron"] = toml_edit::value(v);
+    }
+    if let Some(v) = min_idle_minutes {
+        doc["curator"]["min_idle_minutes"] = toml_edit::value(i64::from(v));
+    }
+    if let Some(v) = stale_after_days {
+        doc["curator"]["stale_after_days"] = toml_edit::value(i64::from(v));
+    }
+    if let Some(v) = archive_after_days {
+        doc["curator"]["archive_after_days"] = toml_edit::value(i64::from(v));
+    }
+    if let Some(v) = max_repairs_per_run {
+        doc["curator"]["max_repairs_per_run"] = toml_edit::value(i64::from(v));
+    }
+    if let Some(v) = agent_name {
+        doc["curator"]["agent_name"] = toml_edit::value(v);
+    }
 
     std::fs::write(config_path, doc.to_string())
         .with_context(|| format!("failed to write config: {config_path}"))?;
@@ -1592,7 +1756,8 @@ pub fn update_agent_tool_config(
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("failed to read config: {config_path}"))?;
 
-    let mut doc: toml_edit::DocumentMut = content.parse()
+    let mut doc: toml_edit::DocumentMut = content
+        .parse()
         .with_context(|| "failed to parse config TOML for editing")?;
 
     if doc.get("agent_tool").is_none() {
@@ -1753,7 +1918,8 @@ name = "test"
 provider = "minimax"
 model = "m2.5"
 "#;
-        let cfg: AgentConfig = toml::from_str(toml_str).expect("failed to parse minimal AgentConfig");
+        let cfg: AgentConfig =
+            toml::from_str(toml_str).expect("failed to parse minimal AgentConfig");
         assert_eq!(cfg.agent.name, "test");
         assert_eq!(cfg.agent.provider, "minimax");
         assert_eq!(cfg.agent.model, "m2.5");
@@ -1928,7 +2094,10 @@ provider = "minimax"
 model = "m2.5"
 "#;
         let cfg: AgentConfig = toml::from_str(toml_str).expect("parse minimal AgentConfig");
-        assert!(!cfg.agent.prompt_cache, "absent field must default to false");
+        assert!(
+            !cfg.agent.prompt_cache,
+            "absent field must default to false"
+        );
     }
 
     #[test]
@@ -1941,7 +2110,8 @@ provider = "minimax"
 model = "m2.5"
 prompt_cache = true
 "#;
-        let cfg: AgentConfig = toml::from_str(toml_str).expect("parse AgentConfig with prompt_cache");
+        let cfg: AgentConfig =
+            toml::from_str(toml_str).expect("parse AgentConfig with prompt_cache");
         assert!(cfg.agent.prompt_cache, "explicit true must be parsed");
     }
 
@@ -1963,8 +2133,14 @@ prompt_cache = true
     fn uploads_config_defaults() {
         let cfg = UploadsConfig::default();
         assert_eq!(cfg.signed_url_ttl_secs, 86_400);
-        assert!(cfg.require_signature, "v0.26.0 enforces signatures by default");
-        assert_eq!(cfg.max_upload_bytes, 52_428_800, "default 50 MB per-file ceiling");
+        assert!(
+            cfg.require_signature,
+            "v0.26.0 enforces signatures by default"
+        );
+        assert_eq!(
+            cfg.max_upload_bytes, 52_428_800,
+            "default 50 MB per-file ceiling"
+        );
     }
 
     #[test]
@@ -2032,7 +2208,10 @@ url = "postgres://localhost/test"
 max_requests_per_minute = 200
 "#;
         let cfg: AppConfig = toml::from_str(toml_str).expect("parse");
-        assert_eq!(cfg.limits.max_restore_size_mb, 500, "missing key uses default");
+        assert_eq!(
+            cfg.limits.max_restore_size_mb, 500,
+            "missing key uses default"
+        );
     }
 
     // ── 5. SubagentsConfig defaults ──
@@ -2234,7 +2413,8 @@ memory_mb = 512
 enabled = true
 funnel = true
 "#;
-        let cfg: AppConfig = toml::from_str(toml_str).expect("failed to parse AppConfig with overrides");
+        let cfg: AppConfig =
+            toml::from_str(toml_str).expect("failed to parse AppConfig with overrides");
         assert_eq!(cfg.gateway.listen, "127.0.0.1:9999");
         assert_eq!(cfg.gateway.auth_token_env.as_deref(), Some("MY_TOKEN"));
         assert_eq!(cfg.database.url, "postgres://user:pass@db:5432/opex");
@@ -2281,8 +2461,8 @@ funnel = true
     #[test]
     fn mcp_file_entry_to_config_defaults() {
         let yaml_str = "name: minimal-mcp";
-        let entry: McpFileEntry = serde_yaml::from_str(yaml_str)
-            .expect("failed to parse minimal McpFileEntry");
+        let entry: McpFileEntry =
+            serde_yaml::from_str(yaml_str).expect("failed to parse minimal McpFileEntry");
 
         assert_eq!(entry.name, "minimal-mcp");
         assert!(entry.url.is_none());
@@ -2301,7 +2481,6 @@ funnel = true
     }
 
     // ── 17. McpFileEntry::config_ref() returns same as to_config() ──
-
 
     // ── 18. ToolLoopSettings defaults via TOML deserialization ──
 
@@ -2377,7 +2556,10 @@ model = "gpt-4"
         let cfg: AgentConfig = toml::from_str(toml_str).expect("failed to parse");
         assert_eq!(cfg.agent.routing.len(), 1);
         assert_eq!(cfg.agent.routing[0].condition, "default");
-        assert_eq!(cfg.agent.routing[0].connection.as_deref(), Some("openai-default"));
+        assert_eq!(
+            cfg.agent.routing[0].connection.as_deref(),
+            Some("openai-default")
+        );
         assert_eq!(cfg.agent.routing[0].model.as_deref(), Some("gpt-4"));
         assert!(cfg.agent.routing[0].temperature.is_none());
     }
@@ -2431,7 +2613,7 @@ session_tools = false
         let tools = cfg.agent.tools.expect("tools should be Some");
         assert!(!tools.groups.git);
         assert!(tools.groups.tool_management); // default true
-        assert!(tools.groups.skill_editing);   // default true
+        assert!(tools.groups.skill_editing); // default true
         assert!(!tools.groups.session_tools);
     }
 
@@ -2563,7 +2745,6 @@ foo_bar_baz = 42
         };
         assert!(cfg.validate().is_empty());
     }
-
 }
 
 #[cfg(test)]
@@ -2635,7 +2816,6 @@ mod backup_config_tests {
         .unwrap();
         assert_eq!(cfg.backup.postgres_container, "my-postgres-2");
     }
-
 }
 
 #[cfg(test)]

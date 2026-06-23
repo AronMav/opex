@@ -24,7 +24,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: hydeclaw_test
+          POSTGRES_DB: opex_test
         ports:
           - 5432:5432
         options: >-
@@ -57,7 +57,7 @@ jobs:
       # postgres above via DATABASE_URL.
       - name: Run integration tests
         env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/hydeclaw_test
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/opex_test
         run: cargo test -p opex-core --tests
 
   # Phase 65 OBS-06: rustls-only invariant — no OpenSSL in the transitive

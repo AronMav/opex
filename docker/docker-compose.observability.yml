@@ -1,15 +1,15 @@
 services:
   # Jaeger all-in-one — receives OTLP traces over gRPC (4317) and exposes a
-  # web UI on 16686 for span exploration. Used by HydeClaw Core when built
-  # with `--features otel` and `[otel] enabled = true` in hydeclaw.toml.
+  # web UI on 16686 for span exploration. Used by Opex Core when built
+  # with `--features otel` and `[otel] enabled = true` in opex.toml.
   #
   # Why Jaeger all-in-one (not a separate otel-collector + storage):
   #   * single ARM64 image (jaegertracing/all-in-one is multi-arch — runs on
   #     Raspberry Pi 4/5 without modification)
   #   * built-in Badger storage — embedded key-value store, persists to
   #     a Docker volume, no external dependency (Cassandra / Elasticsearch
-  #     would each be heavier than HydeClaw itself on a Pi)
-  #   * built-in OTLP receiver: HydeClaw points at port 4317 directly with
+  #     would each be heavier than Opex itself on a Pi)
+  #   * built-in OTLP receiver: Opex points at port 4317 directly with
   #     no intermediate collector to maintain
   #
   # Production-grade setups (multi-host, > ~1000 RPS) should swap to
@@ -46,7 +46,7 @@ services:
       BADGER_DIRECTORY_KEY: "/badger/key"
       BADGER_SPAN_STORE_TTL: "${JAEGER_SPAN_TTL:-72h}"
     ports:
-      # OTLP gRPC receiver (HydeClaw Core sends here when otel feature enabled)
+      # OTLP gRPC receiver (Opex Core sends here when otel feature enabled)
       - "127.0.0.1:4317:4317"
       # OTLP HTTP receiver (alternative; Toolgate Python could use this)
       - "127.0.0.1:4318:4318"
@@ -70,10 +70,10 @@ volumes:
     driver: local
 
 # Standalone network — Jaeger only needs to be reachable from the host on
-# 127.0.0.1:4317 (HydeClaw Core is a native process, not a container, so it
+# 127.0.0.1:4317 (Opex Core is a native process, not a container, so it
 # reaches Jaeger via the published port, not via Docker DNS). Keeping this
 # isolated lets `docker compose up` work without first booting the main
-# `docker-compose.yml` to create the `hydeclaw` network.
+# `docker-compose.yml` to create the `opex` network.
 networks:
   observability:
     driver: bridge

@@ -20,7 +20,7 @@ Use Python `requests` in `code_exec`. Do NOT use curl.
 
 ```python
 import requests, json, os
-TOKEN = os.environ.get("HYDECLAW_AUTH_TOKEN", "")
+TOKEN = os.environ.get("OPEX_AUTH_TOKEN", "")
 H = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 BASE = "http://localhost:18789"
 ```
@@ -44,6 +44,7 @@ print(resp.status_code, resp.text)
 ```
 
 **Fields:**
+
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | yes | Agent name (alphanumeric + underscore/hyphen) |

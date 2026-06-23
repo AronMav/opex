@@ -32,14 +32,8 @@ pub struct ParsedSignedUrl {
 ///
 /// HMAC payload is `"{filename}:{exp_unix}"` where `filename = "{uuid}.{ext}"`.
 /// Key is a 32-byte slice (Plan 04 derives it via HKDF-SHA256 from
-/// `HYDECLAW_MASTER_KEY`; tests pass a deterministic array for reproducibility).
-pub fn mint_signed_url(
-    base: &str,
-    uuid: &str,
-    ext: &str,
-    key: &[u8; 32],
-    ttl_secs: u64,
-) -> String {
+/// `OPEX_MASTER_KEY`; tests pass a deterministic array for reproducibility).
+pub fn mint_signed_url(base: &str, uuid: &str, ext: &str, key: &[u8; 32], ttl_secs: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before UNIX epoch")

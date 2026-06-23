@@ -26,7 +26,7 @@ All providers (LLM and media) use the unified `/api/providers` endpoint. There a
 
 ```bash
 curl -sf -X POST http://localhost:18789/api/providers \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "my-openai",
@@ -44,7 +44,7 @@ For media providers, set `type` to the capability (stt, tts, vision, imagegen, e
 ```bash
 # Example: fal.ai image generation
 curl -sf -X POST http://localhost:18789/api/providers \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "fal-flux",
@@ -62,7 +62,7 @@ After creating a media provider, set it as active for its capability:
 
 ```bash
 curl -sf -X PUT http://localhost:18789/api/provider-active \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"capability": "imagegen", "provider_name": "fal-flux"}'
 ```
@@ -71,7 +71,7 @@ Then reload toolgate so it picks up the new config:
 
 ```bash
 curl -sf -X POST http://localhost:18789/api/services/toolgate/restart \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
 ```
 
 Poll health until ready (up to 15 seconds):
@@ -94,7 +94,7 @@ The `active_providers` field should show the new provider.
 
 ```bash
 curl -sf -X PUT http://localhost:18789/api/providers/PROVIDER_UUID \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"api_key": "new-key", "default_model": "gpt-4o-mini"}'
 ```
@@ -110,7 +110,7 @@ A `command` override is validated (must exist on system). After update, a health
 
 ```bash
 curl -sf -X PATCH http://localhost:18789/api/providers/PROVIDER_UUID \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" \
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "options": {
@@ -138,14 +138,14 @@ Response includes `health_check` field with CLI validation result:
 
 ```bash
 curl -sf -X DELETE http://localhost:18789/api/providers/PROVIDER_UUID \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
 ```
 
 ## Discover models
 
 ```bash
 curl -sf http://localhost:18789/api/providers/PROVIDER_UUID/models \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
 ```
 
 Returns `{"models": [...]}` — array of strings or `{id, owned_by}` objects.
@@ -158,7 +158,7 @@ After creating a text provider, assign it to an agent using the GET→modify→P
 
 ```bash
 curl -sf http://localhost:18789/api/provider-types \
-  -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN"
+  -H "Authorization: Bearer $OPEX_AUTH_TOKEN"
 ```
 
 ## Checklist

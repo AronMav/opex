@@ -230,7 +230,7 @@ mod tests {
             id: "chatcmpl-test".to_string(),
             object: "chat.completion.chunk".to_string(),
             created: 1700000000,
-            model: "Hyde".to_string(),
+            model: "Opex".to_string(),
             choices: vec![ChatChunkChoice {
                 index: 0,
                 delta: ChatChunkDelta {
@@ -240,7 +240,7 @@ mod tests {
             }],
         };
         let actual = serde_json::to_string(&chunk).unwrap();
-        let expected = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1700000000,"model":"Hyde","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}"#;
+        let expected = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1700000000,"model":"Opex","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}"#;
         assert_eq!(actual, expected);
     }
 
@@ -250,7 +250,7 @@ mod tests {
             id: "chatcmpl-test".to_string(),
             object: "chat.completion.chunk".to_string(),
             created: 1700000000,
-            model: "Hyde".to_string(),
+            model: "Opex".to_string(),
             choices: vec![ChatChunkChoice {
                 index: 0,
                 delta: ChatChunkDelta::default(),
@@ -258,7 +258,7 @@ mod tests {
             }],
         };
         let actual = serde_json::to_string(&chunk).unwrap();
-        let expected = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1700000000,"model":"Hyde","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#;
+        let expected = r#"{"id":"chatcmpl-test","object":"chat.completion.chunk","created":1700000000,"model":"Opex","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#;
         assert_eq!(actual, expected);
     }
 }

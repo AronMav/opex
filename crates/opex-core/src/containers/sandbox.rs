@@ -299,7 +299,7 @@ impl CodeSandbox {
         // Only base agents get network access to the opex Docker network.
         // Non-base agents run fully network-isolated to prevent access to
         // internal infrastructure (postgres, toolgate, searxng, etc.).
-        let network_mode = if base { Some("hydeclaw".to_string()) } else { None };
+        let network_mode = if base { Some("opex".to_string()) } else { None };
 
         self.docker.create_container(
             Some(CreateContainerOptions { name: name.to_string(), ..Default::default() }),

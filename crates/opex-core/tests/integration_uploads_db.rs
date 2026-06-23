@@ -15,11 +15,11 @@ async fn icon_roundtrip_db_layer() {
     let pool = h.pool();
     let png = b"\x89PNG\r\n\x1a\nbogus-but-fine-for-test".to_vec();
 
-    let id = uploads::upsert_agent_icon(pool, "Hyde", "image/png", &png)
+    let id = uploads::upsert_agent_icon(pool, "Opex", "image/png", &png)
         .await
         .expect("upsert");
     assert!(
-        uploads::lookup_agent_icon_id(pool, "Hyde")
+        uploads::lookup_agent_icon_id(pool, "Opex")
             .await
             .unwrap()
             .is_some(),
@@ -54,11 +54,11 @@ async fn icon_roundtrip_db_layer() {
     assert!(verify_uploads_url(id, &sig, exp, &key).is_ok());
 
     assert_eq!(
-        uploads::delete_agent_icon(pool, "Hyde").await.unwrap(),
+        uploads::delete_agent_icon(pool, "Opex").await.unwrap(),
         1,
         "delete returns 1 affected row"
     );
-    assert!(uploads::lookup_agent_icon_id(pool, "Hyde")
+    assert!(uploads::lookup_agent_icon_id(pool, "Opex")
         .await
         .unwrap()
         .is_none());

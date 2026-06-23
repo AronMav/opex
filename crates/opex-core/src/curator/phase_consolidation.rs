@@ -71,7 +71,7 @@ async fn read_proposals_file(path: &str) -> ProposalsFile {
     }
 }
 
-/// Run the Analyst Hyde session. Hyde reads active skills and writes
+/// Run the Analyst Opex session. Opex reads active skills and writes
 /// `workspace/curator_proposals.json` via workspace_write.
 /// Returns the path where the agent will write curator_proposals.json.
 fn proposals_path(workspace_dir: &str, agent_name: &str) -> std::path::PathBuf {
@@ -346,7 +346,7 @@ async fn apply_deterministic_fix(
     Ok(true)
 }
 
-/// Run executor Hyde session for MERGE and FIX proposals.
+/// Run executor Opex session for MERGE and FIX proposals.
 async fn run_executor(
     _workspace_dir: &str,
     agents: &AgentCore,

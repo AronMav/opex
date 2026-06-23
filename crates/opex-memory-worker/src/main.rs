@@ -1,8 +1,8 @@
 mod config;
-mod tasks;
 mod handlers;
 #[cfg(feature = "otel")]
 mod otel_init;
+mod tasks;
 
 use sqlx::postgres::{PgListener, PgPoolOptions};
 
@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
         if std::path::Path::new("config/opex.toml").exists() {
             "config/opex.toml".into()
         } else {
-            "config/hydeclaw.toml".into()
+            "config/opex.toml".into()
         }
     });
     let cfg = config::load_config(&config_path)?;
@@ -81,10 +81,7 @@ async fn main() -> anyhow::Result<()> {
     // here; worker no longer manages its own reqwest::Client for embeddings.
     // `requested_dimensions = 0` means "let Toolgate resolve the active
     // embedding model's native dimension" (worker doesn't override dims).
-    let toolgate_client = opex_embedding::ToolgateClient::new(
-        cfg.toolgate_url.clone(),
-        0,
-    );
+    let toolgate_client = opex_embedding::ToolgateClient::new(cfg.toolgate_url.clone(), 0);
 
     let ctx = handlers::DispatchCtx {
         toolgate_client: &toolgate_client,
@@ -267,11 +264,7 @@ mod tests {
         Poll,
     }
 
-    fn should_retry_listen(
-        notify_mode: NotifyMode,
-        wake: Wake,
-        listener_is_some: bool,
-    ) -> bool {
+    fn should_retry_listen(notify_mode: NotifyMode, wake: Wake, listener_is_some: bool) -> bool {
         notify_mode == NotifyMode::Listen
             && (matches!(wake, Wake::ListenerDied)
                 || (matches!(wake, Wake::Poll) && !listener_is_some))

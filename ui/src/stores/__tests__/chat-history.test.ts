@@ -199,8 +199,10 @@ describe("convertHistory — global tool index prevents mis-sort when intermedia
         tool_calls: [{ id: "call_first", name: "search", arguments: {} }] as any,
         created_at: "2026-04-30T10:00:01Z",
       }),
-      makeRow({ id: "t1", role: "tool", parent_message_id: "a1", tool_call_id: "call_first",
-        content: "Error: bad query", created_at: "2026-04-30T10:00:02Z" }),
+      makeRow({
+        id: "t1", role: "tool", parent_message_id: "a1", tool_call_id: "call_first",
+        content: "Error: bad query", created_at: "2026-04-30T10:00:02Z"
+      }),
       // No text in a2 — its merge adds no text separator, so t2 joins t1's run
       makeRow({
         id: "a2", role: "assistant", agent_id: "Arty", parent_message_id: "t1",
@@ -208,8 +210,10 @@ describe("convertHistory — global tool index prevents mis-sort when intermedia
         tool_calls: [{ id: "call_second", name: "search", arguments: {} }] as any,
         created_at: "2026-04-30T10:00:03Z",
       }),
-      makeRow({ id: "t2", role: "tool", parent_message_id: "a2", tool_call_id: "call_second",
-        content: "Good result", created_at: "2026-04-30T10:00:04Z" }),
+      makeRow({
+        id: "t2", role: "tool", parent_message_id: "a2", tool_call_id: "call_second",
+        content: "Good result", created_at: "2026-04-30T10:00:04Z"
+      }),
     ];
 
     const messages = convertHistory(rows, false, {});
@@ -246,7 +250,7 @@ describe("convertHistory — parallel tool results sorted by declared order", ()
         agent_id: "Arty",
         content: "",
         tool_calls: [
-          { id: "call_00_agents", name: "agents_list",    arguments: {} },
+          { id: "call_00_agents", name: "agents_list", arguments: {} },
           { id: "call_01_search", name: "search_web", arguments: {} },
           { id: "call_02_search", name: "search_web", arguments: {} },
         ] as any,
@@ -255,7 +259,7 @@ describe("convertHistory — parallel tool results sorted by declared order", ()
       // Tool results arrive in completion order: call_01 first (fastest), call_02, call_00 last
       makeRow({ id: "t1", role: "tool", tool_call_id: "call_01_search", content: "search result 1", created_at: "2026-04-29T10:50:17.662Z" }),
       makeRow({ id: "t2", role: "tool", tool_call_id: "call_02_search", content: "search result 2", created_at: "2026-04-29T10:50:17.676Z" }),
-      makeRow({ id: "t3", role: "tool", tool_call_id: "call_00_agents", content: "agents result",   created_at: "2026-04-29T10:50:17.800Z" }),
+      makeRow({ id: "t3", role: "tool", tool_call_id: "call_00_agents", content: "agents result", created_at: "2026-04-29T10:50:17.800Z" }),
     ];
 
     const messages = convertHistory(rows, false, {});
@@ -322,7 +326,7 @@ describe("convertHistory — parallel tool results sorted by declared order", ()
 describe("resolveActivePath — parallel batch heir picked by descendants, not created_at", () => {
   it("continues through the sibling whose id is parent_message_id of a later message, even if it is not the latest by created_at", () => {
     // Reproduces Arty's session 48fc271b-ebdc-4db0-8542-525a1c792cc6 step 1:
-    //   - assistant a1 dispatches 3 parallel tools t_hyde, t_alma, t_search
+    //   - assistant a1 dispatches 3 parallel tools t_opex, t_alma, t_search
     //   - all three share parent_message_id = a1
     //   - backend's chain_parent advances to declaration-last parallel tool = t_search
     //   - sequential follow-up t_exch has parent_message_id = t_search
@@ -339,12 +343,12 @@ describe("resolveActivePath — parallel batch heir picked by descendants, not c
       makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", created_at: "2026-05-13T10:31:35Z" }),
       // Parallel batch — all parent=a1, but t_alma is the LATEST by created_at
       // while t_search is the actual heir (has the descendant t_exch).
-      makeRow({ id: "t_hyde",   role: "tool", parent_message_id: "a1", tool_call_id: "call_h", created_at: "2026-05-13T10:33:56.067Z" }),
+      makeRow({ id: "t_opex", role: "tool", parent_message_id: "a1", tool_call_id: "call_h", created_at: "2026-05-13T10:33:56.067Z" }),
       makeRow({ id: "t_search", role: "tool", parent_message_id: "a1", tool_call_id: "call_s", created_at: "2026-05-13T10:33:56.074Z" }),
-      makeRow({ id: "t_alma",   role: "tool", parent_message_id: "a1", tool_call_id: "call_a", created_at: "2026-05-13T10:33:56.090Z" }),
+      makeRow({ id: "t_alma", role: "tool", parent_message_id: "a1", tool_call_id: "call_a", created_at: "2026-05-13T10:33:56.090Z" }),
       // Sequential follow-up chains off t_search (declaration-last parallel tool).
-      makeRow({ id: "t_exch",   role: "tool", parent_message_id: "t_search", tool_call_id: "call_e", created_at: "2026-05-13T10:33:57.762Z" }),
-      makeRow({ id: "a_final",  role: "assistant", parent_message_id: "t_exch", branch_from_message_id: "sentinel-forces-walker", content: "final answer", created_at: "2026-05-13T10:35:26Z" }),
+      makeRow({ id: "t_exch", role: "tool", parent_message_id: "t_search", tool_call_id: "call_e", created_at: "2026-05-13T10:33:57.762Z" }),
+      makeRow({ id: "a_final", role: "assistant", parent_message_id: "t_exch", branch_from_message_id: "sentinel-forces-walker", content: "final answer", created_at: "2026-05-13T10:35:26Z" }),
     ];
 
     const path = resolveActivePath(rows, {});
@@ -353,7 +357,7 @@ describe("resolveActivePath — parallel batch heir picked by descendants, not c
     // All 7 rows must be reachable, in walk order.
     // Parallel batch is included in created_at order with heir last,
     // then walker continues through heir.
-    expect(ids).toEqual(["u1", "a1", "t_hyde", "t_alma", "t_search", "t_exch", "a_final"]);
+    expect(ids).toEqual(["u1", "a1", "t_opex", "t_alma", "t_search", "t_exch", "a_final"]);
   });
 });
 
@@ -363,23 +367,23 @@ describe("resolveActivePath — trunk-only conversation bypasses tree walk (D1)"
     // on every row (the realistic case — most sessions are never explicitly
     // forked). D1 short-circuit must fire and return rows in created_at order
     // — which differs from walker order because the D2 swap moves t_search
-    // (heir) to the last slot, producing [..., t_hyde, t_alma, t_search, ...]
-    // in walker order vs [..., t_hyde, t_search, t_alma, ...] in created_at
+    // (heir) to the last slot, producing [..., t_opex, t_alma, t_search, ...]
+    // in walker order vs [..., t_opex, t_search, t_alma, ...] in created_at
     // order. Distinct expected arrays prove the short-circuit actually fires.
     const rows: MessageRow[] = [
       makeRow({ id: "u1", role: "user", parent_message_id: null, branch_from_message_id: null, created_at: "2026-05-13T10:30:00Z" }),
       makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", branch_from_message_id: null, created_at: "2026-05-13T10:31:35Z" }),
-      makeRow({ id: "t_hyde",   role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "call_h", created_at: "2026-05-13T10:33:56.067Z" }),
+      makeRow({ id: "t_opex", role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "call_h", created_at: "2026-05-13T10:33:56.067Z" }),
       makeRow({ id: "t_search", role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "call_s", created_at: "2026-05-13T10:33:56.074Z" }),
-      makeRow({ id: "t_alma",   role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "call_a", created_at: "2026-05-13T10:33:56.090Z" }),
-      makeRow({ id: "t_exch",   role: "tool", parent_message_id: "t_search", branch_from_message_id: null, tool_call_id: "call_e", created_at: "2026-05-13T10:33:57.762Z" }),
-      makeRow({ id: "a_final",  role: "assistant", parent_message_id: "t_exch", branch_from_message_id: null, content: "final", created_at: "2026-05-13T10:35:26Z" }),
+      makeRow({ id: "t_alma", role: "tool", parent_message_id: "a1", branch_from_message_id: null, tool_call_id: "call_a", created_at: "2026-05-13T10:33:56.090Z" }),
+      makeRow({ id: "t_exch", role: "tool", parent_message_id: "t_search", branch_from_message_id: null, tool_call_id: "call_e", created_at: "2026-05-13T10:33:57.762Z" }),
+      makeRow({ id: "a_final", role: "assistant", parent_message_id: "t_exch", branch_from_message_id: null, content: "final", created_at: "2026-05-13T10:35:26Z" }),
     ];
 
     const path = resolveActivePath(rows, {});
     const ids = path.map(r => r.id);
     // Pure created_at sort — t_search BEFORE t_alma (D2 swap not applied).
-    expect(ids).toEqual(["u1", "a1", "t_hyde", "t_search", "t_alma", "t_exch", "a_final"]);
+    expect(ids).toEqual(["u1", "a1", "t_opex", "t_search", "t_alma", "t_exch", "a_final"]);
   });
 });
 
@@ -414,12 +418,12 @@ describe("resolveActivePath — branched session honors selectedBranches AND D2 
       makeRow({ id: "a1", role: "assistant", parent_message_id: "u1", created_at: "2026-05-13T10:00:01Z" }),
       makeRow({ id: "u2", role: "user", parent_message_id: "a1", created_at: "2026-05-13T10:00:02Z" }),
       makeRow({ id: "a2_main", role: "assistant", parent_message_id: "u2", content: "original", created_at: "2026-05-13T10:00:03Z" }),
-      makeRow({ id: "a2_alt",  role: "assistant", parent_message_id: "u2", branch_from_message_id: "a2_main", content: "alternative", created_at: "2026-05-13T10:00:04Z" }),
+      makeRow({ id: "a2_alt", role: "assistant", parent_message_id: "u2", branch_from_message_id: "a2_main", content: "alternative", created_at: "2026-05-13T10:00:04Z" }),
       // Parallel batch under a2_alt — heir is t_mid (not last by time).
       makeRow({ id: "t_first", role: "tool", parent_message_id: "a2_alt", tool_call_id: "c1", created_at: "2026-05-13T10:00:05Z" }),
-      makeRow({ id: "t_mid",   role: "tool", parent_message_id: "a2_alt", tool_call_id: "c2", created_at: "2026-05-13T10:00:06Z" }),
-      makeRow({ id: "t_last",  role: "tool", parent_message_id: "a2_alt", tool_call_id: "c3", created_at: "2026-05-13T10:00:07Z" }),
-      makeRow({ id: "a_end",   role: "assistant", parent_message_id: "t_mid", content: "done", created_at: "2026-05-13T10:00:08Z" }),
+      makeRow({ id: "t_mid", role: "tool", parent_message_id: "a2_alt", tool_call_id: "c2", created_at: "2026-05-13T10:00:06Z" }),
+      makeRow({ id: "t_last", role: "tool", parent_message_id: "a2_alt", tool_call_id: "c3", created_at: "2026-05-13T10:00:07Z" }),
+      makeRow({ id: "a_end", role: "assistant", parent_message_id: "t_mid", content: "done", created_at: "2026-05-13T10:00:08Z" }),
     ];
 
     const path = resolveActivePath(rows, { u2: "a2_alt" });

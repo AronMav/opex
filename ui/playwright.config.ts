@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /**
- * Playwright E2E configuration for HydeClaw UI.
+ * Playwright E2E configuration for Opex UI.
  */
 export default defineConfig({
   testDir: './src/__e2e__',

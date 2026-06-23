@@ -20,7 +20,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_agent_user_channel_last_msg
     ON sessions (agent_id, user_id, channel, last_message_at DESC);
 
 -- ── DATA-05: partial btree for unread-notifications hot-path ───────────────
--- The notifications table has NO user_id column (HydeClaw is self-hosted
+-- The notifications table has NO user_id column (Opex is self-hosted
 -- single-user; notifications are global). Partial predicate filters to
 -- WHERE read = FALSE — queries MUST use the literal boolean to exercise
 -- this index. Parameterised `WHERE read = $1` defeats the partial predicate

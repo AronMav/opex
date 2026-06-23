@@ -1,8 +1,8 @@
 // ui/src/stores/sse-events.ts
 //
 // Hand-coded thin wrapper. Re-exports types from auto-generated
-// sse.generated.ts. Single source of truth: crates/hydeclaw-types/src/sse.rs
-// (registered for codegen in crates/hydeclaw-core/src/dto_export/sse_ts.rs).
+// sse.generated.ts. Single source of truth: crates/opex-types/src/sse.rs
+// (registered for codegen in crates/opex-core/src/dto_export/sse_ts.rs).
 
 export type {
   SseEvent,

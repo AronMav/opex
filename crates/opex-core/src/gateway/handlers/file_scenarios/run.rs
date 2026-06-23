@@ -550,7 +550,7 @@ mod tests {
     async fn run_disabled_binding_is_rejected(pool: PgPool) {
         // Seed a session + an upload + a DISABLED binding.
         let session_id =
-            opex_db::sessions::create_new_session(&pool, "Hyde", "ui", "web")
+            opex_db::sessions::create_new_session(&pool, "Opex", "ui", "web")
                 .await
                 .unwrap();
         let upload_id = crate::db::uploads::insert_with_retention(
@@ -598,7 +598,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn run_unknown_scenario_id_is_rejected(pool: PgPool) {
         let session_id =
-            opex_db::sessions::create_new_session(&pool, "Hyde", "ui", "web")
+            opex_db::sessions::create_new_session(&pool, "Opex", "ui", "web")
                 .await
                 .unwrap();
         let upload_id = crate::db::uploads::insert_with_retention(
@@ -646,7 +646,7 @@ mod tests {
         let gateway_listen = format!("127.0.0.1:{port}");
 
         let session_id =
-            opex_db::sessions::create_new_session(&pool, "Hyde", "ui", "web")
+            opex_db::sessions::create_new_session(&pool, "Opex", "ui", "web")
                 .await
                 .unwrap();
         let upload_id = crate::db::uploads::insert_with_retention(
@@ -716,7 +716,7 @@ mod tests {
         let gateway_listen = format!("127.0.0.1:{port}");
 
         let session_id =
-            opex_db::sessions::create_new_session(&pool, "Hyde", "ui", "web")
+            opex_db::sessions::create_new_session(&pool, "Opex", "ui", "web")
                 .await
                 .unwrap();
         let upload_id = crate::db::uploads::insert_with_retention(
@@ -816,7 +816,7 @@ mod tests {
 
         // Seed session + upload + enabled binding (save, always Ok, no toolgate call).
         let session_id =
-            opex_db::sessions::create_new_session(&pool, "Hyde", "ui", "web")
+            opex_db::sessions::create_new_session(&pool, "Opex", "ui", "web")
                 .await
                 .unwrap();
         let upload_id = crate::db::uploads::insert_with_retention(
@@ -950,7 +950,7 @@ mod tests {
         let gateway_listen = format!("127.0.0.1:{port}");
 
         let session_id =
-            opex_db::sessions::create_new_session(&pool, "Hyde", "ui", "web")
+            opex_db::sessions::create_new_session(&pool, "Opex", "ui", "web")
                 .await
                 .unwrap();
         let upload_id = crate::db::uploads::insert_with_retention(

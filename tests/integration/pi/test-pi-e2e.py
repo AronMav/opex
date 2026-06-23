@@ -19,7 +19,7 @@ import urllib.request
 import urllib.error
 
 PI_HOST = "http://192.168.1.82:18789"
-TOKEN = os.environ["HYDECLAW_AUTH_TOKEN"]
+TOKEN = os.environ["OPEX_AUTH_TOKEN"]
 AGENT = "Arty"
 
 def http(method, path, body=None, headers=None):
@@ -100,7 +100,7 @@ def db_query(sql):
     # Direct on Pi — `docker exec` works as the local user.
     cmd = [
         "docker", "exec", "docker-postgres-1",
-        "psql", "-U", "hydeclaw", "-d", "hydeclaw", "-tAc", sql,
+        "psql", "-U", "opex", "-d", "opex", "-tAc", sql,
     ]
     out = subprocess.check_output(cmd, timeout=30).decode().strip()
     return out

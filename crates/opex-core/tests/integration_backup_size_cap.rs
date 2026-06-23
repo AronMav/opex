@@ -47,14 +47,14 @@ use support::synthesize_backup_bytes;
 #[test]
 fn on_disk_default_cap_value_500mb() {
     // Walk up from the test binary's working dir (crates/opex-core) to repo root
-    // where config/opex.toml (or legacy config/hydeclaw.toml) lives.
+    // where config/opex.toml (or legacy config/opex.toml) lives.
     let candidates = [
         "config/opex.toml",
         "../../config/opex.toml",
         "../config/opex.toml",
-        "config/hydeclaw.toml",
-        "../../config/hydeclaw.toml",
-        "../config/hydeclaw.toml",
+        "config/opex.toml",
+        "../../config/opex.toml",
+        "../config/opex.toml",
     ];
     let mut content = None;
     for p in candidates {
@@ -63,7 +63,7 @@ fn on_disk_default_cap_value_500mb() {
             break;
         }
     }
-    let toml_str = content.expect("config/opex.toml (or config/hydeclaw.toml) must be readable");
+    let toml_str = content.expect("config/opex.toml (or config/opex.toml) must be readable");
     assert!(
         toml_str.contains("max_restore_size_mb = 500"),
         "config/opex.toml must ship `max_restore_size_mb = 500` in [limits]"

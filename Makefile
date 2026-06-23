@@ -1,6 +1,6 @@
 -include .deploy.env
 SERVER_HOST   ?= user@your-server
-SERVER_DIR    ?= ~/hydeclaw
+SERVER_DIR    ?= ~/opex
 SERVER_TARGET := x86_64-unknown-linux-gnu
 AUTH          ?= $(shell cat .auth-token 2>/dev/null || echo "MISSING_AUTH_TOKEN")
 
@@ -40,13 +40,13 @@ llvm-cov:
 # practice. The test instance uses tmpfs so per-test DB churn is fast and
 # state never survives a docker compose down.
 
-TEST_DB_URL := postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test
+TEST_DB_URL := postgres://opex_test:opex_test@127.0.0.1:5434/opex_test
 
 test-db-up:
 	cd docker && docker compose -f docker-compose.test.yml up -d --build postgres-test
 	@echo "Waiting for postgres-test to become healthy..."
 	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-		if docker exec docker-postgres-test-1 pg_isready -U hydeclaw_test -d hydeclaw_test >/dev/null 2>&1; then \
+		if docker exec docker-postgres-test-1 pg_isready -U opex_test -d opex_test >/dev/null 2>&1; then \
 			echo "  postgres-test ready"; break; \
 		fi; \
 		sleep 1; \
@@ -85,17 +85,17 @@ release:
 
 # ── Remote-build deploy (canonical) ──────────────────────────────────────────
 # Build natively ON the server (i7-8700, 12T, 31GB) — no cross-toolchain.
-# Source lives at ~/hydeclaw-src on the server; this is the canonical
+# Source lives at ~/opex-src on the server; this is the canonical
 # workflow now (see project_build_on_server memory). Use deploy-binary-server
 # only if you specifically need to build locally and scp the binary.
 
 # Full remote cycle: git pull → cargo build --release → atomic swap → restart.
 remote-deploy:
-	ssh $(SERVER_HOST) '~/hydeclaw-src/scripts/server-deploy.sh'
+	ssh $(SERVER_HOST) '~/opex-src/scripts/server-deploy.sh'
 
 # Build only (no swap, no restart). Useful for CI-style verification.
 remote-build:
-	ssh $(SERVER_HOST) 'cd ~/hydeclaw-src && git pull --ff-only && . ~/.cargo/env && cargo build --release -p opex-core -p opex-watchdog -p opex-memory-worker'
+	ssh $(SERVER_HOST) 'cd ~/opex-src && git pull --ff-only && . ~/.cargo/env && cargo build --release -p opex-core -p opex-watchdog -p opex-memory-worker'
 
 # Skip rebuild: redeploy from existing target/release on the server.
 deploy-remote: remote-deploy
@@ -106,7 +106,7 @@ deploy-remote: remote-deploy
 # Prefer `make remote-deploy` for the normal workflow; use this only when a
 # push-to-remote build is undesired or the server is busy.
 deploy-binary-server: build-x86_64
-	@for PAIR in opex-core:hydeclaw-core opex-watchdog:hydeclaw-watchdog opex-memory-worker:hydeclaw-memory-worker; do \
+	@for PAIR in opex-core:opex-core opex-watchdog:opex-watchdog opex-memory-worker:opex-memory-worker; do \
 		CRATE=$${PAIR%%:*}; RUN=$${PAIR##*:}; \
 		BIN=target/$(SERVER_TARGET)/release/$$CRATE; \
 		if [ -f "$$BIN" ]; then \
@@ -115,7 +115,7 @@ deploy-binary-server: build-x86_64
 			echo "  deployed $$CRATE -> $${RUN}-x86_64"; \
 		fi; \
 	done
-	ssh $(SERVER_HOST) "chmod +x $(SERVER_DIR)/hydeclaw-*-x86_64; for SVC in hydeclaw-core hydeclaw-watchdog hydeclaw-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
+	ssh $(SERVER_HOST) "chmod +x $(SERVER_DIR)/opex-*-x86_64; for SVC in opex-core opex-watchdog opex-memory-worker; do systemctl --user is-enabled \$$SVC 2>/dev/null && systemctl --user restart \$$SVC && echo \"  restarted \$$SVC\" || true; done"
 
 # ── Remote ops ───────────────────────────────────────────────────────────────
 # Operational targets run against the live SERVER_HOST.
@@ -124,13 +124,13 @@ doctor:
 	@ssh $(SERVER_HOST) "curl -sf -H 'Authorization: Bearer $(AUTH)' http://localhost:18789/api/doctor | python3 -m json.tool"
 
 logs:
-	ssh $(SERVER_HOST) "journalctl --user -u hydeclaw-core -f --no-pager"
+	ssh $(SERVER_HOST) "journalctl --user -u opex-core -f --no-pager"
 
 restart:
-	ssh $(SERVER_HOST) "systemctl --user restart hydeclaw-core"
+	ssh $(SERVER_HOST) "systemctl --user restart opex-core"
 
 status:
-	ssh $(SERVER_HOST) "systemctl --user status hydeclaw-core --no-pager"
+	ssh $(SERVER_HOST) "systemctl --user status opex-core --no-pager"
 
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 

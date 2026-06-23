@@ -5,30 +5,30 @@ services:
   # one ephemeral database per test (`sqlx_test_<uuid>`) inside this instance,
   # then drop it on success — that's why the user has CREATEDB privileges.
   #
-  # Image and extension set match production (hydeclaw-pg:17-age-pgvector) so
+  # Image and extension set match production (opex-pg:17-age-pgvector) so
   # migration behavior under test is identical to runtime.
   postgres-test:
-    image: hydeclaw-pg:17-age-pgvector
+    image: opex-pg:17-age-pgvector
     build:
       context: .
       dockerfile: Dockerfile.postgres
     ports:
       - "127.0.0.1:5434:5432"
     environment:
-      POSTGRES_DB: hydeclaw_test
-      POSTGRES_USER: hydeclaw_test
-      POSTGRES_PASSWORD: hydeclaw_test
+      POSTGRES_DB: opex_test
+      POSTGRES_USER: opex_test
+      POSTGRES_PASSWORD: opex_test
     tmpfs:
       # Use tmpfs for the data dir so test runs don't leave stale state on
       # disk between sessions and so per-test CREATE/DROP DATABASE is fast.
       - /var/lib/postgresql/data
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U hydeclaw_test -d hydeclaw_test" ]
+      test: [ "CMD-SHELL", "pg_isready -U opex_test -d opex_test" ]
       interval: 2s
       timeout: 2s
       retries: 30
-    networks: [ hydeclaw-test ]
+    networks: [ opex-test ]
 
 networks:
-  hydeclaw-test:
+  opex-test:
     driver: bridge

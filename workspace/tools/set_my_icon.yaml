@@ -21,6 +21,6 @@ parameters:
 response_transform: "$.icon_url"
 auth:
   type: bearer_env
-  key: HYDECLAW_AUTH_TOKEN
+  key: OPEX_AUTH_TOKEN
 status: draft
 tags: ["agent", "icon", "self-service"]

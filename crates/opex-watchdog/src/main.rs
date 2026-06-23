@@ -10,13 +10,10 @@ use opex_watchdog::{alerter, config, inactivity};
 
 use std::collections::HashMap;
 
-/// Dual-read env: reads OPEX_<suffix>, falls back to HYDECLAW_<suffix>.
-/// Local copy — watchdog intentionally has no dep on opex-gateway-util.
-/// Remove fallback in PR3 after server .env is migrated.
+/// Reads `OPEX_<suffix>`. Local copy — watchdog intentionally has no dep on
+/// opex-gateway-util.
 fn env_var(suffix: &str) -> Option<String> {
-    std::env::var(format!("OPEX_{suffix}"))
-        .ok()
-        .or_else(|| std::env::var(format!("HYDECLAW_{suffix}")).ok())
+    std::env::var(format!("OPEX_{suffix}")).ok()
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -48,8 +45,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("OPEX_AUTH_TOKEN not set — alerts will fail");
     }
 
-    let core_url = env_var("CORE_URL")
-        .unwrap_or_else(|| "http://localhost:18789".into());
+    let core_url = env_var("CORE_URL").unwrap_or_else(|| "http://localhost:18789".into());
 
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -82,7 +78,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Grace period
     tracing::info!(secs = cfg.watchdog.grace_period_secs, "grace period");
-    tokio::time::sleep(std::time::Duration::from_secs(cfg.watchdog.grace_period_secs)).await;
+    tokio::time::sleep(std::time::Duration::from_secs(
+        cfg.watchdog.grace_period_secs,
+    ))
+    .await;
     tracing::info!("grace period ended, starting checks");
 
     loop {
@@ -166,8 +165,7 @@ async fn main() -> anyhow::Result<()> {
                                 "down",
                             )
                             .await;
-                        recovery_state
-                            .enter_cooldown(&check.name, cfg.watchdog.cooldown_secs);
+                        recovery_state.enter_cooldown(&check.name, cfg.watchdog.cooldown_secs);
                     }
                 } else if !previously_down {
                     alerter
@@ -205,12 +203,35 @@ async fn main() -> anyhow::Result<()> {
                 resources::check_resources(&cfg.resources, &http, &core_url, &auth_token).await;
 
             // Alert only on state transitions (first occurrence or severity change)
-            if res.disk_critical && !was_resource_warning.get("disk_critical").copied().unwrap_or(false) {
-                alerter.send(&alert_config, &format!("🚨 Disk critical: {:.1}GB free", res.disk_free_gb), "resource").await;
+            if res.disk_critical
+                && !was_resource_warning
+                    .get("disk_critical")
+                    .copied()
+                    .unwrap_or(false)
+            {
+                alerter
+                    .send(
+                        &alert_config,
+                        &format!("🚨 Disk critical: {:.1}GB free", res.disk_free_gb),
+                        "resource",
+                    )
+                    .await;
                 was_resource_warning.insert("disk_critical".into(), true);
                 was_resource_warning.remove("disk_warning");
-            } else if res.disk_warning && !res.disk_critical && !was_resource_warning.get("disk_warning").copied().unwrap_or(false) {
-                alerter.send(&alert_config, &format!("⚠️ Disk low: {:.1}GB free", res.disk_free_gb), "resource").await;
+            } else if res.disk_warning
+                && !res.disk_critical
+                && !was_resource_warning
+                    .get("disk_warning")
+                    .copied()
+                    .unwrap_or(false)
+            {
+                alerter
+                    .send(
+                        &alert_config,
+                        &format!("⚠️ Disk low: {:.1}GB free", res.disk_free_gb),
+                        "resource",
+                    )
+                    .await;
                 was_resource_warning.insert("disk_warning".into(), true);
                 was_resource_warning.remove("disk_critical");
             } else if !res.disk_warning && !res.disk_critical {
@@ -218,13 +239,23 @@ async fn main() -> anyhow::Result<()> {
                 was_resource_warning.remove("disk_critical");
             }
 
-            if res.ram_critical && !was_resource_warning.get("ram_critical").copied().unwrap_or(false) {
-                alerter.send(&alert_config, &format!("🚨 RAM critical: {:.0}%", res.ram_used_percent), "resource").await;
+            if res.ram_critical
+                && !was_resource_warning
+                    .get("ram_critical")
+                    .copied()
+                    .unwrap_or(false)
+            {
+                alerter
+                    .send(
+                        &alert_config,
+                        &format!("🚨 RAM critical: {:.0}%", res.ram_used_percent),
+                        "resource",
+                    )
+                    .await;
                 was_resource_warning.insert("ram_critical".into(), true);
             } else if !res.ram_critical {
                 was_resource_warning.remove("ram_critical");
             }
-
 
             resource_status = Some(res);
         }
@@ -247,15 +278,20 @@ async fn main() -> anyhow::Result<()> {
         // ── Session auto-retry ──────────────────────────────────────────
         if cfg.watchdog.session_retry_enabled {
             match http
-                .get(format!("{}/api/sessions/stuck?stale_secs={}&max_retries={}",
-                    core_url, cfg.watchdog.session_retry_stale_secs, cfg.watchdog.session_retry_max_attempts))
+                .get(format!(
+                    "{}/api/sessions/stuck?stale_secs={}&max_retries={}",
+                    core_url,
+                    cfg.watchdog.session_retry_stale_secs,
+                    cfg.watchdog.session_retry_max_attempts
+                ))
                 .header("Authorization", format!("Bearer {}", auth_token))
                 .send()
                 .await
             {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await
-                        && let Some(sessions) = body.get("sessions").and_then(|s| s.as_array()) {
+                        && let Some(sessions) = body.get("sessions").and_then(|s| s.as_array())
+                    {
                         for s in sessions {
                             let sid = s.get("id").and_then(|v| v.as_str()).unwrap_or("");
                             let agent = s.get("agent_id").and_then(|v| v.as_str()).unwrap_or("?");
@@ -275,17 +311,25 @@ async fn main() -> anyhow::Result<()> {
                             {
                                 Ok(r) if r.status().is_success() => {
                                     tracing::info!(session_id = sid, "retry request accepted");
-                                    alerter.send(&alert_config,
-                                        &format!("Auto-retrying stuck session {} (agent: {})", sid, agent),
-                                        "session_retry",
-                                    ).await;
+                                    alerter
+                                        .send(
+                                            &alert_config,
+                                            &format!(
+                                                "Auto-retrying stuck session {} (agent: {})",
+                                                sid, agent
+                                            ),
+                                            "session_retry",
+                                        )
+                                        .await;
                                 }
                                 Ok(r) => {
                                     let status = r.status();
                                     let body = r.text().await.unwrap_or_default();
                                     tracing::error!(session_id = sid, %status, body, "retry request failed");
                                 }
-                                Err(e) => tracing::error!(session_id = sid, error = %e, "retry request error"),
+                                Err(e) => {
+                                    tracing::error!(session_id = sid, error = %e, "retry request error")
+                                }
                             }
                         }
                     }
@@ -303,7 +347,11 @@ async fn main() -> anyhow::Result<()> {
         for c in &all_containers {
             if !c.healthy {
                 current_unhealthy.insert(c.docker_name.clone(), true);
-                if !was_container_unhealthy.get(&c.docker_name).copied().unwrap_or(false) {
+                if !was_container_unhealthy
+                    .get(&c.docker_name)
+                    .copied()
+                    .unwrap_or(false)
+                {
                     newly_unhealthy.push(c.name.clone());
                 }
             }

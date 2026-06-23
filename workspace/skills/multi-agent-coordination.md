@@ -100,7 +100,7 @@ calls in **one tool batch**. The engine runs them concurrently:
 ```text
 // One tool-call batch from your turn:
 agent(action="ask", target="Alma", text="Analyze Q1 revenue")
-agent(action="ask", target="Hyde", text="Fetch latest market news")
+agent(action="ask", target="Opex", text="Fetch latest market news")
 ```
 
 You receive both results when both peers finish. Skip this pattern

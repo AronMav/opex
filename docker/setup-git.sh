@@ -1,5 +1,5 @@
 #!/bin/bash
-# Configure git credentials from environment variables injected by HydeClaw engine.
+# Configure git credentials from environment variables injected by Opex engine.
 # Supports any git-capable OAuth provider: GITHUB, GITLAB, BITBUCKET, etc.
 # Engine sets {PROVIDER}_GIT_TOKEN and {PROVIDER}_GIT_HOST for each connected binding.
 
