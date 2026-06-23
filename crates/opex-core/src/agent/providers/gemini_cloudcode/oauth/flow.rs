@@ -27,8 +27,8 @@
 //!
 //! # Test overrides
 //!
-//! Set `HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT` and
-//! `HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT` to redirect token exchange and
+//! Set `OPEX_GEMINI_TEST_TOKEN_ENDPOINT` and
+//! `OPEX_GEMINI_TEST_USERINFO_ENDPOINT` to redirect token exchange and
 //! userinfo to a local mock server (e.g. wiremock) during unit tests.
 //! These env vars are only consulted at call time — not at module init — so
 //! each test can set them independently.
@@ -62,12 +62,12 @@ const HTTP_RESPONSE_ERR: &[u8] = b"HTTP/1.1 400 Bad Request\r\nContent-Type: tex
 // ── Endpoint resolution (test-overridable) ─────────────────────────────────────
 
 fn token_endpoint() -> String {
-    std::env::var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT")
+    std::env::var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT")
         .unwrap_or_else(|_| TOKEN_ENDPOINT.to_string())
 }
 
 fn userinfo_endpoint() -> String {
-    std::env::var("HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT")
+    std::env::var("OPEX_GEMINI_TEST_USERINFO_ENDPOINT")
         .unwrap_or_else(|_| USERINFO_ENDPOINT.to_string())
 }
 
@@ -543,8 +543,8 @@ mod tests {
         let userinfo_url = format!("{}/userinfo", userinfo_server.uri());
 
         unsafe {
-            std::env::set_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT", &token_url);
-            std::env::set_var("HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT", &userinfo_url);
+            std::env::set_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT", &token_url);
+            std::env::set_var("OPEX_GEMINI_TEST_USERINFO_ENDPOINT", &userinfo_url);
         }
 
         // Start the flow.
@@ -575,8 +575,8 @@ mod tests {
 
         // Cleanup env vars.
         unsafe {
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT");
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_USERINFO_ENDPOINT");
         }
 
         assert_eq!(creds.email, "test@example.com");
@@ -606,8 +606,8 @@ mod tests {
         let token_url = format!("{}/token", token_server.uri());
 
         unsafe {
-            std::env::set_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT", &token_url);
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT");
+            std::env::set_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT", &token_url);
+            std::env::remove_var("OPEX_GEMINI_TEST_USERINFO_ENDPOINT");
         }
 
         let (_auth_url, _real_state, handle) =
@@ -633,7 +633,7 @@ mod tests {
         let result = handle.await.expect("handle did not panic");
 
         unsafe {
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT");
         }
 
         assert!(

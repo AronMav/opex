@@ -28,7 +28,7 @@ pub use super::device_flow::start_device_code_flow;
 ///
 /// Uses the 3-tier client-credential resolution chain (`resolve_client_creds`)
 /// and the production `TOKEN_ENDPOINT` (overridable by
-/// `HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT` in tests).
+/// `OPEX_GEMINI_TEST_TOKEN_ENDPOINT` in tests).
 ///
 /// Thin wrapper over [`device_flow::poll_until_complete`] that avoids
 /// callers needing to own the client_id / client_secret strings.
@@ -116,7 +116,7 @@ mod tests {
         // Override the token endpoint so poll hits the mock server.
         unsafe {
             std::env::set_var(
-                "HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT",
+                "OPEX_GEMINI_TEST_TOKEN_ENDPOINT",
                 format!("{}/token", server.uri()),
             );
         }
@@ -124,7 +124,7 @@ mod tests {
         let result = poll_device_flow(&session).await;
 
         unsafe {
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT");
         }
 
         assert!(result.is_ok(), "poll must succeed on 200: {result:?}");
@@ -155,7 +155,7 @@ mod tests {
 
         unsafe {
             std::env::set_var(
-                "HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT",
+                "OPEX_GEMINI_TEST_TOKEN_ENDPOINT",
                 format!("{}/token", server.uri()),
             );
         }
@@ -163,7 +163,7 @@ mod tests {
         let result = poll_device_flow(&session).await;
 
         unsafe {
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT");
         }
 
         assert!(
@@ -197,7 +197,7 @@ mod tests {
 
         unsafe {
             std::env::set_var(
-                "HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT",
+                "OPEX_GEMINI_TEST_TOKEN_ENDPOINT",
                 format!("{}/token", server.uri()),
             );
         }
@@ -205,7 +205,7 @@ mod tests {
         let result = poll_device_flow(&session).await;
 
         unsafe {
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT");
         }
 
         assert!(
@@ -235,7 +235,7 @@ mod tests {
 
         unsafe {
             std::env::set_var(
-                "HYDECLAW_GEMINI_TEST_DEVICE_CODE_ENDPOINT",
+                "OPEX_GEMINI_TEST_DEVICE_CODE_ENDPOINT",
                 server.uri(),
             );
         }
@@ -244,7 +244,7 @@ mod tests {
             start_device_code_flow("test-client-id", "test-client-secret").await;
 
         unsafe {
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_DEVICE_CODE_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_DEVICE_CODE_ENDPOINT");
         }
 
         let (user_code, verification_uri, handle) =

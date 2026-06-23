@@ -764,7 +764,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "test-token") };
+        unsafe { std::env::set_var("OPEX_GEMINI_TEST_ACCESS_TOKEN", "test-token") };
         let secrets = Arc::new(SecretsManager::new_noop());
         let provider = make_provider(&server.uri(), secrets);
 
@@ -777,7 +777,7 @@ mod integration_tests {
             db_id: None,
         }];
         let result = provider.chat(&msgs, &[], CallOptions::default()).await;
-        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+        unsafe { std::env::remove_var("OPEX_GEMINI_TEST_ACCESS_TOKEN") };
 
         let resp = result.expect("chat must succeed");
         assert_eq!(resp.content, "Hello!");
@@ -799,7 +799,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        unsafe { std::env::set_var("OPEX_GEMINI_TEST_ACCESS_TOKEN", "tok") };
         let secrets = Arc::new(SecretsManager::new_noop());
         let provider = make_provider(&server.uri(), secrets);
 
@@ -818,7 +818,7 @@ mod integration_tests {
             db_id: None,
         }];
         let _ = provider.chat(&msgs, &[], CallOptions::default()).await;
-        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+        unsafe { std::env::remove_var("OPEX_GEMINI_TEST_ACCESS_TOKEN") };
 
         // After the first call, project_ctx must be populated.
         let guard = provider.project_ctx.lock().await;
@@ -840,7 +840,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        unsafe { std::env::set_var("OPEX_GEMINI_TEST_ACCESS_TOKEN", "tok") };
         let secrets = Arc::new(SecretsManager::new_noop());
         let provider = make_provider(&server.uri(), secrets);
 
@@ -853,7 +853,7 @@ mod integration_tests {
             db_id: None,
         }];
         let result = provider.chat(&msgs, &[], CallOptions::default()).await;
-        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+        unsafe { std::env::remove_var("OPEX_GEMINI_TEST_ACCESS_TOKEN") };
 
         let err = result.expect_err("429 quota must be an error");
         let is_quota = err
@@ -887,7 +887,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        unsafe { std::env::set_var("OPEX_GEMINI_TEST_ACCESS_TOKEN", "tok") };
         let secrets = Arc::new(SecretsManager::new_noop());
         let provider = make_provider(&server.uri(), secrets);
 
@@ -904,7 +904,7 @@ mod integration_tests {
             .chat_stream(&msgs, &[], tx, CallOptions::default())
             .await
             .expect("chat_stream must succeed");
-        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+        unsafe { std::env::remove_var("OPEX_GEMINI_TEST_ACCESS_TOKEN") };
 
         // Collect all chunks sent during streaming.
         let mut chunks = Vec::new();
@@ -934,7 +934,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        unsafe { std::env::set_var("OPEX_GEMINI_TEST_ACCESS_TOKEN", "tok") };
         let secrets = Arc::new(SecretsManager::new_noop());
         let cancel = CancellationToken::new();
         let row = crate::db::providers::ProviderRow {
@@ -973,7 +973,7 @@ mod integration_tests {
         // Cancel immediately before calling chat_stream.
         cancel.cancel();
         let result = provider.chat_stream(&msgs, &[], tx, CallOptions::default()).await;
-        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+        unsafe { std::env::remove_var("OPEX_GEMINI_TEST_ACCESS_TOKEN") };
 
         // Must return either UserCancelled or succeed with partial data if the
         // full response arrived before cancellation was observed.
@@ -1015,7 +1015,7 @@ mod integration_tests {
             .mount(&server)
             .await;
 
-        unsafe { std::env::set_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN", "tok") };
+        unsafe { std::env::set_var("OPEX_GEMINI_TEST_ACCESS_TOKEN", "tok") };
         let secrets = Arc::new(SecretsManager::new_noop());
         let provider = make_provider(&server.uri(), secrets);
 
@@ -1029,7 +1029,7 @@ mod integration_tests {
             db_id: None,
         }];
         let result = provider.chat_stream(&msgs, &[], tx, CallOptions::default()).await;
-        unsafe { std::env::remove_var("HYDECLAW_GEMINI_TEST_ACCESS_TOKEN") };
+        unsafe { std::env::remove_var("OPEX_GEMINI_TEST_ACCESS_TOKEN") };
 
         result.expect("must succeed after 503 retry");
         let mut all = String::new();
@@ -1076,8 +1076,8 @@ mod integration_tests {
         let creds_path = storage_dir.path().join("google_oauth.json");
 
         unsafe {
-            std::env::set_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT", format!("{}/token", token_server.uri()));
-            std::env::set_var("HYDECLAW_OAUTH_CREDENTIALS_PATH", &creds_path);
+            std::env::set_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT", format!("{}/token", token_server.uri()));
+            std::env::set_var("OPEX_OAUTH_CREDENTIALS_PATH", &creds_path);
         }
 
         // Seed expired credentials so the refresh fires on first chat() call.
@@ -1105,8 +1105,8 @@ mod integration_tests {
         let result = provider.chat(&msgs, &[], CallOptions::default()).await;
 
         unsafe {
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT");
-            std::env::remove_var("HYDECLAW_OAUTH_CREDENTIALS_PATH");
+            std::env::remove_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT");
+            std::env::remove_var("OPEX_OAUTH_CREDENTIALS_PATH");
         }
 
         result.expect("chat must succeed after token refresh");

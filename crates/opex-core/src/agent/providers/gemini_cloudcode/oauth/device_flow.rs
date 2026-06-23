@@ -18,8 +18,8 @@
 //!
 //! # Test overrides
 //!
-//! Set `HYDECLAW_GEMINI_TEST_DEVICE_CODE_ENDPOINT` and
-//! `HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT` to redirect requests to a local mock
+//! Set `OPEX_GEMINI_TEST_DEVICE_CODE_ENDPOINT` and
+//! `OPEX_GEMINI_TEST_TOKEN_ENDPOINT` to redirect requests to a local mock
 //! server (e.g. wiremock) during unit tests.
 
 #![allow(dead_code)]
@@ -42,17 +42,17 @@ const SLOW_DOWN_INCREMENT_SECS: u64 = 5;
 // ── Endpoint resolution (test-overridable) ────────────────────────────────────
 
 pub(crate) fn device_code_endpoint() -> String {
-    std::env::var("HYDECLAW_GEMINI_TEST_DEVICE_CODE_ENDPOINT")
+    std::env::var("OPEX_GEMINI_TEST_DEVICE_CODE_ENDPOINT")
         .unwrap_or_else(|_| DEVICE_CODE_ENDPOINT.to_string())
 }
 
 pub(crate) fn token_endpoint() -> String {
-    std::env::var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT")
+    std::env::var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT")
         .unwrap_or_else(|_| TOKEN_ENDPOINT.to_string())
 }
 
 pub(crate) fn userinfo_endpoint() -> String {
-    std::env::var("HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT")
+    std::env::var("OPEX_GEMINI_TEST_USERINFO_ENDPOINT")
         .unwrap_or_else(|_| USERINFO_ENDPOINT.to_string())
 }
 
@@ -501,15 +501,15 @@ mod tests {
 
         unsafe {
             std::env::set_var(
-                "HYDECLAW_GEMINI_TEST_DEVICE_CODE_ENDPOINT",
+                "OPEX_GEMINI_TEST_DEVICE_CODE_ENDPOINT",
                 format!("{}/device/code", server.uri()),
             );
             std::env::set_var(
-                "HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT",
+                "OPEX_GEMINI_TEST_TOKEN_ENDPOINT",
                 format!("{}/token", server.uri()),
             );
             std::env::set_var(
-                "HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT",
+                "OPEX_GEMINI_TEST_USERINFO_ENDPOINT",
                 format!("{}/userinfo", server.uri()),
             );
         }
@@ -527,9 +527,9 @@ mod tests {
             .expect("credentials returned");
 
         unsafe {
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_DEVICE_CODE_ENDPOINT");
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_TOKEN_ENDPOINT");
-            std::env::remove_var("HYDECLAW_GEMINI_TEST_USERINFO_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_DEVICE_CODE_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_TOKEN_ENDPOINT");
+            std::env::remove_var("OPEX_GEMINI_TEST_USERINFO_ENDPOINT");
         }
 
         assert_eq!(creds.access, "ya29.device-access-token");
