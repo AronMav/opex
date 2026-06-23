@@ -90,8 +90,9 @@ pub(crate) async fn api_curator_config_put(
     // Suppress the file-watcher reload cycle triggered by the write below,
     // since we hot-reload shared_config ourselves immediately after.
     cfg_svc.config_api_write_flag.store(true, std::sync::atomic::Ordering::Release);
+    let config_path = opex_gateway_util::config_path::resolve_config_path();
     if let Err(e) = crate::config::update_curator_config(
-        "config/hydeclaw.toml",
+        &config_path,
         body.enabled,
         body.cron.as_deref(),
         body.min_idle_minutes,
@@ -106,7 +107,7 @@ pub(crate) async fn api_curator_config_put(
         ).into_response();
     }
     // Hot-reload shared config so GET immediately reflects the new values
-    let new_curator_cfg = match crate::config::AppConfig::load("config/hydeclaw.toml") {
+    let new_curator_cfg = match crate::config::AppConfig::load(&config_path) {
         Ok(new_config) => {
             let curator_cfg = new_config.curator.clone();
             let mut config = cfg_svc.shared_config.write().await;

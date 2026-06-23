@@ -300,13 +300,13 @@ pub(crate) async fn api_update_config(
         }
     }
 
-    let config_path = "config/hydeclaw.toml";
+    let config_path = opex_gateway_util::config_path::resolve_config_path();
 
     // Serialize config writes to prevent concurrent partial updates
     let _config_guard = cfg_svc.config_write_lock.lock().await;
 
     // Create backup before modifying — fail if unreadable (don't risk empty restore)
-    let config_backup = match tokio::fs::read_to_string(config_path).await {
+    let config_backup = match tokio::fs::read_to_string(&config_path).await {
         Ok(s) => s,
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
@@ -323,7 +323,7 @@ pub(crate) async fn api_update_config(
     // Defined as a closure-like macro pattern since async closures can't capture by ref easily.
     macro_rules! restore_and_fail {
         ($label:expr, $err:expr) => {{
-            if let Err(restore_err) = tokio::fs::write(config_path, &config_backup).await {
+            if let Err(restore_err) = tokio::fs::write(&config_path, &config_backup).await {
                 tracing::error!(
                     error = %$err,
                     restore_error = %restore_err,
@@ -342,7 +342,7 @@ pub(crate) async fn api_update_config(
 
     // Update TOML config file
     if let Err(e) = crate::config::update_service_urls(
-        "config/hydeclaw.toml",
+        &config_path,
         payload.toolgate_url.as_deref(),
     ) {
         restore_and_fail!("failed to update config file", e);
@@ -351,7 +351,7 @@ pub(crate) async fn api_update_config(
     // Update memory config in TOML
     if (payload.embed_enabled.is_some() || payload.embed_dim.is_some() || payload.embed_dimensions.is_some())
         && let Err(e) = crate::config::update_memory_config(
-            "config/hydeclaw.toml",
+            &config_path,
             payload.embed_enabled,
             None, // embed_url removed — managed by toolgate
             None, // embed_model removed — managed by toolgate
@@ -363,14 +363,14 @@ pub(crate) async fn api_update_config(
 
     // Update subagents config in TOML
     if let Some(enabled) = payload.subagents_enabled
-        && let Err(e) = crate::config::update_subagents_enabled("config/hydeclaw.toml", enabled) {
+        && let Err(e) = crate::config::update_subagents_enabled(&config_path, enabled) {
             restore_and_fail!("failed to update subagents config", e);
         }
 
     // Update limits config in TOML
     if (payload.max_requests_per_minute.is_some() || payload.max_tool_concurrency.is_some())
         && let Err(e) = crate::config::update_limits_config(
-            "config/hydeclaw.toml",
+            &config_path,
             payload.max_requests_per_minute,
             payload.max_tool_concurrency,
         )
@@ -380,7 +380,7 @@ pub(crate) async fn api_update_config(
 
     // Update public_url in TOML
     if let Some(ref url) = payload.public_url
-        && let Err(e) = crate::config::update_public_url("config/hydeclaw.toml", url)
+        && let Err(e) = crate::config::update_public_url(&config_path, url)
     {
         restore_and_fail!("failed to update public_url config", e);
     }
@@ -388,7 +388,7 @@ pub(crate) async fn api_update_config(
     // Update backup config in TOML
     if (payload.backup_enabled.is_some() || payload.backup_cron.is_some() || payload.backup_retention_days.is_some())
         && let Err(e) = crate::config::update_backup_config(
-            "config/hydeclaw.toml",
+            &config_path,
             payload.backup_enabled,
             payload.backup_cron.as_deref(),
             payload.backup_retention_days,
@@ -405,7 +405,7 @@ pub(crate) async fn api_update_config(
         || payload.curator_max_repairs_per_run.is_some()
         || payload.curator_agent_name.is_some())
         && let Err(e) = crate::config::update_curator_config(
-            "config/hydeclaw.toml",
+            &config_path,
             payload.curator_enabled,
             payload.curator_cron.as_deref(),
             payload.curator_min_idle_minutes,
@@ -423,7 +423,7 @@ pub(crate) async fn api_update_config(
         || payload.agent_tool_message_result_secs.is_some()
         || payload.agent_tool_safety_timeout_secs.is_some())
         && let Err(e) = crate::config::update_agent_tool_config(
-            "config/hydeclaw.toml",
+            &config_path,
             payload.agent_tool_message_wait_for_idle_secs,
             payload.agent_tool_message_result_secs,
             payload.agent_tool_safety_timeout_secs,
@@ -433,9 +433,9 @@ pub(crate) async fn api_update_config(
     }
 
     // Validate the written config can be fully deserialized before proceeding
-    if let Err(e) = crate::config::AppConfig::load(config_path) {
+    if let Err(e) = crate::config::AppConfig::load(&config_path) {
         // Restore backup — config is broken
-        if let Err(restore_err) = tokio::fs::write(config_path, &config_backup).await {
+        if let Err(restore_err) = tokio::fs::write(&config_path, &config_backup).await {
             tracing::error!(error = %e, restore_error = %restore_err, "config validation failed AND backup restore failed");
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({
                 "error": format!("config broken AND restore failed: {}. Manual fix required.", restore_err)
@@ -456,7 +456,7 @@ pub(crate) async fn api_update_config(
     }
 
     // Reload shared config from file (hot-reload)
-    let new_config = match crate::config::AppConfig::load("config/hydeclaw.toml") {
+    let new_config = match crate::config::AppConfig::load(&config_path) {
         Ok(new_config) => {
             new_config.agent_tool.warn_if_invariant_violated();
             let mut config = cfg_svc.shared_config.write().await;
@@ -597,7 +597,8 @@ async fn rotate_config_backups(config_path: &str) {
 pub(crate) async fn api_export_config(req: Request<Body>) -> impl IntoResponse {
     let ip = crate::gateway::middleware::extract_client_ip(&req);
     tracing::warn!(ip = %ip, "AUDIT: config export requested");
-    let app_toml = std::fs::read_to_string("config/hydeclaw.toml").unwrap_or_default();
+    let config_path = opex_gateway_util::config_path::resolve_config_path();
+    let app_toml = std::fs::read_to_string(&config_path).unwrap_or_default();
     let mut agents = serde_json::Map::new();
     if let Ok(entries) = std::fs::read_dir("config/agents") {
         for entry in entries.flatten() {
@@ -621,6 +622,7 @@ pub(crate) async fn api_import_config(
     req: Request<Body>,
 ) -> impl IntoResponse {
     let _lock = cfg_svc.config_write_lock.lock().await;
+    let config_path = opex_gateway_util::config_path::resolve_config_path();
     let ip = crate::gateway::middleware::extract_client_ip(&req);
     tracing::warn!(ip = %ip, "AUDIT: config import requested");
     let body: Value = match axum::Json::<Value>::from_request(req, &()).await {
@@ -645,8 +647,8 @@ pub(crate) async fn api_import_config(
             }
         }
         // Backup current (timestamped rotation, keeps newest CONFIG_BACKUP_MAX)
-        rotate_config_backups("config/hydeclaw.toml").await;
-        if let Err(e) = std::fs::write("config/hydeclaw.toml", app_toml) {
+        rotate_config_backups(&config_path).await;
+        if let Err(e) = std::fs::write(&config_path, app_toml) {
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response();
         }
     }
