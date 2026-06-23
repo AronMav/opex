@@ -65,6 +65,25 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
 }));
 
+// ── Mock: sidebar (SidebarTrigger requires SidebarProvider context) ─────────
+
+vi.mock("@/components/ui/sidebar", () => ({
+  SidebarProvider: ({ children }: { children: React.ReactNode }) => children,
+  SidebarInset: ({ children }: { children: React.ReactNode }) => children,
+  SidebarTrigger: () => null,
+  Sidebar: ({ children }: { children: React.ReactNode }) => children,
+  SidebarContent: ({ children }: { children: React.ReactNode }) => children,
+  SidebarHeader: ({ children }: { children: React.ReactNode }) => children,
+  SidebarFooter: ({ children }: { children: React.ReactNode }) => children,
+  SidebarMenu: ({ children }: { children: React.ReactNode }) => children,
+  SidebarMenuItem: ({ children }: { children: React.ReactNode }) => children,
+  SidebarMenuButton: ({ children }: { children: React.ReactNode }) => children,
+  SidebarGroup: ({ children }: { children: React.ReactNode }) => children,
+  SidebarGroupContent: ({ children }: { children: React.ReactNode }) => children,
+  SidebarGroupLabel: ({ children }: { children: React.ReactNode }) => children,
+  useSidebar: () => ({ openMobile: false, setOpenMobile: vi.fn(), isMobile: false, state: "expanded" }),
+}));
+
 // ── Mock: translation hook ─────────────────────────────────────────────────
 
 vi.mock("@/hooks/use-translation", () => ({

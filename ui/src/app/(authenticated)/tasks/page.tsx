@@ -193,7 +193,7 @@ export default function CronPage() {
                 <div className="flex-1 flex flex-col justify-between min-w-0">
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-3 flex-wrap">
-                      <h3 className="font-mono text-base font-bold text-foreground truncate">{j.name}</h3>
+                      <h3 className="font-mono text-base font-bold text-foreground truncate min-w-0">{j.name}</h3>
                       <Badge variant="outline" className="text-xs border-primary/40 text-primary bg-primary/5">
                         {j.agent}
                       </Badge>

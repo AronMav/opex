@@ -8,6 +8,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { SidebarTrigger } from "@/components/ui/sidebar";
 import { getLangFromFilename } from "@/components/workspace/code-editor";
 import { useTranslation } from "@/hooks/use-translation";
 import { Folder, FileCode, Save, Trash2, FilePlus, Menu, CornerDownRight, FolderMinus } from "lucide-react";
@@ -228,7 +229,8 @@ export default function WorkspacePage() {
     <div className="flex h-full flex-col bg-background selection:bg-primary/20 overflow-hidden">
       {/* Header / Breadcrumbs */}
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/40 px-4 md:px-6">
-        <div className="flex items-center gap-3 overflow-hidden">
+        <div className="flex items-center gap-3 overflow-hidden min-w-0">
+          <SidebarTrigger className="md:hidden shrink-0" />
           <Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon" className="md:hidden shrink-0">

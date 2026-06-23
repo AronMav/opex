@@ -116,6 +116,16 @@ function createComponents(isStreamingCode = false): Partial<Components> {
     pre: function PreComponent({ children }) {
       return <>{children}</>
     },
+    table: function TableComponent({ children }) {
+      return (
+        <div className="overflow-x-auto my-2">
+          <table className="w-full border-collapse">{children}</table>
+        </div>
+      )
+    },
+    img: function ImgComponent({ src, alt, ...props }) {
+      return <img src={src} alt={alt} className="max-w-full h-auto rounded-lg" {...props} />
+    },
   }
 }
 

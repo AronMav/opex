@@ -279,7 +279,7 @@ export function AudioPlayer({ src }: { src: string }) {
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
           onKeyDown={onKeyDown}
-          className="relative flex-1 h-9 cursor-pointer select-none touch-none focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md"
+          className="relative flex-1 min-w-0 h-9 cursor-pointer select-none touch-none focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-md"
           style={{ touchAction: "none" }}
         >
           <div className="absolute inset-0 flex items-center gap-[2px] px-[1px]">

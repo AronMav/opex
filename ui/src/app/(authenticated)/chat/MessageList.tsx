@@ -252,7 +252,7 @@ export function MessageList({
   }
 
   return (
-    <div className="flex flex-1 flex-col pt-14 lg:pt-0 relative overflow-hidden">
+    <div className="flex flex-1 flex-col pt-14 lg:pt-0 relative overflow-hidden overscroll-contain">
       <Virtuoso
         ref={virtuosoRef}
         scrollerRef={(el) => setScrollerEl(el as HTMLElement)}

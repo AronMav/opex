@@ -162,7 +162,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
           </SheetHeader>
 
           {isLoading ? (
-            <div className="space-y-3">
+            <div className="space-y-3 max-w-4xl mx-auto w-full">
               {[1, 2, 3].map((i) => (
                 <Skeleton key={i} className="h-20 rounded-lg" />
               ))}
@@ -315,7 +315,7 @@ function CuratorWidget() {
 
   return (
     <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
-      <div className="flex flex-col xs:flex-row xs:items-center gap-1 xs:gap-3 text-sm min-w-0">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 text-sm min-w-0">
         <span className="font-medium shrink-0">{t("skills.curator_label")}</span>
         <span className="text-muted-foreground text-xs truncate">
           {t("skills.curator_last_run", { time: lastRun })} &middot; {status.last_phase1} transitions &middot; {status.last_phase2} repairs &middot; {status.last_phase3} LLM
@@ -638,7 +638,7 @@ export default function SkillsPage() {
           </p>
         } />
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 max-w-4xl mx-auto w-full">
           {skills.map((skill) => {
             const isPending = deletePending === skill.name;
             const isArchivePending = archivePending === skill.name;
@@ -707,7 +707,7 @@ export default function SkillsPage() {
                 )}
 
                 {/* Footer: instructions size + actions */}
-                <div className="flex flex-col xs:flex-row xs:items-center justify-between gap-2 pt-1 border-t border-border/30">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-border/30">
                   <div className="flex items-center gap-1.5 min-w-0">
                     <FileText className="h-3 w-3 text-muted-foreground/50 shrink-0" />
                     <span className="text-xs text-muted-foreground/60 truncate">
@@ -719,7 +719,7 @@ export default function SkillsPage() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 shrink-0 self-end xs:self-auto">
+                  <div className="flex items-center gap-1 shrink-0 self-end sm:self-auto">
                     <Button
                       variant="outline"
                       size="sm"

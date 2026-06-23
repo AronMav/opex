@@ -399,7 +399,7 @@ export function MessageActions({
                   <MoreHorizontal className="h-3.5 w-3.5" />
                 </Button>
               </SheetTrigger>
-              <SheetContent side="bottom" className="rounded-t-xl px-4 pb-8">
+              <SheetContent side="bottom" className="rounded-t-xl px-4 pb-[max(2rem,env(safe-area-inset-bottom))]">
                 <SheetTitle className="sr-only">{t("chat.more_actions")}</SheetTitle>
                 <div className="flex items-center justify-around gap-2 pt-2">
                   <SpeakButton message={message} />

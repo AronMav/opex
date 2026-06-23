@@ -95,7 +95,7 @@ export function ContextBar({
     <TooltipProvider delayDuration={300}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="flex items-center gap-2 cursor-default select-none">
+          <div className="flex items-center gap-2 cursor-default select-none min-w-0 shrink ml-auto">
 
             {/* Model badge */}
             {model && (
