@@ -275,7 +275,7 @@ async fn main() -> Result<()> {
     load_env();
 
     // Load config BEFORE tracing init (OTEL layer depends on config)
-    let cfg = config::AppConfig::load("config/hydeclaw.toml")?;
+    let cfg = config::AppConfig::load(&opex_gateway_util::config_path::resolve_config_path())?;
 
     // Broadcast channel for real-time log streaming (created before tracing init)
     let (log_tx, _) = tokio::sync::broadcast::channel::<String>(256);
@@ -300,7 +300,7 @@ async fn main() -> Result<()> {
     // cancelled at the bottom of main alongside the tokio bg_shutdown token (Bug 13).
     let watcher_cancel = tokio_util::sync::CancellationToken::new();
     config::spawn_config_watcher(
-        "config/hydeclaw.toml".to_string(),
+        opex_gateway_util::config_path::resolve_config_path(),
         shared_config.clone(),
         config_api_write_flag.clone(),
         watcher_cancel.clone(),

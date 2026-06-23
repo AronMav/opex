@@ -1,3 +1,4 @@
+pub mod config_path;
 pub mod env;
 pub mod rate_limiter;
 pub mod restore_stream_core;
