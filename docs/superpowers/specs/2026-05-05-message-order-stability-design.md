@@ -33,10 +33,10 @@ Live mode uses insertion order; history mode sorts by `created_at` (server times
 ## Files to Create / Modify
 
 **Backend (Rust):**
-- Modify: `crates/hydeclaw-core/src/agent/stream_event.rs` — add `message_id: Uuid` to `Start` variant
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/execute.rs` — pre-generate UUID, emit in `Start` event
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` — accept and use pre-generated UUID
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/chat.rs` — serialize `messageId` in SSE JSON
+- Modify: `crates/opex-core/src/agent/stream_event.rs` — add `message_id: Uuid` to `Start` variant
+- Modify: `crates/opex-core/src/agent/pipeline/execute.rs` — pre-generate UUID, emit in `Start` event
+- Modify: `crates/opex-core/src/agent/pipeline/finalize.rs` — accept and use pre-generated UUID
+- Modify: `crates/opex-core/src/gateway/handlers/chat.rs` — serialize `messageId` in SSE JSON
 
 **Frontend (TypeScript):**
 - Modify: `ui/src/stores/chat-types.ts` — add `"finishing"` to `MessageSource`
@@ -57,14 +57,14 @@ Live mode uses insertion order; history mode sorts by `created_at` (server times
 ## Task 1: Backend — Pre-allocate assistant message UUID
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/stream_event.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/execute.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
-- Modify: `crates/hydeclaw-core/src/gateway/handlers/chat.rs`
+- Modify: `crates/opex-core/src/agent/stream_event.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/execute.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/finalize.rs`
+- Modify: `crates/opex-core/src/gateway/handlers/chat.rs`
 
 - [ ] **Step 1: Read current `Start` variant in `stream_event.rs`**
 
-Run: `grep -n "Start" crates/hydeclaw-core/src/agent/stream_event.rs | head -20`
+Run: `grep -n "Start" crates/opex-core/src/agent/stream_event.rs | head -20`
 
 Look for the `Start` variant definition and how it is serialized to JSON.
 
@@ -97,7 +97,7 @@ StreamEvent::Start { agent_name, message_id } => {
 
 - [ ] **Step 4: Read `execute.rs` to find where `Start` is emitted**
 
-Run: `grep -n "Start\|message_id\|assistant" crates/hydeclaw-core/src/agent/pipeline/execute.rs | head -40`
+Run: `grep -n "Start\|message_id\|assistant" crates/opex-core/src/agent/pipeline/execute.rs | head -40`
 
 Find exactly where `StreamEvent::Start { .. }` is constructed and emitted in the LLM loop.
 
@@ -120,7 +120,7 @@ Pass `assistant_message_id` to `finalize` (check current `finalize` signature to
 
 - [ ] **Step 6: Read `finalize.rs` to find the assistant message INSERT**
 
-Run: `grep -n "insert\|message_id\|Uuid::new_v4\|assistant" crates/hydeclaw-core/src/agent/pipeline/finalize.rs | head -30`
+Run: `grep -n "insert\|message_id\|Uuid::new_v4\|assistant" crates/opex-core/src/agent/pipeline/finalize.rs | head -30`
 
 Find where the assistant message row is created with a new UUID.
 
@@ -135,16 +135,16 @@ Expected: no compile errors. Pay attention to any new `match` non-exhaustive err
 
 - [ ] **Step 9: Run Rust tests**
 
-Run: `cargo test --package hydeclaw-core 2>&1 | tail -20`
+Run: `cargo test --package opex-core 2>&1 | tail -20`
 Expected: all tests pass.
 
 - [ ] **Step 10: Commit backend changes**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/stream_event.rs \
-        crates/hydeclaw-core/src/agent/pipeline/execute.rs \
-        crates/hydeclaw-core/src/agent/pipeline/finalize.rs \
-        crates/hydeclaw-core/src/gateway/handlers/chat.rs
+git add crates/opex-core/src/agent/stream_event.rs \
+        crates/opex-core/src/agent/pipeline/execute.rs \
+        crates/opex-core/src/agent/pipeline/finalize.rs \
+        crates/opex-core/src/gateway/handlers/chat.rs
 git commit -m "feat(sse): pre-allocate assistant message UUID; emit in Start event for ID sync"
 ```
 

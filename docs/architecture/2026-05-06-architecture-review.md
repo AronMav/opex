@@ -1,4 +1,4 @@
-# HydeClaw Architecture Review
+# OPEX Architecture Review
 
 > **Snapshot of repo state on 2026-05-06.** This review captured the
 > codebase BEFORE the chat.rs split, providers.rs split, providers/ flat
@@ -15,11 +15,11 @@
 
 ## Executive summary
 
-HydeClaw is a single-binary Rust AI gateway (with two satellite Rust binaries and two managed-process sidecars) targeting Raspberry Pi-class hardware. At ~96k LoC of Rust across six crates, ~46k LoC of TypeScript in a Next.js 16 UI, ~44k LoC of Python in a FastAPI media hub, and ~6k LoC of TypeScript in the channel adapter, it is a substantial but coherent codebase.
+OPEX is a single-binary Rust AI gateway (with two satellite Rust binaries and two managed-process sidecars) targeting Raspberry Pi-class hardware. At ~96k LoC of Rust across six crates, ~46k LoC of TypeScript in a Next.js 16 UI, ~44k LoC of Python in a FastAPI media hub, and ~6k LoC of TypeScript in the channel adapter, it is a substantial but coherent codebase.
 
 The project shows the marks of a small team working at high velocity with strong engineering hygiene: 137 design specs and plans under `docs/superpowers/`, 46 forward-only SQL migrations, 53 integration test files, ~1.4k tests across the workspace, three CI matrices (Rust/UI/toolgate/channels) including a generated-types drift gate, deterministic ARM64 cross-compilation via `cargo zigbuild`, end-to-end W3C-traceparent propagation across four processes, and zero `unsafe` blocks in the Rust code. Code-quality signals are strong: only three apparent TODO/FIXME/HACK markers and no `#[deprecated]` annotations.
 
-The dominant architectural risks are weight, not rot. The `hydeclaw-core` crate carries 213 source files and a single-responsibility-per-module structure that has begun to strain at the edges: the LLM/tools loop is split between `pipeline::execute` and a parallel `engine::stream::handle_isolated` path that share helpers but not control flow; six handler modules in `gateway/handlers/` exceed 1000 lines; `agent/providers.rs` is a 2179-line file that does both provider construction and routing; and the `lib.rs` facade has accumulated a tangle of `#[doc(hidden)]` re-mounts to expose leaf modules to integration tests without dragging in the full agent subtree. Documentation drift is small but real (CLAUDE.md still describes OTel 0.26-0.28, but Cargo.toml is on 0.31/0.32; chat-store.ts is described as 451 lines, actual is 70).
+The dominant architectural risks are weight, not rot. The `opex-core` crate carries 213 source files and a single-responsibility-per-module structure that has begun to strain at the edges: the LLM/tools loop is split between `pipeline::execute` and a parallel `engine::stream::handle_isolated` path that share helpers but not control flow; six handler modules in `gateway/handlers/` exceed 1000 lines; `agent/providers.rs` is a 2179-line file that does both provider construction and routing; and the `lib.rs` facade has accumulated a tangle of `#[doc(hidden)]` re-mounts to expose leaf modules to integration tests without dragging in the full agent subtree. Documentation drift is small but real (CLAUDE.md still describes OTel 0.26-0.28, but Cargo.toml is on 0.31/0.32; chat-store.ts is described as 451 lines, actual is 70).
 
 The system is production-ready for its stated target — a single-tenant Pi-class deployment with a small number of agents — and shows visible investment in the things that matter on that target (boot-time provider hot-reload, graceful shutdown drain, watchdog resource recovery, SSE replay via `Last-Event-ID`, chaos tests against a real Pi). The main work ahead is consolidating the duplicated LLM-loop code path, splitting the handler god-modules into per-resource sub-routers in the same way the providers already are, and reducing the surface area of `lib.rs` by promoting the most-needed leaves into a real public API. None of these are urgent.
 
@@ -33,39 +33,39 @@ The Cargo workspace is six crates ([Cargo.toml](../../Cargo.toml)):
 
 | Crate | LoC | Role |
 | --- | --- | --- |
-| `hydeclaw-core` | 80,174 | The HTTP API, agent engine, providers, tools, channels, memory, secrets, gateway, scheduler, MCP, curator, skills |
-| `hydeclaw-types` | 1,462 | Shared serde DTOs (Message, ToolCall, ChannelInbound/Outbound, MediaAttachment, …) |
-| `hydeclaw-db` | 3,597 | Extracted DB query module set (sessions, memory_queries, approvals, session_wal, usage, notifications, session_failures) |
-| `hydeclaw-watchdog` | 977 | Standalone systemd-friendly health monitor binary |
-| `hydeclaw-memory-worker` | 327 | Standalone embedding-reindex worker (PostgreSQL LISTEN/NOTIFY) |
-| `hydeclaw-gateway-util` | 597 | Leaf utilities reused by core's lib facade and the binary: rate limiter, restore-stream parser, W3C trace_context middleware |
+| `opex-core` | 80,174 | The HTTP API, agent engine, providers, tools, channels, memory, secrets, gateway, scheduler, MCP, curator, skills |
+| `opex-types` | 1,462 | Shared serde DTOs (Message, ToolCall, ChannelInbound/Outbound, MediaAttachment, …) |
+| `opex-db` | 3,597 | Extracted DB query module set (sessions, memory_queries, approvals, session_wal, usage, notifications, session_failures) |
+| `opex-watchdog` | 977 | Standalone systemd-friendly health monitor binary |
+| `opex-memory-worker` | 327 | Standalone embedding-reindex worker (PostgreSQL LISTEN/NOTIFY) |
+| `opex-gateway-util` | 597 | Leaf utilities reused by core's lib facade and the binary: rate limiter, restore-stream parser, W3C trace_context middleware |
 
-The `hydeclaw-types` and `hydeclaw-db` and `hydeclaw-gateway-util` crates were extracted to give integration tests a path to leaf modules without dragging the agent subtree into the lib facade — the boundary is **test-driven, not architecture-driven**. The split is real (no cycles) but the seams are accidental: `hydeclaw-db/src/sessions.rs` is 1762 lines and clearly grew large enough to warrant its own crate; `hydeclaw-gateway-util` is 597 lines of mostly unrelated helpers that happen to be `crate::*`-free.
+The `opex-types` and `opex-db` and `opex-gateway-util` crates were extracted to give integration tests a path to leaf modules without dragging the agent subtree into the lib facade — the boundary is **test-driven, not architecture-driven**. The split is real (no cycles) but the seams are accidental: `opex-db/src/sessions.rs` is 1762 lines and clearly grew large enough to warrant its own crate; `opex-gateway-util` is 597 lines of mostly unrelated helpers that happen to be `crate::*`-free.
 
-There is no integration crate / SDK / contract crate mediating between the binary and external clients (channels, UI). Channel TS code in [channels/src/types.ts](../../channels/src/types.ts) hand-mirrors [crates/hydeclaw-types/src/lib.rs](../../crates/hydeclaw-types/src/lib.rs); the comment at the top of `types.ts` literally says "Port of crates/hydeclaw-types/src/lib.rs:138-325". A `ts-rs` codegen path (`make gen-types`, gated behind `ts-gen` feature) handles UI types via the `register_ts_dto!` macro (47 registrations across the core source) and is enforced by a CI drift check, but it does **not** target the channels adapter.
+There is no integration crate / SDK / contract crate mediating between the binary and external clients (channels, UI). Channel TS code in [channels/src/types.ts](../../channels/src/types.ts) hand-mirrors [crates/opex-types/src/lib.rs](../../crates/opex-types/src/lib.rs); the comment at the top of `types.ts` literally says "Port of crates/opex-types/src/lib.rs:138-325". A `ts-rs` codegen path (`make gen-types`, gated behind `ts-gen` feature) handles UI types via the `register_ts_dto!` macro (47 registrations across the core source) and is enforced by a CI drift check, but it does **not** target the channels adapter.
 
-### 2. The Rust core (`crates/hydeclaw-core/`)
+### 2. The Rust core (`crates/opex-core/`)
 
 213 Rust source files; 80,174 LoC. Top-level modules (from `main.rs`): `agent`, `channels`, `config`, `containers`, `curator`, `db`, `dto_export`, `gateway`, `mcp`, `memory`, `metrics`, `net`, `oauth`, `process_manager`, `scheduler`, `secrets`, `shutdown`, `skills`, `tasks`, `tools`, `trace_propagation`, `uploads`.
 
 **Top 10 largest modules** (LoC, by single file):
 
-1. [src/config/mod.rs](../../crates/hydeclaw-core/src/config/mod.rs) — 2,602 — TOML schema + serde defaults for the entire config tree
-2. [src/tools/yaml_tools.rs](../../crates/hydeclaw-core/src/tools/yaml_tools.rs) — 2,360 — YAML tool loader/runner, SSRF protection, response_transform
-3. [src/agent/providers.rs](../../crates/hydeclaw-core/src/agent/providers.rs) — 2,179 — `LlmProvider` trait, `RoutingProvider`, `build_provider`, fallback logic, `UnconfiguredProvider` sentinel
-4. [src/scheduler/mod.rs](../../crates/hydeclaw-core/src/scheduler/mod.rs) — 2,116 — cron + heartbeat scheduler
-5. [src/gateway/handlers/monitoring.rs](../../crates/hydeclaw-core/src/gateway/handlers/monitoring.rs) — 1,575 — `/api/health/*` handlers + dashboard aggregator
-6. [src/agent/cli_backend.rs](../../crates/hydeclaw-core/src/agent/cli_backend.rs) — 1,541 — CLI provider runner (claude/gemini CLI processes)
-7. [src/agent/history.rs](../../crates/hydeclaw-core/src/agent/history.rs) — 1,491 — message history loading, pruning, reconstruction
-8. [src/gateway/handlers/chat.rs](../../crates/hydeclaw-core/src/gateway/handlers/chat.rs) — 1,420 — SSE chat endpoint + Last-Event-ID resume
-9. [src/agent/workspace.rs](../../crates/hydeclaw-core/src/agent/workspace.rs) — 1,349 — workspace file IO + path-readonly checks
-10. [src/agent/providers_anthropic.rs](../../crates/hydeclaw-core/src/agent/providers_anthropic.rs) — 1,315 — Anthropic Messages API adapter (incl. extended thinking)
+1. [src/config/mod.rs](../../crates/opex-core/src/config/mod.rs) — 2,602 — TOML schema + serde defaults for the entire config tree
+2. [src/tools/yaml_tools.rs](../../crates/opex-core/src/tools/yaml_tools.rs) — 2,360 — YAML tool loader/runner, SSRF protection, response_transform
+3. [src/agent/providers.rs](../../crates/opex-core/src/agent/providers.rs) — 2,179 — `LlmProvider` trait, `RoutingProvider`, `build_provider`, fallback logic, `UnconfiguredProvider` sentinel
+4. [src/scheduler/mod.rs](../../crates/opex-core/src/scheduler/mod.rs) — 2,116 — cron + heartbeat scheduler
+5. [src/gateway/handlers/monitoring.rs](../../crates/opex-core/src/gateway/handlers/monitoring.rs) — 1,575 — `/api/health/*` handlers + dashboard aggregator
+6. [src/agent/cli_backend.rs](../../crates/opex-core/src/agent/cli_backend.rs) — 1,541 — CLI provider runner (claude/gemini CLI processes)
+7. [src/agent/history.rs](../../crates/opex-core/src/agent/history.rs) — 1,491 — message history loading, pruning, reconstruction
+8. [src/gateway/handlers/chat.rs](../../crates/opex-core/src/gateway/handlers/chat.rs) — 1,420 — SSE chat endpoint + Last-Event-ID resume
+9. [src/agent/workspace.rs](../../crates/opex-core/src/agent/workspace.rs) — 1,349 — workspace file IO + path-readonly checks
+10. [src/agent/providers_anthropic.rs](../../crates/opex-core/src/agent/providers_anthropic.rs) — 1,315 — Anthropic Messages API adapter (incl. extended thinking)
 
 `main.rs` is 1,294 lines doing config load, migrations, agent spawning, process_manager startup, axum bind, and graceful shutdown.
 
 #### Pipeline architecture
 
-[src/agent/pipeline/](../../crates/hydeclaw-core/src/agent/pipeline/) is the unified execution pipeline introduced in spec [2026-04-20-execution-pipeline-unification-design.md](../superpowers/specs/2026-04-20-execution-pipeline-unification-design.md). 26 modules, total ~10k LoC. Responsibilities are clearly named:
+[src/agent/pipeline/](../../crates/opex-core/src/agent/pipeline/) is the unified execution pipeline introduced in spec [2026-04-20-execution-pipeline-unification-design.md](../superpowers/specs/2026-04-20-execution-pipeline-unification-design.md). 26 modules, total ~10k LoC. Responsibilities are clearly named:
 
 - `sink.rs` — `EventSink` trait + `PipelineEvent` (Stream / Phase) + `SseSink`/`ChannelStatusSink`/`ChunkSink`
 - `bootstrap.rs` — entry: persists user message, opens WAL, builds context, fast-paths slash commands
@@ -80,7 +80,7 @@ The decomposition is genuinely good: each file has one job and the dependencies 
 
 #### Engine entry points
 
-[src/agent/engine/run.rs](../../crates/hydeclaw-core/src/agent/engine/run.rs) (468 lines) hosts three `impl AgentEngine` adapter methods that all delegate into the pipeline:
+[src/agent/engine/run.rs](../../crates/opex-core/src/agent/engine/run.rs) (468 lines) hosts three `impl AgentEngine` adapter methods that all delegate into the pipeline:
 
 - `handle_sse(msg, event_tx, resume_session_id, force_new_session, cancel) -> Result<Uuid>` — the production path; constructs `SseSink`, registers cancel guard, propagates session_id back.
 - `handle_with_status(msg, status_tx, chunk_tx) -> Result<String>` — channel-adapter path; `ChannelStatusSink` carries Phase events for typing indicators plus optional chunk channel.
@@ -90,7 +90,7 @@ The three are largely cosmetic variants of the same flow. Each does the same eig
 
 #### Provider abstraction
 
-[src/agent/providers.rs](../../crates/hydeclaw-core/src/agent/providers.rs) defines `pub trait LlmProvider: Send + Sync` with `chat`/`chat_stream`/`name`. Six implementations live in sibling files:
+[src/agent/providers.rs](../../crates/opex-core/src/agent/providers.rs) defines `pub trait LlmProvider: Send + Sync` with `chat`/`chat_stream`/`name`. Six implementations live in sibling files:
 
 - `providers_openai.rs` (1232 lines) — OpenAI-compatible (also handles Ollama, OpenRouter, etc.)
 - `providers_anthropic.rs` (1315 lines) — Anthropic Messages API + extended thinking
@@ -107,33 +107,33 @@ The three are largely cosmetic variants of the same flow. Each does the same eig
 
 Recent schema-affecting work clusters around three themes: (a) curator/skills self-improvement infrastructure (037–039, 044), (b) compression and mirroring (040–043, 045), (c) observability identity (046). Earlier migrations layered onto the base schema gradually — there are several "drop column" migrations (015, 027–033) that remove fields added by previous migrations. This is healthy churn (cleaning up after experimentation) but it also means the schema has ~32 net tables driven by an evolving design.
 
-**Memory layer:** [src/memory/](../../crates/hydeclaw-core/src/memory/) is small (~1.5k LoC) and architecturally clean. `MemoryStore::search_hybrid` ([store.rs:141](../../crates/hydeclaw-core/src/memory/store.rs#L141)) fans out to three searches in parallel — `search_semantic` (pgvector halfvec), `search_fts` (PostgreSQL FTS), `search_trigram` (pg_trgm) — and combines via Reciprocal Rank Fusion with weights `W_SEM`, `W_FTS`, `W_TRGM`. There's a deliberate "single-branch shortcut" that bypasses RRF when only one branch returned results, and the final sort uses chunk-id as tiebreaker so integration tests are deterministic. MMR reranking with λ=0.75 lives only in `search_semantic`. `pinned` (L0 context) and `raw` (time-decay searchable) tiers are real, distinguished at the SQL layer, and cleanly separated. Embeddings are delegated to Toolgate via `EmbeddingService::embed` so Core never touches Ollama or OpenAI directly. This is one of the cleanest subsystems in the codebase.
+**Memory layer:** [src/memory/](../../crates/opex-core/src/memory/) is small (~1.5k LoC) and architecturally clean. `MemoryStore::search_hybrid` ([store.rs:141](../../crates/opex-core/src/memory/store.rs#L141)) fans out to three searches in parallel — `search_semantic` (pgvector halfvec), `search_fts` (PostgreSQL FTS), `search_trigram` (pg_trgm) — and combines via Reciprocal Rank Fusion with weights `W_SEM`, `W_FTS`, `W_TRGM`. There's a deliberate "single-branch shortcut" that bypasses RRF when only one branch returned results, and the final sort uses chunk-id as tiebreaker so integration tests are deterministic. MMR reranking with λ=0.75 lives only in `search_semantic`. `pinned` (L0 context) and `raw` (time-decay searchable) tiers are real, distinguished at the SQL layer, and cleanly separated. Embeddings are delegated to Toolgate via `EmbeddingService::embed` so Core never touches Ollama or OpenAI directly. This is one of the cleanest subsystems in the codebase.
 
-**Secrets vault:** [src/secrets.rs](../../crates/hydeclaw-core/src/secrets.rs) is 577 lines, ChaCha20Poly1305 with a 32-byte master key from `HYDECLAW_MASTER_KEY` env. The master key is wrapped in `Arc<Zeroizing<[u8; 32]>>` so the bytes are zeroed when the last reference drops. Resolution order is `(name, scope)` → `(name, "")` → env var. Backup export includes decrypted secrets by design (portability across master keys), guarded by `X-Confirm-Restore` header on import. Channel credentials live under scope = channel UUID, redacted from the JSONB `agent_channels.config` column. The audit comment block at the top of the file documents the credential-leak threat model. This module is mature.
+**Secrets vault:** [src/secrets.rs](../../crates/opex-core/src/secrets.rs) is 577 lines, ChaCha20Poly1305 with a 32-byte master key from `OPEX_MASTER_KEY` env. The master key is wrapped in `Arc<Zeroizing<[u8; 32]>>` so the bytes are zeroed when the last reference drops. Resolution order is `(name, scope)` → `(name, "")` → env var. Backup export includes decrypted secrets by design (portability across master keys), guarded by `X-Confirm-Restore` header on import. Channel credentials live under scope = channel UUID, redacted from the JSONB `agent_channels.config` column. The audit comment block at the top of the file documents the credential-leak threat model. This module is mature.
 
 ### 4. Cross-process boundaries
 
-**Toolgate (Python, ~44k LoC):** [toolgate/](../../toolgate/) is a FastAPI sidecar managed via `[[managed_process]]` in `hydeclaw.toml`. Owns 26 provider implementations across STT (8), TTS (6), Vision (7), ImageGen (5), Embedding (2). All share the `providers/base.py` abstract base; provider selection comes from Core's `provider_active` table proxied via REST. Routers under `toolgate/routers/` expose `/transcribe-url`, `/describe-url`, `/v1/audio/speech`, `/v1/embeddings`, `/v1/imagegen`. **Why Python:** native libraries — pymupdf for PDFs, OpenAI SDKs, ElevenLabs, deepgram, transformer-based local STT models. Could be Rust in principle but the ecosystem cost is real.
+**Toolgate (Python, ~44k LoC):** [toolgate/](../../toolgate/) is a FastAPI sidecar managed via `[[managed_process]]` in `opex.toml`. Owns 26 provider implementations across STT (8), TTS (6), Vision (7), ImageGen (5), Embedding (2). All share the `providers/base.py` abstract base; provider selection comes from Core's `provider_active` table proxied via REST. Routers under `toolgate/routers/` expose `/transcribe-url`, `/describe-url`, `/v1/audio/speech`, `/v1/embeddings`, `/v1/imagegen`. **Why Python:** native libraries — pymupdf for PDFs, OpenAI SDKs, ElevenLabs, deepgram, transformer-based local STT models. Could be Rust in principle but the ecosystem cost is real.
 
-**Channels (TypeScript/Bun, ~6k LoC):** [channels/](../../channels/) is an in-process child process speaking JSON over a loopback WebSocket. Eight drivers (`telegram.ts`, `discord.ts`, `slack.ts`, `matrix.ts`, `irc.ts`, `email.ts`, `whatsapp.ts`, `common.ts`). The protocol is a tagged enum: `ChannelInbound` (8 message variants) + `ChannelOutbound` (10 variants) defined identically in [channels/src/types.ts](../../channels/src/types.ts) and [crates/hydeclaw-types/src/lib.rs:204](../../crates/hydeclaw-types/src/lib.rs#L204). The TS file is a hand-written port — comment header literally says "Port of crates/hydeclaw-types/src/lib.rs:138-325". **Why TypeScript:** grammy, discord.js, matrix-bot-sdk, slack/bolt are first-class. Same trade-off as toolgate.
+**Channels (TypeScript/Bun, ~6k LoC):** [channels/](../../channels/) is an in-process child process speaking JSON over a loopback WebSocket. Eight drivers (`telegram.ts`, `discord.ts`, `slack.ts`, `matrix.ts`, `irc.ts`, `email.ts`, `whatsapp.ts`, `common.ts`). The protocol is a tagged enum: `ChannelInbound` (8 message variants) + `ChannelOutbound` (10 variants) defined identically in [channels/src/types.ts](../../channels/src/types.ts) and [crates/opex-types/src/lib.rs:204](../../crates/opex-types/src/lib.rs#L204). The TS file is a hand-written port — comment header literally says "Port of crates/opex-types/src/lib.rs:138-325". **Why TypeScript:** grammy, discord.js, matrix-bot-sdk, slack/bolt are first-class. Same trade-off as toolgate.
 
 **WS loopback contract:** Documented inline in `types.ts` only. There is no schema (JSON Schema, protobuf, OpenAPI) and no test that validates the Rust serde output round-trips against the TS parser. Drift between the two is currently caught only by integration testing in development. The pattern is fine for a small team but is the most fragile cross-process boundary in the project.
 
 ### 5. Streaming + observability
 
-**SSE event taxonomy:** Defined in [src/agent/stream_event.rs](../../crates/hydeclaw-core/src/agent/stream_event.rs) (the `StreamEvent` enum) and serialized to Vercel AI SDK v3 wire format in `gateway/handlers/chat.rs`. 18 variants including `SessionId`, `MessageStart`, `StepStart { step_id, message_id }`, `TextDelta`, `ToolCallStart/Args/Result`, `StepFinish`, `RichCard`, `File`, `Finish`, `ApprovalNeeded/Resolved`, `AgentSwitch`, `Error`, `Reconnecting`, `Usage`. The `Usage` variant with `cache_read_tokens`/`cache_creation_tokens`/`reasoning_tokens` (subsets of input/output, not additive) is well-documented. Frontend mirror is in [ui/src/stores/sse-events.ts](../../ui/src/stores/sse-events.ts) (193 lines). `Last-Event-ID` resume is wired through `gateway/sse/coalescer.rs` and chaos-tested by [test-pi-chaos.py](../../tests/integration/pi/test-pi-chaos.py).
+**SSE event taxonomy:** Defined in [src/agent/stream_event.rs](../../crates/opex-core/src/agent/stream_event.rs) (the `StreamEvent` enum) and serialized to Vercel AI SDK v3 wire format in `gateway/handlers/chat.rs`. 18 variants including `SessionId`, `MessageStart`, `StepStart { step_id, message_id }`, `TextDelta`, `ToolCallStart/Args/Result`, `StepFinish`, `RichCard`, `File`, `Finish`, `ApprovalNeeded/Resolved`, `AgentSwitch`, `Error`, `Reconnecting`, `Usage`. The `Usage` variant with `cache_read_tokens`/`cache_creation_tokens`/`reasoning_tokens` (subsets of input/output, not additive) is well-documented. Frontend mirror is in [ui/src/stores/sse-events.ts](../../ui/src/stores/sse-events.ts) (193 lines). `Last-Event-ID` resume is wired through `gateway/sse/coalescer.rs` and chaos-tested by [test-pi-chaos.py](../../tests/integration/pi/test-pi-chaos.py).
 
-**OpenTelemetry instrumentation:** Recently added in v0.26.0 (release notes: "Phase 67 — Observability & Architecture Polish"). [src/trace_propagation.rs](../../crates/hydeclaw-core/src/trace_propagation.rs) (182 lines) provides three primitives gated behind the `otel` feature:
+**OpenTelemetry instrumentation:** Recently added in v0.26.0 (release notes: "Phase 67 — Observability & Architecture Polish"). [src/trace_propagation.rs](../../crates/opex-core/src/trace_propagation.rs) (182 lines) provides three primitives gated behind the `otel` feature:
 
 - `inject_trace_context(RequestBuilder) -> RequestBuilder` — injects W3C `traceparent` into outbound `reqwest` calls
 - `extract_trace_context_layer` — Axum middleware that opens an `http_request` span parented to the incoming `traceparent`
 - `spawn_traced(future)` — wraps `tokio::spawn` with `.instrument(Span::current())` to preserve span across the spawn boundary
 
-Instrumented spans (per [docs/architecture/observability-setup.md](observability-setup.md) and the v0.26.0 release notes): `http_request`, `pipeline.execute`, `pipeline.execute_tools`, `pipeline.finalize`, `llm.call`, `llm.request`. Sampling uses `Sampler::ParentBased(TraceIdRatioBased(ratio))` so cross-process traces are never half-sampled. Propagation is end-to-end across `hydeclaw-core` → `toolgate` → `channels` → `hydeclaw-memory-worker`, with the Python and Bun sides using `opentelemetry-instrumentation-fastapi`/`@opentelemetry/auto-instrumentations-node`. This is unusually well-done for a project of this size.
+Instrumented spans (per [docs/architecture/observability-setup.md](observability-setup.md) and the v0.26.0 release notes): `http_request`, `pipeline.execute`, `pipeline.execute_tools`, `pipeline.finalize`, `llm.call`, `llm.request`. Sampling uses `Sampler::ParentBased(TraceIdRatioBased(ratio))` so cross-process traces are never half-sampled. Propagation is end-to-end across `opex-core` → `toolgate` → `channels` → `opex-memory-worker`, with the Python and Bun sides using `opentelemetry-instrumentation-fastapi`/`@opentelemetry/auto-instrumentations-node`. This is unusually well-done for a project of this size.
 
 **Note:** CLAUDE.md states OTel `0.27`, `opentelemetry_sdk 0.27`, `opentelemetry-otlp 0.27`, `tracing-opentelemetry 0.28`. [Cargo.toml:60-63](../../Cargo.toml#L60-L63) is on `0.31`/`0.31`/`0.31`/`0.32`. Documentation drift.
 
-**Metrics:** [src/metrics.rs](../../crates/hydeclaw-core/src/metrics.rs) is 1130 lines, with cardinality-guarded label tracking (`assert_label_allowed`, `unique_series_count`), per-tool latency, per-LLM-call duration, DB query duration, token usage, CSP violations with overflow counter, SSE drop counter, LLM timeout/failover counters. `MetricsRegistry` is a global `Arc` registered via `install_global` and read via `global()`. OTel instruments are registered via `install_otel_instruments`. The exposed dashboard surface (`build_dashboard_body` / `build_dashboard_body_with_snapshot`) drives `/api/health/dashboard`. Healthy.
+**Metrics:** [src/metrics.rs](../../crates/opex-core/src/metrics.rs) is 1130 lines, with cardinality-guarded label tracking (`assert_label_allowed`, `unique_series_count`), per-tool latency, per-LLM-call duration, DB query duration, token usage, CSP violations with overflow counter, SSE drop counter, LLM timeout/failover counters. `MetricsRegistry` is a global `Arc` registered via `install_global` and read via `global()`. OTel instruments are registered via `install_otel_instruments`. The exposed dashboard surface (`build_dashboard_body` / `build_dashboard_body_with_snapshot`) drives `/api/health/dashboard`. Healthy.
 
 ### 6. Frontend (`ui/`)
 
@@ -157,7 +157,7 @@ Live-vs-history reconciliation is the architecturally interesting part. It used 
 ### 7. Testing infrastructure
 
 - **Unit tests:** 1071 `#[test]` and 350 `#[tokio::test]` annotations across the workspace, mostly inline with `#[cfg(test)] mod tests`. Test ratio is healthy.
-- **Integration tests:** 53 files in `crates/*/tests/`. 55 `#[sqlx::test]` annotations real-DB-bound, 42 of them in `hydeclaw-core/tests/`. Test names are descriptive and scope-targeted: `integration_approval_race`, `integration_session_chain`, `integration_sse_coalescing`, `integration_ssrf_guard`, `integration_path_canonicalize`, `integration_csp_report`, `integration_otel_export`, `integration_trace_context`, etc.
+- **Integration tests:** 53 files in `crates/*/tests/`. 55 `#[sqlx::test]` annotations real-DB-bound, 42 of them in `opex-core/tests/`. Test names are descriptive and scope-targeted: `integration_approval_race`, `integration_session_chain`, `integration_sse_coalescing`, `integration_ssrf_guard`, `integration_path_canonicalize`, `integration_csp_report`, `integration_otel_export`, `integration_trace_context`, etc.
 - **Test database orchestration:** [docker/docker-compose.test.yml](../../docker/docker-compose.test.yml) boots an isolated Postgres on port 5434 with tmpfs storage. `make test-db` drives the full backend suite; v0.26.0 release notes claim **1122/1122 backend tests passing**.
 - **CI:** Four jobs — Rust check + test + clippy (with `-D warnings`, currently `continue-on-error: true`), UI tsc + build, toolgate pytest (47 tests), channels bun test (193 tests), and a `types-drift` job that runs `make gen-types` and `git diff --exit-code` against the committed `ui/src/types/api.generated.ts`. The drift gate is exactly the right thing to do.
 - **E2E / chaos:** [test-pi-e2e.py](../../tests/integration/pi/test-pi-e2e.py), [test-pi-chaos.py](../../tests/integration/pi/test-pi-chaos.py), [test-pi-concurrency.py](../../tests/integration/pi/test-pi-concurrency.py), [test-pi-trace-correlation.py](../../tests/integration/pi/test-pi-trace-correlation.py) all run against a real Pi at `192.168.1.82:18789`. The chaos test simulates random mid-stream SSE drops and asserts `Last-Event-ID` resume produces a deduplicated event timeline — this is the right way to validate streaming reliability.
@@ -166,13 +166,13 @@ Live-vs-history reconciliation is the architecturally interesting part. It used 
 
 - **Largest files:** Top six listed in §2 (config 2602, yaml_tools 2360, providers 2179, scheduler 2116, monitoring 1575, cli_backend 1541). Below ~1500 most files have a clear single responsibility; above that, splitting would help.
 - **`unsafe` blocks:** Zero (the three matches in `grep -n "unsafe " ` are all inside comments — `path-unsafe characters`, `safe for HTTP headers, unsafe for JSON bodies`, `MUST NOT contain ... unsafe chars`).
-- **`unwrap()` density:** 503 in `crates/hydeclaw-core/src/`. Heaviest: `workspace.rs` (57), `yaml_tools.rs` (39), `net/ssrf.rs` (31), `gateway/handlers/workspace_files.rs` (24). Many will be in test modules; the absolute count is high but not pathological for an 80k-LoC crate.
+- **`unwrap()` density:** 503 in `crates/opex-core/src/`. Heaviest: `workspace.rs` (57), `yaml_tools.rs` (39), `net/ssrf.rs` (31), `gateway/handlers/workspace_files.rs` (24). Many will be in test modules; the absolute count is high but not pathological for an 80k-LoC crate.
 - **`.expect()` density:** 249, mostly used as documented invariant assertions (`bootstrap always sets lifecycle_guard`).
 - **`panic!`:** 63 occurrences total across all six crates — almost all inside `#[cfg(test)]` blocks based on a sampling of the matches.
 - **TODO/FIXME/HACK:** 3 markers total in source code. Two are explanatory references in comments, one is a single deferred task in `bootstrap.rs:20` (`TODO: Task 10 inlines enrichment`). This is exceptionally low.
 - **`#[deprecated]`:** None. No formal deprecation surface.
 - **Cyclomatic complexity hotspots:** `pipeline::execute::execute` (1193 lines, deep loop with multiple early-exit paths), `RoutingProvider::chat`/`chat_stream` (failover state machine), `cli_backend.rs` (process management, parsing 7 different output formats). These are inherent to what they're doing, not gratuitous.
-- **Dependency drift:** [Cargo.lock](../../Cargo.lock) has 463 `[[package]]` entries. 29 crate names appear with multiple versions — the worst is `windows-sys` (5 versions) and `hashbrown` (4). Most are transitive. `testcontainers` is pinned to 0.23 (not 0.27) because 0.24+ requires bollard 0.19+ which is incompatible with the workspace bollard 0.18 — documented in [Cargo.toml:138-145](../../crates/hydeclaw-core/Cargo.toml#L138-L145). No alarming staleness.
+- **Dependency drift:** [Cargo.lock](../../Cargo.lock) has 463 `[[package]]` entries. 29 crate names appear with multiple versions — the worst is `windows-sys` (5 versions) and `hashbrown` (4). Most are transitive. `testcontainers` is pinned to 0.23 (not 0.27) because 0.24+ requires bollard 0.19+ which is incompatible with the workspace bollard 0.18 — documented in [Cargo.toml:138-145](../../crates/opex-core/Cargo.toml#L138-L145). No alarming staleness.
 
 ### 9. Documentation
 
@@ -191,7 +191,7 @@ Live-vs-history reconciliation is the architecturally interesting part. It used 
 
 #### B. The `lib.rs` facade is doing more work than it should
 
-[crates/hydeclaw-core/src/lib.rs](../../crates/hydeclaw-core/src/lib.rs) (329 lines, 80% comments) is a tangle of `#[doc(hidden)]` re-mounts to expose leaf modules to integration tests without dragging the agent subtree in. Three `pub mod` blocks redirect via `#[path]` into the binary's source tree; a `__memory_bridge`, `__memory_pipeline_bridge`, and `memory_test_facade` exist solely to satisfy `crate::*` references in three re-mounted memory files. Each addition is clearly justified in the comments, but the pattern is fundamentally a workaround for not having a real lib API. The lib facade is meant to be minimal (10-module cap mentioned in the comments), but every "exception" is a sign that the underlying agent subtree wants to be exposed and isn't being. The Phase 66 plan to split `engine.rs` is the real fix.
+[crates/opex-core/src/lib.rs](../../crates/opex-core/src/lib.rs) (329 lines, 80% comments) is a tangle of `#[doc(hidden)]` re-mounts to expose leaf modules to integration tests without dragging the agent subtree in. Three `pub mod` blocks redirect via `#[path]` into the binary's source tree; a `__memory_bridge`, `__memory_pipeline_bridge`, and `memory_test_facade` exist solely to satisfy `crate::*` references in three re-mounted memory files. Each addition is clearly justified in the comments, but the pattern is fundamentally a workaround for not having a real lib API. The lib facade is meant to be minimal (10-module cap mentioned in the comments), but every "exception" is a sign that the underlying agent subtree wants to be exposed and isn't being. The Phase 66 plan to split `engine.rs` is the real fix.
 
 #### C. Handler god-modules
 
@@ -199,11 +199,11 @@ Six gateway handler files exceed 1000 lines: `monitoring.rs` (1575), `chat.rs` (
 
 #### D. Channel WS contract is hand-mirrored, not generated
 
-The single most fragile cross-process boundary. `channels/src/types.ts` literally says "Port of crates/hydeclaw-types/src/lib.rs:138-325" in its header. There's no schema, no codegen, no round-trip test. The `ts-rs` codegen path that drives `ui/src/types/api.generated.ts` could in principle be extended to `channels/src/types.generated.ts` — same mechanism, same crate.
+The single most fragile cross-process boundary. `channels/src/types.ts` literally says "Port of crates/opex-types/src/lib.rs:138-325" in its header. There's no schema, no codegen, no round-trip test. The `ts-rs` codegen path that drives `ui/src/types/api.generated.ts` could in principle be extended to `channels/src/types.generated.ts` — same mechanism, same crate.
 
 #### E. `gateway-util` and `db` crates are extraction-driven, not domain-driven
 
-Both crates exist primarily so integration tests can reach leaf modules without the lib facade cascading the full agent subtree. `hydeclaw-gateway-util` is 597 lines of mostly unrelated utilities (rate limiter, restore-stream parser, trace_context middleware). `hydeclaw-db` is 3597 lines, 49% of which is `sessions.rs` (1762 lines — bigger than most "monolithic" modules in `hydeclaw-core`). The crate boundaries don't follow a domain — they follow what the test harness needs. This is fine in practice but means the workspace topology is a build-system artifact, not an architectural statement.
+Both crates exist primarily so integration tests can reach leaf modules without the lib facade cascading the full agent subtree. `opex-gateway-util` is 597 lines of mostly unrelated utilities (rate limiter, restore-stream parser, trace_context middleware). `opex-db` is 3597 lines, 49% of which is `sessions.rs` (1762 lines — bigger than most "monolithic" modules in `opex-core`). The crate boundaries don't follow a domain — they follow what the test harness needs. This is fine in practice but means the workspace topology is a build-system artifact, not an architectural statement.
 
 #### F. Documentation drift
 
@@ -255,7 +255,7 @@ The auto-memory snippet says "single session + orchestrator, not independent age
 
 3. **Six gateway handler god-modules (>1000 lines each).** `monitoring.rs` (1575), `chat.rs` (1420), `providers.rs` (1233), `channel_ws.rs` (1083), `sessions.rs` (1066), `agents/crud.rs` (1059). Pattern of sub-routers per resource is solid, but the resources are big. `agents/` already became a directory; same pattern needed for `chat/` and `monitoring/`.
 
-4. **Channel WS contract is hand-mirrored.** [channels/src/types.ts](../../channels/src/types.ts) header says "Port of crates/hydeclaw-types/src/lib.rs:138-325". No schema, no codegen, no round-trip test. The single fragile cross-process boundary in the system. Drift is caught only by integration testing.
+4. **Channel WS contract is hand-mirrored.** [channels/src/types.ts](../../channels/src/types.ts) header says "Port of crates/opex-types/src/lib.rs:138-325". No schema, no codegen, no round-trip test. The single fragile cross-process boundary in the system. Drift is caught only by integration testing.
 
 5. **`lib.rs` facade is a workaround tangle.** 329 lines mostly explaining why each `pub mod` exists, with `__memory_bridge`/`__memory_pipeline_bridge`/`memory_test_facade` `#[doc(hidden)]` modules existing solely so integration tests can reach leaf code without dragging the agent subtree in. The fact that the file caps itself at "10 modules" and every addition is justified by a comment is a signal — the underlying agent subtree wants to be exposed via a real lib API.
 
@@ -265,7 +265,7 @@ The auto-memory snippet says "single session + orchestrator, not independent age
 
 8. **Migration churn (46 forward-only migrations, 8 are drop-column).** The 008 drop migrations (015, 027–033) reflect productive iteration but also that the schema was experimented on in production. No down migrations means the only escape from a bad migration is a forward fix. For a single-tenant Pi this is fine; for multi-tenant SaaS it would be a risk.
 
-9. **`hydeclaw-db` and `hydeclaw-gateway-util` crates are extraction-driven.** Both exist mainly so integration tests can reach leaf modules without `lib.rs` cascading the full subtree. `hydeclaw-db/sessions.rs` is 1762 lines — bigger than most "monolithic" core modules. The crate split solves a build-system problem, not a domain problem.
+9. **`opex-db` and `opex-gateway-util` crates are extraction-driven.** Both exist mainly so integration tests can reach leaf modules without `lib.rs` cascading the full subtree. `opex-db/sessions.rs` is 1762 lines — bigger than most "monolithic" core modules. The crate split solves a build-system problem, not a domain problem.
 
 10. **No formal API versioning.** URLs are unprefixed (`/api/agents`, not `/api/v1/agents`). No `Accept-Version` header. No deprecation policy. Acknowledged implicitly via v0.x version numbering, but every UI/channel adapter pinned to a specific Core version creates coupling that will hurt during the transition to 1.0.
 
@@ -283,7 +283,7 @@ I'd tackle these in roughly this order:
 
 ### P1 — Reducing fragility
 
-4. **Codegen `channels/src/types.ts` from `hydeclaw-types`.** Extend the `register_ts_dto!` mechanism to emit a second file (`channels/src/types.generated.ts`) covering the `ChannelInbound`/`ChannelOutbound`/`IncomingMessageDto`/`ChannelActionDto` set. Add a CI drift gate. Removes the single hand-mirrored cross-process boundary in the system. Estimate: 2-3 days.
+4. **Codegen `channels/src/types.ts` from `opex-types`.** Extend the `register_ts_dto!` mechanism to emit a second file (`channels/src/types.generated.ts`) covering the `ChannelInbound`/`ChannelOutbound`/`IncomingMessageDto`/`ChannelActionDto` set. Add a CI drift gate. Removes the single hand-mirrored cross-process boundary in the system. Estimate: 2-3 days.
 
 5. **Refresh CLAUDE.md.** Re-run the chat-store decomposition section against actual file sizes; update the OTel version references; note that `chat-store.ts` is now a 70-line wrapper over four action factories. Add a CI hint that warns when CLAUDE.md hasn't been touched in N weeks. Estimate: half a day, but needs the discipline of a recurring sweep.
 
@@ -291,11 +291,11 @@ I'd tackle these in roughly this order:
 
 ### P2 — Refactors that pay off later, not today
 
-7. **Decide whether `hydeclaw-db` and `hydeclaw-gateway-util` are domain crates or test-extraction crates, and act on the answer.** Either rename them to reflect what they actually are, or split them by domain (sessions / memory / approvals / WAL). The current name promises a coherent layer that the contents don't quite deliver.
+7. **Decide whether `opex-db` and `opex-gateway-util` are domain crates or test-extraction crates, and act on the answer.** Either rename them to reflect what they actually are, or split them by domain (sessions / memory / approvals / WAL). The current name promises a coherent layer that the contents don't quite deliver.
 
 8. **Introduce a v1 API prefix.** Add `/api/v1/` aliases that route to the existing handlers; document the deprecation policy in `docs/API.md`. The UI and channels can keep using unprefixed paths for backward compat, and new clients use v1. Costs almost nothing today, saves a hard migration before 1.0.
 
-9. **Consider a real public API surface for `hydeclaw-core`.** The `lib.rs` facade is the wrong shape for what it's used for. Define what an external consumer (e.g. an embedding Hydeclaw in a different binary) would actually need, expose those as proper `pub` modules, and let integration tests use the same surface as external consumers. This dissolves the `__memory_bridge` tangle and lets the Phase 66 work expose its results cleanly.
+9. **Consider a real public API surface for `opex-core`.** The `lib.rs` facade is the wrong shape for what it's used for. Define what an external consumer (e.g. an embedding OPEX in a different binary) would actually need, expose those as proper `pub` modules, and let integration tests use the same surface as external consumers. This dissolves the `__memory_bridge` tangle and lets the Phase 66 work expose its results cleanly.
 
 10. **Add a contract test for the Channel WS protocol.** Even before codegen, a test that round-trips every `ChannelInbound`/`ChannelOutbound` variant through Rust serde → JSON string → TS parser would catch drift at PR time. The TS side needs only `Bun.file` + `JSON.parse`.
 
@@ -305,4 +305,4 @@ I'd tackle these in roughly this order:
 
 The gap to 9/10 is decomposition and contract-formalisation work: finishing the engine/pipeline unification (Phase 66), splitting the six handler god-modules, codegenning the channels WS types, and cleaning up the lib facade. None of this is urgent; all of it would pay off as the project scales beyond a single-Pi single-user deployment.
 
-The codebase shows a small team working with strong engineering discipline: ADRs for architectural decisions, deferred-work documented in code comments with spec references, ts-rs CI drift gate, sqlx::test real-DB harness, chaos tests against real hardware. The dominant risks are size — `hydeclaw-core` at 80k LoC across 213 files is at the edge of what one crate should hold, and the workarounds in `lib.rs` are the canary. Address that and HydeClaw moves from "well-engineered Pi-class gateway" to "well-engineered platform that happens to deploy well on a Pi."
+The codebase shows a small team working with strong engineering discipline: ADRs for architectural decisions, deferred-work documented in code comments with spec references, ts-rs CI drift gate, sqlx::test real-DB harness, chaos tests against real hardware. The dominant risks are size — `opex-core` at 80k LoC across 213 files is at the edge of what one crate should hold, and the workarounds in `lib.rs` are the canary. Address that and OPEX moves from "well-engineered Pi-class gateway" to "well-engineered platform that happens to deploy well on a Pi."

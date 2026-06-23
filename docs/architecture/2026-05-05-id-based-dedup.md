@@ -65,13 +65,13 @@ Five concrete changes carried this:
 
 ### Phase 1 — Per-iteration UUID in StepStart
 
-`crates/hydeclaw-core/src/agent/stream_event.rs`:
+`crates/opex-core/src/agent/stream_event.rs`:
 
 ```rust
 StepStart { step_id: String, message_id: String }
 ```
 
-`crates/hydeclaw-core/src/agent/pipeline/execute.rs`:
+`crates/opex-core/src/agent/pipeline/execute.rs`:
 
 ```rust
 for iteration in 0..max_iterations {
@@ -85,7 +85,7 @@ for iteration in 0..max_iterations {
 The first iteration also emits a legacy `MessageStart` with the same id for
 backward compatibility with existing frontend handlers.
 
-`crates/hydeclaw-core/src/gateway/handlers/chat.rs`:
+`crates/opex-core/src/gateway/handlers/chat.rs`:
 
 ```rust
 StreamEvent::StepStart { step_id, message_id } => {
@@ -244,13 +244,13 @@ results for tools 0..N.
   * OTel observability is wired and ready (`pipeline.execute`,
     `pipeline.finalize`, `pipeline.execute_tools` spans) but the Pi
     operator step is manual — set `[otel] enabled = true` in
-    `hydeclaw.toml`, set `OTEL_EXPORTER_OTLP_ENDPOINT` in the systemd
+    `opex.toml`, set `OTEL_EXPORTER_OTLP_ENDPOINT` in the systemd
     unit, run `make deploy-jaeger`. End-to-end span validation under
     load is operator-driven (Jaeger UI on port 16686).
 
 ### Verification
 
-  * Backend: **1122 unit tests passing** (full hydeclaw-core suite,
+  * Backend: **1122 unit tests passing** (full opex-core suite,
     including all sqlx::test integration tests against the isolated
     test Postgres on `127.0.0.1:5434`). 9 new helper tests in
     `pipeline::tool_loop_helpers::tests` cover the shared loop
@@ -272,7 +272,7 @@ results for tools 0..N.
     `docker-compose.observability.yml` runs Jaeger all-in-one
     (verified live on Pi: UI 200 on port 16686, OTLP receiver on 4317).
     Cross-process tracing wired end-to-end:
-      * Core (`hydeclaw-core` service) — `pipeline.execute`,
+      * Core (`opex-core` service) — `pipeline.execute`,
         `pipeline.finalize`, `pipeline.execute_tools` spans with
         `session_id`, `agent`, `iterations`, `assistant_message_id`,
         `outcome`, `tool_count` tags populated.
@@ -283,7 +283,7 @@ results for tools 0..N.
       * Core's reqwest calls inject W3C `traceparent` via
         `trace_propagation::inject_trace_context` so the Toolgate
         span attaches to its Core parent. Verified live on Pi:
-        single trace (53 spans) contains both `hydeclaw-core` and
+        single trace (53 spans) contains both `opex-core` and
         `toolgate` spans linked under one `pipeline.execute` parent
         — see screenshot artifact in commit message of
         `arch: cross-process tracing — Core → Toolgate → Channels`.
@@ -308,9 +308,9 @@ frontend state → DOM render. No content-based dedup heuristics required.
 ## References
 
   * Migration: `migrations/046_messages_step_id.sql`
-  * Backend Finish guarantee: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
+  * Backend Finish guarantee: `crates/opex-core/src/agent/pipeline/finalize.rs`
     (Failed + Interrupted paths) and `engine/run.rs` (panic path)
-  * Shared loop mechanics: `crates/hydeclaw-core/src/agent/pipeline/tool_loop_helpers.rs`
+  * Shared loop mechanics: `crates/opex-core/src/agent/pipeline/tool_loop_helpers.rs`
     (single source of truth for both `pipeline::execute` and
     `engine/stream.rs::handle_isolated`)
   * Frontend dedup: `ui/src/stores/chat-overlay-dedup.ts`

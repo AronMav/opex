@@ -134,7 +134,7 @@ Be strict. Paraphrase is not coverage. If a quote is absent — REJECT.
 
 ### Provider
 
-Uses the curator's configured `provider_connection` + `model` from `[curator]` in `hydeclaw.toml`.
+Uses the curator's configured `provider_connection` + `model` from `[curator]` in `opex.toml`.
 
 ---
 

@@ -22,9 +22,9 @@ Every Task 2-16 (extract commits) follows the same shape. The steps are:
 2. **Edit** the source file to remove the items (Edit tool, replacing the items' text with empty content) — or use a single Edit that moves them. The cleanest approach is: first Write the new file with the moved items + their imports, then Edit the source file to delete those items.
 3. **Add** `mod <name>;` (and `use <name>::*;` if the parent needs anything from it) to the parent module.
 4. **Update visibility** for items now crossing the new module boundary: change `pub(super)` → `pub(super)` (no-op, stays correct since parent is still `super`), `fn foo` → `pub(super) fn foo` (so siblings can see it), etc. Inside the new sibling, any item used by *another* sibling (not just by `mod.rs`) needs `pub(super)` too.
-5. **`cargo check -p hydeclaw-core`** — fast feedback.
-6. **`cargo clippy -p hydeclaw-core --all-targets -- -D warnings`** — strict.
-7. **`cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers`** — adapter-suite, no DB needed.
+5. **`cargo check -p opex-core`** — fast feedback.
+6. **`cargo clippy -p opex-core --all-targets -- -D warnings`** — strict.
+7. **`cargo test -p opex-core --bin opex-core agent::providers`** — adapter-suite, no DB needed.
 8. **Commit** with the exact message specified in the task.
 
 If clippy fails on something **not introduced** by the move (pre-existing warning the move surfaced because of a new module boundary), fix it minimally in the same commit — keep the diff focused.
@@ -38,9 +38,9 @@ If a test fails, **stop** and investigate before continuing. The whole premise o
 **Files:**
 
 - Create (transient): `target/llvm-cov-providers-baseline.txt` (not committed)
-- Modify: `crates/hydeclaw-core/src/agent/providers/anthropic.rs` — add `#[cfg(test)] mod golden_fixtures` block
-- Modify: `crates/hydeclaw-core/src/agent/providers/openai.rs` — add `#[cfg(test)] mod tests` + `#[cfg(test)] mod golden_fixtures` blocks
-- Modify: `crates/hydeclaw-core/src/agent/providers/google.rs` — add `#[cfg(test)] mod golden_fixtures` block
+- Modify: `crates/opex-core/src/agent/providers/anthropic.rs` — add `#[cfg(test)] mod golden_fixtures` block
+- Modify: `crates/opex-core/src/agent/providers/openai.rs` — add `#[cfg(test)] mod tests` + `#[cfg(test)] mod golden_fixtures` blocks
+- Modify: `crates/opex-core/src/agent/providers/google.rs` — add `#[cfg(test)] mod golden_fixtures` block
 
 - [ ] **Step 1: Inventory current test modules**
 
@@ -48,9 +48,9 @@ Run:
 
 ```bash
 grep -nE "^#\[cfg\(test\)\]|^mod [a-z_]*tests" \
-  crates/hydeclaw-core/src/agent/providers/anthropic.rs \
-  crates/hydeclaw-core/src/agent/providers/openai.rs \
-  crates/hydeclaw-core/src/agent/providers/google.rs
+  crates/opex-core/src/agent/providers/anthropic.rs \
+  crates/opex-core/src/agent/providers/openai.rs \
+  crates/opex-core/src/agent/providers/google.rs
 ```
 
 Expected output includes (locked baseline, 2026-05-14):
@@ -68,7 +68,7 @@ Record the actual line numbers in the commit body — any future drift is justif
 Run (no commit of artifacts):
 
 ```bash
-cargo llvm-cov test -p hydeclaw-core --bin hydeclaw-core agent::providers --summary-only
+cargo llvm-cov test -p opex-core --bin opex-core agent::providers --summary-only
 ```
 
 Capture per-file coverage % from the summary. Numbers go into the commit-message body — no LCOV file is committed.
@@ -82,7 +82,7 @@ rustup component add llvm-tools-preview
 
 - [ ] **Step 3: Add OpenAI baseline `mod tests`**
 
-Insert at the END of `crates/hydeclaw-core/src/agent/providers/openai.rs`, immediately before the existing `mod xml_tests` block (so the two test modules sit adjacent):
+Insert at the END of `crates/opex-core/src/agent/providers/openai.rs`, immediately before the existing `mod xml_tests` block (so the two test modules sit adjacent):
 
 ```rust
 #[cfg(test)]
@@ -122,7 +122,7 @@ mod tests {
             }),
             completion_tokens_details: None,
         };
-        let tu: hydeclaw_types::TokenUsage = s.into();
+        let tu: opex_types::TokenUsage = s.into();
         assert_eq!(tu.input_tokens, 100);
         assert_eq!(tu.output_tokens, 50);
         assert_eq!(tu.cache_read_input_tokens, Some(30));
@@ -136,7 +136,7 @@ Note: field names in the struct-literal above (`prompt_tokens_details`, `cached_
 
 Add to the END of each adapter file (after all existing `#[cfg(test)] mod ...` blocks):
 
-`crates/hydeclaw-core/src/agent/providers/anthropic.rs`:
+`crates/opex-core/src/agent/providers/anthropic.rs`:
 
 ```rust
 #[cfg(test)]
@@ -180,7 +180,7 @@ mod golden_fixtures {
 }
 ```
 
-`crates/hydeclaw-core/src/agent/providers/openai.rs`:
+`crates/opex-core/src/agent/providers/openai.rs`:
 
 ```rust
 #[cfg(test)]
@@ -213,7 +213,7 @@ mod golden_fixtures {
 }
 ```
 
-`crates/hydeclaw-core/src/agent/providers/google.rs`:
+`crates/opex-core/src/agent/providers/google.rs`:
 
 ```rust
 #[cfg(test)]
@@ -244,7 +244,7 @@ If any of these tests references a struct field whose actual name differs (e.g. 
 - [ ] **Step 5: Verify the new tests pass**
 
 ```bash
-cargo test -p hydeclaw-core --bin hydeclaw-core "agent::providers::anthropic::golden_fixtures::|agent::providers::openai::tests::|agent::providers::openai::golden_fixtures::|agent::providers::google::golden_fixtures::"
+cargo test -p opex-core --bin opex-core "agent::providers::anthropic::golden_fixtures::|agent::providers::openai::tests::|agent::providers::openai::golden_fixtures::|agent::providers::google::golden_fixtures::"
 ```
 
 Expected: all new tests PASS. If a test fails with a struct-field error, this means the test was written against the wrong field name — fix the test, not the struct.
@@ -252,7 +252,7 @@ Expected: all new tests PASS. If a test fails with a struct-field error, this me
 - [ ] **Step 6: Run full provider test suite**
 
 ```bash
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers
+cargo test -p opex-core --bin opex-core agent::providers
 ```
 
 Expected: all tests pass.
@@ -260,9 +260,9 @@ Expected: all tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/anthropic.rs \
-        crates/hydeclaw-core/src/agent/providers/openai.rs \
-        crates/hydeclaw-core/src/agent/providers/google.rs
+git add crates/opex-core/src/agent/providers/anthropic.rs \
+        crates/opex-core/src/agent/providers/openai.rs \
+        crates/opex-core/src/agent/providers/google.rs
 git commit -m "$(cat <<'EOF'
 chore(providers): freeze test baseline before W1 refactor
 
@@ -299,19 +299,19 @@ EOF
 
 **Files:**
 
-- Rename: `crates/hydeclaw-core/src/agent/providers/anthropic.rs` → `crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs`
+- Rename: `crates/opex-core/src/agent/providers/anthropic.rs` → `crates/opex-core/src/agent/providers/anthropic/mod.rs`
 
 - [ ] **Step 1: Create the destination directory**
 
 ```bash
-mkdir crates/hydeclaw-core/src/agent/providers/anthropic
+mkdir crates/opex-core/src/agent/providers/anthropic
 ```
 
 - [ ] **Step 2: Perform the rename via git mv**
 
 ```bash
-git mv crates/hydeclaw-core/src/agent/providers/anthropic.rs \
-       crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs
+git mv crates/opex-core/src/agent/providers/anthropic.rs \
+       crates/opex-core/src/agent/providers/anthropic/mod.rs
 ```
 
 Note: this is a single commit with **no content change**. The `git mv` preserves history.
@@ -319,8 +319,8 @@ Note: this is a single commit with **no content change**. The `git mv` preserves
 - [ ] **Step 3: Verify the build is unchanged**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::anthropic
+cargo check -p opex-core
+cargo test -p opex-core --bin opex-core agent::providers::anthropic
 ```
 
 Expected: clean build, all tests pass. Rust resolves `mod anthropic;` to either `anthropic.rs` or `anthropic/mod.rs` automatically.
@@ -337,8 +337,8 @@ git commit -m "refactor(providers/anthropic): rename anthropic.rs to anthropic/m
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/anthropic/thinking.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/anthropic/thinking.rs`
+- Modify: `crates/opex-core/src/agent/providers/anthropic/mod.rs`
 
 The `thinking` extraction goes first because it is the most self-contained piece of Anthropic (no calls into other Anthropic internals).
 
@@ -353,14 +353,14 @@ The `thinking` extraction goes first because it is the most self-contained piece
 
 ```bash
 grep -nE "^(enum ThinkingMode|fn thinking_mode|fn thinking_config|mod thinking_config_tests)" \
-  crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs
+  crates/opex-core/src/agent/providers/anthropic/mod.rs
 ```
 
 Expected: 4 matching lines. Note exact line numbers — they replace the "~" estimates above.
 
 - [ ] **Step 2: Create the new file**
 
-`crates/hydeclaw-core/src/agent/providers/anthropic/thinking.rs`:
+`crates/opex-core/src/agent/providers/anthropic/thinking.rs`:
 
 ```rust
 //! Anthropic-specific "thinking" (extended reasoning) helpers. Decides
@@ -410,7 +410,7 @@ This brings the three items back into `mod.rs`'s namespace so existing call site
 - [ ] **Step 5: Verify the build**
 
 ```bash
-cargo check -p hydeclaw-core
+cargo check -p opex-core
 ```
 
 Expected: clean. If you see `unresolved name` for `ThinkingMode`/`thinking_mode`/`thinking_config`, recheck Step 4's `use` line.
@@ -418,8 +418,8 @@ Expected: clean. If you see `unresolved name` for `ThinkingMode`/`thinking_mode`
 - [ ] **Step 6: Run clippy + tests**
 
 ```bash
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::anthropic
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::anthropic
 ```
 
 Expected: all pass. `thinking_config_tests` runs from its new home with no regression.
@@ -427,8 +427,8 @@ Expected: all pass. `thinking_config_tests` runs from its new home with no regre
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs \
-        crates/hydeclaw-core/src/agent/providers/anthropic/thinking.rs
+git add crates/opex-core/src/agent/providers/anthropic/mod.rs \
+        crates/opex-core/src/agent/providers/anthropic/thinking.rs
 git commit -m "refactor(providers/anthropic): extract thinking to anthropic/thinking.rs"
 ```
 
@@ -438,8 +438,8 @@ git commit -m "refactor(providers/anthropic): extract thinking to anthropic/thin
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/anthropic/response.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/anthropic/response.rs`
+- Modify: `crates/opex-core/src/agent/providers/anthropic/mod.rs`
 
 **Items to move from `anthropic/mod.rs`:**
 
@@ -455,7 +455,7 @@ Keep in `mod.rs`: anything that constructs `AnthropicResponse` from raw bytes (H
 
 ```bash
 grep -nE "^pub\(super\) (struct AnthropicResponse|enum AnthropicContentBlock|struct AnthropicUsage|fn parse_anthropic_response)" \
-  crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs
+  crates/opex-core/src/agent/providers/anthropic/mod.rs
 ```
 
 - [ ] **Step 2: Create `response.rs`**
@@ -466,7 +466,7 @@ grep -nE "^pub\(super\) (struct AnthropicResponse|enum AnthropicContentBlock|str
 //! Owns the JSON shape returned by `POST /v1/messages` (non-streaming
 //! variant) and the conversion into `LlmResponse`.
 
-use hydeclaw_types::LlmResponse;
+use opex_types::LlmResponse;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -531,9 +531,9 @@ The `pub(super) use` re-export is critical: `providers/mod.rs` line 35 imports t
 - [ ] **Step 6: Build + test**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::anthropic
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::anthropic
 ```
 
 Expected: clean.
@@ -541,8 +541,8 @@ Expected: clean.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs \
-        crates/hydeclaw-core/src/agent/providers/anthropic/response.rs
+git add crates/opex-core/src/agent/providers/anthropic/mod.rs \
+        crates/opex-core/src/agent/providers/anthropic/response.rs
 git commit -m "refactor(providers/anthropic): extract response types and parser to anthropic/response.rs"
 ```
 
@@ -552,8 +552,8 @@ git commit -m "refactor(providers/anthropic): extract response types and parser 
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/anthropic/stream.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/anthropic/stream.rs`
+- Modify: `crates/opex-core/src/agent/providers/anthropic/mod.rs`
 
 **Items to move from `anthropic/mod.rs`:**
 
@@ -569,9 +569,9 @@ git commit -m "refactor(providers/anthropic): extract response types and parser 
 
 ```bash
 grep -nE "^(struct StreamingAnthropicUsage|impl StreamingAnthropicUsage|struct ThinkingState|fn process_sse_event|fn process_sse_events_for_test|fn parse_streaming_usage_for_test|mod streaming_thinking_tests)" \
-  crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs
+  crates/opex-core/src/agent/providers/anthropic/mod.rs
 grep -nE "thinking_mode\(|thinking_config\(|AnthropicContentBlock|AnthropicUsage" \
-  crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs | head -20
+  crates/opex-core/src/agent/providers/anthropic/mod.rs | head -20
 ```
 
 The second grep tells you which functions inside the streaming code call into `thinking` or `response`. These calls become cross-module after extraction and need visibility.
@@ -621,7 +621,7 @@ pub(super) fn process_sse_events_for_test(
 #[cfg(test)]
 pub(super) fn parse_streaming_usage_for_test(
     lines: &[String],
-) -> Option<hydeclaw_types::TokenUsage> {
+) -> Option<opex_types::TokenUsage> {
     // [paste body verbatim]
 }
 
@@ -664,9 +664,9 @@ use stream::{process_sse_events_for_test, parse_streaming_usage_for_test};
 - [ ] **Step 5: Build + test**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::anthropic
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::anthropic
 ```
 
 The `streaming_thinking_tests` module should run from its new home with no regression.
@@ -674,8 +674,8 @@ The `streaming_thinking_tests` module should run from its new home with no regre
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs \
-        crates/hydeclaw-core/src/agent/providers/anthropic/stream.rs
+git add crates/opex-core/src/agent/providers/anthropic/mod.rs \
+        crates/opex-core/src/agent/providers/anthropic/stream.rs
 git commit -m "refactor(providers/anthropic): extract SSE streaming to anthropic/stream.rs"
 ```
 
@@ -685,10 +685,10 @@ git commit -m "refactor(providers/anthropic): extract SSE streaming to anthropic
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/anthropic/tool_calls.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/anthropic/response.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/anthropic/stream.rs`
+- Create: `crates/opex-core/src/agent/providers/anthropic/tool_calls.rs`
+- Modify: `crates/opex-core/src/agent/providers/anthropic/mod.rs`
+- Modify: `crates/opex-core/src/agent/providers/anthropic/response.rs`
+- Modify: `crates/opex-core/src/agent/providers/anthropic/stream.rs`
 
 **Items to identify and move:**
 
@@ -700,9 +700,9 @@ Run:
 
 ```bash
 grep -nE "tool_use|input_json_delta|ToolCall" \
-  crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs \
-  crates/hydeclaw-core/src/agent/providers/anthropic/response.rs \
-  crates/hydeclaw-core/src/agent/providers/anthropic/stream.rs
+  crates/opex-core/src/agent/providers/anthropic/mod.rs \
+  crates/opex-core/src/agent/providers/anthropic/response.rs \
+  crates/opex-core/src/agent/providers/anthropic/stream.rs
 ```
 
 Look for:
@@ -746,9 +746,9 @@ No re-export needed if nothing outside `anthropic/` consumes it.
 - [ ] **Step 5: Build + test**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::anthropic
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::anthropic
 ```
 
 - [ ] **Step 6: Commit**
@@ -756,7 +756,7 @@ cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::anthropic
 If extract happened:
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/anthropic/
+git add crates/opex-core/src/agent/providers/anthropic/
 git commit -m "refactor(providers/anthropic): extract tool_use helpers to anthropic/tool_calls.rs"
 ```
 
@@ -772,8 +772,8 @@ If skipped (empty commit per Step 1):
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/anthropic/request.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/anthropic/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/anthropic/request.rs`
+- Modify: `crates/opex-core/src/agent/providers/anthropic/mod.rs`
 
 **Items to move from `anthropic/mod.rs`:**
 
@@ -795,7 +795,7 @@ Use `Read` on `anthropic/mod.rs` starting at line 100. Note which fn's are pure-
 //! Build the JSON body for Anthropic `POST /v1/messages` from a slice of
 //! `Message` plus `CallOptions`. Pure functions — no HTTP, no async.
 
-use hydeclaw_types::{Message, MessageRole, ToolDefinition};
+use opex_types::{Message, MessageRole, ToolDefinition};
 use serde_json::Value;
 
 use super::thinking::thinking_config;
@@ -846,15 +846,15 @@ mod request;
 - [ ] **Step 5: Build + test**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::anthropic
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::anthropic
 ```
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/anthropic/
+git add crates/opex-core/src/agent/providers/anthropic/
 git commit -m "refactor(providers/anthropic): extract request body builder to anthropic/request.rs"
 ```
 
@@ -864,26 +864,26 @@ git commit -m "refactor(providers/anthropic): extract request body builder to an
 
 **Files:**
 
-- Rename: `crates/hydeclaw-core/src/agent/providers/openai.rs` → `crates/hydeclaw-core/src/agent/providers/openai/mod.rs`
+- Rename: `crates/opex-core/src/agent/providers/openai.rs` → `crates/opex-core/src/agent/providers/openai/mod.rs`
 
 - [ ] **Step 1: Create directory**
 
 ```bash
-mkdir crates/hydeclaw-core/src/agent/providers/openai
+mkdir crates/opex-core/src/agent/providers/openai
 ```
 
 - [ ] **Step 2: git mv**
 
 ```bash
-git mv crates/hydeclaw-core/src/agent/providers/openai.rs \
-       crates/hydeclaw-core/src/agent/providers/openai/mod.rs
+git mv crates/opex-core/src/agent/providers/openai.rs \
+       crates/opex-core/src/agent/providers/openai/mod.rs
 ```
 
 - [ ] **Step 3: Verify build**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::openai
+cargo check -p opex-core
+cargo test -p opex-core --bin opex-core agent::providers::openai
 ```
 
 - [ ] **Step 4: Commit**
@@ -898,8 +898,8 @@ git commit -m "refactor(providers/openai): rename openai.rs to openai/mod.rs"
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/openai/minimax_xml.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/openai/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/openai/minimax_xml.rs`
+- Modify: `crates/opex-core/src/agent/providers/openai/mod.rs`
 
 This goes first among OpenAI extracts because it is the most self-contained block.
 
@@ -916,7 +916,7 @@ This goes first among OpenAI extracts because it is the most self-contained bloc
 
 ```bash
 grep -nE "^(pub\(crate\) fn extract_minimax_xml_tool_calls|fn parse_xml_invoke_blocks|fn parse_xml_parameters|fn xml_extract_attr|mod xml_tests)" \
-  crates/hydeclaw-core/src/agent/providers/openai/mod.rs
+  crates/opex-core/src/agent/providers/openai/mod.rs
 ```
 
 - [ ] **Step 2: Create `minimax_xml.rs`**
@@ -929,12 +929,12 @@ grep -nE "^(pub\(crate\) fn extract_minimax_xml_tool_calls|fn parse_xml_invoke_b
 
 pub(crate) fn extract_minimax_xml_tool_calls(
     content: &str,
-    out: &mut Vec<hydeclaw_types::ToolCall>,
+    out: &mut Vec<opex_types::ToolCall>,
 ) {
     // [paste body verbatim]
 }
 
-fn parse_xml_invoke_blocks(block: &str, out: &mut Vec<hydeclaw_types::ToolCall>) {
+fn parse_xml_invoke_blocks(block: &str, out: &mut Vec<opex_types::ToolCall>) {
     // [paste body verbatim]
 }
 
@@ -989,15 +989,15 @@ Expected: 1 call site in `openai/mod.rs` (now via `minimax_xml::extract_minimax_
 - [ ] **Step 6: Build + test**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::openai
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::openai
 ```
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/openai/
+git add crates/opex-core/src/agent/providers/openai/
 git commit -m "refactor(providers/openai): extract MiniMax XML tool-call parsing to openai/minimax_xml.rs"
 ```
 
@@ -1007,8 +1007,8 @@ git commit -m "refactor(providers/openai): extract MiniMax XML tool-call parsing
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/openai/response.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/openai/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/openai/response.rs`
+- Modify: `crates/opex-core/src/agent/providers/openai/mod.rs`
 
 **Items to move from `openai/mod.rs`:**
 
@@ -1100,13 +1100,13 @@ use response::{
 - [ ] **Step 5: Build + test + commit**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::openai
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::openai
 ```
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/openai/
+git add crates/opex-core/src/agent/providers/openai/
 git commit -m "refactor(providers/openai): extract non-streaming response types to openai/response.rs"
 ```
 
@@ -1116,13 +1116,13 @@ git commit -m "refactor(providers/openai): extract non-streaming response types 
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/openai/stream.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/openai/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/openai/stream.rs`
+- Modify: `crates/opex-core/src/agent/providers/openai/mod.rs`
 
 **Items to move from `openai/mod.rs`:**
 
 - `struct StreamingUsage` (line ~959)
-- `impl From<StreamingUsage> for hydeclaw_types::TokenUsage` (line ~967)
+- `impl From<StreamingUsage> for opex_types::TokenUsage` (line ~967)
 - `struct StreamChunk` (line ~1198)
 - `struct StreamChoice` (line ~1205)
 - `struct StreamDelta` (line ~1211)
@@ -1132,7 +1132,7 @@ git commit -m "refactor(providers/openai): extract non-streaming response types 
 
 ```bash
 grep -nE "StreamChunk|StreamDelta|StreamToolCallDelta" \
-  crates/hydeclaw-core/src/agent/providers/openai/mod.rs
+  crates/opex-core/src/agent/providers/openai/mod.rs
 ```
 
 - The `streaming_usage_to_token_usage_includes_cache_fields` test from `mod tests` in `response.rs`.
@@ -1154,7 +1154,7 @@ pub(super) struct StreamingUsage {
     // [paste]
 }
 
-impl From<StreamingUsage> for hydeclaw_types::TokenUsage {
+impl From<StreamingUsage> for opex_types::TokenUsage {
     fn from(s: StreamingUsage) -> Self {
         // [paste body]
     }
@@ -1203,10 +1203,10 @@ use stream::{
 - [ ] **Step 5: Build + test + commit**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::openai
-git add crates/hydeclaw-core/src/agent/providers/openai/
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::openai
+git add crates/opex-core/src/agent/providers/openai/
 git commit -m "refactor(providers/openai): extract SSE streaming to openai/stream.rs"
 ```
 
@@ -1216,9 +1216,9 @@ git commit -m "refactor(providers/openai): extract SSE streaming to openai/strea
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/openai/tool_calls.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/openai/mod.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/openai/stream.rs`
+- Create: `crates/opex-core/src/agent/providers/openai/tool_calls.rs`
+- Modify: `crates/opex-core/src/agent/providers/openai/mod.rs`
+- Modify: `crates/opex-core/src/agent/providers/openai/stream.rs`
 
 Same pattern as Anthropic tool_calls (Task 6): identify whether there are **shared** tool-call helpers between `response.rs` and `stream.rs`. OpenAI's case is simpler because the non-streaming response has tool_calls inline in `ChatMessage`, while streaming accumulates via `StreamToolCallDelta`. Shared logic is likely just the JSON-arguments accumulator.
 
@@ -1226,9 +1226,9 @@ Same pattern as Anthropic tool_calls (Task 6): identify whether there are **shar
 
 ```bash
 grep -nE "tool_calls|ToolCall|merge.*delta" \
-  crates/hydeclaw-core/src/agent/providers/openai/mod.rs \
-  crates/hydeclaw-core/src/agent/providers/openai/response.rs \
-  crates/hydeclaw-core/src/agent/providers/openai/stream.rs
+  crates/opex-core/src/agent/providers/openai/mod.rs \
+  crates/opex-core/src/agent/providers/openai/response.rs \
+  crates/opex-core/src/agent/providers/openai/stream.rs
 ```
 
 If shared helpers exist, follow the extract recipe. If not, file an empty commit as in Task 6 Step 1 (Anthropic).
@@ -1249,8 +1249,8 @@ git commit -m "refactor(providers/openai): extract tool-call accumulator to open
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/openai/request.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/openai/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/openai/request.rs`
+- Modify: `crates/opex-core/src/agent/providers/openai/mod.rs`
 
 **Items to move:**
 
@@ -1260,8 +1260,8 @@ git commit -m "refactor(providers/openai): extract tool-call accumulator to open
 Per `providers/mod.rs:5` the helper `messages_to_openai_format` is listed as a cross-cutting helper — locate its current home:
 
 ```bash
-grep -n "fn messages_to_openai_format" crates/hydeclaw-core/src/agent/providers/openai/mod.rs
-grep -n "messages_to_openai_format" crates/hydeclaw-core/src/agent/providers/
+grep -n "fn messages_to_openai_format" crates/opex-core/src/agent/providers/openai/mod.rs
+grep -n "messages_to_openai_format" crates/opex-core/src/agent/providers/
 ```
 
 If it lives directly in `providers/mod.rs` (not `openai/mod.rs`), leave it there — it is shared across providers. The OpenAI-specific request shaping (the body-building wrapper around `messages_to_openai_format`) moves to `openai/request.rs`.
@@ -1275,7 +1275,7 @@ If it lives directly in `providers/mod.rs` (not `openai/mod.rs`), leave it there
 //! from messages + CallOptions, including model-specific overrides for
 //! reasoning models (o1-*, gpt-4o-*) and tool definitions.
 
-use hydeclaw_types::{Message, ToolDefinition};
+use opex_types::{Message, ToolDefinition};
 use serde_json::Value;
 
 pub(super) fn build_request_body(
@@ -1297,10 +1297,10 @@ pub(super) fn build_request_body(
 - [ ] **Step 5: Build + test + commit**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::openai
-git add crates/hydeclaw-core/src/agent/providers/openai/
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::openai
+git add crates/opex-core/src/agent/providers/openai/
 git commit -m "refactor(providers/openai): extract request body builder to openai/request.rs"
 ```
 
@@ -1310,16 +1310,16 @@ git commit -m "refactor(providers/openai): extract request body builder to opena
 
 **Files:**
 
-- Rename: `crates/hydeclaw-core/src/agent/providers/google.rs` → `crates/hydeclaw-core/src/agent/providers/google/mod.rs`
+- Rename: `crates/opex-core/src/agent/providers/google.rs` → `crates/opex-core/src/agent/providers/google/mod.rs`
 
 - [ ] **Step 1-3: Same recipe as Tasks 2 / 8**
 
 ```bash
-mkdir crates/hydeclaw-core/src/agent/providers/google
-git mv crates/hydeclaw-core/src/agent/providers/google.rs \
-       crates/hydeclaw-core/src/agent/providers/google/mod.rs
-cargo check -p hydeclaw-core
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::google
+mkdir crates/opex-core/src/agent/providers/google
+git mv crates/opex-core/src/agent/providers/google.rs \
+       crates/opex-core/src/agent/providers/google/mod.rs
+cargo check -p opex-core
+cargo test -p opex-core --bin opex-core agent::providers::google
 git commit -m "refactor(providers/google): rename google.rs to google/mod.rs"
 ```
 
@@ -1329,8 +1329,8 @@ git commit -m "refactor(providers/google): rename google.rs to google/mod.rs"
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/google/response.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/google/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/google/response.rs`
+- Modify: `crates/opex-core/src/agent/providers/google/mod.rs`
 
 **Items to move from `google/mod.rs`:**
 
@@ -1401,10 +1401,10 @@ use response::{
 - [ ] **Step 5: Build + test + commit**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::google
-git add crates/hydeclaw-core/src/agent/providers/google/
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::google
+git add crates/opex-core/src/agent/providers/google/
 git commit -m "refactor(providers/google): extract response types to google/response.rs"
 ```
 
@@ -1414,8 +1414,8 @@ git commit -m "refactor(providers/google): extract response types to google/resp
 
 **Files:**
 
-- Create: `crates/hydeclaw-core/src/agent/providers/google/request.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/google/mod.rs`
+- Create: `crates/opex-core/src/agent/providers/google/request.rs`
+- Modify: `crates/opex-core/src/agent/providers/google/mod.rs`
 
 **Items to move from `google/mod.rs`:**
 
@@ -1426,7 +1426,7 @@ git commit -m "refactor(providers/google): extract response types to google/resp
 - [ ] **Step 1: Read current ranges + audit usages**
 
 ```bash
-grep -n "messages_to_gemini_format\|strip_empty_required" crates/hydeclaw-core/
+grep -n "messages_to_gemini_format\|strip_empty_required" crates/opex-core/
 ```
 
 `messages_to_gemini_format` is referenced by `providers/mod.rs:39` (`#[cfg(test)] use google::messages_to_gemini_format;`). The re-export at the top of `google/mod.rs` must keep this path resolvable.
@@ -1436,7 +1436,7 @@ grep -n "messages_to_gemini_format\|strip_empty_required" crates/hydeclaw-core/
 ```rust
 //! Build the JSON body for Gemini API calls from messages + CallOptions.
 
-use hydeclaw_types::Message;
+use opex_types::Message;
 
 pub(super) fn messages_to_gemini_format(
     messages: &[Message],
@@ -1463,10 +1463,10 @@ The `pub(super) use messages_to_gemini_format` is what makes `providers/mod.rs:3
 - [ ] **Step 5: Build + test + commit**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers::google
-git add crates/hydeclaw-core/src/agent/providers/google/
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers::google
+git add crates/opex-core/src/agent/providers/google/
 git commit -m "refactor(providers/google): extract request body builder to google/request.rs"
 ```
 
@@ -1476,7 +1476,7 @@ git commit -m "refactor(providers/google): extract request body builder to googl
 
 **Files:**
 
-- Modify: every file under `crates/hydeclaw-core/src/agent/providers/{anthropic,openai,google}/`
+- Modify: every file under `crates/opex-core/src/agent/providers/{anthropic,openai,google}/`
 
 Goal: narrow `pub(super)` items that are *only* used within their own adapter directory to `pub(super)` (no change — already correct) or to nothing (private) where applicable. Drop any temporary `pub use` re-exports that were needed mid-sequence but no longer have an external consumer.
 
@@ -1487,11 +1487,11 @@ For each `pub(super) fn` / `pub(super) struct` in the adapter:
 ```bash
 # example for anthropic
 for sym in $(grep -hE "pub\(super\) (fn|struct|enum) [a-zA-Z_]+" \
-             crates/hydeclaw-core/src/agent/providers/anthropic/*.rs \
+             crates/opex-core/src/agent/providers/anthropic/*.rs \
              | grep -oE "(fn|struct|enum) [a-zA-Z_]+" \
              | awk '{print $2}'); do
   count=$(grep -rn "\\b$sym\\b" \
-          crates/hydeclaw-core/src/agent/providers/anthropic/ | wc -l)
+          crates/opex-core/src/agent/providers/anthropic/ | wc -l)
   echo "$sym: $count references"
 done
 ```
@@ -1509,13 +1509,13 @@ Look in each `adapter/mod.rs` for `pub(super) use sibling::Item` declarations. I
 - [ ] **Step 4: Build + test + commit**
 
 ```bash
-cargo check -p hydeclaw-core
-cargo clippy -p hydeclaw-core --all-targets -- -D warnings
-cargo test -p hydeclaw-core --bin hydeclaw-core agent::providers
+cargo check -p opex-core
+cargo clippy -p opex-core --all-targets -- -D warnings
+cargo test -p opex-core --bin opex-core agent::providers
 ```
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers/
+git add crates/opex-core/src/agent/providers/
 git commit -m "$(cat <<'EOF'
 chore(providers): tighten visibility after W1 split
 
@@ -1542,7 +1542,7 @@ EOF
 - [ ] **Step 1: Run full test matrix**
 
 ```bash
-DATABASE_URL=postgres://hydeclaw_test:hydeclaw_test@127.0.0.1:5434/hydeclaw_test \
+DATABASE_URL=postgres://opex_test:opex_test@127.0.0.1:5434/opex_test \
   cargo test --workspace 2>&1 | grep -E "test result|FAILED" | tail -30
 ```
 
@@ -1559,9 +1559,9 @@ Expected: prints `rustls invariant holds`.
 - [ ] **Step 3: Per-module final LoC measurement**
 
 ```bash
-wc -l crates/hydeclaw-core/src/agent/providers/anthropic/*.rs \
-      crates/hydeclaw-core/src/agent/providers/openai/*.rs \
-      crates/hydeclaw-core/src/agent/providers/google/*.rs
+wc -l crates/opex-core/src/agent/providers/anthropic/*.rs \
+      crates/opex-core/src/agent/providers/openai/*.rs \
+      crates/opex-core/src/agent/providers/google/*.rs
 ```
 
 Capture the output for the commit body.
@@ -1569,8 +1569,8 @@ Capture the output for the commit body.
 - [ ] **Step 4: Verify public surface unchanged**
 
 ```bash
-diff <(git show HEAD~17:crates/hydeclaw-core/src/agent/providers/mod.rs | grep "^pub") \
-     <(grep "^pub" crates/hydeclaw-core/src/agent/providers/mod.rs)
+diff <(git show HEAD~17:crates/opex-core/src/agent/providers/mod.rs | grep "^pub") \
+     <(grep "^pub" crates/opex-core/src/agent/providers/mod.rs)
 ```
 
 Expected: empty diff (re-exports identical to pre-W1 baseline).

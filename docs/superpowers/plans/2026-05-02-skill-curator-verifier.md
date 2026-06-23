@@ -14,8 +14,8 @@
 
 | File | Change |
 |---|---|
-| `crates/hydeclaw-core/src/curator/phase_consolidation.rs` | Full rewrite: data types, analyst, verifier, executor, wired `run` |
-| `crates/hydeclaw-core/src/curator/mod.rs` | Add `run_verifier_task` helper |
+| `crates/opex-core/src/curator/phase_consolidation.rs` | Full rewrite: data types, analyst, verifier, executor, wired `run` |
+| `crates/opex-core/src/curator/mod.rs` | Add `run_verifier_task` helper |
 
 No DB schema changes. No changes to `mod.rs` orchestrator, `scheduler/mod.rs`, `main.rs`, or any handler.
 
@@ -24,7 +24,7 @@ No DB schema changes. No changes to `mod.rs` orchestrator, `scheduler/mod.rs`, `
 ## Task 1: Proposal data types
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/curator/phase_consolidation.rs`
+- Modify: `crates/opex-core/src/curator/phase_consolidation.rs`
 
 - [ ] **Step 1: Replace file contents with data type definitions + unit tests**
 
@@ -147,7 +147,7 @@ mod tests {
 - [ ] **Step 2: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core curator::phase_consolidation::tests -- --nocapture
+cargo test -p opex-core curator::phase_consolidation::tests -- --nocapture
 ```
 
 Expected: 3 tests pass.
@@ -155,7 +155,7 @@ Expected: 3 tests pass.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/curator/phase_consolidation.rs
+git add crates/opex-core/src/curator/phase_consolidation.rs
 git commit -m "feat(curator/p3): add proposal data types and parsing tests"
 ```
 
@@ -164,7 +164,7 @@ git commit -m "feat(curator/p3): add proposal data types and parsing tests"
 ## Task 2: `run_verifier_task` helper
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/curator/mod.rs`
+- Modify: `crates/opex-core/src/curator/mod.rs`
 
 - [ ] **Step 1: Write the failing test for pinned exclusion helper**
 
@@ -193,7 +193,7 @@ fn pinned_names_not_in_summary() {
 - [ ] **Step 2: Run test to verify it passes** (it's a pure string test, no DB needed)
 
 ```bash
-cargo test -p hydeclaw-core curator::tests::pinned_names_not_in_summary -- --nocapture
+cargo test -p opex-core curator::tests::pinned_names_not_in_summary -- --nocapture
 ```
 
 Expected: PASS.
@@ -223,7 +223,7 @@ pub(crate) async fn run_verifier_task(
 - [ ] **Step 4: Verify compilation**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error" | head -10
+cargo check -p opex-core 2>&1 | grep "^error" | head -10
 ```
 
 Expected: no errors.
@@ -231,7 +231,7 @@ Expected: no errors.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/curator/mod.rs
+git add crates/opex-core/src/curator/mod.rs
 git commit -m "feat(curator/p3): add run_verifier_task helper (1-turn, no tools)"
 ```
 
@@ -240,7 +240,7 @@ git commit -m "feat(curator/p3): add run_verifier_task helper (1-turn, no tools)
 ## Task 3: Analyst step
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/curator/phase_consolidation.rs`
+- Modify: `crates/opex-core/src/curator/phase_consolidation.rs`
 
 - [ ] **Step 1: Write tests for `read_proposals`**
 
@@ -269,7 +269,7 @@ async fn read_proposals_invalid_json_returns_empty() {
 - [ ] **Step 2: Run tests — expect compile failure** (function doesn't exist yet)
 
 ```bash
-cargo test -p hydeclaw-core curator::phase_consolidation::tests::read_proposals -- --nocapture 2>&1 | head -5
+cargo test -p opex-core curator::phase_consolidation::tests::read_proposals -- --nocapture 2>&1 | head -5
 ```
 
 Expected: compile error mentioning `read_proposals_file`.
@@ -361,7 +361,7 @@ async fn run_analyst(
 Also add `tempfile` to dev-dependencies in `Cargo.toml` if not already present:
 
 ```bash
-grep -n "tempfile" crates/hydeclaw-core/Cargo.toml
+grep -n "tempfile" crates/opex-core/Cargo.toml
 ```
 
 If absent, add to `[dev-dependencies]`:
@@ -372,7 +372,7 @@ tempfile = "3"
 - [ ] **Step 4: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core curator::phase_consolidation::tests::read_proposals -- --nocapture
+cargo test -p opex-core curator::phase_consolidation::tests::read_proposals -- --nocapture
 ```
 
 Expected: 2 new tests PASS.
@@ -380,7 +380,7 @@ Expected: 2 new tests PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/curator/phase_consolidation.rs crates/hydeclaw-core/Cargo.toml
+git add crates/opex-core/src/curator/phase_consolidation.rs crates/opex-core/Cargo.toml
 git commit -m "feat(curator/p3): add analyst step and proposals file reader"
 ```
 
@@ -389,7 +389,7 @@ git commit -m "feat(curator/p3): add analyst step and proposals file reader"
 ## Task 4: Verifier step
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/curator/phase_consolidation.rs`
+- Modify: `crates/opex-core/src/curator/phase_consolidation.rs`
 
 - [ ] **Step 1: Write tests for `parse_verifier_response`**
 
@@ -419,7 +419,7 @@ fn verifier_malformed_response_is_rejected() {
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-cargo test -p hydeclaw-core curator::phase_consolidation::tests::verifier -- --nocapture 2>&1 | head -5
+cargo test -p opex-core curator::phase_consolidation::tests::verifier -- --nocapture 2>&1 | head -5
 ```
 
 Expected: compile error (function not yet defined).
@@ -515,7 +515,7 @@ async fn verify_archive_proposal(
 - [ ] **Step 4: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core curator::phase_consolidation::tests::verifier -- --nocapture
+cargo test -p opex-core curator::phase_consolidation::tests::verifier -- --nocapture
 ```
 
 Expected: 3 tests PASS.
@@ -523,7 +523,7 @@ Expected: 3 tests PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/curator/phase_consolidation.rs
+git add crates/opex-core/src/curator/phase_consolidation.rs
 git commit -m "feat(curator/p3): add verifier step with parse_verifier_response"
 ```
 
@@ -532,7 +532,7 @@ git commit -m "feat(curator/p3): add verifier step with parse_verifier_response"
 ## Task 5: Executor step
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/curator/phase_consolidation.rs`
+- Modify: `crates/opex-core/src/curator/phase_consolidation.rs`
 
 - [ ] **Step 1: Add `apply_verified_archive`**
 
@@ -625,7 +625,7 @@ async fn cleanup_proposals(workspace_dir: &str) {
 - [ ] **Step 2: Check compilation**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error" | head -10
+cargo check -p opex-core 2>&1 | grep "^error" | head -10
 ```
 
 Expected: no errors.
@@ -633,7 +633,7 @@ Expected: no errors.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/curator/phase_consolidation.rs
+git add crates/opex-core/src/curator/phase_consolidation.rs
 git commit -m "feat(curator/p3): add executor (apply_verified_archive + run_executor)"
 ```
 
@@ -642,7 +642,7 @@ git commit -m "feat(curator/p3): add executor (apply_verified_archive + run_exec
 ## Task 6: Wire up `run`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/curator/phase_consolidation.rs`
+- Modify: `crates/opex-core/src/curator/phase_consolidation.rs`
 
 - [ ] **Step 1: Replace the stub `run` with the full implementation**
 
@@ -757,7 +757,7 @@ pub async fn run(
 
 - [ ] **Step 2: Update `run_curator` in `mod.rs` to pass `db`**
 
-In `crates/hydeclaw-core/src/curator/mod.rs`, in the `run_curator` function, find this line:
+In `crates/opex-core/src/curator/mod.rs`, in the `run_curator` function, find this line:
 
 ```rust
 match phase_consolidation::run(workspace_dir, agents.as_ref(), &cfg.agent_name).await {
@@ -772,7 +772,7 @@ match phase_consolidation::run(workspace_dir, agents.as_ref(), &cfg.agent_name, 
 - [ ] **Step 3: Check compilation**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error" | head -10
+cargo check -p opex-core 2>&1 | grep "^error" | head -10
 ```
 
 Expected: no errors.
@@ -780,7 +780,7 @@ Expected: no errors.
 - [ ] **Step 4: Run all curator tests**
 
 ```bash
-cargo test -p hydeclaw-core curator -- --nocapture
+cargo test -p opex-core curator -- --nocapture
 ```
 
 Expected: all tests pass.
@@ -788,7 +788,7 @@ Expected: all tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/curator/phase_consolidation.rs crates/hydeclaw-core/src/curator/mod.rs
+git add crates/opex-core/src/curator/phase_consolidation.rs crates/opex-core/src/curator/mod.rs
 git commit -m "feat(curator/p3): wire analyst/verifier/executor into run"
 ```
 
@@ -801,7 +801,7 @@ git commit -m "feat(curator/p3): wire analyst/verifier/executor into run"
 - [ ] **Step 1: Build ARM64**
 
 ```bash
-cargo zigbuild --target aarch64-unknown-linux-gnu -p hydeclaw-core --release 2>&1 | tail -5
+cargo zigbuild --target aarch64-unknown-linux-gnu -p opex-core --release 2>&1 | tail -5
 ```
 
 Expected: `Finished release profile`.
@@ -809,9 +809,9 @@ Expected: `Finished release profile`.
 - [ ] **Step 2: Deploy**
 
 ```bash
-ssh aronmav@192.168.1.85 "systemctl --user stop hydeclaw-core"
-scp target/aarch64-unknown-linux-gnu/release/hydeclaw-core aronmav@192.168.1.85:/home/aronmav/hydeclaw/hydeclaw-core-aarch64
-ssh aronmav@192.168.1.85 "systemctl --user start hydeclaw-core && sleep 3 && systemctl --user is-active hydeclaw-core"
+ssh aronmav@192.168.1.85 "systemctl --user stop opex-core"
+scp target/aarch64-unknown-linux-gnu/release/opex-core aronmav@192.168.1.85:/home/aronmav/opex/opex-core-aarch64
+ssh aronmav@192.168.1.85 "systemctl --user start opex-core && sleep 3 && systemctl --user is-active opex-core"
 ```
 
 Expected: `active`.
@@ -847,11 +847,11 @@ RUN_ID=$(ssh aronmav@192.168.1.85 "curl -s -X POST http://localhost:18789/api/cu
 echo "Run: $RUN_ID"
 
 ssh aronmav@192.168.1.85 "until docker run --rm --network host postgres:17 \
-  psql postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw \
+  psql postgresql://opex:opex@localhost:5432/opex \
   -tAc \"SELECT status FROM curator_runs WHERE id='$RUN_ID';\" 2>/dev/null \
   | grep -q 'done\|failed\|skipped'; do sleep 8; done; \
   docker run --rm --network host postgres:17 \
-  psql postgresql://hydeclaw:hydeclaw@localhost:5432/hydeclaw \
+  psql postgresql://opex:opex@localhost:5432/opex \
   -tAc \"SELECT status, phase3, report_md FROM curator_runs WHERE id='$RUN_ID';\" 2>/dev/null"
 ```
 
@@ -880,6 +880,6 @@ news-digest active             # pinned — never proposed
 - [ ] **Step 6: Commit final**
 
 ```bash
-git add crates/hydeclaw-core/src/curator/
+git add crates/opex-core/src/curator/
 git commit -m "feat(curator/p3): analyst/verifier/executor — regression verified on Pi"
 ```

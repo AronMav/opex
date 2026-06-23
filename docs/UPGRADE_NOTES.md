@@ -1,55 +1,54 @@
-# HydeClaw Upgrade Notes
+# OPEX — Примечания по обновлению
 
-> These are historical upgrade notes. The current release is v0.27.0.
-> If upgrading from v0.20+, no action from these sections is needed.
+> Это исторические примечания по обновлению. Текущая версия — v0.27.0.
+> При обновлении с v0.20+ никаких действий из этих разделов не требуется.
 
-## Upgrading to v0.20+: toolgate config → Core API single source of truth
+## Обновление до v0.20+: конфиг toolgate → единый источник истины Core API
 
-**Breaking change:** toolgate no longer reads the following environment variables.
-Pre-create equivalent providers via the admin UI (or `POST /api/providers`)
-**before** restarting hydeclaw-core, or toolgate will start in **degraded mode**
-and capability endpoints will return 503 until providers are configured.
+**Ломающее изменение:** toolgate больше не читает следующие переменные окружения.
+Создайте эквивалентные провайдеры через admin UI (или `POST /api/providers`)
+**до** перезапуска opex-core, иначе toolgate стартует в **деградированном режиме**
+и capability-эндпоинты будут возвращать 503 до настройки провайдеров.
 
-### Removed environment variables
+### Удалённые переменные окружения
 
-| Deprecated env var | Replacement (in Core provider registry) |
+| Устаревшая env-переменная | Замена (в реестре провайдеров Core) |
 |---|---|
-| `WHISPER_URL`, `OLLAMA_API_KEY` (for STT) | Create provider with `type=stt`, `driver=whisper-local`, `base_url=<your whisper URL>` |
-| `VISION_URL`, `VISION_MODEL`, `OLLAMA_API_KEY` | Create provider with `type=vision`, `driver=ollama`, `base_url=<vision URL>`, `default_model=<model>` |
-| `TTS_BACKEND_URL` | Create provider with `type=tts`, `driver=qwen3-tts`, `base_url=<your Qwen3-TTS URL>` |
-| `MINIMAX_API_KEY` (normalize LLM) | Create provider with `type=text`, `provider_type=openai-compatible`, `base_url=<MiniMax URL>`, `api_key=<key>`; then reference its UUID in the TTS provider's `options.normalize_provider_id` |
+| `WHISPER_URL`, `OLLAMA_API_KEY` (для STT) | Создать провайдер с `type=stt`, `driver=whisper-local`, `base_url=<ваш URL Whisper>` |
+| `VISION_URL`, `VISION_MODEL`, `OLLAMA_API_KEY` | Создать провайдер с `type=vision`, `driver=ollama`, `base_url=<URL vision>`, `default_model=<модель>` |
+| `TTS_BACKEND_URL` | Создать провайдер с `type=tts`, `driver=qwen3-tts`, `base_url=<ваш URL Qwen3-TTS>` |
+| `MINIMAX_API_KEY` (normalize LLM) | Создать провайдер с `type=text`, `provider_type=openai-compatible`, `base_url=<URL MiniMax>`, `api_key=<ключ>`; затем указать его UUID в `options.normalize_provider_id` TTS-провайдера |
 
-### Verifying the migration
+### Проверка миграции
 
-1. **Before upgrade:** on the current Pi, list env vars:
+1. **До обновления:** на текущем сервере выведите список env-переменных:
    ```bash
    systemctl --user show-environment | grep -E 'WHISPER|VISION|OLLAMA|TTS_BACKEND|MINIMAX'
    ```
-2. **For each listed var:** create the equivalent provider via UI (Settings → Media Providers → Add Provider).
-3. **For the MINIMAX normalize case:** note the UUID of the new `text` provider you create. In the TTS provider editor, set `options.normalize_provider_id = "<that UUID>"` and `options.normalize = true`.
-4. **Upgrade:** `./update.sh hydeclaw-v<VERSION>.tar.gz`
-5. **Verify:**
+2. **Для каждой перечисленной переменной:** создайте эквивалентный провайдер через UI (Settings → Media Providers → Add Provider).
+3. **Для случая MINIMAX normalize:** запишите UUID нового `text`-провайдера. В редакторе TTS-провайдера установите `options.normalize_provider_id = "<этот UUID>"` и `options.normalize = true`.
+4. **Обновление:** `./update.sh opex-v<VERSION>.tar.gz`
+5. **Проверка:**
    ```bash
    curl -s http://localhost:9011/health | jq .
    ```
-   Expected: `"degraded": false`, all used capabilities `true` in the `capabilities` map.
+   Ожидаемый результат: `"degraded": false`, все используемые capabilities — `true` в карте `capabilities`.
 
-### Rollback
+### Откат
 
-If providers were not pre-created, you can:
-1. Revert to previous binary (`~/hydeclaw/hydeclaw-core-aarch64.bak` if kept)
-2. **or** create providers retroactively via UI — toolgate will auto-reload on the first matching `PUT /api/providers/{id}`.
+Если провайдеры не были созданы заранее, можно:
+1. Откатиться к предыдущему бинарнику (`~/opex/opex-core-aarch64.bak`, если сохранён)
+2. **или** создать провайдеры ретроспективно через UI — toolgate автоматически перезагрузится при первом соответствующем `PUT /api/providers/{id}`.
 
-### Architectural rationale
+### Архитектурное обоснование
 
-See `docs/superpowers/specs/2026-04-18-toolgate-config-sot-design.md` for full
-design context (degraded mode, nested `normalize_provider_id`, etc.).
+Полный контекст проектного решения (деградированный режим, вложенный `normalize_provider_id` и т.д.) см. в `docs/superpowers/specs/2026-04-18-toolgate-config-sot-design.md`.
 
-## v0.20.x → v0.20.next — toolgate primitives refactor
+## v0.20.x → v0.20.next — рефакторинг примитивов toolgate
 
-Toolgate's `email`, `calendar`, and `bcs_portfolio` routers are replaced by primitive endpoints:
+Роутеры `email`, `calendar` и `bcs_portfolio` в toolgate заменены примитивными эндпоинтами:
 
-| Old endpoint | New primitive endpoint |
+| Старый эндпоинт | Новый примитивный эндпоинт |
 |---|---|
 | `POST /email/send` | `POST /primitives/smtp/send` |
 | `GET /email/inbox` | `POST /primitives/imap/fetch` |
@@ -59,93 +58,89 @@ Toolgate's `email`, `calendar`, and `bcs_portfolio` routers are replaced by prim
 | `POST /calendar/create` | `POST /primitives/google_calendar/events/create` |
 | `GET /bcs/portfolio` | `POST /primitives/bcs/portfolio` |
 
-All credentials now flow through the core secrets vault. Before upgrading, add the
-following secrets via `POST /api/secrets` (replace values with your own).
+Все учётные данные теперь проходят через хранилище секретов Core. До обновления добавьте следующие секреты через `POST /api/secrets` (замените значения своими).
 
-> ⚠ The curl commands below contain plaintext passwords. Run them from a shell
-> with history disabled (`set +o history` in bash, `setopt no_hist_save` in zsh),
-> or clear shell history afterward.
+> Команды curl ниже содержат пароли в открытом виде. Запускайте их из оболочки
+> с отключённой историей (`set +o history` в bash, `setopt no_hist_save` в zsh)
+> или очистите историю оболочки после.
 
-### Secrets to add
+### Секреты для добавления
 
 ```bash
-# SMTP + IMAP — required for email_* tools to function.
-# Ports are hardcoded to standards (587 for SMTP submission, 993 for IMAPS)
-# in the YAML bodies; if you need non-standard ports, edit
-# workspace/tools/email_{send,check,search}.yaml directly.
-curl -sSf -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" -H "Content-Type: application/json" \
+# SMTP + IMAP — необходимы для работы инструментов email_*.
+# Порты жёстко заданы как стандартные (587 для SMTP submission, 993 для IMAPS)
+# в телах YAML; если нужны нестандартные порты, редактируйте
+# workspace/tools/email_{send,check,search}.yaml напрямую.
+curl -sSf -H "Authorization: Bearer $OPEX_AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"SMTP_HOST","scope":"","value":"smtp.gmail.com"}' http://localhost:18789/api/secrets
-curl -sSf -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" -H "Content-Type: application/json" \
+curl -sSf -H "Authorization: Bearer $OPEX_AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"IMAP_HOST","scope":"","value":"imap.gmail.com"}' http://localhost:18789/api/secrets
-curl -sSf -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" -H "Content-Type: application/json" \
+curl -sSf -H "Authorization: Bearer $OPEX_AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"EMAIL_USER","scope":"","value":"you@gmail.com"}' http://localhost:18789/api/secrets
-curl -sSf -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" -H "Content-Type: application/json" \
+curl -sSf -H "Authorization: Bearer $OPEX_AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"EMAIL_PASS","scope":"","value":"YOUR_APP_PASSWORD"}' http://localhost:18789/api/secrets
 
-# Google Calendar — paste the entire service-account JSON as a single string
+# Google Calendar — вставьте весь JSON сервисного аккаунта как одну строку
 GSA_JSON=$(cat /path/to/service-account.json | jq -c .)
-curl -sSf -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" -H "Content-Type: application/json" \
+curl -sSf -H "Authorization: Bearer $OPEX_AUTH_TOKEN" -H "Content-Type: application/json" \
   -d "{\"name\":\"GOOGLE_SA_KEY_JSON\",\"scope\":\"\",\"value\":$(echo "$GSA_JSON" | jq -Rs .)}" \
   http://localhost:18789/api/secrets
-curl -sSf -H "Authorization: Bearer $HYDECLAW_AUTH_TOKEN" -H "Content-Type: application/json" \
+curl -sSf -H "Authorization: Bearer $OPEX_AUTH_TOKEN" -H "Content-Type: application/json" \
   -d '{"name":"GOOGLE_CALENDAR_ID","scope":"","value":"primary"}' http://localhost:18789/api/secrets
 
-# BCS — unchanged, only listed for completeness
-# (BCS_REFRESH_TOKEN should already be in the vault)
+# BCS — без изменений, указан для полноты
+# (BCS_REFRESH_TOKEN должен уже быть в хранилище)
 ```
 
-### What changed
+### Что изменилось
 
-Tools that previously relied on env-var credentials (`EMAIL_USER`, `EMAIL_PASS`,
-`GOOGLE_SA_KEY` as a file path) will now succeed without those env vars set;
-the previous env-based path was non-functional in any default deployment and
-is removed entirely.
+Инструменты, которые ранее полагались на env-переменные с учётными данными (`EMAIL_USER`, `EMAIL_PASS`,
+`GOOGLE_SA_KEY` как путь к файлу), теперь работают без этих env-переменных;
+прежний путь на основе env не функционировал ни в каком стандартном развёртывании
+и полностью удалён.
 
-### Dependencies
+### Зависимости
 
-Toolgate now requires `google-api-python-client` and `google-auth`.
-Run `pip install -r toolgate/requirements.txt` on the deploy target (or rely on
-`make deploy` to sync).
+Toolgate теперь требует `google-api-python-client` и `google-auth`.
+Запустите `pip install -r toolgate/requirements.txt` на целевом сервере (или воспользуйтесь
+`make deploy` для синхронизации).
 
-### Calendar behavior note
+### Примечание о поведении календаря
 
-`calendar_today` and `calendar_upcoming` now always query the "next 7 days
-from now" window (previously there was implicit day-start alignment). The
-`days` parameter on `calendar_upcoming` is accepted but ignored — file an
-issue if you need the old behavior back.
+`calendar_today` и `calendar_upcoming` теперь всегда запрашивают окно «следующие 7 дней
+с текущего момента» (ранее была неявная выравнивание по началу дня). Параметр `days`
+в `calendar_upcoming` принимается, но игнорируется — создайте issue, если вам нужно
+старое поведение.
 
-### Architectural rationale
+### Архитектурное обоснование
 
-See `docs/superpowers/specs/2026-04-19-toolgate-primitives-design.md` for full
-design context (primitives vs integration routers, `${VAR}` templating in
-`body_template`, BCS state carve-out, etc.).
+Полный контекст проектного решения (примитивы vs роутеры интеграций, шаблонизация `${VAR}` в
+`body_template`, выделение состояния BCS и т.д.) см. в `docs/superpowers/specs/2026-04-19-toolgate-primitives-design.md`.
 
-### calendar_create response shape change
+### Изменение формы ответа calendar_create
 
-The agent-facing response for `calendar_create` has changed shape (this is a
-breaking change for agent prompts that referenced specific fields):
+Форма ответа для агентов в `calendar_create` изменилась (это ломающее изменение для
+промптов агентов, которые ссылались на конкретные поля):
 
-- **Old**: `{status, id, link, summary, start, end}` (direct from the GET router)
-- **New**: `{id, summary, html_link}` (extracted via `response_transform: $.event`)
+- **Раньше**: `{status, id, link, summary, start, end}` (напрямую из GET-роутера)
+- **Теперь**: `{id, summary, html_link}` (извлекается через `response_transform: $.event`)
 
-Field renames: `link` → `html_link`. Removed: `status`, `start`, `end`, echoed
-`summary`. If your agent prompts or skills read these fields, update them
-before upgrading.
+Переименования полей: `link` → `html_link`. Удалены: `status`, `start`, `end`, дублированный
+`summary`. Если ваши промпты агентов или навыки читают эти поля, обновите их перед обновлением.
 
-### Known limitations (follow-ups tracked)
+### Известные ограничения (последующие задачи отслеживаются)
 
-- **BCS refresh token error classification**: bad or expired `BCS_REFRESH_TOKEN`
-  now surfaces as 401 from `/primitives/bcs/portfolio` — agents should detect
-  this and prompt for token rotation.
-- **End-to-end automation gap**: there is no automated test that loads a real
-  `workspace/tools/*.yaml`, runs it through core's YAML-tool runtime, and hits
-  a mocked primitive. Manual curl smoke test in Task 11 of the implementation
-  plan covers happy paths. A future integration-test harness would close this
-  gap (tracked as I3 in the plan).
-- **Optional `body_template` params without explicit values**: if the LLM
-  omits an optional parameter (e.g. `html` in `email_send`), its placeholder
-  `{{html}}` is not substituted with the default — the request body becomes
-  invalid JSON and the call fails. This is a pre-existing core behavior (not
-  introduced by the primitives refactor), but now affects more tools. Agents
-  should always pass optional params explicitly until core materialises
-  defaults into the substitution map.
+- **Классификация ошибок BCS refresh token**: плохой или истёкший `BCS_REFRESH_TOKEN`
+  теперь проявляется как 401 из `/primitives/bcs/portfolio` — агенты должны обнаруживать
+  это и предлагать ротацию токена.
+- **Пробел в сквозной автоматизации**: нет автоматизированного теста, который загружает реальный
+  `workspace/tools/*.yaml`, прогоняет его через YAML-runtime Core и обращается к мокированному
+  примитиву. Ручной curl-smoke-тест в Task 11 плана реализации покрывает happy paths.
+  Будущий harness интеграционных тестов закроет этот пробел (отслеживается как I3 в плане).
+- **Опциональные параметры `body_template` без явных значений**: если LLM опускает
+  необязательный параметр (например, `html` в `email_send`), его плейсхолдер
+  `{{html}}` не заменяется значением по умолчанию — тело запроса становится
+  невалидным JSON и вызов завершается ошибкой. Это унаследованное поведение Core (не привнесённое
+  рефакторингом примитивов), но теперь затрагивает больше инструментов. Агенты должны
+  всегда передавать опциональные параметры явно до момента, когда Core начнёт материализовывать
+  дефолты в карту подстановок.

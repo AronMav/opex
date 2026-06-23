@@ -17,7 +17,7 @@
 
 ## Goal
 
-Delete `engine::stream::handle_isolated`. Funnel every LLM+tools loop in HydeClaw through one entry point — `pipeline::execute` — with the features that today only exist on the cron path (`fallback_provider`, `auto-continue`, `session-corruption recovery`, `tool_policy_override`, forced-final-LLM-call) re-expressed as **opt-in behaviour layers** that can be composed onto any caller (SSE, channel, cron, future agent-to-agent).
+Delete `engine::stream::handle_isolated`. Funnel every LLM+tools loop in OPEX through one entry point — `pipeline::execute` — with the features that today only exist on the cron path (`fallback_provider`, `auto-continue`, `session-corruption recovery`, `tool_policy_override`, forced-final-LLM-call) re-expressed as **opt-in behaviour layers** that can be composed onto any caller (SSE, channel, cron, future agent-to-agent).
 
 The exit criteria is twofold:
 
@@ -205,7 +205,7 @@ The plan's exit criteria requires "one fallback switch, one auto-continue nudge,
 
 - **Code:** `engine/stream.rs` shrinks by ~280 lines (handle_isolated body + comment).
 - **Coverage:** five new behaviour-layer unit tests, ~40 new test cases.
-- **Span uniformity:** every cron run after Phase 7 produces a `pipeline.execute` parent span. Verified by checking Jaeger's "operations" list for the `hydeclaw-core` service: only `pipeline.*` and `llm.*` ops, no `engine.handle_isolated` blank slot.
+- **Span uniformity:** every cron run after Phase 7 produces a `pipeline.execute` parent span. Verified by checking Jaeger's "operations" list for the `opex-core` service: only `pipeline.*` and `llm.*` ops, no `engine.handle_isolated` blank slot.
 - **Behaviour parity:** `test-pi-chaos.py` continues to pass; the new cron-feature exercise script (Phase 7) passes on the unified path.
 
 ## Out of scope
@@ -215,7 +215,7 @@ The plan's exit criteria requires "one fallback switch, one auto-continue nudge,
 
 ## Appendix A — Divergent feature map (Phase 1 output)
 
-Mapped from `crates/hydeclaw-core/src/agent/engine/stream.rs` (lines 137–490, the body of `handle_isolated`). Six divergent behaviours need re-homing; one is one-shot bootstrap policy; one is post-loop side-effect.
+Mapped from `crates/opex-core/src/agent/engine/stream.rs` (lines 137–490, the body of `handle_isolated`). Six divergent behaviours need re-homing; one is one-shot bootstrap policy; one is post-loop side-effect.
 
 ### A1 — `fallback_provider`
 

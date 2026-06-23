@@ -27,7 +27,7 @@ Single polymorphic `uploads` table holds every binary tied to an agent or a mess
 | `agent_icon` | agent name (e.g. `"Hyde"`) | `NULL` (permanent) | Unique per agent; PUT replaces |
 | `tool_output` | message ID UUID (or `NULL` if pre-persist) | `NOW() + 30 days` (configurable) | Append-only; cleanup job deletes expired |
 
-Serving uses the existing HMAC-signed URL pattern from Phase 64 SEC-03: `GET /api/uploads/{id}?sig={hmac}&exp={unix_ts}` is excluded from the auth middleware (so HTML `img` and `audio` tags work without bearer headers), and `crates/hydeclaw-core/src/uploads.rs::verify_url_signature` validates the HMAC on each request. URL minting moves from filesystem-path inputs to upload-row IDs.
+Serving uses the existing HMAC-signed URL pattern from Phase 64 SEC-03: `GET /api/uploads/{id}?sig={hmac}&exp={unix_ts}` is excluded from the auth middleware (so HTML `img` and `audio` tags work without bearer headers), and `crates/opex-core/src/uploads.rs::verify_url_signature` validates the HMAC on each request. URL minting moves from filesystem-path inputs to upload-row IDs.
 
 **HMAC namespace preservation:** the signed payload changes from `"uploads:{filename}:{exp}"` to `"uploads:{id}:{exp}"`. The namespace tag stays `"uploads:"`. This keeps the existing `cross_namespace_forgery_rejected` test invariant alive (a `workspace_files:` URL still cannot be forged with the `uploads:` HMAC key). Only the second token in the signed payload changes from filename to UUID-as-string.
 
@@ -118,11 +118,11 @@ To avoid making `agent_to_summary_dto` and `agent_to_detail_dto` async (which wo
 
 `signed_icon_url` stays **synchronous**; `agent_to_summary_dto` / `agent_to_detail_dto` stay synchronous. This matches the existing pattern where `upload_key` is passed in as a parameter rather than fetched inside the DTO factory.
 
-`save_binary_to_uploads()` lives in `crates/hydeclaw-core/src/agent/pipeline/handlers.rs:277` with three call sites:
+`save_binary_to_uploads()` lives in `crates/opex-core/src/agent/pipeline/handlers.rs:277` with three call sites:
 
-- `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs:150,200`
-- `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:527`
-- `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:624`
+- `crates/opex-core/src/agent/pipeline/channel_actions.rs:150,200`
+- `crates/opex-core/src/agent/pipeline/media_background.rs:527`
+- `crates/opex-core/src/agent/pipeline/media_background.rs:624`
 
 Its existing signature `async fn save_binary_to_uploads(workspace_dir, data, hint, upload_key, ttl_secs) -> Result<(String, String)>` (returning `(url, media_type)`) is **preserved** so the three callers compile unchanged. Implementation rewires the body to:
 
@@ -138,17 +138,17 @@ The `__file__:` SSE marker keeps its existing format — only the URL substring 
 | Layer | File | Change |
 | --- | --- | --- |
 | Migration | `migrations/m052_uploads_table.sql` (new) | Create table + indexes |
-| DB layer | `crates/hydeclaw-core/src/db/uploads.rs` (new) | `get_by_id(pool, id) -> Option<UploadRow>`, `upsert_agent_icon(pool, name, mime, data) -> Uuid`, `insert_tool_output(pool, owner_id, mime, data, retention_days) -> Uuid`, `delete_agent_icon(pool, name)`, `cleanup_expired(pool) -> u64` |
-| HTTP handler | `crates/hydeclaw-core/src/gateway/handlers/uploads.rs` (new) | `GET /api/uploads/{id}` reads HMAC params, calls `verify_url_signature`, streams BYTEA. Excluded from auth middleware. |
-| HTTP handler | `crates/hydeclaw-core/src/gateway/handlers/agents/icon.rs` (new) | `PUT /api/agents/{name}/icon` (multipart) and `DELETE /api/agents/{name}/icon` |
-| DTO struct | `crates/hydeclaw-core/src/gateway/handlers/agents/dto_structs.rs` | Drop `AgentDetailDto.icon` (line 184) and `AgentSummaryDto.icon` (line 232). Keep both `icon_url` fields. TS regen propagates. |
-| DTO factory | `crates/hydeclaw-core/src/gateway/handlers/agents/dto.rs` | `signed_icon_url(agent_name: &str, icon_ids: &HashMap<String, Uuid>, upload_key: Option<&[u8; 32]>) -> Option<String>` — stays sync; reads from a prefetched map. New helper `db::uploads::list_agent_icon_ids(pool, &[agent_name]) -> HashMap<String, Uuid>` called once per request in the agents handler before DTO construction. |
-| Tool dispatch | `crates/hydeclaw-core/src/agent/pipeline/handlers.rs:277` (definition) | `save_binary_to_uploads` body rewired to INSERT a `tool_output` row + mint `/api/uploads/{id}` URL. Signature **preserved**: `async fn save_binary_to_uploads(workspace_dir, data, hint, upload_key, ttl_secs) -> Result<(String, String)>`. `workspace_dir` becomes unused at the body level; kept in signature for now. |
-| Tool dispatch callers | `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs:150,200` + `crates/hydeclaw-core/src/agent/pipeline/media_background.rs:527,624` | No source changes (signature preserved); behaviour now writes to DB instead of file. |
-| Config | `crates/hydeclaw-core/src/config/mod.rs` | Remove `AgentSettings.icon: Option<String>`. Add `CleanupConfig.uploads_retention_days: u32` (default 30) and `default_uploads_retention_days() -> u32 { 30 }`. |
-| Signing | `crates/hydeclaw-core/src/uploads.rs` | Rename `mint_workspace_file_url` → `mint_uploads_url(id: Uuid, key, ttl)`. URL format becomes `{base}/api/uploads/{id}?sig=...&exp=...`. Updated `verify_url_signature` accepts the id-based path. Existing 30+ tests in this file get adjusted for the new path shape. |
-| Cleanup loop | `crates/hydeclaw-core/src/scheduler/mod.rs` — alongside the existing `add_session_timeline_cleanup_hourly` registration in `crates/hydeclaw-core/src/main.rs` | Add new method `Scheduler::add_uploads_cleanup_hourly(pool, retention_days)`. The cron body runs `DELETE FROM uploads WHERE expires_at IS NOT NULL AND expires_at < NOW()` and logs the row count via tracing. main.rs adds one registration call mirroring the session_timeline pattern. |
-| Routing | `crates/hydeclaw-core/src/gateway/mod.rs` + `crates/hydeclaw-core/src/gateway/middleware.rs:204` | `merge(uploads::routes())` + `merge(agents::icon::routes())`. Update `PUBLIC_PREFIX` in `middleware.rs:204`: **replace** `"/uploads/"` with `"/api/uploads/"` (no parallel coexistence — old route is removed cleanly). Drop the old `/uploads/*` static-file route from the router. `/workspace-files/` and `/webhook/` exclusions stay. |
+| DB layer | `crates/opex-core/src/db/uploads.rs` (new) | `get_by_id(pool, id) -> Option<UploadRow>`, `upsert_agent_icon(pool, name, mime, data) -> Uuid`, `insert_tool_output(pool, owner_id, mime, data, retention_days) -> Uuid`, `delete_agent_icon(pool, name)`, `cleanup_expired(pool) -> u64` |
+| HTTP handler | `crates/opex-core/src/gateway/handlers/uploads.rs` (new) | `GET /api/uploads/{id}` reads HMAC params, calls `verify_url_signature`, streams BYTEA. Excluded from auth middleware. |
+| HTTP handler | `crates/opex-core/src/gateway/handlers/agents/icon.rs` (new) | `PUT /api/agents/{name}/icon` (multipart) and `DELETE /api/agents/{name}/icon` |
+| DTO struct | `crates/opex-core/src/gateway/handlers/agents/dto_structs.rs` | Drop `AgentDetailDto.icon` (line 184) and `AgentSummaryDto.icon` (line 232). Keep both `icon_url` fields. TS regen propagates. |
+| DTO factory | `crates/opex-core/src/gateway/handlers/agents/dto.rs` | `signed_icon_url(agent_name: &str, icon_ids: &HashMap<String, Uuid>, upload_key: Option<&[u8; 32]>) -> Option<String>` — stays sync; reads from a prefetched map. New helper `db::uploads::list_agent_icon_ids(pool, &[agent_name]) -> HashMap<String, Uuid>` called once per request in the agents handler before DTO construction. |
+| Tool dispatch | `crates/opex-core/src/agent/pipeline/handlers.rs:277` (definition) | `save_binary_to_uploads` body rewired to INSERT a `tool_output` row + mint `/api/uploads/{id}` URL. Signature **preserved**: `async fn save_binary_to_uploads(workspace_dir, data, hint, upload_key, ttl_secs) -> Result<(String, String)>`. `workspace_dir` becomes unused at the body level; kept in signature for now. |
+| Tool dispatch callers | `crates/opex-core/src/agent/pipeline/channel_actions.rs:150,200` + `crates/opex-core/src/agent/pipeline/media_background.rs:527,624` | No source changes (signature preserved); behaviour now writes to DB instead of file. |
+| Config | `crates/opex-core/src/config/mod.rs` | Remove `AgentSettings.icon: Option<String>`. Add `CleanupConfig.uploads_retention_days: u32` (default 30) and `default_uploads_retention_days() -> u32 { 30 }`. |
+| Signing | `crates/opex-core/src/uploads.rs` | Rename `mint_workspace_file_url` → `mint_uploads_url(id: Uuid, key, ttl)`. URL format becomes `{base}/api/uploads/{id}?sig=...&exp=...`. Updated `verify_url_signature` accepts the id-based path. Existing 30+ tests in this file get adjusted for the new path shape. |
+| Cleanup loop | `crates/opex-core/src/scheduler/mod.rs` — alongside the existing `add_session_timeline_cleanup_hourly` registration in `crates/opex-core/src/main.rs` | Add new method `Scheduler::add_uploads_cleanup_hourly(pool, retention_days)`. The cron body runs `DELETE FROM uploads WHERE expires_at IS NOT NULL AND expires_at < NOW()` and logs the row count via tracing. main.rs adds one registration call mirroring the session_timeline pattern. |
+| Routing | `crates/opex-core/src/gateway/mod.rs` + `crates/opex-core/src/gateway/middleware.rs:204` | `merge(uploads::routes())` + `merge(agents::icon::routes())`. Update `PUBLIC_PREFIX` in `middleware.rs:204`: **replace** `"/uploads/"` with `"/api/uploads/"` (no parallel coexistence — old route is removed cleanly). Drop the old `/uploads/*` static-file route from the router. `/workspace-files/` and `/webhook/` exclusions stay. |
 | UI | `ui/src/app/(authenticated)/agents/AgentEditDialog.tsx` | Change the icon-upload PUT endpoint from the legacy `/uploads/...` flow to `/api/agents/{name}/icon` multipart. The existing `img` tag binding (`src={dto.icon_url}`) is unchanged. |
 | TS types | `ui/src/types/api.generated.ts` (regen) | Regenerated by `make gen-types` after `AgentSettings.icon` field is dropped. Already in sync at this commit; nothing manual. |
 | TOML | `config/agents/Hyde.toml`, `Arty.toml`, `Alma.toml` (Pi) | Remove dead `icon = "..."` lines. Optional; serde would ignore unknown fields after the struct removal, but tidiness is cheap. |
@@ -181,16 +181,16 @@ No data migration script is needed because there is no data to migrate — the f
 
 **Pre-existing (must keep passing through every commit):**
 
-- All `crates/hydeclaw-core/src/uploads.rs::tests::*` (30+ tests for HMAC mint/verify, percent-encoding, expiry, path canonicalize). Path-shape change requires updates to assertions matching `http://h/uploads/...` to `http://h/api/uploads/...`.
+- All `crates/opex-core/src/uploads.rs::tests::*` (30+ tests for HMAC mint/verify, percent-encoding, expiry, path canonicalize). Path-shape change requires updates to assertions matching `http://h/uploads/...` to `http://h/api/uploads/...`.
 - `tests/integration_upload_hmac.rs` — the existing HMAC roundtrip integration test, also needs URL-shape updates.
 - `tests/integration_path_canonicalize.rs` — SEC-02 path canonicalize tests, may need adjustment if the path canonicalization logic touches the uploads route.
 - Cross-namespace forgery tests (`uploads::tests::cross_namespace_forgery_rejected`) — confirm the `uploads:` namespace tag in the HMAC stays the same so signed URLs minted before and after this change can't be cross-forged with `workspace_files:` URLs.
 
 **New (added in this spec):**
 
-- `crates/hydeclaw-core/src/db/uploads.rs::tests` — round-trip for `upsert_agent_icon`, `insert_tool_output`, `delete_agent_icon`, `cleanup_expired`, `get_by_id`. sqlx_test fixtures, real Postgres via `make test-db`.
-- `crates/hydeclaw-core/src/gateway/handlers/agents/icon.rs::tests` — PUT/DELETE happy paths, MIME validation, size cap rejection.
-- `crates/hydeclaw-core/src/gateway/handlers/uploads.rs::tests` — GET returns BYTEA with correct headers; expired-row returns 410; missing row returns 404; invalid HMAC returns 403.
+- `crates/opex-core/src/db/uploads.rs::tests` — round-trip for `upsert_agent_icon`, `insert_tool_output`, `delete_agent_icon`, `cleanup_expired`, `get_by_id`. sqlx_test fixtures, real Postgres via `make test-db`.
+- `crates/opex-core/src/gateway/handlers/agents/icon.rs::tests` — PUT/DELETE happy paths, MIME validation, size cap rejection.
+- `crates/opex-core/src/gateway/handlers/uploads.rs::tests` — GET returns BYTEA with correct headers; expired-row returns 410; missing row returns 404; invalid HMAC returns 403.
 - New integration test `tests/integration_uploads_db.rs` — end-to-end: PUT icon → GET via signed URL → DELETE → GET 404.
 
 ## Acceptance criteria

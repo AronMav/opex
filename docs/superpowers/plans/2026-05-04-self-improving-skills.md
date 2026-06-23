@@ -14,20 +14,20 @@
 
 | Action | Path | Responsibility |
 | --- | --- | --- |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` | Add `handle_skill_capture()` |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs` | Add `capture` to `skill_use` schema |
-| Modify | `crates/hydeclaw-core/src/agent/engine_dispatch.rs` | Route `capture` action |
-| Modify | `crates/hydeclaw-core/src/skills/evolution.rs` | Richer review + multi-verdict |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` | `force` bypass for Failed/Interrupted |
+| Modify | `crates/opex-core/src/agent/pipeline/handlers.rs` | Add `handle_skill_capture()` |
+| Modify | `crates/opex-core/src/agent/pipeline/tool_defs.rs` | Add `capture` to `skill_use` schema |
+| Modify | `crates/opex-core/src/agent/engine_dispatch.rs` | Route `capture` action |
+| Modify | `crates/opex-core/src/skills/evolution.rs` | Richer review + multi-verdict |
+| Modify | `crates/opex-core/src/agent/pipeline/finalize.rs` | `force` bypass for Failed/Interrupted |
 | Modify | `config/skills/skill-curator.md` | Capture guidance for agents |
-| Modify | `crates/hydeclaw-core/scaffold/base/SOUL.md` | Mention capture action |
+| Modify | `crates/opex-core/scaffold/base/SOUL.md` | Mention capture action |
 
 ---
 
 ## Task 1 — handle_skill_capture() in handlers.rs
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/handlers.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/handlers.rs`
 
 ### Context
 
@@ -42,7 +42,7 @@ The function needs: `workspace_dir`, `agent_name`, `db: &sqlx::PgPool`, `ui_even
 
 - [ ] **Step 1: Write failing tests**
 
-Add at the bottom of `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` inside the existing `#[cfg(test)]` block (search for `mod tests {`):
+Add at the bottom of `crates/opex-core/src/agent/pipeline/handlers.rs` inside the existing `#[cfg(test)]` block (search for `mod tests {`):
 
 ```rust
 #[test]
@@ -89,7 +89,7 @@ fn capture_parses_triggers_and_tools() {
 - [ ] **Step 2: Run tests to confirm they pass**
 
 ```bash
-cd crates/hydeclaw-core
+cd crates/opex-core
 cargo test capture_rejects_invalid -- --nocapture
 cargo test capture_accepts_valid -- --nocapture
 cargo test capture_parses_triggers -- --nocapture
@@ -239,7 +239,7 @@ pub async fn handle_skill_capture(
 - [ ] **Step 4: Compile to confirm no errors**
 
 ```bash
-cd crates/hydeclaw-core
+cd crates/opex-core
 cargo check 2>&1 | grep "^error" | head -10
 ```
 
@@ -248,7 +248,7 @@ Expected: no errors.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/handlers.rs
+git add crates/opex-core/src/agent/pipeline/handlers.rs
 git commit -m "feat(skills): add handle_skill_capture() for in-session skill creation"
 ```
 
@@ -257,7 +257,7 @@ git commit -m "feat(skills): add handle_skill_capture() for in-session skill cre
 ## Task 2 — tool_defs.rs: add capture to skill_use schema
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/tool_defs.rs`
 
 ### Context
 
@@ -309,7 +309,7 @@ tools.push(ToolDefinition {
 - [ ] **Step 2: Compile**
 
 ```bash
-cd crates/hydeclaw-core
+cd crates/opex-core
 cargo check 2>&1 | grep "^error" | head -10
 ```
 
@@ -318,7 +318,7 @@ Expected: no errors.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs
+git add crates/opex-core/src/agent/pipeline/tool_defs.rs
 git commit -m "feat(skills): add capture action to skill_use tool schema"
 ```
 
@@ -327,7 +327,7 @@ git commit -m "feat(skills): add capture action to skill_use tool schema"
 ## Task 3 — engine_dispatch.rs: route capture action
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/engine_dispatch.rs`
+- Modify: `crates/opex-core/src/agent/engine_dispatch.rs`
 
 ### Context
 
@@ -369,7 +369,7 @@ With:
 - [ ] **Step 2: Compile**
 
 ```bash
-cd crates/hydeclaw-core
+cd crates/opex-core
 cargo check 2>&1 | grep "^error" | head -10
 ```
 
@@ -378,7 +378,7 @@ Expected: no errors.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/engine_dispatch.rs
+git add crates/opex-core/src/agent/engine_dispatch.rs
 git commit -m "feat(skills): route skill_use capture action to handle_skill_capture"
 ```
 
@@ -388,7 +388,7 @@ git commit -m "feat(skills): route skill_use capture action to handle_skill_capt
 
 **Files:**
 - Modify: `config/skills/skill-curator.md`
-- Modify: `crates/hydeclaw-core/scaffold/base/SOUL.md`
+- Modify: `crates/opex-core/scaffold/base/SOUL.md`
 
 No tests needed — these are documentation-only changes.
 
@@ -423,7 +423,7 @@ Append to the end of `config/skills/skill-curator.md` (raw text, no fenced block
 
 - [ ] **Step 2: Add capture line to SOUL.md scaffold**
 
-In `crates/hydeclaw-core/scaffold/base/SOUL.md`, find the line:
+In `crates/opex-core/scaffold/base/SOUL.md`, find the line:
 ```
 Load detailed guides via `skill_use(action="load", name="...")`:
 ```
@@ -437,7 +437,7 @@ Add one line immediately after it:
 - [ ] **Step 3: Commit**
 
 ```bash
-git add config/skills/skill-curator.md crates/hydeclaw-core/scaffold/base/SOUL.md
+git add config/skills/skill-curator.md crates/opex-core/scaffold/base/SOUL.md
 git commit -m "docs(skills): add capture guidance to skill-curator.md and SOUL.md scaffold"
 ```
 
@@ -446,7 +446,7 @@ git commit -m "docs(skills): add capture guidance to skill-curator.md and SOUL.m
 ## Task 5 — evolution.rs: richer review_session_inner + multi-verdict
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/skills/evolution.rs`
+- Modify: `crates/opex-core/src/skills/evolution.rs`
 
 ### Context
 
@@ -547,7 +547,7 @@ fn context_bundle_respects_byte_cap() {
 - [ ] **Step 2: Run tests to confirm they pass**
 
 ```bash
-cd crates/hydeclaw-core
+cd crates/opex-core
 cargo test multi_verdict -- --nocapture
 cargo test user_message_gate -- --nocapture
 cargo test assistant_text_strips -- --nocapture
@@ -787,7 +787,7 @@ async fn review_session_inner(
 - [ ] **Step 4: Compile**
 
 ```bash
-cd crates/hydeclaw-core
+cd crates/opex-core
 cargo check 2>&1 | grep "^error" | head -10
 ```
 
@@ -804,7 +804,7 @@ Expected: all pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/skills/evolution.rs
+git add crates/opex-core/src/skills/evolution.rs
 git commit -m "feat(skills): enrich post-session review with richer context and multi-verdict"
 ```
 
@@ -813,7 +813,7 @@ git commit -m "feat(skills): enrich post-session review with richer context and 
 ## Task 6 — finalize.rs: force gate for Failed/Interrupted sessions
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/finalize.rs`
 
 ### Context
 
@@ -927,7 +927,7 @@ if let Some(sr_cfg) = &ctx.skill_review {
 - [ ] **Step 5: Compile**
 
 ```bash
-cd crates/hydeclaw-core
+cd crates/opex-core
 cargo check 2>&1 | grep "^error" | head -10
 ```
 
@@ -944,7 +944,7 @@ Expected: no new failures.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/finalize.rs
+git add crates/opex-core/src/agent/pipeline/finalize.rs
 git commit -m "feat(skills): spawn skill review for Failed/Interrupted sessions with force bypass"
 ```
 
@@ -955,7 +955,7 @@ git commit -m "feat(skills): spawn skill review for Failed/Interrupted sessions 
 - [ ] **Step 1: Full cargo check**
 
 ```bash
-cd d:/GIT/bogdan/hydeclaw
+cd d:/GIT/bogdan/opex
 cargo check --all-targets 2>&1 | grep "^error" | head -10
 ```
 
@@ -974,7 +974,7 @@ Expected: no new failures beyond the pre-existing 6 sqlx integration tests (DATA
 Check that the compiled binary description includes "capture":
 
 ```bash
-grep -r "capture" crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs
+grep -r "capture" crates/opex-core/src/agent/pipeline/tool_defs.rs
 ```
 
 Expected: line with `"capture"` in the enum list.

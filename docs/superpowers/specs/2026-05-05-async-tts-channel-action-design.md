@@ -28,7 +28,7 @@ Agent returns immediately. The session deadline is no longer relevant.
 
 ### New module
 
-`crates/hydeclaw-core/src/agent/pipeline/tts_background.rs`
+`crates/opex-core/src/agent/pipeline/tts_background.rs`
 
 ### BackgroundTtsTask
 
@@ -79,7 +79,7 @@ impl BackgroundTtsTask {
 
 ### Change to existing code
 
-`execute_yaml_channel_action` in [channel_actions.rs](../../../crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs) — **only this function changes**. Caller signature, YAML tools, and dispatch code are untouched.
+`execute_yaml_channel_action` in [channel_actions.rs](../../../crates/opex-core/src/agent/pipeline/channel_actions.rs) — **only this function changes**. Caller signature, YAML tools, and dispatch code are untouched.
 
 ```rust
 pub async fn execute_yaml_channel_action(
@@ -194,9 +194,9 @@ Channel session errors go to the chat directly — no bell notification needed.
 
 | File | Change |
 |---|---|
-| `crates/hydeclaw-core/src/agent/pipeline/tts_background.rs` | **create** — BackgroundTtsTask |
-| `crates/hydeclaw-core/src/agent/pipeline/mod.rs` | add `pub mod tts_background` |
-| `crates/hydeclaw-core/src/agent/pipeline/channel_actions.rs` | replace body of `execute_yaml_channel_action` |
+| `crates/opex-core/src/agent/pipeline/tts_background.rs` | **create** — BackgroundTtsTask |
+| `crates/opex-core/src/agent/pipeline/mod.rs` | add `pub mod tts_background` |
+| `crates/opex-core/src/agent/pipeline/channel_actions.rs` | replace body of `execute_yaml_channel_action` |
 | `ui/src/` (NotificationRow or notifications component) | add `tts_ready` / `tts_error` rendering |
 | `ui/src/types/api.ts` | add `tts_ready` / `tts_error` to notification type union (if typed) |
 

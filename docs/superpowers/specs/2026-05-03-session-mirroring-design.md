@@ -1,6 +1,6 @@
 # Session Mirroring (P1.2) — Design
 
-> **Source:** Hermes Agent `gateway/mirror.py`, adapted for HydeClaw's Postgres architecture.
+> **Source:** Hermes Agent `gateway/mirror.py`, adapted for OPEX's Postgres architecture.
 > **Goal:** When a cron job (or any outbound channel delivery) sends a message to a platform,
 > append a mirror record to the recipient's session so the agent has cross-platform context
 > on the next inbound turn.
@@ -9,7 +9,7 @@
 
 ## Context
 
-HydeClaw cron jobs run `engine.run_for_cron()` in isolation and deliver the result via
+OPEX cron jobs run `engine.run_for_cron()` in isolation and deliver the result via
 `engine.send_channel_message(channel, chat_id, text)`. The result is stored in a temporary
 cron session — but the _target_ user's DM session never sees it. If the user later messages
 the agent on Telegram, the agent has no memory of what was already sent via cron.
@@ -58,7 +58,7 @@ Not required for initial implementation.
 
 ### 2. `mirror_to_session` helper
 
-New async function in `crates/hydeclaw-db/src/sessions.rs`:
+New async function in `crates/opex-db/src/sessions.rs`:
 
 ```rust
 pub async fn mirror_to_session(
@@ -126,7 +126,7 @@ prior output and can reference them on the next inbound turn. No filtering neede
 
 ### 5. `MessageRow` — add `is_mirror` field
 
-In `crates/hydeclaw-db/src/sessions.rs` (struct drives ts-rs codegen → `api.generated.ts`):
+In `crates/opex-db/src/sessions.rs` (struct drives ts-rs codegen → `api.generated.ts`):
 
 ```rust
 pub struct MessageRow {
@@ -230,12 +230,12 @@ Mirror always happens after delivery — it never blocks or delays the channel s
 | File | Action |
 |---|---|
 | `migrations/043_messages_is_mirror.sql` | CREATE — add `is_mirror` column |
-| `crates/hydeclaw-db/src/sessions.rs` | MODIFY — `MessageRow.is_mirror` + `mirror_to_session()` |
-| `crates/hydeclaw-core/src/scheduler/mod.rs` | MODIFY — `tokio::spawn` mirror after `send_channel_message` |
+| `crates/opex-db/src/sessions.rs` | MODIFY — `MessageRow.is_mirror` + `mirror_to_session()` |
+| `crates/opex-core/src/scheduler/mod.rs` | MODIFY — `tokio::spawn` mirror after `send_channel_message` |
 | `ui/src/types/api.generated.ts` | MODIFY (via `make gen-types`) — `is_mirror: boolean` on `MessageRow` |
 | `ui/src/stores/chat-types.ts` | MODIFY — `is_mirror?: boolean` on `ChatMessage` |
 | `ui/src/components/chat/` | MODIFY — render "↩ cron" badge |
-| `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` | MODIFY — exclude mirrors from last-message preview |
+| `crates/opex-core/src/gateway/handlers/sessions.rs` | MODIFY — exclude mirrors from last-message preview |
 | `ui/src/__tests__/session-mirroring.test.tsx` | CREATE — Vitest coverage |
 
 ---

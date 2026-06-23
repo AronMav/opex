@@ -5,7 +5,7 @@
 
 ## Problem
 
-`SessionToolState` (в `crates/hydeclaw-core/src/agent/dispatcher/state.rs`) содержит
+`SessionToolState` (в `crates/opex-core/src/agent/dispatcher/state.rs`) содержит
 три независимых `tokio::sync::RwLock`-поля: `describe_cache`, `call_counts`, `promoted`.
 
 Две независимые проблемы:

@@ -17,12 +17,12 @@ Three independent-but-cohesive guardrails, aligned with the project's core value
 
 All three are pure-Rust pattern/policy checks (locally TDD-able). No DB / migration. One new config section (`[security]`) for C.
 
-**Out of scope (deferred):** OSV/CVE advisory check before MCP launch (HydeClaw runs MCP as Docker images, not npx/uvx packages — the OSV-package model doesn't map); a downloaded external scanner binary (Hermes's Tirith) — we use in-process patterns instead; blocklist hot-reload (loaded at startup with the rest of the config).
+**Out of scope (deferred):** OSV/CVE advisory check before MCP launch (OPEX runs MCP as Docker images, not npx/uvx packages — the OSV-package model doesn't map); a downloaded external scanner binary (Hermes's Tirith) — we use in-process patterns instead; blocklist hot-reload (loaded at startup with the rest of the config).
 
 ## Cross-cutting principles
 
 - TDD; rustls-only; clippy `-D warnings` clean; no `Co-Authored-By`; no push unless asked.
-- Application-tree Rust tests run under `cargo test --bin hydeclaw-core`.
+- Application-tree Rust tests run under `cargo test --bin opex-core`.
 - Scanners reuse the `Severity` idea from `tools/content_security.rs` but live in focused new modules (shell-command threats and written-code smells are distinct concerns from context-injection).
 - Verify scanners + policy locally with `cargo test`; the web-blocklist integration on the server.
 
@@ -34,7 +34,7 @@ All three are pure-Rust pattern/policy checks (locally TDD-able). No DB / migrat
 `code_exec` is the most dangerous tool. For non-base agents it runs in a Docker sandbox (isolated); for **base agents it runs on the host with full filesystem access** (`execute_host_code`). Nothing scans the command before running.
 
 ### Design
-New `crates/hydeclaw-core/src/tools/command_security.rs`:
+New `crates/opex-core/src/tools/command_security.rs`:
 - `pub enum CommandThreat { None, Dangerous(&'static str) }`
 - `pub fn scan_command(code: &str) -> CommandThreat` — case-normalized substring/regex match against a curated list of high-confidence destructive / exfil / persistence shell patterns:
   - destructive: `rm -rf /`, `rm -rf ~`, `rm -rf /*`, `mkfs`, `dd ... of=/dev/`, `> /dev/sda`, `chmod -R 777 /`, fork bomb `:(){:|:&};:`
@@ -63,7 +63,7 @@ parameters of `handle_code_exec`.
 When an agent writes code via `workspace_write`/`workspace_edit`, nothing flags dangerous constructs back to it. Hermes's security-guidance plugin appends non-blocking warnings so the model self-corrects.
 
 ### Design
-New `crates/hydeclaw-core/src/tools/code_smell.rs`:
+New `crates/opex-core/src/tools/code_smell.rs`:
 - `pub fn scan_written(filename: &str, content: &str) -> Vec<&'static str>` — extension-gated dangerous-code patterns (empty for non-code files like `.md`/`.txt`):
   - `.py`: `eval(`, `exec(`, `pickle.load`, `yaml.load(` (without `Loader=`), `os.system(`, `subprocess` with `shell=True`, `verify=False`, `pyyaml` unsafe
   - `.js`/`.ts`/`.tsx`/`.jsx`: `eval(`, `dangerouslySetInnerHTML`, `child_process.exec(`, `new Function(`
@@ -86,7 +86,7 @@ SSRF blocks private IPs, but there is no way for the operator to block the agent
 
 ### Design
 - New config: `SecurityConfig { #[serde(default)] blocked_domains: Vec<String> }` on `AppConfig` (`config/mod.rs`), `#[serde(default)] pub security: SecurityConfig`. TOML: `[security] blocked_domains = ["*.evil.tld", "ads.example.com"]`.
-- New `crates/hydeclaw-core/src/tools/url_policy.rs`:
+- New `crates/opex-core/src/tools/url_policy.rs`:
   - `pub fn host_blocked(host: &str, globs: &[String]) -> bool` — case-insensitive glob match (`*.evil.tld` matches `a.evil.tld` and `evil.tld`; exact match otherwise). A tiny dependency-free glob (prefix/suffix/`*`) — no new crate.
   - `pub fn url_blocked(url: &str, globs: &[String]) -> bool` — parse host from url, delegate to `host_blocked` (returns false on unparseable url — SSRF already guards scheme).
 - Applied to **agent-controlled** web fetches only (NOT admin-set YAML endpoints).
@@ -106,15 +106,15 @@ SSRF blocks private IPs, but there is no way for the operator to block the agent
 ---
 
 ## File structure
-- `crates/hydeclaw-core/src/tools/command_security.rs` (new) — A
-- `crates/hydeclaw-core/src/tools/code_smell.rs` (new) — B
-- `crates/hydeclaw-core/src/tools/url_policy.rs` (new) — C
-- `crates/hydeclaw-core/src/tools/mod.rs` — declare the 3 modules
-- `crates/hydeclaw-core/src/agent/pipeline/sandbox.rs` — A hook
-- `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` — B hook (write/edit)
-- `crates/hydeclaw-core/src/agent/tool_handlers/comms.rs` — C hook (BrowserActionHandler)
-- `crates/hydeclaw-core/src/agent/tool_handlers/web.rs` — C hook (WebFetchHandler)
-- `crates/hydeclaw-core/src/config/mod.rs` — `SecurityConfig` + `AppConfig.security`
+- `crates/opex-core/src/tools/command_security.rs` (new) — A
+- `crates/opex-core/src/tools/code_smell.rs` (new) — B
+- `crates/opex-core/src/tools/url_policy.rs` (new) — C
+- `crates/opex-core/src/tools/mod.rs` — declare the 3 modules
+- `crates/opex-core/src/agent/pipeline/sandbox.rs` — A hook
+- `crates/opex-core/src/agent/pipeline/handlers.rs` — B hook (write/edit)
+- `crates/opex-core/src/agent/tool_handlers/comms.rs` — C hook (BrowserActionHandler)
+- `crates/opex-core/src/agent/tool_handlers/web.rs` — C hook (WebFetchHandler)
+- `crates/opex-core/src/config/mod.rs` — `SecurityConfig` + `AppConfig.security`
 
 ## Error handling
 - All three fail-safe toward the existing behavior on parse issues (unparseable url → not blocked by policy but still SSRF-checked; empty patterns → no-op).
@@ -122,5 +122,5 @@ SSRF blocks private IPs, but there is no way for the operator to block the agent
 - B never blocks a write (warning only).
 
 ## Testing & deploy
-- Local: `cargo test --bin hydeclaw-core` (scanners + policy + decision helpers); `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings`.
+- Local: `cargo test --bin opex-core` (scanners + policy + decision helpers); `cargo clippy --bin opex-core --all-targets -- -D warnings`.
 - Server: `make remote-deploy` (no migration) + `make doctor`; smoke: a base-agent `code_exec` with `rm -rf /` is refused; a `workspace_write` of a `.py` with `eval(` returns the warning; with `[security] blocked_domains` set, a browser_action to a blocked host is refused.

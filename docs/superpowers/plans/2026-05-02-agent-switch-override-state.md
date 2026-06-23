@@ -423,8 +423,8 @@ Expected: build succeeds, all 30 static pages generated.
 - [ ] **Step 6.2 — Deploy to Pi**
 
 ```bash
-ssh aronmav@192.168.1.85 "rm -rf ~/hydeclaw/ui/out"
-cd ui && tar cf - out | ssh aronmav@192.168.1.85 "mkdir -p ~/hydeclaw/ui && cd ~/hydeclaw/ui && tar xf -"
+ssh aronmav@192.168.1.85 "rm -rf ~/opex/ui/out"
+cd ui && tar cf - out | ssh aronmav@192.168.1.85 "mkdir -p ~/opex/ui && cd ~/opex/ui && tar xf -"
 ```
 
 Expected: `out/` transferred without errors.

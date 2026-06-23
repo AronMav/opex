@@ -15,7 +15,7 @@ The `LlmProvider` trait is stable since the earlier routing/registry split. This
 ## Current state
 
 ```text
-crates/hydeclaw-core/src/agent/providers/
+crates/opex-core/src/agent/providers/
 ├── mod.rs                       (LlmProvider trait, CallOptions, ModelOverride, …)
 ├── anthropic.rs                 1643 LoC  ← target
 ├── openai.rs                    1230 LoC  ← target
@@ -42,7 +42,7 @@ Public surface that *must not change*:
 ## Target state
 
 ```text
-crates/hydeclaw-core/src/agent/providers/
+crates/opex-core/src/agent/providers/
 ├── anthropic/
 │   ├── mod.rs                   LlmProvider impl + AnthropicProvider struct + re-exports     (~250 LoC)
 │   ├── request.rs               Message → Anthropic conversion, request body building       (~300 LoC)
@@ -86,7 +86,7 @@ Per-module LoC estimates are derived from current file structure (functions and 
 - **`mod.rs`** — `OpenAiCompatibleProvider` struct, `impl LlmProvider`. Sibling-module declarations.
 - **`request.rs`** — `messages_to_openai_format(messages)`, body building including model-specific overrides (`o1-*` reasoning, `gpt-4o-*` defaults). `pub(super)` only.
 - **`response.rs`** — non-streaming chat completion parsing. `deserialize_null_as_empty_vec` helper.
-- **`stream.rs`** — SSE chunk accumulator. `StreamingUsage`. `From<StreamingUsage> for hydeclaw_types::TokenUsage`.
+- **`stream.rs`** — SSE chunk accumulator. `StreamingUsage`. `From<StreamingUsage> for opex_types::TokenUsage`.
 - **`tool_calls.rs`** — OpenAI tool-call delta merging (function name + arguments built across chunks). Pure functions, called from `stream.rs`.
 - **`minimax_xml.rs`** — `extract_minimax_xml_tool_calls`, `parse_xml_invoke_blocks`, `parse_xml_parameters`, `xml_extract_attr`. Owns the `xml_tests` submodule.
 
@@ -102,7 +102,7 @@ Linear sequence of small, independently-buildable commits. Every commit passes `
 
 1. **Discovery commit** — `chore(providers): freeze test baseline before W1 refactor`
    - **Test inventory verification** — run `grep -nE "^mod [a-z_]*tests" providers/{anthropic,openai,google}.rs` and lock the list. Currently confirmed (2026-05-14): Anthropic has `mod tests` + `mod thinking_config_tests` + `mod streaming_thinking_tests`; OpenAI has **only** `mod xml_tests` (no regular `mod tests` — gap to address below); Google has `mod tests`. Any subsequent module add/remove must be justified in its extract commit.
-   - Run `cargo llvm-cov test -p hydeclaw-core agent::providers` (works fine on Windows; uses LLVM source-based coverage). Inline summary (per-file coverage %) in the commit message — do **not** commit LCOV artifacts.
+   - Run `cargo llvm-cov test -p opex-core agent::providers` (works fine on Windows; uses LLVM source-based coverage). Inline summary (per-file coverage %) in the commit message — do **not** commit LCOV artifacts.
    - Identify under-tested branches and gaps. Confirmed gaps to address:
      - OpenAI lacks any non-XML `mod tests` — author a baseline `mod tests` covering request-building + response-parsing happy paths.
      - Anthropic `redacted_thinking` / `server_tool_use` content blocks (likely uncovered)
@@ -184,7 +184,7 @@ These are added *before* the first extract and removed if redundant in the accep
 
 ## Acceptance criteria (Wave 1)
 
-- All 18 commits build independently (`cargo check -p hydeclaw-core` clean)
+- All 18 commits build independently (`cargo check -p opex-core` clean)
 - `cargo clippy --all-targets -- -D warnings` clean at every commit
 - `cargo test --workspace` baseline failures unchanged. Current baseline (as of 2026-05-14, after the CI cleanup commits `81b012ef` + `a4d2e4a8`): **1 known failure** — `db::outbound::tests::test_outbound_queue_lifecycle` (sqlx `VersionMismatch(13)` on local test-DB only; CI is green). Any additional failure is a W1 regression.
 - `cargo tree --workspace | grep -E 'openssl-sys|native-tls'` returns nothing (rustls invariant)
@@ -203,7 +203,7 @@ These are added *before* the first extract and removed if redundant in the accep
 
 ## Follow-up observations (record in acceptance commit, no action in W1)
 
-- **`StreamingAnthropicUsage` ↔ `StreamingUsage` similarity** — both adapters keep partial token counts that are folded into `hydeclaw_types::TokenUsage` at stream end. Out of scope for W1 (premature abstraction risk), but worth flagging as a follow-up unification candidate if duplication remains visually obvious after split.
+- **`StreamingAnthropicUsage` ↔ `StreamingUsage` similarity** — both adapters keep partial token counts that are folded into `opex_types::TokenUsage` at stream end. Out of scope for W1 (premature abstraction risk), but worth flagging as a follow-up unification candidate if duplication remains visually obvious after split.
 - **`minimax_xml.rs` lives under `openai/`** — MiniMax is reached via the OpenAI-compatible API plus a vendor-specific XML payload. Right home today (it's an OpenAI dialect quirk). If MiniMax-specific provider routing emerges later, this is the file that promotes to a sibling adapter directory.
 
 ## Effort

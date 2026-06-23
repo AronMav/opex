@@ -15,7 +15,7 @@ This is the deferred companion to [2026-05-14-wal-retirement-and-durable-plans-d
 ### What `session_events` actually does today
 
 - Table created by [m013](../../../migrations/013_session_wal.sql); 86 references across 20 files.
-- Module file [`crates/hydeclaw-db/src/session_wal.rs`](../../../crates/hydeclaw-db/src/session_wal.rs) — 243 LoC.
+- Module file [`crates/opex-db/src/session_wal.rs`](../../../crates/opex-db/src/session_wal.rs) — 243 LoC.
 - `log_event` / `log_event_tx` write rows during bootstrap (`running`), tool start/end, and finalize (`done` / `failed` / `interrupted`). Also bumps `sessions.activity_at` (debounced to ~10 s).
 - `load_tool_events` warms the `LoopDetector` on session re-entry by replaying `tool_end` rows (BUG-026 fix). **This is the only "recovery" feature.**
 - `prune_old_events_batched` runs hourly under `[cleanup]` config to keep the table bounded.
@@ -60,8 +60,8 @@ ALTER INDEX  IF EXISTS idx_session_events_type       RENAME TO idx_session_timel
 
 ### 2. Module rename
 
-- Move `crates/hydeclaw-db/src/session_wal.rs` → `crates/hydeclaw-db/src/session_timeline.rs`.
-- Update `crates/hydeclaw-db/src/lib.rs`: `pub mod session_wal;` → `pub mod session_timeline;`.
+- Move `crates/opex-db/src/session_wal.rs` → `crates/opex-db/src/session_timeline.rs`.
+- Update `crates/opex-db/src/lib.rs`: `pub mod session_wal;` → `pub mod session_timeline;`.
 - Module-level doc-comment is replaced with the new framing (see §4).
 - Function signatures unchanged (`log_event`, `log_event_tx`, `load_tool_events`, `prune_old_events_batched`).
 - Rename type `WalToolEvent` → `TimelineToolEvent` for consistency. All callers are inside the workspace.
@@ -70,9 +70,9 @@ ALTER INDEX  IF EXISTS idx_session_events_type       RENAME TO idx_session_timel
 
 All 86 references in 20 files. Concentrated locations:
 
-- `crates/hydeclaw-db/src/session_timeline.rs` (formerly `session_wal.rs`): 5 SQL string literals.
-- `crates/hydeclaw-db/src/sessions.rs`: 4 SQL string literals + 1 test that drops the table (`DROP TABLE session_events` → `DROP TABLE session_timeline`).
-- All `use hydeclaw_db::session_wal` → `use hydeclaw_db::session_timeline` (Rust import paths).
+- `crates/opex-db/src/session_timeline.rs` (formerly `session_wal.rs`): 5 SQL string literals.
+- `crates/opex-db/src/sessions.rs`: 4 SQL string literals + 1 test that drops the table (`DROP TABLE session_events` → `DROP TABLE session_timeline`).
+- All `use opex_db::session_wal` → `use opex_db::session_timeline` (Rust import paths).
 - Tracing fields and inline comments referencing "WAL" are updated to "timeline".
 
 ### 4. Documentation rewrites
@@ -93,7 +93,7 @@ Concrete edits:
 | `docs/CONFIGURATION.md` | 270–275 | rename config keys (see §5); replace "WAL-журнала" with "хронологического лога событий" |
 | `docs/API.md` | 171 | JSON example field rename to `session_timeline_table_size_bytes` |
 | `migrations/013_session_wal.sql` | header comment | replace "Used for crash recovery instead of injecting synthetic '[interrupted]' messages" with the phrase-anchor |
-| `crates/hydeclaw-db/src/session_timeline.rs` | header doc-comment | rewrite using the phrase-anchor |
+| `crates/opex-db/src/session_timeline.rs` | header doc-comment | rewrite using the phrase-anchor |
 
 The file `migrations/013_session_wal.sql` itself is **not renamed** (would change the migration's identity); only its in-file SQL comments are edited.
 
@@ -105,16 +105,16 @@ Operator-facing renames in one shot, no aliases. Documented in release notes.
 - Field renamed: `session_events_table_size_bytes` → `session_timeline_table_size_bytes`.
 - UI does not consume this field (verified: no matches in `ui/src` for `session_events`).
 
-**Config keys** in `hydeclaw.toml` `[cleanup]` section:
+**Config keys** in `opex.toml` `[cleanup]` section:
 - `session_events_retention_days` → `session_timeline_retention_days`
 - `session_events_batch_size` → `session_timeline_batch_size`
 - Cron job key `session_events_cleanup_hourly` → `session_timeline_cleanup_hourly`.
 
-**Startup PreCheck**: in `crates/hydeclaw-core/src/config/mod.rs::load`, before normal serde parsing, scan the raw TOML for any of the three old keys. If found, return a `ConfigError` with a clear actionable message:
+**Startup PreCheck**: in `crates/opex-core/src/config/mod.rs::load`, before normal serde parsing, scan the raw TOML for any of the three old keys. If found, return a `ConfigError` with a clear actionable message:
 
 ```text
 config error: [cleanup] key `session_events_retention_days` was renamed
-to `session_timeline_retention_days` in this release. Update hydeclaw.toml.
+to `session_timeline_retention_days` in this release. Update opex.toml.
 ```
 
 This replaces the bare serde "unknown field" error and helps the single-operator deployment.
@@ -123,7 +123,7 @@ This replaces the bare serde "unknown field" error and helps the single-operator
 
 - **Migration integrity**: apply schema up to m048, insert sample rows into `session_events`, apply m049, verify table is now `session_timeline`, rows preserved, indexes renamed. Re-run m049 — second pass is a no-op.
 - **PreCheck**: a TOML with the old `session_events_*` keys fails startup with the specific error message; the new keys succeed.
-- **Dashboard metrics** ([integration_dashboard_metrics.rs](../../../crates/hydeclaw-core/tests/integration_dashboard_metrics.rs)): JSON response includes `session_timeline_table_size_bytes`; the old field is absent.
+- **Dashboard metrics** ([integration_dashboard_metrics.rs](../../../crates/opex-core/tests/integration_dashboard_metrics.rs)): JSON response includes `session_timeline_table_size_bytes`; the old field is absent.
 - **Rename of test file**: `tests/integration_session_events_cleanup.rs` → `tests/integration_session_timeline_cleanup.rs`; content and SQL updated. Existing test cases pass unchanged.
 - **`make test-db` is green** after all changes.
 
@@ -132,8 +132,8 @@ This replaces the bare serde "unknown field" error and helps the single-operator
 1. No production source or doc file (excluding the historical `migrations/` directory) contains the phrases "session WAL", "WAL replay", or "crash recovery via WAL". `grep -wr 'WAL' crates/ docs/ CLAUDE.md --exclude-dir=migrations` returns no matches related to the session timeline concept.
 2. `grep -wr "session_events" crates/ docs/ CLAUDE.md --exclude-dir=migrations` returns no matches.
 3. `cargo build --workspace` and `cargo test --workspace` (with DATABASE_URL set) are green.
-4. Startup with a `hydeclaw.toml` that still contains the old `session_events_retention_days` key prints the PreCheck error and exits non-zero, **not** a serde parse error.
-5. Startup with a `hydeclaw.toml` that uses the new `session_timeline_*` keys succeeds and the hourly cleanup cron runs.
+4. Startup with a `opex.toml` that still contains the old `session_events_retention_days` key prints the PreCheck error and exits non-zero, **not** a serde parse error.
+5. Startup with a `opex.toml` that uses the new `session_timeline_*` keys succeeds and the hourly cleanup cron runs.
 6. `/api/dashboard/metrics` response contains `session_timeline_table_size_bytes` and does not contain `session_events_table_size_bytes`.
 
 ## Implementation order

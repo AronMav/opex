@@ -5,7 +5,7 @@
 
 ## Problem
 
-HydeClaw's skill system is passive: the only way a skill is created is via the
+OPEX's skill system is passive: the only way a skill is created is via the
 Curator's Phase 2 repair queue (which is driven by a low-context post-session
 LLM call on user messages only). Agents cannot create skills while working, and
 the post-session analysis misses assistant responses, tool usage, and session
@@ -189,14 +189,14 @@ Unchanged at 30 seconds. No retry on timeout (clarified in code comment).
 
 | Action | Path | Responsibility |
 | --- | --- | --- |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/handlers.rs` | Add `handle_skill_capture()` function |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/tool_defs.rs` | Add `capture` action to `skill_use` tool schema |
-| Modify | `crates/hydeclaw-core/src/agent/engine_dispatch.rs` | Dispatch `skill_use` capture action to new handler |
-| Modify | `crates/hydeclaw-core/src/skills/evolution.rs` | Enrich `review_session_inner`, multi-verdict parse |
-| Modify | `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` | Pass session outcome + user_message_count to `spawn_skill_review` |
+| Modify | `crates/opex-core/src/agent/pipeline/handlers.rs` | Add `handle_skill_capture()` function |
+| Modify | `crates/opex-core/src/agent/pipeline/tool_defs.rs` | Add `capture` action to `skill_use` tool schema |
+| Modify | `crates/opex-core/src/agent/engine_dispatch.rs` | Dispatch `skill_use` capture action to new handler |
+| Modify | `crates/opex-core/src/skills/evolution.rs` | Enrich `review_session_inner`, multi-verdict parse |
+| Modify | `crates/opex-core/src/agent/pipeline/finalize.rs` | Pass session outcome + user_message_count to `spawn_skill_review` |
 | Modify | `config/skills/skill-curator.md` | Add capture guidance section |
-| Modify | `crates/hydeclaw-core/scaffold/base/SOUL.md` | Add `skill_use(action="capture")` to tool list |
-| Modify | `crates/hydeclaw-core/src/gateway/handlers/notifications.rs` | Add `skill_captured` notification type |
+| Modify | `crates/opex-core/scaffold/base/SOUL.md` | Add `skill_use(action="capture")` to tool list |
+| Modify | `crates/opex-core/src/gateway/handlers/notifications.rs` | Add `skill_captured` notification type |
 
 ---
 

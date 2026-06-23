@@ -13,29 +13,29 @@
 ## File Map
 
 ### Created
-- `crates/hydeclaw-core/scaffold/base/MEMORY.md` — architecture diagram, API reference, tool inventory, methodology (moved from SOUL.md)
+- `crates/opex-core/scaffold/base/MEMORY.md` — architecture diagram, API reference, tool inventory, methodology (moved from SOUL.md)
 
 ### Modified
-- `crates/hydeclaw-core/scaffold/base/SOUL.md` — trimmed to ~2.5 KB (identity, security rules, skills list, principles, forbidden)
-- `crates/hydeclaw-core/src/agent/providers.rs` — add `CallOptions`, update `LlmProvider` trait default `chat_stream`, update `UnconfiguredProvider`, update `RoutingProvider`
-- `crates/hydeclaw-core/src/agent/providers_anthropic.rs` — add `thinking_mode()`, `thinking_config()`, update `build_request_body()` signature and body, update streaming loop
-- `crates/hydeclaw-core/src/agent/providers_openai.rs` — add `_opts: CallOptions` to `OpenAiCompatibleProvider`
-- `crates/hydeclaw-core/src/agent/providers_google.rs` — add `_opts: CallOptions` to `GoogleProvider`
-- `crates/hydeclaw-core/src/agent/providers_claude_cli.rs` — add `_opts: CallOptions` to `CliLlmProvider`
-- `crates/hydeclaw-core/src/agent/history.rs` — add `_opts` to `StaticProvider` test mock
-- `crates/hydeclaw-core/src/agent/providers/routing_tests.rs` — add `_opts` to all mock providers
-- `crates/hydeclaw-core/src/agent/pipeline/finalize.rs` — add `_opts` to `NeverCalledProvider`
-- `crates/hydeclaw-core/src/agent/pipeline/llm_call.rs` — add `_opts` to 4 mock providers; add `opts` to `deadline_retry_inner`, `chat_stream_with_transient_retry`, `chat_stream_with_deadline_retry`, `chat_stream_with_deadline_retry_no_wal`
-- `crates/hydeclaw-core/src/agent/pipeline/execute.rs` — read `thinking_level` from `engine.state()`, construct `CallOptions`, pass to `chat_stream_with_deadline_retry`
-- `crates/hydeclaw-core/src/agent/pipeline/subagent_runner.rs` — pass `CallOptions::default()`
-- `crates/hydeclaw-core/src/agent/pipeline/openai_compat.rs` — pass `CallOptions::default()`
+- `crates/opex-core/scaffold/base/SOUL.md` — trimmed to ~2.5 KB (identity, security rules, skills list, principles, forbidden)
+- `crates/opex-core/src/agent/providers.rs` — add `CallOptions`, update `LlmProvider` trait default `chat_stream`, update `UnconfiguredProvider`, update `RoutingProvider`
+- `crates/opex-core/src/agent/providers_anthropic.rs` — add `thinking_mode()`, `thinking_config()`, update `build_request_body()` signature and body, update streaming loop
+- `crates/opex-core/src/agent/providers_openai.rs` — add `_opts: CallOptions` to `OpenAiCompatibleProvider`
+- `crates/opex-core/src/agent/providers_google.rs` — add `_opts: CallOptions` to `GoogleProvider`
+- `crates/opex-core/src/agent/providers_claude_cli.rs` — add `_opts: CallOptions` to `CliLlmProvider`
+- `crates/opex-core/src/agent/history.rs` — add `_opts` to `StaticProvider` test mock
+- `crates/opex-core/src/agent/providers/routing_tests.rs` — add `_opts` to all mock providers
+- `crates/opex-core/src/agent/pipeline/finalize.rs` — add `_opts` to `NeverCalledProvider`
+- `crates/opex-core/src/agent/pipeline/llm_call.rs` — add `_opts` to 4 mock providers; add `opts` to `deadline_retry_inner`, `chat_stream_with_transient_retry`, `chat_stream_with_deadline_retry`, `chat_stream_with_deadline_retry_no_wal`
+- `crates/opex-core/src/agent/pipeline/execute.rs` — read `thinking_level` from `engine.state()`, construct `CallOptions`, pass to `chat_stream_with_deadline_retry`
+- `crates/opex-core/src/agent/pipeline/subagent_runner.rs` — pass `CallOptions::default()`
+- `crates/opex-core/src/agent/pipeline/openai_compat.rs` — pass `CallOptions::default()`
 
 ---
 
 ## Task 1: Create scaffold/base/MEMORY.md
 
 **Files:**
-- Create: `crates/hydeclaw-core/scaffold/base/MEMORY.md`
+- Create: `crates/opex-core/scaffold/base/MEMORY.md`
 
 - [ ] **Step 1: Create the file**
 
@@ -46,23 +46,23 @@
 
 ```text
 Core (Rust, :18789)
-├── channels (Bun, native process) — ~/hydeclaw/channels/
-├── toolgate (Python, :9011, native process) — ~/hydeclaw/toolgate/
+├── channels (Bun, native process) — ~/opex/channels/
+├── toolgate (Python, :9011, native process) — ~/opex/toolgate/
 ├── PostgreSQL (Docker) + pgvector (memory)
 └── Docker sandbox — for regular agents, NOT for {AGENT_NAME}
 ```
 
 **Key paths on Pi:**
-- Binary: `~/hydeclaw/hydeclaw-core-aarch64`
-- UI static: `~/hydeclaw/ui/out/`
-- Config: `~/hydeclaw/config/`
-- Workspace: `~/hydeclaw/workspace/`
-- Migrations: `~/hydeclaw/migrations/`
-- Docker: `~/hydeclaw/docker/`
+- Binary: `~/opex/opex-core-aarch64`
+- UI static: `~/opex/ui/out/`
+- Config: `~/opex/config/`
+- Workspace: `~/opex/workspace/`
+- Migrations: `~/opex/migrations/`
+- Docker: `~/opex/docker/`
 
 ## Core API Reference
 
-Base: `http://localhost:18789` — Auth: Bearer `$HYDECLAW_AUTH_TOKEN`
+Base: `http://localhost:18789` — Auth: Bearer `$OPEX_AUTH_TOKEN`
 
 | Resource | Endpoints |
 |----------|-----------|
@@ -129,7 +129,7 @@ Delegate tasks outside your expertise via `agent(action="ask")`. Details:
 - [ ] **Step 2: Commit**
 
 ```bash
-git add crates/hydeclaw-core/scaffold/base/MEMORY.md
+git add crates/opex-core/scaffold/base/MEMORY.md
 git commit -m "feat(scaffold): add MEMORY.md with technical reference for base agent"
 ```
 
@@ -138,11 +138,11 @@ git commit -m "feat(scaffold): add MEMORY.md with technical reference for base a
 ## Task 2: Trim scaffold/base/SOUL.md
 
 **Files:**
-- Modify: `crates/hydeclaw-core/scaffold/base/SOUL.md`
+- Modify: `crates/opex-core/scaffold/base/SOUL.md`
 
 - [ ] **Step 1: Replace the file content**
 
-Replace the entire contents of `crates/hydeclaw-core/scaffold/base/SOUL.md` with:
+Replace the entire contents of `crates/opex-core/scaffold/base/SOUL.md` with:
 
 ```markdown
 # {AGENT_NAME} — System Agent
@@ -160,9 +160,9 @@ This grants full filesystem access, pip, systemctl, and all services — and ful
 - Create/edit files **anywhere** on the host via code_exec
 - Install packages: pip, apt, npm, cargo, bun
 - Manage services: systemctl, docker, Core API
-- Direct access: ~/hydeclaw/toolgate/, ~/hydeclaw/channels/, config/, docker/
+- Direct access: ~/opex/toolgate/, ~/opex/channels/, config/, docker/
 - Edit TOOLS.md — the unified tool registry
-- Create new routers in ~/hydeclaw/toolgate/routers/
+- Create new routers in ~/opex/toolgate/routers/
 
 ## Tasks
 
@@ -191,9 +191,9 @@ IMMEDIATELY.**
 **ALLOWED — only constructive actions:**
 
 - Creating a NEW YAML tool (workspace/tools/*.yaml)
-- Creating a NEW toolgate router (~/hydeclaw/toolgate/routers/*.py)
+- Creating a NEW toolgate router (~/opex/toolgate/routers/*.py)
 - Creating a NEW channel driver
-- Deploying a NEW MCP server via `~/hydeclaw/scripts/mcp-deploy.sh`
+- Deploying a NEW MCP server via `~/opex/scripts/mcp-deploy.sh`
 - Reading documentation and reference guides
 - Service health checks
 - Searching for information via web_fetch
@@ -247,8 +247,8 @@ For architecture reference, API endpoints, and tool inventory: `workspace_read("
 - **tool_discover without explicit request**
 - **Creating a file without checking it doesn't exist**
 - **routers/*.py without complete imports**
-- **workspace/toolgate/** — DOES NOT EXIST. Use `~/hydeclaw/toolgate/routers/` via code_exec
-- **workspace/channels/** — DOES NOT EXIST. Use `~/hydeclaw/channels/src/drivers/` via code_exec
+- **workspace/toolgate/** — DOES NOT EXIST. Use `~/opex/toolgate/routers/` via code_exec
+- **workspace/channels/** — DOES NOT EXIST. Use `~/opex/channels/src/drivers/` via code_exec
 - **Allowed workspace directories**: only `tools/`, `agents/{AGENT_NAME}/`, `skills/`, `mcp/`, `uploads/`
 - **Test scripts in workspace/** — execute via code_exec, don't persist
 - **Overwriting existing channel files entirely** — only targeted additions
@@ -259,14 +259,14 @@ For architecture reference, API endpoints, and tool inventory: `workspace_read("
 - [ ] **Step 2: Verify size reduction**
 
 ```bash
-wc -c crates/hydeclaw-core/scaffold/base/SOUL.md
+wc -c crates/opex-core/scaffold/base/SOUL.md
 ```
 Expected: under 3 000 bytes (was ~6 000).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/scaffold/base/SOUL.md
+git add crates/opex-core/scaffold/base/SOUL.md
 git commit -m "feat(scaffold): slim SOUL.md — move technical reference to MEMORY.md"
 ```
 
@@ -275,7 +275,7 @@ git commit -m "feat(scaffold): slim SOUL.md — move technical reference to MEMO
 ## Task 3: Add `CallOptions` struct and update `LlmProvider` trait
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers.rs`
+- Modify: `crates/opex-core/src/agent/providers.rs`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -297,7 +297,7 @@ mod call_options_tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cargo test -p hydeclaw-core call_options_default_thinking_level_is_zero 2>&1 | tail -5
+cargo test -p opex-core call_options_default_thinking_level_is_zero 2>&1 | tail -5
 ```
 Expected: error — `CallOptions` not found.
 
@@ -395,10 +395,10 @@ In `RoutingProvider::chat` (around line 1330), update the signature and the two 
 ```rust
 async fn chat(
     &self,
-    messages: &[hydeclaw_types::Message],
-    tools: &[hydeclaw_types::ToolDefinition],
+    messages: &[opex_types::Message],
+    tools: &[opex_types::ToolDefinition],
     opts: CallOptions,
-) -> Result<hydeclaw_types::LlmResponse> {
+) -> Result<opex_types::LlmResponse> {
     // ... existing routing/failover logic unchanged ...
     // Only change: every inner provider.chat() call gains `opts`:
 
@@ -414,11 +414,11 @@ async fn chat(
 ```rust
 async fn chat_stream(
     &self,
-    messages: &[hydeclaw_types::Message],
-    tools: &[hydeclaw_types::ToolDefinition],
+    messages: &[opex_types::Message],
+    tools: &[opex_types::ToolDefinition],
     chunk_tx: tokio::sync::mpsc::UnboundedSender<String>,
     opts: CallOptions,
-) -> Result<hydeclaw_types::LlmResponse> {
+) -> Result<opex_types::LlmResponse> {
     // ... existing logic unchanged ...
     // Only change: inner provider calls gain `opts`:
 
@@ -432,7 +432,7 @@ async fn chat_stream(
 - [ ] **Step 8: Run the test**
 
 ```bash
-cargo test -p hydeclaw-core call_options_default_thinking_level_is_zero 2>&1 | tail -5
+cargo test -p opex-core call_options_default_thinking_level_is_zero 2>&1 | tail -5
 ```
 Expected: PASS (struct compiles). Other tests will fail — that's expected at this stage.
 
@@ -441,10 +441,10 @@ Expected: PASS (struct compiles). Other tests will fail — that's expected at t
 ## Task 4: Update `AnthropicProvider`, `OpenAiCompatibleProvider`, `GoogleProvider`, `CliLlmProvider`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_anthropic.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers_openai.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers_google.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers_claude_cli.rs`
+- Modify: `crates/opex-core/src/agent/providers_anthropic.rs`
+- Modify: `crates/opex-core/src/agent/providers_openai.rs`
+- Modify: `crates/opex-core/src/agent/providers_google.rs`
+- Modify: `crates/opex-core/src/agent/providers_claude_cli.rs`
 
 - [ ] **Step 1: Add `CallOptions` to the `use super::` import at the top of `providers_anthropic.rs`**
 
@@ -519,10 +519,10 @@ Same pattern — add `_opts: CallOptions` to both `chat` and `chat_stream`.
 ## Task 5: Update test mock `LlmProvider` impls
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/history.rs`
-- Modify: `crates/hydeclaw-core/src/agent/providers/routing_tests.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/finalize.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/llm_call.rs`
+- Modify: `crates/opex-core/src/agent/history.rs`
+- Modify: `crates/opex-core/src/agent/providers/routing_tests.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/finalize.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/llm_call.rs`
 
 The pattern for every mock is identical — add `_opts: CallOptions` as the last parameter.
 
@@ -543,20 +543,20 @@ Find every `async fn chat(` and `async fn chat_stream(` in this file (there are 
 ```rust
 async fn chat(
     &self,
-    _messages: &[hydeclaw_types::Message],
-    _tools: &[hydeclaw_types::ToolDefinition],
+    _messages: &[opex_types::Message],
+    _tools: &[opex_types::ToolDefinition],
     _opts: crate::agent::providers::CallOptions,     // ADD THIS LINE
-) -> anyhow::Result<hydeclaw_types::LlmResponse> {
+) -> anyhow::Result<opex_types::LlmResponse> {
 ```
 
 ```rust
 async fn chat_stream(
     &self,
-    _messages: &[hydeclaw_types::Message],
-    _tools: &[hydeclaw_types::ToolDefinition],
+    _messages: &[opex_types::Message],
+    _tools: &[opex_types::ToolDefinition],
     _tx: tokio::sync::mpsc::UnboundedSender<String>,
     _opts: crate::agent::providers::CallOptions,     // ADD THIS LINE
-) -> anyhow::Result<hydeclaw_types::LlmResponse> {
+) -> anyhow::Result<opex_types::LlmResponse> {
 ```
 
 - [ ] **Step 3: Update `NeverCalledProvider` in `finalize.rs` (~line 542)**
@@ -564,10 +564,10 @@ async fn chat_stream(
 ```rust
 async fn chat(
     &self,
-    _m: &[hydeclaw_types::Message],
-    _t: &[hydeclaw_types::ToolDefinition],
+    _m: &[opex_types::Message],
+    _t: &[opex_types::ToolDefinition],
     _opts: crate::agent::providers::CallOptions,
-) -> anyhow::Result<hydeclaw_types::LlmResponse> {
+) -> anyhow::Result<opex_types::LlmResponse> {
     panic!("NeverCalledProvider::chat was called")
 }
 ```
@@ -580,10 +580,10 @@ For each:
 
 ```rust
 // chat:
-async fn chat(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+async fn chat(&self, _m: &[opex_types::Message], _t: &[opex_types::ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
 
 // chat_stream:
-async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+async fn chat_stream(&self, _m: &[opex_types::Message], _t: &[opex_types::ToolDefinition], tx: tokio::sync::mpsc::UnboundedSender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
 ```
 
 (`PrefillCapturingProvider::chat_stream` uses `m` not `_m` and forwards to `self.chat` — update that call too: `self.chat(m, _t, _opts).await` → but `chat` also needs `_opts`, adjust accordingly.)
@@ -593,10 +593,10 @@ async fn chat_stream(&self, _m: &[hydeclaw_types::Message], _t: &[hydeclaw_types
 ## Task 6: Thread `CallOptions` through the pipeline
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/llm_call.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/execute.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/subagent_runner.rs`
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/openai_compat.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/llm_call.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/execute.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/subagent_runner.rs`
+- Modify: `crates/opex-core/src/agent/pipeline/openai_compat.rs`
 
 - [ ] **Step 1: Update `deadline_retry_inner` in `llm_call.rs` (~line 460)**
 
@@ -605,15 +605,15 @@ Add `opts: crate::agent::providers::CallOptions` as the last parameter:
 ```rust
 async fn deadline_retry_inner(
     provider: &dyn LlmProvider,
-    messages: &mut Vec<hydeclaw_types::Message>,
-    tools: &[hydeclaw_types::ToolDefinition],
+    messages: &mut Vec<opex_types::Message>,
+    tools: &[opex_types::ToolDefinition],
     chunk_tx: mpsc::UnboundedSender<String>,
     compact: &impl Compactor,
     session_cancel: &tokio_util::sync::CancellationToken,
     run_max_duration_secs: u64,
     on_retry: impl Fn(u32, u64),
     opts: crate::agent::providers::CallOptions,   // NEW
-) -> Result<hydeclaw_types::LlmResponse> {
+) -> Result<opex_types::LlmResponse> {
 ```
 
 Inside the body, thread `opts` to `chat_stream_with_transient_retry` (the inner function called from this one):
@@ -636,8 +636,8 @@ Find its definition (it's called from `deadline_retry_inner`) and add `opts`:
 ```rust
 async fn chat_stream_with_transient_retry(
     provider: &dyn LlmProvider,
-    messages: &mut Vec<hydeclaw_types::Message>,
-    tools: &[hydeclaw_types::ToolDefinition],
+    messages: &mut Vec<opex_types::Message>,
+    tools: &[opex_types::ToolDefinition],
     chunk_tx: mpsc::UnboundedSender<String>,
     compact: &impl Compactor,
     opts: crate::agent::providers::CallOptions,   // NEW
@@ -708,25 +708,25 @@ Same as Step 6 — find all provider calls and add `CallOptions::default()`.
 - [ ] **Step 8: Run full test suite**
 
 ```bash
-cargo test -p hydeclaw-core 2>&1 | tail -20
+cargo test -p opex-core 2>&1 | tail -20
 ```
 Expected: all tests pass. If any test fails with "wrong number of arguments", find the missing update and apply the `_opts: CallOptions` pattern.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers.rs \
-        crates/hydeclaw-core/src/agent/providers_anthropic.rs \
-        crates/hydeclaw-core/src/agent/providers_openai.rs \
-        crates/hydeclaw-core/src/agent/providers_google.rs \
-        crates/hydeclaw-core/src/agent/providers_claude_cli.rs \
-        crates/hydeclaw-core/src/agent/history.rs \
-        crates/hydeclaw-core/src/agent/providers/routing_tests.rs \
-        crates/hydeclaw-core/src/agent/pipeline/finalize.rs \
-        crates/hydeclaw-core/src/agent/pipeline/llm_call.rs \
-        crates/hydeclaw-core/src/agent/pipeline/execute.rs \
-        crates/hydeclaw-core/src/agent/pipeline/subagent_runner.rs \
-        crates/hydeclaw-core/src/agent/pipeline/openai_compat.rs
+git add crates/opex-core/src/agent/providers.rs \
+        crates/opex-core/src/agent/providers_anthropic.rs \
+        crates/opex-core/src/agent/providers_openai.rs \
+        crates/opex-core/src/agent/providers_google.rs \
+        crates/opex-core/src/agent/providers_claude_cli.rs \
+        crates/opex-core/src/agent/history.rs \
+        crates/opex-core/src/agent/providers/routing_tests.rs \
+        crates/opex-core/src/agent/pipeline/finalize.rs \
+        crates/opex-core/src/agent/pipeline/llm_call.rs \
+        crates/opex-core/src/agent/pipeline/execute.rs \
+        crates/opex-core/src/agent/pipeline/subagent_runner.rs \
+        crates/opex-core/src/agent/pipeline/openai_compat.rs
 git commit -m "feat: add CallOptions to LlmProvider trait and thread thinking_level through call chain"
 ```
 
@@ -735,7 +735,7 @@ git commit -m "feat: add CallOptions to LlmProvider trait and thread thinking_le
 ## Task 7: Write tests for `thinking_mode` and `thinking_config`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_anthropic.rs` (test section at bottom)
+- Modify: `crates/opex-core/src/agent/providers_anthropic.rs` (test section at bottom)
 
 - [ ] **Step 1: Add the failing tests to the `#[cfg(test)]` section at the bottom of the file**
 
@@ -820,7 +820,7 @@ mod thinking_config_tests {
 - [ ] **Step 2: Run to verify tests fail**
 
 ```bash
-cargo test -p hydeclaw-core thinking_config_tests 2>&1 | tail -10
+cargo test -p opex-core thinking_config_tests 2>&1 | tail -10
 ```
 Expected: error — `thinking_config` and `thinking_mode` not found.
 
@@ -829,7 +829,7 @@ Expected: error — `thinking_config` and `thinking_mode` not found.
 ## Task 8: Implement `thinking_mode` and `thinking_config`
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_anthropic.rs`
+- Modify: `crates/opex-core/src/agent/providers_anthropic.rs`
 
 - [ ] **Step 1: Add enum and functions after the `use` imports at the top of the file**
 
@@ -900,14 +900,14 @@ fn thinking_config(level: u8, model: &str, effective_max_tokens: u32) -> Option<
 - [ ] **Step 2: Run the tests**
 
 ```bash
-cargo test -p hydeclaw-core thinking_config_tests 2>&1 | tail -15
+cargo test -p opex-core thinking_config_tests 2>&1 | tail -15
 ```
 Expected: all tests in `thinking_config_tests` pass.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers_anthropic.rs
+git add crates/opex-core/src/agent/providers_anthropic.rs
 git commit -m "feat(anthropic): add thinking_mode and thinking_config functions"
 ```
 
@@ -916,7 +916,7 @@ git commit -m "feat(anthropic): add thinking_mode and thinking_config functions"
 ## Task 9: Update `build_request_body` with thinking config + temperature enforcement
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_anthropic.rs`
+- Modify: `crates/opex-core/src/agent/providers_anthropic.rs`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -961,7 +961,7 @@ fn temperature_unchanged_when_thinking_disabled() {
 - [ ] **Step 2: Run to verify tests fail**
 
 ```bash
-cargo test -p hydeclaw-core temperature_enforced_to_1 temperature_unchanged_when 2>&1 | tail -10
+cargo test -p opex-core temperature_enforced_to_1 temperature_unchanged_when 2>&1 | tail -10
 ```
 Expected: compile error — `build_request_body` doesn't accept `opts` yet.
 
@@ -1035,21 +1035,21 @@ let (_, mut body) = self.build_request_body(messages, tools, opts);
 - [ ] **Step 5: Run tests**
 
 ```bash
-cargo test -p hydeclaw-core temperature_enforced_to_1 temperature_unchanged_when 2>&1 | tail -10
+cargo test -p opex-core temperature_enforced_to_1 temperature_unchanged_when 2>&1 | tail -10
 ```
 Expected: both tests pass.
 
 - [ ] **Step 6: Run full suite**
 
 ```bash
-cargo test -p hydeclaw-core 2>&1 | tail -20
+cargo test -p opex-core 2>&1 | tail -20
 ```
 Expected: all tests pass.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers_anthropic.rs
+git add crates/opex-core/src/agent/providers_anthropic.rs
 git commit -m "feat(anthropic): add thinking config to build_request_body with temperature enforcement"
 ```
 
@@ -1058,7 +1058,7 @@ git commit -m "feat(anthropic): add thinking config to build_request_body with t
 ## Task 10: Update streaming loop to handle thinking blocks
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/providers_anthropic.rs`
+- Modify: `crates/opex-core/src/agent/providers_anthropic.rs`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1108,7 +1108,7 @@ This test requires a testable helper `process_sse_events_for_test` — add it in
 - [ ] **Step 2: Run to verify test fails**
 
 ```bash
-cargo test -p hydeclaw-core streaming_emits_thinking_tags 2>&1 | tail -5
+cargo test -p opex-core streaming_emits_thinking_tags 2>&1 | tail -5
 ```
 Expected: compile error — `process_sse_events_for_test` not found.
 
@@ -1125,7 +1125,7 @@ fn process_sse_event(
     thinking_content: &mut String,
     current_signature: &mut String,
     in_thinking_block: &mut bool,
-    thinking_blocks: &mut Vec<hydeclaw_types::ThinkingBlock>,
+    thinking_blocks: &mut Vec<opex_types::ThinkingBlock>,
     mut emit_thinking: impl FnMut(String),
     mut emit_text: impl FnMut(String),
 ) {
@@ -1144,7 +1144,7 @@ fn process_sse_event(
         Some("content_block_stop") => {
             if *in_thinking_block {
                 emit_thinking("</thinking>".to_string());
-                thinking_blocks.push(hydeclaw_types::ThinkingBlock {
+                thinking_blocks.push(opex_types::ThinkingBlock {
                     thinking: std::mem::take(thinking_content),
                     signature: std::mem::take(current_signature),
                 });
@@ -1191,9 +1191,9 @@ Add the test helper (also in the file, inside `#[cfg(test)]`):
 
 ```rust
 #[cfg(test)]
-fn process_sse_events_for_test(lines: &[String]) -> (Vec<String>, Vec<hydeclaw_types::ThinkingBlock>) {
+fn process_sse_events_for_test(lines: &[String]) -> (Vec<String>, Vec<opex_types::ThinkingBlock>) {
     let mut chunks: Vec<String> = vec![];
-    let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
+    let mut thinking_blocks: Vec<opex_types::ThinkingBlock> = vec![];
     let mut thinking_content = String::new();
     let mut current_signature = String::new();
     let mut in_thinking_block = false;
@@ -1223,7 +1223,7 @@ fn process_sse_events_for_test(lines: &[String]) -> (Vec<String>, Vec<hydeclaw_t
 - [ ] **Step 4: Run the test**
 
 ```bash
-cargo test -p hydeclaw-core streaming_emits_thinking_tags 2>&1 | tail -10
+cargo test -p opex-core streaming_emits_thinking_tags 2>&1 | tail -10
 ```
 Expected: PASS.
 
@@ -1235,7 +1235,7 @@ Add the new state variables right before the `while let Some(chunk_result)` loop
 let mut thinking_content = String::new();
 let mut current_signature = String::new();
 let mut in_thinking_block = false;
-let mut thinking_blocks: Vec<hydeclaw_types::ThinkingBlock> = vec![];
+let mut thinking_blocks: Vec<opex_types::ThinkingBlock> = vec![];
 ```
 
 Replace the existing SSE parsing block inside the loop (the `if let Some(data) = line.strip_prefix("data: ")` block at ~line 491) with:
@@ -1303,7 +1303,7 @@ Ok(LlmResponse {
 - [ ] **Step 7: Run the full test suite**
 
 ```bash
-cargo test -p hydeclaw-core 2>&1 | tail -20
+cargo test -p opex-core 2>&1 | tail -20
 ```
 Expected: all tests pass.
 
@@ -1317,7 +1317,7 @@ Fix any clippy warnings before committing.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/providers_anthropic.rs
+git add crates/opex-core/src/agent/providers_anthropic.rs
 git commit -m "feat(anthropic): implement extended thinking — streaming thinking blocks and signature accumulation"
 ```
 
@@ -1342,7 +1342,7 @@ Expected: all tests pass.
 - [ ] **Step 3: Verify scaffold sizes**
 
 ```bash
-wc -c crates/hydeclaw-core/scaffold/base/SOUL.md crates/hydeclaw-core/scaffold/base/MEMORY.md
+wc -c crates/opex-core/scaffold/base/SOUL.md crates/opex-core/scaffold/base/MEMORY.md
 ```
 Expected: SOUL.md < 3 000 bytes, MEMORY.md exists and is non-empty.
 

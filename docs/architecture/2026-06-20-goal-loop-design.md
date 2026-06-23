@@ -27,7 +27,7 @@ and a self-rescheduling cron (C, wrong session model).
 
 - TDD; rustls-only; clippy `-D warnings` clean; no `Co-Authored-By`; no push unless asked.
 - Migrations runtime-loaded; `make remote-deploy` syncs them (fixed 2026-06-20).
-- Rust application-tree tests run under `cargo test --bin hydeclaw-core`; DB tests use the
+- Rust application-tree tests run under `cargo test --bin opex-core`; DB tests use the
   test postgres + `#[sqlx::test(migrations = "../../migrations")]`.
 - Pure logic (command parsing, judge JSON parsing, GoalState transitions) verified locally;
   the full autonomous loop + delivery verified on the server.
@@ -60,7 +60,7 @@ CREATE TABLE session_goals (
 );
 ```
 
-**`crates/hydeclaw-core/src/db/session_goals.rs` (new):** a `GoalRow` struct mirroring
+**`crates/opex-core/src/db/session_goals.rs` (new):** a `GoalRow` struct mirroring
 the columns, plus `get(db, session_id) -> Option<GoalRow>`, `upsert(db, session_id,
 goal_text, max_turns)`, `set_status`, `bump_turn`, `set_subgoals`, `record_verdict(db,
 session_id, verdict, judge_failed)`, `clear(db, session_id)`. Pure `GoalRow` helpers
@@ -214,16 +214,16 @@ part of the change and the primary thing to verify in code review.
 ## File structure
 
 - `migrations/056_session_goals.sql` (new)
-- `crates/hydeclaw-core/src/db/session_goals.rs` (new) + `db/mod.rs` export
-- `crates/hydeclaw-core/src/agent/goal/mod.rs` (new) — `continuation_prompt`,
+- `crates/opex-core/src/db/session_goals.rs` (new) + `db/mod.rs` export
+- `crates/opex-core/src/agent/goal/mod.rs` (new) — `continuation_prompt`,
   `parse_judge_verdict`, `Verdict`, `GoalCmd`/`SubgoalCmd` parsers (pure)
-- `crates/hydeclaw-core/src/agent/goal/driver.rs` (new) — `run_goal_driver`, judge call,
+- `crates/opex-core/src/agent/goal/driver.rs` (new) — `run_goal_driver`, judge call,
   delivery
-- `crates/hydeclaw-core/src/agent/goal/pool.rs` (new) — `GoalDriverPool`, `GoalDriverHandle`
-- `crates/hydeclaw-core/src/agent/engine/run.rs` — `run_goal_turn`
-- `crates/hydeclaw-core/src/agent/pipeline/commands.rs` — `/goal` + `/subgoal` arms + parsers
-- `crates/hydeclaw-core/src/agent/agent_state.rs` (or `AppState`) — hold `GoalDriverPool`
-- `crates/hydeclaw-core/src/config/mod.rs` — optional `[agent.goal] judge_model`, `max_turns`
+- `crates/opex-core/src/agent/goal/pool.rs` (new) — `GoalDriverPool`, `GoalDriverHandle`
+- `crates/opex-core/src/agent/engine/run.rs` — `run_goal_turn`
+- `crates/opex-core/src/agent/pipeline/commands.rs` — `/goal` + `/subgoal` arms + parsers
+- `crates/opex-core/src/agent/agent_state.rs` (or `AppState`) — hold `GoalDriverPool`
+- `crates/opex-core/src/config/mod.rs` — optional `[agent.goal] judge_model`, `max_turns`
 - `ui/src/stores/...` — handle the `goal-turn` ui_event (append message)
 
 ## Error handling
@@ -245,6 +245,6 @@ part of the change and the primary thing to verify in code review.
   clear` work; a real user message mid-loop is handled and the loop resumes after.
 
 ## Deploy / verification
-- Local: `cargo test --bin hydeclaw-core` (+ test postgres for DB); `cd ui && npm test`.
+- Local: `cargo test --bin opex-core` (+ test postgres for DB); `cd ui && npm test`.
 - Server: `make remote-deploy` (syncs migration 056) + UI deploy for the chat-store event;
   `make doctor`; Telegram smoke of the full loop.

@@ -14,7 +14,7 @@
 
 | File | Change |
 |------|--------|
-| `crates/hydeclaw-core/src/agent/knowledge_extractor.rs` | Remove `tool_insights` field; replace extraction prompt; delete persistence loop + dead code + their tests; add one new test |
+| `crates/opex-core/src/agent/knowledge_extractor.rs` | Remove `tool_insights` field; replace extraction prompt; delete persistence loop + dead code + their tests; add one new test |
 | DB on Pi (one-time, not a migration) | `DELETE FROM memory_chunks WHERE source LIKE 'auto:session:%'` |
 
 ---
@@ -22,7 +22,7 @@
 ## Task 1: Remove `tool_insights` from `ExtractedKnowledge` and fix tests
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/knowledge_extractor.rs`
+- Modify: `crates/opex-core/src/agent/knowledge_extractor.rs`
 
 Context: `ExtractedKnowledge` (lines 25–35) has a `tool_insights: Vec<String>` field. `update_rolling_summary` already skips it (lines 200–203 only iterate user_facts/outcomes/feedback). Eight `parse_extraction` tests reference `result.tool_insights` and will fail to compile once the field is removed.
 
@@ -45,7 +45,7 @@ struct ExtractedKnowledge {
 - [ ] **Step 2: Verify compile fails at the expected spots**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "error\[" | head -20
+cargo check -p opex-core 2>&1 | grep "error\[" | head -20
 ```
 
 Expected errors at:
@@ -146,7 +146,7 @@ fn rolling_summary_empty_when_only_tool_insights() { ... }
 - [ ] **Step 4: Run tests — expect all to pass**
 
 ```bash
-cargo test -p hydeclaw-core --lib 2>&1 | grep -E "test result|FAILED"
+cargo test -p opex-core --lib 2>&1 | grep -E "test result|FAILED"
 ```
 
 Expected: `test result: ok. N passed` (no failures).
@@ -154,7 +154,7 @@ Expected: `test result: ok. N passed` (no failures).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/knowledge_extractor.rs
+git add crates/opex-core/src/agent/knowledge_extractor.rs
 git commit -m "refactor(memory): remove tool_insights from ExtractedKnowledge"
 ```
 
@@ -163,7 +163,7 @@ git commit -m "refactor(memory): remove tool_insights from ExtractedKnowledge"
 ## Task 2: Replace extraction prompt and update module docstring
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/knowledge_extractor.rs`
+- Modify: `crates/opex-core/src/agent/knowledge_extractor.rs`
 
 Context: Extraction prompt (lines 103–125) is the source of noise — it allows meta-commentary, session actions, and up to 5 items per category. The module docstring (line 3) mentions "tool insights".
 
@@ -209,7 +209,7 @@ Replace the entire `let prompt = format!(...)` block:
 - [ ] **Step 3: Verify it compiles**
 
 ```bash
-cargo check -p hydeclaw-core 2>&1 | grep "^error"
+cargo check -p opex-core 2>&1 | grep "^error"
 ```
 
 Expected: no output.
@@ -217,13 +217,13 @@ Expected: no output.
 - [ ] **Step 4: Run tests — expect all to pass**
 
 ```bash
-cargo test -p hydeclaw-core --lib 2>&1 | grep -E "test result|FAILED"
+cargo test -p opex-core --lib 2>&1 | grep -E "test result|FAILED"
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/knowledge_extractor.rs
+git add crates/opex-core/src/agent/knowledge_extractor.rs
 git commit -m "fix(memory): tighten extraction prompt — timeless test, no session actions, max 3"
 ```
 
@@ -232,7 +232,7 @@ git commit -m "fix(memory): tighten extraction prompt — timeless test, no sess
 ## Task 3: Remove persistence loop and all dead code
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/knowledge_extractor.rs`
+- Modify: `crates/opex-core/src/agent/knowledge_extractor.rs`
 
 Context: Lines 147–183 save each fact to `memory_chunks`. After removing them, `save_if_new`, `save_if_new_with_provider`, `resolve_conflict`, `ConflictDecision`, `parse_conflict_decision`, `DEDUP_THRESHOLD`, and `CONFLICT_THRESHOLD` become dead code with no callers outside tests. Their tests (`save_if_new_*` block, lines 593–625) also disappear.
 
@@ -312,7 +312,7 @@ Expected: no errors, all tests pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/knowledge_extractor.rs
+git add crates/opex-core/src/agent/knowledge_extractor.rs
 git commit -m "refactor(memory): remove individual fact persistence and dead code"
 ```
 
@@ -326,7 +326,7 @@ git commit -m "refactor(memory): remove individual fact persistence and dead cod
 
 ```bash
 ssh aronmav@192.168.1.85 "docker exec \$(docker ps -q --filter name=postgres) \
-  psql -U hydeclaw -d hydeclaw \
+  psql -U opex -d opex \
   -c \"SELECT COUNT(*) FROM memory_chunks WHERE source LIKE 'auto:session:%';\""
 ```
 
@@ -336,7 +336,7 @@ Note the count.
 
 ```bash
 ssh aronmav@192.168.1.85 "docker exec \$(docker ps -q --filter name=postgres) \
-  psql -U hydeclaw -d hydeclaw \
+  psql -U opex -d opex \
   -c \"DELETE FROM memory_chunks WHERE source LIKE 'auto:session:%';\""
 ```
 
@@ -346,7 +346,7 @@ Expected output: `DELETE N` where N matches Step 1 count.
 
 ```bash
 ssh aronmav@192.168.1.85 "docker exec \$(docker ps -q --filter name=postgres) \
-  psql -U hydeclaw -d hydeclaw \
+  psql -U opex -d opex \
   -c \"SELECT COUNT(*) FROM memory_chunks WHERE source LIKE 'auto:session:%';\""
 ```
 
@@ -381,10 +381,10 @@ git push origin master
 - [ ] **Step 4: Build ARM64 and deploy binary to Pi**
 
 ```bash
-cargo zigbuild --release --target aarch64-unknown-linux-gnu -p hydeclaw-core
-ssh aronmav@192.168.1.85 "systemctl --user stop hydeclaw-core"
-scp target/aarch64-unknown-linux-gnu/release/hydeclaw-core aronmav@192.168.1.85:~/hydeclaw/hydeclaw-core-aarch64
-ssh aronmav@192.168.1.85 "systemctl --user start hydeclaw-core && sleep 3 && systemctl --user is-active hydeclaw-core"
+cargo zigbuild --release --target aarch64-unknown-linux-gnu -p opex-core
+ssh aronmav@192.168.1.85 "systemctl --user stop opex-core"
+scp target/aarch64-unknown-linux-gnu/release/opex-core aronmav@192.168.1.85:~/opex/opex-core-aarch64
+ssh aronmav@192.168.1.85 "systemctl --user start opex-core && sleep 3 && systemctl --user is-active opex-core"
 ```
 
 Expected: `active`
@@ -395,7 +395,7 @@ Start a session on the Pi (via UI or API), let it complete, then:
 
 ```bash
 ssh aronmav@192.168.1.85 "docker exec \$(docker ps -q --filter name=postgres) \
-  psql -U hydeclaw -d hydeclaw \
+  psql -U opex -d opex \
   -c \"SELECT COUNT(*) FROM memory_chunks WHERE source LIKE 'auto:session:%';\""
 ```
 
@@ -405,7 +405,7 @@ Expected: `count = 0` (no new entries created).
 
 ```bash
 ssh aronmav@192.168.1.85 "docker exec \$(docker ps -q --filter name=postgres) \
-  psql -U hydeclaw -d hydeclaw \
+  psql -U opex -d opex \
   -c \"SELECT source, LEFT(content, 100) FROM memory_chunks WHERE source LIKE 'rolling_summary:%';\""
 ```
 

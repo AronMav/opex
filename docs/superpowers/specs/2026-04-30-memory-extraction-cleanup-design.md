@@ -26,7 +26,7 @@ Rolling summary (`source="rolling_summary:{agent_name}"`) is the single persiste
 
 | File | Change |
 |------|--------|
-| `crates/hydeclaw-core/src/agent/knowledge_extractor.rs` | Remove individual fact persistence; improve extraction prompt; remove `tool_insights` from schema; delete dead code |
+| `crates/opex-core/src/agent/knowledge_extractor.rs` | Remove individual fact persistence; improve extraction prompt; remove `tool_insights` from schema; delete dead code |
 | DB (one-time) | `DELETE FROM memory_chunks WHERE source LIKE 'auto:session:%'` — run on deploy |
 
 ---
@@ -133,7 +133,7 @@ fn extracted_knowledge_schema_has_no_tool_insights() {
 ```bash
 # Before cleanup — count existing auto:session:* entries:
 docker exec $(docker ps -q --filter name=postgres) \
-  psql -U hydeclaw -d hydeclaw \
+  psql -U opex -d opex \
   -c "SELECT COUNT(*) FROM memory_chunks WHERE source LIKE 'auto:session:%';"
 
 # After deploy + cleanup SQL — must return 0

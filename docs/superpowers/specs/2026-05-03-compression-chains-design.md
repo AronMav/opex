@@ -8,14 +8,14 @@
 
 ## Context
 
-HydeClaw already has:
+OPEX already has:
 - **In-place compression** (`agent/compressor.rs` + `history.rs::compress_messages`) — fires in `execute.rs` before each LLM call when `compressor.should_compress()` returns true
 - **Compaction state** (`sessions.compaction_state JSONB`, migration 040) — stores `previous_summary`, `ineffective_count`, `compression_count`
 - **Message-level branching** (`parent_message_id`, `branch_from_message_id`, migration 012) — not the same as session-level chains
 
 Missing: `parent_session_id`, `end_reason` on sessions, and the split logic itself.
 
-Note: Hermes does NOT actually split sessions on compression — `trajectory_compressor.py` is an offline tool. This feature is a HydeClaw-specific improvement inspired by the Hermes P1.1 concept.
+Note: Hermes does NOT actually split sessions on compression — `trajectory_compressor.py` is an offline tool. This feature is a OPEX-specific improvement inspired by the Hermes P1.1 concept.
 
 ---
 
@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent_id
 
 ### 1. `CompressorState` — add `pending_split` field
 
-**File:** `crates/hydeclaw-core/src/agent/compressor.rs`
+**File:** `crates/opex-core/src/agent/compressor.rs`
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,7 +88,7 @@ In `Compressor`: add `pub pending_split: bool` field (default `false`), set to `
 
 ### 2. `db/sessions.rs` — two new helpers
 
-**File:** `crates/hydeclaw-db/src/sessions.rs`
+**File:** `crates/opex-db/src/sessions.rs`
 
 ```rust
 /// Create a child session in a compression chain.
@@ -114,7 +114,7 @@ pub async fn set_session_end_reason(
 
 ### 3. `history.rs` — `build_compressed_seed`
 
-**File:** `crates/hydeclaw-core/src/agent/history.rs`
+**File:** `crates/opex-core/src/agent/history.rs`
 
 Pure function — no I/O, no LLM.
 
@@ -135,7 +135,7 @@ The summary message role is `MessageRole::Assistant` — since the only head mes
 
 ### 4. `pipeline/bootstrap.rs` — `maybe_split_session`
 
-**File:** `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs`
+**File:** `crates/opex-core/src/agent/pipeline/bootstrap.rs`
 
 ```rust
 /// If compaction_state has pending_split=true, create child session and return its ID.
@@ -174,7 +174,7 @@ Called in `bootstrap::handle()` after compaction_state is loaded, before message
 
 ### 6. New API endpoint: `GET /api/sessions/:id/chain`
 
-**File:** `crates/hydeclaw-core/src/gateway/handlers/sessions.rs`
+**File:** `crates/opex-core/src/gateway/handlers/sessions.rs`
 
 ```rust
 pub(crate) async fn api_session_chain(
@@ -368,13 +368,13 @@ Collapsible banner shown at the top of the chat area when `session.parent_sessio
 | File | Action |
 |---|---|
 | `migrations/041_sessions_compression_chains.sql` | CREATE — two new columns + index |
-| `crates/hydeclaw-core/src/agent/compressor.rs` | MODIFY — add `pending_split` to `CompressorState` + `Compressor` |
-| `crates/hydeclaw-db/src/sessions.rs` | MODIFY — add `create_chain_session`, `set_session_end_reason` |
-| `crates/hydeclaw-core/src/agent/history.rs` | MODIFY — add `build_compressed_seed` |
-| `crates/hydeclaw-core/src/agent/pipeline/bootstrap.rs` | MODIFY — add `maybe_split_session`, call it after compaction_state load |
-| `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` | MODIFY — add `api_session_chain` + route |
-| `crates/hydeclaw-core/src/gateway/handlers/sessions.rs` | MODIFY — add `parent_session_id`, `end_reason` to session list DTO |
-| `crates/hydeclaw-core/tests/test_compression_chains.rs` | CREATE — integration tests |
+| `crates/opex-core/src/agent/compressor.rs` | MODIFY — add `pending_split` to `CompressorState` + `Compressor` |
+| `crates/opex-db/src/sessions.rs` | MODIFY — add `create_chain_session`, `set_session_end_reason` |
+| `crates/opex-core/src/agent/history.rs` | MODIFY — add `build_compressed_seed` |
+| `crates/opex-core/src/agent/pipeline/bootstrap.rs` | MODIFY — add `maybe_split_session`, call it after compaction_state load |
+| `crates/opex-core/src/gateway/handlers/sessions.rs` | MODIFY — add `api_session_chain` + route |
+| `crates/opex-core/src/gateway/handlers/sessions.rs` | MODIFY — add `parent_session_id`, `end_reason` to session list DTO |
+| `crates/opex-core/tests/test_compression_chains.rs` | CREATE — integration tests |
 | `ui/src/types/api.ts` | MODIFY — extend `SessionRow`, add `SessionChainEntry`, `SessionChainResponse` |
 | `ui/src/types/api.generated.ts` | MODIFY — add `parent_session_id`, `end_reason` if `SessionRow` is ts-rs generated |
 | `ui/src/lib/queries.ts` | MODIFY — add `qk.sessionChain`, `useSessionChain` |

@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- rustls-only; `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings` clean.
-- Rust app-tree tests run under `cargo test --bin hydeclaw-core`. DB tests use the test postgres + `#[sqlx::test(migrations = "../../migrations")]`.
+- rustls-only; `cargo clippy --bin opex-core --all-targets -- -D warnings` clean.
+- Rust app-tree tests run under `cargo test --bin opex-core`. DB tests use the test postgres + `#[sqlx::test(migrations = "../../migrations")]`.
 - Migrations runtime-loaded; `make remote-deploy` syncs them.
 - Conventional commits, no `Co-Authored-By`. No `git push` unless asked.
 - **Integration tasks (4–8) note:** where a step says "mirror `X` (file:line)", read that code at implementation time and reconcile exact field/fn names; the surrounding contract (signatures in the Interfaces block) is fixed.
@@ -22,8 +22,8 @@
 
 **Files:**
 - Create: `migrations/056_session_goals.sql`
-- Create: `crates/hydeclaw-core/src/db/session_goals.rs`
-- Modify: `crates/hydeclaw-core/src/db/mod.rs` (add `pub mod session_goals;` in the "Remaining modules" group)
+- Create: `crates/opex-core/src/db/session_goals.rs`
+- Modify: `crates/opex-core/src/db/mod.rs` (add `pub mod session_goals;` in the "Remaining modules" group)
 
 **Interfaces:**
 - Produces: `pub struct GoalRow { pub session_id: Uuid, pub goal_text: String, pub status: String, pub turn_count: i32, pub max_turns: i32, pub subgoals: Vec<String>, pub last_verdict: Option<String>, pub consecutive_judge_failures: i32 }` with `impl GoalRow { pub fn is_running(&self) -> bool; pub fn budget_left(&self) -> bool }`.
@@ -131,7 +131,7 @@ mod tests {
 
 - [ ] **Step 4: Run to verify it fails**
 
-Run: `cargo test --bin hydeclaw-core session_goals::tests::is_running_and_budget`
+Run: `cargo test --bin opex-core session_goals::tests::is_running_and_budget`
 Expected: FAIL — `get`/`upsert`/etc. not found (the file won't compile).
 
 - [ ] **Step 5: Implement the storage functions** (insert above `#[cfg(test)]`):
@@ -195,13 +195,13 @@ pub async fn clear(db: &PgPool, session_id: Uuid) -> Result<()> {
 
 - [ ] **Step 6: Run pure + DB tests**
 
-Run: `cargo test --bin hydeclaw-core session_goals::tests::is_running_and_budget` (local), then with the test postgres `DATABASE_URL=… cargo test --bin hydeclaw-core session_goals`.
+Run: `cargo test --bin opex-core session_goals::tests::is_running_and_budget` (local), then with the test postgres `DATABASE_URL=… cargo test --bin opex-core session_goals`.
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add migrations/056_session_goals.sql crates/hydeclaw-core/src/db/session_goals.rs crates/hydeclaw-core/src/db/mod.rs
+git add migrations/056_session_goals.sql crates/opex-core/src/db/session_goals.rs crates/opex-core/src/db/mod.rs
 git commit -m "feat(goal): session_goals table + storage (GoalRow, upsert/get/bump/verdict/clear)"
 ```
 
@@ -210,8 +210,8 @@ git commit -m "feat(goal): session_goals table + storage (GoalRow, upsert/get/bu
 ### Task 2: `agent/goal/mod.rs` — pure logic (parsers, judge, prompt, decision)
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/goal/mod.rs`
-- Modify: `crates/hydeclaw-core/src/agent/mod.rs` (add `pub mod goal;`)
+- Create: `crates/opex-core/src/agent/goal/mod.rs`
+- Modify: `crates/opex-core/src/agent/mod.rs` (add `pub mod goal;`)
 
 **Interfaces:**
 - Consumes: `db::session_goals::GoalRow`.
@@ -284,7 +284,7 @@ mod tests {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `cargo test --bin hydeclaw-core goal::tests`
+Run: `cargo test --bin opex-core goal::tests`
 Expected: FAIL — items not found.
 
 - [ ] **Step 3: Implement the pure logic** (above `#[cfg(test)]`):
@@ -374,17 +374,17 @@ pub fn next_action(row: &GoalRow, verdict: Verdict) -> DriverAction {
 }
 ```
 
-- [ ] **Step 4: Add the module** — in `crates/hydeclaw-core/src/agent/mod.rs` add `pub mod goal;`.
+- [ ] **Step 4: Add the module** — in `crates/opex-core/src/agent/mod.rs` add `pub mod goal;`.
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `cargo test --bin hydeclaw-core goal::tests`
+Run: `cargo test --bin opex-core goal::tests`
 Expected: PASS (5 tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/goal/mod.rs crates/hydeclaw-core/src/agent/mod.rs
+git add crates/opex-core/src/agent/goal/mod.rs crates/opex-core/src/agent/mod.rs
 git commit -m "feat(goal): pure logic — verdict/command parsers, continuation prompt, driver decision"
 ```
 
@@ -393,16 +393,16 @@ git commit -m "feat(goal): pure logic — verdict/command parsers, continuation 
 ### Task 3: `GoalDriverPool` + `AgentConfig` wiring
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/goal/pool.rs`
-- Modify: `crates/hydeclaw-core/src/agent/goal/mod.rs` (`pub mod pool;`)
-- Modify: `crates/hydeclaw-core/src/agent/agent_config.rs` (add fields — mirror `session_pools` at line 47)
+- Create: `crates/opex-core/src/agent/goal/pool.rs`
+- Modify: `crates/opex-core/src/agent/goal/mod.rs` (`pub mod pool;`)
+- Modify: `crates/opex-core/src/agent/agent_config.rs` (add fields — mirror `session_pools` at line 47)
 
 **Interfaces:**
 - Produces: `type GoalDriverPool = Arc<DashMap<Uuid, GoalDriverHandle>>`; `struct GoalDriverHandle { cancel: CancellationToken, join: JoinHandle<()>, target: Option<(String, String)> }` (target = (channel, chat_id)); methods on a thin wrapper or free fns: `is_running(pool, session_id) -> bool`, `stop(pool, session_id)`.
 - Produces: `type GoalLocks = Arc<DashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>`; `fn goal_lock(locks, session_id) -> Arc<Mutex<()>>`.
 - Produces on `AgentConfig`: `pub goal_pool: Option<GoalDriverPool>`, `pub goal_locks: Option<GoalLocks>`.
 
-- [ ] **Step 1: Implement `pool.rs`** (no failing-test ceremony — it is glue verified by compile + later integration). Create `crates/hydeclaw-core/src/agent/goal/pool.rs`:
+- [ ] **Step 1: Implement `pool.rs`** (no failing-test ceremony — it is glue verified by compile + later integration). Create `crates/opex-core/src/agent/goal/pool.rs`:
 
 ```rust
 use std::sync::Arc;
@@ -452,17 +452,17 @@ pub fn goal_lock(locks: &GoalLocks, session_id: Uuid) -> Arc<tokio::sync::Mutex<
     pub goal_locks: Option<crate::agent::goal::pool::GoalLocks>,
 ```
 
-Then find every `AgentConfig { … }` constructor (grep `AgentConfig {`) and add `goal_pool: Some(crate::agent::goal::pool::new_pool()), goal_locks: Some(crate::agent::goal::pool::new_locks()),` (or `None` in test constructors that don't need it). `dashmap` is already a dependency (used by `session_tool_state`); confirm with `grep dashmap crates/hydeclaw-core/Cargo.toml` and add it if missing.
+Then find every `AgentConfig { … }` constructor (grep `AgentConfig {`) and add `goal_pool: Some(crate::agent::goal::pool::new_pool()), goal_locks: Some(crate::agent::goal::pool::new_locks()),` (or `None` in test constructors that don't need it). `dashmap` is already a dependency (used by `session_tool_state`); confirm with `grep dashmap crates/opex-core/Cargo.toml` and add it if missing.
 
 - [ ] **Step 4: Verify compile**
 
-Run: `cargo check --bin hydeclaw-core`
+Run: `cargo check --bin opex-core`
 Expected: clean (every `AgentConfig` literal updated).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/goal/pool.rs crates/hydeclaw-core/src/agent/goal/mod.rs crates/hydeclaw-core/src/agent/agent_config.rs
+git add crates/opex-core/src/agent/goal/pool.rs crates/opex-core/src/agent/goal/mod.rs crates/opex-core/src/agent/agent_config.rs
 git commit -m "feat(goal): GoalDriverPool + per-session goal locks on AgentConfig"
 ```
 
@@ -471,7 +471,7 @@ git commit -m "feat(goal): GoalDriverPool + per-session goal locks on AgentConfi
 ### Task 4: `run_goal_turn` engine entry
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/engine/run.rs` (add `run_goal_turn`, mirror `handle_isolated_via_pipeline` at lines 491–472)
+- Modify: `crates/opex-core/src/agent/engine/run.rs` (add `run_goal_turn`, mirror `handle_isolated_via_pipeline` at lines 491–472)
 
 **Interfaces:**
 - Produces: `pub async fn run_goal_turn(&self, session_id: Uuid, prompt: &str) -> Result<String>` — runs one turn that CONTINUES `session_id` (history loaded) and returns the final assistant text.
@@ -485,13 +485,13 @@ The body is structurally identical to `handle_isolated_via_pipeline` (lines 491�
 
 - [ ] **Step 2: Verify compile**
 
-Run: `cargo check --bin hydeclaw-core`
+Run: `cargo check --bin opex-core`
 Expected: clean.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/engine/run.rs
+git add crates/opex-core/src/agent/engine/run.rs
 git commit -m "feat(goal): run_goal_turn — continue an existing session and return final text"
 ```
 
@@ -500,8 +500,8 @@ git commit -m "feat(goal): run_goal_turn — continue an existing session and re
 ### Task 5: Goal driver loop (`agent/goal/driver.rs`)
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/goal/driver.rs`
-- Modify: `crates/hydeclaw-core/src/agent/goal/mod.rs` (`pub mod driver;`) + add `spawn_goal_driver` to `pool.rs` or `driver.rs`
+- Create: `crates/opex-core/src/agent/goal/driver.rs`
+- Modify: `crates/opex-core/src/agent/goal/mod.rs` (`pub mod driver;`) + add `spawn_goal_driver` to `pool.rs` or `driver.rs`
 
 **Interfaces:**
 - Consumes: `run_goal_turn`, `db::session_goals::*`, `goal::{continuation_prompt, parse_judge_verdict, next_action, Verdict, DriverAction}`, `goal_lock`, the agent's `compaction_provider`/main provider, `engine.state().channel_router`.
@@ -570,13 +570,13 @@ async fn run_goal_driver(engine: Arc<AgentEngine>, session_id: Uuid, target: Goa
 
 - [ ] **Step 5: Verify compile + the goal pure tests still pass**
 
-Run: `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings`
+Run: `cargo clippy --bin opex-core --all-targets -- -D warnings`
 Expected: clean.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/goal/driver.rs crates/hydeclaw-core/src/agent/goal/mod.rs crates/hydeclaw-core/src/agent/goal/pool.rs
+git add crates/opex-core/src/agent/goal/driver.rs crates/opex-core/src/agent/goal/mod.rs crates/opex-core/src/agent/goal/pool.rs
 git commit -m "feat(goal): background goal-driver loop (run_goal_turn -> deliver -> judge -> decide)"
 ```
 
@@ -585,8 +585,8 @@ git commit -m "feat(goal): background goal-driver loop (run_goal_turn -> deliver
 ### Task 6: `/goal` + `/subgoal` slash commands
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/commands.rs` (add `"/goal"` + `"/subgoal"` arms)
-- Modify: `crates/hydeclaw-core/src/agent/pipeline/commands.rs` `CommandContext` struct (add `agent_map` + `goal_pool` + `goal_locks` borrows) and its construction site `engine/context_builder.rs:154`
+- Modify: `crates/opex-core/src/agent/pipeline/commands.rs` (add `"/goal"` + `"/subgoal"` arms)
+- Modify: `crates/opex-core/src/agent/pipeline/commands.rs` `CommandContext` struct (add `agent_map` + `goal_pool` + `goal_locks` borrows) and its construction site `engine/context_builder.rs:154`
 
 **Interfaces:**
 - Consumes: `goal::{parse_goal_command, parse_subgoal_command, GoalCmd, SubgoalCmd}`, `goal::driver::spawn_goal_driver`, `goal::pool::{is_running, stop}`, `db::session_goals::*`, `cfg.agent_map`.
@@ -610,13 +610,13 @@ git commit -m "feat(goal): background goal-driver loop (run_goal_turn -> deliver
 
 - [ ] **Step 5: Verify compile + tests**
 
-Run: `cargo test --bin hydeclaw-core goal_and_subgoal_parsers` then `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings`.
+Run: `cargo test --bin opex-core goal_and_subgoal_parsers` then `cargo clippy --bin opex-core --all-targets -- -D warnings`.
 Expected: clean + pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/pipeline/commands.rs crates/hydeclaw-core/src/agent/engine/context_builder.rs
+git add crates/opex-core/src/agent/pipeline/commands.rs crates/opex-core/src/agent/engine/context_builder.rs
 git commit -m "feat(goal): /goal + /subgoal slash commands (start/stop driver via agent_map + goal_pool)"
 ```
 
@@ -625,7 +625,7 @@ git commit -m "feat(goal): /goal + /subgoal slash commands (start/stop driver vi
 ### Task 7: Preempt — acquire the goal lock on user turns
 
 **Files:**
-- Modify: `crates/hydeclaw-core/src/agent/engine/run.rs` (`handle_with_status`, `handle_sse_inner`)
+- Modify: `crates/opex-core/src/agent/engine/run.rs` (`handle_with_status`, `handle_sse_inner`)
 
 **Interfaces:**
 - Consumes: `goal::pool::{is_running, goal_lock}`, `cfg.goal_pool`, `cfg.goal_locks`.
@@ -646,13 +646,13 @@ Place it after `session_id` resolution and before `execute` so the guard lives a
 
 - [ ] **Step 2: Verify compile**
 
-Run: `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings`
+Run: `cargo clippy --bin opex-core --all-targets -- -D warnings`
 Expected: clean.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/engine/run.rs
+git add crates/opex-core/src/agent/engine/run.rs
 git commit -m "feat(goal): serialize user turns against the goal driver via per-session lock"
 ```
 
@@ -684,8 +684,8 @@ git commit -m "feat(ui/chat): append autonomous goal turns on goal-turn event"
 
 ## Final verification & deploy
 
-- [ ] `cargo clippy --bin hydeclaw-core --all-targets -- -D warnings` — clean.
-- [ ] Test postgres up; `DATABASE_URL=… cargo test --bin hydeclaw-core` — full suite incl. `session_goals` + `goal` green.
+- [ ] `cargo clippy --bin opex-core --all-targets -- -D warnings` — clean.
+- [ ] Test postgres up; `DATABASE_URL=… cargo test --bin opex-core` — full suite incl. `session_goals` + `goal` green.
 - [ ] `cd ui && npm test && npm run build`.
 - [ ] Deploy: `make remote-deploy` (syncs migration 056) + UI deploy + `make doctor`.
 - [ ] Server smoke (Telegram): `/goal <small task>` → agent runs several turns, each delivered to chat, stops at done or budget; `/goal status|pause|resume|clear`; `/subgoal add/list/remove`; send a normal message mid-loop and confirm it is handled and the loop continues after.

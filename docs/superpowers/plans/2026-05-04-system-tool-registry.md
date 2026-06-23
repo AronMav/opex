@@ -14,29 +14,29 @@
 
 | Action | Path | Responsibility |
 | --- | --- | --- |
-| Create | `crates/hydeclaw-core/src/agent/tool_registry.rs` | `ToolDeps`, `SystemToolHandler` trait, `SystemToolRegistry` |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/mod.rs` | Re-exports + `SystemToolRegistry::build()` |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/workspace.rs` | 6 workspace handlers |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/memory.rs` | `MemoryToolHandler` (was `dispatch_memory_tool`) |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/skills.rs` | `SkillHandler` + `SkillUseHandler` |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/agent_tool.rs` | `AgentToolHandler` + `AgentsListHandler` |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/tools_mgmt.rs` | 6 tool management handlers |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/web.rs` | `WebFetchHandler` |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/code.rs` | `CodeExecHandler` |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/comms.rs` | `MessageHandler`, `CronHandler`, `GitToolHandler`, `CanvasHandler`, `RichCardHandler`, `BrowserActionHandler`, `ProcessHandler` |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/secrets.rs` | `SecretSetHandler` |
-| Create | `crates/hydeclaw-core/src/agent/tool_handlers/session.rs` | `SessionHandler` (was `dispatch_session_tool`) |
-| Modify | `crates/hydeclaw-core/src/agent/mod.rs` | Add `pub mod tool_registry; pub mod tool_handlers;` |
-| Modify | `crates/hydeclaw-core/src/agent/engine_dispatch.rs` | Replace match with registry dispatch; delete 5 `dispatch_*` methods |
-| Modify | `crates/hydeclaw-core/src/agent/engine/mod.rs` | Add `tool_registry` field to `AgentEngine`; build in `new()` |
+| Create | `crates/opex-core/src/agent/tool_registry.rs` | `ToolDeps`, `SystemToolHandler` trait, `SystemToolRegistry` |
+| Create | `crates/opex-core/src/agent/tool_handlers/mod.rs` | Re-exports + `SystemToolRegistry::build()` |
+| Create | `crates/opex-core/src/agent/tool_handlers/workspace.rs` | 6 workspace handlers |
+| Create | `crates/opex-core/src/agent/tool_handlers/memory.rs` | `MemoryToolHandler` (was `dispatch_memory_tool`) |
+| Create | `crates/opex-core/src/agent/tool_handlers/skills.rs` | `SkillHandler` + `SkillUseHandler` |
+| Create | `crates/opex-core/src/agent/tool_handlers/agent_tool.rs` | `AgentToolHandler` + `AgentsListHandler` |
+| Create | `crates/opex-core/src/agent/tool_handlers/tools_mgmt.rs` | 6 tool management handlers |
+| Create | `crates/opex-core/src/agent/tool_handlers/web.rs` | `WebFetchHandler` |
+| Create | `crates/opex-core/src/agent/tool_handlers/code.rs` | `CodeExecHandler` |
+| Create | `crates/opex-core/src/agent/tool_handlers/comms.rs` | `MessageHandler`, `CronHandler`, `GitToolHandler`, `CanvasHandler`, `RichCardHandler`, `BrowserActionHandler`, `ProcessHandler` |
+| Create | `crates/opex-core/src/agent/tool_handlers/secrets.rs` | `SecretSetHandler` |
+| Create | `crates/opex-core/src/agent/tool_handlers/session.rs` | `SessionHandler` (was `dispatch_session_tool`) |
+| Modify | `crates/opex-core/src/agent/mod.rs` | Add `pub mod tool_registry; pub mod tool_handlers;` |
+| Modify | `crates/opex-core/src/agent/engine_dispatch.rs` | Replace match with registry dispatch; delete 5 `dispatch_*` methods |
+| Modify | `crates/opex-core/src/agent/engine/mod.rs` | Add `tool_registry` field to `AgentEngine`; build in `new()` |
 
 ---
 
 ## Task 1 — `tool_registry.rs`: ToolDeps, trait, registry skeleton
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/tool_registry.rs`
-- Modify: `crates/hydeclaw-core/src/agent/mod.rs`
+- Create: `crates/opex-core/src/agent/tool_registry.rs`
+- Modify: `crates/opex-core/src/agent/mod.rs`
 
 ### Context
 
@@ -54,7 +54,7 @@ Therefore `ToolDeps` must include `cfg: &'a AgentConfig`, `state: &'a AgentState
 
 - [ ] **Step 1: Add module declarations to mod.rs**
 
-In `crates/hydeclaw-core/src/agent/mod.rs`, add:
+In `crates/opex-core/src/agent/mod.rs`, add:
 
 ```rust
 pub mod tool_registry;
@@ -199,8 +199,8 @@ impl SystemToolRegistry {
 - [ ] **Step 3: Compile check**
 
 ```powershell
-cd d:\GIT\bogdan\hydeclaw
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 10
+cd d:\GIT\bogdan\opex
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 10
 ```
 
 Expected: error about missing `tool_handlers` module only. `tool_registry.rs` itself compiles.
@@ -208,8 +208,8 @@ Expected: error about missing `tool_handlers` module only. `tool_registry.rs` it
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_registry.rs \
-        crates/hydeclaw-core/src/agent/mod.rs
+git add crates/opex-core/src/agent/tool_registry.rs \
+        crates/opex-core/src/agent/mod.rs
 git commit -m "feat(dispatch): add ToolDeps, SystemToolHandler trait, SystemToolRegistry skeleton"
 ```
 
@@ -218,7 +218,7 @@ git commit -m "feat(dispatch): add ToolDeps, SystemToolHandler trait, SystemTool
 ## Task 2 — Workspace handlers
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/workspace.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/workspace.rs`
 
 ### Context
 
@@ -257,14 +257,14 @@ mod tests {
 - [ ] **Step 2: Run to verify it fails (handlers not yet defined)**
 
 ```powershell
-cargo test -p hydeclaw-core tool_handlers::workspace -- --nocapture 2>&1 | Select-String "error\[" | Select-Object -First 5
+cargo test -p opex-core tool_handlers::workspace -- --nocapture 2>&1 | Select-String "error\[" | Select-Object -First 5
 ```
 
 Expected: compile error — handler structs not defined.
 
 - [ ] **Step 3: Implement all 6 workspace handlers**
 
-Create `crates/hydeclaw-core/src/agent/tool_handlers/workspace.rs`:
+Create `crates/opex-core/src/agent/tool_handlers/workspace.rs`:
 
 ```rust
 use async_trait::async_trait;
@@ -346,7 +346,7 @@ mod tests {
 - [ ] **Step 4: Run test**
 
 ```powershell
-cargo test -p hydeclaw-core all_workspace_handlers -- --nocapture
+cargo test -p opex-core all_workspace_handlers -- --nocapture
 ```
 
 Expected: PASS
@@ -354,7 +354,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/workspace.rs
+git add crates/opex-core/src/agent/tool_handlers/workspace.rs
 git commit -m "feat(dispatch): add workspace tool handlers (write, read, list, edit, delete, rename)"
 ```
 
@@ -363,11 +363,11 @@ git commit -m "feat(dispatch): add workspace tool handlers (write, read, list, e
 ## Task 3 — Simple remaining handlers: web, code, secrets, tools_mgmt, agent_tool
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/web.rs`
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/code.rs`
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/secrets.rs`
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/tools_mgmt.rs`
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/agent_tool.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/web.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/code.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/secrets.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/tools_mgmt.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/agent_tool.rs`
 
 ### Context (from engine_dispatch.rs)
 
@@ -662,7 +662,7 @@ mod tests {
 - [ ] **Step 7: Compile check — fix any type mismatches**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 15
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 15
 ```
 
 Common issue: verify `ph::handle_tool_test` param order matches the implementation above. `AgentToolTimeouts` is `Copy` — no clone needed.
@@ -670,12 +670,12 @@ Common issue: verify `ph::handle_tool_test` param order matches the implementati
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/web.rs \
-        crates/hydeclaw-core/src/agent/tool_handlers/code.rs \
-        crates/hydeclaw-core/src/agent/tool_handlers/secrets.rs \
-        crates/hydeclaw-core/src/agent/tool_handlers/tools_mgmt.rs \
-        crates/hydeclaw-core/src/agent/tool_handlers/agent_tool.rs \
-        crates/hydeclaw-core/src/agent/tool_registry.rs
+git add crates/opex-core/src/agent/tool_handlers/web.rs \
+        crates/opex-core/src/agent/tool_handlers/code.rs \
+        crates/opex-core/src/agent/tool_handlers/secrets.rs \
+        crates/opex-core/src/agent/tool_handlers/tools_mgmt.rs \
+        crates/opex-core/src/agent/tool_handlers/agent_tool.rs \
+        crates/opex-core/src/agent/tool_registry.rs
 git commit -m "feat(dispatch): add web, code, secrets, tools_mgmt, agent_tool handlers; add agent_tool_timeouts to ToolDeps"
 ```
 
@@ -684,7 +684,7 @@ git commit -m "feat(dispatch): add web, code, secrets, tools_mgmt, agent_tool ha
 ## Task 4 — Memory handler (migrate `dispatch_memory_tool`)
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/memory.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/memory.rs`
 
 ### Context
 
@@ -722,7 +722,7 @@ mod tests {
 - [ ] **Step 2: Run test to verify failure**
 
 ```powershell
-cargo test -p hydeclaw-core tool_handlers::memory -- --nocapture 2>&1 | Select-String "error\[" | Select-Object -First 5
+cargo test -p opex-core tool_handlers::memory -- --nocapture 2>&1 | Select-String "error\[" | Select-Object -First 5
 ```
 
 Expected: compile error.
@@ -782,7 +782,7 @@ impl SystemToolHandler for MemoryToolHandler {
 - [ ] **Step 4: Run tests**
 
 ```powershell
-cargo test -p hydeclaw-core tool_handlers::memory -- --nocapture
+cargo test -p opex-core tool_handlers::memory -- --nocapture
 ```
 
 Expected: both tests pass.
@@ -790,7 +790,7 @@ Expected: both tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/memory.rs
+git add crates/opex-core/src/agent/tool_handlers/memory.rs
 git commit -m "feat(dispatch): add MemoryToolHandler (migrated from dispatch_memory_tool)"
 ```
 
@@ -799,7 +799,7 @@ git commit -m "feat(dispatch): add MemoryToolHandler (migrated from dispatch_mem
 ## Task 5 — Comms handlers: message, cron, git, canvas, rich_card, browser_action, process
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/comms.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/comms.rs`
 
 ### Context
 
@@ -934,7 +934,7 @@ Copy `dispatch_process_tool` body (lines 483–492) verbatim into `ProcessHandle
 - [ ] **Step 6: Compile check**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 10
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 10
 ```
 
 Verify `CommandContext` field names match those in `crate::agent::pipeline` (check `pipeline/mod.rs`).
@@ -942,7 +942,7 @@ Verify `CommandContext` field names match those in `crate::agent::pipeline` (che
 - [ ] **Step 7: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/comms.rs
+git add crates/opex-core/src/agent/tool_handlers/comms.rs
 git commit -m "feat(dispatch): add comms handlers (message, cron, git, canvas, rich_card, browser, process)"
 ```
 
@@ -951,7 +951,7 @@ git commit -m "feat(dispatch): add comms handlers (message, cron, git, canvas, r
 ## Task 6 — Skills handlers
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/skills.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/skills.rs`
 
 ### Context
 
@@ -1069,7 +1069,7 @@ impl SystemToolHandler for SkillUseHandler {
 - [ ] **Step 4: Run tests**
 
 ```powershell
-cargo test -p hydeclaw-core tool_handlers::skills -- --nocapture
+cargo test -p opex-core tool_handlers::skills -- --nocapture
 ```
 
 Expected: both tests pass.
@@ -1077,7 +1077,7 @@ Expected: both tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/skills.rs
+git add crates/opex-core/src/agent/tool_handlers/skills.rs
 git commit -m "feat(dispatch): add SkillHandler and SkillUseHandler"
 ```
 
@@ -1086,7 +1086,7 @@ git commit -m "feat(dispatch): add SkillHandler and SkillUseHandler"
 ## Task 7 — Session handler
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/session.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/session.rs`
 
 ### Context
 
@@ -1155,14 +1155,14 @@ impl SystemToolHandler for SessionHandler {
 - [ ] **Step 3: Compile + test**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 10
-cargo test -p hydeclaw-core tool_handlers::session -- --nocapture
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 10
+cargo test -p opex-core tool_handlers::session -- --nocapture
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/session.rs
+git add crates/opex-core/src/agent/tool_handlers/session.rs
 git commit -m "feat(dispatch): add SessionHandler (migrated from dispatch_session_tool)"
 ```
 
@@ -1171,9 +1171,9 @@ git commit -m "feat(dispatch): add SessionHandler (migrated from dispatch_sessio
 ## Task 8 — Wire up registry + replace dispatch match
 
 **Files:**
-- Create: `crates/hydeclaw-core/src/agent/tool_handlers/mod.rs`
-- Modify: `crates/hydeclaw-core/src/agent/engine/mod.rs`
-- Modify: `crates/hydeclaw-core/src/agent/engine_dispatch.rs`
+- Create: `crates/opex-core/src/agent/tool_handlers/mod.rs`
+- Modify: `crates/opex-core/src/agent/engine/mod.rs`
+- Modify: `crates/opex-core/src/agent/engine_dispatch.rs`
 
 - [ ] **Step 1: Create `tool_handlers/mod.rs`**
 
@@ -1371,7 +1371,7 @@ Also remove the comment `// ── Dispatch helpers for tools with sub-action ro
 - [ ] **Step 5: Full compile**
 
 ```powershell
-cargo check --package hydeclaw-core 2>&1 | Select-String "^error" | Select-Object -First 20
+cargo check --package opex-core 2>&1 | Select-String "^error" | Select-Object -First 20
 ```
 
 Expected: no errors.
@@ -1379,9 +1379,9 @@ Expected: no errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/hydeclaw-core/src/agent/tool_handlers/mod.rs \
-        crates/hydeclaw-core/src/agent/engine/mod.rs \
-        crates/hydeclaw-core/src/agent/engine_dispatch.rs
+git add crates/opex-core/src/agent/tool_handlers/mod.rs \
+        crates/opex-core/src/agent/engine/mod.rs \
+        crates/opex-core/src/agent/engine_dispatch.rs
 git commit -m "refactor(dispatch): replace 28-arm match with SystemToolRegistry; delete dispatch_* methods"
 ```
 
@@ -1392,7 +1392,7 @@ git commit -m "refactor(dispatch): replace 28-arm match with SystemToolRegistry;
 - [ ] **Step 1: Full cargo check all targets**
 
 ```powershell
-cd d:\GIT\bogdan\hydeclaw
+cd d:\GIT\bogdan\opex
 cargo check --all-targets 2>&1 | Select-String "^error" | Select-Object -First 10
 ```
 
@@ -1401,7 +1401,7 @@ Expected: no errors.
 - [ ] **Step 2: Run test suite**
 
 ```powershell
-cargo test -p hydeclaw-core 2>&1 | Select-String "FAILED|test result" | Select-Object -First 10
+cargo test -p opex-core 2>&1 | Select-String "FAILED|test result" | Select-Object -First 10
 ```
 
 Expected: same pass/fail count as before the refactor. Pre-existing DB-integration failures (7 tests, `DATABASE_URL` missing) are expected.
@@ -1409,7 +1409,7 @@ Expected: same pass/fail count as before the refactor. Pre-existing DB-integrati
 - [ ] **Step 3: Verify 28 registrations**
 
 ```powershell
-(Select-String -Path "crates/hydeclaw-core/src/agent/tool_handlers/mod.rs" -Pattern "r\.register").Count
+(Select-String -Path "crates/opex-core/src/agent/tool_handlers/mod.rs" -Pattern "r\.register").Count
 ```
 
 Expected: `28`
@@ -1417,7 +1417,7 @@ Expected: `28`
 - [ ] **Step 4: Verify engine_dispatch.rs shrunk**
 
 ```powershell
-(Get-Content crates/hydeclaw-core/src/agent/engine_dispatch.rs).Count
+(Get-Content crates/opex-core/src/agent/engine_dispatch.rs).Count
 ```
 
 Expected: under 250 (was 622).
@@ -1425,7 +1425,7 @@ Expected: under 250 (was 622).
 - [ ] **Step 5: Verify no dead method references**
 
 ```powershell
-Select-String -Path "crates/hydeclaw-core/src/agent/engine_dispatch.rs" `
+Select-String -Path "crates/opex-core/src/agent/engine_dispatch.rs" `
     -Pattern "dispatch_memory_tool|dispatch_git_tool|dispatch_skill_tool|dispatch_session_tool|dispatch_process_tool"
 ```
 
