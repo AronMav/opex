@@ -142,13 +142,21 @@ applied but has been modified» и **отказывается стартоват
    `layout`, `login`/`setup`, scaffold `SOUL.md`/`MEMORY.md`, скиллы, тексты
    доков). mDNS `hydeclaw.local` → `opex.local`.
 6. **Локализация:** UI default `locale: 'en'` → `'ru'`; README на русском
-   (англ. → `README.en.md`); перевод `docs/*.md` на русский. localStorage-префикс
+   (англ. → `README.en.md`); перевод **верхнеуровневых** доков на русский
+   (`docs/API.md`, `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md`,
+   `docs/DEPLOYMENT.md`, `docs/UPGRADE_NOTES.md`, `SECURITY.md`, `CONTRIBUTING.md`).
+   Исторические `docs/architecture/*` и `docs/releases/*` **не переводим** (это
+   история) — в них меняется только имя `hydeclaw`→`opex`. localStorage-префикс
    `hydeclaw.` → `opex.` + shim для `auth.token` и `language`.
-7. **CI/скрипты:** `.github/workflows/*` (`-p hydeclaw-core` → `-p opex-core`),
-   `Makefile`, `release.sh`/`setup.sh`/`update.sh`/`uninstall.sh`, `scripts/*`.
-   Пути и юниты на сервере остаются старыми в PR1; deploy-конфиги
-   (`.deploy.env`, `deploy/server/*.service`, `docker-compose.yml`) правит PR2
-   синхронно с миграцией.
+7. **Версия:** бамп `[workspace.package] version` `0.30.0` → `0.31.0` +
+   синхронизация в `ui/package.json`, `channels/package.json`.
+8. **CI/скрипты:** `.github/workflows/*` (`-p hydeclaw-core` → `-p opex-core`),
+   `Makefile` (**только крейт-таргеты** `-p hydeclaw-*` → `-p opex-*`),
+   `release.sh`/`setup.sh`/`update.sh`/`uninstall.sh`, `scripts/*`.
+   Пути/имена юнитов на сервере остаются старыми в PR1; deploy-конфиги
+   (`.deploy.env`, `deploy/server/*.service`, `docker-compose.yml`) и
+   path/unit-строки `Makefile` правит PR2 синхронно с миграцией (т.е. `Makefile`
+   затрагивается обоими PR, но разными строками).
 
 **Граница PR1:** на сервере НЕ трогаем `~/hydeclaw`, systemd-юниты, имя БД,
 docker-образы/сеть.
