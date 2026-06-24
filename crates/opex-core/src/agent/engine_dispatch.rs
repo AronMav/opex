@@ -138,7 +138,7 @@ impl AgentEngine {
                 }
             }
 
-            // Hook: BeforeToolCall
+            // Hook: BeforeToolCall — sync phase (closures)
             let hook_event = crate::agent::hooks::HookEvent::BeforeToolCall {
                 agent: self.cfg().agent.name.clone(),
                 tool_name: name.to_string(),
@@ -148,6 +148,49 @@ impl AgentEngine {
             if let crate::agent::hooks::HookAction::Block(reason) = action {
                 return format!("Tool blocked by hook: {}", reason);
             }
+
+            // Hook: BeforeToolCall — async decision phase (webhooks).
+            // ModifyArgs is applied in-place via shadowed `arguments` binding —
+            // no recursive execute_tool_call call, so hooks cannot re-fire.
+            let decision = self.hooks().fire_decision(
+                &hook_event,
+                serde_json::json!({ "tool_input": arguments }),
+            ).await;
+            let modified_holder;
+            let arguments: &serde_json::Value = match decision {
+                crate::agent::hooks::HookDecision::Block(reason) => {
+                    self.cfg().audit_queue.send(
+                        crate::db::audit_queue::AuditEvent::HookDecision {
+                            agent_name: self.cfg().agent.name.clone(),
+                            session_id: None,
+                            event_type: "BeforeToolCall".into(),
+                            action: "Block".into(),
+                            detail: Some(reason.chars().take(512).collect()),
+                        },
+                    );
+                    return format!("Tool blocked by hook: {}", reason);
+                }
+                crate::agent::hooks::HookDecision::ModifyArgs(mut v) => {
+                    // Preserve internal _context (mirrors ApprovedWithModifiedArgs rebind).
+                    if let Some(ctx) = arguments.get("_context")
+                        && let Some(obj) = v.as_object_mut()
+                    {
+                        obj.insert("_context".to_string(), ctx.clone());
+                    }
+                    self.cfg().audit_queue.send(
+                        crate::db::audit_queue::AuditEvent::HookDecision {
+                            agent_name: self.cfg().agent.name.clone(),
+                            session_id: None,
+                            event_type: "BeforeToolCall".into(),
+                            action: "ModifyArgs".into(),
+                            detail: None,
+                        },
+                    );
+                    modified_holder = v;
+                    &modified_holder
+                }
+                _ => arguments,
+            };
 
             // 1. System tools (registry)
             let available = self.available_tool_names().await;

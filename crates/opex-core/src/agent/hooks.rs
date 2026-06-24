@@ -332,20 +332,20 @@ pub(crate) fn parse_decision(body: &str, event: &HookEvent) -> HookDecision {
     if r.decision.as_deref() == Some("block") {
         return HookDecision::Block(r.reason.unwrap_or_else(|| "blocked by hook".into()));
     }
-    if let Some(args) = r.modified_args {
-        if matches!(event, HookEvent::BeforeToolCall { .. }) && args.is_object() {
-            return HookDecision::ModifyArgs(args);
-        }
+    if let Some(args) = r.modified_args
+        && matches!(event, HookEvent::BeforeToolCall { .. }) && args.is_object()
+    {
+        return HookDecision::ModifyArgs(args);
     }
-    if let Some(res) = r.transformed_result {
-        if matches!(event, HookEvent::AfterToolResult { .. }) {
-            return HookDecision::TransformResult(res);
-        }
+    if let Some(res) = r.transformed_result
+        && matches!(event, HookEvent::AfterToolResult { .. })
+    {
+        return HookDecision::TransformResult(res);
     }
-    if let Some(ctx) = r.inject_context {
-        if matches!(event, HookEvent::BeforeMessage) {
-            return HookDecision::InjectContext(ctx);
-        }
+    if let Some(ctx) = r.inject_context
+        && matches!(event, HookEvent::BeforeMessage)
+    {
+        return HookDecision::InjectContext(ctx);
     }
     HookDecision::Continue
 }
@@ -753,5 +753,35 @@ block_tools = []
         let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "t".into() };
         let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
         assert!(matches!(d, HookDecision::Continue));
+    }
+
+    // ── Test 19 — fire_decision chains modified_args across hooks ────────────
+    // hook1 sets x=2, hook2 sees x=2 in cur_extra and sets x=3.
+    // Final decision must be ModifyArgs with x=3.
+    #[tokio::test]
+    async fn fire_decision_chains_modified_args() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/h1"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"modified_args": {"x": 2}})))
+            .mount(&server).await;
+        Mock::given(method("POST")).and(path("/h2"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"modified_args": {"x": 3}})))
+            .mount(&server).await;
+        let mut reg = HookRegistry::new();
+        reg.set_webhooks(
+            reqwest::Client::new(),
+            vec![
+                decision_hook(format!("{}/h1", server.uri()), None, FailureMode::Open),
+                decision_hook(format!("{}/h2", server.uri()), None, FailureMode::Open),
+            ],
+        );
+        let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "t".into() };
+        let d = reg.fire_decision(&ev, serde_json::json!({"tool_input": {"x": 1}})).await;
+        match d {
+            HookDecision::ModifyArgs(v) => assert_eq!(v["x"], 3, "chain must deliver final x=3"),
+            o => panic!("expected ModifyArgs, got {o:?}"),
+        }
     }
 }
