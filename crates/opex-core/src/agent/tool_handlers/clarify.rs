@@ -30,7 +30,10 @@ pub fn channel_available(ctx: &Value) -> bool {
 
 /// Port of Hermes `_flatten_choice`: extracts a string label from each element
 /// (plain strings or dicts with label/description/text/title), then caps at 4.
-pub fn normalize_choices(raw: &Value) -> Vec<String> {
+pub fn normalize_choices(raw: Option<&Value>) -> Vec<String> {
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
     let Some(arr) = raw.as_array() else {
         return Vec::new();
     };
@@ -74,13 +77,12 @@ impl SystemToolHandler for ClarifyHandler {
         }
 
         // 3. Choices normalisation + session guard
-        let choices = normalize_choices(args.get("choices").unwrap_or(&json!(null)));
+        let choices = normalize_choices(args.get("choices"));
 
         let session_id = match deps.session_id {
             Some(id) => id,
             None => {
-                return json!({"error": "clarify not available in this execution context"})
-                    .to_string();
+                return json!({"error": "clarify not available: no active session"}).to_string();
             }
         };
 
@@ -150,18 +152,23 @@ mod tests {
     fn normalize_choices_flattens_and_caps() {
         let v = json!(["a", {"label": "b"}, {"description": "c"}, "d", "e"]);
         // 5 elements but capped at 4
-        assert_eq!(normalize_choices(&v), vec!["a", "b", "c", "d"]);
+        assert_eq!(normalize_choices(Some(&v)), vec!["a", "b", "c", "d"]);
     }
 
     #[test]
     fn normalize_choices_empty_for_none() {
-        assert!(normalize_choices(&json!(null)).is_empty());
+        assert!(normalize_choices(None).is_empty());
+    }
+
+    #[test]
+    fn normalize_choices_empty_for_null_value() {
+        assert!(normalize_choices(Some(&json!(null))).is_empty());
     }
 
     #[test]
     fn normalize_choices_skips_empty_strings() {
         let v = json!(["  ", "valid", {"label": ""}, {"text": "ok"}]);
-        assert_eq!(normalize_choices(&v), vec!["valid", "ok"]);
+        assert_eq!(normalize_choices(Some(&v)), vec!["valid", "ok"]);
     }
 
     #[test]
