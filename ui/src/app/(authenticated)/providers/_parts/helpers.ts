@@ -1,4 +1,4 @@
-import type { CreateProviderInput, ProviderOptions } from "@/types/api";
+import type { CreateProviderInput, ProviderOptions, Provider } from "@/types/api";
 
 export function sortActiveRows(
   active: { capability: string; provider_name: string | null; priority: number }[],
@@ -10,16 +10,24 @@ export function sortActiveRows(
     .map((a) => ({ provider_name: a.provider_name as string, priority: a.priority }));
 }
 
-export function buildActiveListAfterToggle(
-  currentRows: { provider_name: string; priority: number }[],
-  providerName: string,
-  isCurrentlyActive: boolean,
-  draftPriority: number,
+export function renumberPriorities(
+  orderedNames: string[],
 ): { provider_name: string; priority: number }[] {
-  if (isCurrentlyActive) {
-    return currentRows.filter((r) => r.provider_name !== providerName);
-  }
-  return [...currentRows, { provider_name: providerName, priority: draftPriority }];
+  return orderedNames.map((name, index) => ({ provider_name: name, priority: index + 1 }));
+}
+
+export function splitProviders(
+  capProviders: Provider[],
+  activeRows: { provider_name: string; priority: number }[],
+): { active: Provider[]; inactive: Provider[] } {
+  const activeNames = new Set(activeRows.map((r) => r.provider_name));
+  const active = activeRows
+    .map((r) => capProviders.find((p) => p.name === r.provider_name))
+    .filter((p): p is Provider => !!p);
+  const inactive = capProviders
+    .filter((p) => !activeNames.has(p.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { active, inactive };
 }
 
 export function buildProviderBody(

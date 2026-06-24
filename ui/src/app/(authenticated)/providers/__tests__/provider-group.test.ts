@@ -3,10 +3,11 @@ import {
   ALL_CATEGORIES,
   ALL_CAPABILITIES,
   sortActiveRows,
-  buildActiveListAfterToggle,
+  renumberPriorities,
+  splitProviders,
   buildProviderBody,
 } from "../page";
-import type { CreateProviderInput } from "@/types/api";
+import type { CreateProviderInput, Provider } from "@/types/api";
 
 // ── websearch presence ────────────────────────────────────────────────────────
 
@@ -56,43 +57,50 @@ describe("sortActiveRows", () => {
   });
 });
 
-// ── buildActiveListAfterToggle ────────────────────────────────────────────────
+// ── renumberPriorities ────────────────────────────────────────────────────────
 
-describe("buildActiveListAfterToggle — active toggle sends providers array", () => {
-  const currentRows = [
-    { provider_name: "searxng", priority: 1 },
-    { provider_name: "brave", priority: 5 },
-  ];
-
-  it("removing an active provider yields a filtered providers array", () => {
-    const next = buildActiveListAfterToggle(currentRows, "brave", true, 5);
-    expect(next).toHaveLength(1);
-    expect(next[0].provider_name).toBe("searxng");
-    // Mutation payload shape: array of {provider_name, priority}
-    expect(next[0]).toHaveProperty("provider_name");
-    expect(next[0]).toHaveProperty("priority");
+describe("renumberPriorities", () => {
+  it("returns empty array for empty input", () => {
+    expect(renumberPriorities([])).toEqual([]);
   });
 
-  it("adding an inactive provider appends it with the draft priority", () => {
-    const next = buildActiveListAfterToggle(currentRows, "ollama", false, 10);
-    expect(next).toHaveLength(3);
-    const added = next.find((r) => r.provider_name === "ollama");
-    expect(added?.priority).toBe(10);
+  it("assigns 1-based priority following array order", () => {
+    expect(renumberPriorities(["a", "b", "c"])).toEqual([
+      { provider_name: "a", priority: 1 },
+      { provider_name: "b", priority: 2 },
+      { provider_name: "c", priority: 3 },
+    ]);
+  });
+});
+
+// ── splitProviders ────────────────────────────────────────────────────────────
+
+describe("splitProviders", () => {
+  const mk = (name: string): Provider =>
+    ({ id: name, name, type: "stt", provider_type: "whisper", enabled: true } as Provider);
+  const capProviders = [mk("zeta"), mk("alpha"), mk("mid")];
+
+  it("returns active in activeRows order, inactive alphabetically", () => {
+    const activeRows = [
+      { provider_name: "mid", priority: 1 },
+      { provider_name: "zeta", priority: 2 },
+    ];
+    const { active, inactive } = splitProviders(capProviders, activeRows);
+    expect(active.map((p) => p.name)).toEqual(["mid", "zeta"]);
+    expect(inactive.map((p) => p.name)).toEqual(["alpha"]);
   });
 
-  it("toggling off the last provider yields an empty providers array", () => {
-    const single = [{ provider_name: "searxng", priority: 1 }];
-    const next = buildActiveListAfterToggle(single, "searxng", true, 1);
-    expect(next).toHaveLength(0);
-    // Mutation would send { capability, providers: [] } — valid list form
+  it("all providers inactive (alphabetical) when activeRows empty", () => {
+    const { active, inactive } = splitProviders(capProviders, []);
+    expect(active).toHaveLength(0);
+    expect(inactive.map((p) => p.name)).toEqual(["alpha", "mid", "zeta"]);
   });
 
-  it("returned objects always have provider_name and priority (list-form shape)", () => {
-    const next = buildActiveListAfterToggle(currentRows, "ollama", false, 3);
-    for (const row of next) {
-      expect(typeof row.provider_name).toBe("string");
-      expect(typeof row.priority).toBe("number");
-    }
+  it("skips active rows whose provider is missing from capProviders", () => {
+    const activeRows = [{ provider_name: "ghost", priority: 1 }];
+    const { active, inactive } = splitProviders(capProviders, activeRows);
+    expect(active).toHaveLength(0);
+    expect(inactive.map((p) => p.name)).toEqual(["alpha", "mid", "zeta"]);
   });
 });
 
