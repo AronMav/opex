@@ -406,11 +406,22 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
 
     async fn available_tool_names(&self) -> std::collections::HashSet<String> {
         let mut tools = AgentEngine::internal_tool_definitions(self);
-        // Add YAML tools (load via cache).
+        // Add YAML tools (load via cache), skipping capability-tool names to avoid duplicates.
         for yt in self.load_yaml_tools_cached().await {
+            if crate::agent::capability_tools::is_capability_tool(&yt.name) {
+                continue;
+            }
             tools.push(opex_types::ToolDefinition {
                 name: yt.name.clone(),
                 description: yt.description.clone(),
+                input_schema: serde_json::json!({}),
+            });
+        }
+        // Add capability tools (active-provider-gated).
+        for def in crate::agent::capability_tools::capability_tool_defs(&self.cfg().db).await {
+            tools.push(opex_types::ToolDefinition {
+                name: def.name.clone(),
+                description: def.description.clone(),
                 input_schema: serde_json::json!({}),
             });
         }
