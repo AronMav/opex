@@ -1018,8 +1018,10 @@
   "providers.cap_embedding_desc": "Text vector embeddings for semantic search",
   "providers.cap_websearch_desc": "Web search — allows multiple active providers simultaneously",
   "providers.group_hint": "Only the highest-priority provider is currently used.",
-  "providers.priority_label": "Priority",
   "providers.active_toggle": "Active",
+  "providers.active_heading": "Active",
+  "providers.inactive_heading": "Inactive",
+  "providers.drag_hint": "drag a row up to raise its priority",
   "providers.drag_handle_aria": "Drag to reorder",
   "providers.set_active_error": "Failed to update active providers: {{error}}",
 

@@ -32,8 +32,9 @@ export type { ProviderCategory } from "./_parts/constants";
 
 import { ALL_CATEGORIES, ALL_CAPABILITIES, CATEGORY_ICONS, EMPTY_FORM } from "./_parts/constants";
 import type { ProviderCategory } from "./_parts/constants";
-import { sortActiveRows, buildProviderBody } from "./_parts/helpers";
-import { ProviderCard } from "./ProviderCard";
+import { sortActiveRows, splitProviders, renumberPriorities, buildProviderBody } from "./_parts/helpers";
+import { ProviderRow } from "./ProviderRow";
+import { ProviderSortableGroup } from "./ProviderSortableGroup";
 import { ProviderDialog } from "./ProviderDialog";
 
 // ── Main page ────────────────────────────────────────────────────────────────
@@ -91,19 +92,6 @@ export default function ProvidersPage() {
 
   // Delete state
   const [deleteTarget, setDeleteTarget] = useState<Provider | null>(null);
-
-  // Per-capability draft priority overrides
-  const [draftPriority, setDraftPriority] = useState<Record<string, Record<string, number>>>({});
-
-  const getDraftPriority = (cap: string, providerName: string, fallback: number): number =>
-    draftPriority[cap]?.[providerName] ?? fallback;
-
-  const setDraftPriorityFor = (cap: string, providerName: string, value: number) => {
-    setDraftPriority((prev) => ({
-      ...prev,
-      [cap]: { ...(prev[cap] ?? {}), [providerName]: value },
-    }));
-  };
 
   // ── Active helpers ────────────────────────────────────────────────────────
 
@@ -337,18 +325,21 @@ export default function ProvidersPage() {
             {visibleCategories.map((cap) => {
               const capProviders = providersForCapability(cap);
               const activeRows = sortActiveRows(active, cap);
-              const activeNames = new Set(activeRows.map((r) => r.provider_name).filter(Boolean) as string[]);
-
-              const sorted = [
-                ...activeRows
-                  .map((r) => capProviders.find((p) => p.name === r.provider_name))
-                  .filter((p): p is Provider => !!p),
-                ...capProviders
-                  .filter((p) => !activeNames.has(p.name))
-                  .sort((a, b) => a.name.localeCompare(b.name)),
-              ];
-
+              const { active: activeList, inactive: inactiveList } = splitProviders(capProviders, activeRows);
               const isCapabilityGroup = (ALL_CAPABILITIES as readonly string[]).includes(cap);
+
+              const typeLabelFor = (p: Provider) =>
+                cap === "text"
+                  ? (providerTypes.find((pt) => pt.id === p.provider_type)?.name ?? p.provider_type)
+                  : p.provider_type;
+
+              const activeNames = activeList.map((p) => p.name);
+              const reorder = (orderedNames: string[]) =>
+                setCapabilityActive(cap, renumberPriorities(orderedNames));
+              const toggleOff = (p: Provider) =>
+                setCapabilityActive(cap, renumberPriorities(activeNames.filter((n) => n !== p.name)));
+              const toggleOn = (p: Provider) =>
+                setCapabilityActive(cap, renumberPriorities([...activeNames, p.name]));
 
               return (
                 <TabsContent key={cap} value={cap} className="mt-6">
@@ -360,61 +351,76 @@ export default function ProvidersPage() {
                     )}
                   </p>
 
-                  {/* Provider cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {sorted.map((provider) => {
-                      const isActive = activeNames.has(provider.name);
-                      const activeRow = activeRows.find((r) => r.provider_name === provider.name);
-                      const currentPriority = activeRow?.priority ?? 10;
-                      const draftPrio = getDraftPriority(cap, provider.name, currentPriority);
+                  {isCapabilityGroup ? (
+                    <div className="space-y-6">
+                      {/* Active — draggable */}
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground mb-2">
+                          {t("providers.active_heading")}
+                          {activeList.length > 1 && (
+                            <span className="text-muted-foreground/50"> · {t("providers.drag_hint")}</span>
+                          )}
+                        </p>
+                        {activeList.length === 0 ? (
+                          <p className="text-xs text-muted-foreground/50 italic">{t("providers.none")}</p>
+                        ) : (
+                          <ProviderSortableGroup
+                            cap={cap}
+                            activeProviders={activeList}
+                            typeLabelFor={typeLabelFor}
+                            onReorder={reorder}
+                            onToggleActive={toggleOff}
+                            onEdit={openEdit}
+                            onDelete={setDeleteTarget}
+                          />
+                        )}
+                      </div>
 
-                      const typeLabel = cap === "text"
-                        ? (providerTypes.find((pt) => pt.id === provider.provider_type)?.name ?? provider.provider_type)
-                        : provider.provider_type;
-
-                      const toggleActive = () => {
-                        if (isActive) {
-                          const next = activeRows
-                            .filter((r) => r.provider_name !== provider.name)
-                            .map((r) => ({ provider_name: r.provider_name as string, priority: r.priority }));
-                          setCapabilityActive(cap, next);
-                        } else {
-                          const next = [
-                            ...activeRows.map((r) => ({ provider_name: r.provider_name as string, priority: r.priority })),
-                            { provider_name: provider.name, priority: draftPrio },
-                          ];
-                          setCapabilityActive(cap, next);
-                        }
-                      };
-
-                      const applyPriority = (newPrio: number) => {
-                        if (!isActive) return;
-                        const next = activeRows.map((r) =>
-                          r.provider_name === provider.name
-                            ? { provider_name: provider.name, priority: newPrio }
-                            : { provider_name: r.provider_name as string, priority: r.priority },
-                        );
-                        setCapabilityActive(cap, next);
-                      };
-
-                      return (
-                        <ProviderCard
-                          key={provider.id}
-                          provider={provider}
-                          cap={cap}
-                          isActive={isActive}
-                          draftPrio={draftPrio}
-                          typeLabel={typeLabel}
-                          isCapabilityGroup={isCapabilityGroup}
-                          onToggleActive={toggleActive}
-                          onApplyPriority={applyPriority}
-                          onDraftPriority={(n) => setDraftPriorityFor(cap, provider.name, n)}
-                          onEdit={() => openEdit(provider)}
-                          onDelete={() => setDeleteTarget(provider)}
-                        />
-                      );
-                    })}
-                  </div>
+                      {/* Inactive */}
+                      {inactiveList.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground mb-2">
+                            {t("providers.inactive_heading")}
+                          </p>
+                          <div className="space-y-2">
+                            {inactiveList.map((p) => (
+                              <ProviderRow
+                                key={p.id}
+                                provider={p}
+                                cap={cap}
+                                isActive={false}
+                                typeLabel={typeLabelFor(p)}
+                                isCapabilityGroup
+                                onToggleActive={() => toggleOn(p)}
+                                onEdit={() => openEdit(p)}
+                                onDelete={() => setDeleteTarget(p)}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* text — plain rows, no priority */
+                    <div className="space-y-2">
+                      {capProviders
+                        .slice()
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((p) => (
+                          <ProviderRow
+                            key={p.id}
+                            provider={p}
+                            cap={cap}
+                            isActive={false}
+                            typeLabel={typeLabelFor(p)}
+                            isCapabilityGroup={false}
+                            onToggleActive={() => {}}
+                            onEdit={() => openEdit(p)}
+                            onDelete={() => setDeleteTarget(p)}
+                          />
+                        ))}
+                    </div>
+                  )}
                 </TabsContent>
               );
             })}
