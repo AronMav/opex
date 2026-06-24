@@ -363,6 +363,10 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         AgentEngine::internal_tool_definitions(self)
     }
 
+    async fn capability_tool_defs(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef> {
+        crate::agent::capability_tools::capability_tool_defs(&self.cfg().db).await
+    }
+
     async fn load_yaml_tools_cached(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef> {
         let cache = self.tex().yaml_tools_cache.read().await;
         if cache.0.elapsed() < std::time::Duration::from_secs(30) && !cache.1.is_empty() {

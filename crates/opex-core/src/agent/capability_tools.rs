@@ -210,4 +210,14 @@ mod tests {
         assert!(find_capability_tool(&pool, "search_web").await.is_none());
         assert!(find_capability_tool(&pool, "not_a_capability").await.is_none());
     }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn tool_definition_description_carries_provider(pool: sqlx::PgPool) {
+        seed_provider(&pool, "searxng", "websearch", "searxng").await;
+        crate::db::providers::set_provider_active_list(&pool, "websearch", &[("searxng".into(), 1)])
+            .await.unwrap();
+        let td = find_capability_tool(&pool, "search_web").await.unwrap().to_tool_definition();
+        assert_eq!(td.name, "search_web");
+        assert!(td.description.contains("searxng"));
+    }
 }

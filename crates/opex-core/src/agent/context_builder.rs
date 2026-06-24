@@ -137,6 +137,7 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
 
     // Tools
     fn internal_tool_definitions(&self) -> Vec<ToolDefinition>;
+    async fn capability_tool_defs(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef>;
     async fn load_yaml_tools_cached(&self) -> Vec<crate::tools::yaml_tools::YamlToolDef>;
     async fn load_skills_cached(&self) -> Vec<crate::skills::SkillDef>;
     async fn tool_penalties(&self) -> std::collections::HashMap<String, f32>;
@@ -548,7 +549,15 @@ impl ContextBuilder for DefaultContextBuilder {
                 let pb = penalties.get(&b.name).copied().unwrap_or(1.0);
                 pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
             });
+            // Capability-имена зарезервированы за встроенными инструментами —
+            // выкинуть одноимённые YAML, чтобы не было дубля в списке LLM.
+            yaml_filtered.retain(|t| !crate::agent::capability_tools::is_capability_tool(&t.name));
             tool_list.extend(yaml_filtered.into_iter().map(|t| t.to_tool_definition()));
+
+            // Built-in capability tools (один на активную media-capability).
+            tool_list.extend(
+                deps.capability_tool_defs().await.into_iter().map(|t| t.to_tool_definition()),
+            );
 
             // MCP tools
             tool_list.extend(deps.mcp_tool_definitions().await);
