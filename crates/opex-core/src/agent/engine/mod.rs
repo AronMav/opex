@@ -263,8 +263,15 @@ impl AgentEngine {
         &self.tex().sse_event_tx
     }
 
-    /// Check if an enabled YAML tool exists in workspace/tools/ (shared tools).
+    /// Check if an enabled tool exists: capability-tools check active provider,
+    /// YAML tools check workspace/tools/ file presence + status.
     async fn has_tool(&self, name: &str) -> bool {
+        // Capability-инструменты: доступны, если есть активный провайдер.
+        if crate::agent::capability_tools::is_capability_tool(name) {
+            return crate::agent::capability_tools::find_capability_tool(&self.cfg().db, name)
+                .await
+                .is_some();
+        }
         let dir = std::path::Path::new(&self.cfg().workspace_dir).join("tools");
         let path = dir.join(format!("{name}.yaml"));
         let path = match tokio::fs::try_exists(&path).await {
