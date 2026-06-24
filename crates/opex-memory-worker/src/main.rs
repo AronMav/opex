@@ -37,13 +37,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config_path = std::env::args().nth(1).unwrap_or_else(|| {
-        if std::path::Path::new("config/opex.toml").exists() {
-            "config/opex.toml".into()
-        } else {
-            "config/opex.toml".into()
-        }
-    });
+    let config_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "config/opex.toml".into());
     let cfg = config::load_config(&config_path)?;
 
     if !cfg.worker.enabled {
