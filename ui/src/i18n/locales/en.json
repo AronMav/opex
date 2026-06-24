@@ -1020,6 +1020,7 @@
   "providers.group_hint": "Only the highest-priority provider is currently used.",
   "providers.priority_label": "Priority",
   "providers.active_toggle": "Active",
+  "providers.drag_handle_aria": "Drag to reorder",
   "providers.set_active_error": "Failed to update active providers: {{error}}",
 
   "integrations.title": "Integrations",
