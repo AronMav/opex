@@ -14,10 +14,10 @@ use crate::agent::tool_registry::{SystemToolHandler, ToolDeps};
 /// answered.
 pub fn channel_available(ctx: &Value) -> bool {
     // chat_id present and non-empty/non-null → a Telegram or channel context
-    if let Some(chat_id) = ctx.get("chat_id").and_then(|v| v.as_str()) {
-        if !chat_id.is_empty() && chat_id != "null" {
-            return true;
-        }
+    if let Some(chat_id) = ctx.get("chat_id").and_then(|v| v.as_str())
+        && !chat_id.is_empty() && chat_id != "null"
+    {
+        return true;
     }
     // _channel == "ui" → web SSE context
     ctx.get("_channel").and_then(|v| v.as_str()) == Some("ui")
@@ -94,8 +94,8 @@ impl SystemToolHandler for ClarifyHandler {
         let timeout_ms = clarify_timeout_secs * 1000;
 
         // 5a. Web SSE path (Task 5)
-        if let Some(tx) = deps.tex.sse_event_tx.lock().await.as_ref() {
-            if let Err(e) = tx
+        if let Some(tx) = deps.tex.sse_event_tx.lock().await.as_ref()
+            && let Err(e) = tx
                 .send_async(crate::agent::engine::StreamEvent::ClarifyNeeded {
                     clarify_id,
                     question: question.clone(),
@@ -103,13 +103,12 @@ impl SystemToolHandler for ClarifyHandler {
                     timeout_ms,
                 })
                 .await
-            {
-                tracing::warn!(
-                    clarify_id = %clarify_id,
-                    error = ?e,
-                    "ClarifyNeeded send failed"
-                );
-            }
+        {
+            tracing::warn!(
+                clarify_id = %clarify_id,
+                error = ?e,
+                "ClarifyNeeded send failed"
+            );
         }
 
         // 5b. Channel path (Task 6): chat_id present → send inline buttons or
@@ -118,63 +117,60 @@ impl SystemToolHandler for ClarifyHandler {
         //     choices → inline-кнопки: callback_data = "clarify:{id}:{idx}"
         //     (+ «Other» button "clarify:{id}:other" if choices non-empty)
         //     open-ended → plain text question, no buttons.
-        if let Some(chat_id_str) = ctx.get("chat_id").and_then(|v| v.as_str()) {
-            if !chat_id_str.is_empty() && chat_id_str != "null" {
-                if let Some(router) = deps.state.channel_router.as_ref() {
-                    let id_str = clarify_id.to_string();
-                    let buttons: serde_json::Value = if choices.is_empty() {
-                        serde_json::Value::Array(vec![])
-                    } else {
-                        let mut rows: Vec<serde_json::Value> = choices
-                            .iter()
-                            .enumerate()
-                            .map(|(i, label)| {
-                                serde_json::json!({
-                                    "text": label,
-                                    "callback_data": format!("clarify:{id_str}:{i}")
-                                })
-                            })
-                            .collect();
-                        rows.push(serde_json::json!({
-                            "text": "Other",
-                            "callback_data": format!("clarify:{id_str}:other")
-                        }));
-                        serde_json::Value::Array(rows)
-                    };
-
-                    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-                    let action = crate::agent::channel_actions::ChannelAction {
-                        name: "clarify_question".to_string(),
-                        params: serde_json::json!({
-                            "text": question,
-                            "buttons": buttons,
-                            "clarify_id": id_str,
-                        }),
-                        context: ctx.clone(),
-                        reply: reply_tx,
-                        target_channel: None,
-                    };
-                    if let Err(e) = router.send(action).await {
-                        tracing::warn!(
-                            clarify_id = %clarify_id,
-                            error = %e,
-                            "clarify: failed to send clarify_question to channel"
-                        );
-                    } else {
-                        // Brief ack wait — mirrors approval_manager pattern.
-                        tokio::time::timeout(
-                            Duration::from_secs(5),
-                            reply_rx,
-                        )
-                        .await
-                        .ok();
-                    }
+        if let Some(chat_id_str) = ctx.get("chat_id").and_then(|v| v.as_str())
+            && !chat_id_str.is_empty() && chat_id_str != "null"
+        {
+            if let Some(router) = deps.state.channel_router.as_ref() {
+                let id_str = clarify_id.to_string();
+                let buttons: serde_json::Value = if choices.is_empty() {
+                    serde_json::Value::Array(vec![])
                 } else {
+                    let mut rows: Vec<serde_json::Value> = choices
+                        .iter()
+                        .enumerate()
+                        .map(|(i, label)| {
+                            serde_json::json!({
+                                "text": label,
+                                "callback_data": format!("clarify:{id_str}:{i}")
+                            })
+                        })
+                        .collect();
+                    rows.push(serde_json::json!({
+                        "text": "Other",
+                        "callback_data": format!("clarify:{id_str}:other")
+                    }));
+                    serde_json::Value::Array(rows)
+                };
+
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                let action = crate::agent::channel_actions::ChannelAction {
+                    name: "clarify_question".to_string(),
+                    params: serde_json::json!({
+                        "text": question,
+                        "buttons": buttons,
+                        "clarify_id": id_str,
+                    }),
+                    context: ctx.clone(),
+                    reply: reply_tx,
+                    target_channel: None,
+                };
+                if let Err(e) = router.send(action).await {
                     tracing::warn!(
                         clarify_id = %clarify_id,
-                        "clarify: chat_id present but no channel_router"
+                        error = %e,
+                        "clarify: failed to send clarify_question to channel"
                     );
+                } else {
+                    // Brief ack wait — mirrors approval_manager pattern.
+                    tokio::time::timeout(Duration::from_secs(5), reply_rx)
+                        .await
+                        .ok();
                 }
+            } else {
+                tracing::warn!(
+                    clarify_id = %clarify_id,
+                    "clarify: chat_id present but no channel_router"
+                );
             }
         }
 

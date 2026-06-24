@@ -28,6 +28,7 @@ pub enum NoResponseReason {
 #[derive(Debug)]
 pub enum ClarifyOutcome {
     Answered(String),
+    #[allow(dead_code)]
     NoResponse(NoResponseReason),
 }
 
@@ -62,6 +63,7 @@ impl ClarifyManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn waiters(&self) -> &ClarifyWaitersMap {
         &self.waiters
     }
