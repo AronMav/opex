@@ -6,11 +6,6 @@ use serde_json::{json, Value};
 use crate::agent::clarify_manager::ClarifyOutcome;
 use crate::agent::tool_registry::{SystemToolHandler, ToolDeps};
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-/// Default timeout for waiting for a user response (2 minutes).
-const DEFAULT_CLARIFY_TIMEOUT_SECS: u64 = 120;
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Returns true when the execution context has an interactive channel
@@ -95,7 +90,8 @@ impl SystemToolHandler for ClarifyHandler {
         // 5. Delivery
         // Must-deliver: ClarifyNeeded is a non-text event; losing it would strand
         // the client waiting indefinitely. Mirror pattern from approval_manager.rs.
-        let timeout_ms = DEFAULT_CLARIFY_TIMEOUT_SECS * 1000;
+        let clarify_timeout_secs = deps.cfg.app_config.limits.clarify_timeout_secs;
+        let timeout_ms = clarify_timeout_secs * 1000;
 
         // 5a. Web SSE path (Task 5)
         if let Some(tx) = deps.tex.sse_event_tx.lock().await.as_ref() {
@@ -183,7 +179,7 @@ impl SystemToolHandler for ClarifyHandler {
         }
 
         // 6. Wait for response
-        let timeout = Duration::from_secs(DEFAULT_CLARIFY_TIMEOUT_SECS);
+        let timeout = Duration::from_secs(clarify_timeout_secs);
         let outcome = deps
             .cfg
             .clarify_manager
