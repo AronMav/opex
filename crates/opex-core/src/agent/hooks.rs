@@ -216,6 +216,7 @@ block_tools = []
         let wh = WebhookConfig {
             url: "http://invalid.localhost.invalid:1/".into(),
             events: vec!["BeforeToolCall".into()],
+            ..Default::default()
         };
         assert!(webhook_matches(
             &wh,
@@ -255,6 +256,7 @@ block_tools = []
             vec![WebhookConfig {
                 url: "http://127.0.0.1:1/never".into(),
                 events: vec!["BeforeMessage".into()],
+                ..Default::default()
             }],
         );
         // fire_webhooks must return before the 100ms timeout — it spawns and returns immediately
