@@ -50,7 +50,7 @@ pub(crate) async fn api_resolve_clarify(
     // Scan all running engines for the matching clarify waiter.
     // ClarifyManager::resolve() is sync (DashMap) and returns true on the first hit.
     let engines = agents_core.get_engines_map().await;
-    for (_agent_name, engine) in &engines {
+    for engine in engines.values() {
         if engine.cfg().clarify_manager.resolve(id, response.clone()) {
             return (
                 StatusCode::OK,
