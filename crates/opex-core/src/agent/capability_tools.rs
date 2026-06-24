@@ -134,6 +134,19 @@ pub async fn find_capability_tool(db: &sqlx::PgPool, name: &str) -> Option<YamlT
     parse_spec(spec).ok().map(|d| with_provider(d, &top))
 }
 
+/// Разрешить имя инструмента в YamlToolDef: capability-имена зарезервированы
+/// (приоритет над YAML-файлом), иначе — обычный YAML-инструмент.
+pub async fn resolve_tool(
+    workspace_dir: &str,
+    db: &sqlx::PgPool,
+    name: &str,
+) -> Option<YamlToolDef> {
+    if is_capability_tool(name) {
+        return find_capability_tool(db, name).await;
+    }
+    crate::tools::yaml_tools::find_yaml_tool(workspace_dir, name).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +232,15 @@ mod tests {
         let td = find_capability_tool(&pool, "search_web").await.unwrap().to_tool_definition();
         assert_eq!(td.name, "search_web");
         assert!(td.description.contains("searxng"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resolve_prefers_capability(pool: sqlx::PgPool) {
+        seed_provider(&pool, "p", "imagegen", "fal").await;
+        crate::db::providers::set_provider_active_list(&pool, "imagegen", &[("p".into(), 1)])
+            .await.unwrap();
+        let def = resolve_tool("/nonexistent-workspace", &pool, "generate_image").await.unwrap();
+        assert_eq!(def.name, "generate_image");
+        assert!(def.description.contains("(provider: p)"));
     }
 }
