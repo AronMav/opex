@@ -518,6 +518,23 @@ mod tests {
         assert!(m.restore(agent, ws.to_str().unwrap(), 99, None).await.is_err());
     }
 
+    #[test]
+    fn validate_rel_path_cases() {
+        // ── reject: пустая строка ──────────────────────────────────────────────
+        assert!(CheckpointManager::validate_rel_path("").is_err(), "empty must fail");
+
+        // ── reject: unix absolute ──────────────────────────────────────────────
+        assert!(CheckpointManager::validate_rel_path("/etc/passwd").is_err(), "/etc/passwd must fail");
+
+        // ── reject: traversal с компонентом ".." ──────────────────────────────
+        assert!(CheckpointManager::validate_rel_path("../secret").is_err(), "../secret must fail");
+        assert!(CheckpointManager::validate_rel_path("a/../../b").is_err(), "a/../../b must fail");
+
+        // ── accept: обычные относительные пути ────────────────────────────────
+        assert!(CheckpointManager::validate_rel_path("a.md").is_ok(), "a.md must pass");
+        assert!(CheckpointManager::validate_rel_path("notes/x.md").is_ok(), "notes/x.md must pass");
+    }
+
     #[tokio::test]
     async fn ensure_checkpoint_respects_excludes_and_size() {
         let tmp = tempfile::tempdir().unwrap();
