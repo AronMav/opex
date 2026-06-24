@@ -500,6 +500,11 @@ pub(super) async fn handle_clarify_text(
         return false;
     }
 
+    // Fast-path: skip expensive session-lookup when no clarify waiter is active.
+    if !engine.cfg().clarify_manager.has_any_pending() {
+        return false;
+    }
+
     let text = match msg.text.as_deref() {
         Some(t) if !t.trim().is_empty() => t.trim().to_string(),
         _ => return false,

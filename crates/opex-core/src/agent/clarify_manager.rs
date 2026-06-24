@@ -149,6 +149,12 @@ impl ClarifyManager {
         n
     }
 
+    /// Cheap pre-check: есть ли вообще хоть один pending clarify-waiter.
+    /// Позволяет пропустить дорогой session-lookup на каждое channel-сообщение.
+    pub fn has_any_pending(&self) -> bool {
+        !self.waiters.is_empty()
+    }
+
     /// Return the first open-ended (awaiting_text) waiter id for `session_id`,
     /// or `None` if there is none.
     pub fn has_pending_text(&self, session_id: Uuid) -> Option<Uuid> {
@@ -238,6 +244,15 @@ mod tests {
         let (_btn, _rx1) = m.register(sid, false); // choices present → not awaiting_text
         let (open, _rx2) = m.register(sid, true); // open-ended → awaiting_text
         assert_eq!(m.has_pending_text(sid), Some(open));
+    }
+
+    #[test]
+    fn has_any_pending_empty_and_after_register() {
+        let m = mgr();
+        assert!(!m.has_any_pending(), "empty manager must return false");
+        let sid = Uuid::new_v4();
+        let (_id, _rx) = m.register(sid, true);
+        assert!(m.has_any_pending(), "after register must return true");
     }
 
     #[test]
