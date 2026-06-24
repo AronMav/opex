@@ -92,16 +92,35 @@ impl SystemToolHandler for ClarifyHandler {
             .clarify_manager
             .register(session_id, choices.is_empty());
 
-        // 5. Delivery — web SSE + channel (Task 5/6)
-        // delivery: Task 5/6 will wire SSE event emission and Telegram button delivery here.
-        // For now we log so the clarify_id is traceable.
-        tracing::info!(
-            clarify_id = %clarify_id,
-            session_id = %session_id,
-            choices = ?choices,
-            question = %question,
-            "clarify: awaiting user response (delivery: Task 5/6)"
-        );
+        // 5. Delivery — web SSE (Task 5)
+        // Must-deliver: ClarifyNeeded is a non-text event; losing it would strand
+        // the client waiting indefinitely. Mirror pattern from approval_manager.rs.
+        let timeout_ms = DEFAULT_CLARIFY_TIMEOUT_SECS * 1000;
+        if let Some(tx) = deps.tex.sse_event_tx.lock().await.as_ref() {
+            if let Err(e) = tx
+                .send_async(crate::agent::engine::StreamEvent::ClarifyNeeded {
+                    clarify_id,
+                    question: question.clone(),
+                    choices: choices.clone(),
+                    timeout_ms,
+                })
+                .await
+            {
+                tracing::warn!(
+                    clarify_id = %clarify_id,
+                    error = ?e,
+                    "ClarifyNeeded send failed"
+                );
+            }
+        } else {
+            tracing::info!(
+                clarify_id = %clarify_id,
+                session_id = %session_id,
+                choices = ?choices,
+                question = %question,
+                "clarify: no SSE sender (channel context); awaiting user response"
+            );
+        }
 
         // 6. Wait for response
         let timeout = Duration::from_secs(DEFAULT_CLARIFY_TIMEOUT_SECS);
