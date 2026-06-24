@@ -492,7 +492,7 @@ pub fn build_system_prompt(
     // 5. Available Capabilities with usage guidance
     prompt.push_str("# Available Capabilities\n");
     if capabilities.has_search {
-        prompt.push_str("- **Web Search**: `search_web` for web queries (optionally pass `provider` to pick a specific backend)\n");
+        prompt.push_str("- **Web Search**: `search_web` for web search\n");
     }
     if capabilities.has_memory {
         prompt.push_str("- **Long-term Memory**: `memory(action=\"search\")` to recall past context, `memory(action=\"index\")` to save important information\n");

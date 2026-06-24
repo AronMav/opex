@@ -22,9 +22,9 @@ Execute these in parallel where possible:
 
 1. **Weather**: get_weather for user city
 2. **Portfolio**: bcs_portfolio to get current positions, then get_stock_price for each ticker
-3. **Market news**: search_web(provider="ws-brave") for Russian stock market today
+3. **Market news**: search_web(query="Russian stock market today")
 4. **Currency**: get_cbr_rate for USD and EUR
-5. **General news**: search_web(provider="ws-brave") for top 3 news stories
+5. **General news**: search_web(query="top 3 news stories today")
 
 ## Output Format
 
