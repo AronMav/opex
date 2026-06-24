@@ -159,6 +159,23 @@ impl ClarifyManager {
         })
     }
 
+    /// Flip an existing waiter to `awaiting_text = true` so that the next
+    /// plain text message from the user is intercepted as an open-ended answer.
+    ///
+    /// Used by the «Other» button callback: the user clicked «Other» on a
+    /// choices-based clarify — we upgrade the waiter to accept free-form input.
+    /// No-ops if `clarify_id` is not in the by_session index.
+    pub fn mark_awaiting_text(&self, clarify_id: Uuid) {
+        for mut entry in self.by_session.iter_mut() {
+            for (id, at) in entry.value_mut().iter_mut() {
+                if *id == clarify_id {
+                    *at = true;
+                    return;
+                }
+            }
+        }
+    }
+
     /// Remove resolved/cancelled entries from the reverse-index for `session_id`.
     fn forget(&self, session_id: Uuid) {
         // SAFETY: by_session и waiters — РАЗНЫЕ DashMap; одновременный borrow не создаёт шард-дедлок (и .await тут нет).
@@ -221,5 +238,19 @@ mod tests {
         let (_btn, _rx1) = m.register(sid, false); // choices present → not awaiting_text
         let (open, _rx2) = m.register(sid, true); // open-ended → awaiting_text
         assert_eq!(m.has_pending_text(sid), Some(open));
+    }
+
+    #[test]
+    fn mark_awaiting_text_upgrades_choice_waiter() {
+        let m = mgr();
+        let sid = Uuid::new_v4();
+        // Register a choices-based waiter (awaiting_text = false).
+        let (btn_id, _rx) = m.register(sid, false);
+        // Initially not in awaiting_text mode.
+        assert_eq!(m.has_pending_text(sid), None);
+        // Upgrade it to awaiting_text via «Other» button.
+        m.mark_awaiting_text(btn_id);
+        // Now has_pending_text should find it.
+        assert_eq!(m.has_pending_text(sid), Some(btn_id));
     }
 }

@@ -123,6 +123,20 @@ pub(super) async fn run(
                         ).await;
                         if consumed_fse { continue; }
 
+                        // Clarify button-callback intercept (owner-gated).
+                        let consumed_clarify_cb = inline::handle_clarify_callback(
+                            &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
+                        ).await;
+                        if consumed_clarify_cb { continue; }
+
+                        // Clarify text-intercept (open-ended / «Other»).
+                        // Priority: approval > clarify (checked inside).
+                        let consumed_clarify_text = inline::handle_clarify_text(
+                            &ctx, &engine, &agent_name, &state.channel_type,
+                            &request_id, &msg, &out_tx,
+                        ).await;
+                        if consumed_clarify_text { continue; }
+
                         dispatcher::dispatch_message(
                             engine.clone(),
                             agent_name.clone(),
@@ -215,7 +229,7 @@ pub(super) async fn run(
 }
 
 #[cfg(test)]
-mod fse_wire_guard {
+mod wire_guards {
     #[test]
     fn fse_callback_wired_before_dispatch() {
         let src = include_str!("reader.rs");
@@ -223,5 +237,30 @@ mod fse_wire_guard {
         // Use the call-site pattern (with open-paren) to skip the doc-comment reference.
         let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
         assert!(fse < dispatch, "fse intercept must run before dispatch_message");
+    }
+
+    #[test]
+    fn clarify_callback_wired_before_dispatch() {
+        let src = include_str!("reader.rs");
+        let cb = src.find("handle_clarify_callback").expect("clarify callback intercept must be wired");
+        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
+        assert!(cb < dispatch, "clarify callback intercept must run before dispatch_message");
+    }
+
+    #[test]
+    fn clarify_text_wired_before_dispatch() {
+        let src = include_str!("reader.rs");
+        let txt = src.find("handle_clarify_text").expect("clarify text-intercept must be wired");
+        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
+        assert!(txt < dispatch, "clarify text-intercept must run before dispatch_message");
+    }
+
+    #[test]
+    fn approval_wired_before_clarify() {
+        // Approval must be wired BEFORE clarify to enforce priority.
+        let src = include_str!("reader.rs");
+        let approval = src.find("handle_approval_callback").expect("approval intercept present");
+        let clarify_txt = src.find("handle_clarify_text").expect("clarify text-intercept present");
+        assert!(approval < clarify_txt, "approval intercept must be wired before clarify text-intercept");
     }
 }
