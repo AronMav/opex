@@ -16,13 +16,15 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
   const { t } = useTranslation();
   const [otherText, setOtherText] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittingChoice, setSubmittingChoice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<string | null>(part.response);
 
   const handleSubmit = useCallback(
-    async (response: string) => {
+    async (response: string, choiceKey?: string) => {
       if (!response.trim()) return;
       setIsSubmitting(true);
+      if (choiceKey !== undefined) setSubmittingChoice(choiceKey);
       setError(null);
       try {
         const result = await submitClarify(part.clarifyId, response.trim());
@@ -35,6 +37,7 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
         setError(t("chat.clarify_error"));
       } finally {
         setIsSubmitting(false);
+        setSubmittingChoice(null);
       }
     },
     [part.clarifyId, t],
@@ -86,7 +89,7 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
         <ApprovalCountdown
           timeoutMs={part.timeoutMs}
           receivedAt={part.receivedAt}
-          status={submitted !== null ? "done" : "pending"}
+          status="pending"
         />
       </div>
 
@@ -102,10 +105,14 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
               variant="outline"
               size="sm"
               className="text-xs"
-              onClick={() => handleSubmit(choice)}
+              onClick={() => handleSubmit(choice, choice)}
               disabled={isSubmitting}
             >
-              {isSubmitting ? <Loader2 className="h-3 w-3 animate-spin" /> : choice}
+              {submittingChoice === choice ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                choice
+              )}
             </Button>
           ))}
         </div>
