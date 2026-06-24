@@ -163,6 +163,15 @@ pub async fn start_agent_from_config(
         approval_waiters.clone(),
     ));
 
+    // Shared clarify waiters map — mirrors approval pattern (DashMap, no .await under guard).
+    let clarify_waiters: crate::agent::clarify_manager::ClarifyWaitersMap =
+        Arc::new(dashmap::DashMap::new());
+
+    let clarify_manager = Arc::new(crate::agent::clarify_manager::ClarifyManager::new(
+        infra.db.clone(),
+        clarify_waiters,
+    ));
+
     let agent_state = Arc::new(crate::agent::agent_state::AgentState::new(
         Some(status.processing_tracker.clone()),
         Some(channel_router.clone()),
@@ -183,6 +192,7 @@ pub async fn start_agent_from_config(
         embedder: infra.embedder.clone(),
         tools: agents.tools.clone(),
         approval_manager: approval_manager.clone(),
+        clarify_manager: clarify_manager.clone(),
         scheduler: Some(agents.scheduler.clone()),
         agent_map: Some(agents.map.clone()),
         session_pools: Some(agents.session_pools.clone()),
