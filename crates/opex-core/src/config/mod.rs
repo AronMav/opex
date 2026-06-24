@@ -70,6 +70,9 @@ pub struct AppConfig {
     /// Agent web-fetch guardrails (domain blocklist).
     #[serde(default)]
     pub security: SecurityConfig,
+    /// Shadow-git checkpoint snapshots (enabled by default).
+    #[serde(default)]
+    pub checkpoint: CheckpointConfig,
 }
 
 // ── SecurityConfig ────────────────────────────────────────────────────────────
@@ -258,6 +261,60 @@ impl Default for BackupConfig {
             cron: default_backup_cron(),
             retention_days: default_backup_retention_days(),
             postgres_container: default_postgres_container(),
+        }
+    }
+}
+
+// ── CheckpointConfig ──────────────────────────────────────────────────────────
+
+/// Shadow-git checkpoint snapshots of agent workspace files.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct CheckpointConfig {
+    /// Enable automatic checkpointing (default: true).
+    #[serde(default = "default_checkpoint_enabled")]
+    pub enabled: bool,
+    /// Maximum number of snapshots to keep per agent (default: 50).
+    #[serde(default = "default_checkpoint_keep")]
+    pub keep: u32,
+    /// Snapshot retention in days — older entries are pruned (default: 14).
+    #[serde(default = "default_checkpoint_ttl_days")]
+    pub ttl_days: u32,
+    /// Path to the shadow-git store (default: "~/.opex/checkpoints/store").
+    #[serde(default = "default_checkpoint_store_path")]
+    pub store_path: String,
+    /// Glob patterns for files to exclude from snapshots (default: []).
+    #[serde(default)]
+    pub excludes: Vec<String>,
+    /// Skip files larger than this many megabytes (default: 5).
+    #[serde(default = "default_checkpoint_max_file_size_mb")]
+    pub max_file_size_mb: u64,
+}
+
+fn default_checkpoint_enabled() -> bool {
+    true
+}
+fn default_checkpoint_keep() -> u32 {
+    50
+}
+fn default_checkpoint_ttl_days() -> u32 {
+    14
+}
+fn default_checkpoint_store_path() -> String {
+    "~/.opex/checkpoints/store".to_string()
+}
+fn default_checkpoint_max_file_size_mb() -> u64 {
+    5
+}
+
+impl Default for CheckpointConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_checkpoint_enabled(),
+            keep: default_checkpoint_keep(),
+            ttl_days: default_checkpoint_ttl_days(),
+            store_path: default_checkpoint_store_path(),
+            excludes: Vec::new(),
+            max_file_size_mb: default_checkpoint_max_file_size_mb(),
         }
     }
 }
@@ -2828,6 +2885,38 @@ mod backup_config_tests {
         )
         .unwrap();
         assert_eq!(cfg.backup.postgres_container, "my-postgres-2");
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_config_tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_config_defaults() {
+        let c = CheckpointConfig::default();
+        assert!(c.enabled);
+        assert_eq!(c.keep, 50);
+        assert_eq!(c.ttl_days, 14);
+        assert_eq!(c.max_file_size_mb, 5);
+        assert_eq!(c.store_path, "~/.opex/checkpoints/store");
+        assert!(c.excludes.is_empty());
+    }
+
+    #[test]
+    fn checkpoint_config_parses_from_toml() {
+        let toml = r#"
+            enabled = false
+            keep = 10
+            ttl_days = 3
+            store_path = "/tmp/cp"
+            excludes = ["foo", "bar"]
+            max_file_size_mb = 2
+        "#;
+        let c: CheckpointConfig = toml::from_str(toml).unwrap();
+        assert!(!c.enabled);
+        assert_eq!(c.keep, 10);
+        assert_eq!(c.excludes, vec!["foo".to_string(), "bar".to_string()]);
     }
 }
 
