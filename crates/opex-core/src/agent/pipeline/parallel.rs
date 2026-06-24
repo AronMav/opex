@@ -1082,7 +1082,7 @@ mod sequential_enrichment_tests {
         // Force sequential partitioning: a YAML tool with `parallel = true`
         // and a `channel_action` is routed to the sequential branch by line
         // ~339 of `execute_tool_calls_partitioned`. Mirrors the production
-        // tts.yaml / generate_image.yaml shape.
+        // synthesize_speech / generate_image capability-tool shape.
         let tool: crate::tools::yaml_tools::YamlToolDef = serde_yaml::from_str(
             "name: tts_capture\n\
              description: capture-only TTS-style YAML tool\n\

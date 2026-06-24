@@ -108,7 +108,7 @@ pub async fn send_channel_message(
     Ok(())
 }
 
-/// Execute a system YAML tool that has a channel_action (e.g. TTS -> send_voice,
+/// Execute a capability tool that has a channel_action (e.g. TTS -> send_voice,
 /// generate_image -> send_photo, future video generators -> send_video).
 ///
 /// Two delivery paths depending on whether the call originates from a chat

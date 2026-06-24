@@ -166,6 +166,7 @@ pub async fn run_subagent_with_session(
     if !dispatch_for_subagent {
         let denied_set: std::collections::HashSet<&str> =
             denied_for_subagent.iter().map(String::as_str).collect();
+        // Capability tools intentionally NOT injected for subagents — all are in SUBAGENT_DENIED_TOOLS.
         available_tools.extend(
             yaml_tools
                 .into_iter()

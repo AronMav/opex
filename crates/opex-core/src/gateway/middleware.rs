@@ -213,7 +213,7 @@ pub(crate) async fn auth_middleware(
     // ── Loopback-only paths (internal service calls) ─────────────────
     // /api/channels/notify — watchdog/internal alerts
     // /api/media/upload    — toolgate media uploads
-    // /api/vision/analyze  — vision proxy called by analyze_image YAML tool
+    // /api/vision/analyze  — vision proxy called by the analyze_image capability tool
     // /api/uploads/*       — DB-backed binary read endpoint
     //
     // /ws* is intentionally NOT free-passed here even on loopback. Audit
