@@ -323,7 +323,7 @@
   "chat.stop_and_keep": "Stop & keep",
   "agents.title": "Agents",
   "agents.subtitle": "Manage agent configurations",
-  "agents.new_agent": "+ New agent",
+  "agents.new_agent": "New agent",
   "agents.no_active_agents": "No active agents",
   "agents.active": "Active",
   "agents.inactive": "Inactive",
@@ -903,7 +903,7 @@
   "canvas.clear": "Clear",
   "providers.title": "Providers",
   "providers.subtitle": "Manage LLM provider connections",
-  "providers.add": "+ Add Provider",
+  "providers.add": "Add Provider",
   "providers.empty": "No providers configured yet. Create one to reference it from agent config.",
   "providers.add_title": "Add Provider",
   "providers.edit_title": "Edit Provider",
@@ -1024,7 +1024,6 @@
   "providers.drag_hint": "drag a row up to raise its priority",
   "providers.drag_handle_aria": "Drag to reorder",
   "providers.set_active_error": "Failed to update active providers: {{error}}",
-
   "integrations.title": "Integrations",
   "integrations.subtitle": "Connect external services to agents via OAuth 2.0",
   "integrations.agent_label": "Agent",
@@ -1125,7 +1124,6 @@
   "providers.max_retries_section": "Retry",
   "providers.max_retries_label": "Max retries (1–10)",
   "providers.max_retries_error": "must be between 1 and 10",
-
   "config.section_curator": "Curator",
   "config.section_alerting": "Alerting",
   "config.section_channels": "Channels",
@@ -1136,7 +1134,6 @@
   "config.alert_restart": "Restart",
   "config.alert_recovery": "Recovery",
   "config.alert_resource": "Resource alert",
-
   "skills.state_active": "active",
   "skills.state_stale": "stale",
   "skills.state_archived": "archived",
@@ -1153,26 +1150,18 @@
   "skills.curator_run_now": "Run now",
   "skills.curator_run_started": "Curator run started",
   "skills.version_description": "Version history — click a version to view content",
-
   "secrets.delete_error": "Failed to delete secret: {{error}}",
-
   "memory.doc_load_error": "Failed to load document",
   "memory.fetch_error": "Failed to fetch memory",
-
   "webhooks.type_generic": "Generic (Bearer token)",
   "webhooks.type_github": "GitHub (HMAC-SHA256)",
-
   "access.revoke_error": "Failed to revoke: {{error}}",
-
   "tasks.no_jitter_hint": "0 — no jitter",
-
   "setup.select_provider": "Select provider...",
   "setup.select_model": "Select model...",
   "setup.model_placeholder": "model-name",
   "setup.optional_hint": "(optional)",
-
   "login.show_token": "Show token",
-
   "file_scenarios.default_badge": "default",
   "file_scenarios.disabled_badge": "Disabled",
   "file_scenarios.set_default": "Set as default",
@@ -1192,7 +1181,7 @@
   "file_scenarios.allowlist_hint": "Only tool actions in this closed list can be set as the automatic default. Enable or disable each action to control which defaults are permitted.",
   "file_scenarios.title": "File Scenarios",
   "file_scenarios.subtitle": "Manage file-type bindings and default-action allowlist",
-  "file_scenarios.add": "+ Add Scenario",
+  "file_scenarios.add": "Add Scenario",
   "file_scenarios.empty": "No file scenarios configured yet. Add one to handle incoming files automatically.",
   "file_scenarios.save_error": "Failed to save scenario: {{error}}",
   "file_scenarios.delete_title": "Delete scenario?",
