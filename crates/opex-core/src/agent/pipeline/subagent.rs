@@ -21,6 +21,11 @@ pub const SUBAGENT_DENIED_TOOLS: &[&str] = &[
     "secret_set",
     "process",
     "code_exec",
+    "generate_image",
+    "synthesize_speech",
+    "analyze_image",
+    "transcribe_audio",
+    "search_web",
 ];
 
 /// Strict subagent runtime deny list — always SUBAGENT_DENIED_TOOLS, regardless
@@ -825,6 +830,13 @@ mod tests {
         let denied = runtime_subagent_denylist(&cfg);
         assert_eq!(denied.iter().filter(|d| *d == "cron").count(), 1,
             "duplicate entries between extra and SUBAGENT_DENIED_TOOLS must be deduped");
+    }
+
+    #[test]
+    fn capability_tools_denied_to_subagents() {
+        for name in ["generate_image", "synthesize_speech", "analyze_image", "transcribe_audio"] {
+            assert!(SUBAGENT_DENIED_TOOLS.contains(&name), "{name} must be denied to subagents");
+        }
     }
 
     // ── enrich_message_text → EnrichResult ──────────────────────────────────
