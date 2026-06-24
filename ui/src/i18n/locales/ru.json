@@ -323,7 +323,7 @@
   "chat.stop_and_keep": "Остановить и сохранить",
   "agents.title": "Агенты",
   "agents.subtitle": "Управление конфигурациями агентов",
-  "agents.new_agent": "+ Новый агент",
+  "agents.new_agent": "Новый агент",
   "agents.no_active_agents": "Нет активных агентов",
   "agents.active": "Активен",
   "agents.inactive": "Неактивен",
@@ -903,7 +903,7 @@
   "canvas.clear": "Очистить",
   "providers.title": "Провайдеры",
   "providers.subtitle": "Управление подключениями к LLM-провайдерам",
-  "providers.add": "+ Добавить провайдер",
+  "providers.add": "Добавить провайдер",
   "providers.empty": "Провайдеры не настроены. Создайте подключение для использования в конфигурации агентов.",
   "providers.add_title": "Добавить провайдер",
   "providers.edit_title": "Редактировать провайдер",
@@ -1124,7 +1124,6 @@
   "providers.max_retries_section": "Повторы",
   "providers.max_retries_label": "Макс. попыток (1–10)",
   "providers.max_retries_error": "должно быть от 1 до 10",
-
   "config.section_curator": "Куратор",
   "config.section_alerting": "Оповещения",
   "config.section_channels": "Каналы",
@@ -1135,7 +1134,6 @@
   "config.alert_restart": "Перезапуск",
   "config.alert_recovery": "Восстановление",
   "config.alert_resource": "Ресурсное оповещение",
-
   "skills.state_active": "активный",
   "skills.state_stale": "устаревший",
   "skills.state_archived": "архивный",
@@ -1152,26 +1150,18 @@
   "skills.curator_run_now": "Запустить",
   "skills.curator_run_started": "Запуск куратора выполнен",
   "skills.version_description": "История версий — нажмите на версию для просмотра",
-
   "secrets.delete_error": "Ошибка удаления секрета: {{error}}",
-
   "memory.doc_load_error": "Не удалось загрузить документ",
   "memory.fetch_error": "Ошибка загрузки памяти",
-
   "webhooks.type_generic": "Обычный (Bearer token)",
   "webhooks.type_github": "GitHub (HMAC-SHA256)",
-
   "access.revoke_error": "Ошибка отзыва: {{error}}",
-
   "tasks.no_jitter_hint": "0 — без джиттера",
-
   "setup.select_provider": "Выберите провайдера...",
   "setup.select_model": "Выберите модель...",
   "setup.model_placeholder": "название-модели",
   "setup.optional_hint": "(необязательно)",
-
   "login.show_token": "Показать токен",
-
   "file_scenarios.default_badge": "по умолчанию",
   "file_scenarios.disabled_badge": "Отключён",
   "file_scenarios.set_default": "Сделать по умолчанию",
@@ -1191,7 +1181,7 @@
   "file_scenarios.allowlist_hint": "Только инструменты из этого закрытого списка могут быть установлены как автоматические по умолчанию. Включайте или отключайте каждое действие для управления допустимыми умолчаниями.",
   "file_scenarios.title": "Сценарии файлов",
   "file_scenarios.subtitle": "Управление привязками типов файлов и списком допустимых умолчаний",
-  "file_scenarios.add": "+ Добавить сценарий",
+  "file_scenarios.add": "Добавить сценарий",
   "file_scenarios.empty": "Сценарии файлов ещё не настроены. Добавьте сценарий для автоматической обработки входящих файлов.",
   "file_scenarios.save_error": "Ошибка сохранения сценария: {{error}}",
   "file_scenarios.delete_title": "Удалить сценарий?",
