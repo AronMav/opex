@@ -23,6 +23,7 @@ pub fn is_valid_tool_name(name: &str) -> bool {
 ///
 /// Filters in order: deny-list, required_base for non-base, drop static core,
 /// drop currently-promoted tools (they are in per-session core for this turn).
+/// Capability tools shadow same-named YAML files.
 /// Sorted alphabetically by name.
 // allow(dead_code): consumed by tool_handlers/tool_use.rs.
 #[allow(dead_code)]
@@ -31,6 +32,7 @@ pub async fn build_extension_tool_list(
     deny: &[String],
     promoted: &std::collections::HashSet<String>,
     workspace_dir: &str,
+    db: &sqlx::PgPool,
     mcp: Option<&crate::mcp::McpRegistry>,
 ) -> Vec<ToolDefinition> {
     let core = crate::agent::pipeline::tool_defs::static_core_tool_names();
@@ -56,14 +58,22 @@ pub async fn build_extension_tool_list(
         });
     }
 
-    // YAML tools.
+    // YAML tools (capability-named files are skipped — they are added below).
     let yaml = crate::tools::yaml_tools::load_yaml_tools(workspace_dir, false).await;
     for t in yaml {
         if (!t.required_base || is_base_agent)
             && !deny.iter().any(|d| d == &t.name)
             && !promoted.contains(&t.name)
+            && !crate::agent::capability_tools::is_capability_tool(&t.name)
         {
             out.push(t.to_tool_definition());
+        }
+    }
+
+    // Built-in capability tools (backed by active providers in DB).
+    for def in crate::agent::capability_tools::capability_tool_defs(db).await {
+        if !deny.iter().any(|d| d == &def.name) && !promoted.contains(&def.name) {
+            out.push(def.to_tool_definition());
         }
     }
 
@@ -90,9 +100,10 @@ pub async fn find_extension_tool(
     deny: &[String],
     promoted: &std::collections::HashSet<String>,
     workspace_dir: &str,
+    db: &sqlx::PgPool,
     mcp: Option<&crate::mcp::McpRegistry>,
 ) -> Option<ToolDefinition> {
-    build_extension_tool_list(is_base_agent, deny, promoted, workspace_dir, mcp)
+    build_extension_tool_list(is_base_agent, deny, promoted, workspace_dir, db, mcp)
         .await
         .into_iter()
         .find(|t| t.name == name)

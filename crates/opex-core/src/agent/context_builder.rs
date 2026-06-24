@@ -390,12 +390,14 @@ impl ContextBuilder for DefaultContextBuilder {
         // ContextBuilderDeps in Tasks 14/15.
         if dispatcher_enabled && !user_text.is_empty() {
             let deny: Vec<String> = deps.cfg_deny_list();
+            let db = deps.db();
 
             let candidates = crate::agent::dispatcher::build_extension_tool_list(
                 deps.agent_base(),
                 &deny,
                 &std::collections::HashSet::new(),
                 deps.workspace_dir(),
+                &db,
                 deps.mcp_registry(),
             ).await;
 
