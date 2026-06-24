@@ -84,6 +84,16 @@ pub enum StreamEvent {
         finish_reason: String,
         continuation: bool,
     },
+    /// Clarification needed: agent is waiting for user input before continuing.
+    ///
+    /// `clarify_id` uniquely identifies this pending clarification request so
+    /// the UI can match a user response to the waiting engine call.
+    ClarifyNeeded {
+        clarify_id: uuid::Uuid,
+        question: String,
+        choices: Vec<String>,
+        timeout_ms: u64,
+    },
     /// Approval needed: a tool call is waiting for human approval.
     ///
     /// `approval_id` is `ApprovalId` (Uuid newtype) post-T4. Wire format on

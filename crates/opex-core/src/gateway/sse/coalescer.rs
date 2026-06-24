@@ -27,6 +27,7 @@ fn event_type_label(ev: &StreamEvent) -> &'static str {
         StreamEvent::RichCard { .. } => "rich-card",
         StreamEvent::File { .. } => "file",
         StreamEvent::AgentSwitch { .. } => "agent-switch",
+        StreamEvent::ClarifyNeeded { .. } => "clarify-needed",
         StreamEvent::ApprovalNeeded { .. } => "approval-needed",
         StreamEvent::ApprovalResolved { .. } => "approval-resolved",
         StreamEvent::Finish { .. } => "finish",

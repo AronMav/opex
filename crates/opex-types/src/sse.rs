@@ -129,6 +129,16 @@ pub enum SseEvent {
     /// Rich-card payload. Newtype variant — discriminator `cardType` lives
     /// at top level alongside `type`.
     RichCard(RichCardData),
+    ClarifyNeeded {
+        #[serde(rename = "clarifyId")]
+        #[cfg_attr(feature = "ts-gen", ts(type = "string"))]
+        clarify_id: uuid::Uuid,
+        question: String,
+        choices: Vec<String>,
+        #[serde(rename = "timeoutMs")]
+        #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
+        timeout_ms: u64,
+    },
     ToolApprovalNeeded {
         #[serde(rename = "approvalId")]
         #[cfg_attr(feature = "ts-gen", ts(type = "string"))]
