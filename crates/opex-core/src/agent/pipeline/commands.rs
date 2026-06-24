@@ -14,6 +14,48 @@ use crate::agent::providers::LlmProvider;
 use crate::config::CompactionConfig;
 use crate::db::sessions;
 
+/// Parsed `/rollback` argument.
+#[derive(Debug)]
+pub enum RollbackCmd {
+    List,
+    To(usize),
+    Diff(usize),
+    File(usize, String),
+}
+
+/// Parse a `/rollback` argument into a `RollbackCmd`.
+/// Unknown/garbage input falls back to `List` (safe default).
+pub fn parse_rollback_command(arg: &str) -> RollbackCmd {
+    let a = arg.trim();
+    if a.is_empty() || a == "list" {
+        return RollbackCmd::List;
+    }
+    if let Some(rest) = a.strip_prefix("diff ") {
+        if let Ok(n) = rest.trim().parse::<usize>() {
+            return RollbackCmd::Diff(n);
+        }
+        return RollbackCmd::List;
+    }
+    // "N file <path>"
+    let mut it = a.split_whitespace();
+    if let Some(first) = it.next()
+        && let Ok(n) = first.parse::<usize>()
+    {
+        match it.next() {
+            Some("file") => {
+                let path = it.collect::<Vec<_>>().join(" ");
+                if !path.is_empty() {
+                    return RollbackCmd::File(n, path);
+                }
+                return RollbackCmd::List;
+            }
+            None => return RollbackCmd::To(n),
+            _ => return RollbackCmd::List,
+        }
+    }
+    RollbackCmd::List
+}
+
 /// Parsed `/voice` argument.
 pub enum VoiceCmd {
     Status,
@@ -246,6 +288,54 @@ where
                 Some(None) => Some(Ok(s.compact_not_needed.to_string())),
                 None => Some(Ok("Compaction failed.".to_string())),
             }
+        }
+        "/rollback" => {
+            let Some(engine) = ctx.engine_arc.clone() else {
+                return Some(Ok("Откат недоступен в этом контексте.".to_string()));
+            };
+            let Some(cm) = engine.cfg().checkpoint_manager.clone() else {
+                return Some(Ok("Чекпойнты отключены.".to_string()));
+            };
+            let ws = engine.cfg().workspace_dir.clone();
+            let agent = engine.cfg().agent.name.clone();
+            let cmd = parse_rollback_command(args);
+            let result = match cmd {
+                RollbackCmd::List => match cm.list_checkpoints(&agent).await {
+                    Ok(list) if list.is_empty() => "Чекпойнтов нет.".to_string(),
+                    Ok(list) => {
+                        let mut s = String::from("Чекпойнты (свежие сверху):\n");
+                        for c in list.iter().take(30) {
+                            let short = &c.commit.get(..8).unwrap_or(&c.commit);
+                            s.push_str(&format!("  {}. {} ({})  {}\n", c.n, c.created, short, c.summary));
+                        }
+                        s.push_str("\n`/rollback N` — откат · `/rollback diff N` — показать · `/rollback N file <путь>` — один файл");
+                        s
+                    }
+                    Err(e) => format!("Ошибка списка чекпойнтов: {e}"),
+                },
+                RollbackCmd::Diff(n) => match cm.diff(&agent, &ws, n).await {
+                    Ok(d) if d.trim().is_empty() => format!("Чекпойнт {n}: отличий нет."),
+                    Ok(d) => {
+                        let body: String = d.lines().take(200).collect::<Vec<_>>().join("\n");
+                        format!("Diff против чекпойнта {n}:\n```diff\n{body}\n```")
+                    }
+                    Err(e) => format!("Ошибка diff: {e}"),
+                },
+                RollbackCmd::To(n) => match cm.restore(&agent, &ws, n, None).await {
+                    Ok(rep) => format!(
+                        "Откат к чекпойнту {} выполнен ({} файлов). Текущее состояние сохранено{}.",
+                        rep.n,
+                        rep.files.len(),
+                        rep.new_checkpoint.map(|c| format!(" как чекпойнт {c}")).unwrap_or_default(),
+                    ),
+                    Err(e) => format!("Ошибка отката: {e}"),
+                },
+                RollbackCmd::File(n, path) => match cm.restore(&agent, &ws, n, Some(&path)).await {
+                    Ok(_) => format!("Файл `{path}` восстановлен из чекпойнта {n}."),
+                    Err(e) => format!("Ошибка отката файла: {e}"),
+                },
+            };
+            Some(Ok(result))
         }
         "/model" => {
             let model_arg = args.trim();
@@ -552,6 +642,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rollback_parse() {
+        use super::{parse_rollback_command, RollbackCmd};
+        assert!(matches!(parse_rollback_command(""), RollbackCmd::List));
+        assert!(matches!(parse_rollback_command("list"), RollbackCmd::List));
+        assert!(matches!(parse_rollback_command("2"), RollbackCmd::To(2)));
+        assert!(matches!(parse_rollback_command("diff 3"), RollbackCmd::Diff(3)));
+        match parse_rollback_command("2 file notes/x.md") {
+            RollbackCmd::File(2, p) => assert_eq!(p, "notes/x.md"),
+            other => panic!("unexpected: {other:?}"),
+        }
+        // мусор → List (безопасный дефолт)
+        assert!(matches!(parse_rollback_command("garbage"), RollbackCmd::List));
+    }
 
     #[test]
     fn goal_and_subgoal_parsers() {

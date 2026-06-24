@@ -10,10 +10,10 @@ pub(crate) async fn maybe_checkpoint(
     agent_name: &str,
     workspace_dir: &str,
 ) {
-    if let Some(cm) = mgr {
-        if let Err(e) = cm.ensure_checkpoint(agent_name, workspace_dir).await {
-            tracing::warn!(agent = %agent_name, error = %e, "checkpoint ensure failed (non-fatal)");
-        }
+    if let Some(cm) = mgr
+        && let Err(e) = cm.ensure_checkpoint(agent_name, workspace_dir).await
+    {
+        tracing::warn!(agent = %agent_name, error = %e, "checkpoint ensure failed (non-fatal)");
     }
 }
 
@@ -111,8 +111,10 @@ mod cp_tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
         let ws = tmp.path().join("ws");
-        let mut cfg = crate::config::CheckpointConfig::default();
-        cfg.store_path = store.to_str().unwrap().to_string();
+        let cfg = crate::config::CheckpointConfig {
+            store_path: store.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
         let mgr = std::sync::Arc::new(
             crate::agent::checkpoint_manager::CheckpointManager::new(cfg)
         );

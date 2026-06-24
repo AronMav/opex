@@ -3,6 +3,7 @@
 //! Порт Hermes `tools/checkpoint_manager.py`. Best-effort: git-ошибки логируются,
 //! ход агента не падает. Все store-мутации сериализованы `store_lock`.
 
+use std::cmp::Reverse;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
@@ -156,6 +157,7 @@ impl CheckpointManager {
     ///   добавление второго захвата вызвало бы reentrant-deadlock (tokio::Mutex не реентрантен);
     /// - read-only вызыватель (`list_checkpoints`) допускает безвредную идемпотентную гонку —
     ///   `git init`, `git config` и перезапись `info/exclude` идемпотентны.
+    ///
     /// Это не противоречит доку модуля «все store-мутации сериализованы store_lock»: там речь
     /// о снапшотах/прунинге, а не о bootstrap-инициализации репо.
     pub(crate) async fn ensure_store(&self) -> anyhow::Result<()> {
@@ -223,10 +225,10 @@ impl CheckpointManager {
             let staged = self.git_ok(agent, wt, &["diff", "--cached", "--name-only"]).await?;
             let wt_root = Path::new(workspace_dir).join("agents").join(agent);
             for rel in staged.lines().filter(|l| !l.is_empty()) {
-                if let Ok(meta) = tokio::fs::metadata(wt_root.join(rel)).await {
-                    if meta.len() > limit {
-                        self.git_ok(agent, wt, &["rm", "--cached", "--quiet", "--", rel]).await.ok();
-                    }
+                if let Ok(meta) = tokio::fs::metadata(wt_root.join(rel)).await
+                    && meta.len() > limit
+                {
+                    self.git_ok(agent, wt, &["rm", "--cached", "--quiet", "--", rel]).await.ok();
                 }
             }
         }
@@ -364,7 +366,7 @@ impl CheckpointManager {
             let n: usize = refname.rsplit('/').next()?.parse().ok()?;
             Some((n, refname, ts))
         }).collect();
-        entries.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        entries.sort_unstable_by_key(|b| Reverse(b.0));
 
         let now = chrono::Utc::now().timestamp();
         let ttl_secs = self.config.ttl_days as i64 * 86_400;
@@ -444,8 +446,7 @@ mod tests {
     use tokio::fs;
 
     fn mgr_at(store: &std::path::Path) -> CheckpointManager {
-        let mut cfg = CheckpointConfig::default();
-        cfg.store_path = store.to_str().unwrap().to_string();
+        let cfg = CheckpointConfig { store_path: store.to_str().unwrap().to_string(), ..Default::default() };
         CheckpointManager::new(cfg)
     }
 
@@ -592,10 +593,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
         let ws = tmp.path().join("ws");
-        let mut cfg = CheckpointConfig::default();
-        cfg.store_path = store.to_str().unwrap().to_string();
-        cfg.keep = 2;
-        cfg.ttl_days = 3650; // не мешает count-cap
+        let cfg = CheckpointConfig {
+            store_path: store.to_str().unwrap().to_string(),
+            keep: 2,
+            ttl_days: 3650, // не мешает count-cap
+            ..Default::default()
+        };
         let m = CheckpointManager::new(cfg);
         let agent = "Agent";
 
@@ -616,10 +619,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
         let ws = tmp.path().join("ws");
-        let mut cfg = CheckpointConfig::default();
-        cfg.store_path = store.to_str().unwrap().to_string();
-        cfg.keep = 50;
-        cfg.ttl_days = 7;
+        let cfg = CheckpointConfig {
+            store_path: store.to_str().unwrap().to_string(),
+            keep: 50,
+            ttl_days: 7,
+            ..Default::default()
+        };
         let m = CheckpointManager::new(cfg);
         let agent = "Agent";
 
@@ -667,9 +672,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
         let ws = tmp.path().join("ws");
-        let mut cfg = CheckpointConfig::default();
-        cfg.store_path = store.to_str().unwrap().to_string();
-        cfg.max_file_size_mb = 1;
+        let cfg = CheckpointConfig {
+            store_path: store.to_str().unwrap().to_string(),
+            max_file_size_mb: 1,
+            ..Default::default()
+        };
         let m = CheckpointManager::new(cfg);
         let agent = "Agent";
 
