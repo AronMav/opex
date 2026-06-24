@@ -3,6 +3,7 @@
 //!
 //! See docs/superpowers/specs/2026-04-20-execution-pipeline-unification-design.md §4.
 
+use crate::agent::clarify_manager::ClarifyManager;
 use crate::agent::memory_service::MemoryService;
 use crate::agent::pipeline::sink::{EventSink, PipelineEvent};
 use crate::agent::providers::LlmProvider;
@@ -323,6 +324,10 @@ pub struct FinalizeContext {
     /// Matches the UUID sent in the `MessageStart` SSE event so the frontend's
     /// live buffer ID equals the DB row ID, preventing duplicate messages.
     pub assistant_message_id: Uuid,
+    /// Shared clarify manager — `finalize` cancels any pending clarify waiters
+    /// for this session so they don't hang until timeout when the turn ends
+    /// (Done / Failed / Interrupted all release the waiter).
+    pub clarify_manager: Arc<ClarifyManager>,
 }
 
 // ── finalize() ────────────────────────────────────────────────────────────────
@@ -350,6 +355,17 @@ pub async fn finalize<S: EventSink>(
     sink: &mut S,
     lifecycle_guard: &mut SessionLifecycleGuard,
 ) -> anyhow::Result<String> {
+    // Cancel any pending clarify waiters for this session so they don't block
+    // until timeout. Applies to all outcomes (Done / Failed / Interrupted).
+    let n = ctx.clarify_manager.clear_session(ctx.session_id);
+    if n > 0 {
+        tracing::debug!(
+            session_id = %ctx.session_id,
+            cancelled = n,
+            "finalize: cancelled pending clarify waiters"
+        );
+    }
+
     let sm = SessionManager::new(ctx.db.clone());
     let agent_name_ref = ctx.agent_name.as_str();
 
@@ -616,6 +632,7 @@ pub fn finalize_context_from_engine(
         compressor,
         skill_review: engine.cfg().agent.skill_review.clone(),
         assistant_message_id,
+        clarify_manager: engine.cfg().clarify_manager.clone(),
     }
 }
 
@@ -831,6 +848,7 @@ mod tests {
             compressor: crate::agent::compressor::Compressor::new(128_000),
             skill_review: None,
             assistant_message_id: uuid::Uuid::nil(),
+            clarify_manager: Arc::new(crate::agent::clarify_manager::ClarifyManager::new_for_test()),
         }
     }
 

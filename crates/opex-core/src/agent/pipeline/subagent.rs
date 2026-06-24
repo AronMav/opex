@@ -26,6 +26,9 @@ pub const SUBAGENT_DENIED_TOOLS: &[&str] = &[
     "analyze_image",
     "transcribe_audio",
     "search_web",
+    // Clarify blocks the caller waiting for human input; a subagent calling it
+    // would hang indefinitely with no user present to answer.
+    "clarify",
 ];
 
 /// Strict subagent runtime deny list — always SUBAGENT_DENIED_TOOLS, regardless
@@ -645,6 +648,17 @@ mod tests {
         assert!(SUBAGENT_DENIED_TOOLS.contains(&"cron"));
         assert!(SUBAGENT_DENIED_TOOLS.contains(&"secret_set"));
         assert!(SUBAGENT_DENIED_TOOLS.contains(&"process"));
+    }
+
+    #[test]
+    fn clarify_denied_to_subagents() {
+        // Subagents must not be able to call `clarify`: they run headlessly and
+        // there is no user present to answer the question, so a clarify call
+        // would block the subagent until the waiter times out.
+        assert!(
+            SUBAGENT_DENIED_TOOLS.contains(&"clarify"),
+            "'clarify' must be in SUBAGENT_DENIED_TOOLS"
+        );
     }
 
     #[test]
