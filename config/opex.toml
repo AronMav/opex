@@ -103,6 +103,22 @@ retention_days = 7
 # max_file_size_mb = 5                        # файлы крупнее не попадают в снапшот
 # excludes = []                               # доп. паттерны поверх встроенных (node_modules, target, *.log, бинарники)
 
+# ═══ Runtime decision-webhooks (per-agent, в config/agents/{Name}.toml) ═══
+#
+# Хуки задаются в конфиге агента под ключом [agent.hooks], а не здесь.
+# Пример для config/agents/MyAgent.toml:
+#
+# [[agent.hooks.webhooks]]
+# url = "http://hooks.local:9000/gate"   # admin-hosted hook service
+# events = ["BeforeToolCall"]            # BeforeMessage|BeforeToolCall|AfterToolResult
+# mode = "decision"                      # "async" (fire-and-forget, default) | "decision" (sync, parse response)
+# tool_matcher = "code_exec|workspace_.*" # regex on tool_name (decision tool-events)
+# on_failure = "open"                    # "open" (continue, default) | "closed" (block on hook failure)
+# timeout_ms = 3000                      # sync decision timeout (cap 30000)
+# allow_internal = false                 # true → bypass SSRF (localhost/LAN hook service)
+# Decision response JSON: {"decision":"block","reason":"..."} | {"modified_args":{...}}
+#   | {"inject_context":"..."} | {"transformed_result":"..."} | {} (continue)
+
 # ═══ Multi-agent timeouts (`agent` tool: run/message/collect/status/kill) ═══
 # Hot-reloadable via config watcher and PUT /api/config.
 # Invariant (warned-only): safety_timeout_secs > message_wait_for_idle_secs + message_result_secs.
