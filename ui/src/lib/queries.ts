@@ -544,8 +544,26 @@ export function useSetProviderActive() {
   return useMutation({
     mutationFn: (data: { capability: string; providers: { provider_name: string; priority: number }[] }) =>
       apiPut("/api/provider-active", data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.providerActive }),
-    onError: (e: Error) => toast.error(e.message),
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: qk.providerActive })
+      const snapshot = qc.getQueryData<{ active: ProviderActiveRow[] }>(qk.providerActive)
+      qc.setQueryData<{ active: ProviderActiveRow[] }>(qk.providerActive, (old) => {
+        const base = old?.active ?? []
+        const others = base.filter((r) => r.capability !== vars.capability)
+        const next: ProviderActiveRow[] = vars.providers.map((p) => ({
+          capability: vars.capability,
+          provider_name: p.provider_name,
+          priority: p.priority,
+        }))
+        return { active: [...others, ...next] }
+      })
+      return { snapshot }
+    },
+    onError: (e: Error, _vars, ctx) => {
+      if (ctx?.snapshot) qc.setQueryData(qk.providerActive, ctx.snapshot)
+      toast.error(e.message)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.providerActive }),
   })
 }
 
