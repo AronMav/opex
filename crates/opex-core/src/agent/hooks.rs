@@ -146,17 +146,6 @@ struct WebhookResponse {
     transformed_result: Option<String>,
 }
 
-/// Map HookEvent variant to its canonical wire name (same as TOML event name).
-pub(crate) fn event_wire_name(event: &HookEvent) -> &'static str {
-    match event {
-        HookEvent::BeforeMessage => "BeforeMessage",
-        HookEvent::AfterResponse => "AfterResponse",
-        HookEvent::BeforeToolCall { .. } => "BeforeToolCall",
-        HookEvent::AfterToolResult { .. } => "AfterToolResult",
-        HookEvent::OnError => "OnError",
-    }
-}
-
 /// Return the tool name from events that carry one, or None.
 pub(crate) fn event_tool_name(event: &HookEvent) -> Option<&str> {
     match event {
@@ -391,8 +380,17 @@ block_tools = []
     #[test]
     fn event_wire_helpers() {
         let btc = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "tool".into() };
-        assert_eq!(event_wire_name(&btc), "BeforeToolCall");
+        assert_eq!(event_name(&btc), "BeforeToolCall");
         assert_eq!(event_tool_name(&btc), Some("tool"));
         assert_eq!(event_tool_name(&HookEvent::BeforeMessage), None);
+    }
+
+    // ── Test 8 — modified_args ignored on non-BeforeToolCall ─────────────────
+
+    #[test]
+    fn parse_decision_modified_args_only_on_before_tool_call() {
+        let atr = HookEvent::AfterToolResult { agent: "A".into(), tool_name: "t".into(), duration_ms: 1 };
+        // modified_args присутствует, но событие не BeforeToolCall → Continue
+        assert!(matches!(parse_decision(r#"{"modified_args":{"x":1}}"#, &atr), HookDecision::Continue));
     }
 }
