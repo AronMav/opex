@@ -155,7 +155,7 @@ export default function FileScenariosPage() {
         title={t("file_scenarios.title")}
         description={t("file_scenarios.subtitle")}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5">
               <RefreshCw className="h-4 w-4" />
               {t("common.refresh")}

@@ -544,7 +544,7 @@ export default function AgentsPage() {
         title={t("agents.title")}
         description={t("agents.subtitle")}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="relative flex-1 md:w-48">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
               <Input
