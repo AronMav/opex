@@ -4,6 +4,19 @@ use serde_json::Value;
 use crate::agent::pipeline::handlers as ph;
 use crate::agent::tool_registry::{SystemToolHandler, ToolDeps};
 
+/// Best-effort снапшот scope перед мутацией. Любая ошибка → warn, не блокирует.
+pub(crate) async fn maybe_checkpoint(
+    mgr: &Option<std::sync::Arc<crate::agent::checkpoint_manager::CheckpointManager>>,
+    agent_name: &str,
+    workspace_dir: &str,
+) {
+    if let Some(cm) = mgr {
+        if let Err(e) = cm.ensure_checkpoint(agent_name, workspace_dir).await {
+            tracing::warn!(agent = %agent_name, error = %e, "checkpoint ensure failed (non-fatal)");
+        }
+    }
+}
+
 pub struct WorkspaceWriteHandler;
 pub struct WorkspaceReadHandler;
 pub struct WorkspaceListHandler;
@@ -14,6 +27,7 @@ pub struct WorkspaceRenameHandler;
 #[async_trait]
 impl SystemToolHandler for WorkspaceWriteHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
+        maybe_checkpoint(&deps.cfg.checkpoint_manager, deps.agent_name, deps.workspace_dir).await;
         ph::handle_workspace_write(
             deps.workspace_dir,
             deps.agent_name,
@@ -43,6 +57,7 @@ impl SystemToolHandler for WorkspaceListHandler {
 #[async_trait]
 impl SystemToolHandler for WorkspaceEditHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
+        maybe_checkpoint(&deps.cfg.checkpoint_manager, deps.agent_name, deps.workspace_dir).await;
         ph::handle_workspace_edit(
             deps.workspace_dir,
             deps.agent_name,
@@ -58,6 +73,7 @@ impl SystemToolHandler for WorkspaceEditHandler {
 #[async_trait]
 impl SystemToolHandler for WorkspaceDeleteHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
+        maybe_checkpoint(&deps.cfg.checkpoint_manager, deps.agent_name, deps.workspace_dir).await;
         ph::handle_workspace_delete(deps.workspace_dir, deps.agent_name, args).await
     }
 }
@@ -65,6 +81,7 @@ impl SystemToolHandler for WorkspaceDeleteHandler {
 #[async_trait]
 impl SystemToolHandler for WorkspaceRenameHandler {
     async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
+        maybe_checkpoint(&deps.cfg.checkpoint_manager, deps.agent_name, deps.workspace_dir).await;
         ph::handle_workspace_rename(deps.workspace_dir, deps.agent_name, args).await
     }
 }
@@ -82,5 +99,32 @@ mod tests {
         assert_impl(WorkspaceEditHandler);
         assert_impl(WorkspaceDeleteHandler);
         assert_impl(WorkspaceRenameHandler);
+    }
+}
+
+#[cfg(test)]
+mod cp_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn maybe_checkpoint_snaps_then_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let mut cfg = crate::config::CheckpointConfig::default();
+        cfg.store_path = store.to_str().unwrap().to_string();
+        let mgr = std::sync::Arc::new(
+            crate::agent::checkpoint_manager::CheckpointManager::new(cfg)
+        );
+        // подготовить scope
+        let p = ws.join("agents").join("Agent").join("x.md");
+        tokio::fs::create_dir_all(p.parent().unwrap()).await.unwrap();
+        tokio::fs::write(&p, "v1").await.unwrap();
+
+        maybe_checkpoint(&Some(mgr.clone()), "Agent", ws.to_str().unwrap()).await;
+        assert!(store.join("refs/checkpoints/Agent/1").exists());
+
+        // None-менеджер — не паникует
+        maybe_checkpoint(&None, "Agent", ws.to_str().unwrap()).await;
     }
 }
