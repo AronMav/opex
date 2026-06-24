@@ -11,6 +11,16 @@ use crate::config::CheckpointConfig;
 /// SHA пустого git-дерева (для diff первого чекпойнта).
 pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+/// Результат операции restore.
+pub(crate) struct RestoreReport {
+    /// Номер чекпойнта, к которому выполнен откат.
+    pub n: usize,
+    /// Файлы, затронутые операцией (changed при full restore; [file] при single-file).
+    pub files: Vec<String>,
+    /// Номер нового forward-чекпойнта («restore of n»), None если дерево не изменилось.
+    pub new_checkpoint: Option<usize>,
+}
+
 /// Метаданные одного чекпойнта (для list_checkpoints).
 pub(crate) struct CheckpointMeta {
     pub n: usize,
@@ -304,6 +314,75 @@ impl CheckpointManager {
         let refname = self.resolve_n(agent, n).await?;
         self.git_ok(agent, workspace_dir, &["diff", &refname, "--", "."]).await
     }
+
+    // ── Restore ───────────────────────────────────────────────────────────────
+
+    /// Лексический anti-traversal для restore-file (файл может НЕ существовать на диске,
+    /// поэтому проверяем без canonicalize): не absolute, без компонента "..", не пустой.
+    fn validate_rel_path(rel: &str) -> anyhow::Result<()> {
+        let p = Path::new(rel);
+        if rel.is_empty() || p.is_absolute() {
+            anyhow::bail!("invalid restore path: {:?}", rel);
+        }
+        for comp in p.components() {
+            use std::path::Component;
+            match comp {
+                Component::Normal(_) | Component::CurDir => {}
+                _ => anyhow::bail!("path escapes scope: {:?}", rel),
+            }
+        }
+        Ok(())
+    }
+
+    /// Откатить workspace агента к чекпойнту n.
+    ///
+    /// - `file = None` — exact-tree restore: index := tree(n), checkout-index, clean untracked.
+    /// - `file = Some(rel)` — single-file restore: только этот файл.
+    ///
+    /// После отката автоматически создаётся новый чекпойнт «restore of n» (forward-only).
+    pub(crate) async fn restore(
+        &self,
+        agent: &str,
+        workspace_dir: &str,
+        n: usize,
+        file: Option<&str>,
+    ) -> anyhow::Result<RestoreReport> {
+        if !self.config.enabled {
+            anyhow::bail!("checkpoints disabled");
+        }
+        let _guard = self.store_lock.lock().await;
+        let refname = self.resolve_n(agent, n).await?;
+        let wt = workspace_dir;
+
+        let files: Vec<String> = if let Some(f) = file {
+            // single-file restore: anti-traversal сначала
+            Self::validate_rel_path(f)?;
+            self.git_ok(agent, wt, &["checkout", &refname, "--", f]).await?;
+            vec![f.to_string()]
+        } else {
+            // exact-tree restore: собрать список изменённых файлов до отката
+            let changed = self
+                .git_ok(agent, wt, &["diff", "--name-only", &refname, "--", "."])
+                .await
+                .unwrap_or_default()
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+
+            // index := дерево чекпойнта n
+            self.git_ok(agent, wt, &["read-tree", &refname]).await?;
+            // выписать индекс в work-tree
+            self.git_ok(agent, wt, &["checkout-index", "-f", "-a"]).await?;
+            // удалить файлы, которых нет в индексе; excludes из info/exclude защищают артефакты
+            self.git_ok(agent, wt, &["clean", "-fd"]).await?;
+            changed
+        };
+
+        // forward-only: зафиксировать состояние после отката новым чекпойнтом
+        let new_checkpoint = self.commit_snapshot(agent, wt, &format!("restore of {n}")).await?;
+        Ok(RestoreReport { n, files, new_checkpoint })
+    }
 }
 
 #[cfg(test)]
@@ -393,6 +472,50 @@ mod tests {
 
         // несуществующий N
         assert!(m.diff(agent, ws.to_str().unwrap(), 99).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn restore_exact_tree_and_single_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let m = mgr_at(&store);
+        let agent = "Agent";
+        let scope = ws.join("agents").join(agent);
+
+        write_scope(&ws, agent, "a.md", "v1").await;
+        m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap(); // cp 1
+
+        // правим a.md и добавляем новый файл b.md → cp 2
+        write_scope(&ws, agent, "a.md", "v2").await;
+        write_scope(&ws, agent, "b.md", "new").await;
+        m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap(); // cp 2
+
+        // exact-tree restore к cp 1: a.md→v1, b.md удалён
+        let rep = m.restore(agent, ws.to_str().unwrap(), 1, None).await.unwrap();
+        assert_eq!(rep.n, 1);
+        assert!(rep.new_checkpoint.is_some());
+        assert_eq!(fs::read_to_string(scope.join("a.md")).await.unwrap(), "v1");
+        assert!(!scope.join("b.md").exists(), "b.md должен быть удалён exact-tree restore");
+
+        // single-file restore: вернуть только a.md из cp 2 (=v2)
+        let rep2 = m.restore(agent, ws.to_str().unwrap(), 2, Some("a.md")).await.unwrap();
+        assert_eq!(rep2.files, vec!["a.md".to_string()]);
+        assert_eq!(fs::read_to_string(scope.join("a.md")).await.unwrap(), "v2");
+    }
+
+    #[tokio::test]
+    async fn restore_rejects_traversal_and_bad_n() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let m = mgr_at(&store);
+        let agent = "Agent";
+        write_scope(&ws, agent, "a.md", "v1").await;
+        m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+
+        assert!(m.restore(agent, ws.to_str().unwrap(), 1, Some("../../etc/passwd")).await.is_err());
+        assert!(m.restore(agent, ws.to_str().unwrap(), 99, None).await.is_err());
     }
 
     #[tokio::test]
