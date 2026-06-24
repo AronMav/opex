@@ -125,6 +125,78 @@ impl HookRegistry {
     }
 }
 
+// ── HookDecision + webhook-response parsing ─────────────────────────────────
+
+/// Result of an async decision-webhook (richer than the sync HookAction).
+#[derive(Debug, Clone)]
+pub enum HookDecision {
+    Continue,
+    Block(String),
+    ModifyArgs(serde_json::Value),
+    InjectContext(String),
+    TransformResult(String),
+}
+
+#[derive(serde::Deserialize, Default)]
+struct WebhookResponse {
+    decision: Option<String>,
+    reason: Option<String>,
+    inject_context: Option<String>,
+    modified_args: Option<serde_json::Value>,
+    transformed_result: Option<String>,
+}
+
+/// Map HookEvent variant to its canonical wire name (same as TOML event name).
+pub(crate) fn event_wire_name(event: &HookEvent) -> &'static str {
+    match event {
+        HookEvent::BeforeMessage => "BeforeMessage",
+        HookEvent::AfterResponse => "AfterResponse",
+        HookEvent::BeforeToolCall { .. } => "BeforeToolCall",
+        HookEvent::AfterToolResult { .. } => "AfterToolResult",
+        HookEvent::OnError => "OnError",
+    }
+}
+
+/// Return the tool name from events that carry one, or None.
+pub(crate) fn event_tool_name(event: &HookEvent) -> Option<&str> {
+    match event {
+        HookEvent::BeforeToolCall { tool_name, .. }
+        | HookEvent::AfterToolResult { tool_name, .. } => Some(tool_name),
+        _ => None,
+    }
+}
+
+/// Parse a webhook JSON body into a HookDecision. Lenient: invalid JSON or `{}`
+/// → Continue (the caller applies on_failure for transport errors separately).
+/// Precedence: explicit block > modified_args > transformed_result > inject_context > continue.
+pub(crate) fn parse_decision(body: &str, event: &HookEvent) -> HookDecision {
+    let r: WebhookResponse = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(_) => return HookDecision::Continue,
+    };
+    if r.decision.as_deref() == Some("block") {
+        return HookDecision::Block(r.reason.unwrap_or_else(|| "blocked by hook".into()));
+    }
+    if let Some(args) = r.modified_args {
+        if matches!(event, HookEvent::BeforeToolCall { .. }) && args.is_object() {
+            return HookDecision::ModifyArgs(args);
+        }
+    }
+    if let Some(res) = r.transformed_result {
+        if matches!(event, HookEvent::AfterToolResult { .. }) {
+            return HookDecision::TransformResult(res);
+        }
+    }
+    if let Some(ctx) = r.inject_context {
+        if matches!(event, HookEvent::BeforeMessage) {
+            return HookDecision::InjectContext(ctx);
+        }
+    }
+    HookDecision::Continue
+}
+
+// ── Map HookEvent variant to its canonical TOML name ────────────────────────
+
 /// Map HookEvent variant to its canonical TOML name.
 pub(crate) fn event_name(event: &HookEvent) -> &'static str {
     match event {
@@ -280,5 +352,47 @@ block_tools = []
         )
         .await;
         assert!(result.is_ok(), "empty fire_webhooks must return immediately");
+    }
+
+    // ── Test 6 — parse_decision variants ────────────────────────────────────
+
+    #[test]
+    fn parse_decision_variants() {
+        let btc = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "t".into() };
+        let bm = HookEvent::BeforeMessage;
+        let atr = HookEvent::AfterToolResult { agent: "A".into(), tool_name: "t".into(), duration_ms: 1 };
+
+        // block
+        assert!(matches!(
+            parse_decision(r#"{"decision":"block","reason":"no"}"#, &btc),
+            HookDecision::Block(r) if r == "no"));
+        // empty → continue
+        assert!(matches!(parse_decision("{}", &btc), HookDecision::Continue));
+        // continue explicit
+        assert!(matches!(parse_decision(r#"{"decision":"continue"}"#, &btc), HookDecision::Continue));
+        // modified_args (BeforeToolCall)
+        assert!(matches!(
+            parse_decision(r#"{"modified_args":{"x":1}}"#, &btc),
+            HookDecision::ModifyArgs(_)));
+        // inject_context (BeforeMessage)
+        assert!(matches!(
+            parse_decision(r#"{"inject_context":"hi"}"#, &bm),
+            HookDecision::InjectContext(s) if s == "hi"));
+        // transformed_result (AfterToolResult)
+        assert!(matches!(
+            parse_decision(r#"{"transformed_result":"r"}"#, &atr),
+            HookDecision::TransformResult(s) if s == "r"));
+        // invalid JSON → Continue (caller maps to on_failure separately; parse is lenient)
+        assert!(matches!(parse_decision("not json", &btc), HookDecision::Continue));
+    }
+
+    // ── Test 7 — event wire helpers ──────────────────────────────────────────
+
+    #[test]
+    fn event_wire_helpers() {
+        let btc = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "tool".into() };
+        assert_eq!(event_wire_name(&btc), "BeforeToolCall");
+        assert_eq!(event_tool_name(&btc), Some("tool"));
+        assert_eq!(event_tool_name(&HookEvent::BeforeMessage), None);
     }
 }
