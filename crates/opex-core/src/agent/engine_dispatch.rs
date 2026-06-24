@@ -46,7 +46,7 @@ impl AgentEngine {
             // Strip _context from parameters before storing (contains internal routing data)
             let clean_params = crate::agent::pipeline::dispatch::clean_tool_params(arguments);
 
-            // Hook: AfterToolResult (fire-and-forget, non-blocking)
+            // Hook: AfterToolResult — sync notification + async decision (transform result).
             let hook_event = crate::agent::hooks::HookEvent::AfterToolResult {
                 agent: self.cfg().agent.name.clone(),
                 tool_name: name.to_string(),
@@ -54,6 +54,22 @@ impl AgentEngine {
             };
             self.hooks().fire(&hook_event);
             self.hooks().fire_webhooks(&hook_event);
+            let decision = self.hooks().fire_decision(
+                &hook_event,
+                serde_json::json!({ "result": result }),
+            ).await;
+            let result = if let crate::agent::hooks::HookDecision::TransformResult(s) = decision {
+                self.cfg().audit_queue.send(crate::db::audit_queue::AuditEvent::HookDecision {
+                    agent_name: self.cfg().agent.name.clone(),
+                    session_id: None,
+                    event_type: "AfterToolResult".into(),
+                    action: "TransformResult".into(),
+                    detail: None,
+                });
+                s
+            } else {
+                result
+            };
 
             self.cfg().audit_queue.send(crate::db::audit_queue::AuditEvent::ToolExecution {
                 agent_name: self.cfg().agent.name.clone(),
