@@ -798,6 +798,13 @@ mod tests {
         for yt in crate::tools::yaml_tools::load_yaml_tools(workspace_dir, true).await {
             known.insert(yt.name);
         }
+        // Capability tools replace the 5 deleted YAML tools (generate_image,
+        // synthesize_speech, search_web, transcribe_audio, analyze_image).
+        // Skills that list these names are correct — the tools now exist as
+        // built-in capability tools rather than YAML files.
+        for name in crate::agent::capability_tools::CAPABILITY_TOOL_NAMES {
+            known.insert(name.to_string());
+        }
 
         // Load workspace skills then config skills using absolute paths derived
         // from the workspace root (avoids cwd-relative path issues in test runner).
