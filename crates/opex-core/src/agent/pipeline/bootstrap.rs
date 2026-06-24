@@ -264,6 +264,37 @@ pub async fn bootstrap<S: EventSink>(
         tracing::info!("fse: at least one attachment took the failure-rewrite path");
     }
 
+    // Decision-webhooks for BeforeMessage: block the turn or inject context.
+    let bm_event = crate::agent::hooks::HookEvent::BeforeMessage;
+    let bm_decision = engine.hooks().fire_decision(
+        &bm_event,
+        serde_json::json!({ "message": enriched_text }),
+    ).await;
+    let enriched_text = match bm_decision {
+        crate::agent::hooks::HookDecision::Block(reason) => {
+            engine.cfg().audit_queue.send(crate::db::audit_queue::AuditEvent::HookDecision {
+                agent_name: engine.cfg().agent.name.clone(),
+                session_id: Some(session_id),
+                event_type: "BeforeMessage".into(),
+                action: "Block".into(),
+                detail: Some(reason.chars().take(512).collect()),
+            });
+            anyhow::bail!("blocked by hook: {}", reason);
+        }
+        crate::agent::hooks::HookDecision::InjectContext(ctx_inject) => {
+            engine.cfg().audit_queue.send(crate::db::audit_queue::AuditEvent::HookDecision {
+                agent_name: engine.cfg().agent.name.clone(),
+                session_id: Some(session_id),
+                event_type: "BeforeMessage".into(),
+                action: "InjectContext".into(),
+                detail: None,
+            });
+            // Inject hook context ahead of the user message (provenance already tagged).
+            format!("{ctx_inject}\n\n{enriched_text}")
+        }
+        _ => enriched_text,
+    };
+
     let sender_agent_id = extract_sender_agent_id(&ctx.msg.user_id);
     // parent_message_id = leaf_message_id: threads the new user message onto
     // the active conversation path so reload-from-active-path can find it.
