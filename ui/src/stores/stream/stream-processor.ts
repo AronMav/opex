@@ -18,6 +18,7 @@ import type {
   TextPart,
   ToolPart,
   ApprovalPart,
+  ClarifyPart,
   ConnectionPhase,
   AgentState,
   MessagePart,
@@ -289,6 +290,22 @@ export async function processSSEStream(
                 modifiedInput: (event.modifiedInput ?? undefined) as Record<string, unknown> | undefined,
               };
             }
+            session.scheduleCommit();
+            break;
+          }
+
+          case "clarify-needed": {
+            session.buffer.flushText();
+            const clarify: ClarifyPart = {
+              type: "clarify",
+              clarifyId: event.clarifyId,
+              question: event.question,
+              choices: event.choices,
+              timeoutMs: event.timeoutMs,
+              receivedAt: Date.now(),
+              response: null,
+            };
+            session.buffer.parts.push(clarify);
             session.scheduleCommit();
             break;
           }

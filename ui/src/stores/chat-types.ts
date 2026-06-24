@@ -72,6 +72,17 @@ export interface ApprovalPart {
   modifiedInput?: Record<string, unknown>;
 }
 
+export interface ClarifyPart {
+  type: "clarify";
+  clarifyId: string;
+  question: string;
+  choices: string[];
+  timeoutMs: number;
+  receivedAt: number;
+  /** null = pending, string = response submitted */
+  response: string | null;
+}
+
 export interface CompressionDividerPart {
   type: "compression-divider";
   segmentIndex: number;
@@ -92,6 +103,7 @@ export type MessagePart =
   | ToolPart
   | RichCardPart
   | ApprovalPart
+  | ClarifyPart
   | CompressionDividerPart
   | FileScenarioChipsPart;
 

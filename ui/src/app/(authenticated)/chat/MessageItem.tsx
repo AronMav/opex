@@ -30,6 +30,7 @@ import {
   RichCardDataPartView,
 } from "./avatar/RoleAvatar";
 import { ApprovalCard } from "@/components/chat/ApprovalCard";
+import { ClarifyCard } from "@/components/chat/ClarifyCard";
 import { abortReasonLabel } from "@/components/chat/abort-reason-label";
 import { useSwipeGesture } from "@/hooks/use-swipe-gesture";
 
@@ -82,6 +83,8 @@ function renderPart(part: MessagePart, index: number) {
       return <RichCardDataPartView key={`card-${part.cardType}-${index}`} data={{ cardType: part.cardType, ...part.data }} />;
     case "approval":
       return <ApprovalCard key={`approval-${part.approvalId}`} part={part} />;
+    case "clarify":
+      return <ClarifyCard key={`clarify-${part.clarifyId}`} part={part} />;
     case "compression-divider":
       return (
         <CompressionDivider

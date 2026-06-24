@@ -28,7 +28,7 @@ export type ActionDeps = {
 };
 
 // ── Re-exports for backward compatibility ───────────────────────────────────
-export type { ChatMessage, MessagePart, TextPart, ToolPart, ToolPartState, RichCardPart, FilePart, ReasoningPart, ConnectionPhase, MessageSource, ChatStore, ApprovalPart } from "./chat-types";
+export type { ChatMessage, MessagePart, TextPart, ToolPart, ToolPartState, RichCardPart, FilePart, ReasoningPart, ConnectionPhase, MessageSource, ChatStore, ApprovalPart, ClarifyPart } from "./chat-types";
 export { isActivePhase, MAX_INPUT_LENGTH, STREAM_THROTTLE_MS } from "./chat-types";
 export { convertHistory, getCachedHistoryMessages, getCachedRawMessages, findSiblings } from "./chat-history";
 export { saveLastSession, getInitialAgent, getLastSessionId } from "./chat-persistence";

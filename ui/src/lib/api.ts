@@ -196,6 +196,25 @@ export async function decideApproval(
   }
 }
 
+export async function submitClarify(
+  clarifyId: string,
+  response: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const resp = await apiFetch(`/api/clarify/${clarifyId}`, {
+      method: "POST",
+      body: JSON.stringify({ response }),
+    });
+    if (!resp.ok) {
+      const err = await extractError(resp);
+      return { ok: false, error: err };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
+  }
+}
+
 export async function inviteAgent(
   sessionId: string,
   ownerAgent: string,
