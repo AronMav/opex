@@ -25,6 +25,13 @@ pub enum AuditEvent {
         duration_ms: i32,
         error: Option<String>,
     },
+    HookDecision {
+        agent_name: String,
+        session_id: Option<Uuid>,
+        event_type: String,
+        action: String,           // "Block" | "ModifyArgs" | "InjectContext" | "TransformResult"
+        detail: Option<String>,   // truncated reason/diff ≤512B
+    },
 }
 
 // ── Queue ────────────────────────────────────────────────────────────
@@ -88,6 +95,17 @@ impl AuditQueue {
                             tracing::warn!(error = %e, "audit queue: failed to record tool quality");
                         }
                     }
+                    AuditEvent::HookDecision { agent_name, session_id, event_type, action, detail } => {
+                        tracing::info!(
+                            target: "hook_audit",
+                            agent = %agent_name,
+                            session = ?session_id,
+                            event = %event_type,
+                            action = %action,
+                            detail = detail.as_deref().unwrap_or(""),
+                            "hook decision",
+                        );
+                    }
                 }
             }
         });
@@ -106,5 +124,30 @@ impl AuditQueue {
                 tracing::error!("audit worker dead — audit events permanently lost");
             }
         }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn hook_decision_event_constructs_and_sends() {
+        // Lazy pool (never connects) — worker arm for HookDecision must not touch DB.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://x:x@127.0.0.1:1/x")
+            .unwrap();
+        let q = AuditQueue::new(pool);
+        q.send(AuditEvent::HookDecision {
+            agent_name: "A".into(),
+            session_id: None,
+            event_type: "BeforeToolCall".into(),
+            action: "Block".into(),
+            detail: Some("reason".into()),
+        });
+        // No panic; give worker a tick.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
