@@ -23,9 +23,9 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 /// GET /api/yaml-tools — global, not per-agent.
-pub(crate) async fn api_yaml_tools_list_global(State(_state): State<InfraServices>) -> impl IntoResponse {
+pub(crate) async fn api_yaml_tools_list_global(State(state): State<InfraServices>) -> impl IntoResponse {
     let tools = crate::tools::yaml_tools::load_all_yaml_tools(crate::config::WORKSPACE_DIR).await;
-    let list: Vec<Value> = tools.iter().map(|t| json!({
+    let mut list: Vec<Value> = tools.iter().map(|t| json!({
         "name": t.name,
         "description": t.description,
         "endpoint": t.endpoint,
@@ -34,6 +34,18 @@ pub(crate) async fn api_yaml_tools_list_global(State(_state): State<InfraService
         "parameters_count": t.parameters.len(),
         "tags": t.tags,
     })).collect();
+    for def in crate::agent::capability_tools::capability_tool_defs(&state.db).await {
+        list.push(json!({
+            "name": def.name,
+            "description": def.description,
+            "endpoint": def.endpoint,
+            "method": def.method,
+            "status": "builtin",
+            "parameters_count": def.parameters.len(),
+            "tags": def.tags,
+            "builtin": true,
+        }));
+    }
     Json(json!({ "tools": list }))
 }
 
