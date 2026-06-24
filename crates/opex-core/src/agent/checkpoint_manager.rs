@@ -11,6 +11,14 @@ use crate::config::CheckpointConfig;
 /// SHA пустого git-дерева (для diff первого чекпойнта).
 pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+/// Метаданные одного чекпойнта (для list_checkpoints).
+pub(crate) struct CheckpointMeta {
+    pub n: usize,
+    pub commit: String,
+    pub created: String,
+    pub summary: String,
+}
+
 /// Каталоги/паттерны, никогда не попадающие в снапшот (cost + safety).
 pub(crate) const DEFAULT_EXCLUDES: &[&str] = &[
     ".git/", "node_modules/", "target/", "dist/", "build/", ".cache/",
@@ -90,6 +98,34 @@ impl CheckpointManager {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
+    /// git для ref/object-операций: только GIT_DIR + изоляция конфигов, БЕЗ
+    /// GIT_WORK_TREE/GIT_INDEX_FILE. Безопасно когда scope-каталог агента не существует.
+    async fn git_bare(&self, args: &[&str]) -> anyhow::Result<Output> {
+        let devnull = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let out = tokio::process::Command::new("git")
+            .env("GIT_DIR", &self.store_path)
+            .env("GIT_CONFIG_GLOBAL", devnull)
+            .env("GIT_CONFIG_SYSTEM", devnull)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "OPEX")
+            .env("GIT_AUTHOR_EMAIL", "checkpoint@opex.local")
+            .env("GIT_COMMITTER_NAME", "OPEX")
+            .env("GIT_COMMITTER_EMAIL", "checkpoint@opex.local")
+            .args(args)
+            .output()
+            .await?;
+        Ok(out)
+    }
+
+    /// git_bare, который падает (bail) при ненулевом статусе; возвращает stdout как String.
+    async fn git_bare_ok(&self, args: &[&str]) -> anyhow::Result<String> {
+        let out = self.git_bare(args).await?;
+        if !out.status.success() {
+            anyhow::bail!("git {:?} failed: {}", args, String::from_utf8_lossy(&out.stderr));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
     /// Пересоздать структуру bare-репо, если `gc` её снёс (порт Hermes `_repair_bare_repo_dirs`).
     fn repair_bare_repo_dirs(&self) -> anyhow::Result<()> {
         for d in ["refs", "refs/checkpoints", "objects", "objects/pack", "objects/info"] {
@@ -149,8 +185,8 @@ impl CheckpointManager {
     }
 
     /// Наибольший существующий n для агента (0 если refs нет).
-    async fn max_existing_n(&self, agent: &str, workspace_dir: &str) -> anyhow::Result<usize> {
-        let refs = self.git_ok(agent, workspace_dir, &[
+    async fn max_existing_n(&self, agent: &str) -> anyhow::Result<usize> {
+        let refs = self.git_bare_ok(&[
             "for-each-ref", "--format=%(refname)",
             &format!("refs/checkpoints/{agent}/*"),
         ]).await.unwrap_or_default();
@@ -188,9 +224,9 @@ impl CheckpointManager {
         let tree = self.git_ok(agent, wt, &["write-tree"]).await?.trim().to_string();
 
         // no-op, если дерево совпало с последним чекпойнтом.
-        let last_n = self.max_existing_n(agent, wt).await?;
+        let last_n = self.max_existing_n(agent).await?;
         if last_n > 0 {
-            let last_tree = self.git_ok(agent, wt, &[
+            let last_tree = self.git_bare_ok(&[
                 "rev-parse", &format!("refs/checkpoints/{agent}/{last_n}^{{tree}}"),
             ]).await?.trim().to_string();
             if last_tree == tree {
@@ -215,6 +251,58 @@ impl CheckpointManager {
         }
         let _guard = self.store_lock.lock().await;
         self.commit_snapshot(agent, workspace_dir, "checkpoint").await
+    }
+
+    /// Проверить, что чекпойнт n существует; вернуть полное имя ref.
+    async fn resolve_n(&self, agent: &str, n: usize) -> anyhow::Result<String> {
+        Self::validate_agent_name(agent)?;
+        let refname = format!("refs/checkpoints/{agent}/{n}");
+        let out = self.git_bare(&["rev-parse", "--verify", "--quiet", &refname]).await?;
+        if !out.status.success() {
+            anyhow::bail!("checkpoint {n} not found");
+        }
+        Ok(refname)
+    }
+
+    /// Вернуть список чекпойнтов агента, newest-first (по n убыв.).
+    pub(crate) async fn list_checkpoints(&self, agent: &str) -> anyhow::Result<Vec<CheckpointMeta>> {
+        Self::validate_agent_name(agent)?;
+        self.ensure_store().await?;
+        let refs = self.git_bare_ok(&[
+            "for-each-ref", "--format=%(refname)", &format!("refs/checkpoints/{agent}"),
+        ]).await.unwrap_or_default();
+
+        let mut ns: Vec<usize> = refs.lines()
+            .filter_map(|r| r.rsplit('/').next())
+            .filter_map(|s| s.parse::<usize>().ok())
+            .collect();
+        ns.sort_unstable_by(|a, b| b.cmp(a)); // newest (наибольший n) первым
+
+        let mut out = Vec::with_capacity(ns.len());
+        for n in ns {
+            let refname = format!("refs/checkpoints/{agent}/{n}");
+            let commit = self.git_bare_ok(&["rev-parse", &refname]).await?.trim().to_string();
+            let created = self.git_bare_ok(&[
+                "show", "-s", "--format=%cI", &refname,
+            ]).await?.trim().to_string();
+            // shortstat этого снапшота относительно предыдущего (или пустого дерева).
+            let prev = if n > 1 {
+                format!("refs/checkpoints/{agent}/{}", n - 1)
+            } else {
+                EMPTY_TREE.to_string()
+            };
+            let summary = self.git_bare_ok(&[
+                "diff", "--shortstat", &prev, &refname,
+            ]).await.unwrap_or_default().trim().to_string();
+            out.push(CheckpointMeta { n, commit, created, summary });
+        }
+        Ok(out)
+    }
+
+    /// Diff между чекпойнтом n и текущим состоянием workspace_dir.
+    pub(crate) async fn diff(&self, agent: &str, workspace_dir: &str, n: usize) -> anyhow::Result<String> {
+        let refname = self.resolve_n(agent, n).await?;
+        self.git_ok(agent, workspace_dir, &["diff", &refname, "--", "."]).await
     }
 }
 
@@ -278,6 +366,33 @@ mod tests {
         write_scope(&ws, agent, "notes.md", "v2").await;
         let n2 = m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
         assert_eq!(n2, Some(2));
+    }
+
+    #[tokio::test]
+    async fn list_and_diff() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let m = mgr_at(&store);
+        let agent = "Agent";
+
+        write_scope(&ws, agent, "a.md", "one").await;
+        m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+        write_scope(&ws, agent, "a.md", "two").await;
+        m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+
+        let list = m.list_checkpoints(agent).await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].n, 2); // newest first
+        assert_eq!(list[1].n, 1);
+        assert!(!list[0].created.is_empty());
+
+        // diff чекпойнта 1 против текущего ("two") должен показать изменение
+        let d = m.diff(agent, ws.to_str().unwrap(), 1).await.unwrap();
+        assert!(d.contains("one") || d.contains("two"), "diff: {d}");
+
+        // несуществующий N
+        assert!(m.diff(agent, ws.to_str().unwrap(), 99).await.is_err());
     }
 
     #[tokio::test]
