@@ -362,6 +362,212 @@ pub(super) async fn handle_approval_callback(
     true
 }
 
+// ── Clarify callback / text-intercept ────────────────────────────────────────
+
+/// Parse a `clarify:{uuid}:{idx_or_other}` Telegram callback payload.
+/// Returns `(clarify_id, slot)` where slot is `"0"`, `"1"`, ... or `"other"`.
+pub(super) fn parse_clarify_callback(text: &str) -> Option<(uuid::Uuid, String)> {
+    let rest = text.strip_prefix("clarify:")?;
+    let (id_str, slot) = rest.split_once(':')?;
+    let id = id_str.parse::<uuid::Uuid>().ok()?;
+    if slot.is_empty() {
+        return None;
+    }
+    Some((id, slot.to_string()))
+}
+
+/// Intercept `clarify:{id}:{idx_or_other}` inline-button callbacks.
+///
+/// - `idx` (numeric) → look up choice text in the button payload; resolve waiter.
+/// - `"other"` → flip `awaiting_text = true` via `mark_awaiting_text` so the
+///   next plain text message is intercepted as a free-form answer.
+///
+/// Owner-gated (same rule as approval callbacks). Returns `true` when consumed.
+pub(super) async fn handle_clarify_callback(
+    ctx: &CwsCtx,
+    engine: &Arc<AgentEngine>,
+    agent_name: &str,
+    request_id: &str,
+    msg: &IncomingMessageDto,
+    out_tx: &mpsc::Sender<OutboundMsg>,
+) -> bool {
+    let is_callback = msg
+        .context
+        .get("is_callback")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !is_callback {
+        return false;
+    }
+
+    let text = msg.text.as_deref().unwrap_or("");
+    let Some((clarify_id, slot)) = parse_clarify_callback(text) else {
+        return false;
+    };
+    let user_id = msg.user_id.clone();
+
+    // Owner gate — same pattern as approval callbacks.
+    let live_guard = ctx.auth.access_guards.read().await.get(agent_name).cloned();
+    let is_owner = live_guard.as_ref().is_some_and(|g| g.is_owner(&user_id));
+    if !is_owner {
+        tracing::warn!(%user_id, "non-owner attempted to resolve clarify via callback");
+        let _ = out_tx
+            .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                request_id: request_id.to_string(),
+                message: "Only the owner can answer clarification questions.".to_string(),
+            }))
+            .await;
+        return true;
+    }
+
+    let clarify_mgr = &engine.cfg().clarify_manager;
+
+    if slot == "other" {
+        // Flip the waiter to awaiting_text mode so the next plain message
+        // is intercepted as a free-form response.
+        clarify_mgr.mark_awaiting_text(clarify_id);
+        let _ = out_tx
+            .send(OutboundMsg::Wire(ChannelOutbound::Done {
+                request_id: request_id.to_string(),
+                text: "Please type your answer.".to_string(),
+            }))
+            .await;
+        return true;
+    }
+
+    // Numeric slot → resolve with the choice text.
+    // The channel adapter is expected to echo `button_text` in the callback
+    // context. Fall back to `"option {idx}"` if the adapter does not.
+    let choice_text = if let Ok(idx) = slot.parse::<usize>() {
+        msg.context
+            .get("button_text")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("option {idx}"))
+    } else {
+        slot.clone()
+    };
+
+    let resolved = clarify_mgr.resolve(clarify_id, choice_text.clone());
+    if resolved {
+        tracing::info!(
+            %clarify_id, choice = %choice_text, %user_id,
+            "clarify resolved via channel button callback"
+        );
+        let _ = out_tx
+            .send(OutboundMsg::Wire(ChannelOutbound::Done {
+                request_id: request_id.to_string(),
+                text: format!("✅ {choice_text}"),
+            }))
+            .await;
+    } else {
+        tracing::warn!(%clarify_id, "clarify callback: waiter not found (already resolved?)");
+        let _ = out_tx
+            .send(OutboundMsg::Wire(ChannelOutbound::Error {
+                request_id: request_id.to_string(),
+                message: "Clarify already resolved or timed out.".to_string(),
+            }))
+            .await;
+    }
+    true
+}
+
+/// Try to intercept a plain text message as a clarify open-ended response.
+///
+/// Priority: if there is an active approval waiter for this agent, we do NOT
+/// intercept — approval takes priority over clarify text-intercept.
+///
+/// `channel_type` is the adapter-reported channel (e.g. `"telegram"`) — it
+/// comes from `ReaderState.channel_type` which is known at the call site.
+///
+/// Returns `true` when the message was consumed as a clarify response.
+pub(super) async fn handle_clarify_text(
+    ctx: &CwsCtx,
+    engine: &Arc<AgentEngine>,
+    agent_name: &str,
+    channel_type: &str,
+    request_id: &str,
+    msg: &IncomingMessageDto,
+    out_tx: &mpsc::Sender<OutboundMsg>,
+) -> bool {
+    // Callbacks are handled by handle_clarify_callback — skip here.
+    let is_callback = msg
+        .context
+        .get("is_callback")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if is_callback {
+        return false;
+    }
+
+    let text = match msg.text.as_deref() {
+        Some(t) if !t.trim().is_empty() => t.trim().to_string(),
+        _ => return false,
+    };
+
+    // Resolve the session for this channel peer so we can check for pending
+    // clarify waiters. Uses the same lookup as mirror_to_session and the
+    // channel_ws handshake (resolve_active_dm_session, ≤4h window).
+    let dm_scope = engine
+        .cfg()
+        .agent
+        .session
+        .as_ref()
+        .map(|s| s.dm_scope.as_str())
+        .unwrap_or("per-channel-peer")
+        .to_string();
+
+    let session_id = match opex_db::sessions::resolve_active_dm_session(
+        &ctx.infra.db,
+        agent_name,
+        &msg.user_id,
+        channel_type,
+        &dm_scope,
+    )
+    .await
+    {
+        Ok(Some((sid, _status))) => sid,
+        _ => return false,
+    };
+
+    let clarify_mgr = &engine.cfg().clarify_manager;
+
+    // Check for pending open-ended clarify waiter.
+    let Some(clarify_id) = clarify_mgr.has_pending_text(session_id) else {
+        return false;
+    };
+
+    // Priority: if this agent has ANY active approval waiter, let the
+    // message fall through to the dispatcher so the approval flow is not
+    // inadvertently consumed by the clarify interceptor.
+    let approval_waiters = engine.tex().approval_waiters.len();
+    if approval_waiters > 0 {
+        tracing::debug!(
+            %session_id, %clarify_id,
+            "clarify text-intercept: skipping — approval waiter active"
+        );
+        return false;
+    }
+
+    let resolved = clarify_mgr.resolve(clarify_id, text.clone());
+    if resolved {
+        tracing::info!(
+            %clarify_id, %session_id, %agent_name,
+            "clarify resolved via channel text-intercept"
+        );
+        let _ = out_tx
+            .send(OutboundMsg::Wire(ChannelOutbound::Done {
+                request_id: request_id.to_string(),
+                text: format!("✅ Got it: {text}"),
+            }))
+            .await;
+        true
+    } else {
+        // Waiter disappeared between has_pending_text and resolve — race; fall through.
+        false
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -401,5 +607,48 @@ mod fse_callback_tests {
         let id = Uuid::nil();
         let parsed = parse_fse_callback(&format!("fse:{id}:save:extra"));
         assert_eq!(parsed, Some((id, "save:extra".to_string())));
+    }
+}
+
+#[cfg(test)]
+mod clarify_callback_tests {
+    use super::parse_clarify_callback;
+    use uuid::Uuid;
+
+    #[test]
+    fn parses_numeric_slot() {
+        let id = Uuid::nil();
+        let parsed = parse_clarify_callback(&format!("clarify:{id}:2"));
+        assert_eq!(parsed, Some((id, "2".to_string())));
+    }
+
+    #[test]
+    fn parses_other_slot() {
+        let id = Uuid::nil();
+        let parsed = parse_clarify_callback(&format!("clarify:{id}:other"));
+        assert_eq!(parsed, Some((id, "other".to_string())));
+    }
+
+    #[test]
+    fn rejects_non_clarify() {
+        assert!(parse_clarify_callback("approve:abc").is_none());
+        assert!(parse_clarify_callback("fse:abc:x").is_none());
+    }
+
+    #[test]
+    fn rejects_malformed_uuid() {
+        assert!(parse_clarify_callback("clarify:not-a-uuid:0").is_none());
+    }
+
+    #[test]
+    fn rejects_empty_slot() {
+        let id = Uuid::nil();
+        assert!(parse_clarify_callback(&format!("clarify:{id}:")).is_none());
+    }
+
+    #[test]
+    fn rejects_missing_slot() {
+        let id = Uuid::nil();
+        assert!(parse_clarify_callback(&format!("clarify:{id}")).is_none());
     }
 }
