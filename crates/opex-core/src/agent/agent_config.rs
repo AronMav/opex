@@ -5,6 +5,7 @@ use std::sync::Arc;
 use sqlx::PgPool;
 
 use crate::agent::approval_manager::ApprovalManager;
+use crate::agent::clarify_manager::ClarifyManager;
 use crate::agent::memory_service::MemoryService;
 use crate::agent::providers::LlmProvider;
 use crate::agent::session_agent_pool::SessionPoolsMap;
@@ -40,6 +41,7 @@ pub struct AgentConfig {
     // ── Tools ───────────────────────────────────────────────────────────
     pub tools: ToolRegistry,
     pub approval_manager: Arc<ApprovalManager>,
+    pub clarify_manager: Arc<ClarifyManager>,
 
     // ── Infra ───────────────────────────────────────────────────────────
     pub scheduler: Option<Arc<Scheduler>>,
