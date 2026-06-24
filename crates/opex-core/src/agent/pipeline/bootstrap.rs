@@ -170,10 +170,10 @@ pub async fn bootstrap<S: EventSink>(
     }
 
     // Граница нового хода: prune старья (best-effort, не блокирует ход).
-    if let Some(cm) = engine.cfg().checkpoint_manager.as_ref() {
-        if let Err(e) = cm.new_turn(&engine.cfg().agent.name).await {
-            tracing::warn!(error = %e, "checkpoint new_turn failed (non-fatal)");
-        }
+    if let Some(cm) = engine.cfg().checkpoint_manager.as_ref()
+        && let Err(e) = cm.new_turn(&engine.cfg().agent.name).await
+    {
+        tracing::warn!(error = %e, "checkpoint new_turn failed (non-fatal)");
     }
 
     // Persist the originating channel chat_id (if any) so an interactive `/goal`
