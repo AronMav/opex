@@ -31,7 +31,7 @@
 - **Modify** `crates/opex-core/src/db/audit_queue.rs` — `AuditEvent::HookDecision` variant + worker arm.
 - **Modify** `crates/opex-core/src/agent/engine_dispatch.rs` — BeforeToolCall (block+modify), AfterToolResult (transform).
 - **Modify** `crates/opex-core/src/agent/pipeline/bootstrap.rs` — BeforeMessage decision (block+inject).
-- **Test** integration: `crates/opex-core/tests/integration_hooks.rs` (WireMock).
+- **Test** WireMock: `#[cfg(test)] mod tests` ВНУТРИ `crates/opex-core/src/agent/hooks.rs` (внутрикрейтовые — `lib.rs` НЕ экспонирует `agent::hooks`/`config` для внешнего крейта; dev-dep `wiremock 0.6.5` доступен unit-тестам). Внутренние типы — через `super::*` / `crate::config::*`. НЕ создавать `tests/integration_hooks.rs`.
 
 ---
 
@@ -429,7 +429,7 @@ git commit -m "feat(hooks): CompiledWebhook storage, set_webhooks matcher+intern
 
 **Files:**
 - Modify: `crates/opex-core/src/agent/hooks.rs`
-- Test: `crates/opex-core/tests/integration_hooks.rs` (новый, WireMock)
+- Test: `#[cfg(test)] mod tests` в `crates/opex-core/src/agent/hooks.rs` (WireMock, внутрикрейтовые)
 
 **Interfaces:**
 - Consumes: `parse_decision`, `event_wire_name`, `event_tool_name`, `hook_provenance`, `CompiledWebhook`, clients (Task 2-3).
@@ -437,14 +437,13 @@ git commit -m "feat(hooks): CompiledWebhook storage, set_webhooks matcher+intern
 
 - [ ] **Step 1: Падающий integration-тест (WireMock)**
 
-Создать `crates/opex-core/tests/integration_hooks.rs`:
+Добавить WireMock-тесты в `#[cfg(test)] mod tests` внутри `hooks.rs` (внутрикрейтовые; типы через `super`). Импорты в начале тест-модуля:
 
 ```rust
+use super::*;  // HookRegistry, HookEvent, HookDecision, fire_decision
+use crate::config::{WebhookConfig, WebhookMode, FailureMode};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use wiremock::matchers::{method, path};
-use opex_core::agent::hooks::HookRegistry;
-use opex_core::agent::hooks::HookEvent;
-use opex_core::config::{WebhookConfig, WebhookMode, FailureMode};
 
 fn decision_hook(url: String, matcher: Option<String>, on_failure: FailureMode) -> WebhookConfig {
     WebhookConfig {
@@ -464,7 +463,7 @@ async fn fire_decision_block_vetoes() {
     reg.set_webhooks(reqwest::Client::new(), vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
     let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "code_exec".into() };
     let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
-    assert!(matches!(d, opex_core::agent::hooks::HookDecision::Block(r) if r == "nope"));
+    assert!(matches!(d, HookDecision::Block(r) if r == "nope"));
 }
 
 #[tokio::test]
@@ -477,7 +476,7 @@ async fn fire_decision_modify_args() {
     reg.set_webhooks(reqwest::Client::new(), vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
     let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "code_exec".into() };
     let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{"x":1}})).await;
-    match d { opex_core::agent::hooks::HookDecision::ModifyArgs(v) => assert_eq!(v["x"], 2), o => panic!("{o:?}") }
+    match d { HookDecision::ModifyArgs(v) => assert_eq!(v["x"], 2), o => panic!("{o:?}") }
 }
 
 #[tokio::test]
@@ -490,7 +489,7 @@ async fn fire_decision_transform_result_has_provenance() {
     reg.set_webhooks(reqwest::Client::new(), vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
     let ev = HookEvent::AfterToolResult { agent: "A".into(), tool_name: "t".into(), duration_ms: 1 };
     let d = reg.fire_decision(&ev, serde_json::json!({"result":"orig"})).await;
-    match d { opex_core::agent::hooks::HookDecision::TransformResult(s) => assert!(s.starts_with("[hook:")), o => panic!("{o:?}") }
+    match d { HookDecision::TransformResult(s) => assert!(s.starts_with("[hook:")), o => panic!("{o:?}") }
 }
 
 #[tokio::test]
@@ -503,7 +502,7 @@ async fn fire_decision_matcher_skips_nonmatching_tool() {
     reg.set_webhooks(reqwest::Client::new(), vec![decision_hook(format!("{}/h", server.uri()), Some("code_.*".into()), FailureMode::Open)]);
     let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "workspace_write".into() };
     let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
-    assert!(matches!(d, opex_core::agent::hooks::HookDecision::Continue));
+    assert!(matches!(d, HookDecision::Continue));
 }
 
 #[tokio::test]
@@ -513,7 +512,7 @@ async fn fire_decision_failclosed_on_unreachable_blocks() {
     reg.set_webhooks(reqwest::Client::new(), vec![decision_hook("http://127.0.0.1:1/h".into(), None, FailureMode::Closed)]);
     let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "t".into() };
     let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
-    assert!(matches!(d, opex_core::agent::hooks::HookDecision::Block(_)));
+    assert!(matches!(d, HookDecision::Block(_)));
 }
 
 #[tokio::test]
@@ -522,15 +521,15 @@ async fn fire_decision_failopen_on_unreachable_continues() {
     reg.set_webhooks(reqwest::Client::new(), vec![decision_hook("http://127.0.0.1:1/h".into(), None, FailureMode::Open)]);
     let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "t".into() };
     let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
-    assert!(matches!(d, opex_core::agent::hooks::HookDecision::Continue));
+    assert!(matches!(d, HookDecision::Continue));
 }
 ```
 
-> Для доступа из `tests/` крейта `HookRegistry`/`HookEvent`/`HookDecision`/`config` enums должны быть `pub` и реэкспортированы. Если они `pub(crate)` — добавить `pub` (см. реализацию: `HookDecision` уже `pub`; `fire_decision` `pub`; `HookEvent`/`HookRegistry` уже `pub`; `WebhookMode`/`FailureMode` `pub`). `parse_decision`/`event_*`/`hook_provenance` остаются `pub(crate)` (тестируются в unit-тестах hooks.rs Task 2-3).
+> Тесты живут в `#[cfg(test)] mod tests` ВНУТРИ `hooks.rs` (НЕ внешний `tests/`-крейт — `lib.rs` не экспонирует `agent::hooks`/`config`). Внутри модуля всё достижимо через `super::*`/`crate::config::*` без `pub`-расширения. `decision_hook`-хелпер — в том же тест-модуле (используется и в Task 6/7/8). `wiremock` (dev-dep) доступен unit-тестам.
 
 - [ ] **Step 2: FAIL**
 
-Run: `cargo test --test integration_hooks -- --nocapture`
+Run: `cargo test --bin opex-core -- --nocapture`
 Expected: FAIL — `fire_decision` не найден.
 
 - [ ] **Step 3: Реализация `fire_decision`**
@@ -631,7 +630,7 @@ impl HookRegistry {
 
 - [ ] **Step 4: PASS**
 
-Run: `cargo test --test integration_hooks -- --nocapture`
+Run: `cargo test --bin opex-core -- --nocapture`
 Expected: PASS (6 тестов).
 Run: `cargo check --all-targets`
 Expected: PASS (`fire_decision` пока не вызван из prod → dead_code warning ОЖИДАЕМ; полный clippy — Task 6+).
@@ -639,7 +638,7 @@ Expected: PASS (`fire_decision` пока не вызван из prod → dead_co
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/opex-core/src/agent/hooks.rs crates/opex-core/tests/integration_hooks.rs
+git add crates/opex-core/src/agent/hooks.rs
 git commit -m "feat(hooks): fire_decision (sequential, first-block, chaining, on_failure) + WireMock tests"
 ```
 
@@ -728,7 +727,7 @@ git commit -m "feat(hooks): AuditEvent::HookDecision variant + tracing-backed wo
 
 **Files:**
 - Modify: `crates/opex-core/src/agent/engine_dispatch.rs` (~142-150)
-- Test: добавить в `crates/opex-core/tests/integration_hooks.rs` (или unit, см. ниже)
+- Test: добавить в `#[cfg(test)] mod tests` в `crates/opex-core/src/agent/hooks.rs`
 
 **Interfaces:**
 - Consumes: `fire_decision` (Task 4), `AuditEvent::HookDecision` (Task 5), rebind-паттерн `ApprovedWithModifiedArgs` (engine_dispatch.rs:121-128).
@@ -798,13 +797,13 @@ async fn fire_decision_chains_modified_args() {
     ]);
     let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "t".into() };
     let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{"x":1}})).await;
-    match d { opex_core::agent::hooks::HookDecision::ModifyArgs(v) => assert_eq!(v["x"], 3), o => panic!("{o:?}") }
+    match d { HookDecision::ModifyArgs(v) => assert_eq!(v["x"], 3), o => panic!("{o:?}") }
 }
 ```
 
 - [ ] **Step 3: Запустить**
 
-Run: `cargo test --test integration_hooks fire_decision_chains -- --nocapture`
+Run: `cargo test --bin opex-core fire_decision_chains -- --nocapture`
 Expected: PASS.
 Run: `cargo check --all-targets`
 Expected: PASS.
@@ -812,7 +811,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/opex-core/src/agent/engine_dispatch.rs crates/opex-core/tests/integration_hooks.rs
+git add crates/opex-core/src/agent/engine_dispatch.rs crates/opex-core/src/agent/hooks.rs
 git commit -m "feat(hooks): BeforeToolCall decision — block veto + modified-args rebind + audit"
 ```
 
@@ -853,7 +852,7 @@ git commit -m "feat(hooks): BeforeToolCall decision — block veto + modified-ar
 
 - [ ] **Step 2: Тест**
 
-Покрытие transform + provenance — integration-тест `fire_decision_transform_result_has_provenance` (Task 4). Дополнительно проверить, что для НЕ-transform решения результат не меняется — добавить в `integration_hooks.rs`:
+Покрытие transform + provenance — integration-тест `fire_decision_transform_result_has_provenance` (Task 4). Дополнительно проверить, что для НЕ-transform решения результат не меняется — добавить в `#[cfg(test)] mod tests` в `hooks.rs`:
 
 ```rust
 #[tokio::test]
@@ -866,13 +865,13 @@ async fn fire_decision_continue_keeps_result() {
     reg.set_webhooks(reqwest::Client::new(), vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
     let ev = HookEvent::AfterToolResult { agent: "A".into(), tool_name: "t".into(), duration_ms: 1 };
     let d = reg.fire_decision(&ev, serde_json::json!({"result":"orig"})).await;
-    assert!(matches!(d, opex_core::agent::hooks::HookDecision::Continue));
+    assert!(matches!(d, HookDecision::Continue));
 }
 ```
 
 - [ ] **Step 3: Запустить**
 
-Run: `cargo test --test integration_hooks fire_decision_continue_keeps -- --nocapture`
+Run: `cargo test --bin opex-core fire_decision_continue_keeps -- --nocapture`
 Expected: PASS.
 Run: `cargo check --all-targets`
 Expected: PASS.
@@ -880,7 +879,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/opex-core/src/agent/engine_dispatch.rs crates/opex-core/tests/integration_hooks.rs
+git add crates/opex-core/src/agent/engine_dispatch.rs crates/opex-core/src/agent/hooks.rs
 git commit -m "feat(hooks): AfterToolResult decision — transform result + provenance + audit"
 ```
 
@@ -935,7 +934,7 @@ git commit -m "feat(hooks): AfterToolResult decision — transform result + prov
 
 - [ ] **Step 2: Тест**
 
-BeforeMessage inject покрывается unit-уровнем `fire_decision` — добавить в `integration_hooks.rs`:
+BeforeMessage inject покрывается unit-уровнем `fire_decision` — добавить в `#[cfg(test)] mod tests` в `hooks.rs`:
 
 ```rust
 #[tokio::test]
@@ -948,7 +947,7 @@ async fn fire_decision_inject_context_has_provenance() {
     reg.set_webhooks(reqwest::Client::new(), vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
     let ev = HookEvent::BeforeMessage;
     let d = reg.fire_decision(&ev, serde_json::json!({"message":"hi"})).await;
-    match d { opex_core::agent::hooks::HookDecision::InjectContext(s) => {
+    match d { HookDecision::InjectContext(s) => {
         assert!(s.starts_with("[hook:")); assert!(s.contains("today is friday"));
     }, o => panic!("{o:?}") }
 }
@@ -956,7 +955,7 @@ async fn fire_decision_inject_context_has_provenance() {
 
 - [ ] **Step 3: Запустить**
 
-Run: `cargo test --test integration_hooks fire_decision_inject -- --nocapture`
+Run: `cargo test --bin opex-core fire_decision_inject -- --nocapture`
 Expected: PASS.
 Run: `cargo check --all-targets`
 Expected: PASS.
@@ -964,7 +963,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/opex-core/src/agent/pipeline/bootstrap.rs crates/opex-core/tests/integration_hooks.rs
+git add crates/opex-core/src/agent/pipeline/bootstrap.rs crates/opex-core/src/agent/hooks.rs
 git commit -m "feat(hooks): BeforeMessage decision in bootstrap — block + inject context + audit"
 ```
 
@@ -998,7 +997,7 @@ git commit -m "feat(hooks): BeforeMessage decision in bootstrap — block + inje
 
 - [ ] **Step 2: Финальный гейт**
 
-Run: `cargo test --bin opex-core hooks -- --nocapture` && `cargo test --test integration_hooks -- --nocapture`
+Run: `cargo test --bin opex-core hooks -- --nocapture` && `cargo test --bin opex-core -- --nocapture`
 Expected: PASS (все hook-тесты).
 Run: `cargo clippy --all-targets -- -D warnings`
 Expected: PASS — весь decision-функционал теперь используется из prod (BeforeToolCall/AfterToolResult/BeforeMessage). Если остался dead_code/clippy — устранить (мёртвый код удалить или проверить путь; не глушить `#[allow]` без причины).
