@@ -899,6 +899,35 @@ pub struct HooksConfig {
     pub webhooks: Vec<WebhookConfig>,
 }
 
+/// Webhook firing mode: fire-and-forget vs. blocking decision gate.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WebhookMode {
+    /// Fire-and-forget: POST is sent but the agent does not wait for the
+    /// response. Default for backward compatibility with existing configs.
+    #[default]
+    Async,
+    /// Decision gate: agent waits for an HTTP 200 `{"allow": bool}` reply
+    /// before proceeding. Times out after `timeout_ms`; behaviour on timeout
+    /// is governed by `on_failure`.
+    Decision,
+}
+
+/// What to do when a `Decision`-mode webhook times out or returns an error.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FailureMode {
+    /// Allow the action to proceed (fail-open). Default.
+    #[default]
+    Open,
+    /// Block the action (fail-closed).
+    Closed,
+}
+
+fn default_hook_timeout_ms() -> u64 {
+    3000
+}
+
 /// Outbound webhook subscription for hook events (TOML:
 /// `[[agent.hooks.webhooks]]`). Fire-and-forget HTTP POST per matching event.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Default)]
@@ -910,6 +939,21 @@ pub struct WebhookConfig {
     /// "AfterToolResult", "OnError". Unknown names are ignored at fire time.
     #[serde(default)]
     pub events: Vec<String>,
+    /// Firing mode: `async` (fire-and-forget, default) or `decision` (blocking gate).
+    #[serde(default)]
+    pub mode: WebhookMode,
+    /// Regex on tool_name (BeforeToolCall/AfterToolResult). None = all tools.
+    #[serde(default)]
+    pub tool_matcher: Option<String>,
+    /// What to do when a Decision-mode webhook times out or errors.
+    #[serde(default)]
+    pub on_failure: FailureMode,
+    /// Timeout for Decision-mode webhooks in milliseconds (default: 3000).
+    #[serde(default = "default_hook_timeout_ms")]
+    pub timeout_ms: u64,
+    /// true → bypass SSRF resolver (admin opt-in for localhost/LAN hook service).
+    #[serde(default)]
+    pub allow_internal: bool,
 }
 
 /// Per-agent tool loop configuration (TOML: `[agent.tool_loop]`).
@@ -2922,7 +2966,7 @@ mod checkpoint_config_tests {
 
 #[cfg(test)]
 mod precheck_tests {
-    use super::AppConfig;
+    use super::{AppConfig, FailureMode, WebhookConfig, WebhookMode};
     use std::io::Write;
 
     fn write_temp_toml(content: &str) -> tempfile::NamedTempFile {
@@ -2981,5 +3025,34 @@ session_timeline_batch_size = 1000
         let cfg = AppConfig::load(f.path()).expect("new keys must parse");
         assert_eq!(cfg.cleanup.session_timeline_retention_days, 14);
         assert_eq!(cfg.cleanup.session_timeline_batch_size, 1000);
+    }
+
+    #[test]
+    fn webhook_config_backward_compat_defaults_async() {
+        let toml = r#"url = "https://x/h"
+events = ["BeforeToolCall"]"#;
+        let w: WebhookConfig = toml::from_str(toml).unwrap();
+        assert!(matches!(w.mode, WebhookMode::Async));
+        assert!(matches!(w.on_failure, FailureMode::Open));
+        assert_eq!(w.timeout_ms, 3000);
+        assert!(!w.allow_internal);
+        assert!(w.tool_matcher.is_none());
+    }
+
+    #[test]
+    fn webhook_config_decision_parses() {
+        let toml = r#"url = "https://x/h"
+events = ["BeforeToolCall"]
+mode = "decision"
+tool_matcher = "code_exec|workspace_.*"
+on_failure = "closed"
+timeout_ms = 1500
+allow_internal = true"#;
+        let w: WebhookConfig = toml::from_str(toml).unwrap();
+        assert!(matches!(w.mode, WebhookMode::Decision));
+        assert!(matches!(w.on_failure, FailureMode::Closed));
+        assert_eq!(w.timeout_ms, 1500);
+        assert!(w.allow_internal);
+        assert_eq!(w.tool_matcher.as_deref(), Some("code_exec|workspace_.*"));
     }
 }
