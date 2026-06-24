@@ -170,6 +170,7 @@ pub async fn start_agent_from_config(
     let clarify_manager = Arc::new(crate::agent::clarify_manager::ClarifyManager::new(
         infra.db.clone(),
         clarify_waiters,
+        name.clone(),
     ));
 
     let agent_state = Arc::new(crate::agent::agent_state::AgentState::new(

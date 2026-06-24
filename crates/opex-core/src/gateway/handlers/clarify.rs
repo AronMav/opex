@@ -1,12 +1,14 @@
 //! `POST /api/clarify/{id}` — resolve a pending mid-run clarification waiter.
 //!
 //! Architecture: `ClarifyManager` is per-agent (held in `AgentConfig`).
-//! `clarify_id` is a globally unique UUID, so we iterate over all running
-//! engines and call `clarify_manager.resolve(id, response)` on each until
-//! one succeeds. This mirrors the approach used by `approval_waiters` (which
-//! look up the DB first to get the agent_id); here there is no DB record for
-//! clarify entries — they are in-memory only — so we scan across engines
-//! (n ≤ 20 in practice; resolution terminates at the first hit).
+//! `clarify_id` is a globally unique UUID; `CLARIFY_AGENT_INDEX` (process-wide
+//! DashMap registered in `clarify_manager.rs`) maps each live clarify_id to its
+//! owning agent name, so we can do a direct targeted lookup without scanning all
+//! running engines.
+//!
+//! Web auth = single OPEX_AUTH_TOKEN (admin, no per-user web principal);
+//! channel resolve is owner-gated separately. Targeted resolve avoids blind
+//! cross-agent scan.
 
 use axum::{
     Router,
@@ -18,6 +20,7 @@ use axum::{
 };
 use uuid::Uuid;
 
+use crate::agent::clarify_manager::agent_for_clarify;
 use crate::gateway::clusters::AgentCore;
 use crate::gateway::AppState;
 
@@ -47,17 +50,29 @@ pub(crate) async fn api_resolve_clarify(
         }
     };
 
-    // Scan all running engines for the matching clarify waiter.
-    // ClarifyManager::resolve() is sync (DashMap) and returns true on the first hit.
-    let engines = agents_core.get_engines_map().await;
-    for engine in engines.values() {
-        if engine.cfg().clarify_manager.resolve(id, response.clone()) {
-            return (
-                StatusCode::OK,
-                Json(serde_json::json!({"ok": true, "clarify_id": id})),
-            )
-                .into_response();
-        }
+    // Targeted lookup via process-wide index: no iteration over all engines.
+    let Some(agent_name) = agent_for_clarify(&id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("clarify {} not found or already resolved", id)})),
+        )
+            .into_response();
+    };
+
+    let Some(engine) = agents_core.get_engine(&agent_name).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("clarify {} not found or already resolved", id)})),
+        )
+            .into_response();
+    };
+
+    if engine.cfg().clarify_manager.resolve(id, response) {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({"ok": true, "clarify_id": id})),
+        )
+            .into_response();
     }
 
     (

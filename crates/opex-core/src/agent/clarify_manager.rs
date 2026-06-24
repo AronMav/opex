@@ -5,13 +5,31 @@
 //! Паттерн зеркалит `approval_manager.rs`: DashMap-шарды (sync RAII guard),
 //! `#![deny(clippy::await_holding_lock)]` гарантирует отсутствие `.await`
 //! при удерживании guard.
+//!
+//! Процесс-глобальный индекс `CLARIFY_AGENT_INDEX` (clarify_id → agent_name)
+//! позволяет gateway-handler-у немедленно найти нужный движок по clarify_id,
+//! не перебирая все работающие агенты (устраняет blind-scan IDOR-smell).
 
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+// ── Process-wide index: clarify_id → agent_name ─────────────────────────────
+
+/// Глобальный индекс: clarify_id → имя агента.
+/// Регистрируется при `register()`, удаляется при `resolve()` / `clear_session()` / `forget()`.
+static CLARIFY_AGENT_INDEX: LazyLock<DashMap<Uuid, String>> =
+    LazyLock::new(DashMap::new);
+
+/// Вернуть имя агента, владеющего данным clarify_id.
+/// `None` — waiter не существует или уже разрешён.
+pub fn agent_for_clarify(id: &Uuid) -> Option<String> {
+    CLARIFY_AGENT_INDEX.get(id).map(|e| e.clone())
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,14 +61,16 @@ pub struct ClarifyManager {
     db: Option<PgPool>,
     waiters: ClarifyWaitersMap,
     by_session: Arc<DashMap<Uuid, Vec<(Uuid, bool)>>>,
+    agent_name: String,
 }
 
 impl ClarifyManager {
-    pub fn new(db: PgPool, waiters: ClarifyWaitersMap) -> Self {
+    pub fn new(db: PgPool, waiters: ClarifyWaitersMap, agent_name: String) -> Self {
         Self {
             db: Some(db),
             waiters,
             by_session: Arc::new(DashMap::new()),
+            agent_name,
         }
     }
 
@@ -60,6 +80,7 @@ impl ClarifyManager {
             db: None,
             waiters: Arc::new(DashMap::new()),
             by_session: Arc::new(DashMap::new()),
+            agent_name: "test".into(),
         }
     }
 
@@ -85,6 +106,7 @@ impl ClarifyManager {
             .entry(session_id)
             .or_default()
             .push((id, awaiting_text));
+        CLARIFY_AGENT_INDEX.insert(id, self.agent_name.clone());
         (id, rx)
     }
 
@@ -126,6 +148,7 @@ impl ClarifyManager {
     /// Returns `true` if the waiter was found and the answer delivered.
     pub fn resolve(&self, id: Uuid, response: String) -> bool {
         if let Some((_, (tx, _))) = self.waiters.remove(&id) {
+            CLARIFY_AGENT_INDEX.remove(&id);
             tx.send(response).is_ok()
         } else {
             false
@@ -144,6 +167,7 @@ impl ClarifyManager {
         let mut n = 0;
         for id in ids {
             if self.waiters.remove(&id).is_some() {
+                CLARIFY_AGENT_INDEX.remove(&id);
                 n += 1; // drop sender → receiver gets Err(RecvError) → Cancelled
             }
         }
@@ -188,7 +212,14 @@ impl ClarifyManager {
     fn forget(&self, session_id: Uuid) {
         // SAFETY: by_session и waiters — РАЗНЫЕ DashMap; одновременный borrow не создаёт шард-дедлок (и .await тут нет).
         if let Some(mut v) = self.by_session.get_mut(&session_id) {
-            v.retain(|(id, _)| self.waiters.contains_key(id));
+            v.retain(|(id, _)| {
+                if !self.waiters.contains_key(id) {
+                    CLARIFY_AGENT_INDEX.remove(id);
+                    false
+                } else {
+                    true
+                }
+            });
         }
     }
 }
@@ -269,5 +300,27 @@ mod tests {
         m.mark_awaiting_text(btn_id);
         // Now has_pending_text should find it.
         assert_eq!(m.has_pending_text(sid), Some(btn_id));
+    }
+
+    #[test]
+    fn agent_index_register_and_resolve() {
+        let m = mgr();
+        let sid = Uuid::new_v4();
+        let (id, _rx) = m.register(sid, true);
+        // After register: index contains the test agent name.
+        assert_eq!(agent_for_clarify(&id).as_deref(), Some("test"));
+        // After resolve: index entry is removed.
+        assert!(m.resolve(id, "answer".into()));
+        assert_eq!(agent_for_clarify(&id), None);
+    }
+
+    #[test]
+    fn agent_index_clear_session_removes_entries() {
+        let m = mgr();
+        let sid = Uuid::new_v4();
+        let (id, _rx) = m.register(sid, false);
+        assert!(agent_for_clarify(&id).is_some());
+        m.clear_session(sid);
+        assert_eq!(agent_for_clarify(&id), None);
     }
 }
