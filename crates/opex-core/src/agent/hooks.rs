@@ -770,6 +770,31 @@ block_tools = []
         assert!(matches!(d, HookDecision::Continue));
     }
 
+    // ── Test 21 — fire_decision BeforeMessage inject has provenance ─────────
+
+    #[tokio::test]
+    async fn fire_decision_inject_context_has_provenance() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/h"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"inject_context": "today is friday"})))
+            .mount(&server).await;
+        let mut reg = HookRegistry::new();
+        reg.set_webhooks(
+            reqwest::Client::new(),
+            vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)],
+        );
+        let ev = HookEvent::BeforeMessage;
+        let d = reg.fire_decision(&ev, serde_json::json!({"message": "hi"})).await;
+        match d {
+            HookDecision::InjectContext(s) => {
+                assert!(s.starts_with("[hook:"), "missing provenance tag: {s}");
+                assert!(s.contains("today is friday"), "content missing: {s}");
+            }
+            o => panic!("expected InjectContext, got {o:?}"),
+        }
+    }
+
     // ── Test 19 — fire_decision chains modified_args across hooks ────────────
     // hook1 sets x=2, hook2 sees x=2 in cur_extra and sets x=3.
     // Final decision must be ModifyArgs with x=3.
