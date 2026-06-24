@@ -72,7 +72,10 @@ pub async fn build_extension_tool_list(
 
     // Built-in capability tools (backed by active providers in DB).
     for def in crate::agent::capability_tools::capability_tool_defs(db).await {
-        if !deny.iter().any(|d| d == &def.name) && !promoted.contains(&def.name) {
+        if (!def.required_base || is_base_agent)
+            && !deny.iter().any(|d| d == &def.name)
+            && !promoted.contains(&def.name)
+        {
             out.push(def.to_tool_definition());
         }
     }
