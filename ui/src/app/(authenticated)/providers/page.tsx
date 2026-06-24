@@ -281,7 +281,7 @@ export default function ProvidersPage() {
         title={t("providers.title")}
         description={t("providers.subtitle")}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-1.5">
               <RefreshCw className="h-4 w-4" />
               {t("common.refresh")}
@@ -312,15 +312,17 @@ export default function ProvidersPage() {
         }
         return (
           <Tabs defaultValue={visibleCategories[0]}>
-            <TabsList className="h-auto flex-wrap">
-              {visibleCategories.map((cap) => (
-                <TabsTrigger key={cap} value={cap}>
-                  {CATEGORY_ICONS[cap]}
-                  {capLabel(cap)}
-                  <Badge variant="secondary" className="ml-1.5 text-[10px]">{providersForCapability(cap).length}</Badge>
-                </TabsTrigger>
-              ))}
-            </TabsList>
+            <div className="overflow-x-auto scrollbar-none">
+              <TabsList className="h-9 w-max">
+                {visibleCategories.map((cap) => (
+                  <TabsTrigger key={cap} value={cap}>
+                    {CATEGORY_ICONS[cap]}
+                    {capLabel(cap)}
+                    <Badge variant="secondary" className="ml-1.5 text-[10px]">{providersForCapability(cap).length}</Badge>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </div>
 
             {visibleCategories.map((cap) => {
               const capProviders = providersForCapability(cap);
