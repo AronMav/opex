@@ -165,9 +165,10 @@ impl AgentEngine {
                 return result;
             }
 
-            // 2. YAML-defined tools — only VERIFIED may be called directly.
-            if let Some(yaml_tool) = crate::tools::yaml_tools::find_yaml_tool(
+            // 2. YAML-defined tools (capability-names take priority over files).
+            if let Some(yaml_tool) = crate::agent::capability_tools::resolve_tool(
                 &self.cfg().workspace_dir,
+                &self.cfg().db,
                 name,
             ).await {
                 if yaml_tool.status == crate::tools::yaml_tools::ToolStatus::Draft {
