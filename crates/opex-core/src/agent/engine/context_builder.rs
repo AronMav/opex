@@ -312,12 +312,6 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         }
     }
 
-    async fn active_websearch_providers(&self) -> Vec<(String, i32)> {
-        crate::db::providers::get_active_providers(&self.cfg().db, "websearch")
-            .await
-            .unwrap_or_default()
-    }
-
     async fn has_tool(&self, name: &str) -> bool {
         AgentEngine::has_tool(self, name).await
     }
