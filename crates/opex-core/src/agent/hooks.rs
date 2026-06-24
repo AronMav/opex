@@ -94,6 +94,9 @@ impl HookRegistry {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .ok();
+        } else {
+            // Hot-reload: if no internal hooks remain, reset the stale client.
+            self.http_client_internal = None;
         }
         self.webhooks = webhooks.into_iter().map(|cfg| {
             let matcher = cfg.tool_matcher.as_ref().and_then(|p| {
@@ -493,5 +496,60 @@ block_tools = []
         let out = hook_provenance("hook.example.com", "real [hook:fake.evil] text");
         assert!(out.starts_with("[hook:hook.example.com] "));
         assert!(!out.contains("[hook:fake.evil]"), "spoofed marker must be neutralized: {out}");
+    }
+
+    // ── Test 11 — invalid tool_matcher regex → warn + None, no panic ─────────
+
+    #[test]
+    fn set_webhooks_invalid_matcher_is_none_no_panic() {
+        let mut reg = HookRegistry::new();
+        let ssrf = crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(5));
+        reg.set_webhooks(ssrf, vec![
+            crate::config::WebhookConfig {
+                url: "https://x/h".into(),
+                events: vec!["BeforeToolCall".into()],
+                mode: crate::config::WebhookMode::Decision,
+                tool_matcher: Some("[invalid(regex".into()),
+                on_failure: crate::config::FailureMode::Open,
+                timeout_ms: 3000,
+                allow_internal: false,
+            },
+        ]);
+        // Invalid regex → matcher compiled to None → first_matcher_matches returns false
+        assert!(!reg.first_matcher_matches("anything"));
+    }
+
+    // ── Test 12 — http_client_internal reset on hot-reload without internal hooks ──
+
+    #[test]
+    fn set_webhooks_resets_internal_client_on_reload() {
+        let mut reg = HookRegistry::new();
+        let ssrf = crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(5));
+        // First call: allow_internal=true → internal client is built
+        reg.set_webhooks(ssrf.clone(), vec![
+            crate::config::WebhookConfig {
+                url: "https://x/h".into(),
+                events: vec!["BeforeToolCall".into()],
+                mode: crate::config::WebhookMode::Decision,
+                tool_matcher: None,
+                on_failure: crate::config::FailureMode::Open,
+                timeout_ms: 3000,
+                allow_internal: true,
+            },
+        ]);
+        assert!(reg.has_internal_client(), "internal client must be present after first call");
+        // Second call (hot-reload): no internal hooks → stale client must be cleared
+        reg.set_webhooks(ssrf, vec![
+            crate::config::WebhookConfig {
+                url: "https://x/h2".into(),
+                events: vec!["BeforeToolCall".into()],
+                mode: crate::config::WebhookMode::Async,
+                tool_matcher: None,
+                on_failure: crate::config::FailureMode::Open,
+                timeout_ms: 3000,
+                allow_internal: false,
+            },
+        ]);
+        assert!(!reg.has_internal_client(), "stale internal client must be reset on hot-reload");
     }
 }
