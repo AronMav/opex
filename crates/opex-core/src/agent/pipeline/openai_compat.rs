@@ -21,10 +21,23 @@ pub async fn handle_openai(
 ) -> Result<opex_types::LlmResponse> {
     let cfg = ctx.cfg;
 
-    // 1. Build tool list (same as build_context but without session)
+    // 1. Build tool list (same as build_context but without session).
+    //    Capability tools (generate_image, search_web, etc.) are built-in and
+    //    injected explicitly — filter same-named YAML files to avoid duplicates.
     let yaml_tools = crate::tools::yaml_tools::load_yaml_tools(&cfg.workspace_dir, false).await;
     let mut raw_tools = executor.internal_tool_definitions();
-    raw_tools.extend(yaml_tools.into_iter().map(|t| t.to_tool_definition()));
+    raw_tools.extend(
+        yaml_tools
+            .into_iter()
+            .filter(|t| !crate::agent::capability_tools::is_capability_tool(&t.name))
+            .map(|t| t.to_tool_definition()),
+    );
+    raw_tools.extend(
+        crate::agent::capability_tools::capability_tool_defs(&cfg.db)
+            .await
+            .into_iter()
+            .map(|t| t.to_tool_definition()),
+    );
     if let Some(mcp) = &ctx.tex.mcp {
         raw_tools.extend(mcp.all_tool_definitions().await);
     }
