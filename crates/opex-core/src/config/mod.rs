@@ -907,9 +907,11 @@ pub enum WebhookMode {
     /// response. Default for backward compatibility with existing configs.
     #[default]
     Async,
-    /// Decision gate: agent waits for an HTTP 200 `{"allow": bool}` reply
-    /// before proceeding. Times out after `timeout_ms`; behaviour on timeout
-    /// is governed by `on_failure`.
+    /// Decision gate: agent waits for an HTTP 200 JSON reply and acts on it.
+    /// Response fields (all optional): `{"decision":"block"|"continue",
+    /// "reason":"...", "inject_context":"...", "modified_args":{...},
+    /// "transformed_result":"..."}`. Empty `{}` or missing `decision` → continue.
+    /// Times out after `timeout_ms`; behaviour on timeout governed by `on_failure`.
     Decision,
 }
 
