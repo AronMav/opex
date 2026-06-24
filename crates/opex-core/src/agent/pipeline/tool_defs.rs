@@ -835,6 +835,31 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
         });
     }
 
+    // clarify: mid-run user clarification (sequential only — NOT in static_core_tool_names)
+    tools.push(ToolDefinition {
+        name: "clarify".to_string(),
+        description: "Ask the user a clarifying question and wait for a response before continuing. \
+Use when you need a decision or missing information that only the user can provide. \
+Do NOT list options in the question field — put them in choices instead. \
+Only available in interactive contexts (web UI or Telegram); returns an error in cron/inter-agent contexts.".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the user. Do not enumerate options here — use choices for that."
+                },
+                "choices": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional list of up to 4 answer choices presented as buttons. Omit for open-ended text input.",
+                    "maxItems": 4
+                }
+            },
+            "required": ["question"]
+        }),
+    });
+
     // agents_list is always available (core tool)
     tools.push(ToolDefinition {
         name: "agents_list".to_string(),

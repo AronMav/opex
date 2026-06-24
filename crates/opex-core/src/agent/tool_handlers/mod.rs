@@ -11,6 +11,7 @@ mod session;
 mod tool_use;
 mod todo;
 mod file_scenario;
+pub(crate) mod clarify;
 
 use workspace::*;
 use memory::*;
@@ -25,6 +26,7 @@ use session::*;
 use tool_use::*;
 use todo::*;
 use file_scenario::*;
+use clarify::ClarifyHandler;
 
 use crate::agent::tool_registry::SystemToolRegistry;
 
@@ -62,6 +64,7 @@ impl SystemToolRegistry {
         r.register("process",          ProcessHandler);
         r.register("tool_use",         ToolUseHandler);
         r.register("file_scenario",    FileScenarioHandler);
+        r.register("clarify",          ClarifyHandler);
         r
     }
 }
