@@ -501,13 +501,12 @@ pub struct LimitsConfig {
     #[serde(default = "default_max_sessions_per_agent")]
     pub max_sessions_per_agent: u32,
     /// Maximum time (seconds) an agent may block waiting for the user to
-    /// respond to a `clarify` tool call. Default: 120 (2 minutes).
+    /// respond to a `clarify` tool call. Default: 300 (5 min).
     ///
     /// **Channel constraint:** the channel dispatcher wraps the entire engine
-    /// turn (including any clarify wait) in `request_timeout_secs`. To avoid
-    /// the dispatcher killing the turn before clarify resolves, keep
-    /// `clarify_timeout_secs ≤ request_timeout_secs`. Alternatively, raise
-    /// `request_timeout_secs` to accommodate longer clarify waits.
+    /// turn (including any clarify wait) in `request_timeout_secs`. Keep
+    /// `clarify_timeout_secs ≤ request_timeout_secs` (both default to 300 s)
+    /// so the dispatcher never kills a clarify wait prematurely.
     #[serde(default = "default_clarify_timeout")]
     pub clarify_timeout_secs: u64,
 }
@@ -528,7 +527,7 @@ fn default_max_sessions_per_agent() -> u32 {
     500
 }
 fn default_clarify_timeout() -> u64 {
-    120
+    300
 }
 
 impl Default for LimitsConfig {
