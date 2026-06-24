@@ -4,7 +4,7 @@ pub mod context_builder;
 pub mod tool_executor;
 pub mod session_manager;
 pub(crate) mod approval_manager;
-pub mod clarify_manager;
+pub(crate) mod clarify_manager;
 pub mod channel_actions;
 pub mod channel_kind;
 pub mod cli_backend;

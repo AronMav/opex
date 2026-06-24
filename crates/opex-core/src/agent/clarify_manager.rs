@@ -161,6 +161,7 @@ impl ClarifyManager {
 
     /// Remove resolved/cancelled entries from the reverse-index for `session_id`.
     fn forget(&self, session_id: Uuid) {
+        // SAFETY: by_session и waiters — РАЗНЫЕ DashMap; одновременный borrow не создаёт шард-дедлок (и .await тут нет).
         if let Some(mut v) = self.by_session.get_mut(&session_id) {
             v.retain(|(id, _)| self.waiters.contains_key(id));
         }
