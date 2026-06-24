@@ -1,7 +1,7 @@
 # Runtime User-Hooks (decision-webhooks)
 
 **Дата:** 2026-06-24
-**Статус:** Design v1 (одобрено в brainstorming по 3 секциям; ожидает финального spec review)
+**Статус:** Design v2 (одобрено в brainstorming + адверсариальное ревью учтено; ожидает финального spec review)
 **Hermes-референс:** `D:/GIT/hermes-agent` — `gateway/hooks.py` (event registry), `agent/shell_hooks.py` (stdin/stdout JSON wire protocol, matcher, timeout), `hermes_cli/plugins.py` (VALID_HOOKS).
 
 ## Цель
@@ -17,7 +17,8 @@
   - `HookAction { Continue, Block(String) }` — синхронный результат.
   - `fire(&event) -> HookAction` (sync, closures); `fire_webhooks(&event)` — async **fire-and-forget** через `tokio::spawn` + 5s timeout, **результат игнорируется** (нельзя вернуть block/modify).
   - `set_webhooks(client, vec)` сохраняет SSRF-клиент + конфиг; `register(name, handler)`.
-- **Точки fire:** `engine/run.rs:34` (BeforeMessage, до bootstrap, 3 entry-point); `engine_dispatch.rs:142` (BeforeToolCall, после approval, результат используется для block); `engine_dispatch.rs:50` (AfterToolResult, с duration_ms, результат НЕ используется).
+- **Точки fire:** `engine/run.rs:34` (BeforeMessage sync-fire, до bootstrap — здесь контекст ЕЩЁ не построен, inject невозможен); `engine_dispatch.rs:142` (BeforeToolCall, после approval — `arguments: &Value` доступны во inner; результат block используется); `engine_dispatch.rs:50` (AfterToolResult outer, с duration_ms + результат, результат НЕ используется). **Approval уже умеет `ApprovedWithModifiedArgs` (engine_dispatch.rs:121-128) — паттерн rebind args.**
+- **Параллельные инструменты:** `parallel.rs:401-443` исполняет tool-batch через `join_all` — BeforeToolCall/AfterToolResult живут ВНУТРИ `execute_tool_call`, т.е. фаерятся конкурентно по инструментам (важно для семантики — см. ниже).
 - **Конфиг** (`config/mod.rs`): `HooksConfig { log_all_tool_calls: bool, block_tools: Vec<String>, webhooks: Vec<WebhookConfig> }`, `WebhookConfig { url: String, events: Vec<String> }`. Парсится как `[agent.hooks]`. `lifecycle.rs:136-154` регистрирует: log→`logging_hook()`, block_tools→`block_tools_hook()`, webhooks→`set_webhooks(ssrf_http_client, …)`.
 - **Hot-reload:** конфиг агента перечитывается (notify crate) → хуки пере-регистрируются при правке TOML/через UI (PUT /api/agents).
 - **SSRF:** webhooks уже идут через `ssrf_http_client` (`net::ssrf`) — приватные IP блокируются кроме `is_internal_endpoint`.
@@ -45,8 +46,7 @@
 ## Non-goals (YAGNI)
 
 - Исполнение пользовательского кода/скриптов на хосте (shell-hooks, Python handler.py) — выбраны webhooks.
-- localhost/private-IP hook-сервисы без internal-endpoint (SSRF остаётся строгим; opt-in — follow-up).
-- Полноструктурный provenance (графовый тег) — пока текстовый префикс + audit.
+- Полноструктурный provenance (графовый тег) — пока текстовый префикс + анти-spoof санитайз + audit.
 - Re-валидация `modified_args` против JSON-схемы инструмента (handler сам валидирует свои аргументы).
 - Новые события сверх трёх существующих fire-точек; `AfterResponse`/`OnError` (заявлены, но не дёргаются) — вне рамок.
 - Глобальные (cross-agent) хуки — остаются per-agent.
@@ -84,6 +84,7 @@ pub struct WebhookConfig {
     #[serde(default)] pub tool_matcher: Option<String>, // regex на tool_name (*ToolCall/*ToolResult)
     #[serde(default)] pub on_failure: FailureMode,      // Open (default) | Closed
     #[serde(default = "default_hook_timeout_ms")] pub timeout_ms: u64, // 3000 для decision
+    #[serde(default)] pub allow_internal: bool,          // true → стандартный http_client (обход SSRF) для localhost/LAN hook (admin opt-in)
 }
 
 #[derive(Default)] pub enum WebhookMode { #[default] Async, Decision }
@@ -109,20 +110,22 @@ pub async fn fire_decision(&self, event: &HookEvent, extra: serde_json::Value) -
 
 Порядок в каждой точке: сначала sync `fire()` (closures — дёшево, block_tools может ветировать без HTTP), если не Block → `fire_decision().await`.
 
-- **`run.rs:34` (BeforeMessage):** `extra = {message, context}`. `Block`→прервать ход с reason (как существующий block-путь сообщения); `InjectContext(s)`→добавить `s` (с provenance-префиксом) в контекст перед LLM (через bootstrap/context-builder).
-- **`engine_dispatch.rs:142` (BeforeToolCall):** `extra = {tool_input}`. `Block`→вето (существующий путь). `ModifyArgs(v)`→заменить аргументы инструмента на `v` перед исполнением (+ audit).
-- **`engine_dispatch.rs:50` (AfterToolResult):** `extra = {result}`. `TransformResult(s)`→заменить результат на `s` (с provenance-префиксом) перед добавлением в контекст (+ audit).
+- **BeforeMessage — decision-fire ВНУТРИ `bootstrap` (после построения `enriched_text`, bootstrap.rs:~260), НЕ в run.rs:34** (там контекст ещё не существует, inject некуда применить — CRIT ревью). `extra = {message}`. `Block`→прервать ход с reason; `InjectContext(s)`→добавить санитайзнутый+provenance `s` в контекст/сообщения перед LLM-вызовом. Sync `fire(BeforeMessage)` в run.rs:34 остаётся для observer-closures.
+- **`engine_dispatch.rs:142` (BeforeToolCall, inner — `arguments: &Value` доступны):** `extra = {tool_input: arguments}`. `Block`→вето (существующий путь). `ModifyArgs(v)`→продолжить исполнение с `v` через rebind-паттерн approval `ApprovedWithModifiedArgs` (engine_dispatch.rs:121-128), сохранив `_context` (+ audit).
+- **`engine_dispatch.rs:50` (AfterToolResult, outer — результат доступен):** `extra = {result}`. `TransformResult(s)`→заменить результат на санитайзнутый+provenance `s` перед добавлением в контекст (+ audit).
 
 ### 5. Безопасность
 
-- **SSRF:** decision-webhooks через `ssrf_http_client` (как сейчас) — приватные IP блокируются кроме `is_internal_endpoint`. Локальный hook-сервис → LAN-адрес/internal-endpoint.
-- **Audit:** каждое нетривиальное решение (Block/ModifyArgs/InjectContext/TransformResult) → запись в `audit_queue` (agent, event, tool_name, hook-host, тип решения, усечённый reason/дифф ≤512B).
-- **Provenance:** `inject_context` и `transformed_result` оборачиваются текстовым префиксом `[hook:{host}] …` перед попаданием в контекст/результат — отметка источника (закрывает injection-канал, отмеченный FSE-исследованием). Полноструктурный provenance — non-goal.
-- **modified_args:** должен десериализоваться в JSON-объект; иначе → on_failure. Корректность аргументов проверяет tool-handler (как обычно). Изменение аудируется.
+- **SSRF + `allow_internal` opt-in:** по умолчанию decision-webhooks через `ssrf_http_client` (приватные IP блокируются на уровне DNS; `is_internal_endpoint` матчит лишь хардкод toolgate/renderer, произвольный localhost НЕ открывает). Т.к. хуки admin-конфигурируемы (TOML/PUT под auth = доверенная граница), per-hook **`allow_internal: bool` (default false)**: при `true` хук идёт через стандартный `http_client()` (без SSRF-резолвера) — для hook-сервиса рядом с OPEX (типовой деплой). Риск осознанно берёт admin.
+- **Audit:** требует НОВОГО варианта `AuditEvent::HookDecision` (`db/audit_queue.rs` — сейчас только `ToolExecution`/`ToolQuality`) + арм воркера. Каждое нетривиальное решение (Block/ModifyArgs/InjectContext/TransformResult) → запись (agent, event, tool_name, hook-host, тип, усечённый reason/дифф ≤512B).
+- **Provenance + анти-spoof:** перед обёрткой из ответа УДАЛЯЮТСЯ/экранируются вхождения маркера `[hook:` (внешний сервис не подделает источник), затем `inject_context`/`transformed_result` оборачиваются префиксом `[hook:{host}] …`. Отметка источника закрывает injection-канал (FSE-исследование). Полноструктурный provenance — non-goal.
+- **modified_args:** должен десериализоваться в JSON-объект; иначе → on_failure. Безопасность аргументов обеспечивает tool-handler (workspace-handlers валидируют path через `validate_workspace_path`/`is_read_only` — modify НЕ обходит эти проверки). Изменение аудируется.
 
 ## Семантика (edge cases)
 
-- **Несколько decision-хуков на событие:** последовательно; first Block short-circuit; modify/transform/inject чейнятся.
+- **Несколько decision-хуков на ОДНОМ event-instance:** последовательно в одном `fire_decision`; first Block short-circuit; modify/transform/inject чейнятся (выход N → вход N+1).
+- **Параллельные tool-calls** (parallel.rs:401-443 join_all) фаерят свои `fire_decision` НЕЗАВИСИМО и конкурентно — cross-tool порядка/чейнинга НЕТ (корректно: инструменты независимы; чейнинг только внутри одного tool-call).
+- **Латентность:** hook-timeout входит в бюджет tool-timeout (`default_timeout`, parallel.rs:418) — должно держаться `timeout_ms × N decision-хуков ≤ tool-timeout`, иначе обёртка инструмента сработает раньше хука.
 - **mode=async (старые webhooks):** без изменений — fire-and-forget; `on_failure`/`timeout_ms`/`tool_matcher` НЕ применяются (async шлёт как раньше, на все подходящие по `events`).
 - **closed на transform-событии:** неприменимо (нет block) → при сбое оригинальный результат + warn.
 - **timeout default 3000ms** на горячем пути — оператор тюнит per-hook (cap 30s).
@@ -146,9 +149,10 @@ pub async fn fire_decision(&self, event: &HookEvent, extra: serde_json::Value) -
 - BeforeMessage inject_context добавляет контекст.
 
 **Security:**
-- decision-webhook на приватный IP (10.x/127.x) блокируется SSRF-резолвером.
-- inject_context/transformed_result несут provenance-префикс `[hook:{host}]`.
-- audit-запись пишется на block/modify/transform/inject.
+- decision-webhook на приватный IP (10.x/127.x) с `allow_internal=false` блокируется SSRF-резолвером; с `allow_internal=true` — доходит (стандартный клиент).
+- inject_context/transformed_result несут provenance-префикс `[hook:{host}]`; подделанный `[hook:` во входящем ответе санитайзится (анти-spoof).
+- audit-запись (`AuditEvent::HookDecision`) пишется на block/modify/transform/inject.
+- параллельные tool-calls: per-tool `fire_decision` независимы (нет cross-tool чейнинга).
 
 **Negative:**
 - closed + endpoint down на BeforeToolCall → Block.
@@ -156,7 +160,6 @@ pub async fn fire_decision(&self, event: &HookEvent, extra: serde_json::Value) -
 
 ## Open questions / future
 
-- localhost/private-IP hook opt-in (`allow_internal`).
 - shell-hooks / on-host исполнение (если потребуется истинный Hermes-parity).
 - Полноструктурный provenance-граф для injected/transformed контента.
 - UI для управления decision-хуками (сейчас через agent-config TOML/PUT API).
