@@ -112,6 +112,99 @@ impl HookRegistry {
         }).collect();
     }
 
+    /// Run decision-webhooks sequentially for `event`. `extra` carries event-specific
+    /// data: `{"tool_input": <args>}` (BeforeToolCall), `{"result": <str>}`
+    /// (AfterToolResult), `{"message": <str>}` (BeforeMessage). Webhooks matching
+    /// the event (and tool_matcher) run in order: first Block short-circuits;
+    /// ModifyArgs / TransformResult / InjectContext chain across hooks.
+    pub async fn fire_decision(&self, event: &HookEvent, extra: serde_json::Value) -> HookDecision {
+        let ev_name = event_name(event);
+        let tool = event_tool_name(event);
+
+        let mut cur_extra = extra;
+        let mut modified_args: Option<serde_json::Value> = None;
+        let mut transformed: Option<String> = None;
+        let mut injected: Vec<String> = Vec::new();
+
+        for cw in self.webhooks.iter()
+            .filter(|c| matches!(c.cfg.mode, crate::config::WebhookMode::Decision))
+        {
+            // filter by subscribed events
+            if !cw.cfg.events.iter().any(|e| e == ev_name) { continue; }
+            // filter by tool_matcher (only when matcher present AND tool name known)
+            if let Some(re) = &cw.matcher {
+                match tool {
+                    Some(t) if re.is_match(t) => {} // passes
+                    _ => continue,                   // no tool name or no match → skip
+                }
+            }
+
+            let client = if cw.cfg.allow_internal {
+                self.http_client_internal.as_ref()
+            } else {
+                self.http_client.as_ref()
+            };
+            let Some(client) = client else { continue; };
+
+            // Build request body: event fields + current extra.
+            let agent_val = match event {
+                HookEvent::BeforeToolCall { agent, .. }
+                | HookEvent::AfterToolResult { agent, .. } => agent.clone(),
+                _ => String::new(),
+            };
+            let mut req = serde_json::json!({ "event": ev_name, "agent": agent_val });
+            if let Some(t) = tool { req["tool_name"] = serde_json::json!(t); }
+            if let (Some(obj), Some(ex)) = (req.as_object_mut(), cur_extra.as_object()) {
+                for (k, v) in ex { obj.insert(k.clone(), v.clone()); }
+            }
+
+            let host = reqwest::Url::parse(&cw.cfg.url).ok()
+                .and_then(|u| u.host_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            let fut = client.post(&cw.cfg.url).json(&req).send();
+            let resp = tokio::time::timeout(
+                std::time::Duration::from_millis(cw.cfg.timeout_ms.min(30_000)),
+                fut,
+            ).await;
+
+            let body = match resp {
+                Ok(Ok(r)) => r.text().await.unwrap_or_default(),
+                _ => {
+                    tracing::warn!(url = %cw.cfg.url, "decision hook failed (timeout or transport error)");
+                    match cw.cfg.on_failure {
+                        crate::config::FailureMode::Open => continue,
+                        crate::config::FailureMode::Closed => {
+                            return HookDecision::Block("hook unavailable".into());
+                        }
+                    }
+                }
+            };
+
+            match parse_decision(&body, event) {
+                HookDecision::Block(r) => return HookDecision::Block(r),
+                HookDecision::ModifyArgs(v) => {
+                    cur_extra["tool_input"] = v.clone();
+                    modified_args = Some(v);
+                }
+                HookDecision::TransformResult(s) => {
+                    let tagged = hook_provenance(&host, &s);
+                    cur_extra["result"] = serde_json::json!(tagged.clone());
+                    transformed = Some(tagged);
+                }
+                HookDecision::InjectContext(s) => {
+                    injected.push(hook_provenance(&host, &s));
+                }
+                HookDecision::Continue => {}
+            }
+        }
+
+        if let Some(v) = modified_args { return HookDecision::ModifyArgs(v); }
+        if let Some(s) = transformed { return HookDecision::TransformResult(s); }
+        if !injected.is_empty() { return HookDecision::InjectContext(injected.join("\n")); }
+        HookDecision::Continue
+    }
+
     /// Fire matching async webhooks for `event`. Always returns immediately; the
     /// HTTP POST is dispatched on a detached `tokio::spawn` task with a
     /// 5-second timeout. Errors are logged at warn level and dropped — they
@@ -119,7 +212,7 @@ impl HookRegistry {
     /// the synchronous policy decision).
     ///
     /// Only webhooks with `mode == Async` are dispatched here. Decision-mode
-    /// webhooks are handled separately by the decision gateway (Task 4+).
+    /// webhooks are handled separately by `fire_decision`.
     pub fn fire_webhooks(&self, event: &HookEvent) {
         if self.webhooks.is_empty() { return; }
         let Some(client) = self.http_client.clone() else { return; };
@@ -305,8 +398,28 @@ pub fn block_tools_hook(blocked: Vec<String>) -> HookHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{HooksConfig, WebhookConfig};
+    use crate::config::{FailureMode, HooksConfig, WebhookConfig, WebhookMode};
     use std::time::Duration;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::{method, path};
+
+    // ── Decision-hook test helper ────────────────────────────────────────────
+
+    fn decision_hook(url: String, matcher: Option<String>, on_failure: FailureMode) -> WebhookConfig {
+        WebhookConfig {
+            url,
+            events: vec![
+                "BeforeToolCall".into(),
+                "AfterToolResult".into(),
+                "BeforeMessage".into(),
+            ],
+            mode: WebhookMode::Decision,
+            tool_matcher: matcher,
+            on_failure,
+            timeout_ms: 3000,
+            allow_internal: true, // localhost WireMock → bypass SSRF
+        }
+    }
 
     // ── Test 1 — TOML parse ──────────────────────────────────────────────────
 
@@ -551,5 +664,94 @@ block_tools = []
             },
         ]);
         assert!(!reg.has_internal_client(), "stale internal client must be reset on hot-reload");
+    }
+
+    // ── Tests 13–18: fire_decision (WireMock) ───────────────────────────────
+
+    #[tokio::test]
+    async fn fire_decision_block_vetoes() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/h"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"decision":"block","reason":"nope"})))
+            .mount(&server).await;
+        let mut reg = HookRegistry::new();
+        reg.set_webhooks(reqwest::Client::new(),
+            vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
+        let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "code_exec".into() };
+        let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
+        assert!(matches!(d, HookDecision::Block(r) if r == "nope"));
+    }
+
+    #[tokio::test]
+    async fn fire_decision_modify_args() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/h"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"modified_args":{"x":2}})))
+            .mount(&server).await;
+        let mut reg = HookRegistry::new();
+        reg.set_webhooks(reqwest::Client::new(),
+            vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
+        let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "code_exec".into() };
+        let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{"x":1}})).await;
+        match d {
+            HookDecision::ModifyArgs(v) => assert_eq!(v["x"], 2),
+            o => panic!("expected ModifyArgs, got {o:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fire_decision_transform_result_has_provenance() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/h"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"transformed_result":"clean"})))
+            .mount(&server).await;
+        let mut reg = HookRegistry::new();
+        reg.set_webhooks(reqwest::Client::new(),
+            vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
+        let ev = HookEvent::AfterToolResult { agent: "A".into(), tool_name: "t".into(), duration_ms: 1 };
+        let d = reg.fire_decision(&ev, serde_json::json!({"result":"orig"})).await;
+        match d {
+            HookDecision::TransformResult(s) => assert!(s.starts_with("[hook:"), "missing provenance: {s}"),
+            o => panic!("expected TransformResult, got {o:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fire_decision_matcher_skips_nonmatching_tool() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/h"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"decision":"block","reason":"x"})))
+            .mount(&server).await;
+        let mut reg = HookRegistry::new();
+        reg.set_webhooks(reqwest::Client::new(),
+            vec![decision_hook(format!("{}/h", server.uri()), Some("code_.*".into()), FailureMode::Open)]);
+        let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "workspace_write".into() };
+        let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
+        assert!(matches!(d, HookDecision::Continue));
+    }
+
+    #[tokio::test]
+    async fn fire_decision_failclosed_on_unreachable_blocks() {
+        let mut reg = HookRegistry::new();
+        // unroutable port → connect error
+        reg.set_webhooks(reqwest::Client::new(),
+            vec![decision_hook("http://127.0.0.1:1/h".into(), None, FailureMode::Closed)]);
+        let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "t".into() };
+        let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
+        assert!(matches!(d, HookDecision::Block(_)));
+    }
+
+    #[tokio::test]
+    async fn fire_decision_failopen_on_unreachable_continues() {
+        let mut reg = HookRegistry::new();
+        reg.set_webhooks(reqwest::Client::new(),
+            vec![decision_hook("http://127.0.0.1:1/h".into(), None, FailureMode::Open)]);
+        let ev = HookEvent::BeforeToolCall { agent: "A".into(), tool_name: "t".into() };
+        let d = reg.fire_decision(&ev, serde_json::json!({"tool_input":{}})).await;
+        assert!(matches!(d, HookDecision::Continue));
     }
 }
