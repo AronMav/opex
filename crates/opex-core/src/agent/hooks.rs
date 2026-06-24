@@ -24,16 +24,29 @@ pub enum HookAction {
 
 pub type HookHandler = Box<dyn Fn(&HookEvent) -> HookAction + Send + Sync>;
 
+/// Compiled webhook entry: config + pre-compiled tool_matcher regex.
+pub(crate) struct CompiledWebhook {
+    pub cfg: crate::config::WebhookConfig,
+    pub matcher: Option<regex::Regex>,
+}
+
 pub struct HookRegistry {
     handlers: Vec<(String, HookHandler)>,
-    // None until set_webhooks is called.
+    /// SSRF-safe client for async webhooks (set by set_webhooks).
     http_client: Option<reqwest::Client>,
-    webhooks: Vec<crate::config::WebhookConfig>,
+    /// Plain client (no SSRF resolver) for allow_internal decision hooks.
+    http_client_internal: Option<reqwest::Client>,
+    webhooks: Vec<CompiledWebhook>,
 }
 
 impl HookRegistry {
     pub fn new() -> Self {
-        Self { handlers: Vec::new(), http_client: None, webhooks: Vec::new() }
+        Self {
+            handlers: Vec::new(),
+            http_client: None,
+            http_client_internal: None,
+            webhooks: Vec::new(),
+        }
     }
 
     pub fn register(&mut self, name: String, handler: HookHandler) {
@@ -60,8 +73,9 @@ impl HookRegistry {
         self.handlers.iter().map(|(n, _)| n.as_str()).collect()
     }
 
-    /// Configure outbound webhook delivery. Pass an existing reqwest::Client
-    /// (rustls-tls) so we share the connection pool with the rest of Core.
+    /// Configure outbound webhook delivery. Pass an SSRF-safe reqwest::Client
+    /// for async hooks; a plain client is built internally when any
+    /// `allow_internal` + `Decision`-mode hook is present.
     pub fn set_webhooks(
         &mut self,
         client: reqwest::Client,
@@ -70,15 +84,39 @@ impl HookRegistry {
         if !webhooks.is_empty() {
             tracing::info!(count = webhooks.len(), "webhook hooks configured");
         }
+        let needs_internal = webhooks.iter()
+            .any(|w| w.allow_internal && matches!(w.mode, crate::config::WebhookMode::Decision));
         self.http_client = Some(client);
-        self.webhooks = webhooks;
+        if needs_internal {
+            // Plain client (no SSRF resolver) for admin-opted-in internal hooks.
+            self.http_client_internal = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .ok();
+        }
+        self.webhooks = webhooks.into_iter().map(|cfg| {
+            let matcher = cfg.tool_matcher.as_ref().and_then(|p| {
+                match regex::Regex::new(p) {
+                    Ok(re) => Some(re),
+                    Err(e) => {
+                        tracing::warn!(pattern = %p, error = %e, "invalid hook tool_matcher; ignoring");
+                        None
+                    }
+                }
+            });
+            CompiledWebhook { cfg, matcher }
+        }).collect();
     }
 
-    /// Fire matching webhooks for `event`. Always returns immediately; the
+    /// Fire matching async webhooks for `event`. Always returns immediately; the
     /// HTTP POST is dispatched on a detached `tokio::spawn` task with a
     /// 5-second timeout. Errors are logged at warn level and dropped — they
     /// NEVER alter HookAction (the existing `fire()` already returned for
     /// the synchronous policy decision).
+    ///
+    /// Only webhooks with `mode == Async` are dispatched here. Decision-mode
+    /// webhooks are handled separately by the decision gateway (Task 4+).
     pub fn fire_webhooks(&self, event: &HookEvent) {
         if self.webhooks.is_empty() { return; }
         let Some(client) = self.http_client.clone() else { return; };
@@ -91,7 +129,10 @@ impl HookRegistry {
                 (Some(agent.clone()), Some(tool_name.clone()), Some(*duration_ms)),
             _ => (None, None, None),
         };
-        for wh in &self.webhooks {
+        for wh in self.webhooks.iter()
+            .filter(|c| matches!(c.cfg.mode, crate::config::WebhookMode::Async))
+            .map(|c| &c.cfg)
+        {
             if !wh.events.iter().any(|e| e == ev_name) { continue; }
             let url = wh.url.clone();
             let client = client.clone();
@@ -122,6 +163,35 @@ impl HookRegistry {
                 }
             });
         }
+    }
+}
+
+// ── Provenance sanitizer ─────────────────────────────────────────────────────
+
+/// Prefix a webhook response body with a `[hook:{host}]` provenance marker
+/// and neutralize any spoofed `[hook:` markers already present in the body
+/// by inserting a zero-width space after `[hook`.
+pub(crate) fn hook_provenance(host: &str, body: &str) -> String {
+    let sanitized = body.replace("[hook:", "[hook\u{200b}:");
+    format!("[hook:{host}] {sanitized}")
+}
+
+// ── #[cfg(test)] helpers on HookRegistry ─────────────────────────────────────
+
+#[cfg(test)]
+impl HookRegistry {
+    /// Returns true if a plain (non-SSRF) internal client was built.
+    pub(crate) fn has_internal_client(&self) -> bool {
+        self.http_client_internal.is_some()
+    }
+
+    /// Returns true if the first compiled webhook has a matcher that matches `tool`.
+    pub(crate) fn first_matcher_matches(&self, tool: &str) -> bool {
+        self.webhooks
+            .first()
+            .and_then(|c| c.matcher.as_ref())
+            .map(|re| re.is_match(tool))
+            .unwrap_or(false)
     }
 }
 
@@ -392,5 +462,36 @@ block_tools = []
         let atr = HookEvent::AfterToolResult { agent: "A".into(), tool_name: "t".into(), duration_ms: 1 };
         // modified_args присутствует, но событие не BeforeToolCall → Continue
         assert!(matches!(parse_decision(r#"{"modified_args":{"x":1}}"#, &atr), HookDecision::Continue));
+    }
+
+    // ── Test 9 — set_webhooks compiles matcher + builds internal client ────────
+
+    #[test]
+    fn set_webhooks_compiles_matcher_and_internal_client() {
+        let mut reg = HookRegistry::new();
+        let ssrf = crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(5));
+        reg.set_webhooks(ssrf, vec![
+            crate::config::WebhookConfig {
+                url: "https://x/h".into(),
+                events: vec!["BeforeToolCall".into()],
+                mode: crate::config::WebhookMode::Decision,
+                tool_matcher: Some("code_.*".into()),
+                on_failure: crate::config::FailureMode::Open,
+                timeout_ms: 3000,
+                allow_internal: true,
+            },
+        ]);
+        assert!(reg.has_internal_client());          // plain client built (allow_internal present)
+        assert!(reg.first_matcher_matches("code_exec"));
+        assert!(!reg.first_matcher_matches("workspace_write"));
+    }
+
+    // ── Test 10 — provenance sanitizes spoofed markers ───────────────────────
+
+    #[test]
+    fn provenance_sanitizes_spoof() {
+        let out = hook_provenance("hook.example.com", "real [hook:fake.evil] text");
+        assert!(out.starts_with("[hook:hook.example.com] "));
+        assert!(!out.contains("[hook:fake.evil]"), "spoofed marker must be neutralized: {out}");
     }
 }
