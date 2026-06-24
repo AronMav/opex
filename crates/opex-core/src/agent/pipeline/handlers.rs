@@ -526,6 +526,7 @@ pub async fn handle_tool_list(workspace_dir: &str, args: &serde_json::Value) -> 
 }
 
 /// Internal tool: test a YAML tool (including draft) with specific parameters.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_tool_test(
     workspace_dir: &str,
     db: &sqlx::PgPool,
