@@ -8,6 +8,9 @@ use std::process::Output;
 
 use crate::config::CheckpointConfig;
 
+/// SHA пустого git-дерева (для diff первого чекпойнта).
+pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 /// Каталоги/паттерны, никогда не попадающие в снапшот (cost + safety).
 pub(crate) const DEFAULT_EXCLUDES: &[&str] = &[
     ".git/", "node_modules/", "target/", "dist/", "build/", ".cache/",
@@ -144,17 +147,93 @@ impl CheckpointManager {
         tokio::fs::write(info_dir.join("exclude"), excludes.join("\n") + "\n").await?;
         Ok(())
     }
+
+    /// Наибольший существующий n для агента (0 если refs нет).
+    async fn max_existing_n(&self, agent: &str, workspace_dir: &str) -> anyhow::Result<usize> {
+        let refs = self.git_ok(agent, workspace_dir, &[
+            "for-each-ref", "--format=%(refname)",
+            &format!("refs/checkpoints/{agent}/*"),
+        ]).await.unwrap_or_default();
+        let max = refs.lines()
+            .filter_map(|r| r.rsplit('/').next())
+            .filter_map(|s| s.parse::<usize>().ok())
+            .max()
+            .unwrap_or(0);
+        Ok(max)
+    }
+
+    /// Снять снапшот scope в новый per-n ref. None = дерево не изменилось (no-op).
+    async fn commit_snapshot(&self, agent: &str, workspace_dir: &str, msg: &str) -> anyhow::Result<Option<usize>> {
+        Self::validate_agent_name(agent)?;
+        self.ensure_store().await?;
+        let wt = workspace_dir;
+
+        // Стейджим всё (excludes из info/exclude применяются автоматически).
+        self.git_ok(agent, wt, &["add", "-A"]).await?;
+
+        // max_file_size: убрать из индекса файлы крупнее лимита.
+        if self.config.max_file_size_mb > 0 {
+            let limit = self.config.max_file_size_mb * 1024 * 1024;
+            let staged = self.git_ok(agent, wt, &["diff", "--cached", "--name-only"]).await?;
+            let wt_root = Path::new(workspace_dir).join("agents").join(agent);
+            for rel in staged.lines().filter(|l| !l.is_empty()) {
+                if let Ok(meta) = tokio::fs::metadata(wt_root.join(rel)).await {
+                    if meta.len() > limit {
+                        self.git_ok(agent, wt, &["rm", "--cached", "--quiet", "--", rel]).await.ok();
+                    }
+                }
+            }
+        }
+
+        let tree = self.git_ok(agent, wt, &["write-tree"]).await?.trim().to_string();
+
+        // no-op, если дерево совпало с последним чекпойнтом.
+        let last_n = self.max_existing_n(agent, wt).await?;
+        if last_n > 0 {
+            let last_tree = self.git_ok(agent, wt, &[
+                "rev-parse", &format!("refs/checkpoints/{agent}/{last_n}^{{tree}}"),
+            ]).await?.trim().to_string();
+            if last_tree == tree {
+                return Ok(None);
+            }
+        }
+
+        let commit = self.git_ok(agent, wt, &[
+            "commit-tree", &tree, "--no-gpg-sign", "-m", msg,
+        ]).await?.trim().to_string();
+        let next_n = last_n + 1;
+        self.git_ok(agent, wt, &[
+            "update-ref", &format!("refs/checkpoints/{agent}/{next_n}"), &commit,
+        ]).await?;
+        Ok(Some(next_n))
+    }
+
+    /// Ленивый baseline: снять снапшот scope перед правкой. None = нет изменений.
+    pub(crate) async fn ensure_checkpoint(&self, agent: &str, workspace_dir: &str) -> anyhow::Result<Option<usize>> {
+        if !self.config.enabled {
+            return Ok(None);
+        }
+        let _guard = self.store_lock.lock().await;
+        self.commit_snapshot(agent, workspace_dir, "checkpoint").await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::CheckpointConfig;
+    use tokio::fs;
 
     fn mgr_at(store: &std::path::Path) -> CheckpointManager {
         let mut cfg = CheckpointConfig::default();
         cfg.store_path = store.to_str().unwrap().to_string();
         CheckpointManager::new(cfg)
+    }
+
+    async fn write_scope(ws: &std::path::Path, agent: &str, rel: &str, content: &str) {
+        let p = ws.join("agents").join(agent).join(rel);
+        fs::create_dir_all(p.parent().unwrap()).await.unwrap();
+        fs::write(p, content).await.unwrap();
     }
 
     #[tokio::test]
@@ -176,5 +255,53 @@ mod tests {
         assert!(CheckpointManager::validate_agent_name("").is_err());
         assert!(CheckpointManager::validate_agent_name("../etc").is_err());
         assert!(CheckpointManager::validate_agent_name("a/b").is_err());
+    }
+
+    #[tokio::test]
+    async fn ensure_checkpoint_creates_and_noops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let m = mgr_at(&store);
+        let agent = "Agent";
+        write_scope(&ws, agent, "notes.md", "v1").await;
+
+        let n1 = m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+        assert_eq!(n1, Some(1));
+        assert!(store.join("refs/checkpoints/Agent/1").exists());
+
+        // без изменений → no-op
+        let n_noop = m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+        assert_eq!(n_noop, None);
+
+        // правка → новый чекпойнт 2
+        write_scope(&ws, agent, "notes.md", "v2").await;
+        let n2 = m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+        assert_eq!(n2, Some(2));
+    }
+
+    #[tokio::test]
+    async fn ensure_checkpoint_respects_excludes_and_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let mut cfg = CheckpointConfig::default();
+        cfg.store_path = store.to_str().unwrap().to_string();
+        cfg.max_file_size_mb = 1;
+        let m = CheckpointManager::new(cfg);
+        let agent = "Agent";
+
+        write_scope(&ws, agent, "keep.md", "small").await;
+        write_scope(&ws, agent, "node_modules/x.js", "junk").await; // excluded
+        // 2 MB файл → исключается по размеру
+        write_scope(&ws, agent, "big.bin", &"a".repeat(2 * 1024 * 1024)).await;
+
+        let n = m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+        assert_eq!(n, Some(1));
+        let tracked = m.git_ok(agent, ws.to_str().unwrap(),
+            &["ls-tree", "-r", "--name-only", "refs/checkpoints/Agent/1"]).await.unwrap();
+        assert!(tracked.contains("keep.md"));
+        assert!(!tracked.contains("node_modules"));
+        assert!(!tracked.contains("big.bin"));
     }
 }
