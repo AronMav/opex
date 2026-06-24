@@ -101,12 +101,24 @@ impl CheckpointManager {
 
     /// Идемпотентно создать bare-store, выставить gc.auto=0 + logAllRefUpdates=false,
     /// записать info/exclude. Дёргать перед любой операцией.
+    ///
+    /// **Lock-free по замыслу.** `store_lock` здесь намеренно НЕ захватывается:
+    /// - мутирующие вызыватели (`ensure_checkpoint`, `prune`) держат `store_lock` при вызове,
+    ///   добавление второго захвата вызвало бы reentrant-deadlock (tokio::Mutex не реентрантен);
+    /// - read-only вызыватель (`list_checkpoints`) допускает безвредную идемпотентную гонку —
+    ///   `git init`, `git config` и перезапись `info/exclude` идемпотентны.
+    /// Это не противоречит доку модуля «все store-мутации сериализованы store_lock»: там речь
+    /// о снапшотах/прунинге, а не о bootstrap-инициализации репо.
     pub(crate) async fn ensure_store(&self) -> anyhow::Result<()> {
+        let devnull = if cfg!(windows) { "NUL" } else { "/dev/null" };
         if !self.store_path.join("HEAD").exists() {
             tokio::fs::create_dir_all(&self.store_path).await?;
             let out = tokio::process::Command::new("git")
                 .arg("init").arg("--bare")
                 .arg(&self.store_path)
+                .env("GIT_CONFIG_GLOBAL", devnull)
+                .env("GIT_CONFIG_SYSTEM", devnull)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
                 .output().await?;
             if !out.status.success() {
                 anyhow::bail!("git init --bare failed: {}", String::from_utf8_lossy(&out.stderr));
@@ -115,6 +127,9 @@ impl CheckpointManager {
                 let out = tokio::process::Command::new("git")
                     .arg("--git-dir").arg(&self.store_path)
                     .arg("config").arg(kv.0).arg(kv.1)
+                    .env("GIT_CONFIG_GLOBAL", devnull)
+                    .env("GIT_CONFIG_SYSTEM", devnull)
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
                     .output().await?;
                 if !out.status.success() {
                     anyhow::bail!("git config {} failed: {}", kv.0, String::from_utf8_lossy(&out.stderr));
