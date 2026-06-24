@@ -755,6 +755,21 @@ block_tools = []
         assert!(matches!(d, HookDecision::Continue));
     }
 
+    // ── Test 20 — fire_decision Continue keeps original result unchanged ─────
+
+    #[tokio::test]
+    async fn fire_decision_continue_keeps_result() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/h"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server).await;
+        let mut reg = HookRegistry::new();
+        reg.set_webhooks(reqwest::Client::new(), vec![decision_hook(format!("{}/h", server.uri()), None, FailureMode::Open)]);
+        let ev = HookEvent::AfterToolResult { agent: "A".into(), tool_name: "t".into(), duration_ms: 1 };
+        let d = reg.fire_decision(&ev, serde_json::json!({"result":"orig"})).await;
+        assert!(matches!(d, HookDecision::Continue));
+    }
+
     // ── Test 19 — fire_decision chains modified_args across hooks ────────────
     // hook1 sets x=2, hook2 sees x=2 in cur_extra and sets x=3.
     // Final decision must be ModifyArgs with x=3.
