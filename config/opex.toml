@@ -94,6 +94,15 @@ enabled = true
 cron = "0 3 * * *"
 retention_days = 7
 
+# ═══ Shadow-git checkpoint store (workspace snapshots + /rollback) ═══
+# [checkpoint]
+# enabled = true                              # kill-switch shadow-git чекпойнтов
+# keep = 50                                   # хранить последние N чекпойнтов на агента
+# ttl_days = 14                               # удалять чекпойнты старше N дней
+# store_path = "~/.opex/checkpoints/store"    # bare-git store (общий на всех агентов)
+# max_file_size_mb = 5                        # файлы крупнее не попадают в снапшот
+# excludes = []                               # доп. паттерны поверх встроенных (node_modules, target, *.log, бинарники)
+
 # ═══ Multi-agent timeouts (`agent` tool: run/message/collect/status/kill) ═══
 # Hot-reloadable via config watcher and PUT /api/config.
 # Invariant (warned-only): safety_timeout_secs > message_wait_for_idle_secs + message_result_secs.

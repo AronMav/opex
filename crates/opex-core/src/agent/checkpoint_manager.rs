@@ -276,8 +276,15 @@ impl CheckpointManager {
         Ok(refname)
     }
 
+    pub(crate) fn enabled(&self) -> bool {
+        self.config.enabled
+    }
+
     /// Вернуть список чекпойнтов агента, newest-first (по n убыв.).
     pub(crate) async fn list_checkpoints(&self, agent: &str) -> anyhow::Result<Vec<CheckpointMeta>> {
+        if !self.config.enabled {
+            return Ok(Vec::new());
+        }
         Self::validate_agent_name(agent)?;
         self.ensure_store().await?;
         let refs = self.git_bare_ok(&[
@@ -313,6 +320,9 @@ impl CheckpointManager {
 
     /// Diff между чекпойнтом n и текущим состоянием workspace_dir.
     pub(crate) async fn diff(&self, agent: &str, workspace_dir: &str, n: usize) -> anyhow::Result<String> {
+        if !self.config.enabled {
+            anyhow::bail!("checkpoints disabled");
+        }
         let refname = self.resolve_n(agent, n).await?;
         self.git_ok(agent, workspace_dir, &["diff", &refname, "--", "."]).await
     }
@@ -407,6 +417,8 @@ impl CheckpointManager {
         let _guard = self.store_lock.lock().await;
         let refname = self.resolve_n(agent, n).await?;
         let wt = workspace_dir;
+        // Восстановить scope-каталог агента если был удалён — best-effort.
+        tokio::fs::create_dir_all(self.work_tree(workspace_dir, agent)).await.ok();
 
         let files: Vec<String> = if let Some(f) = file {
             // single-file restore: anti-traversal сначала
@@ -647,6 +659,38 @@ mod tests {
         let list = m.list_checkpoints(agent).await.unwrap();
         let ns: Vec<usize> = list.iter().map(|c| c.n).collect();
         assert_eq!(ns, vec![2], "старше ttl_days cp 1 должен быть удалён");
+    }
+
+    #[tokio::test]
+    async fn disabled_list_returns_empty_and_no_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let cfg = CheckpointConfig {
+            enabled: false,
+            store_path: store.to_str().unwrap().to_string(),
+            ..Default::default()
+        };
+        let m = CheckpointManager::new(cfg);
+        let agent = "Agent";
+
+        // list_checkpoints при disabled → пустой Vec, store НЕ создан
+        let list = m.list_checkpoints(agent).await.unwrap();
+        assert!(list.is_empty(), "disabled: list должен быть пустым");
+        assert!(
+            !store.join("HEAD").exists(),
+            "disabled: store-каталог не должен быть создан"
+        );
+
+        // diff при disabled → ошибка, store по-прежнему не создан
+        assert!(
+            m.diff(agent, ws.to_str().unwrap(), 1).await.is_err(),
+            "disabled: diff должен вернуть Err"
+        );
+        assert!(
+            !store.join("HEAD").exists(),
+            "disabled: store не должен появиться после diff"
+        );
     }
 
     // Тест-хелпер: коммит дерева с заданной committer/author датой.

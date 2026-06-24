@@ -296,6 +296,9 @@ where
             let Some(cm) = engine.cfg().checkpoint_manager.clone() else {
                 return Some(Ok("Чекпойнты отключены.".to_string()));
             };
+            if !cm.enabled() {
+                return Some(Ok("Чекпойнты отключены.".to_string()));
+            }
             let ws = engine.cfg().workspace_dir.clone();
             let agent = engine.cfg().agent.name.clone();
             let cmd = parse_rollback_command(args);
