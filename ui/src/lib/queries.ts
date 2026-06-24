@@ -559,9 +559,8 @@ export function useSetProviderActive() {
       })
       return { snapshot }
     },
-    onError: (e: Error, _vars, ctx) => {
+    onError: (_e: Error, _vars, ctx) => {
       if (ctx?.snapshot) qc.setQueryData(qk.providerActive, ctx.snapshot)
-      toast.error(e.message)
     },
     onSettled: () => qc.invalidateQueries({ queryKey: qk.providerActive }),
   })
