@@ -334,6 +334,58 @@ impl CheckpointManager {
         Ok(())
     }
 
+    // ── Prune / new_turn ──────────────────────────────────────────────────────
+
+    /// Граница нового хода: prune старья. Best-effort.
+    pub(crate) async fn new_turn(&self, agent: &str) -> anyhow::Result<()> {
+        if !self.config.enabled {
+            return Ok(());
+        }
+        let _guard = self.store_lock.lock().await;
+        self.prune(agent).await
+    }
+
+    /// Удалить refs за пределом keep (по убыванию n) ИЛИ старше ttl_days (по commit-date).
+    async fn prune(&self, agent: &str) -> anyhow::Result<()> {
+        Self::validate_agent_name(agent)?;
+        self.ensure_store().await?;
+
+        let refs = self.git_bare_ok(&[
+            "for-each-ref", "--sort=-refname",
+            "--format=%(refname) %(committerdate:unix)",
+            &format!("refs/checkpoints/{agent}"),
+        ]).await.unwrap_or_default();
+
+        // Список (n, refname, ts) отсортирован по убыванию n.
+        let mut entries: Vec<(usize, String, i64)> = refs.lines().filter_map(|line| {
+            let mut it = line.split_whitespace();
+            let refname = it.next()?.to_string();
+            let ts: i64 = it.next()?.parse().ok()?;
+            let n: usize = refname.rsplit('/').next()?.parse().ok()?;
+            Some((n, refname, ts))
+        }).collect();
+        entries.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+
+        let now = chrono::Utc::now().timestamp();
+        let ttl_secs = self.config.ttl_days as i64 * 86_400;
+        let keep = self.config.keep as usize;
+
+        let mut deleted = false;
+        for (idx, (_n, refname, ts)) in entries.iter().enumerate() {
+            let beyond_keep = idx >= keep;
+            let too_old = ttl_secs > 0 && (now - *ts) > ttl_secs;
+            if beyond_keep || too_old {
+                self.git_bare_ok(&["update-ref", "-d", refname]).await.ok();
+                deleted = true;
+            }
+        }
+        if deleted {
+            self.git_bare(&["gc", "--prune=now", "--quiet"]).await.ok();
+            self.repair_bare_repo_dirs()?;
+        }
+        Ok(())
+    }
+
     /// Откатить workspace агента к чекпойнту n.
     ///
     /// - `file = None` — exact-tree restore: index := tree(n), checkout-index, clean untracked.
@@ -533,6 +585,81 @@ mod tests {
         // ── accept: обычные относительные пути ────────────────────────────────
         assert!(CheckpointManager::validate_rel_path("a.md").is_ok(), "a.md must pass");
         assert!(CheckpointManager::validate_rel_path("notes/x.md").is_ok(), "notes/x.md must pass");
+    }
+
+    #[tokio::test]
+    async fn prune_by_keep() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let mut cfg = CheckpointConfig::default();
+        cfg.store_path = store.to_str().unwrap().to_string();
+        cfg.keep = 2;
+        cfg.ttl_days = 3650; // не мешает count-cap
+        let m = CheckpointManager::new(cfg);
+        let agent = "Agent";
+
+        for v in ["a", "b", "c"] {
+            write_scope(&ws, agent, "f.md", v).await;
+            m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+        }
+        // 3 чекпойнта, keep=2 → new_turn должен снести cp 1
+        m.new_turn(agent).await.unwrap();
+        let list = m.list_checkpoints(agent).await.unwrap();
+        let ns: Vec<usize> = list.iter().map(|c| c.n).collect();
+        assert_eq!(ns, vec![3, 2]);
+        assert!(!store.join("refs/checkpoints/Agent/1").exists());
+    }
+
+    #[tokio::test]
+    async fn prune_by_ttl() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let ws = tmp.path().join("ws");
+        let mut cfg = CheckpointConfig::default();
+        cfg.store_path = store.to_str().unwrap().to_string();
+        cfg.keep = 50;
+        cfg.ttl_days = 7;
+        let m = CheckpointManager::new(cfg);
+        let agent = "Agent";
+
+        // cp 1 с датой 30 дней назад (бэкдейт через GIT_COMMITTER_DATE напрямую).
+        write_scope(&ws, agent, "f.md", "old").await;
+        m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap();
+        // переписать дату коммита cp 1 на 30 дней назад вручную:
+        let old_date = "2000-01-01T00:00:00 +0000";
+        // создаём бэкдейтнутый коммит того же дерева и переставляем ref
+        let tree = m.git_ok(agent, ws.to_str().unwrap(),
+            &["rev-parse", "refs/checkpoints/Agent/1^{tree}"]).await.unwrap().trim().to_string();
+        let commit = run_git_with_date(&store, &ws, agent, &tree, old_date).await;
+        m.git_ok(agent, ws.to_str().unwrap(),
+            &["update-ref", "refs/checkpoints/Agent/1", &commit]).await.unwrap();
+
+        write_scope(&ws, agent, "f.md", "fresh").await;
+        m.ensure_checkpoint(agent, ws.to_str().unwrap()).await.unwrap(); // cp 2 свежий
+
+        m.new_turn(agent).await.unwrap();
+        let list = m.list_checkpoints(agent).await.unwrap();
+        let ns: Vec<usize> = list.iter().map(|c| c.n).collect();
+        assert_eq!(ns, vec![2], "старше ttl_days cp 1 должен быть удалён");
+    }
+
+    // Тест-хелпер: коммит дерева с заданной committer/author датой.
+    async fn run_git_with_date(
+        store: &std::path::Path, ws: &std::path::Path, agent: &str, tree: &str, date: &str,
+    ) -> String {
+        let devnull = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        let out = tokio::process::Command::new("git")
+            .env("GIT_DIR", store)
+            .env("GIT_INDEX_FILE", store.join(format!("index-{agent}")))
+            .env("GIT_WORK_TREE", ws.join("agents").join(agent))
+            .env("GIT_CONFIG_GLOBAL", devnull).env("GIT_CONFIG_SYSTEM", devnull).env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "OPEX").env("GIT_AUTHOR_EMAIL", "checkpoint@opex.local")
+            .env("GIT_COMMITTER_NAME", "OPEX").env("GIT_COMMITTER_EMAIL", "checkpoint@opex.local")
+            .env("GIT_AUTHOR_DATE", date).env("GIT_COMMITTER_DATE", date)
+            .args(["commit-tree", tree, "--no-gpg-sign", "-m", "backdated"])
+            .output().await.unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
     #[tokio::test]
