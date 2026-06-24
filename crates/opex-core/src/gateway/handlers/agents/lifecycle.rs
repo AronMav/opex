@@ -203,6 +203,7 @@ pub async fn start_agent_from_config(
         audit_queue: deps.audit_queue.clone(),
         metrics: infra.metrics.clone(),
         tool_exec_ctx: deps.tool_exec_ctx.clone(),
+        checkpoint_manager: Some(deps.checkpoint_mgr.clone()),
     });
 
     let engine = Arc::new(AgentEngine {

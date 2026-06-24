@@ -64,6 +64,9 @@ pub struct AgentConfig {
     /// from `AgentDeps.tool_exec_ctx` at engine construction time. Read by
     /// `engine_dispatch::execute_tool_call_inner` on the YAML-tool path.
     pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>,
+    /// Shared checkpoint manager (process-wide singleton). `None` for engines
+    /// created outside `AgentCore` (test helpers). Cloned from `AgentDeps.checkpoint_mgr`.
+    pub checkpoint_manager: Option<Arc<crate::agent::checkpoint_manager::CheckpointManager>>,
 }
 
 #[cfg(test)]

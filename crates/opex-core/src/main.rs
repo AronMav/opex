@@ -591,6 +591,10 @@ async fn main() -> Result<()> {
         cfg.tools_cache.max_entries,
     ));
 
+    let checkpoint_mgr = Arc::new(crate::agent::checkpoint_manager::CheckpointManager::new(
+        cfg.checkpoint.clone(),
+    ));
+
     let agent_deps = Arc::new(tokio::sync::RwLock::new(gateway::AgentDeps {
         mcp: mcp_registry.clone(),
         workspace_dir: config::WORKSPACE_DIR.to_string(),
@@ -600,6 +604,7 @@ async fn main() -> Result<()> {
         penalty_cache: penalty_cache.clone(),
         audit_queue,
         tool_exec_ctx,
+        checkpoint_mgr,
     }));
 
     let agents_map: gateway::AgentMap = Arc::new(tokio::sync::RwLock::new(HashMap::new()));

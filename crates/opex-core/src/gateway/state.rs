@@ -118,6 +118,8 @@ pub struct AgentDeps {
     pub audit_queue: Arc<crate::db::audit_queue::AuditQueue>,
     /// Shared YAML-tool response cache (process-wide singleton).
     pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>,
+    /// Shared checkpoint manager (process-wide singleton).
+    pub checkpoint_mgr: Arc<crate::agent::checkpoint_manager::CheckpointManager>,
 }
 
 #[cfg(test)]
@@ -135,6 +137,9 @@ impl AgentDeps {
             penalty_cache: Arc::new(crate::db::tool_quality::PenaltyCache::new(db.clone())),
             audit_queue: Arc::new(crate::db::audit_queue::AuditQueue::new(db)),
             tool_exec_ctx: Arc::new(crate::tools::yaml_tools::ToolExecutionContext::new(100)),
+            checkpoint_mgr: Arc::new(crate::agent::checkpoint_manager::CheckpointManager::new(
+                crate::config::CheckpointConfig::default(),
+            )),
         }
     }
 }
