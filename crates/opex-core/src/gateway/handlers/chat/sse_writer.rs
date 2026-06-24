@@ -38,6 +38,17 @@ impl From<StreamEvent> for SseEvent {
                 output: result,
             },
             StreamEvent::File { url, media_type } => SseEvent::File { url, media_type },
+            StreamEvent::ClarifyNeeded {
+                clarify_id,
+                question,
+                choices,
+                timeout_ms,
+            } => SseEvent::ClarifyNeeded {
+                clarify_id,
+                question,
+                choices,
+                timeout_ms,
+            },
             StreamEvent::ApprovalNeeded {
                 approval_id,
                 tool_name,
@@ -349,6 +360,23 @@ mod tests {
             json,
             r#"{"type":"file","url":"/uploads/x.png","mediaType":"image/png"}"#
         );
+    }
+
+    #[test]
+    fn from_clarify_needed_wire_shape() {
+        let id = uuid::Uuid::nil();
+        let stream = StreamEvent::ClarifyNeeded {
+            clarify_id: id,
+            question: "Which format?".to_string(),
+            choices: vec!["JSON".to_string(), "CSV".to_string()],
+            timeout_ms: 60_000_u64,
+        };
+        let json = serde_json::to_string(&SseEvent::from(stream)).unwrap();
+        assert!(json.contains(r#""type":"clarify-needed""#));
+        assert!(json.contains(r#""clarifyId":"00000000-0000-0000-0000-000000000000""#));
+        assert!(json.contains(r#""question":"Which format?""#));
+        assert!(json.contains(r#""choices":["JSON","CSV"]"#));
+        assert!(json.contains(r#""timeoutMs":60000"#));
     }
 
     #[test]

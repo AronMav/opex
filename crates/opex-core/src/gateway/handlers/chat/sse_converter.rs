@@ -370,6 +370,16 @@ pub(super) async fn run_converter(
                 writer.set_agent(new_agent);
                 continue; // Internal event — don't emit SSE
             }
+            StreamEvent::ClarifyNeeded { clarify_id, question, choices, timeout_ms } => {
+                let frame = writer.build_pure(StreamEvent::ClarifyNeeded {
+                    clarify_id,
+                    question,
+                    choices,
+                    timeout_ms,
+                });
+                let _ = send_and_buffer!(frame);
+                continue;
+            }
             StreamEvent::ApprovalNeeded { approval_id, tool_name, tool_input, timeout_ms } => {
                 let frame = writer.build_pure(StreamEvent::ApprovalNeeded {
                     approval_id,
