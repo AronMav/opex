@@ -45,6 +45,7 @@ pub mod fse;  // allowlist validators + AllowlistError (SoT for Phase 5+ binding
 pub mod path_guard;
 pub mod tool_registry;
 pub mod tool_handlers;
+pub mod capability_tools;
 
 /// Delete upload files older than `max_age` from workspace/uploads/.
 pub async fn cleanup_stale_uploads(workspace_dir: &str, max_age: std::time::Duration) -> usize {
