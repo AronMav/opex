@@ -245,10 +245,12 @@ impl AgentEngine {
         if mode != "on" {
             return;
         }
-        let tool = match crate::tools::yaml_tools::find_yaml_tool(&self.cfg().workspace_dir, "synthesize_speech").await {
+        let tool = match crate::agent::capability_tools::resolve_tool(
+            &self.cfg().workspace_dir, &self.cfg().db, "synthesize_speech",
+        ).await {
             Some(t) => t,
             None => {
-                tracing::warn!("auto-tts: synthesize_speech tool not found");
+                tracing::warn!("auto-tts: synthesize_speech unavailable (no tts provider active?)");
                 return;
             }
         };
