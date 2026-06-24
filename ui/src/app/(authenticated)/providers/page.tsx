@@ -26,7 +26,7 @@ import {
 } from "@/lib/queries";
 
 // ── Re-exports for tests ─────────────────────────────────────────────────────
-export { sortActiveRows, buildActiveListAfterToggle, buildProviderBody, getOpts } from "./_parts/helpers";
+export { sortActiveRows, splitProviders, renumberPriorities, buildProviderBody, getOpts } from "./_parts/helpers";
 export { ALL_CATEGORIES, ALL_CAPABILITIES } from "./_parts/constants";
 export type { ProviderCategory } from "./_parts/constants";
 
