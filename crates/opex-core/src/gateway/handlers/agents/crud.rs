@@ -40,6 +40,29 @@ pub(super) fn merge_clearable_string(
     }
 }
 
+/// Preserve existing webhooks when the PUT payload's hooks block omitted them.
+///
+/// Mirrors the `base`/`delegation` preserve-from-disk pattern.
+/// `payload_webhooks_present` must be computed from the raw payload *before*
+/// `build_agent_config` consumes it (where `None` and `[]` become indistinguishable).
+///
+/// - `false` → webhooks were absent in the payload → copy from disk.
+/// - `true`  → payload explicitly supplied webhooks (possibly empty) → leave as-is.
+pub(crate) fn preserve_hooks_webhooks(
+    new: &mut crate::config::AgentConfig,
+    existing: &crate::config::AgentConfig,
+    payload_webhooks_present: bool,
+) {
+    if payload_webhooks_present {
+        return;
+    }
+    if let (Some(nh), Some(eh)) = (new.agent.hooks.as_mut(), existing.agent.hooks.as_ref()) {
+        nh.webhooks = eh.webhooks.clone();
+    }
+    // If new.agent.hooks is None, the hooks-is_none() preserve block already
+    // copies the entire HooksConfig (including webhooks) from existing.
+}
+
 // ── agent_id table catalogue + helpers ──────────────────────────────────────
 //
 // Centralized list of every table whose `agent_id` column references
@@ -685,6 +708,15 @@ pub(crate) async fn api_update_agent(
         }
     }
 
+    // Compute before payload is consumed by build_agent_config — after that,
+    // webhooks=[] is indistinguishable from "webhooks not present in payload".
+    let payload_webhooks_present = payload
+        .hooks
+        .as_ref()
+        .and_then(|h| h.as_ref())
+        .map(|h| h.webhooks.is_some())
+        .unwrap_or(false);
+
     let voice = payload.voice.take();
     let mut cfg = build_agent_config(new_name.clone(), payload);
     // Preserve base from existing config — never changed via API
@@ -699,6 +731,10 @@ pub(crate) async fn api_update_agent(
     if cfg.agent.hooks.is_none() {
         cfg.agent.hooks = existing_cfg.agent.hooks.clone();
     }
+    // Preserve webhooks when payload included a hooks block but omitted webhooks
+    // (UI sends hooks without webhooks on every save — without this, webhooks
+    // configured via TOML are silently wiped on the next UI update).
+    preserve_hooks_webhooks(&mut cfg, &existing_cfg, payload_webhooks_present);
     if cfg.agent.max_history_messages.is_none() {
         cfg.agent.max_history_messages = existing_cfg.agent.max_history_messages;
     }
@@ -1270,6 +1306,63 @@ mod tests {
         );
     }
 
+    // ── preserve_hooks_webhooks ──────────────────────────────────────────────
+    //
+    // Guards the data-loss fix: PUT without webhooks in the payload must not
+    // wipe webhooks that were hand-configured in the agent's TOML on disk.
+
+    use super::preserve_hooks_webhooks;
+    use crate::config::{AgentConfig, HooksConfig, WebhookConfig};
+
+    /// Minimal valid AgentConfig from TOML, with the provided hooks section.
+    fn make_agent_config_with_hooks(hooks: Option<HooksConfig>) -> AgentConfig {
+        let mut cfg: AgentConfig = toml::from_str(
+            "[agent]\nname = \"Test\"\nprovider = \"openai\"\nmodel = \"gpt-4o\"\n",
+        )
+        .expect("minimal AgentConfig must parse");
+        cfg.agent.hooks = hooks;
+        cfg
+    }
+
+    #[test]
+    fn preserve_webhooks_when_payload_omits() {
+        let webhook = WebhookConfig { url: "https://keep/h".into(), ..Default::default() };
+
+        // new_cfg: hooks present but webhooks=[] (build_agent_config result when
+        // payload sent hooks block without webhooks field)
+        let mut new_cfg = make_agent_config_with_hooks(Some(HooksConfig {
+            log_all_tool_calls: true,
+            block_tools: vec![],
+            webhooks: vec![],
+        }));
+        // existing: has one webhook on disk
+        let existing = make_agent_config_with_hooks(Some(HooksConfig {
+            log_all_tool_calls: false,
+            block_tools: vec![],
+            webhooks: vec![webhook.clone()],
+        }));
+
+        // payload omitted webhooks → must preserve from disk
+        preserve_hooks_webhooks(&mut new_cfg, &existing, false);
+        let hooks = new_cfg.agent.hooks.as_ref().unwrap();
+        assert_eq!(hooks.webhooks.len(), 1, "omitted webhooks must be preserved from disk");
+        assert_eq!(hooks.webhooks[0].url, "https://keep/h");
+        // other hooks fields must NOT be overwritten by preserve_hooks_webhooks
+        assert!(hooks.log_all_tool_calls, "log_all_tool_calls must stay from new_cfg (payload)");
+
+        // payload explicitly provided webhooks (empty list) → leave as-is
+        let mut new2 = make_agent_config_with_hooks(Some(HooksConfig {
+            log_all_tool_calls: true,
+            block_tools: vec![],
+            webhooks: vec![],
+        }));
+        preserve_hooks_webhooks(&mut new2, &existing, true);
+        assert_eq!(
+            new2.agent.hooks.as_ref().unwrap().webhooks.len(),
+            0,
+            "provided=true must not overwrite the explicit empty list"
+        );
+    }
 
     /// Per D-09: Simulated failure mid-rename should leave DB in pre-rename state.
     /// In production, sqlx Transaction provides this guarantee via DROP (implicit rollback).
