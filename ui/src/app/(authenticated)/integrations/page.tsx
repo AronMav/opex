@@ -534,7 +534,7 @@ export default function IntegrationsPage() {
               {t("integrations.new_oauth_account")}
             </p>
             <div className="grid gap-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <Field label={t("integrations.provider")} labelClassName="text-xs">
                   <Select
                     value={addForm.provider}
@@ -626,22 +626,24 @@ export default function IntegrationsPage() {
         <div className="grid gap-3">
           {accounts.map((account) => (
             <div key={account.id} className="neu-card overflow-hidden">
-              <div className="flex items-center gap-3 px-5 py-4">
-                <ProviderIcon provider={account.provider} />
-                <div className="flex-1 min-w-0">
-                  <span className="font-display font-bold text-sm tracking-tight">
-                    {account.display_name}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] text-muted-foreground capitalize">{PROVIDER_LABEL[account.provider as Provider] ?? account.provider}</span>
-                    {account.user_email && (
-                      <span className="text-[11px] text-muted-foreground font-mono truncate">
-                        {account.user_email}
-                      </span>
-                    )}
+              <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center">
+                <div className="flex min-w-0 items-center gap-3 sm:flex-1">
+                  <ProviderIcon provider={account.provider} />
+                  <div className="min-w-0 flex-1">
+                    <span className="font-display font-bold text-sm tracking-tight">
+                      {account.display_name}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-muted-foreground capitalize">{PROVIDER_LABEL[account.provider as Provider] ?? account.provider}</span>
+                      {account.user_email && (
+                        <span className="text-[11px] text-muted-foreground font-mono truncate">
+                          {account.user_email}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 sm:justify-start">
                   <StatusBadge status={account.status} />
                   {account.status === "disconnected" && (
                     <Button
@@ -719,18 +721,20 @@ export default function IntegrationsPage() {
 
               return (
                 <div key={provider} className="neu-card px-5 py-4">
-                  <div className="flex items-center gap-3">
-                    <ProviderIcon provider={provider} />
-                    <div className="flex-1 min-w-0">
-                      <span className="font-display font-bold text-sm tracking-tight">
-                        {PROVIDER_LABEL[provider]}
-                      </span>
-                      {binding && (
-                        <p className="text-[11px] text-muted-foreground font-mono truncate">
-                          {binding.display_name}
-                          {binding.user_email && ` (${binding.user_email})`}
-                        </p>
-                      )}
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <div className="flex min-w-0 items-center gap-3 sm:flex-1">
+                      <ProviderIcon provider={provider} />
+                      <div className="min-w-0 flex-1">
+                        <span className="font-display font-bold text-sm tracking-tight">
+                          {PROVIDER_LABEL[provider]}
+                        </span>
+                        {binding && (
+                          <p className="text-[11px] text-muted-foreground font-mono truncate">
+                            {binding.display_name}
+                            {binding.user_email && ` (${binding.user_email})`}
+                          </p>
+                        )}
+                      </div>
                     </div>
                     <Select
                       value={currentValue}
