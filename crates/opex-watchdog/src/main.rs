@@ -6,7 +6,7 @@ mod status;
 // sharing them with the lib avoids compiling duplicate copies into the
 // binary (and the dead_code warnings that go with it).
 
-use opex_watchdog::{alerter, config, inactivity};
+use opex_watchdog::{alerter, config, inactivity, infra_jobs};
 
 use std::collections::HashMap;
 
@@ -71,6 +71,12 @@ async fn main() -> anyhow::Result<()> {
     let mut resource_timer = std::time::Instant::now()
         .checked_sub(std::time::Duration::from_secs(3600))
         .unwrap_or(start_time);
+    // Infra-jobs backstop: daily timer (init in the past → immediate first check)
+    // + transition flag so we alert once per disabled-state, not every cycle.
+    let mut jobs_timer = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(86_400))
+        .unwrap_or(start_time);
+    let mut jobs_alerted = false;
 
     // Notify systemd we're ready
     #[cfg(target_os = "linux")]
@@ -273,6 +279,24 @@ async fn main() -> anyhow::Result<()> {
         .await
         {
             tracing::warn!(error = %e, "inactivity tick failed");
+        }
+
+        // ── Infra-jobs backstop (backup + curator enabled?) — daily ─────
+        if jobs_timer.elapsed().as_secs() >= 86_400 {
+            jobs_timer = std::time::Instant::now();
+            match infra_jobs::tick(
+                &http,
+                &core_url,
+                &auth_token,
+                &alerter,
+                &alert_config,
+                jobs_alerted,
+            )
+            .await
+            {
+                Ok(now) => jobs_alerted = now,
+                Err(e) => tracing::warn!(error = %e, "infra-jobs check failed"),
+            }
         }
 
         // ── Session auto-retry ──────────────────────────────────────────
