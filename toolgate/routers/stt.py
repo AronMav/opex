@@ -11,6 +11,7 @@ import httpx
 
 from dependencies import require_provider
 from helpers import download_limited, check_upload_size, log_provider
+from audio_trim import trim_silence
 
 log = logging.getLogger("toolgate.stt")
 
@@ -34,10 +35,15 @@ async def transcribe(
     if size_err:
         return size_err
 
+    # Best-effort: strip leading/trailing silence before the (paid) STT call.
+    _name = file.filename or "audio.ogg"
+    _in_ext = _name.rsplit(".", 1)[-1].lower() if "." in _name else "ogg"
+    audio_bytes, _out_ext = await trim_silence(audio_bytes, _in_ext)
+
     try:
         text = await provider.transcribe(
             request.app.state.http_client, audio_bytes,
-            file.filename or "audio.ogg", language, model,
+            f"audio.{_out_ext}", language, model,
         )
         return {"text": text}
     except httpx.HTTPStatusError as e:
@@ -67,10 +73,12 @@ async def transcribe_url(
         return JSONResponse(status_code=502, content={"error": f"Failed to download audio: {e}"})
 
     filename = body.audio_url.split("/")[-1].split("?")[0] or "audio.ogg"
+    _in_ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "ogg"
+    audio_bytes, _out_ext = await trim_silence(audio_bytes, _in_ext)
 
     try:
         text = await provider.transcribe(
-            http, audio_bytes, filename, body.language or "ru", body.model,
+            http, audio_bytes, f"audio.{_out_ext}", body.language or "ru", body.model,
         )
         return {"text": text}
     except httpx.HTTPStatusError as e:
