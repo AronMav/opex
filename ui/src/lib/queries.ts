@@ -1,10 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useEffect } from "react"
 import { toast } from "sonner"
-import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from "./api"
+import { apiGet, apiPost, apiPut, apiDelete, apiPatch, listCheckpoints, restoreCheckpoint } from "./api"
 import { useNotificationStore } from "@/stores/notification-store"
 import { useWsSubscription } from "@/hooks/use-ws-subscription"
 import type { NotificationsResponse, SessionFailuresResponse, SessionChainResponse } from "@/types/api"
+import type { CheckpointListDto, RestoreReportDto } from "@/types/api.generated"
 import type {
   AgentInfo,
   SecretInfo,
@@ -90,6 +91,7 @@ export const qk = {
   skillCuratorDecisions: (name: string) => ["skills", name, "curator-decisions"] as const,
   fileScenarios: ["file-scenarios"] as const,
   fileScenarioAllowlist: ["file-scenarios", "allowlist"] as const,
+  checkpoints: (name: string) => ["agents", name, "checkpoints"] as const,
 }
 
 // ── Query Hooks ─────────────────────────────────────────────────────────────
@@ -760,6 +762,25 @@ export function useSetFileScenarioAllowlist() {
     mutationFn: (data: { action_ref: string; enabled: boolean }) =>
       apiPut<{ action_ref: string; enabled: boolean }>("/api/file-scenarios/allowlist", data),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileScenarioAllowlist }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+// ── Checkpoints ──────────────────────────────────────────────────────────────
+
+export function useCheckpoints(agent: string | null, enabled = true) {
+  return useQuery<CheckpointListDto>({
+    queryKey: qk.checkpoints(agent ?? ""),
+    queryFn: () => listCheckpoints(agent!),
+    enabled: !!agent && enabled,
+  })
+}
+
+export function useRestoreCheckpoint() {
+  const qc = useQueryClient()
+  return useMutation<RestoreReportDto, Error, { agent: string; n: number; file?: string }>({
+    mutationFn: ({ agent, n, file }) => restoreCheckpoint(agent, n, file),
+    onSuccess: (_r, { agent }) => qc.invalidateQueries({ queryKey: qk.checkpoints(agent) }),
     onError: (e: Error) => toast.error(e.message),
   })
 }
