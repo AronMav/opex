@@ -99,6 +99,7 @@ export const emptyForm: FormState = {
   toolGroupSessionTools: true,
   hooksLogAll: false,
   hooksBlockTools: "",
+  hooksWebhooks: [],
   dailyBudgetTokens: "0",
   accessEnabled: false,
   accessMode: "open",
@@ -168,6 +169,7 @@ export function detailToForm(d: AgentDetail): FormState {
     toolGroupSessionTools: d.tools?.groups?.session_tools ?? true,
     hooksLogAll: d.hooks?.log_all_tool_calls ?? false,
     hooksBlockTools: d.hooks?.block_tools?.join(", ") ?? "",
+    hooksWebhooks: d.hooks?.webhooks ?? [],
     dailyBudgetTokens: String(d.daily_budget_tokens ?? 0),
     accessEnabled: !!d.access,
     accessMode: d.access?.mode ?? "open",
@@ -264,10 +266,11 @@ export function formToPayload(f: FormState) {
           max_auto_continues: parseInt(f.tlMaxAutoContinues) || 5,
         }
       : null,
-    hooks: (f.hooksLogAll || f.hooksBlockTools.trim())
+    hooks: (f.hooksLogAll || f.hooksBlockTools.trim() || f.hooksWebhooks.length)
       ? {
           log_all_tool_calls: f.hooksLogAll,
           block_tools: splitList(f.hooksBlockTools),
+          webhooks: f.hooksWebhooks,
         }
       : null,
     max_history_messages: f.maxHistoryMessages ? parseInt(f.maxHistoryMessages) : null,

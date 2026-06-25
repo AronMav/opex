@@ -1,0 +1,225 @@
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
+
+import { WebhooksEditor } from "../AgentEditDialog";
+import type { WebhookDto } from "@/types/api.generated";
+
+// ── Mocks ────────────────────────────────────────────────────────────────────
+
+vi.mock("@/hooks/use-translation", () => ({
+  useTranslation: () => ({ t: (key: string) => key, locale: "en" }),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() },
+}));
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function makeWebhook(overrides: Partial<WebhookDto> = {}): WebhookDto {
+  return {
+    url: "",
+    events: [],
+    mode: "async",
+    tool_matcher: null,
+    on_failure: "open",
+    timeout_ms: 3000,
+    allow_internal: false,
+    ...overrides,
+  };
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+describe("WebhooksEditor", () => {
+  it("renders empty state with Add button", () => {
+    const onChange = vi.fn();
+    render(<WebhooksEditor webhooks={[]} onChange={onChange} />);
+    expect(screen.getByText(/Добавить webhook/i)).toBeInTheDocument();
+  });
+
+  it("clicking Add webhook adds a new entry with defaults", () => {
+    const onChange = vi.fn();
+    render(<WebhooksEditor webhooks={[]} onChange={onChange} />);
+    fireEvent.click(screen.getByText(/Добавить webhook/i));
+    expect(onChange).toHaveBeenCalledWith([makeWebhook()]);
+  });
+
+  it("url input change updates webhook url", () => {
+    const onChange = vi.fn();
+    render(<WebhooksEditor webhooks={[makeWebhook()]} onChange={onChange} />);
+    const urlInput = screen.getByPlaceholderText(/https:\/\//i);
+    fireEvent.change(urlInput, { target: { value: "https://example.com/hook" } });
+    expect(onChange).toHaveBeenCalledWith([makeWebhook({ url: "https://example.com/hook" })]);
+  });
+
+  it("delete button removes the webhook", () => {
+    const onChange = vi.fn();
+    render(<WebhooksEditor webhooks={[makeWebhook({ url: "https://x.com" })]} onChange={onChange} />);
+    const deleteBtn = screen.getByRole("button", { name: /удалить/i });
+    fireEvent.click(deleteBtn);
+    expect(onChange).toHaveBeenCalledWith([]);
+  });
+
+  it("decision mode toggle shows on_failure and timeout fields", () => {
+    const onChange = vi.fn();
+    render(
+      <WebhooksEditor
+        webhooks={[makeWebhook({ mode: "decision" })]}
+        onChange={onChange}
+      />
+    );
+    expect(screen.getByText(/on_failure/i)).toBeInTheDocument();
+    expect(screen.getByText(/timeout/i)).toBeInTheDocument();
+  });
+
+  it("async mode hides decision-only fields", () => {
+    const onChange = vi.fn();
+    render(
+      <WebhooksEditor
+        webhooks={[makeWebhook({ mode: "async" })]}
+        onChange={onChange}
+      />
+    );
+    expect(screen.queryByText(/on_failure/i)).not.toBeInTheDocument();
+  });
+
+  it("BeforeMessage event toggle adds event to events array", () => {
+    const onChange = vi.fn();
+    render(<WebhooksEditor webhooks={[makeWebhook({ events: [] })]} onChange={onChange} />);
+    const checkbox = screen.getByRole("checkbox", { name: /BeforeMessage/i });
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith([makeWebhook({ events: ["BeforeMessage"] })]);
+  });
+
+  it("BeforeToolCall event toggle adds event to events array", () => {
+    const onChange = vi.fn();
+    render(<WebhooksEditor webhooks={[makeWebhook({ events: [] })]} onChange={onChange} />);
+    const checkbox = screen.getByRole("checkbox", { name: /BeforeToolCall/i });
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith([makeWebhook({ events: ["BeforeToolCall"] })]);
+  });
+
+  it("AfterToolResult event toggle adds event to events array", () => {
+    const onChange = vi.fn();
+    render(<WebhooksEditor webhooks={[makeWebhook({ events: [] })]} onChange={onChange} />);
+    const checkbox = screen.getByRole("checkbox", { name: /AfterToolResult/i });
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith([makeWebhook({ events: ["AfterToolResult"] })]);
+  });
+
+  it("unchecking an event removes it from events array", () => {
+    const onChange = vi.fn();
+    render(
+      <WebhooksEditor
+        webhooks={[makeWebhook({ events: ["BeforeMessage", "BeforeToolCall"] })]}
+        onChange={onChange}
+      />
+    );
+    const checkbox = screen.getByRole("checkbox", { name: /BeforeMessage/i });
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith([makeWebhook({ events: ["BeforeToolCall"] })]);
+  });
+
+  it("tool_matcher null renders as empty string", () => {
+    const onChange = vi.fn();
+    render(
+      <WebhooksEditor
+        webhooks={[makeWebhook({ mode: "decision", tool_matcher: null })]}
+        onChange={onChange}
+      />
+    );
+    const input = screen.getByPlaceholderText(/tool_matcher/i);
+    expect((input as HTMLInputElement).value).toBe("");
+  });
+
+  it("tool_matcher input empty string → null in onChange", () => {
+    const onChange = vi.fn();
+    render(
+      <WebhooksEditor
+        webhooks={[makeWebhook({ mode: "decision", tool_matcher: "old" })]}
+        onChange={onChange}
+      />
+    );
+    const input = screen.getByPlaceholderText(/tool_matcher/i);
+    fireEvent.change(input, { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith([makeWebhook({ mode: "decision", tool_matcher: null })]);
+  });
+
+  it("allow_internal switch toggle updates value", () => {
+    const onChange = vi.fn();
+    render(
+      <WebhooksEditor
+        webhooks={[makeWebhook({ mode: "decision", allow_internal: false })]}
+        onChange={onChange}
+      />
+    );
+    const sw = screen.getByRole("switch");
+    fireEvent.click(sw);
+    expect(onChange).toHaveBeenCalledWith([makeWebhook({ mode: "decision", allow_internal: true })]);
+  });
+});
+
+// ── formToPayload webhook tests ───────────────────────────────────────────────
+
+describe("formToPayload — webhooks", () => {
+  it("hooksWebhooks always included in hooks payload when present", async () => {
+    const { formToPayload, emptyForm } = await import("../page");
+    const wh = makeWebhook({ url: "https://x.com", events: ["BeforeMessage"] });
+    const payload = formToPayload({ ...emptyForm, hooksWebhooks: [wh] });
+    expect(payload.hooks).not.toBeNull();
+    expect((payload.hooks as { webhooks: WebhookDto[] }).webhooks).toEqual([wh]);
+  });
+
+  it("hooksWebhooks: [] → hooks null when logAll=false and blockTools empty", async () => {
+    const { formToPayload, emptyForm } = await import("../page");
+    const payload = formToPayload({ ...emptyForm, hooksWebhooks: [] });
+    expect(payload.hooks).toBeNull();
+  });
+
+  it("webhooks always in hooks payload when logAll=true", async () => {
+    const { formToPayload, emptyForm } = await import("../page");
+    const payload = formToPayload({ ...emptyForm, hooksLogAll: true, hooksWebhooks: [] });
+    expect(payload.hooks).not.toBeNull();
+    expect((payload.hooks as { webhooks: WebhookDto[] }).webhooks).toEqual([]);
+  });
+});
+
+// ── detailToForm webhook init tests ──────────────────────────────────────────
+
+describe("detailToForm — webhooks init", () => {
+  it("hooks: null → hooksWebhooks: []", async () => {
+    const { detailToForm } = await import("../page");
+    const form = detailToForm({
+      name: "A", language: "ru", provider: "openai", model: "gpt-4",
+      provider_connection: null, fallback_provider: null, tts_provider: null,
+      imagegen_provider: null, temperature: 1, max_tokens: null,
+      access: null, heartbeat: null, tools: null, compaction: null,
+      skill_review: null, session: null, icon_url: null,
+      max_tools_in_context: null, tool_loop: null, tool_dispatcher: null,
+      approval: null, routing: [], watchdog: null, hooks: null,
+      max_history_messages: null, daily_budget_tokens: 0,
+      max_failover_attempts: 0, is_running: false, config_dirty: false,
+    });
+    expect(form.hooksWebhooks).toEqual([]);
+  });
+
+  it("hooks.webhooks populated → hooksWebhooks set", async () => {
+    const { detailToForm } = await import("../page");
+    const wh = makeWebhook({ url: "https://h.com" });
+    const form = detailToForm({
+      name: "A", language: "ru", provider: "openai", model: "gpt-4",
+      provider_connection: null, fallback_provider: null, tts_provider: null,
+      imagegen_provider: null, temperature: 1, max_tokens: null,
+      access: null, heartbeat: null, tools: null, compaction: null,
+      skill_review: null, session: null, icon_url: null,
+      max_tools_in_context: null, tool_loop: null, tool_dispatcher: null,
+      approval: null, routing: [], watchdog: null,
+      hooks: { log_all_tool_calls: false, block_tools: [], webhooks: [wh] },
+      max_history_messages: null, daily_budget_tokens: 0,
+      max_failover_attempts: 0, is_running: false, config_dirty: false,
+    });
+    expect(form.hooksWebhooks).toEqual([wh]);
+  });
+});
