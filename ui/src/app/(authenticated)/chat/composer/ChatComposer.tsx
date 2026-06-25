@@ -21,6 +21,7 @@ import {
   X,
   Loader2,
   Mic,
+  Repeat,
 } from "lucide-react";
 
 // ── Draft persistence helpers ─────────────────────────────────────────────────
@@ -62,7 +63,6 @@ export function ChatComposer() {
   const hasMessages = messageSource.mode !== "new-chat";
 
   // ── Voice recorder ───────────────────────────────────────────────────────
-  const voice = useVoiceRecorder();
   const { data: activeProviders } = useProviderActive();
   const hasSttProvider = useMemo(
     () => activeProviders?.some((p) => p.capability === "stt" && p.provider_name) ?? false,
@@ -78,6 +78,57 @@ export function ChatComposer() {
   const [hasInput, setHasInput] = useState(false);
   const [uploadingCount, setUploadingCount] = useState(0);
   const isUploading = uploadingCount > 0;
+
+  // ── Voice: VAD auto-stop + optional continuous (hands-free) ───────────────
+  const [continuous, setContinuous] = useState(false);
+  const continuousRef = useRef(false);
+  useEffect(() => {
+    continuousRef.current = continuous;
+  }, [continuous]);
+  const emptyCountRef = useRef(0);
+
+  const insertTranscript = useCallback((text: string) => {
+    const ta = textareaRef.current;
+    if (!ta || !text) return;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    const newVal = (ta.value ? ta.value + " " : "") + text;
+    setter?.call(ta, newVal);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    ta.focus();
+  }, []);
+
+  // Called when VAD auto-stops with a transcript. In continuous mode the turn is
+  // auto-sent; otherwise the text is just inserted (user sends manually).
+  const handleAutoResult = useCallback(
+    (text: string) => {
+      if (text) {
+        emptyCountRef.current = 0;
+        insertTranscript(text);
+        if (continuousRef.current) formRef.current?.requestSubmit();
+      } else if (continuousRef.current) {
+        // Empty cycle (no speech). Stop hands-free after 3 in a row.
+        emptyCountRef.current += 1;
+        if (emptyCountRef.current >= 3) {
+          setContinuous(false);
+          void import("sonner").then(({ toast }) => toast.info(t("chat.voice_continuous_stopped")));
+        }
+      }
+    },
+    [insertTranscript, t],
+  );
+
+  const voice = useVoiceRecorder({ vad: true, onAutoResult: handleAutoResult });
+
+  // Continuous loop: re-arm recording once a turn finishes (idle + not streaming).
+  const voiceStartRef = useRef(voice.start);
+  useEffect(() => {
+    voiceStartRef.current = voice.start;
+  });
+  useEffect(() => {
+    if (continuous && voice.state === "idle" && !isStreaming) {
+      void voiceStartRef.current();
+    }
+  }, [continuous, voice.state, isStreaming]);
 
   // Focus textarea on desktop only (avoid opening mobile keyboard on page load)
   useEffect(() => {
@@ -459,19 +510,47 @@ export function ChatComposer() {
                   disabled={voice.state === "transcribing"}
                   onClick={handleMicClick}
                   className={cn(
-                    "rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "relative rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     voice.state === "recording"
-                      ? "text-destructive animate-pulse ring-2 ring-destructive/40 rounded-full"
+                      ? "text-destructive ring-2 ring-destructive/40 rounded-full"
                       : voice.state === "transcribing"
                         ? "text-muted-foreground/30 cursor-not-allowed"
                         : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50",
                   )}
                 >
-                  {voice.state === "transcribing" ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Mic className="h-4 w-4" />
+                  {voice.state === "recording" && (
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-0 rounded-full bg-destructive/25"
+                      style={{
+                        transform: `scale(${1 + Math.min(voice.level, 1) * 0.8})`,
+                        opacity: Math.min(0.25 + voice.level * 2, 0.7),
+                      }}
+                    />
                   )}
+                  {voice.state === "transcribing" ? (
+                    <Loader2 className="relative h-4 w-4 animate-spin" />
+                  ) : (
+                    <Mic className="relative h-4 w-4" />
+                  )}
+                </button>
+              )}
+              {hasSttProvider && (
+                <button
+                  type="button"
+                  aria-pressed={continuous}
+                  aria-label={t("chat.continuous_voice")}
+                  title={t("chat.continuous_voice")}
+                  disabled={voice.state === "transcribing"}
+                  onClick={() => setContinuous((v) => !v)}
+                  className={cn(
+                    "rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    continuous
+                      ? "text-primary bg-primary/10"
+                      : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50",
+                  )}
+                >
+                  <Repeat className="h-4 w-4" />
                 </button>
               )}
               {agents.length > 1 && (

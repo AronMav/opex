@@ -1088,6 +1088,8 @@
   "chat.recording": "Recording: {{elapsed}}",
   "chat.transcribing": "Transcribing...",
   "chat.record_voice": "Record voice",
+  "chat.continuous_voice": "Hands-free voice (auto-send & listen)",
+  "chat.voice_continuous_stopped": "Hands-free voice stopped (no speech)",
   "chat.cancel_queue": "Cancel queue",
   "chat.queue_prefix": "Queued: \"{{content}}\"",
   "chat.search_messages": "Search messages...",

@@ -1088,6 +1088,8 @@
   "chat.recording": "Запись: {{elapsed}}",
   "chat.transcribing": "Распознавание...",
   "chat.record_voice": "Записать голос",
+  "chat.continuous_voice": "Hands-free голос (авто-отправка и прослушивание)",
+  "chat.voice_continuous_stopped": "Hands-free голос остановлен (нет речи)",
   "chat.cancel_queue": "Отменить очередь",
   "chat.queue_prefix": "В очереди: «{{content}}»",
   "chat.search_messages": "Поиск по сообщениям...",
