@@ -3,9 +3,9 @@
   "content": "Final assistant response.",
   "toolCalls": [
     {
+      "output": "ok",
       "toolCallId": "tc-1",
-      "toolName": "code_exec",
-      "output": "ok"
+      "toolName": "code_exec"
     }
   ],
   "status": "finished"

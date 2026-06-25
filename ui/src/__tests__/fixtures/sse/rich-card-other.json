@@ -4,11 +4,11 @@
   "data": {
     "cardType": "experimental_chart",
     "data": {
-      "foo": 1,
       "bar": [
         2,
         3
-      ]
+      ],
+      "foo": 1
     }
   }
 }
