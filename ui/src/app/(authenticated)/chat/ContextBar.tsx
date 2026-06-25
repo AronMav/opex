@@ -105,64 +105,75 @@ export function ContextBar({
       onOpenChange={setCheckpointOpen}
     />
     <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div className="flex items-center gap-2 cursor-default select-none min-w-0 shrink ml-auto">
+      <div className="flex items-center gap-2 ml-auto min-w-0 shrink">
 
-            {/* Checkpoint history button */}
-            {currentAgent && (
+        {/* Checkpoint history button — own Tooltip, outside model-badge trigger */}
+        {currentAgent && (
+          <Tooltip>
+            <TooltipTrigger asChild>
               <button
                 className="rounded p-0.5 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
                 onClick={() => setCheckpointOpen(true)}
-                title="История чекпойнтов"
                 aria-label="История чекпойнтов"
               >
                 <HistoryIcon className="size-3.5" />
               </button>
-            )}
-
-            {/* Model badge */}
-            {model && (
-              <span className="rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 font-mono text-[11px] text-muted-foreground/60 whitespace-nowrap">
-                {shortModel(model)}
-              </span>
-            )}
-
-            {/* Token count + progress bar */}
-            {hasUsage && (
-              <>
-                <span className={`text-[11px] tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground/40" : "text-muted-foreground/60"}`}>
-                  {formatK(tokens!)} / {formatK(limit!)}
-                </span>
-                <div className="relative h-[4px] w-14 rounded-full bg-muted/30 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-700 ${barColor} ${isGenerating ? "opacity-50" : ""}`}
-                    style={{ width: `${pct}%` }}
-                  />
-                  {isGenerating && (
-                    <div className="absolute inset-0 rounded-full bg-primary/20 animate-pulse" />
-                  )}
-                </div>
-                {ratio > 0.95 && !isGenerating && (
-                  <span className="text-[10px] text-destructive font-medium whitespace-nowrap">
-                    {t("chat.context_almost_full")}
-                  </span>
-                )}
-              </>
-            )}
-
-          </div>
-        </TooltipTrigger>
-
-        {tooltipLines.length > 0 && (
-          <TooltipContent
-            side="bottom"
-            className="bg-popover/95 border border-border/60 text-popover-foreground backdrop-blur-sm text-[11px] font-mono max-w-[240px] whitespace-pre-line shadow-lg"
-          >
-            {tooltipLines.join("\n")}
-          </TooltipContent>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-[11px]">
+              История чекпойнтов
+            </TooltipContent>
+          </Tooltip>
         )}
-      </Tooltip>
+
+        {/* Model badge + token bar — single Tooltip for usage details */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="flex items-center gap-2 cursor-default select-none min-w-0">
+
+              {/* Model badge */}
+              {model && (
+                <span className="rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 font-mono text-[11px] text-muted-foreground/60 whitespace-nowrap">
+                  {shortModel(model)}
+                </span>
+              )}
+
+              {/* Token count + progress bar */}
+              {hasUsage && (
+                <>
+                  <span className={`text-[11px] tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground/40" : "text-muted-foreground/60"}`}>
+                    {formatK(tokens!)} / {formatK(limit!)}
+                  </span>
+                  <div className="relative h-[4px] w-14 rounded-full bg-muted/30 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 ${barColor} ${isGenerating ? "opacity-50" : ""}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                    {isGenerating && (
+                      <div className="absolute inset-0 rounded-full bg-primary/20 animate-pulse" />
+                    )}
+                  </div>
+                  {ratio > 0.95 && !isGenerating && (
+                    <span className="text-[10px] text-destructive font-medium whitespace-nowrap">
+                      {t("chat.context_almost_full")}
+                    </span>
+                  )}
+                </>
+              )}
+
+            </div>
+          </TooltipTrigger>
+
+          {tooltipLines.length > 0 && (
+            <TooltipContent
+              side="bottom"
+              className="bg-popover/95 border border-border/60 text-popover-foreground backdrop-blur-sm text-[11px] font-mono max-w-[240px] whitespace-pre-line shadow-lg"
+            >
+              {tooltipLines.join("\n")}
+            </TooltipContent>
+          )}
+        </Tooltip>
+
+      </div>
     </TooltipProvider>
     </>
   );

@@ -44,9 +44,10 @@ vi.mock("../CheckpointPanel", () => ({
   CheckpointPanel: () => null,
 }));
 
-// Мок chat-store — currentAgent не нужен в тестах ContextBar
+// Мок chat-store — selector-форма (Zustand-совместимая)
 vi.mock("@/stores/chat-store", () => ({
-  useChatStore: () => null,
+  useChatStore: (sel: (s: { currentAgent: string }) => unknown) =>
+    sel({ currentAgent: "" }),
 }));
 
 import { ContextBar } from "../ContextBar";
