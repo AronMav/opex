@@ -97,7 +97,8 @@ expression: dto
     "log_all_tool_calls": true,
     "block_tools": [
       "shell_exec"
-    ]
+    ],
+    "webhooks": []
   },
   "max_history_messages": 100,
   "daily_budget_tokens": 500000,

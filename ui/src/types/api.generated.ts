@@ -25,7 +25,7 @@ voice?: string, };
 
 export type AgentDetailHeartbeatDto = { cron: string, timezone: string | null, announce_to: string | null, };
 
-export type AgentDetailHooksDto = { log_all_tool_calls: boolean, block_tools: Array<string>, };
+export type AgentDetailHooksDto = { log_all_tool_calls: boolean, block_tools: Array<string>, webhooks: Array<WebhookDto>, };
 
 export type AgentDetailRoutingDto = { condition: string, connection: string | null, model: string | null, temperature: number | null, cooldown_secs: number, };
 
@@ -82,5 +82,7 @@ export type NotificationsResponseDto = { items: Array<Notification>, unread_coun
 export type Session = { id: string, agent_id: string, user_id: string, channel: string, started_at: string, last_message_at: string, title: string | null, metadata: Record<string, unknown> | null, run_status: string | null, participants: Array<string>, parent_session_id: string | null, end_reason: string | null, };
 
 export type ToolEntryDto = { name: string, url: string, tool_type: string, concurrency_limit: number, healthy: boolean, healthcheck?: string, depends_on: Array<string>, ui_path?: string, managed: boolean, };
+
+export type WebhookDto = { url: string, events: Array<string>, mode: string, tool_matcher: string | null, on_failure: string, timeout_ms: number, allow_internal: boolean, };
 
 export type WebhookEntryDto = { id: string, name: string, agent_id: string, secret: string | null, prompt_prefix: string | null, enabled: boolean, created_at: string, last_triggered_at: string | null, trigger_count: number, webhook_type: "generic" | "github", event_filter: Array<string> | null, };
