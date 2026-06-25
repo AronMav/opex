@@ -1,4 +1,5 @@
 import { useAuthStore } from "@/stores/auth-store";
+import type { CheckpointListDto, RestoreReportDto } from "@/types/api.generated";
 
 const REQUEST_TIMEOUT = 30_000;
 
@@ -227,3 +228,17 @@ export async function inviteAgent(
     { agent_name: agentName },
   );
 }
+
+// ── Checkpoints ──────────────────────────────────────────────────────────────
+
+export const listCheckpoints = (agent: string) =>
+  apiGet<CheckpointListDto>(`/api/agents/${encodeURIComponent(agent)}/checkpoints`);
+
+export const diffCheckpoint = (agent: string, n: number) =>
+  apiGet<{ diff: string }>(`/api/agents/${encodeURIComponent(agent)}/checkpoints/${n}/diff`);
+
+export const restoreCheckpoint = (agent: string, n: number, file?: string) =>
+  apiPost<RestoreReportDto>(
+    `/api/agents/${encodeURIComponent(agent)}/checkpoints/${n}/restore`,
+    file ? { file } : {},
+  );
