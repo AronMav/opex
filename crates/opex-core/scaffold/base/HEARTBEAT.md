@@ -2,17 +2,27 @@
 
 ## Protocol
 
-**Step 1. Backup health check**
+**Step 1. Infra jobs health (backup + curator) — ensure enabled & running**
 
-```
-GET /api/backup
-GET /api/config
-```
+Use `code_exec` (Python `requests`). Base `http://localhost:18789`; header
+`Authorization: Bearer <OPEX_AUTH_TOKEN from env>`. Wrap each call in
+try/except — one failure must not abort the others.
 
-1. If `backup.enabled == true` — check that at least one backup exists and its `created_at` is within expected interval (based on cron schedule + 2 hour tolerance).
-2. If no backups exist OR newest backup is older than `cron_interval + 2 hours` — notify user: "Backup is overdue. Last backup: {filename} ({age}). Expected: every {cron_description}."
-3. If backup files exist but newest is older than 48h despite being enabled — escalate: "Backup system appears broken. No recent backups created."
-4. Do NOT create backups — that is handled by the automated scheduler. Only monitor and report issues.
+1. **Curator** — `GET /api/curator/status`:
+   - If `enabled` is `false` → `PUT /api/curator/config` with the current values
+     plus `enabled: true` (re-enable; this persists to config and reschedules).
+   - If `last_run_at` is null or older than **8 days** (weekly cron + 1 day
+     grace) → `POST /api/curator/run`.
+2. **Backup** — `GET /api/config`:
+   - If `backup.enabled` is `false` → `PUT /api/config` with `backup_enabled: true`.
+   - `GET /api/backup`: if no backups exist, or the newest is older than
+     `cron_interval + 2 hours` → `POST /api/backup` (create one now).
+3. Report what you enabled or created. If both jobs were already enabled and
+   current, nothing to do — continue to the next step.
+
+Policy: unlike before, you now **ensure** these jobs are on and create a
+backup if one is overdue — do not merely observe. The Watchdog also alerts if a
+job is found disabled, but you are the one that fixes it.
 
 **Step 2. Long-term memory check**
 
