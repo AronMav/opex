@@ -31,7 +31,7 @@
 
 ---
 
-### Task A1: Backend — WebhookDto + AgentDetailHooksDto.webhooks + codegen
+### Task 1: Backend — WebhookDto + AgentDetailHooksDto.webhooks + codegen
 
 **Files:**
 - Modify: `crates/opex-core/src/gateway/handlers/agents/dto_structs.rs` (~150-157)
@@ -134,7 +134,7 @@ git commit -m "feat(ui-hooks): WebhookDto + webhooks в AgentDetailHooksDto (GET
 
 ---
 
-### Task A2: Backend — preserve-on-omit webhooks (data-loss фикс)
+### Task 2: Backend — preserve-on-omit webhooks (data-loss фикс)
 
 **Files:**
 - Modify: `crates/opex-core/src/gateway/handlers/agents/crud.rs` (preserve-блок ~690-701)
@@ -206,7 +206,7 @@ git commit -m "fix(ui-hooks): preserve webhooks при PUT без webhooks (data
 
 ---
 
-### Task A3: UI — webhooks-редактор в AgentEditDialog + always-send
+### Task 3: UI — webhooks-редактор в AgentEditDialog + always-send
 
 **Files:**
 - Modify: `ui/src/app/(authenticated)/agents/AgentEditDialog.tsx` (state ~111, рендер ~604-614)
