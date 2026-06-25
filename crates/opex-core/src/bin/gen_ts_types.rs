@@ -41,7 +41,7 @@ fn main() {
 
     // Min-count assertions catch accidental registration loss (linker dropped
     // inventory section, dropped register_ts_dto call, etc.).
-    // ui count: tightened to current production count (34, verified via
+    // ui count: tightened to current production count (38, verified via
     //   `grep -rn "register_ts_dto!" crates/opex-core/src --include="*.rs"
     //     | grep -v "macro_rules\|stringify\|#!\[\|//"`).
     // channels count: 6 — MediaType, MediaAttachment, IncomingMessageDto,
