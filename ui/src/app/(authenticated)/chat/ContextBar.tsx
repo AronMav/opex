@@ -2,8 +2,10 @@
 
 // ── ContextBar.tsx ────────────────────────────────────────────────────────────
 // Always-visible model badge + token usage bar in the chat header.
+// Includes checkpoint history trigger button (HistoryIcon → CheckpointPanel).
 
-import React from "react";
+import React, { useState } from "react";
+import { HistoryIcon } from "lucide-react";
 import { getContextLimit } from "@/lib/model-limits";
 import { useTranslation } from "@/hooks/use-translation";
 import {
@@ -12,6 +14,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useChatStore } from "@/stores/chat-store";
+import { CheckpointPanel } from "./CheckpointPanel";
 
 interface ContextBarProps {
   tokens: number | null;
@@ -48,6 +52,8 @@ export function ContextBar({
   isGenerating = false,
 }: ContextBarProps) {
   const { t } = useTranslation();
+  const currentAgent = useChatStore((s) => s.currentAgent);
+  const [checkpointOpen, setCheckpointOpen] = useState(false);
   // Backend-provided limit is the single source of truth; fall back to static table.
   const limit = modelContextLimit ?? (model ? getContextLimit(model) : null);
 
@@ -92,10 +98,28 @@ export function ContextBar({
   }
 
   return (
+    <>
+    <CheckpointPanel
+      agent={currentAgent}
+      open={checkpointOpen}
+      onOpenChange={setCheckpointOpen}
+    />
     <TooltipProvider delayDuration={300}>
       <Tooltip>
         <TooltipTrigger asChild>
           <div className="flex items-center gap-2 cursor-default select-none min-w-0 shrink ml-auto">
+
+            {/* Checkpoint history button */}
+            {currentAgent && (
+              <button
+                className="rounded p-0.5 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                onClick={() => setCheckpointOpen(true)}
+                title="История чекпойнтов"
+                aria-label="История чекпойнтов"
+              >
+                <HistoryIcon className="size-3.5" />
+              </button>
+            )}
 
             {/* Model badge */}
             {model && (
@@ -140,5 +164,6 @@ export function ContextBar({
         )}
       </Tooltip>
     </TooltipProvider>
+    </>
   );
 }

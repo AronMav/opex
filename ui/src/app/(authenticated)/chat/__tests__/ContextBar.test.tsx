@@ -39,6 +39,16 @@ vi.mock("@/hooks/use-translation", () => ({
   }),
 }));
 
+// Мок CheckpointPanel — изолируем ContextBar от React Query
+vi.mock("../CheckpointPanel", () => ({
+  CheckpointPanel: () => null,
+}));
+
+// Мок chat-store — currentAgent не нужен в тестах ContextBar
+vi.mock("@/stores/chat-store", () => ({
+  useChatStore: () => null,
+}));
+
 import { ContextBar } from "../ContextBar";
 
 const MODEL = "claude-opus-4"; // 200k limit per model-limits.ts
