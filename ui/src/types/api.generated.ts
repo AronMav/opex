@@ -59,6 +59,10 @@ export type BackupEntryDto = { filename: string, size_bytes: number, created_at:
 
 export type ChannelRowDto = { id: string, agent_name: string, channel_type: string, display_name: string, config: Record<string, unknown>, status: string, error_msg: string | null, };
 
+export type CheckpointListDto = { enabled: boolean, items: Array<CheckpointMetaDto>, };
+
+export type CheckpointMetaDto = { n: number, commit: string, created: string, summary: string, };
+
 export type CronJobDto = { id: string, name: string, agent: string, cron: string, timezone: string, task: string, enabled: boolean, silent: boolean, announce_to?: { channel: string; chat_id: number; channel_id?: string }, jitter_secs: number, run_once: boolean, run_at: string | null, created_at: string, last_run: string | null, next_run: string | null, tool_policy?: { allow: string[]; deny: string[] }, };
 
 export type CronRunDto = { id: string, job_id: string, job_name?: string, agent_id: string, started_at: string, finished_at: string | null, status: "running" | "success" | "error", error: string | null, response_preview: string | null, };
@@ -78,6 +82,8 @@ export type MessageRow = { id: string, role: string, content: string, tool_calls
 export type Notification = { id: string, type: string, title: string, body: string, data: Record<string, unknown>, read: boolean, created_at: string, };
 
 export type NotificationsResponseDto = { items: Array<Notification>, unread_count: number, limit: number, offset: number, };
+
+export type RestoreReportDto = { n: number, files: Array<string>, new_checkpoint: number | null, };
 
 export type Session = { id: string, agent_id: string, user_id: string, channel: string, started_at: string, last_message_at: string, title: string | null, metadata: Record<string, unknown> | null, run_status: string | null, participants: Array<string>, parent_session_id: string | null, end_reason: string | null, };
 

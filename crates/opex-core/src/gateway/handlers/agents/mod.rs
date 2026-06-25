@@ -1,3 +1,4 @@
+mod checkpoints;
 mod crud;
 pub mod dto;
 mod icon;
@@ -27,4 +28,5 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/approvals/allowlist", get(api_list_allowlist).post(api_add_to_allowlist))
         .route("/api/approvals/allowlist/{id}", delete(api_delete_from_allowlist))
         .merge(icon::routes())
+        .merge(checkpoints::routes())
 }

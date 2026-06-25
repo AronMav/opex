@@ -96,6 +96,22 @@ mod backup_dto_register {
     crate::register_ts_dto!(BackupEntryDto);
 }
 
+/// Checkpoint list/restore DTOs — leaf file (serde only), no crate::* imports.
+/// `register_ts_dto!()` calls live here (not in the file itself) to avoid
+/// double-registration: the leaf is compiled once via this #[path] entry and
+/// once via `gateway::handlers::agents::checkpoints`.
+#[cfg(feature = "ts-gen")]
+#[path = "../gateway/handlers/agents/checkpoints_dto_structs.rs"]
+pub mod checkpoints_dto;
+
+#[cfg(feature = "ts-gen")]
+mod checkpoints_dto_register {
+    use super::checkpoints_dto::{CheckpointListDto, CheckpointMetaDto, RestoreReportDto};
+    crate::register_ts_dto!(CheckpointMetaDto);
+    crate::register_ts_dto!(CheckpointListDto);
+    crate::register_ts_dto!(RestoreReportDto);
+}
+
 /// Phase D: Channel WS protocol types — registered for dest="channels".
 /// Imports types from opex-types and registers each via register_ts_dto!.
 #[cfg(feature = "ts-gen")]

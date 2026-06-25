@@ -48,7 +48,7 @@ fn main() {
     //   ChannelActionDto, ChannelInbound, ChannelOutbound (registered via
     //   crates/opex-core/src/dto_export/channels_ts.rs).
     let dest_paths: &[(&str, &str, usize)] = &[
-        ("ui",       "ui/src/types/api.generated.ts",         35),
+        ("ui",       "ui/src/types/api.generated.ts",         38),
         ("channels", "channels/src/types.generated.ts",        6),
         ("ui-sse",   "ui/src/types/sse.generated.ts",         10),
     ];
