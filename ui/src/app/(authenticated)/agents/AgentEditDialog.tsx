@@ -35,6 +35,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { ChannelRow, RoutingRule } from "@/types/api";
+import type { WebhookDto } from "@/types/api.generated";
 import { ChevronDown, Bot, ExternalLink, Link2, Camera, RefreshCw, Settings, Wrench, Zap, Archive, Clock, Radio } from "lucide-react";
 import { RoutingRulesEditor } from "./RoutingRulesEditor";
 import { useProviders, useProviderModels } from "@/lib/queries";
@@ -111,6 +112,7 @@ export interface FormState {
   // Hooks
   hooksLogAll: boolean;
   hooksBlockTools: string;
+  hooksWebhooks: WebhookDto[];
   // Budget
   dailyBudgetTokens: string;
   // Access Control
@@ -601,7 +603,7 @@ export function AgentEditDialog({
                     </div>
                   </div>
                 </SwitchSection>
-                <SwitchSection title={t("agents.section_hooks")} enabled={form.hooksLogAll || form.hooksBlockTools.trim() !== ""} onToggle={(v) => { if (!v) upd({ hooksLogAll: false, hooksBlockTools: "" }); else upd({ hooksLogAll: true }); }}>
+                <SwitchSection title={t("agents.section_hooks")} enabled={form.hooksLogAll || form.hooksBlockTools.trim() !== "" || form.hooksWebhooks.length > 0} onToggle={(v) => { if (!v) upd({ hooksLogAll: false, hooksBlockTools: "", hooksWebhooks: [] }); else upd({ hooksLogAll: true }); }}>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium text-muted-foreground">{t("agents.hooks_log_all")}</span>
@@ -610,6 +612,7 @@ export function AgentEditDialog({
                     <Field label={t("agents.hooks_block_tools")} labelClassName="text-xs">
                       <Input value={form.hooksBlockTools} placeholder="tool1, tool2" className="bg-background border-border font-mono text-sm h-8" onChange={(e) => upd({ hooksBlockTools: e.target.value })} />
                     </Field>
+                    <WebhooksEditor webhooks={form.hooksWebhooks} onChange={(wh) => upd({ hooksWebhooks: wh })} />
                   </div>
                 </SwitchSection>
                 <SwitchSection title={t("agents.section_skills")} enabled={form.srEnabled} onToggle={(v) => upd({ srEnabled: v })}>
@@ -1016,6 +1019,159 @@ function TagInput({
           ))}
         </datalist>
       )}
+    </div>
+  );
+}
+
+// ── WebhooksEditor ────────────────────────────────────────────────────────────
+
+const WEBHOOK_EVENTS = ["BeforeMessage", "BeforeToolCall", "AfterToolResult"] as const;
+
+export interface WebhooksEditorProps {
+  webhooks: WebhookDto[];
+  onChange: (webhooks: WebhookDto[]) => void;
+}
+
+export function WebhooksEditor({ webhooks, onChange }: WebhooksEditorProps) {
+  const defaultWebhook: WebhookDto = {
+    url: "",
+    events: [],
+    mode: "async",
+    tool_matcher: null,
+    on_failure: "open",
+    timeout_ms: 3000,
+    allow_internal: false,
+  };
+
+  function update(index: number, patch: Partial<WebhookDto>) {
+    onChange(webhooks.map((wh, i) => (i === index ? { ...wh, ...patch } : wh)));
+  }
+
+  function remove(index: number) {
+    onChange(webhooks.filter((_, i) => i !== index));
+  }
+
+  function toggleEvent(index: number, event: string, checked: boolean) {
+    const wh = webhooks[index];
+    const events = checked
+      ? [...wh.events, event]
+      : wh.events.filter((e) => e !== event);
+    update(index, { events });
+  }
+
+  return (
+    <div className="space-y-2 mt-2">
+      {webhooks.map((wh, i) => (
+        <div key={i} className="border border-border/50 rounded-lg p-3 space-y-2 bg-muted/10">
+          {/* URL */}
+          <div className="flex items-center gap-2">
+            <Input
+              value={wh.url}
+              placeholder="https://"
+              className="bg-background border-border font-mono text-xs h-7 flex-1"
+              onChange={(e) => update(i, { url: e.target.value })}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-label="Удалить"
+              className="h-7 px-2 text-muted-foreground hover:text-destructive shrink-0"
+              onClick={() => remove(i)}
+            >
+              ×
+            </Button>
+          </div>
+
+          {/* Events */}
+          <div className="flex flex-wrap gap-3">
+            {WEBHOOK_EVENTS.map((ev) => (
+              <label key={ev} className="flex items-center gap-1.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  role="checkbox"
+                  aria-label={ev}
+                  checked={wh.events.includes(ev)}
+                  onChange={(e) => toggleEvent(i, ev, e.target.checked)}
+                  className="h-3.5 w-3.5 accent-primary"
+                />
+                <span className="text-xs font-mono text-muted-foreground">{ev}</span>
+              </label>
+            ))}
+          </div>
+
+          {/* Mode */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground w-12 shrink-0">mode</span>
+            <Select value={wh.mode} onValueChange={(v) => update(i, { mode: v })}>
+              <SelectTrigger className="bg-background border-border text-xs h-7 flex-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="border-border">
+                <SelectItem value="async">async</SelectItem>
+                <SelectItem value="decision">decision</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Decision-only fields */}
+          {wh.mode === "decision" && (
+            <div className="space-y-2 pl-1 border-l-2 border-primary/30">
+              {/* tool_matcher */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-24 shrink-0">tool_matcher</span>
+                <Input
+                  value={wh.tool_matcher ?? ""}
+                  placeholder="tool_matcher"
+                  className="bg-background border-border font-mono text-xs h-7 flex-1"
+                  onChange={(e) => update(i, { tool_matcher: e.target.value || null })}
+                />
+              </div>
+              {/* on_failure */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-24 shrink-0">on_failure</span>
+                <Select value={wh.on_failure} onValueChange={(v) => update(i, { on_failure: v })}>
+                  <SelectTrigger className="bg-background border-border text-xs h-7 flex-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-border">
+                    <SelectItem value="open">open</SelectItem>
+                    <SelectItem value="closed">closed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {/* timeout_ms */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground w-24 shrink-0">timeout (ms)</span>
+                <Input
+                  type="number"
+                  value={wh.timeout_ms}
+                  className="bg-background border-border font-mono text-xs h-7 flex-1"
+                  onChange={(e) => update(i, { timeout_ms: parseInt(e.target.value) || 3000 })}
+                />
+              </div>
+              {/* allow_internal */}
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">allow_internal</span>
+                <Switch
+                  checked={wh.allow_internal}
+                  onCheckedChange={(v) => update(i, { allow_internal: v })}
+                  className="data-[state=checked]:bg-primary"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="w-full h-7 text-xs border-dashed border-border/70 text-muted-foreground hover:text-foreground"
+        onClick={() => onChange([...webhooks, { ...defaultWebhook }])}
+      >
+        + Добавить webhook
+      </Button>
     </div>
   );
 }
