@@ -126,6 +126,21 @@ impl AgentDetailDto {
             hooks: a.hooks.as_ref().map(|h| AgentDetailHooksDto {
                 log_all_tool_calls: h.log_all_tool_calls,
                 block_tools: h.block_tools.clone(),
+                webhooks: h.webhooks.iter().map(|w| WebhookDto {
+                    url: w.url.clone(),
+                    events: w.events.clone(),
+                    mode: match w.mode {
+                        crate::config::WebhookMode::Async => "async",
+                        crate::config::WebhookMode::Decision => "decision",
+                    }.to_string(),
+                    tool_matcher: w.tool_matcher.clone(),
+                    on_failure: match w.on_failure {
+                        crate::config::FailureMode::Open => "open",
+                        crate::config::FailureMode::Closed => "closed",
+                    }.to_string(),
+                    timeout_ms: w.timeout_ms,
+                    allow_internal: w.allow_internal,
+                }).collect(),
             }),
             max_history_messages: a.max_history_messages,
             daily_budget_tokens: a.daily_budget_tokens,
@@ -212,5 +227,26 @@ mod tests {
         let icons: HashMap<String, Uuid> = HashMap::new();
         let dto = AgentInfoDto::from_config(&cfg, 0, false, false, Some(false), None, &icons, None);
         insta::assert_json_snapshot!("agent_info_snapshot_min", dto);
+    }
+
+    #[test]
+    fn hooks_dto_serializes_webhooks() {
+        let dto = AgentDetailHooksDto {
+            log_all_tool_calls: false,
+            block_tools: vec![],
+            webhooks: vec![WebhookDto {
+                url: "https://x/h".into(),
+                events: vec!["BeforeToolCall".into()],
+                mode: "decision".into(),
+                tool_matcher: Some("code_.*".into()),
+                on_failure: "closed".into(),
+                timeout_ms: 1500,
+                allow_internal: true,
+            }],
+        };
+        let j = serde_json::to_value(&dto).unwrap();
+        assert_eq!(j["webhooks"][0]["mode"], "decision");
+        assert_eq!(j["webhooks"][0]["on_failure"], "closed");
+        assert_eq!(j["webhooks"][0]["timeout_ms"], 1500);
     }
 }

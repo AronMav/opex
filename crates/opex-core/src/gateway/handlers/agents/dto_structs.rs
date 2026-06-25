@@ -150,9 +150,26 @@ crate::register_ts_dto!(AgentDetailWatchdogDto);
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
 #[cfg_attr(feature = "ts-gen", ts(export))]
+pub struct WebhookDto {
+    pub url: String,
+    pub events: Vec<String>,
+    pub mode: String,           // "async" | "decision"
+    pub tool_matcher: Option<String>,
+    pub on_failure: String,     // "open" | "closed"
+    // u64 → number: timeout values always within JS safe integer range
+    #[cfg_attr(feature = "ts-gen", ts(type = "number"))]
+    pub timeout_ms: u64,
+    pub allow_internal: bool,
+}
+crate::register_ts_dto!(WebhookDto);
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts-gen", ts(export))]
 pub struct AgentDetailHooksDto {
     pub log_all_tool_calls: bool,
     pub block_tools: Vec<String>,
+    pub webhooks: Vec<WebhookDto>,
 }
 crate::register_ts_dto!(AgentDetailHooksDto);
 
