@@ -1,7 +1,16 @@
 # UI для decision-hooks + checkpoint/rollback
 
 **Дата:** 2026-06-25
-**Статус:** Design v1 (одобрено в brainstorming по 4 секциям; ожидает финального spec review)
+**Статус:** Design v2 (одобрено в brainstorming + адверсариальное ревью учтено; ожидает финального spec review)
+
+## Ревью (адверсариальное) — учтено в v2
+
+CRIT: (1) **data-loss** — PUT `HooksPayload.webhooks=unwrap_or_default()` + UI не шлёт webhooks → сохранение агента обнуляет webhooks с диска → backend **preserve-on-omit** + UI всегда шлёт полный массив (read+write atomic); (2) `get_engine` резолвит только ЗАПУЩЕННЫХ агентов → checkpoint REST резолвит **shared `CheckpointManager` из AppState** (process-wide singleton), не через engine. HIGH: (3) `WebhookConfig` не ts-rs → `WebhookDto` (TS-аннот.); (4) `CheckpointMeta`/`RestoreReport` `pub(crate)` без Serialize → `CheckpointMetaDto`/`RestoreReportDto`. MED: GET checkpoints → `{enabled, items}`; `created` ISO8601 → `Intl.RelativeTimeFormat`. **Декомпозиция: 2 плана** (A=hooks, B=checkpoint).
+
+## Декомпозиция (2 плана)
+
+- **План A — Decision-hooks UI + data-loss фикс** (atomic): backend preserve-on-omit + `webhooks` в GET-DTO (`WebhookDto`) + UI-редактор в AgentEditDialog (всегда шлёт webhooks). ПЕРВЫМ (закрывает CRIT data-loss).
+- **План B — Checkpoint REST + панель**: REST API (резолв из AppState) + `CheckpointMetaDto`/`RestoreReportDto` + панель в чате.
 
 ## Цель
 
@@ -39,23 +48,25 @@
 
 ### 1. Backend — Checkpoint REST API
 
-Новый sub-router `gateway/handlers/agents/checkpoints.rs`, `pub(crate) fn routes() -> Router<AppState>`, merge в `gateway/handlers/mod.rs` (или в agents-mod, как собираются прочие agents-роуты). Все хендлеры: Bearer-auth (middleware), `agent_name` валидируется (charset), резолв `AgentCore::get_engine(name)` → `cfg().checkpoint_manager`.
+Новый sub-router `gateway/handlers/agents/checkpoints.rs`, `pub(crate) fn routes() -> Router<AppState>`, merge как прочие agents-роуты. Bearer-auth (middleware), `agent_name` валидируется (charset). **Резолв CheckpointManager — из AppState/AgentDeps (process-wide shared `Arc<CheckpointManager>`), НЕ через `get_engine`** (ревью CRIT-2: get_engine отдаёт только ЗАПУЩЕННЫХ агентов → чекпойнты стопнутого агента были бы недоступны). `workspace_dir` — из `AgentDeps.workspace_dir` (глобальный root; менеджер сам строит `agents/{agent}`).
 
-- `GET /api/agents/{name}/checkpoints` → `200 [{n, commit, created, summary}]` (serde of `CheckpointMeta`). Нет агента → 404; `checkpoint_manager` None/`!enabled` → `200 []` (пустой, чтобы UI показал «нет»).
-- `GET /api/agents/{name}/checkpoints/{n}/diff` → `200 {"diff": string}`. Невалидный N → 400/404 (из `diff` Err).
-- `POST /api/agents/{name}/checkpoints/{n}/restore` body `{"file": string?}` → `200 {"n", "files": [..], "new_checkpoint": n?}` (serde of `RestoreReport`). Невалидный N / path-traversal → 400 (из `restore` Err — менеджер валидирует).
-- DTO-структуры (serde) для ответов: `CheckpointMetaDto`, `RestoreReportDto` (или прямой serde на `CheckpointMeta`/`RestoreReport` — добавить `#[derive(Serialize)]` если нет).
+- `GET /api/agents/{name}/checkpoints` → `200 {"enabled": bool, "items": [CheckpointMetaDto]}` (ревью MED: отличить disabled от пусто). `list_checkpoints` при `!enabled` уже даёт `[]`; `enabled` берём из `manager.enabled()`.
+- `GET /api/agents/{name}/checkpoints/{n}/diff` → `200 {"diff": string}`. Невалидный N / disabled → 4xx (из `diff` Err).
+- `POST /api/agents/{name}/checkpoints/{n}/restore` body `{"file": string?}` → `200 RestoreReportDto`. Невалидный N / path-traversal / disabled → 4xx (из `restore` Err — менеджер валидирует).
+- **DTO обязательны** (ревью HIGH-2: `CheckpointMeta`/`RestoreReport` — `pub(crate)` без Serialize): `CheckpointMetaDto {n, commit, created, summary}` + `RestoreReportDto {n, files, new_checkpoint}` в handler-модуле, `#[derive(Serialize, TS)]`; маппинг из менеджер-типов. `created` = ISO8601-строка (`%cI`).
 
 ### 2. Backend — Hooks GET-DTO
 
-В `gateway/handlers/agents/dto.rs` расширить `AgentDetailHooksDto`: добавить `webhooks: Vec<WebhookConfig>` (или `Vec<WebhookDto>` с полями url/events/mode/tool_matcher/on_failure/timeout_ms/allow_internal). Заполнять из `agent_cfg.agent.hooks.webhooks` при сборке DTO. `WebhookConfig` уже `Serialize` (нужен `#[derive(TS)]`/ts-rs если api.generated.ts генерится — сверить как у соседних DTO; если `WebhookConfig` не ts-rs-аннотирован, добавить либо ввести `WebhookDto` с `#[derive(TS)]`). ts-rs codegen: `cargo run --bin gen_ts_types` обновит `api.generated.ts`. PUT-путь не трогаем (уже принимает `HooksPayload.webhooks`).
+**`WebhookDto` (новый, ts-rs)** — ревью HIGH-1: `WebhookConfig`/`WebhookMode`/`FailureMode` не `#[derive(TS)]`, codegen их не выдаст. Ввести `WebhookDto { url:String, events:Vec<String>, mode:String("async"|"decision"), tool_matcher:Option<String>, on_failure:String("open"|"closed"), timeout_ms:u64, allow_internal:bool }` с `#[derive(Serialize, Deserialize, TS)]` (в `dto.rs`/dto_structs). Расширить `AgentDetailHooksDto`: `webhooks: Vec<WebhookDto>`, заполнять из `agent_cfg.agent.hooks.webhooks` (маппинг enum→lowercase string). Зарегистрировать `WebhookDto` в `gen_ts_types.rs` + поднять min-count guard. `cargo run --bin gen_ts_types` → `api.generated.ts`.
+
+**CRIT data-loss фикс (preserve-on-omit) — ОБЯЗАТЕЛЕН в этом же плане:** сейчас PUT-обработчик `HooksPayload.webhooks.unwrap_or_default()` (`schema.rs:282`) → при отсутствии webhooks в payload **обнуляет** webhooks с диска; текущий UI-payload (`agents/page.tsx`) webhooks не шлёт. Фикс: в update-обработчике если `payload.hooks.webhooks` = `None` → **сохранить существующие** webhooks агента (как base/delegation «preserved from disk»), НЕ затирать. Плюс UI (Компонент 5) ВСЕГДА шлёт полный `webhooks`. Read (GET-DTO) + write (preserve + UI) — один atomic-инкремент (План A).
 
 ### 3. UI — Checkpoint-панель (`chat/CheckpointPanel.tsx`)
 
 - **Триггер:** кнопка-иконка в `ContextBar.tsx` (history/rewind), вызывает открытие `Sheet`.
-- **`Sheet`** (shadcn, справа): заголовок «Чекпойнты — {currentAgent}». Список из `useCheckpoints(currentAgent)` (React Query, GET endpoint), refetch при открытии (`enabled: open`).
-- **Строка:** `N` · relative time (`created`, через существующий util относительного времени или `Intl`) · `summary`. Кнопки: **Diff** (GET diff → `Dialog` с `<pre className="diff">` +/− подсветкой), **Откатить** (`confirm-dialog` → `useRestoreCheckpoint` POST → toast (`sonner`) «Откат к N выполнен» + `invalidateQueries(["checkpoints", agent])`).
-- **Пусто:** «Чекпойнтов нет».
+- **`Sheet`** (shadcn, справа): заголовок «Чекпойнты — {currentAgent}». Данные из `useCheckpoints(currentAgent)` (React Query, GET → `{enabled, items}`), refetch при открытии (`enabled: open`).
+- **Строка:** `N` · relative time (`Intl.RelativeTimeFormat` от `Date.parse(created)` — created = ISO8601) · `summary`. Кнопки: **Diff** (GET diff → `Dialog` с `<pre className="diff">` +/− подсветкой), **Откатить** (`confirm-dialog` → `useRestoreCheckpoint` POST → toast (`sonner`) «Откат к N выполнен» + `invalidateQueries(["checkpoints", agent])`).
+- **Состояния:** `enabled=false` → «Чекпойнты отключены»; `enabled=true` && `items=[]` → «Чекпойнтов нет» (различаем по полю `enabled`).
 - **Ошибки:** toast.error на API-сбой; панель не валит чат.
 
 ### 4. UI — API + хуки
@@ -67,8 +78,8 @@
 
 - В секции hooks добавить подсекцию «Decision webhooks»: массив строк (локальный state, init из `data.hooks.webhooks`).
 - Строка: `url` (Input), `events` (чекбоксы BeforeMessage/BeforeToolCall/AfterToolResult), `mode` (Select async|decision), и при `mode=decision`: `tool_matcher` (Input), `on_failure` (Select open|closed), `timeout_ms` (Input number), `allow_internal` (Switch). «×» удалить; «+ Добавить webhook».
-- Сохранение: включить `webhooks` массив в payload hooks при PATCH/PUT (рядом с log_all/block_tools). Пустой массив = нет хуков.
-- Типы: `WebhookDto` из `api.generated.ts` (после Секции 2 codegen).
+- Сохранение: **ВСЕГДА включать полный `webhooks` массив** в payload hooks при PATCH/PUT (рядом с log_all/block_tools) — даже пустой (`[]` = осознанно нет хуков). Вместе с backend preserve-on-omit это закрывает CRIT data-loss.
+- Типы: `WebhookDto` из `api.generated.ts` (после Компонента 2 codegen). Форма: events — чекбоксы → `string[]`; mode/on_failure — `"async"|"decision"`/`"open"|"closed"` (lowercase, как serde).
 
 ## Данные / поток
 
@@ -77,9 +88,15 @@
 
 ## Тестирование (TDD)
 
-**Backend (Rust):**
-- Checkpoint handlers: GET checkpoints → 200 + JSON shape; 401 без токена; GET diff невалидный N → 4xx; POST restore невалидный N → 4xx; `agent_name` с `/`/`..` → reject; manager None → `[]`.
-- Hooks DTO: serde — `AgentDetailHooksDto` содержит `webhooks` со всеми полями (round-trip).
+**Backend (Rust) — План A (hooks):**
+- **data-loss preserve (CRIT):** PUT агента с `hooks` БЕЗ `webhooks` → существующие webhooks на диске СОХРАНЯЮТСЯ (не обнулены). PUT с `webhooks=[...]` → заменяет.
+- Hooks DTO: serde — `AgentDetailHooksDto` содержит `webhooks: Vec<WebhookDto>` со всеми полями (round-trip, mode/on_failure lowercase).
+- gen_ts_types: `WebhookDto` присутствует в выводе (codegen-тест/min-count).
+
+**Backend (Rust) — План B (checkpoint):**
+- GET checkpoints → 200 `{enabled, items}` JSON shape; 401 без токена.
+- **stopped-agent:** checkpoints резолвятся даже когда engine не запущен (резолв из AppState, не get_engine).
+- GET diff невалидный N → 4xx; POST restore невалидный N / path-traversal → 4xx; `agent_name` с `/`/`..` → reject; `!enabled` → diff/restore 4xx, GET → `{enabled:false, items:[]}`.
 
 **UI (vitest + @testing-library/react):**
 - `CheckpointPanel`: рендер списка (мок useCheckpoints); пустое «Чекпойнтов нет»; «Откатить» → confirm → restore API (мок) вызван + invalidate; «Diff» → diff показан.
