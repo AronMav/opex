@@ -35,6 +35,7 @@ pub(crate) mod url_tools;
 pub(crate) mod file_scenario;
 pub mod mention_parser;
 pub mod workspace;
+pub(crate) mod v4a_patch;
 pub mod knowledge_extractor;
 pub mod agent_config;
 pub mod pipeline;

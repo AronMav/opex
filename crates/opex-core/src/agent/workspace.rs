@@ -593,6 +593,83 @@ pub async fn write_workspace_file(
     Ok(())
 }
 
+/// Summary of a successfully applied V4A patch (for the tool result text).
+#[derive(Debug, Default)]
+pub struct PatchOutcome {
+    pub updated: Vec<String>,
+    pub added: Vec<String>,
+    pub hunks: usize,
+    /// Concatenated code-smell warnings for the written content (may be empty).
+    pub warnings: String,
+}
+
+/// Apply a V4A patch (Update + Add) atomically.
+///
+/// Phase 1 parses the envelope and, for every file section, validates the target
+/// path, rejects read-only targets, and computes the new content in memory
+/// (Update: read + locate/replace hunks; Add: ensure the file does not yet
+/// exist). Any parse/match/validation failure aborts before a single byte is
+/// written. Phase 2 then writes every file through [`write_workspace_file`]
+/// (path-guard + read-only + symlink checks). The per-call checkpoint snapshot
+/// is taken by the tool-handler wrapper, so even a rare mid-phase-2 IO error is
+/// recoverable via `/rollback`.
+pub async fn apply_v4a_patch(
+    workspace_dir: &str,
+    agent_name: &str,
+    patch: &str,
+    base: bool,
+) -> Result<PatchOutcome> {
+    use crate::agent::v4a_patch::{self, FileOp};
+
+    let ops = v4a_patch::parse_patch(patch)
+        .map_err(|e| anyhow::anyhow!("patch parse error: {e}"))?;
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut writes: Vec<(String, String)> = Vec::new();
+    let mut outcome = PatchOutcome::default();
+
+    for op in &ops {
+        let path = match op {
+            FileOp::Update { path, .. } | FileOp::Add { path, .. } => path.clone(),
+        };
+        if !seen.insert(path.clone()) {
+            anyhow::bail!("duplicate file section for '{path}' in one patch");
+        }
+        let resolved = validate_workspace_path(workspace_dir, agent_name, &path).await?;
+        if is_read_only(workspace_dir, &resolved, base) {
+            anyhow::bail!("'{path}' is read-only and cannot be modified");
+        }
+        let content = match op {
+            FileOp::Update { hunks, .. } => {
+                let original = read_workspace_file(workspace_dir, agent_name, &path)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("cannot read '{path}' to update: {e}"))?;
+                let new_content = v4a_patch::apply_hunks(&original, hunks)
+                    .map_err(|e| anyhow::anyhow!("'{path}': {e}"))?;
+                outcome.hunks += hunks.len();
+                outcome.updated.push(path.clone());
+                new_content
+            }
+            FileOp::Add { content, .. } => {
+                if fs::try_exists(&resolved).await.unwrap_or(false) {
+                    anyhow::bail!("'{path}' already exists — use Update File");
+                }
+                outcome.added.push(path.clone());
+                content.clone()
+            }
+        };
+        outcome
+            .warnings
+            .push_str(&crate::tools::code_smell::warning_for(&path, &content));
+        writes.push((path, content));
+    }
+
+    for (filename, content) in &writes {
+        write_workspace_file(workspace_dir, agent_name, filename, content, base).await?;
+    }
+    Ok(outcome)
+}
+
 /// Validate and resolve a workspace path.
 ///
 /// Resolution rules (applied in order after stripping a leading `workspace/` prefix):
@@ -1335,6 +1412,78 @@ mod tests {
         let expected = ws.join("agents").join("Opex").join("notes").join("report.md");
         assert!(expected.exists(), "file must exist at {}", expected.display());
         assert_eq!(std::fs::read_to_string(&expected).unwrap(), "hello");
+    }
+
+    // ── apply_v4a_patch (V4A) ───────────────────────────────────────────────
+
+    fn vad_ws() -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(ws.join("agents").join("Opex")).unwrap();
+        (tmp, ws)
+    }
+
+    #[tokio::test]
+    async fn apply_v4a_patch_update_and_add() {
+        let (_tmp, ws) = vad_ws();
+        let agent = ws.join("agents").join("Opex");
+        std::fs::write(agent.join("a.md"), "one\ntwo\nthree").unwrap();
+        let ws_str = ws.to_str().unwrap();
+
+        let patch = "*** Begin Patch\n*** Update File: a.md\n one\n-two\n+TWO\n three\n*** Add File: b.md\n+new file\n*** End Patch";
+        let out = apply_v4a_patch(ws_str, "Opex", patch, false).await.unwrap();
+        assert_eq!(out.updated, vec!["a.md".to_string()]);
+        assert_eq!(out.added, vec!["b.md".to_string()]);
+        assert_eq!(out.hunks, 1);
+        assert_eq!(std::fs::read_to_string(agent.join("a.md")).unwrap(), "one\nTWO\nthree");
+        assert_eq!(std::fs::read_to_string(agent.join("b.md")).unwrap(), "new file");
+    }
+
+    #[tokio::test]
+    async fn apply_v4a_patch_atomic_on_bad_hunk() {
+        let (_tmp, ws) = vad_ws();
+        let agent = ws.join("agents").join("Opex");
+        std::fs::write(agent.join("a.md"), "one\ntwo").unwrap();
+        let ws_str = ws.to_str().unwrap();
+
+        // a.md hunk context doesn't match → whole patch must abort, b.md not created.
+        let patch = "*** Begin Patch\n*** Update File: a.md\n-NOPE\n+x\n*** Add File: b.md\n+nope\n*** End Patch";
+        assert!(apply_v4a_patch(ws_str, "Opex", patch, false).await.is_err());
+        assert_eq!(std::fs::read_to_string(agent.join("a.md")).unwrap(), "one\ntwo");
+        assert!(!agent.join("b.md").exists(), "b.md must NOT be created on abort");
+    }
+
+    #[tokio::test]
+    async fn apply_v4a_patch_add_existing_errors() {
+        let (_tmp, ws) = vad_ws();
+        let agent = ws.join("agents").join("Opex");
+        std::fs::write(agent.join("exists.md"), "x").unwrap();
+        let ws_str = ws.to_str().unwrap();
+
+        let patch = "*** Begin Patch\n*** Add File: exists.md\n+y\n*** End Patch";
+        assert!(apply_v4a_patch(ws_str, "Opex", patch, false).await.is_err());
+        assert_eq!(std::fs::read_to_string(agent.join("exists.md")).unwrap(), "x");
+    }
+
+    #[tokio::test]
+    async fn apply_v4a_patch_traversal_rejected() {
+        let (_tmp, ws) = vad_ws();
+        let ws_str = ws.to_str().unwrap();
+        let patch = "*** Begin Patch\n*** Add File: ../../../etc/evil\n+pwned\n*** End Patch";
+        assert!(apply_v4a_patch(ws_str, "Opex", patch, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn apply_v4a_patch_readonly_rejected() {
+        let (_tmp, ws) = vad_ws();
+        let agent = ws.join("agents").join("Opex");
+        std::fs::write(agent.join("SOUL.md"), "soul\nline2").unwrap();
+        let ws_str = ws.to_str().unwrap();
+
+        // SOUL.md is read-only for base agents.
+        let patch = "*** Begin Patch\n*** Update File: SOUL.md\n-soul\n+hacked\n*** End Patch";
+        assert!(apply_v4a_patch(ws_str, "Opex", patch, true).await.is_err());
+        assert_eq!(std::fs::read_to_string(agent.join("SOUL.md")).unwrap(), "soul\nline2");
     }
 
     // ── build_system_prompt — refactor regression tests (2026-04-18) ────────

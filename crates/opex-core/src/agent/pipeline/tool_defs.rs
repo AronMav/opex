@@ -165,6 +165,20 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
             }),
         },
         ToolDefinition {
+            name: "apply_patch".to_string(),
+            description: "Apply a multi-file patch in the V4A format (context-based, no line numbers). Best for several edits across one or more files at once. Envelope:\n*** Begin Patch\n*** Update File: notes/todo.md\n@@ optional anchor\n context line\n-removed line\n+added line\n*** Add File: notes/new.md\n+new file line\n*** End Patch\nUpdate hunks: ' ' context, '-' remove, '+' add; the context must match the current file. Add File: '+' lines are the new file's content. Atomic — if any hunk fails to match, nothing is written. Supports Update + Add only (use workspace_delete/workspace_rename for those).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "patch": {
+                        "type": "string",
+                        "description": "The full V4A patch envelope from '*** Begin Patch' to '*** End Patch'."
+                    }
+                },
+                "required": ["patch"]
+            }),
+        },
+        ToolDefinition {
             name: "workspace_delete".to_string(),
             description: "Delete a file or directory from your workspace. Core identity files (SOUL.md, IDENTITY.md, MEMORY.md, HEARTBEAT.md) are protected and cannot be deleted.".to_string(),
             input_schema: serde_json::json!({
