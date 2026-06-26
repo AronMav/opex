@@ -732,6 +732,11 @@ async fn main() -> Result<()> {
 
     // Managed processes started after TcpListener::bind below — toolgate needs Core API ready.
 
+    // Recover any video_jobs stuck in 'processing' from a previous crash.
+    if let Err(e) = opex_db::video_jobs::recover_stuck_video_jobs(&state.infra.db).await {
+        tracing::warn!(error = %e, "video_jobs recovery failed");
+    }
+
     // Spawn periodic background tasks (cleanup, watchdog, etc.)
     spawn_background_tasks(&state, process_manager.clone(), &agent_configs, bg_shutdown.clone()).await;
 
@@ -1313,6 +1318,7 @@ async fn spawn_background_tasks(
     // Channel health monitor
     let health_channels = state.channels.connected_channels.clone();
     let health_pm = process_manager;
+    let shutdown_video = shutdown.clone();
     let shutdown_health = shutdown;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
@@ -1338,6 +1344,9 @@ async fn spawn_background_tasks(
             }
         }
     });
+
+    // Video summarization worker (durable video_jobs queue).
+    crate::agent::file_scenario::video_worker::spawn_video_worker(state, shutdown_video);
 }
 
 /// Start all agents defined in the configuration.
