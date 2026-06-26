@@ -526,10 +526,10 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn allowlist_get_returns_all_four_members(pool: sqlx::PgPool) {
-        // Fresh DB: all four members enabled by default.
+    async fn allowlist_get_returns_all_five_members(pool: sqlx::PgPool) {
+        // Fresh DB: all five members enabled by default.
         let enabled = crate::agent::fse::get_enabled_allowlist(&pool).await;
-        assert_eq!(enabled.len(), 4, "fresh DB must default to all four members enabled");
+        assert_eq!(enabled.len(), 5, "fresh DB must default to all five members enabled");
         for name in crate::agent::fse::FSE_DEFAULT_ALLOWLIST {
             assert!(
                 enabled.iter().any(|m| m == name),
@@ -556,7 +556,7 @@ mod tests {
         assert!(result.is_err(), "code_exec must be rejected by set_enabled_allowlist");
         // DB state must be unchanged (full default still in effect).
         let still_full = crate::agent::fse::get_enabled_allowlist(&pool).await;
-        assert_eq!(still_full.len(), 4, "DB must be unchanged after rejected set");
+        assert_eq!(still_full.len(), 5, "DB must be unchanged after rejected set");
     }
 
     #[test]
