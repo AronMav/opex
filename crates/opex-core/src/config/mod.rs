@@ -73,6 +73,9 @@ pub struct AppConfig {
     /// Shadow-git checkpoint snapshots (enabled by default).
     #[serde(default)]
     pub checkpoint: CheckpointConfig,
+    /// Language server (LSP) orchestration config (disabled by default).
+    #[serde(default)]
+    pub lsp: LspConfig,
 }
 
 // ── SecurityConfig ────────────────────────────────────────────────────────────
@@ -369,6 +372,64 @@ impl Default for CuratorConfig {
             archive_after_days: default_curator_archive_after_days(),
             max_repairs_per_run: default_curator_max_repairs_per_run(),
             agent_name: default_curator_agent_name(),
+        }
+    }
+}
+
+// ── LspConfig ─────────────────────────────────────────────────────────────────
+
+/// Language server (LSP) orchestration configuration.
+///
+/// Controls the lifecycle of LSP servers spawned by agents (e.g., for V4A-patch,
+/// apply_patch, or other code-aware tools). Each agent can spawn up to
+/// `max_servers_per_agent` LSP instances.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct LspConfig {
+    /// Enable LSP orchestration. Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Idle timeout before terminating an LSP server (seconds).
+    /// Default: 600 (10 minutes).
+    #[serde(default = "default_lsp_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+    /// Request timeout for LSP operations (seconds).
+    /// Default: 30 seconds.
+    #[serde(default = "default_lsp_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    /// TTL for marking a broken LSP server as recoverable (seconds).
+    /// Default: 120 seconds.
+    #[serde(default = "default_lsp_broken_ttl_secs")]
+    pub broken_ttl_secs: u64,
+    /// Maximum concurrent LSP servers per agent.
+    /// Default: 4.
+    #[serde(default = "default_lsp_max_servers_per_agent")]
+    pub max_servers_per_agent: usize,
+}
+
+fn default_lsp_idle_timeout_secs() -> u64 {
+    600
+}
+
+fn default_lsp_request_timeout_secs() -> u64 {
+    30
+}
+
+fn default_lsp_broken_ttl_secs() -> u64 {
+    120
+}
+
+fn default_lsp_max_servers_per_agent() -> usize {
+    4
+}
+
+impl Default for LspConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            idle_timeout_secs: default_lsp_idle_timeout_secs(),
+            request_timeout_secs: default_lsp_request_timeout_secs(),
+            broken_ttl_secs: default_lsp_broken_ttl_secs(),
+            max_servers_per_agent: default_lsp_max_servers_per_agent(),
         }
     }
 }
@@ -2963,6 +3024,80 @@ mod checkpoint_config_tests {
         assert!(!c.enabled);
         assert_eq!(c.keep, 10);
         assert_eq!(c.excludes, vec!["foo".to_string(), "bar".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod lsp_config_tests {
+    use super::*;
+
+    #[test]
+    fn lsp_config_defaults() {
+        let cfg: LspConfig = Default::default();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.idle_timeout_secs, 600);
+        assert_eq!(cfg.request_timeout_secs, 30);
+        assert_eq!(cfg.broken_ttl_secs, 120);
+        assert_eq!(cfg.max_servers_per_agent, 4);
+    }
+
+    #[test]
+    fn lsp_config_parses_enabled_from_toml() {
+        let toml_str = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+
+[lsp]
+enabled = true
+"#;
+        let cfg: AppConfig = toml::from_str(toml_str).expect("failed to parse AppConfig");
+        assert!(cfg.lsp.enabled);
+        assert_eq!(cfg.lsp.request_timeout_secs, 30);
+        assert_eq!(cfg.lsp.idle_timeout_secs, 600);
+        assert_eq!(cfg.lsp.broken_ttl_secs, 120);
+        assert_eq!(cfg.lsp.max_servers_per_agent, 4);
+    }
+
+    #[test]
+    fn lsp_config_fully_empty_config() {
+        let toml_str = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+"#;
+        let cfg: AppConfig = toml::from_str(toml_str).expect("failed to parse AppConfig");
+        assert!(!cfg.lsp.enabled);
+        assert_eq!(cfg.lsp.request_timeout_secs, 30);
+        assert_eq!(cfg.lsp.max_servers_per_agent, 4);
+    }
+
+    #[test]
+    fn lsp_config_parses_all_fields_from_toml() {
+        let toml_str = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+
+[lsp]
+enabled = true
+idle_timeout_secs = 300
+request_timeout_secs = 45
+broken_ttl_secs = 60
+max_servers_per_agent = 8
+"#;
+        let cfg: AppConfig = toml::from_str(toml_str).expect("failed to parse AppConfig");
+        assert!(cfg.lsp.enabled);
+        assert_eq!(cfg.lsp.idle_timeout_secs, 300);
+        assert_eq!(cfg.lsp.request_timeout_secs, 45);
+        assert_eq!(cfg.lsp.broken_ttl_secs, 60);
+        assert_eq!(cfg.lsp.max_servers_per_agent, 8);
     }
 }
 
