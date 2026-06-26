@@ -192,6 +192,7 @@ pub struct EnrichResult {
 /// Enrich user text: auto-fetch URLs (max 2), add attachment hints, then run the
 /// File Scenario Engine dispatch (sniff → bindings → built-in) and rewrite the
 /// enriched text per the outcome contract (§4.4). Returns an `EnrichResult`.
+#[allow(clippy::too_many_arguments)]
 pub async fn enrich_message_text(
     http_client: &reqwest::Client,
     gateway_listen: &str,

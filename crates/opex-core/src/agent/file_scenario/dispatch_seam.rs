@@ -121,6 +121,7 @@ async fn run_builtin(
 ///
 /// Returns `(outcomes, pending_alternatives)`. One outcome per attachment.
 /// `pending_alternatives` are produced but NOT emitted as SSE events here (Phase 6).
+#[allow(clippy::too_many_arguments)]
 pub async fn dispatch_attachments(
     http_client: &reqwest::Client,
     gateway_listen: &str,
