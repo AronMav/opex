@@ -1130,8 +1130,19 @@ pub fn apply_text_edits(original: &str, edits: &[serde_json::Value]) -> String {
 
     let mut result = original.to_owned();
     for (start, end, text) in ops {
+        // Guard: clamp first, then reject any edit whose offsets exceed the
+        // current length or land mid-multibyte-char. Skipping a bad edit is
+        // safe — descending order means the remaining ops still reference
+        // valid positions; worst case the rename is partial, which the agent
+        // can detect. Panicking on malformed server output is unacceptable.
         let start = start.min(result.len());
         let end = end.min(result.len());
+        if start > end
+            || !result.is_char_boundary(start)
+            || !result.is_char_boundary(end)
+        {
+            continue;
+        }
         result.replace_range(start..end, &text);
     }
     result
@@ -1521,6 +1532,55 @@ mod tests {
             }),
         ];
         assert_eq!(apply_text_edits("abc", &edits), "AbC");
+    }
+
+    #[test]
+    fn apply_text_edits_bad_offsets_no_panic() {
+        // "привет" = 12 bytes: each Cyrillic letter is 2 UTF-8 bytes.
+        // п=0..2, р=2..4, и=4..6, в=6..8, е=8..10, т=10..12
+        let s = "привет";
+
+        // Edit A — valid edit (bytes 0..4, i.e. "пр" → "XX"): should apply.
+        // Edit B — mid-char start: byte offset 1 lands inside 'п' → skip.
+        // Edit C — start > end after clamping path: use a line that doesn't
+        //           exist so both chars map to same line_start missing → filtered
+        //           by filter_map, not reaching the boundary check. Instead we
+        //           test start > end via character values where start_char >
+        //           end_char on the same line after adding line_start=0:
+        //           start=6, end=3 → start(6) > end(3) → skip.
+        let edits = vec![
+            // Edit A: valid replacement п р → XX (bytes 0..4 are char boundaries)
+            serde_json::json!({
+                "range": {
+                    "start": {"line": 0, "character": 0},
+                    "end":   {"line": 0, "character": 4}
+                },
+                "newText": "XX"
+            }),
+            // Edit B: start=1 is mid-char (inside 'п') → boundary check fails → skip, no panic
+            serde_json::json!({
+                "range": {
+                    "start": {"line": 0, "character": 1},
+                    "end":   {"line": 0, "character": 4}
+                },
+                "newText": "BOOM"
+            }),
+            // Edit C: start(6) > end(3) → start > end check → skip, no panic
+            serde_json::json!({
+                "range": {
+                    "start": {"line": 0, "character": 6},
+                    "end":   {"line": 0, "character": 3}
+                },
+                "newText": "BOOM"
+            }),
+        ];
+        // Ops sorted descending by start_byte: C(6), B(1), A(0).
+        // C: start=6 > end=3 → skip.
+        // B: start=1, is_char_boundary(1) == false → skip.
+        // A: start=0, end=4, both boundaries → apply "XX".
+        // Result: "XX" + "ивет" = "XXивет".
+        let result = apply_text_edits(s, &edits);
+        assert_eq!(result, "XXивет");
     }
 
     #[test]
