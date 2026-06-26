@@ -247,7 +247,7 @@ async fn run_summarize_video(input: &DispatchInput<'_>) -> ScenarioOutcome {
         ctx.agent_name,
         ctx.source_type,
         &input.attachment.url,
-        None,
+        input.attachment.file_name.as_deref(),
     )
     .await
     {
@@ -469,6 +469,34 @@ mod tests {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM video_jobs WHERE session_id=$1")
             .bind(sid).fetch_one(&pool).await.unwrap();
         assert_eq!(count, 1, "one video_jobs row enqueued");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn summarize_video_persists_source_title(pool: sqlx::PgPool) {
+        use opex_types::{MediaAttachment, MediaType};
+        let sid = uuid::Uuid::new_v4();
+        let att = MediaAttachment {
+            url: "https://h/api/uploads/v1?sig=x".into(),
+            media_type: MediaType::Video,
+            file_name: Some("Лекция.mp4".into()),
+            mime_type: Some("video/mp4".into()),
+            file_size: None,
+        };
+        let client = reqwest::Client::new();
+        let input = DispatchInput {
+            action_ref: "summarize_video",
+            attachment: &att,
+            toolgate_url: "http://localhost:9011",
+            gateway_listen: "0.0.0.0:18789",
+            language: "ru",
+            http_client: &client,
+            timeout: std::time::Duration::from_secs(60),
+            enqueue: Some(EnqueueCtx { db: &pool, session_id: sid, agent_name: "Atlas", source_type: "file" }),
+        };
+        let _ = dispatch_action(input).await;
+        let title: Option<String> = sqlx::query_scalar("SELECT source_title FROM video_jobs WHERE session_id=$1")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(title.as_deref(), Some("Лекция.mp4"));
     }
 
     #[tokio::test]
