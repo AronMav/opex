@@ -1,7 +1,7 @@
 # Video → Zettelkasten Notes — Design
 
 - **Date:** 2026-06-26
-- **Status:** Approved (brainstorm complete) — ready for implementation planning.
+- **Status:** Approved (brainstorm complete) — **rev 1** after a code-fact review. Key change: the worker reaches the Obsidian MCP through the existing `McpRegistry::call_tool` (which calls `ContainerManager::ensure_running` to start the on-demand container + retries the startup gap), NOT via hand-rolled HTTP + services-API ensure. Plus a note-specific frame cap, `extract_summary` fallback, upload-title source, and folder-collision detection. Ready for implementation planning.
 - **Related:**
   - [`2026-06-26-fse-video-summarization-design.md`](2026-06-26-fse-video-summarization-design.md) — the video-summary feature this extends. That feature delivers a short text summary into the chat session; THIS work changes the final stage to produce a full Obsidian note (with screenshots) in the Zettelkasten vault and post only a short summary + link to chat.
   - `D:\GIT\telesumbot\src\summary\generator.rs` — the reference for full-note formatting: transcript + inline `![Кадр N [MM:SS]](images/…)` screenshots, with an appendix for unplaced frames.
@@ -53,7 +53,8 @@ in-core video worker  (CHANGED final stage)
   1. Build hybrid note via LLM (video_summary.rs):
        frontmatter + ## Резюме + ## Конспект (sections, ![[…]] by timestamp)
        + «Дополнительные кадры» for unplaced frames + collapsed full transcript
-  2. Ensure mcp-obsidian container is up (services API), then over HTTP /mcp:
+  2. Via engine.mcp() → McpRegistry::call_tool("mcp-obsidian", …)
+     (ensure_running starts the on-demand container + retries the startup gap):
        save_media(<slug>-frame-NN.jpg, image_b64)  → _System/media/   (×N)
        create_note("Видео/<slug>", "конспект.md", markdown)
        commit_vault("видео-конспект: <title>")       (best-effort)
@@ -131,8 +132,8 @@ commit_vault(message)
 ## 7. toolgate changes (`routers/video.py`, `video_helpers.py`)
 
 - In the frame loop, keep the JPEG bytes: each frame result becomes `{timestamp, description, image_b64}` where `image_b64 = base64(jpeg_bytes)`.
-- Add `title` to the response: for `page_url`, `yt-dlp --print title --skip-download <url>` (or `--no-download --print "%(title)s"`); for `video_url` (upload), derive from the upload filename. Fall back to empty (worker uses a date-based slug).
-- `FRAME_CEILING` already bounds frame count → bounds base64 payload size.
+- **Note-specific frame cap (R2):** returning images for up to `FRAME_CEILING=200` frames would be a ~54 MB payload (200 × ~270 KB base64) plus 200 Vision calls and 200 embedded pictures — unreadable in a note. Introduce a separate, smaller cap `VIDEO_NOTE_MAX_FRAMES` (default ~24) applied to the frames whose images are described + returned. ffmpeg may still detect more scene cuts; keep at most the cap, evenly spread by timestamp (or first-N). The base feature's `FRAME_CEILING` stays as the hard safety ceiling for extraction; the note cap bounds the *returned-with-image* set.
+- Add `title` to the response: for `page_url`, `yt-dlp --print "%(title)s" --skip-download <url>`; for `video_url` (upload), use the upload's original filename (see R4 in §8 — the worker passes it; toolgate echoes the request's filename if provided, else leaves `title` empty). Fall back to empty (worker uses a date-based slug).
 
 ## 8. Worker changes (`video_worker.rs`, `video_summary.rs`)
 
@@ -140,18 +141,20 @@ commit_vault(message)
 - `build_summary_messages` → hybrid prompt: emit frontmatter, `## Резюме`, `## Конспект` with screenshot embeds the LLM places, and the collapsed transcript. The frame list passed to the LLM carries the **planned filenames**.
 - New module (or worker helpers): `slug(title) -> String` (strip `/\:*?"<>|`, spaces→`-`, keep Cyrillic, fallback `видео-<date>-<id8>`); `build_note(raw, slug, llm_markdown) -> String` (assembles frontmatter + LLM body + appends unplaced frames + collapsed transcript); `extract_summary(note) -> String` (the `## Резюме` section for chat).
 - Worker final stage replaces the session-message delivery:
-  1. compute `slug`, plan frame filenames `<slug>-frame-NN.jpg`
+  1. compute `slug`; **resolve a free folder** (R6): query `list_notes`/probe `Видео/<slug>/`; on collision use `<slug>-2`, `-3`…; plan frame filenames `<slug>-frame-NN.jpg`
   2. LLM digest → assemble note
-  3. ensure `mcp-obsidian` up; `save_media` each frame; `create_note("Видео/"+slug, "конспект.md", note)`; `commit_vault(...)`
-  4. deliver chat: Резюме + path `Видео/<slug>/конспект.md` + `obsidian://open?vault=zettelkasten&file=<url-encoded path without .md>`
+  3. via `engine.mcp().call_tool("mcp-obsidian", …)`: `save_media` each frame; `create_note("Видео/<slug>", "конспект.md", note)`; `commit_vault(...)`
+  4. deliver chat: Резюме + path `Видео/<slug>/конспект.md` + `obsidian://open?vault=<vault>&file=<url-encoded path without .md>`
   5. `mark_video_job_done(summary = Резюме)`
-- **MCP HTTP:** the worker POSTs `{"method":"tools/call","params":{"name":…,"arguments":…}}` to the mcp-obsidian endpoint (port 9005 on the host / container DNS on the docker net). Confirm the in-core reachable URL during planning.
+- **MCP access (R1):** the worker does NOT hand-roll HTTP. It uses the existing `McpRegistry::call_tool(mcp_name, tool, args)` obtained via `engine.mcp()` (the `AgentEngine` exposes `mcp() -> &Option<Arc<McpRegistry>>`). `call_tool` internally calls `ContainerManager::ensure_running("mcp-obsidian")` (starts the on-demand container, returns its base URL) and retries the 300/700/1500 ms startup gap. `mcp_name` = `"mcp-obsidian"` (the `name:` in `workspace/mcp/obsidian.yaml`). If `engine.mcp()` is `None` (MCP disabled) → job `failed` with a clear reason.
+- **R4 — upload title source:** `video_jobs.source_ref` holds the signed upload URL, not the original filename. To title upload-source notes, thread the original `file_name` from the `MediaAttachment` into the job at enqueue time — add a nullable `source_title` column to `video_jobs` (set from `attachment.file_name` in the `summarize_video` enqueue path) and pass it to toolgate / use it for the slug. For `url`-source the title comes from yt-dlp.
+- **R3 — robust summary extraction:** instruct the LLM to emit the summary under an exact `## Резюме` heading. `extract_summary` reads the text between `## Резюме` and the next `## `; if the heading is absent, fall back to the first non-empty paragraph of the note (never ship an empty chat message).
 
 ## 9. Error handling
 
 - **mcp-obsidian not reachable / save_media / create_note fail** → job `failed` + chat «не удалось сохранить конспект: <reason>». (Don't half-write: if `create_note` fails after media saved, the orphaned media is acceptable; log it.)
 - **`commit_vault` fails** → `tracing::warn`, NOT fatal — files are written; the Zettelkasten heartbeat git step will pick them up.
-- **slug collision** (folder exists) → `create_note` refuses; worker retries with `-2`, `-3` suffix.
+- **slug collision** (R6): `create_note` refuses only on an existing **file**, not folder. The worker detects an existing `Видео/<slug>/` folder up front (via `list_notes` / a probe) and picks `<slug>-2`, `-3`… BEFORE saving media, so screenshots and the note land in the same fresh folder.
 - **empty title** → date-based slug.
 - **toolgate failure** (no frames / no STT) unchanged from the base feature (degraded → transcript-only note; honest fail if no STT).
 
@@ -160,18 +163,21 @@ commit_vault(message)
 - **MCP (Node):** add a minimal test runner (none today). `save_media` decodes base64 → file in `_System/media`, rejects traversal + bad extension; `create_note` creates the subfolder + refuses `..`; `commit_vault` commits and treats "nothing to commit" as success.
 - **`video_summary.rs`:** hybrid prompt contains frontmatter keys, `## Резюме`, `![[_System/media/…]]` with the planned filename, `> [!note]-` callout; `build_note` appends unplaced frames to «Дополнительные кадры»; `extract_summary` returns only the Резюме section.
 - **slug:** strips special chars, keeps Cyrillic, empty→date fallback, collision→suffix.
-- **worker:** assembles the note and issues `save_media`×N → `create_note` → `commit_vault` in order against a mock MCP; chat payload carries Резюме + link; `image_b64` threaded from RawMaterial.
-- **toolgate:** `frames[].image_b64` present and decodes to the JPEG; `title` returned (mock yt-dlp/ filename path).
+- **worker:** assembles the note and issues `save_media`×N → `create_note` → `commit_vault` in order against a mock `McpRegistry`/`call_tool`; chat payload carries Резюме + link; `image_b64` threaded from RawMaterial; folder collision → `-2` suffix (R6); `extract_summary` falls back to the first paragraph when `## Резюме` is missing (R3).
+- **toolgate:** `frames[].image_b64` present and decodes to the JPEG; `title` returned (mock yt-dlp / filename path); at most `VIDEO_NOTE_MAX_FRAMES` frames carry images (R2).
 
 ## 11. Resolved defaults
 - Subfolder: top-level **`Видео/`**, one folder per video (`Видео/<slug>/конспект.md`).
 - Screenshots: shared **`_System/media/`**, `<slug>-frame-NN.jpg`.
 - slug keeps **Cyrillic**.
 - `commit_vault`: **best-effort** (never fails the job).
-- Vault write path: **extended MCP** (not direct filesystem).
+- Vault write path: **extended MCP via `McpRegistry::call_tool`** (`ensure_running` handles on-demand startup) — not direct filesystem, not hand-rolled HTTP.
+- Note frame cap: **`VIDEO_NOTE_MAX_FRAMES` ≈ 24** images per note (separate from extraction `FRAME_CEILING`).
+- Upload title: new nullable **`video_jobs.source_title`** column (from `attachment.file_name`).
 - Chat: short **Резюме + link**.
 
 ## 12. Open questions (for the plan, not blockers)
-- Exact in-core URL to reach mcp-obsidian (host `127.0.0.1:9005` vs docker-network DNS) and how the worker ensures the on-demand container is started (services API endpoint) — confirm against `services.rs` during planning.
-- `obsidian://` vault name — confirm the vault's registered name (`zettelkasten` assumed) so the deep link opens correctly.
-- Whether to also store the note path on the `video_jobs` row (nice for diagnostics) — optional column, decide in planning.
+- `obsidian://` vault name — confirm the vault's registered Obsidian name (`zettelkasten` assumed) so the deep link opens; if unknown, ship the plain path and drop the deep link.
+- `list_notes` currently lists only top-level `.md` (it does `readdir(ZK_PATH)` non-recursive) — confirm the folder-collision probe works for subfolders, or add a tiny `note_exists(folder, filename)` MCP helper during planning.
+- `VIDEO_NOTE_MAX_FRAMES` default (~24) and the down-selection strategy (even-by-timestamp vs first-N) — pick during planning; even-by-timestamp gives better coverage.
+- (Resolved in rev 1: MCP reach via `McpRegistry::call_tool`; upload title via a new `video_jobs.source_title` column.)
