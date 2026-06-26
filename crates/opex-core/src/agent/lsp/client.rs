@@ -66,6 +66,12 @@ pub struct LspClient {
     open_version: AtomicI64,
     /// Keeps the read-loop running as long as this client exists.
     _read_task: tokio::task::JoinHandle<()>,
+    /// Owns the language-server subprocess so it lives as long as this client.
+    ///
+    /// `None` for in-memory transports (tests using duplex).  When the
+    /// `Arc<LspClient>` is dropped the `Child` drops too, and `kill_on_drop`
+    /// cleanly terminates the server process.
+    child: StdMutex<Option<tokio::process::Child>>,
 }
 
 #[allow(dead_code)]
@@ -152,6 +158,7 @@ impl LspClient {
             opened: StdMutex::new(HashSet::new()),
             open_version: AtomicI64::new(2),
             _read_task: read_task,
+            child: StdMutex::new(None),
         })
     }
 
@@ -215,6 +222,16 @@ impl LspClient {
     #[allow(dead_code)]
     pub fn position_encoding(&self) -> &str {
         &self.position_encoding
+    }
+
+    /// Store the language-server subprocess so its lifetime is tied to this
+    /// client.  Call once after [`connect`] when using a real host process.
+    ///
+    /// The lock is taken and released synchronously — no await inside the
+    /// critical section — so this is safe to call from any async context.
+    pub fn attach_process(&self, child: tokio::process::Child) {
+        let mut guard = self.child.lock().expect("child lock poisoned");
+        *guard = Some(child);
     }
 
     // ── document tracking ──────────────────────────────────────────────────────
