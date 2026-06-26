@@ -193,7 +193,7 @@ export default function SecretsPage() {
                 onChange={(e) => setNewDesc(e.target.value)}
               />
             </Field>
-            <Field label={t("secrets.scope_global")}>
+            <Field label={t("secrets.scope")}>
               <Select value={newScope} onValueChange={setNewScope}>
                 <SelectTrigger className="text-sm h-11">
                   <SelectValue placeholder={t("secrets.scope_global")} />
@@ -324,7 +324,7 @@ export default function SecretsPage() {
                 className="text-sm h-10"
               />
             </Field>
-            <Field label={t("secrets.scope_global")}>
+            <Field label={t("secrets.scope")}>
               <Select value={editScope || "__global__"} onValueChange={(v) => setEditScope(v === "__global__" ? "" : v)}>
                 <SelectTrigger className="text-sm h-10">
                   <SelectValue placeholder={t("secrets.scope_global")} />

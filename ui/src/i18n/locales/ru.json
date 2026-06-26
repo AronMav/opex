@@ -734,6 +734,7 @@
   "secrets.delete_description": "«{{name}}» будет безвозвратно удалён. Это действие нельзя отменить.",
   "secrets.edit_title": "Обновить значение",
   "secrets.new_value_placeholder": "Новое значение",
+  "secrets.scope": "Область видимости",
   "secrets.scope_global": "Глобальный (все агенты)",
   "secrets.reveal": "Показать значение",
   "secrets.reveal_title": "Значение секрета",

@@ -734,6 +734,7 @@
   "secrets.delete_description": "\"{{name}}\" will be permanently deleted. This action cannot be undone.",
   "secrets.edit_title": "Update value",
   "secrets.new_value_placeholder": "New value",
+  "secrets.scope": "Scope",
   "secrets.scope_global": "Global (all agents)",
   "secrets.reveal": "Reveal value",
   "secrets.reveal_title": "Secret Value",

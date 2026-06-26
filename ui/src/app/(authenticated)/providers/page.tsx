@@ -275,7 +275,7 @@ export default function ProvidersPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col gap-8 p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <div className="flex flex-col gap-8 p-4 md:p-6 lg:p-8 min-w-0 selection:bg-primary/20">
       {/* Header */}
       <PageHeader
         title={t("providers.title")}
@@ -311,8 +311,8 @@ export default function ProvidersPage() {
           return <EmptyState icon={Zap} text={t("providers.empty")} height="h-48" />;
         }
         return (
-          <Tabs defaultValue={visibleCategories[0]}>
-            <div className="overflow-x-auto scrollbar-none">
+          <Tabs defaultValue={visibleCategories[0]} className="min-w-0">
+            <div className="min-w-0 max-w-full overflow-x-auto scrollbar-none">
               <TabsList className="h-9 w-max">
                 {visibleCategories.map((cap) => (
                   <TabsTrigger key={cap} value={cap}>
