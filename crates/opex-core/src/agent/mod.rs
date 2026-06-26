@@ -46,6 +46,7 @@ pub mod fse;  // allowlist validators + AllowlistError (SoT for Phase 5+ binding
 // zero crate::* deps (only std + dunce) so the lib facade can re-export it
 // without cascading the agent subtree.
 pub mod path_guard;
+pub(crate) mod lsp;
 pub mod tool_registry;
 pub mod tool_handlers;
 pub mod capability_tools;
