@@ -1089,22 +1089,64 @@ pub async fn handle_tool_discover(
 
 // ── LSP handler ─────────────────────────────────────────────────
 
+/// Convert a UTF-16 `character` offset within `line_slice` to a UTF-8 byte offset.
+///
+/// Walks through each `char` in the line, accumulating UTF-16 code units
+/// (`c.len_utf16()`) until the running total reaches `utf16_char`.  Returns
+/// the corresponding UTF-8 byte offset, clamped to the line length if
+/// `utf16_char` exceeds the line's total UTF-16 length.
+fn utf16_char_to_byte_offset(line_slice: &str, utf16_char: usize) -> usize {
+    let mut utf16_seen: usize = 0;
+    let mut byte_off: usize = 0;
+    for c in line_slice.chars() {
+        if utf16_seen >= utf16_char {
+            break;
+        }
+        utf16_seen += c.len_utf16();
+        byte_off += c.len_utf8();
+    }
+    byte_off
+}
+
 /// Apply a list of LSP `TextEdit` objects to `original`.
 ///
 /// Each edit carries a `range.start` / `range.end` of `{line, character}`.
-/// Because the LSP server negotiated utf-8 position encoding,
-/// `character` is a **byte** offset within the UTF-8 line, not a UTF-16
-/// code-unit count. This lets us map directly to byte positions in the
-/// Rust `String` without any re-encoding.
+/// The `encoding` parameter controls how `character` is interpreted:
+///
+/// * `"utf-8"` — `character` is a **byte** offset within the UTF-8 line
+///   (the legacy behaviour).
+/// * `"utf-16"` (or any other value) — `character` is a UTF-16 code-unit
+///   count.  This is the default for pyright and most LSP servers that do
+///   not negotiate `utf-8`.
 ///
 /// Edits are applied in **descending** start order so that earlier byte
 /// offsets remain valid while later ones are replaced first.
-pub fn apply_text_edits(original: &str, edits: &[serde_json::Value]) -> String {
+pub fn apply_text_edits(original: &str, edits: &[serde_json::Value], encoding: &str) -> String {
+    let use_utf8 = encoding.eq_ignore_ascii_case("utf-8");
+
     // Build a table of line start byte-offsets.
     let mut line_starts: Vec<usize> = vec![0];
     for (i, b) in original.bytes().enumerate() {
         if b == b'\n' {
             line_starts.push(i + 1);
+        }
+    }
+
+    /// Resolve a `{line, character}` pair to a byte offset in `text`.
+    fn resolve_byte(
+        text: &str,
+        line_starts: &[usize],
+        line: usize,
+        character: usize,
+        use_utf8: bool,
+    ) -> Option<usize> {
+        let line_start = *line_starts.get(line)?;
+        if use_utf8 {
+            Some(line_start + character)
+        } else {
+            let next_line_start = line_starts.get(line + 1).copied().unwrap_or(text.len());
+            let line_slice = &text[line_start..next_line_start];
+            Some(line_start + utf16_char_to_byte_offset(line_slice, character))
         }
     }
 
@@ -1119,8 +1161,10 @@ pub fn apply_text_edits(original: &str, edits: &[serde_json::Value]) -> String {
             let end_char = range["end"]["character"].as_u64()? as usize;
             let new_text = edit.get("newText")?.as_str().unwrap_or("").to_owned();
 
-            let start_byte = line_starts.get(start_line).copied()? + start_char;
-            let end_byte = line_starts.get(end_line).copied()? + end_char;
+            let start_byte =
+                resolve_byte(original, &line_starts, start_line, start_char, use_utf8)?;
+            let end_byte =
+                resolve_byte(original, &line_starts, end_line, end_char, use_utf8)?;
             Some((start_byte, end_byte, new_text))
         })
         .collect();
@@ -1223,7 +1267,7 @@ pub async fn handle_lsp(
         other => return format!("Error: unknown action '{other}' (use diagnostics/definition/references/hover/symbols/rename)"),
     };
 
-    // For rename the manager returns a WorkspaceEdit JSON string — apply it.
+    // For rename the manager returns a JSON envelope — apply it.
     let is_rename = matches!(lsp_action, LspAction::Rename { .. });
 
     let raw = match mgr.op(agent_name, workspace_dir, file, lsp_action).await {
@@ -1236,13 +1280,28 @@ pub async fn handle_lsp(
     }
 
     // ── Apply the WorkspaceEdit returned by the manager ──────────────
-    // The manager already bailed with "rename unavailable: server uses utf-16
-    // positions" if position_encoding() != "utf-8", so we can treat `character`
-    // as byte offsets from here on.
+    // The manager returns: {"positionEncoding": "...", "edit": <WorkspaceEdit>}
+    // Parse the envelope to get both the encoding and the workspace edit.
 
-    let we: serde_json::Value = match serde_json::from_str(&raw) {
+    let envelope: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
-        Err(e) => return format!("Error: could not parse WorkspaceEdit: {e}"),
+        Err(e) => return format!("Error: could not parse rename result: {e}"),
+    };
+
+    // Extract positionEncoding (default "utf-16" when absent — pyright's default).
+    let encoding = envelope
+        .get("positionEncoding")
+        .and_then(|v| v.as_str())
+        .unwrap_or("utf-16")
+        .to_owned();
+
+    // Extract the actual WorkspaceEdit from the "edit" field.
+    let we = match envelope.get("edit") {
+        Some(v) => v.clone(),
+        None => {
+            // Fallback: treat the whole envelope as the WorkspaceEdit (legacy).
+            envelope.clone()
+        }
     };
 
     // Collect uri → [edits] from `changes` map (LSP 3.13+).
@@ -1290,7 +1349,7 @@ pub async fn handle_lsp(
             Err(e) => return format!("Error reading '{rel}' for rename: {e}"),
         };
 
-        let new_content = apply_text_edits(&current, edits);
+        let new_content = apply_text_edits(&current, edits, &encoding);
 
         if let Err(e) =
             workspace::write_workspace_file(workspace_dir, agent_name, rel, &new_content, is_base)
@@ -1504,7 +1563,7 @@ mod tests {
             "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 3}},
             "newText": "X"
         })];
-        assert_eq!(apply_text_edits("abc\ndef", &edits), "X\ndef");
+        assert_eq!(apply_text_edits("abc\ndef", &edits, "utf-8"), "X\ndef");
     }
 
     #[test]
@@ -1516,7 +1575,7 @@ mod tests {
             "range": {"start": {"line": 0, "character": 4}, "end": {"line": 0, "character": 12}},
             "newText": "ok"
         })];
-        assert_eq!(apply_text_edits("x = тест", &edits), "x = ok");
+        assert_eq!(apply_text_edits("x = тест", &edits, "utf-8"), "x = ok");
     }
 
     #[test]
@@ -1531,7 +1590,7 @@ mod tests {
                 "newText": "C"
             }),
         ];
-        assert_eq!(apply_text_edits("abc", &edits), "AbC");
+        assert_eq!(apply_text_edits("abc", &edits, "utf-8"), "AbC");
     }
 
     #[test]
@@ -1579,8 +1638,79 @@ mod tests {
         // B: start=1, is_char_boundary(1) == false → skip.
         // A: start=0, end=4, both boundaries → apply "XX".
         // Result: "XX" + "ивет" = "XXивет".
-        let result = apply_text_edits(s, &edits);
+        let result = apply_text_edits(s, &edits, "utf-8");
         assert_eq!(result, "XXивет");
+    }
+
+    // ── utf-16 encoding tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn apply_text_edits_utf16_cyrillic() {
+        // "x = тест":
+        //   x   → 1 UTF-16 unit, 1 byte  (running utf16=1, byte=1)
+        //   ' ' → 1 UTF-16 unit, 1 byte  (utf16=2, byte=2)
+        //   '=' → 1 UTF-16 unit, 1 byte  (utf16=3, byte=3)
+        //   ' ' → 1 UTF-16 unit, 1 byte  (utf16=4, byte=4)
+        //   'т' → 1 UTF-16 unit, 2 bytes (utf16=5, byte=6)
+        //   'е' → 1 UTF-16 unit, 2 bytes (utf16=6, byte=8)
+        //   'с' → 1 UTF-16 unit, 2 bytes (utf16=7, byte=10)
+        //   'т' → 1 UTF-16 unit, 2 bytes (utf16=8, byte=12)
+        //
+        // Under utf-16:  character 4 = byte 4 (start of "тест"),
+        //               character 8 = byte 12 (end of "тест").
+        // Edit: replace range [0:4, 0:8] with "ok" → "x = ok".
+        let edits = vec![serde_json::json!({
+            "range": {
+                "start": {"line": 0, "character": 4},
+                "end":   {"line": 0, "character": 8}
+            },
+            "newText": "ok"
+        })];
+        assert_eq!(apply_text_edits("x = тест", &edits, "utf-16"), "x = ok");
+    }
+
+    #[test]
+    fn apply_text_edits_utf16_ascii_unchanged() {
+        // For ASCII, utf-16 character == byte offset, so behaviour is identical.
+        let edits = vec![serde_json::json!({
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 3}},
+            "newText": "X"
+        })];
+        assert_eq!(apply_text_edits("abc\ndef", &edits, "utf-16"), "X\ndef");
+    }
+
+    #[test]
+    fn apply_text_edits_utf16_multiline_cyrillic() {
+        // Two-line file:
+        //   line 0: "привет"  (6 Cyrillic chars = 6 utf-16 units = 12 bytes)
+        //   line 1: "мир"     (3 Cyrillic chars = 3 utf-16 units = 6 bytes)
+        //
+        // Replace line 1, utf-16 chars 0..3 (entire "мир") with "OK".
+        let edits = vec![serde_json::json!({
+            "range": {
+                "start": {"line": 1, "character": 0},
+                "end":   {"line": 1, "character": 3}
+            },
+            "newText": "OK"
+        })];
+        assert_eq!(
+            apply_text_edits("привет\nмир", &edits, "utf-16"),
+            "привет\nOK"
+        );
+    }
+
+    #[test]
+    fn apply_text_edits_utf16_clamp_beyond_line() {
+        // character beyond end of line → clamp to line end → no panic.
+        let edits = vec![serde_json::json!({
+            "range": {
+                "start": {"line": 0, "character": 0},
+                "end":   {"line": 0, "character": 9999}
+            },
+            "newText": "Z"
+        })];
+        // Should replace the entire line "abc" with "Z" (no panic).
+        assert_eq!(apply_text_edits("abc", &edits, "utf-16"), "Z");
     }
 
     #[test]

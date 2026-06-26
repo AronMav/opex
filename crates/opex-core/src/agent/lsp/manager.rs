@@ -287,16 +287,17 @@ impl LspManager {
             }
 
             LspAction::Rename { line, character, new_name } => {
-                // Guard: refuse if server uses utf-16 positions (byte offsets would mismatch).
-                if client.position_encoding() != "utf-8" {
-                    anyhow::bail!(
-                        "rename unavailable: server uses utf-16 positions"
-                    );
-                }
                 let edit = client
                     .rename(&uri, &text, language_id, line, character, &new_name)
                     .await?;
-                serde_json::to_string(&edit).context("serialize WorkspaceEdit")?
+                // Return an envelope so the caller knows which encoding to use when
+                // applying the TextEdits.  Most servers (including pyright) negotiate
+                // utf-16 by default, so we must surface the negotiated encoding here.
+                serde_json::to_string(&serde_json::json!({
+                    "positionEncoding": client.position_encoding(),
+                    "edit": edit
+                }))
+                .context("serialize rename envelope")?
             }
         };
 
