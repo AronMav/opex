@@ -166,7 +166,11 @@ pub fn extract_summary(note: &str) -> String {
     } else {
         note
     };
-    body.split("\n\n").map(str::trim).find(|p| !p.is_empty()).unwrap_or("").to_string()
+    body.split("\n\n")
+        .map(str::trim)
+        .find(|p| !p.is_empty() && !p.starts_with('#') && !p.starts_with("---"))
+        .unwrap_or("")
+        .to_string()
 }
 
 #[cfg(test)]
@@ -210,6 +214,17 @@ mod tests {
         assert_eq!(extract_summary(note).trim(), "это резюме");
         let no_section = "просто первый абзац\n\nвторой";
         assert_eq!(extract_summary(no_section).trim(), "просто первый абзац");
+    }
+
+    /// I3: fallback must skip frontmatter and H1 heading, return first real paragraph.
+    #[test]
+    fn extract_summary_fallback_skips_heading_and_frontmatter() {
+        let note = "---\nx\n---\n# Заголовок\n\nреальный текст\n";
+        assert_eq!(
+            extract_summary(note).trim(),
+            "реальный текст",
+            "fallback should skip heading and return first real paragraph"
+        );
     }
 
     #[test]

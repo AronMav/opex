@@ -270,6 +270,15 @@ impl McpRegistry {
                         );
                     }
                     let body = parse_mcp_response(resp).await?;
+                    // Check for JSON-RPC application-level error (HTTP 200 but
+                    // `{"error":{"code":...,"message":"..."}}` — no `result`).
+                    if let Some(err) = body.get("error") {
+                        let msg = err
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown MCP error");
+                        anyhow::bail!("MCP tool error: {msg}");
+                    }
                     let content = body
                         .pointer("/result/content")
                         .and_then(|c| c.as_array())
@@ -816,6 +825,31 @@ mod tests {
             1,
             "5xx must not trigger retries (transport-only retry policy) — got {} requests",
             received.len()
+        );
+    }
+
+    /// C1: HTTP 200 with JSON-RPC error body must surface as Err, not Ok("").
+    #[tokio::test]
+    async fn call_tool_surfaces_jsonrpc_error_as_err() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32000, "message": "boom"},
+                "id": 2
+            })))
+            .mount(&server)
+            .await;
+        let (reg, _cm) = registry_with_url_mcp("err-body-mcp", &server.uri()).await;
+
+        let err = reg
+            .call_tool("err-body-mcp", "any", &serde_json::json!({}))
+            .await
+            .expect_err("JSON-RPC error body on HTTP 200 must yield Err");
+        assert!(
+            err.to_string().contains("boom"),
+            "error message should propagate: {err}"
         );
     }
 }

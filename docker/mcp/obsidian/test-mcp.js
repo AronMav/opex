@@ -22,6 +22,8 @@ const ops = require("./ops"); // pure functions extracted from app.js
   await ops.createNote("Видео/тест", "конспект.md", "# Заметка\n");
   assert.ok(fs.existsSync(path.join(tmp, "Видео/тест/конспект.md")), "note in subfolder");
   await assert.rejects(ops.createNote("../escape", "x.md", "y"), /folder|invalid|\.\./i);
+  // collision must throw, not silently succeed
+  await assert.rejects(ops.createNote("Видео/тест", "конспект.md", "дубль"), /already exists/i, "duplicate note must reject");
 
   // note_exists
   assert.equal(await ops.noteExists("Видео/тест", "конспект.md"), true);

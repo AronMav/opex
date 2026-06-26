@@ -33,7 +33,7 @@ async function createNote(folder, filename, content) {
   const dir = path.join(ZK_PATH(), sf);
   await fs.mkdir(dir, { recursive: true });
   const file = path.join(dir, name);
-  try { await fs.access(file); return `Заметка уже существует: ${sf}/${name}`; } catch {}
+  try { await fs.access(file); throw new Error(`note already exists: ${sf}/${name}`); } catch (e) { if (e.code !== "ENOENT") throw e; }
   await fs.writeFile(file, content, "utf8");
   return `Создана заметка: ${sf}/${name}`;
 }

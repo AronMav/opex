@@ -92,7 +92,7 @@ pub async fn process_one(
     let note_slug = slug(&title, &id8);
 
     let frame_names: Vec<String> = (0..raw.frames.len())
-        .map(|i| format!("{note_slug}-frame-{:02}.jpg", i + 1))
+        .map(|i| format!("{note_slug}-{id8}-frame-{:02}.jpg", i + 1))
         .collect();
 
     let media: Vec<(String, String)> = frame_names
