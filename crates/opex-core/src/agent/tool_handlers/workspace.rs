@@ -12,16 +12,12 @@ use crate::agent::tool_registry::{SystemToolHandler, ToolDeps};
 
 /// Return `true` when LSP diagnostics should be collected for `file`.
 ///
-/// All three conditions must hold:
-/// * `enabled` — the call-site has determined LSP is enabled (e.g. a
-///   `Some(mgr)` is present in `deps.cfg.lsp_manager`).
-/// * `has_mgr` — a live `LspManager` instance is available.
-/// * a language server is registered for the file extension.
-///
-/// Both boolean guards are kept separate so tests can exercise each path
-/// independently (the brief specifies four distinct test cases).
-pub(crate) fn should_diagnose(file: &str, enabled: bool, has_mgr: bool) -> bool {
-    enabled && has_mgr && server_for_path(file).is_some()
+/// Checks only whether a language server is registered for the file extension.
+/// The `lsp_manager.is_some()` manager-present gate is kept at each call site
+/// (inside `if let Some(mgr) = deps.cfg.lsp_manager`) — zero overhead when LSP
+/// is disabled.
+pub(crate) fn should_diagnose(file: &str) -> bool {
+    server_for_path(file).is_some()
 }
 
 /// Append LSP diagnostics for each of `files` to `base_result`.
@@ -36,7 +32,7 @@ pub(crate) async fn append_diagnostics(
     mut result: String,
 ) -> String {
     for file in files {
-        if !should_diagnose(file, true, true) {
+        if !should_diagnose(file) {
             continue;
         }
         if let Ok(text) = mgr.op(agent_name, workspace_dir, file, LspAction::Diagnostics).await {
@@ -87,7 +83,7 @@ impl SystemToolHandler for WorkspaceWriteHandler {
         .await;
         let filename = args.get("filename").and_then(|v| v.as_str()).unwrap_or("");
         if let Some(mgr) = &deps.cfg.lsp_manager
-            && should_diagnose(filename, true, true)
+            && should_diagnose(filename)
         {
             return append_diagnostics(mgr, deps.agent_name, deps.workspace_dir, &[filename], result).await;
         }
@@ -124,7 +120,7 @@ impl SystemToolHandler for WorkspaceEditHandler {
         .await;
         let filename = args.get("filename").and_then(|v| v.as_str()).unwrap_or("");
         if let Some(mgr) = &deps.cfg.lsp_manager
-            && should_diagnose(filename, true, true)
+            && should_diagnose(filename)
         {
             return append_diagnostics(mgr, deps.agent_name, deps.workspace_dir, &[filename], result).await;
         }
@@ -167,7 +163,7 @@ impl SystemToolHandler for ApplyPatchHandler {
                     crate::agent::v4a_patch::FileOp::Update { path, .. } => path.as_str(),
                     crate::agent::v4a_patch::FileOp::Add { path, .. } => path.as_str(),
                 })
-                .filter(|f| should_diagnose(f, true, true))
+                .filter(|f| should_diagnose(f))
                 .collect();
             if !files.is_empty() {
                 return append_diagnostics(mgr, deps.agent_name, deps.workspace_dir, &files, result)
@@ -219,27 +215,27 @@ mod tests {
     // ── should_diagnose unit tests ─────────────────────────────────────────────
 
     #[test]
-    fn should_diagnose_py_enabled_with_mgr() {
-        // .py + enabled=true + has_mgr=true → true
-        assert!(should_diagnose("script.py", true, true));
+    fn should_diagnose_py_true() {
+        // .py has a registered language server → true
+        assert!(should_diagnose("script.py"));
     }
 
     #[test]
-    fn should_diagnose_md_excluded() {
-        // .md has no language server → false regardless of flags
-        assert!(!should_diagnose("notes.md", true, true));
+    fn should_diagnose_md_false() {
+        // .md has no language server → false
+        assert!(!should_diagnose("notes.md"));
     }
 
     #[test]
-    fn should_diagnose_py_no_enabled() {
-        // enabled=false → false even if has_mgr=true and file is python
-        assert!(!should_diagnose("script.py", false, true));
+    fn should_diagnose_rs_false() {
+        // .rs is v2 (not yet registered) → false
+        assert!(!should_diagnose("lib.rs"));
     }
 
     #[test]
-    fn should_diagnose_py_no_mgr() {
-        // has_mgr=false → false even if enabled=true and file is python
-        assert!(!should_diagnose("script.py", true, false));
+    fn should_diagnose_no_ext_false() {
+        // no extension → false
+        assert!(!should_diagnose("noext"));
     }
 }
 
