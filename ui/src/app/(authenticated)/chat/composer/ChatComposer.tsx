@@ -97,14 +97,15 @@ export function ChatComposer() {
     ta.focus();
   }, []);
 
-  // Called when VAD auto-stops with a transcript. In continuous mode the turn is
-  // auto-sent; otherwise the text is just inserted (user sends manually).
+  // Called when VAD auto-stops with a transcript. The turn is auto-sent so the
+  // agent actually replies (hands-free voice). Continuous mode additionally
+  // re-arms recording after the reply (see the effect below).
   const handleAutoResult = useCallback(
     (text: string) => {
       if (text) {
         emptyCountRef.current = 0;
         insertTranscript(text);
-        if (continuousRef.current) formRef.current?.requestSubmit();
+        formRef.current?.requestSubmit();
       } else if (continuousRef.current) {
         // Empty cycle (no speech). Stop hands-free after 3 in a row.
         emptyCountRef.current += 1;
@@ -353,21 +354,16 @@ export function ChatComposer() {
 
   const handleMicClick = useCallback(async () => {
     if (voice.state === "recording") {
+      // Manual stop: transcribe, insert, and auto-send so the agent replies.
       const text = await voice.stop();
       if (text) {
-        const ta = textareaRef.current;
-        if (ta) {
-          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-          const newVal = (ta.value ? ta.value + " " : "") + text;
-          setter?.call(ta, newVal);
-          ta.dispatchEvent(new Event("input", { bubbles: true }));
-          ta.focus();
-        }
+        insertTranscript(text);
+        formRef.current?.requestSubmit();
       }
     } else if (voice.state === "idle") {
       await voice.start();
     }
-  }, [voice]);
+  }, [voice, insertTranscript]);
 
   const formatElapsed = (secs: number): string => {
     const m = Math.floor(secs / 60);
