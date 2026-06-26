@@ -10,7 +10,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { assertToken } from "@/lib/api";
 import { useTranslation } from "@/hooks/use-translation";
-import { createVadDetector, type VadDetector } from "./vad";
+import { createVadDetector, type VadDetector, type VadConfig } from "./vad";
 
 export type VoiceRecorderState = "idle" | "recording" | "transcribing" | "error";
 
@@ -19,6 +19,8 @@ export interface UseVoiceRecorderOptions {
   vad?: boolean;
   /** Called when a VAD-triggered auto-stop produced a result. `""` = empty/skipped. */
   onAutoResult?: (text: string) => void;
+  /** Overrides for the VAD detector (sensitivity / silence timeout). Read at start(). */
+  vadConfig?: Partial<VadConfig>;
 }
 
 export interface UseVoiceRecorder {
@@ -55,10 +57,12 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
   const sampleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const vadRef = useRef<VadDetector | null>(null);
   const finishingRef = useRef(false);
-  // Latest onAutoResult without re-binding callbacks.
+  // Latest onAutoResult / vadConfig without re-binding callbacks (read at start()).
   const onAutoResultRef = useRef(opts.onAutoResult);
+  const vadConfigRef = useRef(opts.vadConfig);
   useEffect(() => {
     onAutoResultRef.current = opts.onAutoResult;
+    vadConfigRef.current = opts.vadConfig;
   });
 
   const clearTimers = useCallback(() => {
@@ -209,7 +213,7 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
         analyser.fftSize = 2048;
         source.connect(analyser);
         analyserRef.current = analyser;
-        vadRef.current = createVadDetector();
+        vadRef.current = createVadDetector(vadConfigRef.current);
 
         const buf = new Float32Array(analyser.fftSize);
         sampleTimerRef.current = setInterval(() => {

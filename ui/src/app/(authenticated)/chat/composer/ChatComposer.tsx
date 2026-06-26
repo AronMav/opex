@@ -22,6 +22,7 @@ import {
   Loader2,
   Mic,
   Repeat,
+  SlidersHorizontal,
 } from "lucide-react";
 
 // ── Draft persistence helpers ─────────────────────────────────────────────────
@@ -134,6 +135,34 @@ export function ChatComposer() {
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
 
+  // Voice input tuning (persisted): sensitivity 0..100 (50 = current default),
+  // pause 1000..5000ms before auto-stop on silence.
+  const [voiceSensitivity, setVoiceSensitivity] = useState(50);
+  const [voicePauseMs, setVoicePauseMs] = useState(2000);
+  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(false);
+  useEffect(() => {
+    const s = Number(localStorage.getItem("opex.voice.sensitivity"));
+    if (Number.isFinite(s) && s >= 0 && s <= 100) setVoiceSensitivity(s);
+    const p = Number(localStorage.getItem("opex.voice.pauseMs"));
+    if (Number.isFinite(p) && p >= 1000 && p <= 5000) setVoicePauseMs(p);
+  }, []);
+  useEffect(() => {
+    localStorage.setItem("opex.voice.sensitivity", String(voiceSensitivity));
+  }, [voiceSensitivity]);
+  useEffect(() => {
+    localStorage.setItem("opex.voice.pauseMs", String(voicePauseMs));
+  }, [voicePauseMs]);
+  // Higher sensitivity → lower threshold (picks up quieter speech). 50 keeps the
+  // original tuning (thresholdFloorMult 3, thresholdMin 0.01).
+  const vadConfig = useMemo(
+    () => ({
+      thresholdFloorMult: 5 - (voiceSensitivity / 100) * 4,
+      thresholdMin: 0.018 - (voiceSensitivity / 100) * 0.016,
+      silenceStopMs: voicePauseMs,
+    }),
+    [voiceSensitivity, voicePauseMs],
+  );
+
   const insertTranscript = useCallback((text: string) => {
     const ta = textareaRef.current;
     if (!ta || !text) return;
@@ -166,7 +195,7 @@ export function ChatComposer() {
     [insertTranscript, t],
   );
 
-  const voice = useVoiceRecorder({ vad: true, onAutoResult: handleAutoResult });
+  const voice = useVoiceRecorder({ vad: true, vadConfig, onAutoResult: handleAutoResult });
 
   // ── Voice reply: speak the agent's answer (TTS playback) ──────────────────
   // One persistent <audio> element kept "unlocked" via primeTtsAudio() on a user
@@ -691,6 +720,65 @@ export function ChatComposer() {
                 >
                   <Repeat className="h-4 w-4" />
                 </button>
+              )}
+              {hasSttProvider && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    aria-label={t("chat.voice_settings")}
+                    title={t("chat.voice_settings")}
+                    onClick={() => setVoiceSettingsOpen((v) => !v)}
+                    className={cn(
+                      "rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      voiceSettingsOpen
+                        ? "text-primary bg-primary/10"
+                        : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50",
+                    )}
+                  >
+                    <SlidersHorizontal className="h-4 w-4" />
+                  </button>
+                  {voiceSettingsOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-40"
+                        aria-hidden
+                        onClick={() => setVoiceSettingsOpen(false)}
+                      />
+                      <div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg border border-border/60 bg-card p-3 shadow-lg">
+                        <div className="mb-3">
+                          <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                            <span>{t("chat.voice_sensitivity")}</span>
+                            <span className="font-mono">{voiceSensitivity}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={voiceSensitivity}
+                            onChange={(e) => setVoiceSensitivity(Number(e.target.value))}
+                            className="w-full accent-primary"
+                          />
+                        </div>
+                        <div>
+                          <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                            <span>{t("chat.voice_pause")}</span>
+                            <span className="font-mono">{(voicePauseMs / 1000).toFixed(1)}s</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={1000}
+                            max={5000}
+                            step={250}
+                            value={voicePauseMs}
+                            onChange={(e) => setVoicePauseMs(Number(e.target.value))}
+                            className="w-full accent-primary"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
               )}
               {agents.length > 1 && (
                 <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50 bg-muted/30 px-2 py-0.5 rounded">
