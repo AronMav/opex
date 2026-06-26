@@ -145,3 +145,7 @@ frame_ceiling = 200
 job_timeout_secs = 1800
 # v1 video-URL download allowlist (yt-dlp). YouTube only.
 url_allowlist = ["youtube.com", "youtu.be"]
+# Zettelkasten note output (v1): max screenshots embedded per note.
+note_max_frames = 24
+# Obsidian vault name for the obsidian:// deep link in the chat notification.
+vault_name = "zettelkasten"
