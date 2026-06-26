@@ -9,6 +9,7 @@
 const fs = require("fs").promises;
 const path = require("path");
 const Fastify = require("fastify");
+const ops = require("./ops");
 
 const ZK_PATH = process.env.ZETTELKASTEN_PATH || "/workspace/zettelkasten";
 const PORT = parseInt(process.env.PORT || "8000", 10);
@@ -91,6 +92,52 @@ const MCP_TOOLS = [
       required: ["query"],
     },
   },
+  {
+    name: "save_media",
+    description: "Save an image into _System/media (base64).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filename: { type: "string" },
+        content_b64: { type: "string" },
+      },
+      required: ["filename", "content_b64"],
+    },
+  },
+  {
+    name: "create_note",
+    description: "Create a note, optionally in a subfolder.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder: { type: "string", description: "Subfolder, e.g. 'Видео/название'" },
+        filename: { type: "string" },
+        content: { type: "string" },
+      },
+      required: ["filename", "content"],
+    },
+  },
+  {
+    name: "note_exists",
+    description: "Check if a note exists in a subfolder.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder: { type: "string" },
+        filename: { type: "string" },
+      },
+      required: ["filename"],
+    },
+  },
+  {
+    name: "commit_vault",
+    description: "git add+commit the vault.",
+    inputSchema: {
+      type: "object",
+      properties: { message: { type: "string" } },
+      required: ["message"],
+    },
+  },
 ];
 
 async function listNotes(limit = 50, query = "") {
@@ -137,22 +184,6 @@ async function readNote(filename) {
   } catch {
     return `Заметка '${safe}' не найдена.`;
   }
-}
-
-async function createNote(filename, content) {
-  const safe = path.basename(filename);
-  if (!safe.endsWith(".md")) {
-    return "Filename must end with .md";
-  }
-  const filePath = path.join(ZK_PATH, safe);
-  try {
-    await fs.access(filePath);
-    return `Заметка '${safe}' уже существует. Используй другое имя.`;
-  } catch {
-    // File doesn't exist — good
-  }
-  await fs.writeFile(filePath, content, "utf8");
-  return `Создана заметка: ${safe}`;
 }
 
 async function randomNote() {
@@ -224,7 +255,7 @@ app.post("/mcp", async (request, reply) => {
           result = await readNote(args.filename);
           break;
         case "create_note":
-          result = await createNote(args.filename, args.content);
+          result = await ops.createNote(args.folder, args.filename, args.content);
           break;
         case "random_note":
           result = await randomNote();
@@ -232,6 +263,12 @@ app.post("/mcp", async (request, reply) => {
         case "search_notes":
           result = await searchNotes(args.query, args.limit);
           break;
+        case "save_media":
+          result = await ops.saveMedia(args.filename, args.content_b64); break;
+        case "note_exists":
+          result = String(await ops.noteExists(args.folder, args.filename)); break;
+        case "commit_vault":
+          result = await ops.commitVault(args.message); break;
         default:
           return {
             jsonrpc: "2.0",
