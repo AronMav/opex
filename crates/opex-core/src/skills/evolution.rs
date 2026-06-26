@@ -16,8 +16,11 @@ pub async fn analyze_and_evolve(
     skills_used: &[String],
     success: bool,
 ) {
-    // Skip trivial responses
-    if response.len() < 20 || response.trim().eq_ignore_ascii_case("HEARTBEAT_OK") {
+    // Skip trivial responses and clean heartbeats. Uses the same tolerant
+    // all-clear check as the announcement-suppression path so a chatty
+    // `**HEARTBEAT_OK**` report no longer drives skill churn (the cycle that
+    // auto-generated competing heartbeat skills).
+    if response.len() < 20 || crate::scheduler::is_heartbeat_ok(response) {
         return;
     }
 

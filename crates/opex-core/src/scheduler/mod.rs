@@ -13,6 +13,23 @@ use crate::config::AgentConfig;
 /// Must match the instruction in AGENTS.md / HEARTBEAT.md.
 const HEARTBEAT_OK: &str = "HEARTBEAT_OK";
 
+/// True if a heartbeat response signals "all clear" — i.e. some line is the
+/// standalone `HEARTBEAT_OK` sentinel, tolerating markdown emphasis
+/// (`**HEARTBEAT_OK**`), list markers and trailing punctuation, even when the
+/// run also produced a routine summary on other lines. Agents emit this sentinel
+/// for routine runs and OMIT it entirely when the owner needs an alert.
+///
+/// Only the sentinel as (essentially) the whole line counts — the token merely
+/// mentioned inside a prose sentence does NOT, so genuine alerts still announce.
+/// Used both to suppress the channel announcement and to skip post-run skill
+/// evolution (see `skills::evolution`), keeping the two decisions in lockstep.
+pub(crate) fn is_heartbeat_ok(response: &str) -> bool {
+    const TRIM: &[char] = &['*', '_', '`', '#', '-', '>', '~', '.', ':', '!', ' ', '\t'];
+    response
+        .lines()
+        .any(|line| line.trim_matches(TRIM).eq_ignore_ascii_case(HEARTBEAT_OK))
+}
+
 /// Parse a string-form delivery target into a normalized JSON object.
 ///
 /// Accepted forms:
@@ -1433,8 +1450,10 @@ async fn run_heartbeat(
 
     let response = engine.handle_isolated_via_pipeline(&msg).await?;
 
-    // Suppress announcement when agent reports nothing to do
-    let suppress = response.trim().eq_ignore_ascii_case(HEARTBEAT_OK);
+    // Suppress announcement when agent reports nothing to do. Tolerant of markdown
+    // wrapping / routine summaries so a chatty `**HEARTBEAT_OK**` does not spam the
+    // owner every hour (see is_heartbeat_ok).
+    let suppress = is_heartbeat_ok(&response);
 
     if suppress {
         tracing::info!(agent = %agent_name, "heartbeat OK — nothing to announce");
@@ -2211,5 +2230,58 @@ mod tests {
         // 1970-01-01 01:00:00 UTC is the next hourly fire strictly after epoch.
         let expected = chrono::DateTime::from_timestamp(3600, 0).unwrap();
         assert_eq!(next, Some(expected));
+    }
+
+    // ── is_heartbeat_ok ────────────────────────────────────────────────
+
+    #[test]
+    fn heartbeat_ok_bare() {
+        assert!(is_heartbeat_ok("HEARTBEAT_OK"));
+    }
+
+    #[test]
+    fn heartbeat_ok_surrounding_whitespace() {
+        assert!(is_heartbeat_ok("  HEARTBEAT_OK \n"));
+    }
+
+    #[test]
+    fn heartbeat_ok_markdown_bold() {
+        assert!(is_heartbeat_ok("**HEARTBEAT_OK**"));
+    }
+
+    #[test]
+    fn heartbeat_ok_case_insensitive() {
+        assert!(is_heartbeat_ok("heartbeat_ok"));
+    }
+
+    #[test]
+    fn heartbeat_ok_list_item_and_punctuation() {
+        assert!(is_heartbeat_ok("- **HEARTBEAT_OK**."));
+    }
+
+    #[test]
+    fn heartbeat_ok_sentinel_amid_routine_report() {
+        // The real-world chatty case: a full report whose verdict line is the
+        // bolded sentinel. Must suppress so the owner is not pinged hourly.
+        let r = "Zettelkasten синхронизирован, изменений нет.\n\n---\n\n\
+                 **HEARTBEAT_OK**\n\nРезультаты:\n- Step 1: ок\n- Step 2: удалён дубликат";
+        assert!(is_heartbeat_ok(r));
+    }
+
+    #[test]
+    fn heartbeat_not_ok_alert_without_sentinel() {
+        let r = "⚠️ Backup не удалось создать: диск переполнен. Вмешайтесь вручную.";
+        assert!(!is_heartbeat_ok(r));
+    }
+
+    #[test]
+    fn heartbeat_not_ok_token_mentioned_in_prose() {
+        // The token merely referenced inside a sentence is NOT an all-clear verdict.
+        assert!(!is_heartbeat_ok("Я отвечу HEARTBEAT_OK если всё в порядке."));
+    }
+
+    #[test]
+    fn heartbeat_not_ok_empty() {
+        assert!(!is_heartbeat_ok(""));
     }
 }
