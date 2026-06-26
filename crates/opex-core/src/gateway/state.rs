@@ -120,6 +120,8 @@ pub struct AgentDeps {
     pub tool_exec_ctx: Arc<crate::tools::yaml_tools::ToolExecutionContext>,
     /// Shared checkpoint manager (process-wide singleton).
     pub checkpoint_mgr: Arc<crate::agent::checkpoint_manager::CheckpointManager>,
+    /// Shared LSP manager (process-wide singleton). `None` when LSP is disabled.
+    pub lsp_manager: Option<Arc<crate::agent::lsp::LspManager>>,
 }
 
 #[cfg(test)]
@@ -140,6 +142,7 @@ impl AgentDeps {
             checkpoint_mgr: Arc::new(crate::agent::checkpoint_manager::CheckpointManager::new(
                 crate::config::CheckpointConfig::default(),
             )),
+            lsp_manager: None,
         }
     }
 }
