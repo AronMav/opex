@@ -247,6 +247,7 @@ async fn run_summarize_video(input: &DispatchInput<'_>) -> ScenarioOutcome {
         ctx.agent_name,
         ctx.source_type,
         &input.attachment.url,
+        None,
     )
     .await
     {

@@ -230,7 +230,7 @@ pub async fn enrich_message_text(
     // Enqueue a `url` video-summarization job for each YouTube link detected
     // in the original (pre-PII-redacted) user text so the job stores the real URL.
     for link in detect_video_links(user_text) {
-        match opex_db::video_jobs::enqueue_video_job(db, session_id, agent_name, "url", &link).await {
+        match opex_db::video_jobs::enqueue_video_job(db, session_id, agent_name, "url", &link, None).await {
             Ok(_) => enriched.push_str("\n\n🎬 Видео по ссылке принято, готовлю сводку."),
             Err(e) => tracing::warn!(error = %e, link = %link, "video url enqueue failed"),
         }
