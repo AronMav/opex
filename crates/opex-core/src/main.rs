@@ -595,6 +595,28 @@ async fn main() -> Result<()> {
         cfg.checkpoint.clone(),
     ));
 
+    let lsp_manager: Option<Arc<crate::agent::lsp::LspManager>> = if cfg.lsp.enabled {
+        use std::time::Duration;
+        let mgr = crate::agent::lsp::LspManager::with_host_factory(
+            Duration::from_secs(cfg.lsp.request_timeout_secs),
+            Duration::from_secs(cfg.lsp.idle_timeout_secs),
+            Duration::from_secs(cfg.lsp.broken_ttl_secs),
+            cfg.lsp.max_servers_per_agent,
+        );
+        mgr.clone().spawn_sweeper();
+        tracing::info!(
+            request_timeout_secs = cfg.lsp.request_timeout_secs,
+            idle_timeout_secs    = cfg.lsp.idle_timeout_secs,
+            broken_ttl_secs      = cfg.lsp.broken_ttl_secs,
+            max_servers_per_agent = cfg.lsp.max_servers_per_agent,
+            "LSP manager initialized"
+        );
+        Some(mgr)
+    } else {
+        tracing::info!("LSP orchestration disabled (lsp.enabled = false)");
+        None
+    };
+
     let agent_deps = Arc::new(tokio::sync::RwLock::new(gateway::AgentDeps {
         mcp: mcp_registry.clone(),
         workspace_dir: config::WORKSPACE_DIR.to_string(),
@@ -605,6 +627,7 @@ async fn main() -> Result<()> {
         audit_queue,
         tool_exec_ctx,
         checkpoint_mgr,
+        lsp_manager,
     }));
 
     let agents_map: gateway::AgentMap = Arc::new(tokio::sync::RwLock::new(HashMap::new()));

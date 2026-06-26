@@ -67,6 +67,12 @@ pub struct AgentConfig {
     /// Shared checkpoint manager (process-wide singleton). `None` for engines
     /// created outside `AgentCore` (test helpers). Cloned from `AgentDeps.checkpoint_mgr`.
     pub checkpoint_manager: Option<Arc<crate::agent::checkpoint_manager::CheckpointManager>>,
+    /// Shared LSP manager (process-wide singleton). `None` when LSP is disabled or
+    /// for engines created outside `AgentCore` (test helpers).
+    /// Cloned from `AgentDeps.lsp_manager`.
+    // Task 10 wires the `lsp` tool handler that reads this field.
+    #[allow(dead_code)]
+    pub lsp_manager: Option<Arc<crate::agent::lsp::LspManager>>,
 }
 
 #[cfg(test)]
