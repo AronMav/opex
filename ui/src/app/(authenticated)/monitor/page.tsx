@@ -636,8 +636,8 @@ function MonitorPageInner() {
 
   return (
     <div className="flex h-full flex-col">
-      <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0">
-        <div className="border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0 overflow-x-auto scrollbar-none">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0 min-w-0">
+        <div className="border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0 min-w-0 overflow-x-auto scrollbar-none">
           <TabsList className="h-9">
             <TabsTrigger value="watchdog" className="text-xs">{t("monitor.tab_watchdog")}</TabsTrigger>
             <TabsTrigger value="doctor" className="text-xs">{t("monitor.tab_doctor")}</TabsTrigger>

@@ -40,7 +40,7 @@ pub(crate) fn default_seed_rows() -> Vec<SeedRow> {
         SeedRow {
             match_type: "audio/*",
             action_ref: "transcribe",
-            label: "Transcribe audio",
+            label: "Распознать речь",
             executor: "tool",
             is_default: true,
             priority: 100,
@@ -48,7 +48,7 @@ pub(crate) fn default_seed_rows() -> Vec<SeedRow> {
         SeedRow {
             match_type: "image/*",
             action_ref: "describe",
-            label: "Describe image",
+            label: "Описать изображение",
             executor: "tool",
             is_default: true,
             priority: 100,
@@ -56,7 +56,7 @@ pub(crate) fn default_seed_rows() -> Vec<SeedRow> {
         SeedRow {
             match_type: "application/pdf",
             action_ref: "extract_document",
-            label: "Extract document text",
+            label: "Извлечь текст документа",
             executor: "tool",
             is_default: true,
             priority: 100,
