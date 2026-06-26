@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import tempfile
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -13,6 +14,9 @@ from pydantic import BaseModel
 
 from helpers import download_limited
 from video_helpers import extract_audio, extract_scene_frames, download_video, _run
+
+# Hostnames trusted for video_url (always a Core gateway upload URL — localhost only).
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
 log = logging.getLogger("toolgate.video")
 
@@ -43,7 +47,14 @@ async def _materialize_source(http, url: str, work_dir: str) -> str:
     if url.startswith("yt-dlp::"):
         real_url = url[len("yt-dlp::"):]
         return await download_video(real_url, work_dir)
-    # Regular HTTP download (upload URL)
+    # Regular HTTP download (upload URL — MUST be a localhost Core gateway URL).
+    # Inverted allowlist: only loopback is permitted here to prevent SSRF.
+    # page_url / yt-dlp branch is separately guarded by the YouTube allowlist
+    # enforced in opex-core (detect_video_links) and the http/https scheme check
+    # in download_video.
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or parsed.hostname not in _LOOPBACK_HOSTS:
+        raise ValueError("video_url must be a localhost gateway URL")
     data, _ = await download_limited(http, url, max_bytes=None)
     path = os.path.join(work_dir, "upload.mp4")
     with open(path, "wb") as f:

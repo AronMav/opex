@@ -226,6 +226,15 @@ pub async fn enrich_message_text(
     }
     enrich_with_attachments(&mut enriched, attachments);
 
+    // Enqueue a `url` video-summarization job for each YouTube link detected
+    // in the original (pre-PII-redacted) user text so the job stores the real URL.
+    for link in detect_video_links(user_text) {
+        match opex_db::video_jobs::enqueue_video_job(db, session_id, agent_name, "url", &link).await {
+            Ok(_) => enriched.push_str("\n\n🎬 Видео по ссылке принято, готовлю сводку."),
+            Err(e) => tracing::warn!(error = %e, link = %link, "video url enqueue failed"),
+        }
+    }
+
     // FSE dispatch replaces the old inline auto_transcribe_audio/auto_describe_images
     // calls: sniff each attachment, look up bindings, run the built-in via the
     // in-core dispatch table, then deterministically rewrite the enriched text.
@@ -249,6 +258,21 @@ pub async fn enrich_message_text(
     );
 
     EnrichResult { text: enriched, outcomes, pending_alternatives }
+}
+
+/// v1 video-URL allowlist: YouTube only (SSRF surface — see spec §9).
+///
+/// Filters `extract_urls(text)` keeping only hosts that end with `youtube.com`
+/// or are equal to / end with `youtu.be`.  The host is extracted as the third
+/// `/`-delimited segment so that `evil.com/youtube.com/path` is rejected.
+fn detect_video_links(text: &str) -> Vec<String> {
+    extract_urls(text)
+        .into_iter()
+        .filter(|u| {
+            let host = u.split('/').nth(2).unwrap_or("");
+            host.ends_with("youtube.com") || host == "youtu.be" || host.ends_with(".youtu.be")
+        })
+        .collect()
 }
 
 /// Fetch a URL and return text content (tool handler).
@@ -855,6 +879,19 @@ mod tests {
         for name in ["generate_image", "synthesize_speech", "analyze_image", "transcribe_audio"] {
             assert!(SUBAGENT_DENIED_TOOLS.contains(&name), "{name} must be denied to subagents");
         }
+    }
+
+    // ── detect_video_links ──────────────────────────────────────────────────
+
+    #[test]
+    fn detect_video_links_youtube_only() {
+        let text = "смотри https://www.youtube.com/watch?v=abc123 и https://example.com/x.mp4";
+        let links = detect_video_links(text);
+        assert_eq!(links.len(), 1);
+        assert!(links[0].contains("youtube.com/watch?v=abc123"));
+
+        assert!(detect_video_links("https://youtu.be/xyz").len() == 1, "youtu.be allowed");
+        assert!(detect_video_links("нет ссылок тут").is_empty());
     }
 
     // ── enrich_message_text → EnrichResult ──────────────────────────────────

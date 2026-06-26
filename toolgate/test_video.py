@@ -93,3 +93,38 @@ async def test_download_video_rejects_non_http_scheme():
         for bad in ["-x", "--exec=rm -rf /", "file:///etc/passwd", "ftp://h/x"]:
             with pytest.raises(ValueError):
                 await download_video(bad, d)
+
+
+# ── SSRF loopback guard for video_url ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_materialize_source_video_url_rejects_non_loopback():
+    """video_url must only accept localhost gateway URLs (SSRF guard)."""
+    from routers.video import _materialize_source
+
+    with tempfile.TemporaryDirectory() as d:
+        for bad_url in [
+            "http://169.254.169.254/latest/meta-data",
+            "http://evil.com/x",
+            "https://internal.corp/secret",
+            "http://10.0.0.1/api",
+        ]:
+            with pytest.raises(ValueError, match="localhost"):
+                await _materialize_source(None, bad_url, d)
+
+
+@pytest.mark.asyncio
+async def test_materialize_source_video_url_accepts_loopback(monkeypatch):
+    """video_url with a localhost URL must be accepted (not rejected by the guard)."""
+    from routers.video import _materialize_source
+    from helpers import download_limited
+
+    # Monkeypatch download_limited to avoid real network call.
+    async def fake_download(http, url, max_bytes=None):
+        return b"\x00\x01\x02", "video/mp4"
+
+    monkeypatch.setattr("routers.video.download_limited", fake_download)
+
+    with tempfile.TemporaryDirectory() as d:
+        path = await _materialize_source(None, "http://localhost:18789/api/uploads/x?sig=1", d)
+        assert os.path.exists(path)
