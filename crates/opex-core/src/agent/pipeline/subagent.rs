@@ -265,12 +265,16 @@ pub async fn enrich_message_text(
 /// Filters `extract_urls(text)` keeping only hosts that end with `youtube.com`
 /// or are equal to / end with `youtu.be`.  The host is extracted as the third
 /// `/`-delimited segment so that `evil.com/youtube.com/path` is rejected.
+///
+/// Domain-label boundary enforcement prevents byte-suffix attacks:
+/// `notayoutube.com` and `fakeyoutube.com` are rejected because their last 11 bytes
+/// are `youtube.com` but they are not valid YouTube domains.
 fn detect_video_links(text: &str) -> Vec<String> {
     extract_urls(text)
         .into_iter()
         .filter(|u| {
             let host = u.split('/').nth(2).unwrap_or("");
-            host.ends_with("youtube.com") || host == "youtu.be" || host.ends_with(".youtu.be")
+            host == "youtube.com" || host.ends_with(".youtube.com") || host == "youtu.be" || host.ends_with(".youtu.be")
         })
         .collect()
 }
@@ -892,6 +896,11 @@ mod tests {
 
         assert!(detect_video_links("https://youtu.be/xyz").len() == 1, "youtu.be allowed");
         assert!(detect_video_links("нет ссылок тут").is_empty());
+
+        // Byte-suffix attack rejection: these hosts end with "youtube.com" as bytes,
+        // but lack domain-label boundary (no leading dot), so they are not YouTube domains.
+        assert!(detect_video_links("https://notayoutube.com/watch").is_empty(), "byte-suffix attack rejected");
+        assert!(detect_video_links("https://fakeyoutube.com/x").is_empty(), "byte-suffix attack rejected");
     }
 
     // ── enrich_message_text → EnrichResult ──────────────────────────────────
