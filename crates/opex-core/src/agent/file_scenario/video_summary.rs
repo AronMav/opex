@@ -13,6 +13,8 @@ pub struct FrameDesc {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Degraded {
+    /// Tracked in API response; not yet read by the digest builder (v1 uses transcript regardless).
+    #[allow(dead_code)]
     pub stt: bool,
     pub vision: bool,
 }

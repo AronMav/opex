@@ -59,10 +59,11 @@ fn allowlist_constant_excludes_code_exec_and_raw_fetch() {
         );
     }
     // Guard the exact set so additions require updating this assertion too.
+    // summarize_video was added as part of the FSE video summarization feature.
     assert_eq!(
         FSE_DEFAULT_ALLOWLIST,
-        &["transcribe", "describe", "extract_document", "save"],
-        "FSE_DEFAULT_ALLOWLIST must be exactly the four safe built-in actions"
+        &["transcribe", "describe", "extract_document", "save", "summarize_video"],
+        "FSE_DEFAULT_ALLOWLIST must be exactly the five safe built-in actions"
     );
 }
 

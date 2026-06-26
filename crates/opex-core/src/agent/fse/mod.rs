@@ -28,7 +28,7 @@ mod reexport_tests {
     fn public_surface_is_re_exported_from_module_root() {
         // These paths are what Phase 5+ (HTTP handlers / agent tool / dispatcher)
         // import — guard them so a refactor cannot silently break the surface.
-        assert_eq!(FSE_DEFAULT_ALLOWLIST.len(), 4);
+        assert_eq!(FSE_DEFAULT_ALLOWLIST.len(), 5); // 4 base + summarize_video (added in video FSE task)
         let full: Vec<String> = FSE_DEFAULT_ALLOWLIST.iter().map(|s| s.to_string()).collect();
         assert!(validate_binding_write("tool", "transcribe", true, &full).is_ok());
         assert!(is_allowed_for_autorun("describe", &full));
