@@ -96,7 +96,15 @@ async fn deliver(
     .execute(db)
     .await
     {
-        tracing::warn!(error = %e, session_id = %job.session_id, "video summary session inject failed");
+        // CRITICAL: job already marked done but session delivery failed — summary
+        // is stored in video_jobs.summary but not visible in the UI session.
+        // Operator must manually re-inject or the job must be re-delivered.
+        tracing::error!(
+            error = %e,
+            job_id = %job.id,
+            session_id = %job.session_id,
+            "video summary delivery failed after job marked done — summary lost from session"
+        );
     }
 
     // Live push — open clients pick this up via their WebSocket event feed.

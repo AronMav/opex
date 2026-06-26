@@ -56,10 +56,17 @@ pub async fn claim_next_video_job(db: &PgPool) -> anyhow::Result<Option<VideoJob
     Ok(job)
 }
 
-/// Reset rows stuck in 'processing' (crash recovery) back to 'pending'.
+/// Reset rows stuck in 'processing' (crash recovery).
+/// Jobs that have already been attempted 3+ times are marked 'failed'
+/// instead of being retried — a crashed job that consistently kills the
+/// worker would otherwise loop forever.
 pub async fn recover_stuck_video_jobs(db: &PgPool) -> anyhow::Result<u64> {
     let res = sqlx::query(
-        "UPDATE video_jobs SET status='pending', updated_at=NOW() WHERE status='processing'",
+        "UPDATE video_jobs \
+         SET status   = CASE WHEN attempts >= 3 THEN 'failed' ELSE 'pending' END, \
+             error    = CASE WHEN attempts >= 3 THEN 'exceeded retry limit after crash' ELSE error END, \
+             updated_at = NOW() \
+         WHERE status = 'processing'",
     )
     .execute(db)
     .await?;
@@ -119,13 +126,99 @@ mod tests {
     async fn recover_resets_processing_to_pending(pool: PgPool) {
         let sid = Uuid::new_v4();
         enqueue_video_job(&pool, sid, "Atlas", "file", "ref").await.unwrap();
-        claim_next_video_job(&pool).await.unwrap().unwrap(); // → processing
+        claim_next_video_job(&pool).await.unwrap().unwrap(); // → processing, attempts=1
 
         let n = recover_stuck_video_jobs(&pool).await.unwrap();
         assert_eq!(n, 1, "one stuck processing row recovered");
 
-        // Now claimable again.
+        // Now claimable again (attempts=1 < 3, so reset to pending).
         assert!(claim_next_video_job(&pool).await.unwrap().is_some());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn recover_caps_at_three_attempts(pool: PgPool) {
+        let sid = Uuid::new_v4();
+        enqueue_video_job(&pool, sid, "Atlas", "file", "crasher").await.unwrap();
+
+        // Simulate three claim→crash cycles by claiming then force-resetting to
+        // processing so the attempts counter accumulates to 3.
+        for _ in 0..3 {
+            // claim increments attempts and sets status=processing
+            let job = claim_next_video_job(&pool).await.unwrap().expect("should be claimable");
+            // Simulate a crash: worker dies mid-processing.
+            // Reset status back to pending so the next iteration can claim again
+            // (mimics what recover_stuck_video_jobs does for attempts < 3).
+            // After 3 claims, attempts = 3 and we call recover to trigger the cap.
+            sqlx::query("UPDATE video_jobs SET status='pending' WHERE id=$1")
+                .bind(job.id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // At this point the row has attempts=3 and status='pending'.
+        // Claim once more to set status='processing' with attempts staying 3+.
+        // (claim increments to 4, but the cap fires on attempts >= 3.)
+        // Actually claim sets attempts to 4 here; the cap threshold is >= 3 so
+        // we still want to verify >= 3 triggers the cap.  Force the row directly.
+        sqlx::query("UPDATE video_jobs SET status='processing', attempts=3 WHERE session_id=$1")
+            .bind(sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let n = recover_stuck_video_jobs(&pool).await.unwrap();
+        assert_eq!(n, 1, "one row recovered");
+
+        let job = sqlx::query_as::<_, VideoJob>(
+            "SELECT id, session_id, agent_name, channel_id, source_type, source_ref, \
+                    status, summary, error, attempts FROM video_jobs WHERE session_id=$1",
+        )
+        .bind(sid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(job.status, "failed", "job with attempts=3 must be marked failed");
+        assert_eq!(
+            job.error.as_deref(),
+            Some("exceeded retry limit after crash"),
+            "error message must be set"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn recover_pending_below_cap_still_resets(pool: PgPool) {
+        let sid = Uuid::new_v4();
+        enqueue_video_job(&pool, sid, "Atlas", "file", "recoverable").await.unwrap();
+
+        // Two claims (attempts=2), then force-stuck in processing.
+        for _ in 0..2 {
+            claim_next_video_job(&pool).await.unwrap().expect("claimable");
+            sqlx::query("UPDATE video_jobs SET status='pending' WHERE session_id=$1")
+                .bind(sid)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("UPDATE video_jobs SET status='processing', attempts=2 WHERE session_id=$1")
+            .bind(sid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        recover_stuck_video_jobs(&pool).await.unwrap();
+
+        let job = sqlx::query_as::<_, VideoJob>(
+            "SELECT id, session_id, agent_name, channel_id, source_type, source_ref, \
+                    status, summary, error, attempts FROM video_jobs WHERE session_id=$1",
+        )
+        .bind(sid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(job.status, "pending", "attempts=2 < 3, must reset to pending");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

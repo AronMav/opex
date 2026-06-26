@@ -12,7 +12,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from helpers import download_limited
 from video_helpers import extract_audio, extract_scene_frames, download_video, _run
 
 # Hostnames trusted for video_url (always a Core gateway upload URL — localhost only).
@@ -55,7 +54,12 @@ async def _materialize_source(http, url: str, work_dir: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or parsed.hostname not in _LOOPBACK_HOSTS:
         raise ValueError("video_url must be a localhost gateway URL")
-    data, _ = await download_limited(http, url, max_bytes=None)
+    # Loopback host already validated above. download_limited would (a) block
+    # loopback via validate_url_ssrf and (b) TypeError on max_bytes=None, so fetch
+    # the already-trusted upload URL directly. No size cap per the no-limits design.
+    resp = await http.get(url, follow_redirects=False)
+    resp.raise_for_status()
+    data = resp.content
     path = os.path.join(work_dir, "upload.mp4")
     with open(path, "wb") as f:
         f.write(data)

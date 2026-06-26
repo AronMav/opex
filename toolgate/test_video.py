@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -114,17 +115,27 @@ async def test_materialize_source_video_url_rejects_non_loopback():
 
 
 @pytest.mark.asyncio
-async def test_materialize_source_video_url_accepts_loopback(monkeypatch):
-    """video_url with a localhost URL must be accepted (not rejected by the guard)."""
+async def test_materialize_source_video_url_accepts_loopback():
+    """video_url with a localhost URL is accepted and the bytes are written to disk.
+
+    Uses a real httpx.AsyncClient backed by MockTransport so the actual http.get
+    call inside _materialize_source is exercised (not monkeypatched away).
+    This catches both the SSRF self-block bug (C1a) and the max_bytes=None
+    TypeError (C1b) that download_limited would have triggered.
+    """
     from routers.video import _materialize_source
-    from helpers import download_limited
 
-    # Monkeypatch download_limited to avoid real network call.
-    async def fake_download(http, url, max_bytes=None):
-        return b"\x00\x01\x02", "video/mp4"
+    fake_video_bytes = b"\x00\x01\x02\x03\x04"
+    upload_url = "http://localhost:18789/api/uploads/x?sig=1"
 
-    monkeypatch.setattr("routers.video.download_limited", fake_download)
+    def transport_handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == upload_url, f"unexpected URL: {request.url}"
+        return httpx.Response(200, content=fake_video_bytes)
 
-    with tempfile.TemporaryDirectory() as d:
-        path = await _materialize_source(None, "http://localhost:18789/api/uploads/x?sig=1", d)
-        assert os.path.exists(path)
+    transport = httpx.MockTransport(transport_handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        with tempfile.TemporaryDirectory() as d:
+            path = await _materialize_source(http, upload_url, d)
+            assert os.path.exists(path), "upload.mp4 was not written"
+            with open(path, "rb") as f:
+                assert f.read() == fake_video_bytes, "file content mismatch"
