@@ -33,6 +33,7 @@ use anyhow::Context as _;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use serde_json::Value;
+use tokio::sync::Mutex as TokioMutex;
 
 use super::{
     client::LspClient,
@@ -95,7 +96,7 @@ impl HostClientFactory {
 #[async_trait]
 impl ClientFactory for HostClientFactory {
     async fn make(&self, def: &ServerDef, root: &Path) -> anyhow::Result<Arc<LspClient>> {
-        let (_child, out, inp) = spawn_server(&def.command, root)
+        let (child, out, inp) = spawn_server(&def.command, root)
             .await
             .with_context(|| format!("spawn LSP server for {:?}", def.language))?;
 
@@ -104,6 +105,12 @@ impl ClientFactory for HostClientFactory {
             LspClient::connect(out, inp, &root_uri, def.init_options.clone(), self.req_timeout)
                 .await
                 .with_context(|| format!("LSP handshake for {:?}", def.language))?;
+
+        // C-1: Keep the child alive as long as the client Arc lives.
+        // `kill_on_drop(true)` was set in spawn_server — without this the
+        // process would be SIGKILLed the instant `child` dropped at the end
+        // of this function.
+        client.attach_process(child);
 
         Ok(Arc::new(client))
     }
@@ -121,15 +128,32 @@ struct PoolEntry {
 /// Connection pool + lifecycle manager for LSP servers.
 ///
 /// One `LspManager` is shared across all agents (via `Arc<LspManager>` in
-/// `AppState`).  Concurrent callers are serialised per key by `DashMap`'s
-/// per-shard locking; the happy path (reuse a live client) holds no lock across
-/// an await point.
+/// `AppState`).
+///
+/// ## Concurrency contract
+///
+/// * **Happy path** (reuse a live client): reads `pool` with `DashMap::get_mut`,
+///   updates `last_used`, and returns immediately.  No `DashMap` shard lock is
+///   held across any `.await`.
+///
+/// * **Slow path** (spawn): two concurrent callers for the same key could both
+///   miss the pool and both call `factory.make`, launching two processes where
+///   one would be orphaned.  This is prevented by `spawn_locks`: each key gets
+///   a per-key `Arc<tokio::sync::Mutex<()>>`.  The callers acquire that mutex
+///   (outside of any DashMap lock), then re-check the pool before spawning.
+///   The DashMap ref is always cloned/dropped *before* the `.await` on the
+///   per-key mutex, so no DashMap shard lock is ever held across an await.
 #[allow(dead_code)]
 pub struct LspManager {
     /// Live clients: (agent, language, root_string) → entry.
     pool: DashMap<(String, String, String), PoolEntry>,
     /// Keys that recently failed to spawn.
     broken: DashMap<(String, String, String), Instant>,
+    /// Per-key mutex that serialises the slow (spawn) path.
+    ///
+    /// The `Arc<Mutex<()>>` is cloned out of the DashMap before `.await`ing,
+    /// so no DashMap shard lock is ever held across an async boundary.
+    spawn_locks: DashMap<(String, String, String), Arc<TokioMutex<()>>>,
 
     // ── config ────────────────────────────────────────────────────────────────
     /// How long to wait for individual LSP requests.
@@ -157,6 +181,7 @@ impl LspManager {
         Self {
             pool: DashMap::new(),
             broken: DashMap::new(),
+            spawn_locks: DashMap::new(),
             request_timeout,
             idle_timeout,
             broken_ttl,
@@ -328,7 +353,13 @@ impl LspManager {
 
     /// Return a live `Arc<LspClient>` for `key`, spawning a new one if needed.
     ///
-    /// The critical invariant: no lock is held across an `.await` point.
+    /// ## Concurrency invariants
+    ///
+    /// * No DashMap shard lock is held across any `.await` point.
+    /// * The slow (spawn) path is serialised per key via `spawn_locks`: the
+    ///   per-key `Arc<TokioMutex<()>>` is *cloned out* of the DashMap before
+    ///   the `.await`, then the pool is re-checked inside the critical section
+    ///   so concurrent callers for the same key share a single spawned client.
     async fn get_or_spawn(
         &self,
         key: &(String, String, String),
@@ -342,7 +373,26 @@ impl LspManager {
             entry.last_used = Instant::now();
             return Ok(Arc::clone(&entry.client));
         }
-        // Dead client (or no entry): fall through to respawn.
+        // Dead client (or no entry): take the per-key spawn lock.
+
+        // Clone the Arc<Mutex> out of the DashMap before any await so no
+        // DashMap shard lock is held across an async boundary.
+        let spawn_lock: Arc<TokioMutex<()>> = self
+            .spawn_locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+            .clone();
+
+        // Await the per-key mutex — DashMap ref is already dropped.
+        let _guard = spawn_lock.lock().await;
+
+        // Re-check the pool: another caller may have spawned while we waited.
+        if let Some(mut entry) = self.pool.get_mut(key)
+            && entry.client.is_alive()
+        {
+            entry.last_used = Instant::now();
+            return Ok(Arc::clone(&entry.client));
+        }
 
         // Remove dead entry if present (idempotent if already gone).
         self.pool.remove(key);
@@ -653,7 +703,13 @@ mod tests {
         // drain all remaining requests with null results
         loop {
             // Drain buffered + incoming bytes.
-            let _ = tokio::time::timeout(Duration::from_millis(200), r.read(&mut tmp)).await;
+            // m-1 fix: append the bytes we read into `buf` so try_decode can
+            // actually find the frames.  Previously `tmp` was read but never
+            // extended into `buf`, so framing::try_decode never saw any data.
+            match tokio::time::timeout(Duration::from_millis(200), r.read(&mut tmp)).await {
+                Ok(Ok(n)) if n > 0 => buf.extend_from_slice(&tmp[..n]),
+                _ => {}
+            }
             while let Some(msg) = framing::try_decode(&mut buf) {
                 let v: serde_json::Value = match serde_json::from_str(&msg) {
                     Ok(v) => v,
