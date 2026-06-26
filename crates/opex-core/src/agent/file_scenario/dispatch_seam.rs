@@ -98,6 +98,7 @@ async fn run_builtin(
         language: agent_language,
         http_client,
         timeout: BUILTIN_TIMEOUT,
+        enqueue: None,
     })
     .await
 }
