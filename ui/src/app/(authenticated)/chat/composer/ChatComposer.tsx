@@ -45,6 +45,33 @@ export function clearDraft(agent: string) {
 
 const EMPTY_MESSAGE_SOURCE = { mode: "new-chat" as const };
 
+/** Tiny silent WAV blob URL — played during a user gesture to unlock the audio
+ *  element so later programmatic TTS playback isn't blocked by autoplay policy. */
+function silentWavUrl(): string {
+  const sampleRate = 8000;
+  const n = 400; // ~0.05s
+  const buf = new ArrayBuffer(44 + n);
+  const v = new DataView(buf);
+  const w = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  w(0, "RIFF");
+  v.setUint32(4, 36 + n, true);
+  w(8, "WAVE");
+  w(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true);
+  v.setUint32(28, sampleRate, true);
+  v.setUint16(32, 1, true);
+  v.setUint16(34, 8, true);
+  w(36, "data");
+  v.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) v.setUint8(44 + i, 128); // 8-bit silence
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
 /** Text of the most recent assistant message — used to speak voice replies. */
 function lastAssistantSpokenText(source: MessageSource): string {
   const msgs = getLiveMessages(source);
@@ -142,11 +169,10 @@ export function ChatComposer() {
   const voice = useVoiceRecorder({ vad: true, onAutoResult: handleAutoResult });
 
   // ── Voice reply: speak the agent's answer (TTS playback) ──────────────────
+  // One persistent <audio> element kept "unlocked" via primeTtsAudio() on a user
+  // gesture, so the later (async) reply playback isn't blocked by autoplay policy.
   const stopTts = useCallback(() => {
-    if (ttsAudioRef.current) {
-      ttsAudioRef.current.pause();
-      ttsAudioRef.current = null;
-    }
+    ttsAudioRef.current?.pause();
     if (ttsUrlRef.current) {
       URL.revokeObjectURL(ttsUrlRef.current);
       ttsUrlRef.current = null;
@@ -154,7 +180,41 @@ export function ChatComposer() {
     ttsPlayingRef.current = false;
     setTtsPlaying(false);
   }, []);
+
+  const getTtsEl = useCallback(() => {
+    if (!ttsAudioRef.current) {
+      const a = new Audio();
+      a.addEventListener("ended", stopTts);
+      a.addEventListener("error", stopTts);
+      ttsAudioRef.current = a;
+    }
+    return ttsAudioRef.current;
+  }, [stopTts]);
+
   useEffect(() => () => stopTts(), [stopTts]);
+
+  // Unlock audio during a user gesture (mic tap / continuous toggle) by playing
+  // a brief silent clip — later programmatic TTS plays on the same element pass.
+  const primeTtsAudio = useCallback(() => {
+    try {
+      const a = getTtsEl();
+      const u = silentWavUrl();
+      a.src = u;
+      const p = a.play();
+      if (p && typeof p.then === "function") {
+        p.then(() => {
+          a.pause();
+          a.currentTime = 0;
+        })
+          .catch(() => {})
+          .finally(() => URL.revokeObjectURL(u));
+      } else {
+        URL.revokeObjectURL(u);
+      }
+    } catch {
+      /* best-effort unlock */
+    }
+  }, [getTtsEl]);
 
   const playReply = useCallback(
     async (text: string) => {
@@ -166,18 +226,19 @@ export function ChatComposer() {
         });
         if (!resp.ok) throw new Error(`TTS ${resp.status}`);
         const blob = await resp.blob();
+        if (ttsUrlRef.current) URL.revokeObjectURL(ttsUrlRef.current);
         const url = URL.createObjectURL(blob);
         ttsUrlRef.current = url;
-        const audio = new Audio(url);
-        ttsAudioRef.current = audio;
-        audio.addEventListener("ended", stopTts);
-        audio.addEventListener("error", stopTts);
-        await audio.play();
+        const a = getTtsEl();
+        a.src = url;
+        await a.play();
       } catch {
         stopTts();
+        const { toast } = await import("sonner");
+        toast.error(t("chat.tts_error"));
       }
     },
-    [stopTts],
+    [getTtsEl, stopTts, t],
   );
 
   // When a voice-initiated turn finishes streaming, speak the agent's reply.
@@ -439,9 +500,10 @@ export function ChatComposer() {
         formRef.current?.requestSubmit();
       }
     } else if (voice.state === "idle") {
+      primeTtsAudio(); // unlock TTS playback while we still have the user gesture
       await voice.start();
     }
-  }, [voice, insertTranscript]);
+  }, [voice, insertTranscript, primeTtsAudio]);
 
   const formatElapsed = (secs: number): string => {
     const m = Math.floor(secs / 60);
@@ -616,7 +678,10 @@ export function ChatComposer() {
                   aria-label={t("chat.continuous_voice")}
                   title={t("chat.continuous_voice")}
                   disabled={voice.state === "transcribing"}
-                  onClick={() => setContinuous((v) => !v)}
+                  onClick={() => {
+                    if (!continuous) primeTtsAudio();
+                    setContinuous((v) => !v);
+                  }}
                   className={cn(
                     "rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     continuous
