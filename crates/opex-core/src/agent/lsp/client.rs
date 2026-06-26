@@ -123,7 +123,8 @@ impl LspClient {
                 "rootUri": root_uri,
                 "capabilities": {
                     "general": { "positionEncodings": ["utf-8"] },
-                    "workspace": { "configuration": true }
+                    "workspace": { "configuration": true },
+                    "textDocument": { "rename": { "dynamicRegistration": false } }
                 },
                 "initializationOptions": init_options
             }),
