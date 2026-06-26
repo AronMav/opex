@@ -15,7 +15,7 @@
 //! critical section.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, AtomicI64, Ordering},
         Arc, Mutex as StdMutex,
@@ -50,7 +50,7 @@ type DiagMap = Arc<StdMutex<HashMap<String, Vec<Value>>>>;
 // ── LspClient ─────────────────────────────────────────────────────────────────
 
 /// An active connection to one LSP server process.
-// Fields are consumed by Task 5/6 (LSP manager + tool handler). Allow until then.
+// Fields are consumed by Task 6/7/10 (LSP manager + tool handler). Allow until then.
 #[allow(dead_code)]
 pub struct LspClient {
     writer: SharedWriter,
@@ -60,6 +60,10 @@ pub struct LspClient {
     alive: Arc<AtomicBool>,
     position_encoding: String,
     req_timeout: Duration,
+    /// Tracks which document URIs have been opened in this session.
+    opened: StdMutex<HashSet<String>>,
+    /// Monotonically-increasing document version counter for didChange.
+    open_version: AtomicI64,
     /// Keeps the read-loop running as long as this client exists.
     _read_task: tokio::task::JoinHandle<()>,
 }
@@ -145,6 +149,8 @@ impl LspClient {
             alive,
             position_encoding,
             req_timeout,
+            opened: StdMutex::new(HashSet::new()),
+            open_version: AtomicI64::new(2),
             _read_task: read_task,
         })
     }
@@ -209,6 +215,179 @@ impl LspClient {
     #[allow(dead_code)]
     pub fn position_encoding(&self) -> &str {
         &self.position_encoding
+    }
+
+    // ── document tracking ──────────────────────────────────────────────────────
+
+    /// Ensure `uri` is open in the server.
+    ///
+    /// * First time: sends `textDocument/didOpen` and records the URI.
+    /// * Subsequent calls: sends `textDocument/didChange` (full-text, bumped version).
+    ///
+    /// The `StdMutex` is locked only synchronously to check/insert the URI,
+    /// released before any `.await`, so the async invariant is upheld.
+    async fn ensure_open(
+        &self,
+        uri: &str,
+        text: &str,
+        language_id: &str,
+    ) -> anyhow::Result<()> {
+        // Lock, check/insert, drop — no await inside the critical section.
+        let is_new = {
+            let mut guard = self
+                .opened
+                .lock()
+                .expect("opened set lock poisoned");
+            guard.insert(uri.to_owned())
+        };
+
+        if is_new {
+            self.notify(
+                "textDocument/didOpen",
+                json!({
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": language_id,
+                        "version": 1,
+                        "text": text
+                    }
+                }),
+            )
+            .await
+        } else {
+            let version = self.open_version.fetch_add(1, Ordering::Relaxed);
+            self.notify(
+                "textDocument/didChange",
+                json!({
+                    "textDocument": { "uri": uri, "version": version },
+                    "contentChanges": [{ "text": text }]
+                }),
+            )
+            .await
+        }
+    }
+
+    // ── high-level document operations ─────────────────────────────────────────
+
+    /// Open/sync `uri`, wait `collect` for the server to publish diagnostics,
+    /// then drain and return them.
+    #[allow(dead_code)]
+    pub async fn diagnostics(
+        &self,
+        uri: &str,
+        text: &str,
+        language_id: &str,
+        collect: Duration,
+    ) -> Vec<Value> {
+        if self.ensure_open(uri, text, language_id).await.is_err() {
+            return Vec::new();
+        }
+        tokio::time::sleep(collect).await;
+        self.take_diagnostics(uri)
+    }
+
+    /// Go-to-definition for the symbol at `(line, character)`.
+    #[allow(dead_code)]
+    pub async fn definition(
+        &self,
+        uri: &str,
+        text: &str,
+        language_id: &str,
+        line: u32,
+        character: u32,
+    ) -> anyhow::Result<Value> {
+        self.ensure_open(uri, text, language_id).await?;
+        self.request(
+            "textDocument/definition",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            }),
+        )
+        .await
+    }
+
+    /// Find all references for the symbol at `(line, character)`.
+    #[allow(dead_code)]
+    pub async fn references(
+        &self,
+        uri: &str,
+        text: &str,
+        language_id: &str,
+        line: u32,
+        character: u32,
+    ) -> anyhow::Result<Value> {
+        self.ensure_open(uri, text, language_id).await?;
+        self.request(
+            "textDocument/references",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            }),
+        )
+        .await
+    }
+
+    /// Hover information for the symbol at `(line, character)`.
+    #[allow(dead_code)]
+    pub async fn hover(
+        &self,
+        uri: &str,
+        text: &str,
+        language_id: &str,
+        line: u32,
+        character: u32,
+    ) -> anyhow::Result<Value> {
+        self.ensure_open(uri, text, language_id).await?;
+        self.request(
+            "textDocument/hover",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character }
+            }),
+        )
+        .await
+    }
+
+    /// List all symbols in `uri` (no position needed).
+    #[allow(dead_code)]
+    pub async fn document_symbols(
+        &self,
+        uri: &str,
+        text: &str,
+        language_id: &str,
+    ) -> anyhow::Result<Value> {
+        self.ensure_open(uri, text, language_id).await?;
+        self.request(
+            "textDocument/documentSymbol",
+            json!({ "textDocument": { "uri": uri } }),
+        )
+        .await
+    }
+
+    /// Rename the symbol at `(line, character)` to `new_name`.
+    ///
+    /// Returns the `WorkspaceEdit` from the server.
+    #[allow(dead_code)]
+    pub async fn rename(
+        &self,
+        uri: &str,
+        text: &str,
+        language_id: &str,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> anyhow::Result<Value> {
+        self.ensure_open(uri, text, language_id).await?;
+        self.request(
+            "textDocument/rename",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": line, "character": character },
+                "newName": new_name
+            }),
+        )
+        .await
     }
 }
 
@@ -442,31 +621,67 @@ mod tests {
         }
         assert!(saw_config_reply, "client never sent a reply to workspace/configuration");
 
-        // ── Step 5: receive custom/echo → reply ───────────────────────────────
-        // Only reached after a correct config reply is validated above.
-        // Skip any stray notifications (e.g. `initialized`) that race here.
-        let echo_msg = loop {
-            let msg = read_one_msg(&mut r, &mut buf)
-                .await
-                .expect("connection closed before custom/echo");
-            if msg.get("id").is_none() {
-                // notification — skip
-                continue;
+        // ── Step 5: receive and dispatch further client requests ─────────────
+        // Handle custom/echo, textDocument/definition, textDocument/rename, and
+        // any stray notifications (e.g. `initialized`, `didOpen`).
+        // Loop until the client side closes.
+        loop {
+            let msg = match read_one_msg(&mut r, &mut buf).await {
+                Some(m) => m,
+                None => break,
+            };
+            // Notifications have no id — skip silently.
+            let id = match msg.get("id") {
+                Some(v) => v.clone(),
+                None => continue,
+            };
+            match msg["method"].as_str().unwrap_or("") {
+                "custom/echo" => {
+                    let _ = w
+                        .write_all(&framing::encode_message(
+                            &json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {"echo": msg["params"]}
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                }
+                "textDocument/definition" => {
+                    let _ = w
+                        .write_all(&framing::encode_message(
+                            &json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": [{"uri":"file:///x","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}]
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                }
+                "textDocument/rename" => {
+                    let _ = w
+                        .write_all(&framing::encode_message(
+                            &json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {"changes":{"file:///x":[{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},"newText":"y"}]}}
+                            })
+                            .to_string(),
+                        ))
+                        .await;
+                }
+                _ => {
+                    // Unknown requests get a null result.
+                    let _ = w
+                        .write_all(&framing::encode_message(
+                            &json!({"jsonrpc":"2.0","id":id,"result":null}).to_string(),
+                        ))
+                        .await;
+                }
             }
-            break msg;
-        };
-        assert_eq!(echo_msg["method"], "custom/echo");
-        let echo_id = echo_msg["id"].as_i64().unwrap();
-        let _ = w
-            .write_all(&framing::encode_message(
-                &json!({
-                    "jsonrpc": "2.0",
-                    "id": echo_id,
-                    "result": {"echo": echo_msg["params"]}
-                })
-                .to_string(),
-            ))
-            .await;
+        }
     }
 
     #[tokio::test]
@@ -495,5 +710,107 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    // ── Task-5 high-level operation tests ─────────────────────────────────────
+
+    /// `definition()` must send `textDocument/didOpen` (first call) then
+    /// `textDocument/definition` and return the server's location list.
+    #[tokio::test]
+    async fn definition_returns_location() {
+        let (cr, sw) = tokio::io::duplex(65536);
+        let (sr, cw) = tokio::io::duplex(65536);
+        tokio::spawn(mock_server(sr, sw));
+
+        let c = LspClient::connect(cr, cw, "file:///root", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        let locs = c
+            .definition("file:///x", "fn foo(){}", "rust", 0, 3)
+            .await
+            .unwrap();
+
+        // Server returns an array with one location object.
+        assert!(locs.is_array(), "expected array, got {locs}");
+        let arr = locs.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["uri"], "file:///x");
+    }
+
+    /// `rename()` must return the WorkspaceEdit the server replies with.
+    #[tokio::test]
+    async fn rename_returns_workspace_edit() {
+        let (cr, sw) = tokio::io::duplex(65536);
+        let (sr, cw) = tokio::io::duplex(65536);
+        tokio::spawn(mock_server(sr, sw));
+
+        let c = LspClient::connect(cr, cw, "file:///root", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        let edit = c
+            .rename("file:///x", "fn foo(){}", "rust", 0, 3, "y")
+            .await
+            .unwrap();
+
+        // WorkspaceEdit has a `changes` map.
+        assert!(
+            edit.get("changes").is_some(),
+            "expected WorkspaceEdit with 'changes', got {edit}"
+        );
+        let new_text = edit["changes"]["file:///x"][0]["newText"].as_str().unwrap();
+        assert_eq!(new_text, "y");
+    }
+
+    /// `diagnostics()` sends `didOpen` then returns buffered diagnostics.
+    ///
+    /// We pre-seed the diag buffer (the mock already pushed `boom` to `file:///x`
+    /// during handshake), so `collect` can be very short.
+    #[tokio::test]
+    async fn diagnostics_returns_buffered_note() {
+        let (cr, sw) = tokio::io::duplex(65536);
+        let (sr, cw) = tokio::io::duplex(65536);
+        tokio::spawn(mock_server(sr, sw));
+
+        let c = LspClient::connect(cr, cw, "file:///root", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        // Give the read-loop a moment to buffer the diagnostic sent during handshake.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // diagnostics() sends didOpen, waits `collect`, then drains.
+        let diags = c
+            .diagnostics("file:///x", "fn foo(){}", "rust", Duration::from_millis(10))
+            .await;
+
+        assert!(!diags.is_empty(), "expected at least one diagnostic");
+        assert_eq!(diags[0]["message"], "boom");
+    }
+
+    /// Calling `definition()` twice on the same URI: first → `didOpen`,
+    /// second → `didChange` (no crash, version bumped).
+    #[tokio::test]
+    async fn second_call_sends_did_change() {
+        let (cr, sw) = tokio::io::duplex(65536);
+        let (sr, cw) = tokio::io::duplex(65536);
+        tokio::spawn(mock_server(sr, sw));
+
+        let c = LspClient::connect(cr, cw, "file:///root", json!({}), Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        // First call — didOpen + definition.
+        c.definition("file:///x", "fn foo(){}", "rust", 0, 0)
+            .await
+            .unwrap();
+
+        // Second call — didChange + definition.  Should not panic or error.
+        let locs = c
+            .definition("file:///x", "fn bar(){}", "rust", 0, 3)
+            .await
+            .unwrap();
+        assert!(locs.is_array());
     }
 }
