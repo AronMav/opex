@@ -7,7 +7,6 @@ use anyhow::Context as _;
 use opex_db::video_jobs::VideoJob;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::file_scenario::video_summary::{build_summary_messages, RawMaterial};
 use crate::agent::providers::{CallOptions, LlmProvider};
 use crate::gateway::AppState;
 
@@ -26,23 +25,43 @@ fn source_payload(job: &VideoJob, gateway_listen: &str) -> serde_json::Value {
     }
 }
 
+// ── NoteResult ────────────────────────────────────────────────────────────────
+
+/// Everything produced by `process_one`; consumed by the worker loop for MCP
+/// writes and session delivery.
+#[derive(Debug)]
+pub struct NoteResult {
+    pub slug: String,
+    pub note: String,
+    pub summary: String,
+    /// `(filename, image_b64)` pairs — one per frame — to upload via `save_media`.
+    pub media: Vec<(String, String)>,
+}
+
 // ── Core logic (unit-testable, no DB) ────────────────────────────────────────
 
-/// Call toolgate `/summarize-video`, build the digest, run through the LLM,
-/// and return the summary text. Delivery is intentionally separate so this
-/// function is independently unit-testable with a mock toolgate and a fake
-/// provider.
+/// Call toolgate `/summarize-video`, assemble the full Obsidian note, run
+/// through the LLM, and return a `NoteResult`. Delivery and MCP writes are
+/// intentionally separate so this function is independently unit-testable with
+/// a mock toolgate and a fake provider.
 pub async fn process_one(
     http: &reqwest::Client,
     toolgate_url: &str,
     gateway_listen: &str,
     provider: &dyn LlmProvider,
     job: &VideoJob,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<NoteResult> {
+    use crate::agent::file_scenario::video_summary::{
+        build_note, build_summary_messages, extract_summary, slug, RawMaterial,
+    };
+
     // ── 1. Call toolgate ──────────────────────────────────────────────────────
     let url = format!("{}/summarize-video", toolgate_url.trim_end_matches('/'));
     let mut body = source_payload(job, gateway_listen);
     body["language"] = serde_json::json!("ru");
+    if let Some(t) = &job.source_title {
+        body["title"] = serde_json::json!(t);
+    }
 
     let resp = http
         .post(&url)
@@ -60,16 +79,51 @@ pub async fn process_one(
         .await
         .context("deserialise toolgate /summarize-video response")?;
 
-    // ── 2. Build digest messages and call provider ────────────────────────────
-    // frame_names are populated by the note builder (Task 6); pass empty for legacy path.
-    let messages = build_summary_messages(&raw, &[]);
+    // ── 2. Derive slug + frame names ──────────────────────────────────────────
+    let title = job
+        .source_title
+        .clone()
+        .or_else(|| raw.title.clone())
+        .unwrap_or_default();
+    let id8 = {
+        let full = job.id.simple().to_string();
+        full[..8].to_string()
+    };
+    let note_slug = slug(&title, &id8);
+
+    let frame_names: Vec<String> = (0..raw.frames.len())
+        .map(|i| format!("{note_slug}-frame-{:02}.jpg", i + 1))
+        .collect();
+
+    let media: Vec<(String, String)> = frame_names
+        .iter()
+        .cloned()
+        .zip(raw.frames.iter().map(|f| f.image_b64.clone()))
+        .collect();
+
+    // ── 3. Build LLM body ─────────────────────────────────────────────────────
+    let messages = build_summary_messages(&raw, &frame_names);
     let opts = CallOptions {
         thinking_level: 0,
         claude_md_content: None,
     };
-    let llm_resp = provider.chat(&messages, &[], opts).await?;
+    let llm_body = provider.chat(&messages, &[], opts).await?.content;
 
-    Ok(llm_resp.content)
+    // ── 4. Build note + extract summary ──────────────────────────────────────
+    let title_for_note = if title.is_empty() {
+        note_slug.clone()
+    } else {
+        title
+    };
+    let note = build_note(&raw, &title_for_note, &llm_body, &frame_names);
+    let summary = extract_summary(&note);
+
+    Ok(NoteResult {
+        slug: note_slug,
+        note,
+        summary,
+        media,
+    })
 }
 
 // ── Delivery (web-only, v1) ───────────────────────────────────────────────────
@@ -123,9 +177,11 @@ async fn deliver(
 ///
 /// The worker:
 /// 1. Claims one job at a time from the durable `video_jobs` queue.
-/// 2. Resolves the agent's registered engine to obtain its LLM provider.
-/// 3. Calls `process_one` (toolgate → digest → LLM).
-/// 4. Marks the job done/failed and delivers the summary to the web session.
+/// 2. Resolves the agent's registered engine to obtain its LLM provider and
+///    MCP registry.
+/// 3. Calls `process_one` (toolgate → digest → LLM → note assembly).
+/// 4. Writes frames + note to the Obsidian vault via MCP, then marks the job
+///    done/failed and delivers the summary + vault link to the web session.
 pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
     let db = state.infra.db.clone();
     let agents = state.agents.clone();
@@ -170,7 +226,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                 "video_worker: processing job"
             );
 
-            // ── Resolve provider ──────────────────────────────────────────────
+            // ── Resolve provider + MCP ────────────────────────────────────────
             let engine: Arc<crate::agent::engine::AgentEngine> =
                 match agents.get_engine(&job.agent_name).await {
                     Some(e) => e,
@@ -192,12 +248,131 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
 
             let provider: Arc<dyn LlmProvider> = engine.provider_arc();
 
+            let mcp = match engine.mcp() {
+                Some(m) => m.clone(),
+                None => {
+                    tracing::warn!(
+                        job_id = %job.id,
+                        "video_worker: MCP disabled — cannot save note"
+                    );
+                    let _ = opex_db::video_jobs::mark_video_job_failed(
+                        &db,
+                        job.id,
+                        "MCP disabled — cannot save note",
+                    )
+                    .await;
+                    deliver(
+                        &db,
+                        &ui_tx,
+                        &job,
+                        "Не удалось сохранить конспект: MCP не настроен",
+                    )
+                    .await;
+                    continue;
+                }
+            };
+
             // ── Process ───────────────────────────────────────────────────────
-            match process_one(&http, &toolgate_url, &gateway_listen, provider.as_ref(), &job).await {
-                Ok(summary) => {
-                    tracing::info!(job_id = %job.id, "video_worker: job succeeded");
-                    let _ = opex_db::video_jobs::mark_video_job_done(&db, job.id, &summary).await;
-                    deliver(&db, &ui_tx, &job, &summary).await;
+            match process_one(&http, &toolgate_url, &gateway_listen, provider.as_ref(), &job).await
+            {
+                Ok(nr) => {
+                    tracing::info!(job_id = %job.id, slug = %nr.slug, "video_worker: note assembled");
+
+                    // Free folder name — collision avoidance
+                    let mut folder = format!("Видео/{}", nr.slug);
+                    for suffix in 2..=20 {
+                        let exists = mcp
+                            .call_tool(
+                                "mcp-obsidian",
+                                "note_exists",
+                                &serde_json::json!({
+                                    "folder": folder,
+                                    "filename": "конспект.md"
+                                }),
+                            )
+                            .await
+                            .map(|s| s.trim() == "true")
+                            .unwrap_or(false);
+                        if !exists {
+                            break;
+                        }
+                        folder = format!("Видео/{}-{}", nr.slug, suffix);
+                    }
+
+                    // Save media frames
+                    let mut ok = true;
+                    for (name, b64) in &nr.media {
+                        if let Err(e) = mcp
+                            .call_tool(
+                                "mcp-obsidian",
+                                "save_media",
+                                &serde_json::json!({ "filename": name, "content_b64": b64 }),
+                            )
+                            .await
+                        {
+                            tracing::warn!(error = %e, frame = %name, "video_worker: save_media failed");
+                            ok = false;
+                            break;
+                        }
+                    }
+
+                    if !ok {
+                        let _ = opex_db::video_jobs::mark_video_job_failed(
+                            &db,
+                            job.id,
+                            "save_media failed",
+                        )
+                        .await;
+                        deliver(&db, &ui_tx, &job, "Не удалось сохранить кадры конспекта").await;
+                        continue;
+                    }
+
+                    // Create the note
+                    if let Err(e) = mcp
+                        .call_tool(
+                            "mcp-obsidian",
+                            "create_note",
+                            &serde_json::json!({
+                                "folder": folder,
+                                "filename": "конспект.md",
+                                "content": nr.note
+                            }),
+                        )
+                        .await
+                    {
+                        tracing::warn!(job_id = %job.id, error = %e, "video_worker: create_note failed");
+                        let _ = opex_db::video_jobs::mark_video_job_failed(
+                            &db,
+                            job.id,
+                            &format!("create_note: {e}"),
+                        )
+                        .await;
+                        deliver(
+                            &db,
+                            &ui_tx,
+                            &job,
+                            &format!("Не удалось сохранить конспект: {e}"),
+                        )
+                        .await;
+                        continue;
+                    }
+
+                    // Commit vault — best-effort
+                    let _ = mcp
+                        .call_tool(
+                            "mcp-obsidian",
+                            "commit_vault",
+                            &serde_json::json!({
+                                "message": format!("видео-конспект: {}", nr.slug)
+                            }),
+                        )
+                        .await;
+
+                    let path = format!("{folder}/конспект.md");
+                    let chat = format!("{}\n\n📓 Конспект: {}", nr.summary, path);
+                    let _ = opex_db::video_jobs::mark_video_job_done(&db, job.id, &nr.summary)
+                        .await;
+                    deliver(&db, &ui_tx, &job, &chat).await;
                 }
                 Err(e) => {
                     let msg = format!("Не удалось обработать видео: {e}");
@@ -235,7 +410,8 @@ mod tests {
             _opts: crate::agent::providers::CallOptions,
         ) -> anyhow::Result<opex_types::LlmResponse> {
             Ok(opex_types::LlmResponse {
-                content: "СВОДКА: тест ок".to_string(),
+                content: "## Резюме\nкоротко\n\n## Конспект\n![[_System/media/тест-frame-01.jpg]]"
+                    .to_string(),
                 tool_calls: vec![],
                 usage: None,
                 finish_reason: None,
@@ -255,6 +431,52 @@ mod tests {
         fn current_model(&self) -> String {
             "fake".into()
         }
+    }
+
+    // ── Test: process_one assembles note from toolgate + LLM ─────────────────
+
+    #[tokio::test]
+    async fn process_one_builds_note_with_image_and_summary() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/summarize-video"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "title": "Тест", "duration": 30.0, "transcript": "речь",
+                "frames": [{"timestamp": 5.0, "description": "слайд", "image_b64": "/9j/AA=="}],
+                "degraded": {"stt": false, "vision": false}
+            })))
+            .mount(&server)
+            .await;
+
+        let job = opex_db::video_jobs::VideoJob {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            agent_name: "Atlas".into(),
+            channel_id: None,
+            source_type: "file".into(),
+            source_ref: "http://localhost/api/uploads/x?sig=1".into(),
+            source_title: Some("Тест".into()),
+            status: "processing".into(),
+            summary: None,
+            error: None,
+            attempts: 1,
+        };
+
+        let client = reqwest::Client::new();
+        let provider = FakeLlm;
+
+        let note = process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job)
+            .await
+            .unwrap();
+
+        assert!(note.note.contains("title: Тест"), "frontmatter title");
+        assert!(
+            note.note.contains("> [!note]- Полный транскрипт"),
+            "collapsed transcript"
+        );
+        assert!(note.summary.contains("коротко"), "summary extracted");
+        assert!(!note.media.is_empty(), "media collected for MCP save");
     }
 
     // ── Test: process_one calls toolgate and returns LLM digest ─────────────
@@ -291,12 +513,11 @@ mod tests {
         let client = reqwest::Client::new();
         let provider = FakeLlm;
 
-        let summary =
-            process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job)
-                .await
-                .unwrap();
+        let nr = process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job)
+            .await
+            .unwrap();
 
-        assert!(summary.contains("СВОДКА"), "digest returned: {summary}");
+        assert!(nr.summary.contains("коротко"), "digest returned: {}", nr.summary);
     }
 
     // ── Test: process_one fails fast when toolgate returns 500 ───────────────
@@ -368,11 +589,10 @@ mod tests {
 
         let client = reqwest::Client::new();
         let provider = FakeLlm;
-        let summary =
-            process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job)
-                .await
-                .unwrap();
+        let nr = process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job)
+            .await
+            .unwrap();
 
-        assert!(summary.contains("СВОДКА"), "digest returned: {summary}");
+        assert!(nr.summary.contains("коротко"), "digest returned: {}", nr.summary);
     }
 }
