@@ -273,8 +273,20 @@ fn detect_video_links(text: &str) -> Vec<String> {
     extract_urls(text)
         .into_iter()
         .filter(|u| {
-            let host = u.split('/').nth(2).unwrap_or("");
-            host == "youtube.com" || host.ends_with(".youtube.com") || host == "youtu.be" || host.ends_with(".youtu.be")
+            // Parse with a real URL parser — a naive `split('/')` is fooled by
+            // userinfo (`youtube.com@evil.com`), case (`YouTube.com`), trailing
+            // dot, and ports. Only http/https YouTube domains (exact label or
+            // dot-prefixed suffix) pass.
+            let Ok(parsed) = url::Url::parse(u) else { return false };
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return false;
+            }
+            let Some(h) = parsed.host_str() else { return false };
+            let host = h.trim_end_matches('.').to_ascii_lowercase();
+            host == "youtube.com"
+                || host.ends_with(".youtube.com")
+                || host == "youtu.be"
+                || host.ends_with(".youtu.be")
         })
         .collect()
 }
@@ -901,6 +913,11 @@ mod tests {
         // but lack domain-label boundary (no leading dot), so they are not YouTube domains.
         assert!(detect_video_links("https://notayoutube.com/watch").is_empty(), "byte-suffix attack rejected");
         assert!(detect_video_links("https://fakeyoutube.com/x").is_empty(), "byte-suffix attack rejected");
+
+        // URL-parser hardening: userinfo confusion, case-insensitivity, scheme.
+        assert!(detect_video_links("https://youtube.com@evil.com/x").is_empty(), "userinfo confusion rejected");
+        assert!(detect_video_links("https://YOUTUBE.com/watch?v=z").len() == 1, "uppercase host accepted");
+        assert!(detect_video_links("ftp://youtube.com/x").is_empty(), "non-http scheme rejected");
     }
 
     // ── enrich_message_text → EnrichResult ──────────────────────────────────
