@@ -61,10 +61,16 @@ async def extract_scene_frames(
 
 
 async def download_video(url: str, dest_dir: str) -> str:
-    """Download `url` via yt-dlp to a single file under dest_dir. Returns the path."""
+    """Download `url` via yt-dlp to a single file under dest_dir. Returns the path.
+
+    Security: only http/https URLs are accepted (rejects `file:`, `-`-prefixed
+    flag-smuggling, etc.), and `--` terminates option parsing so the URL can
+    never be read as a yt-dlp flag."""
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise ValueError("download_video: only http/https URLs are allowed")
     out_tmpl = os.path.join(dest_dir, "dl.%(ext)s")
     code, _, err = await _run(
-        "yt-dlp", "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", url
+        "yt-dlp", "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
     )
     if code != 0:
         raise RuntimeError(f"yt-dlp failed: {err.decode(errors='ignore')[:400]}")

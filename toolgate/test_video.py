@@ -6,7 +6,7 @@ import tempfile
 import pytest
 from fastapi.testclient import TestClient
 
-from video_helpers import extract_audio, extract_scene_frames
+from video_helpers import extract_audio, extract_scene_frames, download_video
 
 
 def _make_tiny_video(path: str):
@@ -84,3 +84,12 @@ def test_summarize_video_local_file(monkeypatch):
         assert len(body["frames"]) >= 1
         assert body["frames"][0]["description"] == "кадр: синий экран"
         assert body["degraded"] == {"stt": False, "vision": False}
+
+
+@pytest.mark.asyncio
+async def test_download_video_rejects_non_http_scheme():
+    # argv flag-smuggling / non-http schemes must be rejected before yt-dlp runs.
+    with tempfile.TemporaryDirectory() as d:
+        for bad in ["-x", "--exec=rm -rf /", "file:///etc/passwd", "ftp://h/x"]:
+            with pytest.raises(ValueError):
+                await download_video(bad, d)
