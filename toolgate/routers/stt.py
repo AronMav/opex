@@ -15,7 +15,12 @@ from audio_trim import trim_silence
 
 log = logging.getLogger("toolgate.stt")
 
-STT_MAX_BYTES = 25 * 1024 * 1024  # 25 MB (Whisper API limit)
+STT_MAX_BYTES = 25 * 1024 * 1024  # 25 MB (legacy Whisper API limit; kept for cloud providers)
+
+# A provider may declare a hard per-file byte cap (cloud APIs). Local Whisper
+# has none → no cap. Default: no cap unless the provider sets `max_bytes`.
+def _provider_cap(provider) -> int | None:
+    return getattr(provider, "max_bytes", None)
 
 router = APIRouter(tags=["stt"])
 
@@ -31,9 +36,11 @@ async def transcribe(
     log_provider(log, provider)
     audio_bytes = await file.read()
 
-    size_err = check_upload_size(audio_bytes, STT_MAX_BYTES, "Audio file")
-    if size_err:
-        return size_err
+    cap = _provider_cap(provider)
+    if cap is not None:
+        size_err = check_upload_size(audio_bytes, cap, "Audio file")
+        if size_err:
+            return size_err
 
     # Best-effort: strip leading/trailing silence before the (paid) STT call.
     _name = file.filename or "audio.ogg"
@@ -67,8 +74,9 @@ async def transcribe_url(
 ):
     log_provider(log, provider)
     http = request.app.state.http_client
+    cap = _provider_cap(provider)
     try:
-        audio_bytes, _ = await download_limited(http, body.audio_url, max_bytes=STT_MAX_BYTES)
+        audio_bytes, _ = await download_limited(http, body.audio_url, max_bytes=cap or STT_MAX_BYTES)
     except Exception as e:
         return JSONResponse(status_code=502, content={"error": f"Failed to download audio: {e}"})
 

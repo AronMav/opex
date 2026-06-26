@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 
 import pytest
+from fastapi.testclient import TestClient
 
 from video_helpers import extract_audio, extract_scene_frames
 
@@ -40,3 +41,46 @@ async def test_extract_scene_frames_finds_the_cut():
         ts, jpeg = frames[0]
         assert isinstance(ts, float)
         assert jpeg[:2] == b"\xff\xd8", "JPEG SOI marker"
+
+
+class _FakeSTT:
+    name = "fake-stt"
+    async def transcribe(self, http, audio_bytes, filename, language, model=None):
+        return "привет это тест"
+
+
+class _FakeVision:
+    name = "fake-vision"
+    async def describe(self, http, image_bytes, content_type, prompt, max_tokens=2000):
+        return "кадр: синий экран"
+
+
+def test_summarize_video_local_file(monkeypatch):
+    import app as toolgate_app
+    # Bypass auth (internal-network check passes for testclient host).
+    monkeypatch.setattr(toolgate_app, "AUTH_TOKEN", "")
+
+    # Fake providers via the registry.
+    async def fake_active(cap):
+        return _FakeSTT() if cap == "stt" else _FakeVision()
+    monkeypatch.setattr(toolgate_app.registry, "aget_active", fake_active)
+
+    # Serve a local file path to the router by faking _materialize_source.
+    with tempfile.TemporaryDirectory() as d:
+        vid = os.path.join(d, "v.mp4")
+        _make_tiny_video(vid)
+
+        import routers.video as video_mod
+        async def fake_fetch(http, url):
+            return vid
+        monkeypatch.setattr(video_mod, "_materialize_source", fake_fetch)
+
+        # Use context manager so lifespan runs and app.state.http_client is set.
+        with TestClient(toolgate_app.app) as client:
+            r = client.post("/summarize-video", json={"video_url": "http://localhost/api/uploads/x", "language": "ru"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["transcript"] == "привет это тест"
+        assert len(body["frames"]) >= 1
+        assert body["frames"][0]["description"] == "кадр: синий экран"
+        assert body["degraded"] == {"stt": False, "vision": False}

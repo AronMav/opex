@@ -183,7 +183,7 @@ async def log_requests(request: Request, call_next):
 
 
 # Mount routers
-from routers import stt, vision, tts, imagegen, embedding, documents, fetch, search
+from routers import stt, vision, tts, imagegen, embedding, documents, fetch, search, video
 from primitives import imap, smtp, google_calendar, bcs
 app.include_router(stt.router)
 app.include_router(vision.router)
@@ -193,6 +193,7 @@ app.include_router(embedding.router)
 app.include_router(documents.router)
 app.include_router(fetch.router)
 app.include_router(search.router)
+app.include_router(video.router)
 app.include_router(imap.router)
 app.include_router(smtp.router)
 app.include_router(google_calendar.router)
