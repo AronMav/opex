@@ -198,6 +198,8 @@ pub async fn enrich_message_text(
     toolgate_url: &str,
     agent_language: &str,
     db: &sqlx::PgPool,
+    session_id: uuid::Uuid,
+    agent_name: &str,
     user_text: &str,
     attachments: &[opex_types::MediaAttachment],
 ) -> EnrichResult {
@@ -234,6 +236,8 @@ pub async fn enrich_message_text(
             toolgate_url,
             agent_language,
             db,
+            session_id,
+            agent_name,
             &mut enriched,
             attachments,
         )
@@ -887,6 +891,8 @@ mod tests {
             "http://localhost:9011", // unreachable toolgate → built-in extract fails or save runs
             "ru",
             &pool,
+            uuid::Uuid::new_v4(),
+            "TestAgent",
             "see attached",
             &[att],
         )
