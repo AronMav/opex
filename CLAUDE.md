@@ -58,6 +58,20 @@ make deploy-binary-server      # build x86_64 + scp + restart on SERVER_HOST (ma
 
 **Why zigbuild for legacy path:** no OpenSSL anywhere — `reqwest` uses `rustls-tls` only. All crates in `Cargo.toml` use `rustls-tls` feature flags. Never add OpenSSL dependencies.
 
+### LSP servers (host)
+
+The `lsp` tool provides agents IDE-grade intelligence (diagnostics, definition, references, hover, symbols, rename) on Python projects in the workspace. v1 supports Python (pyright) only; TypeScript and Rust are planned for v2.
+
+Language servers run as **host subprocesses** (not sandboxed), so the deploy server must have **Node.js + pyright** installed:
+
+```bash
+apt install -y nodejs npm
+npm i -g pyright
+pyright-langserver --version  # verify install
+```
+
+The tool is **gated by `[lsp] enabled = true` in `config/opex.toml`** (default off). If pyright is not on PATH, the tool returns a clear error and is otherwise inert.
+
 ## Release
 
 ```bash
