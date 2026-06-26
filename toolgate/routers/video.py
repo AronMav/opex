@@ -3,6 +3,7 @@ Returns RAW MATERIAL (transcript + frame descriptions); the final LLM digest is
 built in opex-core, not here (toolgate has no text-LLM)."""
 
 import asyncio
+import base64
 import logging
 import os
 import tempfile
@@ -26,12 +27,14 @@ router = APIRouter(tags=["video"])
 SCENE_THRESHOLD = float(os.environ.get("VIDEO_SCENE_THRESHOLD", "0.4"))
 FRAME_CEILING = int(os.environ.get("VIDEO_FRAME_CEILING", "200"))
 FRAME_VISION_CONCURRENCY = 4
+VIDEO_NOTE_MAX_FRAMES = int(os.environ.get("VIDEO_NOTE_MAX_FRAMES", "24"))
 
 
 class SummarizeVideoRequest(BaseModel):
     video_url: str | None = None   # localhost upload URL (file source)
     page_url: str | None = None    # link for yt-dlp (url source)
     language: str = "ru"
+    title: str | None = None
 
 
 async def _materialize_source(http, url: str, work_dir: str) -> str:
@@ -109,6 +112,11 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
             frames = []
             log.warning("scene extract failed (continuing transcript-only): %s", e)
 
+        # Down-select to note frame cap BEFORE describing (saves Vision calls).
+        if len(frames) > VIDEO_NOTE_MAX_FRAMES:
+            step = len(frames) / VIDEO_NOTE_MAX_FRAMES
+            frames = [frames[int(i * step)] for i in range(VIDEO_NOTE_MAX_FRAMES)]
+
         vision = await registry.aget_active("vision")
         if vision is None and frames:
             degraded["vision"] = True
@@ -119,15 +127,16 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
 
             async def describe(ts: float, jpeg: bytes):
                 async with sem:
+                    b64 = base64.b64encode(jpeg).decode("ascii")
                     try:
                         desc = await vision.describe(http, jpeg, "image/jpeg", prompt)
-                        return {"timestamp": ts, "description": desc}
+                        return {"timestamp": ts, "description": desc, "image_b64": b64}
                     except Exception as e:
                         log.warning("frame describe failed at %.1fs: %s", ts, e)
-                        return None
+                        return {"timestamp": ts, "description": "", "image_b64": b64}
 
             results = await asyncio.gather(*(describe(ts, j) for ts, j in frames))
-            frames_out = [r for r in results if r is not None]
+            frames_out = list(results)
 
         # Probe duration (best-effort, non-fatal).
         duration = 0.0
@@ -141,7 +150,20 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
         except Exception:
             pass
 
+        # Resolve title: use explicit body.title; for page_url probe yt-dlp.
+        resolved_title = body.title or ""
+        if not resolved_title and body.page_url:
+            try:
+                code, out, _ = await _run(
+                    "yt-dlp", "--print", "%(title)s", "--skip-download", body.page_url,
+                )
+                if code == 0:
+                    resolved_title = out.decode(errors="ignore").strip()
+            except Exception:
+                pass
+
         return {
+            "title": resolved_title,
             "duration": duration,
             "transcript": transcript,
             "frames": frames_out,
