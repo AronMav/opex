@@ -4,7 +4,7 @@ import React, { useState, useCallback, useRef, useEffect, useMemo } from "react"
 import { cn } from "@/lib/utils";
 import { assertToken } from "@/lib/api";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
-import { uuid } from "@/stores/chat-types";
+import { uuid, getLiveMessages, type MessageSource } from "@/stores/chat-types";
 import { useTranslation } from "@/hooks/use-translation";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,19 @@ export function clearDraft(agent: string) {
 // ── Composer ──────────────────────────────────────────────────────────────────
 
 const EMPTY_MESSAGE_SOURCE = { mode: "new-chat" as const };
+
+/** Text of the most recent assistant message — used to speak voice replies. */
+function lastAssistantSpokenText(source: MessageSource): string {
+  const msgs = getLiveMessages(source);
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== "assistant") continue;
+    let txt = "";
+    for (const p of m.parts) if (p.type === "text") txt += (txt ? "\n" : "") + p.text;
+    return txt.trim();
+  }
+  return "";
+}
 
 interface AttachmentEntry {
   id: string;
@@ -87,6 +100,13 @@ export function ChatComposer() {
   }, [continuous]);
   const emptyCountRef = useRef(0);
 
+  // Voice reply: speak the agent's answer aloud when the turn was sent by voice.
+  const voiceReplyPendingRef = useRef(false);
+  const ttsPlayingRef = useRef(false);
+  const [ttsPlaying, setTtsPlaying] = useState(false);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsUrlRef = useRef<string | null>(null);
+
   const insertTranscript = useCallback((text: string) => {
     const ta = textareaRef.current;
     if (!ta || !text) return;
@@ -105,6 +125,7 @@ export function ChatComposer() {
       if (text) {
         emptyCountRef.current = 0;
         insertTranscript(text);
+        voiceReplyPendingRef.current = true;
         formRef.current?.requestSubmit();
       } else if (continuousRef.current) {
         // Empty cycle (no speech). Stop hands-free after 3 in a row.
@@ -120,16 +141,72 @@ export function ChatComposer() {
 
   const voice = useVoiceRecorder({ vad: true, onAutoResult: handleAutoResult });
 
-  // Continuous loop: re-arm recording once a turn finishes (idle + not streaming).
+  // ── Voice reply: speak the agent's answer (TTS playback) ──────────────────
+  const stopTts = useCallback(() => {
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
+    if (ttsUrlRef.current) {
+      URL.revokeObjectURL(ttsUrlRef.current);
+      ttsUrlRef.current = null;
+    }
+    ttsPlayingRef.current = false;
+    setTtsPlaying(false);
+  }, []);
+  useEffect(() => () => stopTts(), [stopTts]);
+
+  const playReply = useCallback(
+    async (text: string) => {
+      try {
+        const resp = await fetch("/api/tts/synthesize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${assertToken()}` },
+          body: JSON.stringify({ text }),
+        });
+        if (!resp.ok) throw new Error(`TTS ${resp.status}`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        ttsUrlRef.current = url;
+        const audio = new Audio(url);
+        ttsAudioRef.current = audio;
+        audio.addEventListener("ended", stopTts);
+        audio.addEventListener("error", stopTts);
+        await audio.play();
+      } catch {
+        stopTts();
+      }
+    },
+    [stopTts],
+  );
+
+  // When a voice-initiated turn finishes streaming, speak the agent's reply.
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    const was = prevStreamingRef.current;
+    prevStreamingRef.current = isStreaming;
+    if (was && !isStreaming && voiceReplyPendingRef.current) {
+      voiceReplyPendingRef.current = false;
+      const text = lastAssistantSpokenText(messageSource);
+      if (text) {
+        ttsPlayingRef.current = true; // synchronous guard so continuous re-arm waits
+        setTtsPlaying(true);
+        void playReply(text);
+      }
+    }
+  }, [isStreaming, messageSource, playReply]);
+
+  // Continuous loop: re-arm recording once a turn finishes (idle, not streaming,
+  // and not while the spoken reply is still playing — avoids recording the TTS).
   const voiceStartRef = useRef(voice.start);
   useEffect(() => {
     voiceStartRef.current = voice.start;
   });
   useEffect(() => {
-    if (continuous && voice.state === "idle" && !isStreaming) {
+    if (continuous && voice.state === "idle" && !isStreaming && !ttsPlayingRef.current) {
       void voiceStartRef.current();
     }
-  }, [continuous, voice.state, isStreaming]);
+  }, [continuous, voice.state, isStreaming, ttsPlaying]);
 
   // Focus textarea on desktop only (avoid opening mobile keyboard on page load)
   useEffect(() => {
@@ -358,6 +435,7 @@ export function ChatComposer() {
       const text = await voice.stop();
       if (text) {
         insertTranscript(text);
+        voiceReplyPendingRef.current = true;
         formRef.current?.requestSubmit();
       }
     } else if (voice.state === "idle") {
