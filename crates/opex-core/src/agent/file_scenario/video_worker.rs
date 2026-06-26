@@ -61,7 +61,8 @@ pub async fn process_one(
         .context("deserialise toolgate /summarize-video response")?;
 
     // ── 2. Build digest messages and call provider ────────────────────────────
-    let messages = build_summary_messages(&raw);
+    // frame_names are populated by the note builder (Task 6); pass empty for legacy path.
+    let messages = build_summary_messages(&raw, &[]);
     let opts = CallOptions {
         thinking_level: 0,
         claude_md_content: None,
