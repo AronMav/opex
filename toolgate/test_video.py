@@ -114,6 +114,31 @@ async def test_materialize_source_video_url_rejects_non_loopback():
                 await _materialize_source(None, bad_url, d)
 
 
+def test_summarize_video_returns_images_and_title(monkeypatch):
+    import app as toolgate_app
+    monkeypatch.setattr(toolgate_app, "AUTH_TOKEN", "")
+    async def fake_active(cap):
+        return _FakeSTT() if cap == "stt" else _FakeVision()
+    monkeypatch.setattr(toolgate_app.registry, "aget_active", fake_active)
+    with tempfile.TemporaryDirectory() as d:
+        vid = os.path.join(d, "v.mp4")
+        _make_tiny_video(vid)
+        import routers.video as video_mod
+        async def fake_fetch(http, url, work_dir):
+            return vid
+        monkeypatch.setattr(video_mod, "_materialize_source", fake_fetch)
+        with TestClient(toolgate_app.app) as client:
+            r = client.post("/summarize-video", json={"video_url": "http://localhost/api/uploads/x", "language": "ru", "title": "Тест"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["title"] == "Тест"
+        assert len(body["frames"]) >= 1
+        import base64
+        jpeg = base64.b64decode(body["frames"][0]["image_b64"])
+        assert jpeg[:2] == b"\xff\xd8", "frame image is JPEG"
+        assert len(body["frames"]) <= 24, "note frame cap"
+
+
 @pytest.mark.asyncio
 async def test_materialize_source_video_url_accepts_loopback():
     """video_url with a localhost URL is accepted and the bytes are written to disk.
