@@ -120,8 +120,8 @@ mod tests {
     }
 
     #[test]
-    fn allowlist_contains_exactly_the_four_builtins() {
-        assert_eq!(FSE_DEFAULT_ALLOWLIST, &["transcribe", "describe", "extract_document", "save"]);
+    fn allowlist_contains_exactly_the_five_builtins() {
+        assert_eq!(FSE_DEFAULT_ALLOWLIST, &["transcribe", "describe", "extract_document", "save", "summarize_video"]);
         assert!(FSE_DEFAULT_ALLOWLIST.contains(&"transcribe"));
         assert!(!FSE_DEFAULT_ALLOWLIST.contains(&"code_exec"), "code_exec must never be allowlisted");
     }

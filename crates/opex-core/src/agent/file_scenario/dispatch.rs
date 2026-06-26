@@ -41,6 +41,10 @@ pub async fn dispatch_action(input: DispatchInput<'_>) -> ScenarioOutcome {
         BuiltinAction::Transcribe => run_transcribe(&input).await,
         BuiltinAction::Describe => run_describe(&input).await,
         BuiltinAction::ExtractDocument => run_extract_document(&input).await,
+        // TEMPORARY placeholder for Task 4: the real implementation is wired in Task 5.
+        BuiltinAction::SummarizeVideo => ScenarioOutcome::unsupported(
+            "summarize_video enqueue is wired in Task 5".into(),
+        ),
     }
 }
 
@@ -227,6 +231,7 @@ pub enum BuiltinAction {
     Describe,
     ExtractDocument,
     Save,
+    SummarizeVideo,
 }
 
 /// Fail-closed resolution of an `action_ref` to a built-in. Returns `None` for
@@ -238,6 +243,7 @@ pub fn resolve(action_ref: &str) -> Option<BuiltinAction> {
         "describe" => Some(BuiltinAction::Describe),
         "extract_document" => Some(BuiltinAction::ExtractDocument),
         "save" => Some(BuiltinAction::Save),
+        "summarize_video" => Some(BuiltinAction::SummarizeVideo),
         _ => None,
     }
 }
@@ -385,6 +391,11 @@ mod tests {
         for name in crate::agent::file_scenario::outcome::FSE_DEFAULT_ALLOWLIST {
             assert!(resolve(name).is_some(), "allowlist member {name} must resolve to a builtin");
         }
+    }
+
+    #[test]
+    fn resolve_summarize_video() {
+        assert_eq!(resolve("summarize_video"), Some(BuiltinAction::SummarizeVideo));
     }
 
     #[tokio::test]

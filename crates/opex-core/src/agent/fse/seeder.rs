@@ -61,6 +61,14 @@ pub(crate) fn default_seed_rows() -> Vec<SeedRow> {
             is_default: true,
             priority: 100,
         },
+        SeedRow {
+            match_type: "video/*",
+            action_ref: "summarize_video",
+            label: "Сводка видео",
+            executor: "tool",
+            is_default: true,
+            priority: 100,
+        },
     ]
 }
 
@@ -109,8 +117,8 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn seeds_three_defaults_on_fresh_db(pool: sqlx::PgPool) {
         let inserted = seed_default_file_scenarios(&pool).await.unwrap();
-        assert_eq!(inserted, 3);
-        assert_eq!(count(&pool).await, 3);
+        assert_eq!(inserted, 4);
+        assert_eq!(count(&pool).await, 4);
 
         // exactly one default per seeded match_type, all executor='tool'
         let defaults: i64 = sqlx::query_scalar(
@@ -119,10 +127,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(defaults, 3);
+        assert_eq!(defaults, 4);
 
         // the seeded match_types are present
-        for mt in ["audio/*", "image/*", "application/pdf"] {
+        for mt in ["audio/*", "image/*", "application/pdf", "video/*"] {
             let n: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM file_scenarios WHERE match_type = $1 AND is_default",
             )
@@ -136,10 +144,10 @@ mod tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn is_idempotent_on_reseed(pool: sqlx::PgPool) {
-        assert_eq!(seed_default_file_scenarios(&pool).await.unwrap(), 3);
-        // second run inserts nothing, does not error, leaves 3 rows
+        assert_eq!(seed_default_file_scenarios(&pool).await.unwrap(), 4);
+        // second run inserts nothing, does not error, leaves 4 rows
         assert_eq!(seed_default_file_scenarios(&pool).await.unwrap(), 0);
-        assert_eq!(count(&pool).await, 3);
+        assert_eq!(count(&pool).await, 4);
     }
 }
 
@@ -192,6 +200,15 @@ mod reconcile_tests {
         assert!(
             types.iter().any(|t| t.contains("pdf") || *t == "application/pdf"),
             "application/pdf default is missing from seed",
+        );
+    }
+
+    #[test]
+    fn seed_includes_video_default() {
+        let rows = default_seed_rows();
+        assert!(
+            rows.iter().any(|r| r.match_type == "video/*" && r.action_ref == "summarize_video"),
+            "video/* → summarize_video default must be seeded",
         );
     }
 }

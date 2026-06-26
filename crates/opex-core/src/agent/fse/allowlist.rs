@@ -10,11 +10,11 @@
 
 use std::fmt;
 
-/// The four built-in deterministic action names. `save` is the rowless
+/// The five built-in deterministic action names. `save` is the rowless
 /// universal fallback; it is listed here so dispatch + validation share one
 /// closed set (design §4.2, §4.6).
 #[allow(dead_code)] // Phase 5+: consumed by binding-write validator and HTTP route handlers
-pub const FSE_DEFAULT_ALLOWLIST: &[&str] = &["transcribe", "describe", "extract_document", "save"];
+pub const FSE_DEFAULT_ALLOWLIST: &[&str] = &["transcribe", "describe", "extract_document", "save", "summarize_video"];
 
 /// Reasons a binding write or allowlist amend is rejected.
 #[allow(dead_code)] // Phase 5+: returned by validators, matched in HTTP handlers
@@ -117,8 +117,8 @@ mod tests {
     }
 
     #[test]
-    fn constant_holds_exactly_the_four_builtins() {
-        assert_eq!(FSE_DEFAULT_ALLOWLIST, &["transcribe", "describe", "extract_document", "save"]);
+    fn constant_holds_exactly_the_five_builtins() {
+        assert_eq!(FSE_DEFAULT_ALLOWLIST, &["transcribe", "describe", "extract_document", "save", "summarize_video"]);
     }
 
     #[test]
@@ -166,5 +166,10 @@ mod tests {
         // An empty allowlist is valid: it means the operator has disabled all
         // auto-run; no unknown members to reject.
         assert!(validate_allowlist_toggle(&[]).is_ok());
+    }
+
+    #[test]
+    fn allowlist_contains_summarize_video() {
+        assert!(FSE_DEFAULT_ALLOWLIST.contains(&"summarize_video"));
     }
 }
