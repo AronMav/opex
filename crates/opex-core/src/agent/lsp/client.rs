@@ -325,77 +325,148 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// Minimal mock LSP server exercising:
-    /// - `initialize` request/response
-    /// - A server→client `workspace/configuration` request (client must reply)
-    /// - A `textDocument/publishDiagnostics` notification
-    /// - Any other request → echo params
-    async fn mock_server(mut r: tokio::io::DuplexStream, mut w: tokio::io::DuplexStream) {
-        let mut buf = Vec::new();
+    /// Read one complete LSP frame from `r` into `buf`, returning the decoded JSON.
+    async fn read_one_msg(
+        r: &mut tokio::io::DuplexStream,
+        buf: &mut Vec<u8>,
+    ) -> Option<serde_json::Value> {
         let mut tmp = [0u8; 4096];
-        let mut sent_extra = false;
-
         loop {
-            let n = match r.read(&mut tmp).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => n,
-            };
-            buf.extend_from_slice(&tmp[..n]);
-
-            while let Some(msg) = framing::try_decode(&mut buf) {
-                let v: serde_json::Value = serde_json::from_str(&msg).unwrap();
-                let method = v["method"].as_str().unwrap_or("");
-
-                if let Some(id) = v.get("id").and_then(|x| x.as_i64()) {
-                    // Client reply to our server-request has id+result and no method.
-                    if v.get("result").is_some() && method.is_empty() {
-                        continue;
-                    }
-
-                    let result = if method == "initialize" {
-                        json!({"capabilities": {}})
-                    } else {
-                        json!({"echo": v["params"]})
-                    };
-
-                    let _ = w
-                        .write_all(&framing::encode_message(
-                            &json!({"jsonrpc":"2.0","id":id,"result":result}).to_string(),
-                        ))
-                        .await;
-
-                    if method == "initialize" && !sent_extra {
-                        sent_extra = true;
-                        // server→client REQUEST: client must reply or it'd hang
-                        let _ = w
-                            .write_all(&framing::encode_message(
-                                &json!({
-                                    "jsonrpc": "2.0",
-                                    "id": 999,
-                                    "method": "workspace/configuration",
-                                    "params": {"items": [{}]}
-                                })
-                                .to_string(),
-                            ))
-                            .await;
-                        // diagnostics notification
-                        let _ = w
-                            .write_all(&framing::encode_message(
-                                &json!({
-                                    "jsonrpc": "2.0",
-                                    "method": "textDocument/publishDiagnostics",
-                                    "params": {
-                                        "uri": "file:///x",
-                                        "diagnostics": [{"message": "boom"}]
-                                    }
-                                })
-                                .to_string(),
-                            ))
-                            .await;
-                    }
-                }
+            if let Some(msg) = framing::try_decode(buf) {
+                return serde_json::from_str(&msg).ok();
+            }
+            match r.read(&mut tmp).await {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
             }
         }
+    }
+
+    /// Minimal mock LSP server that exercises the client's server-request reply
+    /// path with **causal ordering**: the echo response is only sent *after* the
+    /// mock has received and validated the client's reply to `workspace/configuration`.
+    ///
+    /// Protocol (sequential):
+    /// 1. Receive `initialize` → reply with capabilities.
+    /// 2. Send `workspace/configuration` (id 999) + `publishDiagnostics`.
+    /// 3. Read the next client message and **assert** it is a response with
+    ///    `id == 999` and `result == [null]`.
+    /// 4. Receive `custom/echo` → reply only now (echo result).
+    ///
+    /// Because the echo reply is gated behind step 3, if the client fails to
+    /// send a correct config reply the `client.request("custom/echo", …)` call
+    /// will time out and the test will fail.
+    async fn mock_server(mut r: tokio::io::DuplexStream, mut w: tokio::io::DuplexStream) {
+        let mut buf = Vec::new();
+
+        // ── Step 1: receive initialize ────────────────────────────────────────
+        let init_msg = read_one_msg(&mut r, &mut buf).await.unwrap();
+        assert_eq!(init_msg["method"], "initialize");
+        let init_id = init_msg["id"].as_i64().unwrap();
+
+        let _ = w
+            .write_all(&framing::encode_message(
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": init_id,
+                    "result": {"capabilities": {}}
+                })
+                .to_string(),
+            ))
+            .await;
+
+        // ── Step 2: fire server→client workspace/configuration + diagnostics ──
+        // Send both back-to-back before reading the client's reply.
+        let _ = w
+            .write_all(&framing::encode_message(
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 999,
+                    "method": "workspace/configuration",
+                    "params": {"items": [{}]}
+                })
+                .to_string(),
+            ))
+            .await;
+        let _ = w
+            .write_all(&framing::encode_message(
+                &json!({
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": {
+                        "uri": "file:///x",
+                        "diagnostics": [{"message": "boom"}]
+                    }
+                })
+                .to_string(),
+            ))
+            .await;
+
+        // ── Steps 3 & 4: drain until we see the config reply ──────────────────
+        // The client sends `initialized` (notification) at some point after
+        // the init response is processed.  The read-loop's reply to
+        // `workspace/configuration` may race with that notification.  We accept
+        // them in either order, asserting on the config reply when we find it.
+        //
+        // This is the key assertion: the reply MUST be a Response with id==999
+        // and result==[null].  If the client never sends it, read_one_msg
+        // blocks until the duplex channel closes (echo reply never arrives →
+        // client times out → test fails).
+        let mut saw_config_reply = false;
+        for _ in 0..3 {
+            let msg = match read_one_msg(&mut r, &mut buf).await {
+                Some(m) => m,
+                None => break,
+            };
+            // `initialized` notification: no id, has method field — skip.
+            if msg.get("id").is_none() {
+                // notification — skip
+                continue;
+            }
+            // A message with no "method" field is a Response.
+            if msg.get("method").is_none() {
+                assert_eq!(
+                    msg["id"], 999,
+                    "config reply id mismatch: {msg}"
+                );
+                assert_eq!(
+                    msg["result"],
+                    json!([null]),
+                    "config reply result mismatch: {msg}"
+                );
+                saw_config_reply = true;
+                break;
+            }
+            // Unexpected request — stop.
+            panic!("unexpected server-bound request before config reply: {msg}");
+        }
+        assert!(saw_config_reply, "client never sent a reply to workspace/configuration");
+
+        // ── Step 5: receive custom/echo → reply ───────────────────────────────
+        // Only reached after a correct config reply is validated above.
+        // Skip any stray notifications (e.g. `initialized`) that race here.
+        let echo_msg = loop {
+            let msg = read_one_msg(&mut r, &mut buf)
+                .await
+                .expect("connection closed before custom/echo");
+            if msg.get("id").is_none() {
+                // notification — skip
+                continue;
+            }
+            break msg;
+        };
+        assert_eq!(echo_msg["method"], "custom/echo");
+        let echo_id = echo_msg["id"].as_i64().unwrap();
+        let _ = w
+            .write_all(&framing::encode_message(
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": echo_id,
+                    "result": {"echo": echo_msg["params"]}
+                })
+                .to_string(),
+            ))
+            .await;
     }
 
     #[tokio::test]
