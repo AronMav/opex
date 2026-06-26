@@ -152,10 +152,12 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
 
         # Resolve title: use explicit body.title; for page_url probe yt-dlp.
         resolved_title = body.title or ""
-        if not resolved_title and body.page_url:
+        # http/https scheme check (rejects '-'-prefixed flag-smuggling + file:/ftp:)
+        # and '--' terminates yt-dlp option parsing so the URL can't be read as a flag.
+        if not resolved_title and body.page_url and body.page_url.startswith(("http://", "https://")):
             try:
                 code, out, _ = await _run(
-                    "yt-dlp", "--print", "%(title)s", "--skip-download", body.page_url,
+                    "yt-dlp", "--print", "%(title)s", "--skip-download", "--", body.page_url,
                 )
                 if code == 0:
                     resolved_title = out.decode(errors="ignore").strip()
