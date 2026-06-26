@@ -86,6 +86,16 @@ impl SystemToolHandler for WorkspaceRenameHandler {
     }
 }
 
+pub struct ApplyPatchHandler;
+
+#[async_trait]
+impl SystemToolHandler for ApplyPatchHandler {
+    async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
+        maybe_checkpoint(&deps.cfg.checkpoint_manager, deps.agent_name, deps.workspace_dir).await;
+        ph::handle_apply_patch(deps.workspace_dir, deps.agent_name, deps.agent_base, args).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

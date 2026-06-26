@@ -175,6 +175,36 @@ pub async fn handle_workspace_edit(
     }
 }
 
+/// Internal tool: apply a V4A patch (Update + Add, multi-file, atomic).
+/// Returns a text summary of what changed (plus any code-smell warnings).
+pub async fn handle_apply_patch(
+    workspace_dir: &str,
+    agent_name: &str,
+    is_base: bool,
+    args: &serde_json::Value,
+) -> String {
+    let patch = args.get("patch").and_then(|v| v.as_str()).unwrap_or("");
+    if patch.trim().is_empty() {
+        return "Error: 'patch' is required (a '*** Begin Patch' … '*** End Patch' envelope)"
+            .to_string();
+    }
+
+    match workspace::apply_v4a_patch(workspace_dir, agent_name, patch, is_base).await {
+        Ok(o) => {
+            let mut parts: Vec<String> = Vec::new();
+            if !o.updated.is_empty() {
+                parts.push(format!("updated {} ({})", o.updated.len(), o.updated.join(", ")));
+            }
+            if !o.added.is_empty() {
+                parts.push(format!("added {} ({})", o.added.len(), o.added.join(", ")));
+            }
+            let summary = if parts.is_empty() { "no changes".to_string() } else { parts.join("; ") };
+            format!("Patch applied: {} [{} hunks].{}", summary, o.hunks, o.warnings)
+        }
+        Err(e) => format!("Error applying patch: {e}"),
+    }
+}
+
 /// Internal tool: delete a workspace file.
 pub async fn handle_workspace_delete(
     workspace_dir: &str,
