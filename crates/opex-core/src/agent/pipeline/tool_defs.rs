@@ -179,6 +179,37 @@ pub fn build_internal_tool_definitions(ctx: &ToolDefsContext<'_>) -> Vec<ToolDef
             }),
         },
         ToolDefinition {
+            name: "lsp".to_string(),
+            description: "IDE intelligence for the agent's Python project files via an in-process language-server pool (Pyright).\n\nActions:\n• diagnostics — report type errors and warnings in `file` (no cursor needed)\n• definition  — go to definition of the symbol at `file:line:character`\n• references  — find all references to the symbol at `file:line:character`\n• hover       — show type/doc hover for the symbol at `file:line:character`\n• symbols     — list all top-level symbols (classes, functions, variables) in `file`\n• rename      — rename the symbol at `file:line:character` to `new_name`; applies the resulting WorkspaceEdit to all affected files atomically and returns a summary\n\nPositions are 0-based (LSP convention). `file` is a workspace-relative path (e.g. `myproject/app.py`).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["diagnostics", "definition", "references", "hover", "symbols", "rename"],
+                        "description": "LSP operation to perform."
+                    },
+                    "file": {
+                        "type": "string",
+                        "description": "Workspace-relative path to the source file (e.g. 'myproject/main.py')."
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "0-based line number. Required for definition, references, hover, rename."
+                    },
+                    "character": {
+                        "type": "integer",
+                        "description": "0-based byte offset within the line (utf-8). Required for definition, references, hover, rename."
+                    },
+                    "new_name": {
+                        "type": "string",
+                        "description": "Replacement identifier. Required for rename."
+                    }
+                },
+                "required": ["action", "file"]
+            }),
+        },
+        ToolDefinition {
             name: "workspace_delete".to_string(),
             description: "Delete a file or directory from your workspace. Core identity files (SOUL.md, IDENTITY.md, MEMORY.md, HEARTBEAT.md) are protected and cannot be deleted.".to_string(),
             input_schema: serde_json::json!({
