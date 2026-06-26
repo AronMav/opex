@@ -155,6 +155,7 @@ async fn regression_first_voice_transcribed() {
         language: "en",
         http_client: &client,
         timeout: std::time::Duration::from_secs(10),
+        enqueue: None,
     })
     .await;
 
@@ -243,6 +244,7 @@ async fn regression_document_auto_extracted() {
         language: "en",
         http_client: &client,
         timeout: std::time::Duration::from_secs(10),
+        enqueue: None,
     })
     .await;
 
@@ -325,6 +327,7 @@ async fn regression_first_photo_described() {
         language: "en",
         http_client: &client,
         timeout: std::time::Duration::from_secs(10),
+        enqueue: None,
     })
     .await;
 

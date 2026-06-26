@@ -145,6 +145,7 @@ pub(crate) async fn run_scenario_and_persist(
             language: agent_language,
             http_client,
             timeout: BUILTIN_TIMEOUT,
+            enqueue: None,
         })
         .await
     } else {

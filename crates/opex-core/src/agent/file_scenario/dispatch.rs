@@ -9,6 +9,15 @@
 use crate::agent::file_scenario::outcome::{status_from_http, ScenarioOutcome};
 use crate::agent::url_tools::uploads_local_url;
 
+/// Context the async `summarize_video` built-in needs to enqueue a durable job.
+/// Other built-ins ignore it (they pass `None`).
+pub struct EnqueueCtx<'a> {
+    pub db: &'a sqlx::PgPool,
+    pub session_id: uuid::Uuid,
+    pub agent_name: &'a str,
+    pub source_type: &'a str, // "file" | "url"
+}
+
 /// Everything one built-in handler needs. Borrowed (no ownership) — the
 /// dispatcher is called synchronously pre-LLM. `timeout` is the core-enforced
 /// per-execution ceiling that maps to `ScenarioStatus::Timeout`.
@@ -20,6 +29,7 @@ pub struct DispatchInput<'a> {
     pub language: &'a str,
     pub http_client: &'a reqwest::Client,
     pub timeout: std::time::Duration,
+    pub enqueue: Option<EnqueueCtx<'a>>,
 }
 
 /// Resolve `action_ref` against the in-core table and run the matching built-in,
@@ -41,10 +51,7 @@ pub async fn dispatch_action(input: DispatchInput<'_>) -> ScenarioOutcome {
         BuiltinAction::Transcribe => run_transcribe(&input).await,
         BuiltinAction::Describe => run_describe(&input).await,
         BuiltinAction::ExtractDocument => run_extract_document(&input).await,
-        // TEMPORARY placeholder for Task 4: the real implementation is wired in Task 5.
-        BuiltinAction::SummarizeVideo => ScenarioOutcome::unsupported(
-            "summarize_video enqueue is wired in Task 5".into(),
-        ),
+        BuiltinAction::SummarizeVideo => run_summarize_video(&input).await,
     }
 }
 
@@ -223,6 +230,34 @@ async fn run_extract_document(input: &DispatchInput<'_>) -> ScenarioOutcome {
     }
 }
 
+/// Async built-in: enqueue a durable video_jobs row and return an instant ack.
+/// The heavy pipeline runs out-of-band in the in-core video worker.
+async fn run_summarize_video(input: &DispatchInput<'_>) -> ScenarioOutcome {
+    let ctx = match &input.enqueue {
+        Some(c) => c,
+        None => {
+            return ScenarioOutcome::unsupported(
+                "summarize_video requires enqueue context (session/agent)".into(),
+            )
+        }
+    };
+    match opex_db::video_jobs::enqueue_video_job(
+        ctx.db,
+        ctx.session_id,
+        ctx.agent_name,
+        ctx.source_type,
+        &input.attachment.url,
+    )
+    .await
+    {
+        Ok(_id) => ScenarioOutcome::ok(
+            "🎬 видео принято, готовлю сводку — пришлю, когда будет готова.".into(),
+            vec![input.attachment.url.clone()],
+        ),
+        Err(e) => ScenarioOutcome::failed(format!("could not enqueue video job: {e}")),
+    }
+}
+
 /// The built-in deterministic action names that the dispatch table resolves.
 /// 1:1 with [`crate::agent::file_scenario::outcome::FSE_DEFAULT_ALLOWLIST`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +310,7 @@ mod tests {
             language: "ru",
             http_client: client,
             timeout: Duration::from_secs(10),
+            enqueue: None,
         }
     }
 
@@ -396,6 +432,42 @@ mod tests {
     #[test]
     fn resolve_summarize_video() {
         assert_eq!(resolve("summarize_video"), Some(BuiltinAction::SummarizeVideo));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn summarize_video_enqueues_and_acks(pool: sqlx::PgPool) {
+        use opex_types::{MediaAttachment, MediaType};
+        let sid = uuid::Uuid::new_v4();
+        let att = MediaAttachment {
+            url: "https://h/api/uploads/v1?sig=x".into(),
+            media_type: MediaType::Video,
+            file_name: Some("clip.mp4".into()),
+            mime_type: Some("video/mp4".into()),
+            file_size: None,
+        };
+        let client = reqwest::Client::new();
+        let input = DispatchInput {
+            action_ref: "summarize_video",
+            attachment: &att,
+            toolgate_url: "http://localhost:9011",
+            gateway_listen: "0.0.0.0:18789",
+            language: "ru",
+            http_client: &client,
+            timeout: std::time::Duration::from_secs(60),
+            enqueue: Some(EnqueueCtx {
+                db: &pool,
+                session_id: sid,
+                agent_name: "Atlas",
+                source_type: "file",
+            }),
+        };
+        let out = dispatch_action(input).await;
+        assert_eq!(out.status, ScenarioStatus::Ok);
+        assert!(out.summary_text.contains("видео"), "ack mentions video: {}", out.summary_text);
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM video_jobs WHERE session_id=$1")
+            .bind(sid).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "one video_jobs row enqueued");
     }
 
     #[tokio::test]
