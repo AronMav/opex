@@ -71,7 +71,7 @@ def test_summarize_video_local_file(monkeypatch):
         _make_tiny_video(vid)
 
         import routers.video as video_mod
-        async def fake_fetch(http, url):
+        async def fake_fetch(http, url, work_dir):
             return vid
         monkeypatch.setattr(video_mod, "_materialize_source", fake_fetch)
 

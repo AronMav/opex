@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from helpers import download_limited
-from video_helpers import extract_audio, extract_scene_frames, download_video
+from video_helpers import extract_audio, extract_scene_frames, download_video, _run
 
 log = logging.getLogger("toolgate.video")
 
@@ -31,20 +31,19 @@ class SummarizeVideoRequest(BaseModel):
     language: str = "ru"
 
 
-async def _materialize_source(http, url: str) -> str:
+async def _materialize_source(http, url: str, work_dir: str) -> str:
     """Return a local video file path. Download from upload URL or via yt-dlp.
 
-    NOTE: signature is (http, url) — a plain string. The router resolves the
-    URL from the request body and passes it here, keeping this function simple
-    to test/monkeypatch. yt-dlp URLs are identified by the `page_url` sentinel
-    prefix stored as `yt-dlp::` in the URL string.
+    NOTE: signature is (http, url, work_dir) — the caller provides the scratch
+    directory. The router resolves the URL from the request body and passes it
+    here, keeping this function simple to test/monkeypatch. yt-dlp URLs are
+    identified by the `page_url` sentinel prefix stored as `yt-dlp::` in the
+    URL string.
     """
     if url.startswith("yt-dlp::"):
         real_url = url[len("yt-dlp::"):]
-        work_dir = tempfile.mkdtemp()
         return await download_video(real_url, work_dir)
     # Regular HTTP download (upload URL)
-    work_dir = tempfile.mkdtemp()
     data, _ = await download_limited(http, url, max_bytes=None)
     path = os.path.join(work_dir, "upload.mp4")
     with open(path, "wb") as f:
@@ -69,7 +68,7 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
 
     with tempfile.TemporaryDirectory() as work_dir:
         try:
-            video_path = await _materialize_source(http, source_url)
+            video_path = await _materialize_source(http, source_url, work_dir)
         except Exception as e:
             return JSONResponse(status_code=502, content={"error": f"source fetch failed: {e}"})
 
@@ -118,7 +117,6 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
         # Probe duration (best-effort, non-fatal).
         duration = 0.0
         try:
-            from video_helpers import _run
             code, out, _ = await _run(
                 "ffprobe", "-v", "error", "-show_entries", "format=duration",
                 "-of", "default=nw=1:nk=1", video_path,
