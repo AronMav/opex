@@ -53,7 +53,8 @@ pub fn slug(title: &str, fallback_id: &str) -> String {
     let cleaned: String = title
         .chars()
         .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => ' ',
+            // '#' stripped too — it breaks Obsidian `[[wikilink#section]]` parsing.
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '#' => ' ',
             c => c,
         })
         .collect();
@@ -159,7 +160,13 @@ pub fn extract_summary(note: &str) -> String {
         let body = after.split("\n## ").next().unwrap_or(after);
         return body.trim().to_string();
     }
-    note.split("\n\n").map(str::trim).find(|p| !p.is_empty()).unwrap_or("").to_string()
+    // No ## Резюме — skip a leading YAML frontmatter block, then first real paragraph.
+    let body = if note.starts_with("---") {
+        note.splitn(3, "---").nth(2).unwrap_or(note)
+    } else {
+        note
+    };
+    body.split("\n\n").map(str::trim).find(|p| !p.is_empty()).unwrap_or("").to_string()
 }
 
 #[cfg(test)]
@@ -171,6 +178,7 @@ mod tests {
     fn slug_keeps_cyrillic_strips_specials() {
         assert_eq!(slug("Лекция: Rust / async?", "id8"), "Лекция-Rust-async");
         assert_eq!(slug("   ", "ab12cd34"), "видео-ab12cd34");
+        assert_eq!(slug("Урок #5", "x"), "Урок-5", "'#' stripped (Obsidian wikilink-safe)");
     }
 
     #[test]
