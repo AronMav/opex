@@ -6,6 +6,7 @@ pub use opex_db::session_failures;
 pub use opex_db::session_timeline;
 pub use opex_db::sessions;
 pub use opex_db::usage;
+pub use opex_db::video_jobs;
 
 // ── Remaining modules (not extracted) ───────────────────────────────────
 pub mod access;
