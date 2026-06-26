@@ -96,6 +96,29 @@ impl SystemToolHandler for ApplyPatchHandler {
     }
 }
 
+pub struct LspHandler;
+
+#[async_trait]
+impl SystemToolHandler for LspHandler {
+    async fn handle(&self, deps: ToolDeps<'_>, args: &Value) -> String {
+        // Checkpoint before rename (the only mutating action); other actions are read-only
+        // but maybe_checkpoint is a no-op when there's nothing to snap — safe to call always.
+        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+        if action == "rename" {
+            maybe_checkpoint(&deps.cfg.checkpoint_manager, deps.agent_name, deps.workspace_dir)
+                .await;
+        }
+        ph::handle_lsp(
+            deps.cfg.lsp_manager.as_ref(),
+            deps.workspace_dir,
+            deps.agent_name,
+            deps.agent_base,
+            args,
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -40,6 +40,7 @@ impl SystemToolRegistry {
         r.register("workspace_delete", WorkspaceDeleteHandler);
         r.register("workspace_rename", WorkspaceRenameHandler);
         r.register("apply_patch",      ApplyPatchHandler);
+        r.register("lsp",              LspHandler);
         r.register("memory",           MemoryToolHandler);
         r.register("message",          MessageHandler);
         r.register("cron",             CronHandler);

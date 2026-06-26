@@ -1087,6 +1087,218 @@ pub async fn handle_tool_discover(
     out
 }
 
+// ── LSP handler ─────────────────────────────────────────────────
+
+/// Apply a list of LSP `TextEdit` objects to `original`.
+///
+/// Each edit carries a `range.start` / `range.end` of `{line, character}`.
+/// Because the LSP server negotiated utf-8 position encoding,
+/// `character` is a **byte** offset within the UTF-8 line, not a UTF-16
+/// code-unit count. This lets us map directly to byte positions in the
+/// Rust `String` without any re-encoding.
+///
+/// Edits are applied in **descending** start order so that earlier byte
+/// offsets remain valid while later ones are replaced first.
+pub fn apply_text_edits(original: &str, edits: &[serde_json::Value]) -> String {
+    // Build a table of line start byte-offsets.
+    let mut line_starts: Vec<usize> = vec![0];
+    for (i, b) in original.bytes().enumerate() {
+        if b == b'\n' {
+            line_starts.push(i + 1);
+        }
+    }
+
+    // Parse edits into (start_byte, end_byte, new_text).
+    let mut ops: Vec<(usize, usize, String)> = edits
+        .iter()
+        .filter_map(|edit| {
+            let range = edit.get("range")?;
+            let start_line = range["start"]["line"].as_u64()? as usize;
+            let start_char = range["start"]["character"].as_u64()? as usize;
+            let end_line = range["end"]["line"].as_u64()? as usize;
+            let end_char = range["end"]["character"].as_u64()? as usize;
+            let new_text = edit.get("newText")?.as_str().unwrap_or("").to_owned();
+
+            let start_byte = line_starts.get(start_line).copied()? + start_char;
+            let end_byte = line_starts.get(end_line).copied()? + end_char;
+            Some((start_byte, end_byte, new_text))
+        })
+        .collect();
+
+    // Sort descending by start_byte so replacements don't shift earlier offsets.
+    ops.sort_by_key(|e| std::cmp::Reverse(e.0));
+
+    let mut result = original.to_owned();
+    for (start, end, text) in ops {
+        let start = start.min(result.len());
+        let end = end.min(result.len());
+        result.replace_range(start..end, &text);
+    }
+    result
+}
+
+/// Internal tool: IDE intelligence (diagnostics, go-to-definition, hover, rename …)
+/// over the agent's Python project files via an in-process language-server pool.
+///
+/// `lsp_manager` is `None` when the `[lsp]` section is disabled in `opex.toml`.
+pub async fn handle_lsp(
+    lsp_manager: Option<&Arc<crate::agent::lsp::LspManager>>,
+    workspace_dir: &str,
+    agent_name: &str,
+    is_base: bool,
+    args: &serde_json::Value,
+) -> String {
+    use crate::agent::lsp::manager::LspAction;
+
+    let Some(mgr) = lsp_manager else {
+        return "Error: LSP is disabled".to_string();
+    };
+
+    let action_str = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+    let file = args.get("file").and_then(|v| v.as_str()).unwrap_or("");
+
+    if file.is_empty() {
+        return "Error: 'file' is required".to_string();
+    }
+    if action_str.is_empty() {
+        return "Error: 'action' is required".to_string();
+    }
+
+    let get_pos = |key_line: &str, key_char: &str| -> Result<(u32, u32), String> {
+        let line = args
+            .get(key_line)
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| format!("Error: '{}' is required for action '{}'", key_line, action_str))?
+            as u32;
+        let character = args
+            .get(key_char)
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| format!("Error: '{}' is required for action '{}'", key_char, action_str))?
+            as u32;
+        Ok((line, character))
+    };
+
+    let lsp_action = match action_str {
+        "diagnostics" => LspAction::Diagnostics,
+        "symbols" => LspAction::Symbols,
+        "definition" => {
+            let Ok((line, character)) = get_pos("line", "character") else {
+                return get_pos("line", "character").unwrap_err();
+            };
+            LspAction::Definition { line, character }
+        }
+        "references" => {
+            let Ok((line, character)) = get_pos("line", "character") else {
+                return get_pos("line", "character").unwrap_err();
+            };
+            LspAction::References { line, character }
+        }
+        "hover" => {
+            let Ok((line, character)) = get_pos("line", "character") else {
+                return get_pos("line", "character").unwrap_err();
+            };
+            LspAction::Hover { line, character }
+        }
+        "rename" => {
+            let Ok((line, character)) = get_pos("line", "character") else {
+                return get_pos("line", "character").unwrap_err();
+            };
+            let new_name = match args.get("new_name").and_then(|v| v.as_str()) {
+                Some(n) if !n.is_empty() => n.to_owned(),
+                _ => return "Error: 'new_name' is required for action 'rename'".to_string(),
+            };
+            LspAction::Rename { line, character, new_name }
+        }
+        other => return format!("Error: unknown action '{other}' (use diagnostics/definition/references/hover/symbols/rename)"),
+    };
+
+    // For rename the manager returns a WorkspaceEdit JSON string — apply it.
+    let is_rename = matches!(lsp_action, LspAction::Rename { .. });
+
+    let raw = match mgr.op(agent_name, workspace_dir, file, lsp_action).await {
+        Ok(s) => s,
+        Err(e) => return format!("Error: {e}"),
+    };
+
+    if !is_rename {
+        return raw;
+    }
+
+    // ── Apply the WorkspaceEdit returned by the manager ──────────────
+    // The manager already bailed with "rename unavailable: server uses utf-16
+    // positions" if position_encoding() != "utf-8", so we can treat `character`
+    // as byte offsets from here on.
+
+    let we: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => return format!("Error: could not parse WorkspaceEdit: {e}"),
+    };
+
+    // Collect uri → [edits] from `changes` map (LSP 3.13+).
+    // `documentChanges` array form is handled as a fallback.
+    let mut file_edits: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+
+    if let Some(changes) = we.get("changes").and_then(|v| v.as_object()) {
+        for (uri, edits_val) in changes {
+            if let Some(edits) = edits_val.as_array() {
+                file_edits.push((uri.clone(), edits.clone()));
+            }
+        }
+    } else if let Some(doc_changes) = we.get("documentChanges").and_then(|v| v.as_array()) {
+        for dc in doc_changes {
+            if let (Some(uri), Some(edits)) = (
+                dc.get("textDocument").and_then(|td| td.get("uri")).and_then(|v| v.as_str()),
+                dc.get("edits").and_then(|v| v.as_array()),
+            ) {
+                file_edits.push((uri.to_owned(), edits.clone()));
+            }
+        }
+    }
+
+    if file_edits.is_empty() {
+        return "Rename applied: no file changes returned.".to_string();
+    }
+
+    // Map each file URI to a workspace-relative path, apply edits, write.
+    let mut written: Vec<String> = Vec::new();
+    for (uri, edits) in &file_edits {
+        // Strip "file://" prefix → host-absolute path.
+        let abs_path = uri.strip_prefix("file://").unwrap_or(uri);
+
+        // Strip workspace_dir prefix (with or without trailing slash) to get
+        // the workspace-relative path used by write_workspace_file.
+        let ws_prefix = workspace_dir.trim_end_matches(['/', '\\']);
+        let rel = abs_path
+            .strip_prefix(ws_prefix)
+            .unwrap_or(abs_path)
+            .trim_start_matches(['/', '\\']);
+
+        // Read current content.
+        let current = match workspace::read_workspace_file(workspace_dir, agent_name, rel).await {
+            Ok(c) => c,
+            Err(e) => return format!("Error reading '{rel}' for rename: {e}"),
+        };
+
+        let new_content = apply_text_edits(&current, edits);
+
+        if let Err(e) =
+            workspace::write_workspace_file(workspace_dir, agent_name, rel, &new_content, is_base)
+                .await
+        {
+            return format!("Error writing '{rel}' after rename: {e}");
+        }
+
+        written.push(rel.to_owned());
+    }
+
+    format!(
+        "renamed → {} file{}: {}",
+        written.len(),
+        if written.len() == 1 { "" } else { "s" },
+        written.join(", ")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1271,6 +1483,60 @@ mod tests {
         let valid = name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
             && !name.starts_with('-');
         assert!(!valid);
+    }
+
+    // ── apply_text_edits tests ───────────────────────────────────────────────
+
+    #[test]
+    fn apply_text_edits_single() {
+        let edits = vec![serde_json::json!({
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 3}},
+            "newText": "X"
+        })];
+        assert_eq!(apply_text_edits("abc\ndef", &edits), "X\ndef");
+    }
+
+    #[test]
+    fn apply_text_edits_cyrillic_byte_offsets() {
+        // utf-8: "тест" = 8 bytes (2 bytes per char × 4 chars).
+        // "x = тест" bytes: 'x'(1) ' '(1) '='(1) ' '(1) then "тест"(8 bytes).
+        // Replace bytes 4..12 with "ok" → "x = ok".
+        let edits = vec![serde_json::json!({
+            "range": {"start": {"line": 0, "character": 4}, "end": {"line": 0, "character": 12}},
+            "newText": "ok"
+        })];
+        assert_eq!(apply_text_edits("x = тест", &edits), "x = ok");
+    }
+
+    #[test]
+    fn apply_text_edits_two_descending() {
+        let edits = vec![
+            serde_json::json!({
+                "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+                "newText": "A"
+            }),
+            serde_json::json!({
+                "range": {"start": {"line": 0, "character": 2}, "end": {"line": 0, "character": 3}},
+                "newText": "C"
+            }),
+        ];
+        assert_eq!(apply_text_edits("abc", &edits), "AbC");
+    }
+
+    #[test]
+    fn handle_lsp_none_manager_returns_disabled() {
+        // Synchronous: no runtime needed — check the None path.
+        // We can't call async directly in a non-async test, so use a simple
+        // block_on via the tokio macro variant.
+        let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let result = rt.block_on(handle_lsp(
+            None,
+            "/workspace",
+            "Agent",
+            true,
+            &serde_json::json!({"action": "diagnostics", "file": "app.py"}),
+        ));
+        assert_eq!(result, "Error: LSP is disabled");
     }
 
     #[test]
