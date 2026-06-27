@@ -44,16 +44,24 @@ pub struct NoteResult {
 /// through the LLM, and return a `NoteResult`. Delivery and MCP writes are
 /// intentionally separate so this function is independently unit-testable with
 /// a mock toolgate and a fake provider.
+///
+/// `on_phase` is called at two points: `"fetch"` (before the toolgate HTTP
+/// call) and `"digest"` (before the LLM call). It is a best-effort hook — the
+/// caller may pass a no-op. The callback must be `Sync` so the async fn can
+/// hold it across await points.
 pub async fn process_one(
     http: &reqwest::Client,
     toolgate_url: &str,
     gateway_listen: &str,
     provider: &dyn LlmProvider,
     job: &VideoJob,
+    on_phase: &(dyn Fn(&str, &str) + Sync),
 ) -> anyhow::Result<NoteResult> {
     use crate::agent::file_scenario::video_summary::{
         build_note, build_summary_messages, extract_summary, slug, RawMaterial,
     };
+
+    on_phase("fetch", "🎬 Скачиваю и расшифровываю видео…");
 
     // ── 1. Call toolgate ──────────────────────────────────────────────────────
     let url = format!("{}/summarize-video", toolgate_url.trim_end_matches('/'));
@@ -102,6 +110,7 @@ pub async fn process_one(
         .collect();
 
     // ── 3. Build LLM body ─────────────────────────────────────────────────────
+    on_phase("digest", "📝 Составляю конспект…");
     let messages = build_summary_messages(&raw, &frame_names);
     let opts = CallOptions {
         thinking_level: 0,
@@ -166,6 +175,23 @@ async fn deliver(
     let ev = serde_json::json!({
         "type": "video_summary_ready",
         "session_id": job.session_id.to_string(),
+        "text": text,
+    });
+    let _ = ui_tx.send(ev.to_string());
+}
+
+/// Best-effort broadcast of a video processing phase to open UI clients.
+/// `text` is the status line for active phases; terminal phases pass `""`.
+fn emit_video_progress(
+    ui_tx: &tokio::sync::broadcast::Sender<String>,
+    session_id: uuid::Uuid,
+    phase: &str,
+    text: &str,
+) {
+    let ev = serde_json::json!({
+        "type": "video_progress",
+        "session_id": session_id.to_string(),
+        "phase": phase,
         "text": text,
     });
     let _ = ui_tx.send(ev.to_string());
@@ -268,15 +294,30 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                         "Не удалось сохранить конспект: MCP не настроен",
                     )
                     .await;
+                    emit_video_progress(&ui_tx, job.session_id, "failed", "");
                     continue;
                 }
             };
 
             // ── Process ───────────────────────────────────────────────────────
-            match process_one(&http, &toolgate_url, &gateway_listen, provider.as_ref(), &job).await
+            let pj_ui = ui_tx.clone();
+            let pj_sid = job.session_id;
+            let on_phase = move |phase: &str, text: &str| {
+                emit_video_progress(&pj_ui, pj_sid, phase, text);
+            };
+            match process_one(
+                &http,
+                &toolgate_url,
+                &gateway_listen,
+                provider.as_ref(),
+                &job,
+                &on_phase,
+            )
+            .await
             {
                 Ok(nr) => {
                     tracing::info!(job_id = %job.id, slug = %nr.slug, "video_worker: note assembled");
+                    emit_video_progress(&ui_tx, job.session_id, "saving", "💾 Сохраняю в Obsidian…");
 
                     // Free folder name — collision avoidance
                     let mut folder = format!("Видео/{}", nr.slug);
@@ -324,6 +365,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                         )
                         .await;
                         deliver(&db, &ui_tx, &job, "Не удалось сохранить кадры конспекта").await;
+                        emit_video_progress(&ui_tx, job.session_id, "failed", "");
                         continue;
                     }
 
@@ -354,6 +396,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                             &format!("Не удалось сохранить конспект: {e}"),
                         )
                         .await;
+                        emit_video_progress(&ui_tx, job.session_id, "failed", "");
                         continue;
                     }
 
@@ -373,6 +416,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                     let _ = opex_db::video_jobs::mark_video_job_done(&db, job.id, &nr.summary)
                         .await;
                     deliver(&db, &ui_tx, &job, &chat).await;
+                    emit_video_progress(&ui_tx, job.session_id, "done", "");
                 }
                 Err(e) => {
                     let msg = format!("Не удалось обработать видео: {e}");
@@ -381,6 +425,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                         opex_db::video_jobs::mark_video_job_failed(&db, job.id, &e.to_string())
                             .await;
                     deliver(&db, &ui_tx, &job, &msg).await;
+                    emit_video_progress(&ui_tx, job.session_id, "failed", "");
                 }
             }
         }
@@ -399,7 +444,15 @@ mod tests {
 
     // ── Minimal fake LLM provider returning a fixed summary ──────────────────
 
-    struct FakeLlm;
+    struct FakeLlm {
+        content: String,
+    }
+
+    impl FakeLlm {
+        fn new(content: &str) -> Self {
+            Self { content: content.to_string() }
+        }
+    }
 
     #[async_trait::async_trait]
     impl crate::agent::providers::LlmProvider for FakeLlm {
@@ -410,8 +463,7 @@ mod tests {
             _opts: crate::agent::providers::CallOptions,
         ) -> anyhow::Result<opex_types::LlmResponse> {
             Ok(opex_types::LlmResponse {
-                content: "## Резюме\nкоротко\n\n## Конспект\n![[_System/media/тест-frame-01.jpg]]"
-                    .to_string(),
+                content: self.content.clone(),
                 tool_calls: vec![],
                 usage: None,
                 finish_reason: None,
@@ -464,11 +516,20 @@ mod tests {
         };
 
         let client = reqwest::Client::new();
-        let provider = FakeLlm;
+        let provider = FakeLlm::new(
+            "## Резюме\nкоротко\n\n## Конспект\n![[_System/media/тест-frame-01.jpg]]",
+        );
 
-        let note = process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job)
-            .await
-            .unwrap();
+        let note = process_one(
+            &client,
+            &server.uri(),
+            "0.0.0.0:18789",
+            &provider,
+            &job,
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .unwrap();
 
         assert!(note.note.contains("title: Тест"), "frontmatter title");
         assert!(
@@ -511,11 +572,18 @@ mod tests {
         };
 
         let client = reqwest::Client::new();
-        let provider = FakeLlm;
+        let provider = FakeLlm::new("## Резюме\nкоротко\n\n## Конспект\nтело");
 
-        let nr = process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job)
-            .await
-            .unwrap();
+        let nr = process_one(
+            &client,
+            &server.uri(),
+            "0.0.0.0:18789",
+            &provider,
+            &job,
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .unwrap();
 
         assert!(nr.summary.contains("коротко"), "digest returned: {}", nr.summary);
     }
@@ -547,9 +615,16 @@ mod tests {
         };
 
         let client = reqwest::Client::new();
-        let provider = FakeLlm;
-        let result =
-            process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job).await;
+        let provider = FakeLlm::new("## Резюме\nкоротко\n\n## Конспект\nтело");
+        let result = process_one(
+            &client,
+            &server.uri(),
+            "0.0.0.0:18789",
+            &provider,
+            &job,
+            &|_: &str, _: &str| {},
+        )
+        .await;
 
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
@@ -588,11 +663,62 @@ mod tests {
         };
 
         let client = reqwest::Client::new();
-        let provider = FakeLlm;
-        let nr = process_one(&client, &server.uri(), "0.0.0.0:18789", &provider, &job)
-            .await
-            .unwrap();
+        let provider = FakeLlm::new("## Резюме\nкоротко\n\n## Конспект\nтело");
+        let nr = process_one(
+            &client,
+            &server.uri(),
+            "0.0.0.0:18789",
+            &provider,
+            &job,
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .unwrap();
 
         assert!(nr.summary.contains("коротко"), "digest returned: {}", nr.summary);
+    }
+
+    // ── Test: process_one invokes on_phase in fetch then digest order ─────────
+
+    #[tokio::test]
+    async fn process_one_emits_fetch_then_digest() {
+        use std::sync::{Arc, Mutex};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/summarize-video"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "title": "Тест", "duration": 12.0, "transcript": "речь",
+                "frames": [], "degraded": {"stt": false, "vision": false}
+            })))
+            .mount(&server)
+            .await;
+
+        let provider = FakeLlm::new("## Резюме\nкоротко\n\n## Конспект\nтело");
+        let job = VideoJob {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            agent_name: "Atlas".into(),
+            channel_id: None,
+            source_type: "url".into(),
+            source_ref: "https://youtu.be/x".into(),
+            source_title: None,
+            status: "processing".into(),
+            summary: None,
+            error: None,
+            attempts: 1,
+        };
+
+        let phases: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let p2 = phases.clone();
+        let on_phase = move |phase: &str, _text: &str| {
+            p2.lock().unwrap().push(phase.to_string());
+        };
+
+        let http = reqwest::Client::new();
+        let _ = process_one(&http, &server.uri(), "127.0.0.1:18789", &provider, &job, &on_phase)
+            .await
+            .expect("ok");
+
+        assert_eq!(*phases.lock().unwrap(), vec!["fetch".to_string(), "digest".to_string()]);
     }
 }
