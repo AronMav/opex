@@ -49,16 +49,24 @@ pub struct NoteResult {
 /// call) and `"digest"` (before the LLM call). It is a best-effort hook — the
 /// caller may pass a no-op. The callback must be `Sync` so the async fn can
 /// hold it across await points.
+///
+/// `digest_mode` selects the digest strategy: `Some("mapreduce")` runs the
+/// per-segment map-reduce path (topical segmentation → per-segment digest →
+/// merge → final summary); anything else (`Some("single")` / `None`) runs the
+/// legacy single-pass digest. The map-reduce path degrades gracefully — any
+/// segmentation/JSON failure logs a warning and falls back to uniform segments
+/// (and, if even that yields nothing, to single-pass) rather than failing the job.
 pub async fn process_one(
     http: &reqwest::Client,
     toolgate_url: &str,
     gateway_listen: &str,
     provider: &dyn LlmProvider,
     job: &VideoJob,
+    digest_mode: Option<&str>,
     on_phase: &(dyn Fn(&str, &str) + Sync),
 ) -> anyhow::Result<NoteResult> {
     use crate::agent::file_scenario::video_summary::{
-        build_note, build_summary_messages, extract_summary, slug, RawMaterial,
+        build_summary_messages, extract_summary, slug, RawMaterial,
     };
 
     on_phase("fetch", "🎬 Скачиваю и расшифровываю видео…");
@@ -110,21 +118,27 @@ pub async fn process_one(
         .collect();
 
     // ── 3. Build LLM body ─────────────────────────────────────────────────────
-    on_phase("digest", "📝 Составляю конспект…");
-    let messages = build_summary_messages(&raw, &frame_names);
-    let opts = CallOptions {
-        thinking_level: 0,
-        claude_md_content: None,
-    };
-    let llm_body = provider.chat(&messages, &[], opts).await?.content;
-
-    // ── 4. Build note + extract summary ──────────────────────────────────────
     let title_for_note = if title.is_empty() {
         note_slug.clone()
     } else {
         title
     };
-    let note = build_note(&raw, &title_for_note, &llm_body, &frame_names);
+
+    let note = if matches!(digest_mode, Some("mapreduce")) {
+        build_note_mapreduce(provider, &raw, &title_for_note, &frame_names, on_phase).await?
+    } else {
+        on_phase("digest", "📝 Составляю конспект…");
+        let messages = build_summary_messages(&raw, &frame_names);
+        let llm_body = provider.chat(&messages, &[], digest_opts()).await?.content;
+        crate::agent::file_scenario::video_summary::build_note(
+            &raw,
+            &title_for_note,
+            &llm_body,
+            &frame_names,
+        )
+    };
+
+    // ── 4. Extract summary ───────────────────────────────────────────────────
     let summary = extract_summary(&note);
 
     Ok(NoteResult {
@@ -133,6 +147,151 @@ pub async fn process_one(
         summary,
         media,
     })
+}
+
+/// Shared `CallOptions` for every digest LLM call (no thinking, no CLAUDE.md).
+fn digest_opts() -> CallOptions {
+    CallOptions {
+        thinking_level: 0,
+        claude_md_content: None,
+    }
+}
+
+/// Parse the segment-boundary JSON returned by the LLM into
+/// `(start_frac, title)` pairs. Robust to surrounding prose / markdown fences:
+/// we extract the outermost `[` … `]` and parse that. Returns `None` on any
+/// failure so the caller can fall back to uniform segments.
+fn parse_segment_boundaries(raw_json: &str) -> Option<Vec<(f64, String)>> {
+    #[derive(serde::Deserialize)]
+    struct Bound {
+        start_frac: f64,
+        #[serde(default)]
+        title: String,
+    }
+    let start = raw_json.find('[')?;
+    let end = raw_json.rfind(']')?;
+    if end <= start {
+        return None;
+    }
+    let slice = &raw_json[start..=end];
+    let parsed: Vec<Bound> = serde_json::from_str(slice).ok()?;
+    if parsed.is_empty() {
+        return None;
+    }
+    let mut out: Vec<(f64, String)> = parsed
+        .into_iter()
+        .map(|b| {
+            let title = if b.title.trim().is_empty() {
+                "Сегмент".to_string()
+            } else {
+                b.title.trim().to_string()
+            };
+            (b.start_frac.clamp(0.0, 1.0), title)
+        })
+        .collect();
+    // Sort ascending by start_frac and force the first segment to start at 0.0.
+    out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    if let Some(first) = out.first_mut() {
+        first.0 = 0.0;
+    }
+    Some(out)
+}
+
+/// Uniform fallback boundaries: `n` evenly-spaced segments starting at 0.0.
+fn uniform_boundaries(n: usize) -> Vec<(f64, String)> {
+    let n = n.max(1);
+    (0..n)
+        .map(|i| (i as f64 / n as f64, format!("Часть {}", i + 1)))
+        .collect()
+}
+
+/// Map-reduce digest: segment the transcript by topic, summarise each segment in
+/// its own small-context LLM call, concatenate the segment notes in order, then
+/// write one final `## Резюме`. Any segmentation/JSON error falls back to uniform
+/// segments (and the per-segment map still runs), so this never hard-fails on a
+/// flaky boundaries response.
+async fn build_note_mapreduce(
+    provider: &dyn LlmProvider,
+    raw: &crate::agent::file_scenario::video_summary::RawMaterial,
+    title: &str,
+    frame_names: &[String],
+    on_phase: &(dyn Fn(&str, &str) + Sync),
+) -> anyhow::Result<String> {
+    use crate::agent::file_scenario::video_summary::{
+        build_note_from_parts, final_summary_messages, frames_for_segment,
+        segment_boundaries_messages, segment_digest_messages, slice_segments,
+    };
+
+    // ── Step 1: topical segmentation ──────────────────────────────────────────
+    on_phase("digest", "📝 Размечаю темы…");
+    let boundaries = match provider
+        .chat(&segment_boundaries_messages(raw), &[], digest_opts())
+        .await
+    {
+        Ok(resp) => parse_segment_boundaries(&resp.content).unwrap_or_else(|| {
+            tracing::warn!(
+                "video_worker: segment-boundaries JSON unparseable — falling back to 6 uniform segments"
+            );
+            uniform_boundaries(6)
+        }),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "video_worker: segment-boundaries LLM call failed — falling back to 6 uniform segments"
+            );
+            uniform_boundaries(6)
+        }
+    };
+
+    // ── Step 2: slice transcript + assign frames per segment ──────────────────
+    let segments = slice_segments(&raw.transcript, &boundaries);
+    let total = segments.len();
+
+    // ── Step 3 (map): per-segment digest ──────────────────────────────────────
+    let mut segment_notes: Vec<String> = Vec::with_capacity(total);
+    for (i, (_seg_title, seg_text)) in segments.iter().enumerate() {
+        let seg_start = boundaries[i].0;
+        let seg_end = boundaries.get(i + 1).map(|b| b.0).unwrap_or(1.0);
+        let seg_frames = frames_for_segment(raw, frame_names, seg_start, seg_end);
+
+        on_phase("digest", &format!("📝 Конспект сегмента {}/{}…", i + 1, total));
+        match provider
+            .chat(&segment_digest_messages(raw, seg_text, &seg_frames), &[], digest_opts())
+            .await
+        {
+            Ok(resp) => segment_notes.push(resp.content.trim().to_string()),
+            Err(e) => {
+                // A single segment failing should not sink the whole job; keep a
+                // visible placeholder so the transcript slice is still acknowledged.
+                tracing::warn!(
+                    error = %e,
+                    segment = i + 1,
+                    "video_worker: segment digest failed — inserting placeholder"
+                );
+                segment_notes.push(format!("### Часть {} (фрагмент не обработан)\n", i + 1));
+            }
+        }
+    }
+
+    let merged = segment_notes.join("\n\n");
+
+    // ── Step 4 (reduce): final summary over the merged body ───────────────────
+    on_phase("digest", "📝 Финальное резюме…");
+    let summary = match provider
+        .chat(&final_summary_messages(&merged), &[], digest_opts())
+        .await
+    {
+        Ok(resp) => resp.content.trim().to_string(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "video_worker: final-summary LLM call failed — using empty summary"
+            );
+            String::new()
+        }
+    };
+
+    Ok(build_note_from_parts(raw, title, &summary, &merged, frame_names))
 }
 
 // ── Delivery (web-only, v1) ───────────────────────────────────────────────────
@@ -310,6 +469,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
     // Capture video config overrides at spawn time.
     let digest_provider_name = state.config.config.video.digest_provider.clone();
     let digest_model = state.config.config.video.digest_model.clone();
+    let digest_mode = state.config.config.video.digest_mode.clone();
 
     // Clone the state for async use inside the spawned task.
     let state_for_worker = state.clone();
@@ -413,6 +573,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                 &gateway_listen,
                 provider.as_ref(),
                 &job,
+                digest_mode.as_deref(),
                 &on_phase,
             )
             .await
@@ -628,6 +789,7 @@ mod tests {
             "0.0.0.0:18789",
             &provider,
             &job,
+            None,
             &|_: &str, _: &str| {},
         )
         .await
@@ -682,6 +844,7 @@ mod tests {
             "0.0.0.0:18789",
             &provider,
             &job,
+            None,
             &|_: &str, _: &str| {},
         )
         .await
@@ -724,6 +887,7 @@ mod tests {
             "0.0.0.0:18789",
             &provider,
             &job,
+            None,
             &|_: &str, _: &str| {},
         )
         .await;
@@ -772,6 +936,7 @@ mod tests {
             "0.0.0.0:18789",
             &provider,
             &job,
+            None,
             &|_: &str, _: &str| {},
         )
         .await
@@ -817,10 +982,213 @@ mod tests {
         };
 
         let http = reqwest::Client::new();
-        let _ = process_one(&http, &server.uri(), "127.0.0.1:18789", &provider, &job, &on_phase)
+        let _ = process_one(&http, &server.uri(), "127.0.0.1:18789", &provider, &job, None, &on_phase)
             .await
             .expect("ok");
 
         assert_eq!(*phases.lock().unwrap(), vec!["fetch".to_string(), "digest".to_string()]);
+    }
+
+    // ── Map-reduce path ───────────────────────────────────────────────────────
+
+    /// Sequenced fake provider: returns canned responses in call order, so we can
+    /// drive the multi-call map-reduce pipeline (boundaries → N segments → summary).
+    struct SeqLlm {
+        responses: std::sync::Mutex<std::collections::VecDeque<String>>,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl SeqLlm {
+        fn new(responses: Vec<&str>) -> Self {
+            Self {
+                responses: std::sync::Mutex::new(responses.iter().map(|s| s.to_string()).collect()),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agent::providers::LlmProvider for SeqLlm {
+        async fn chat(
+            &self,
+            messages: &[Message],
+            _tools: &[opex_types::ToolDefinition],
+            _opts: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<opex_types::LlmResponse> {
+            // Record the user message of each call for assertions.
+            if let Some(u) = messages.last() {
+                self.calls.lock().unwrap().push(u.content.clone());
+            }
+            let content = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| "## fallback".to_string());
+            Ok(opex_types::LlmResponse {
+                content,
+                tool_calls: vec![],
+                usage: None,
+                finish_reason: None,
+                model: None,
+                provider: None,
+                fallback_notice: None,
+                tools_used: vec![],
+                iterations: 1,
+                thinking_blocks: vec![],
+            })
+        }
+        fn name(&self) -> &str { "seq" }
+        fn current_model(&self) -> String { "seq".into() }
+    }
+
+    #[tokio::test]
+    async fn process_one_mapreduce_segments_map_and_reduce() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/summarize-video"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "title": "Урок", "duration": 100.0,
+                "transcript": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123",
+                "frames": [
+                    {"timestamp": 10.0, "description": "к1", "image_b64": "/9j/A"},
+                    {"timestamp": 80.0, "description": "к2", "image_b64": "/9j/B"}
+                ],
+                "degraded": {"stt": false, "vision": false}
+            })))
+            .mount(&server)
+            .await;
+
+        // Call order: boundaries (2 segments) → seg1 digest → seg2 digest → final summary.
+        let provider = SeqLlm::new(vec![
+            // boundaries with surrounding prose to exercise the [..] extractor
+            "Вот сегменты: [{\"start_frac\":0.0,\"title\":\"Вступление\"},{\"start_frac\":0.5,\"title\":\"Практика\"}]",
+            "### Вступление (0:00)\n- деталь один\n![](images/frame-01.jpg)",
+            "### Практика (0:50)\n- деталь два\n![](images/frame-02.jpg)",
+            "Это видео про вступление и практику.",
+        ]);
+
+        let job = VideoJob {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            agent_name: "Atlas".into(),
+            channel_id: None,
+            source_type: "file".into(),
+            source_ref: "http://localhost/api/uploads/x?sig=1".into(),
+            source_title: Some("Урок".into()),
+            status: "processing".into(),
+            summary: None,
+            error: None,
+            attempts: 1,
+        };
+
+        let http = reqwest::Client::new();
+        let nr = process_one(
+            &http,
+            &server.uri(),
+            "0.0.0.0:18789",
+            &provider,
+            &job,
+            Some("mapreduce"),
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .unwrap();
+
+        // 4 LLM calls fired: boundaries + 2 segments + final summary.
+        assert_eq!(provider.calls.lock().unwrap().len(), 4, "boundaries + 2 maps + reduce");
+        // Final summary came from the reduce call.
+        assert!(nr.summary.contains("вступление и практику"), "summary: {}", nr.summary);
+        // Both segment digests merged into ## Конспект, in order.
+        let i1 = nr.note.find("деталь один").expect("seg1 present");
+        let i2 = nr.note.find("деталь два").expect("seg2 present");
+        assert!(i1 < i2, "segments concatenated in order");
+        assert!(nr.note.contains("## Резюме"), "summary section");
+        assert!(nr.note.contains("## Конспект"), "digest section");
+        assert!(nr.note.contains("> [!note]- Полный транскрипт"), "transcript collapsed in");
+        assert!(!nr.media.is_empty(), "media collected for MCP");
+    }
+
+    #[tokio::test]
+    async fn process_one_mapreduce_falls_back_on_bad_boundaries_json() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/summarize-video"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "title": "Урок", "duration": 60.0,
+                "transcript": "речь без кадров целиком для нарезки",
+                "frames": [],
+                "degraded": {"stt": false, "vision": false}
+            })))
+            .mount(&server)
+            .await;
+
+        // First response is junk (no JSON array) → uniform fallback to 6 segments,
+        // so the provider must then serve 6 segment digests + 1 final summary.
+        let mut responses = vec!["извини, не смог разметить"];
+        for i in 0..6 {
+            responses.push(if i == 0 { "### Часть 1\n- a" } else { "### Часть\n- b" });
+        }
+        responses.push("краткое резюме целиком");
+        let provider = SeqLlm::new(responses);
+
+        let job = VideoJob {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            agent_name: "Atlas".into(),
+            channel_id: None,
+            source_type: "file".into(),
+            source_ref: "http://localhost/api/uploads/x?sig=1".into(),
+            source_title: Some("Урок".into()),
+            status: "processing".into(),
+            summary: None,
+            error: None,
+            attempts: 1,
+        };
+
+        let http = reqwest::Client::new();
+        let nr = process_one(
+            &http,
+            &server.uri(),
+            "0.0.0.0:18789",
+            &provider,
+            &job,
+            Some("mapreduce"),
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .expect("mapreduce must not hard-fail on bad boundaries JSON");
+
+        // boundaries(1) + 6 uniform segments + final summary(1) = 8 calls.
+        assert_eq!(provider.calls.lock().unwrap().len(), 8, "fell back to 6 uniform segments");
+        assert!(nr.summary.contains("резюме целиком"), "summary: {}", nr.summary);
+        assert!(nr.note.contains("## Конспект"));
+    }
+
+    #[test]
+    fn parse_segment_boundaries_extracts_array_and_sorts() {
+        let raw = "prefix [{\"start_frac\":0.6,\"title\":\"B\"},{\"start_frac\":0.0,\"title\":\"A\"}] suffix";
+        let b = parse_segment_boundaries(raw).expect("parses");
+        assert_eq!(b.len(), 2);
+        // Sorted ascending, first forced to 0.0.
+        assert_eq!(b[0].0, 0.0);
+        assert_eq!(b[0].1, "A");
+        assert_eq!(b[1].1, "B");
+        assert!((b[1].0 - 0.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_segment_boundaries_rejects_non_json() {
+        assert!(parse_segment_boundaries("нет тут массива").is_none());
+        assert!(parse_segment_boundaries("[]").is_none(), "empty array → None");
+    }
+
+    #[test]
+    fn uniform_boundaries_evenly_spaced_starting_at_zero() {
+        let b = uniform_boundaries(4);
+        assert_eq!(b.len(), 4);
+        assert_eq!(b[0].0, 0.0);
+        assert!((b[1].0 - 0.25).abs() < 1e-9);
+        assert!((b[3].0 - 0.75).abs() < 1e-9);
     }
 }

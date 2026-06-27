@@ -1578,6 +1578,16 @@ pub struct VideoConfig {
     /// Example: `digest_model = "qwen3:32b"`
     #[serde(default)]
     pub digest_model: Option<String>,
+    /// Digest assembly strategy. `"mapreduce"` segments the transcript by topic,
+    /// summarises each segment in its own small-context LLM call (preserves
+    /// mid-transcript detail — fixes "lost-in-the-middle"), then writes one final
+    /// `## Резюме` over the merged body. `"single"` / `None` use the legacy
+    /// single-pass digest (one LLM call over the whole transcript) — the default,
+    /// fully backward-compatible.
+    ///
+    /// Example: `digest_mode = "mapreduce"`
+    #[serde(default)]
+    pub digest_mode: Option<String>,
 }
 
 // ── Tailscale Funnel config ──
@@ -3297,5 +3307,33 @@ digest_provider = "my-provider"
         assert_eq!(cfg.video.digest_provider.as_deref(), Some("my-provider"));
         assert!(cfg.video.digest_model.is_none());
         assert_eq!(cfg.video.vault_name.as_deref(), Some("zettelkasten"));
+    }
+
+    #[test]
+    fn video_config_digest_mode_round_trip_and_default() {
+        let toml = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+
+[video]
+digest_mode = "mapreduce"
+"#;
+        let f = write_temp_toml(toml);
+        let cfg = AppConfig::load(f.path()).expect("digest_mode must parse");
+        assert_eq!(cfg.video.digest_mode.as_deref(), Some("mapreduce"));
+
+        let toml_none = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+"#;
+        let f2 = write_temp_toml(toml_none);
+        let cfg2 = AppConfig::load(f2.path()).expect("minimal config must parse");
+        assert!(cfg2.video.digest_mode.is_none(), "digest_mode defaults to None");
     }
 }
