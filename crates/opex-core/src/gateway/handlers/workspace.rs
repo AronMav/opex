@@ -268,6 +268,14 @@ mod tests {
         assert!(url.starts_with("/workspace-files/img.png?sig="), "got {url}");
     }
 
+    #[tokio::test]
+    async fn build_response_extensionless_binary_returns_signed_url() {
+        let base = tempfile::tempdir().unwrap();
+        tokio::fs::write(base.path().join("rawdata"), [0xFFu8]).await.unwrap();
+        let v = build_file_response(base.path(), "rawdata", &[7u8; 32], 3600).await.unwrap();
+        assert_eq!(v["is_binary"], true);
+    }
+
     #[test]
     fn binary_classification_by_extension() {
         for n in ["a.png", "a.JPG", "photo.jpeg", "x.webp", "y.gif", "doc.pdf", "icon.svg"] {
