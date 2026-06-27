@@ -149,3 +149,10 @@ url_allowlist = ["youtube.com", "youtu.be"]
 note_max_frames = 24
 # Obsidian vault name for the obsidian:// deep link in the chat notification.
 vault_name = "zettelkasten"
+# Override LLM provider for the video digest step (name from the providers table).
+# When unset, the digest uses the job-owning agent's own LLM provider.
+# Useful for routing the digest to a large-context or local model without
+# changing the agent's own provider connection.
+# digest_provider = "ollama-local"
+# Optional model override for the digest provider (uses provider default when absent).
+# digest_model = "qwen3:32b"
