@@ -10,4 +10,14 @@ describe("parseCalloutHeader", () => {
   it("non-callout returns null", () => {
     expect(parseCalloutHeader("> just a quote")).toBeNull();
   });
+  it("uppercased type is lowercased", () => {
+    expect(parseCalloutHeader("> [!NOTE]")).toEqual({
+      type: "note", collapsible: false, title: "",
+    });
+  });
+  it("+ suffix marks collapsible", () => {
+    expect(parseCalloutHeader("> [!tip]+ Expand me")).toEqual({
+      type: "tip", collapsible: true, title: "Expand me",
+    });
+  });
 });

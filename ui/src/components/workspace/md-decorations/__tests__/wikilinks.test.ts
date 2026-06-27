@@ -8,4 +8,20 @@ describe("findWikiLinks", () => {
     expect(m[0].target).toBe("My Note");
     expect(m[0].label).toBe("My Note#Intro");
   });
+  it("parses alias syntax [[Target|Alias]]", () => {
+    const m = findWikiLinks("see [[My Note|Display Name]] here");
+    expect(m).toHaveLength(1);
+    expect(m[0].target).toBe("My Note");
+    expect(m[0].label).toBe("Display Name");
+  });
+  it("parses alias with section [[Target#Section|Alias]]", () => {
+    const m = findWikiLinks("[[Topic#Heading|Custom Label]]");
+    expect(m).toHaveLength(1);
+    expect(m[0].target).toBe("Topic");
+    expect(m[0].label).toBe("Custom Label");
+  });
+  it("skips empty/whitespace-only links", () => {
+    const m = findWikiLinks("[[ ]]");
+    expect(m).toHaveLength(0);
+  });
 });

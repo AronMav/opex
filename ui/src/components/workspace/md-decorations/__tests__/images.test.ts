@@ -18,5 +18,15 @@ describe("findImageMatches", () => {
     const m = findImageMatches("text ![alt](images/x.png) more");
     expect(m).toHaveLength(1);
     expect(m[0].src).toBe("images/x.png");
+    expect(m[0].alt).toBe("alt");
+  });
+  it("handles image src with spaces (local paths)", () => {
+    const m = findImageMatches("![a](images/my photo.png)");
+    expect(m).toHaveLength(1);
+    expect(m[0].src).toBe("images/my photo.png");
+  });
+  it("skips image with empty src", () => {
+    const m = findImageMatches("![]()");
+    expect(m).toHaveLength(0);
   });
 });
