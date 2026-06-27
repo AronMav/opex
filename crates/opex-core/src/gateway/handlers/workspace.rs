@@ -44,30 +44,51 @@ pub(crate) fn is_binary_filename(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Canonicalize `path` even when it (or trailing components) don't exist yet:
+/// canonicalize the nearest EXISTING ancestor, then re-append the missing tail.
+/// Read-only — creates nothing on disk. Resolves `..`/symlinks in the existing
+/// prefix via the OS, so the traversal guard remains sound.
+async fn canonicalize_existing_prefix(path: &std::path::Path) -> std::path::PathBuf {
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path.to_path_buf();
+    loop {
+        if tokio::fs::metadata(&cur).await.is_ok() {
+            let mut resolved = tokio::fs::canonicalize(&cur).await.unwrap_or_else(|_| cur.clone());
+            for comp in tail.iter().rev() {
+                resolved.push(comp);
+            }
+            return resolved;
+        }
+        match cur.file_name() {
+            Some(name) => {
+                tail.push(name.to_os_string());
+                match cur.parent() {
+                    Some(p) => cur = p.to_path_buf(),
+                    None => break,
+                }
+            }
+            None => break, // ends in `..` or root with no file_name
+        }
+    }
+    path.to_path_buf() // unreachable in practice — base always exists
+}
+
 /// Resolve and validate a path within `base`.
 /// Returns `(base_canonical, target_canonical)` where target is guaranteed strictly inside base.
 async fn resolve_within(
     base: &std::path::Path,
     rel_path: &str,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), (StatusCode, Json<Value>)> {
-    let _ = tokio::fs::create_dir_all(base).await;
+    let _ = tokio::fs::create_dir_all(base).await; // workspace root — legitimately ensured
     let target = base.join(rel_path);
 
     let base_canonical = tokio::fs::canonicalize(base).await
         .unwrap_or_else(|_| base.to_path_buf());
 
-    let target_canonical = if target.exists() {
-        tokio::fs::canonicalize(&target).await
-            .unwrap_or_else(|_| target.clone())
-    } else if let Some(parent) = target.parent() {
-        // For new files, canonicalize parent
-        let _ = tokio::fs::create_dir_all(parent).await;
-        let parent_canonical = tokio::fs::canonicalize(parent).await
-            .unwrap_or_else(|_| parent.to_path_buf());
-        let file_name = target.file_name().unwrap_or_default();
-        parent_canonical.join(file_name)
+    let target_canonical = if tokio::fs::metadata(&target).await.is_ok() {
+        tokio::fs::canonicalize(&target).await.unwrap_or_else(|_| target.clone())
     } else {
-        target.clone()
+        canonicalize_existing_prefix(&target).await
     };
 
     // Strictly require paths inside base — no escape via symlinks or traversal
@@ -569,6 +590,27 @@ mod tests {
         let big = vec![0u8; MAX_UPLOAD_BYTES + 1];
         let err = save_upload(base.path(), "", "big.bin", &big).await.unwrap_err();
         assert_eq!(err.0, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn resolve_within_is_read_only_no_dir_creation() {
+        let base = tempfile::tempdir().unwrap();
+        let _ = resolve_within(base.path(), "newdir/sub/file.png").await;
+        assert!(!base.path().join("newdir").exists(), "resolve must not create dirs on disk");
+    }
+
+    #[tokio::test]
+    async fn resolve_within_rejects_traversal_for_missing_target() {
+        let base = tempfile::tempdir().unwrap();
+        assert!(resolve_within(base.path(), "../../escape/x.png").await.is_err(), "traversal on a non-existent target must still be denied");
+    }
+
+    #[tokio::test]
+    async fn resolve_within_accepts_missing_nested_inside() {
+        let base = tempfile::tempdir().unwrap();
+        let (b, t) = resolve_within(base.path(), "a/b/file.md").await.unwrap();
+        assert!(t.starts_with(&b), "valid non-existent nested path resolves inside base");
+        assert!(!base.path().join("a").exists(), "still no dir creation");
     }
 
     #[tokio::test]
