@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { BinaryViewer } from "@/components/workspace/binary-viewer";
+
+vi.mock("@/hooks/use-translation", () => ({
+  useTranslation: () => ({ t: (key: string) => key, locale: "en" }),
+}));
 
 describe("BinaryViewer", () => {
   it("renders <img> for images", () => {
