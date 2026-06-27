@@ -19,9 +19,13 @@ class OpenAISTT:
     async def transcribe(self, http: httpx.AsyncClient, audio_bytes: bytes,
                          filename: str, language: str,
                          model: str | None = None) -> str:
+        # Omit the Authorization header entirely when no api_key is set: a local
+        # OpenAI-compatible server (e.g. speaches) needs no auth, and an empty
+        # `Bearer ` value is rejected by httpx ("Illegal header value b'Bearer '").
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         resp = await http.post(
             f"{self.base_url}/audio/transcriptions",
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            headers=headers,
             files={"file": (filename, audio_bytes, "audio/ogg")},
             data={"model": model or self.model, "language": language},
             timeout=self._request_timeout,
