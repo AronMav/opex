@@ -7,6 +7,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { keymap, EditorView } from "@codemirror/view";
 import { imageDecorations, resolveAssetPath, findImageMatches, setUrls, urlField } from "./md-decorations/images";
 import { wikiLinkDecorations } from "./md-decorations/wikilinks";
+import { calloutDecorations } from "./md-decorations/callouts";
 import { signWorkspacePaths } from "@/lib/api";
 
 export interface ObsidianEditorProps {
@@ -59,6 +60,7 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
       urlField,
       imageDecorations({ noteDir, getUrl: (p) => urlCacheRef.current[p] }),
       wikiLinkDecorations((t) => onNavigateRef.current?.(t)),
+      calloutDecorations(),
     ],
     // noteDir change rebuilds the decoration extension with updated resolver
     // eslint-disable-next-line react-hooks/exhaustive-deps
