@@ -8,6 +8,9 @@ describe("resolveAssetPath", () => {
   it("returns null for absolute urls", () => {
     expect(resolveAssetPath("zettelkasten/Note", "https://e.com/a.png")).toBeNull();
   });
+  it("returns null for root-relative urls", () => {
+    expect(resolveAssetPath("note", "/images/x.png")).toBeNull();
+  });
 });
 
 describe("findImageMatches", () => {

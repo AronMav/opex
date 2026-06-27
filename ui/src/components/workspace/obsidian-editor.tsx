@@ -5,19 +5,8 @@ import CodeMirror from "@uiw/react-codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { markdown } from "@codemirror/lang-markdown";
 import { keymap, EditorView } from "@codemirror/view";
-import { StateEffect, StateField } from "@codemirror/state";
-import { imageDecorations, resolveAssetPath, findImageMatches } from "./md-decorations/images";
+import { imageDecorations, resolveAssetPath, findImageMatches, setUrls, urlField } from "./md-decorations/images";
 import { signWorkspacePaths } from "@/lib/api";
-
-// ── URL cache state ──────────────────────────────────────────────────────────
-const setUrls = StateEffect.define<Record<string, string>>();
-const urlField = StateField.define<Record<string, string>>({
-  create: () => ({}),
-  update(value, tr) {
-    for (const e of tr.effects) if (e.is(setUrls)) value = { ...value, ...e.value };
-    return value;
-  },
-});
 
 export interface ObsidianEditorProps {
   value: string;
@@ -42,10 +31,13 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
       const p = resolveAssetPath(noteDir, m.src);
       if (p && !urlCacheRef.current[p]) need.add(p);
     }
-    if (!need.size) return;
-    const map = await signWorkspacePaths([...need]);
-    urlCacheRef.current = { ...urlCacheRef.current, ...map };
-    viewRef.current?.dispatch({ effects: setUrls.of(map) });
+    if (need.size) {
+      const map = await signWorkspacePaths([...need]);
+      urlCacheRef.current = { ...urlCacheRef.current, ...map };
+    }
+    // Always push the current cache so the plugin rebuilds with URLs — covers the
+    // mount case where the earlier call ran before viewRef was captured.
+    viewRef.current?.dispatch({ effects: setUrls.of(urlCacheRef.current) });
   }, [noteDir]);
 
   useEffect(() => { ensureSigned(value); }, [value, ensureSigned]);
