@@ -4,6 +4,7 @@ video-summary pipeline. System ffmpeg is required (already used by audio_trim)."
 import asyncio
 import glob
 import os
+import shutil
 import sys
 import tempfile
 
@@ -21,12 +22,25 @@ async def _run(*args: str) -> tuple[int, bytes, bytes]:
 # not a bot") to the datacenter/proxy IP for media-stream downloads — a valid
 # cookies file authenticates the request and passes the check.
 _DEFAULT_COOKIES = os.path.expanduser("~/docker/metube/.metube/cookies.txt")
+_COOKIES_WORKING_COPY = os.path.join(tempfile.gettempdir(), "opex_ytdlp_cookies.txt")
 
 
 def _cookie_args() -> list[str]:
-    """`["--cookies", <path>]` if a cookies file is configured and exists, else `[]`."""
+    """`["--cookies", <copy>]` if a cookies file is configured and exists, else `[]`.
+
+    yt-dlp REWRITES the cookies file it is handed (it saves the post-request
+    session back). Pointing it at MeTube's shared jar means a bot-checked /
+    logged-out response overwrites and DEGRADES that jar — each failed attempt
+    makes the next one worse. So copy the jar to a throwaway working file every
+    call and give yt-dlp the copy; the source jar is never mutated by us."""
     path = os.environ.get("YTDLP_COOKIES_FILE", _DEFAULT_COOKIES)
-    return ["--cookies", path] if path and os.path.isfile(path) else []
+    if not (path and os.path.isfile(path)):
+        return []
+    try:
+        shutil.copyfile(path, _COOKIES_WORKING_COPY)
+        return ["--cookies", _COOKIES_WORKING_COPY]
+    except OSError:
+        return ["--cookies", path]
 
 
 async def extract_audio(video_path: str) -> bytes:
