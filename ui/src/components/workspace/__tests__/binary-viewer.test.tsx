@@ -13,4 +13,11 @@ describe("BinaryViewer", () => {
     const { container } = render(<BinaryViewer file={{ is_binary: true, mime: "application/pdf", size: 1, url: "/workspace-files/d.pdf?sig=a", path: "d.pdf", is_dir: false }} />);
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe("/workspace-files/d.pdf?sig=a");
   });
+
+  it("renders a download link for other binary types", () => {
+    const { container } = render(<BinaryViewer file={{ is_binary: true, mime: "application/zip", size: 2048, url: "/workspace-files/a.zip?sig=a", path: "a.zip", is_dir: false }} />);
+    const a = container.querySelector("a");
+    expect(a?.getAttribute("href")).toBe("/workspace-files/a.zip?sig=a");
+    expect(a?.hasAttribute("download")).toBe(true);
+  });
 });
