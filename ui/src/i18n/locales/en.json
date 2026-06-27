@@ -852,6 +852,8 @@
   "workspace.create_folder": "New folder",
   "workspace.rename": "Rename",
   "workspace.download": "Download",
+  "workspace.image_load_error": "Failed to load image",
+  "workspace.pdf_load_error": "If the PDF did not load —",
   "workspace.upload": "Upload",
   "workspace.rename_title": "Rename",
   "workspace.delete_recursive_title": "Delete folder?",
