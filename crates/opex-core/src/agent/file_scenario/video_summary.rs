@@ -129,12 +129,65 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
     ]
 }
 
-/// Build the full Obsidian note: frontmatter + LLM body + unplaced-frame appendix
-/// + collapsed transcript.
+/// Insert the embed lines for frames the LLM did NOT place inline, distributing
+/// them through `body` by each frame's own timestamp (the conspect text follows
+/// the video chronologically, so timestamp position maps roughly to text
+/// position). This avoids the failure mode where the LLM — especially on long
+/// transcripts — ignores the "embed a frame after each thesis" instruction and
+/// leaves ALL frames to be dumped in a trailing appendix. Frames the LLM already
+/// embedded keep their position. Does NOT rely on the LLM writing section
+/// timecodes; uses `raw.frames[i].timestamp` directly.
+fn distribute_unplaced_frames(body: &str, raw: &RawMaterial, frame_names: &[String]) -> String {
+    let blocks: Vec<&str> = body.split("\n\n").collect();
+    if blocks.is_empty() {
+        return body.to_string();
+    }
+    let dur = if raw.duration > 0.0 { raw.duration } else { 1.0 };
+    // Trailing embeds to append after each block.
+    let mut inserts: Vec<Vec<String>> = vec![Vec::new(); blocks.len()];
+    for (i, name) in frame_names.iter().enumerate() {
+        if body.contains(name.as_str()) {
+            continue; // already placed inline by the LLM — leave it
+        }
+        let frac = raw
+            .frames
+            .get(i)
+            .map(|f| (f.timestamp / dur).clamp(0.0, 1.0))
+            .unwrap_or(0.0);
+        let mut idx = ((frac * blocks.len() as f64) as usize).min(blocks.len() - 1);
+        // Spread: if the target block already holds an embed, walk forward
+        // (wrapping) so two frames don't pile onto the same spot.
+        let start = idx;
+        while !inserts[idx].is_empty() {
+            idx = (idx + 1) % blocks.len();
+            if idx == start {
+                break;
+            }
+        }
+        inserts[idx].push(format!("![](images/{name})"));
+    }
+    let mut out = String::new();
+    for (i, block) in blocks.iter().enumerate() {
+        out.push_str(block);
+        for emb in &inserts[i] {
+            out.push_str("\n\n");
+            out.push_str(emb);
+        }
+        if i + 1 < blocks.len() {
+            out.push_str("\n\n");
+        }
+    }
+    out
+}
+
+/// Build the full Obsidian note: frontmatter + LLM body (with any unplaced frames
+/// distributed inline by timestamp) + collapsed transcript.
 ///
 /// Deterministic — does NOT call `Utc::now()`. The worker (Task 6) prepends the
 /// `created` date field before writing.
 pub fn build_note(raw: &RawMaterial, title: &str, llm_body: &str, frame_names: &[String]) -> String {
+    let body = distribute_unplaced_frames(llm_body.trim(), raw, frame_names);
+
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str(&format!("title: {title}\n"));
@@ -142,12 +195,13 @@ pub fn build_note(raw: &RawMaterial, title: &str, llm_body: &str, frame_names: &
     out.push_str(&format!("duration: {:.0}s\n", raw.duration));
     out.push_str("---\n\n");
     out.push_str(&format!("# {title}\n\n"));
-    out.push_str(llm_body.trim());
+    out.push_str(body.trim());
     out.push('\n');
 
-    // Appendix: frames whose embed string the LLM did not include.
+    // Safety net: any frame still not present (e.g. empty body) goes in an
+    // appendix so no frame is ever lost.
     let unplaced: Vec<&String> = frame_names.iter()
-        .filter(|n| !llm_body.contains(n.as_str()))
+        .filter(|n| !body.contains(n.as_str()))
         .collect();
     if !unplaced.is_empty() {
         out.push_str("\n## Дополнительные кадры\n\n");
@@ -198,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn build_note_has_frontmatter_appendix_and_transcript() {
+    fn build_note_keeps_placed_frame_and_distributes_unplaced_inline() {
         let raw = RawMaterial {
             title: Some("Тест".into()), duration: 65.0, transcript: "речь целиком".into(),
             frames: vec![
@@ -208,16 +262,44 @@ mod tests {
             degraded: Degraded::default(),
         };
         let names = vec!["t-frame-01.jpg".to_string(), "t-frame-02.jpg".to_string()];
-        // LLM used only frame 1 inline; frame 2 must go to appendix.
-        let llm_body = "## Резюме\nкоротко\n\n## Конспект\n### Раздел\n![](images/t-frame-01.jpg)\n";
+        // LLM placed frame 1 inline; frame 2 was left unplaced → distributed into body.
+        let llm_body = "## Резюме\nкоротко\n\n## Конспект\n### Раздел\n![](images/t-frame-01.jpg)\n\nещё абзац";
         let note = build_note(&raw, "Тест", llm_body, &names);
         assert!(note.starts_with("---\n"), "frontmatter");
         assert!(note.contains("title: Тест"));
-        assert!(note.contains("![](images/t-frame-01.jpg)"));
-        assert!(note.contains("## Дополнительные кадры"));
-        assert!(note.contains("![](images/t-frame-02.jpg)"), "unplaced frame appended");
+        assert!(note.contains("![](images/t-frame-01.jpg)"), "LLM-placed frame kept");
+        assert!(note.contains("![](images/t-frame-02.jpg)"), "unplaced frame distributed");
+        assert!(!note.contains("## Дополнительные кадры"), "no appendix — frame went inline");
+        let f2 = note.find("t-frame-02.jpg").unwrap();
+        let tr = note.find("Полный транскрипт").unwrap();
+        assert!(f2 < tr, "distributed frame sits in the body, not after the transcript");
         assert!(note.contains("> [!note]- Полный транскрипт"));
         assert!(note.contains("речь целиком"));
+    }
+
+    #[test]
+    fn build_note_distributes_all_frames_when_llm_embedded_none() {
+        // Этап-2 failure mode: the LLM embedded ZERO frames. They must spread
+        // through the body by timestamp, none dumped in a trailing appendix.
+        let raw = RawMaterial {
+            title: Some("Длинное".into()), duration: 120.0, transcript: "t".into(),
+            frames: vec![
+                FrameDesc { timestamp: 6.0, description: "a".into(), image_b64: "x".into() },
+                FrameDesc { timestamp: 60.0, description: "b".into(), image_b64: "y".into() },
+                FrameDesc { timestamp: 114.0, description: "c".into(), image_b64: "z".into() },
+            ],
+            degraded: Degraded::default(),
+        };
+        let names = vec!["f-01.jpg".to_string(), "f-02.jpg".to_string(), "f-03.jpg".to_string()];
+        let llm_body = "## Конспект\n\n### Начало\nтекст1\n\n### Середина\nтекст2\n\n### Конец\nтекст3";
+        let note = build_note(&raw, "Длинное", llm_body, &names);
+        for n in &names {
+            assert!(note.contains(&format!("![](images/{n})")), "{n} present");
+        }
+        assert!(!note.contains("## Дополнительные кадры"), "no appendix dump");
+        // Spread by timestamp: early frame before late frame in the text.
+        assert!(note.find("f-01.jpg").unwrap() < note.find("f-03.jpg").unwrap(),
+            "early-timestamp frame placed before late-timestamp frame");
     }
 
     #[test]
