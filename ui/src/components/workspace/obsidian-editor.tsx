@@ -29,12 +29,15 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
   const viewRef = useRef<EditorView | null>(null);
   // Monotonic counter to drop stale concurrent fetch results (Fix 2).
   const ensureSignedSeqRef = useRef(0);
+  // Fix C3: per-path re-sign attempt counter to cap the onError retry loop.
+  const resignAttemptsRef = useRef<Record<string, number>>({});
 
   // Fix 1: clear cache when noteDir changes so expired entries from a previous
   // note do not bleed into the new note and so memory is bounded per note.
   useEffect(() => {
     urlCacheRef.current = {};
     ensureSignedSeqRef.current = 0;
+    resignAttemptsRef.current = {};
   }, [noteDir]);
 
   const ensureSigned = useCallback(async (doc: string) => {
@@ -57,7 +60,13 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
   }, [noteDir]);
 
   // Fix 3: on image load error, evict the stale URL and re-sign so the image recovers.
+  // Fix C3: cap re-sign attempts per path to avoid an infinite loop when the URL
+  // persistently fails (server down / permanent 403). After 2 attempts the broken
+  // image stays on the error placeholder instead of cycling forever.
   const onImageError = useCallback((assetPath: string) => {
+    const attempts = (resignAttemptsRef.current[assetPath] ?? 0) + 1;
+    if (attempts > 2) return; // give up after 2 re-sign attempts — avoid infinite loop on persistent failure
+    resignAttemptsRef.current[assetPath] = attempts;
     delete urlCacheRef.current[assetPath];
     ensureSigned(viewRef.current?.state.doc.toString() ?? "");
   }, [ensureSigned]);
