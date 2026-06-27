@@ -8,7 +8,15 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from video_helpers import extract_audio, extract_scene_frames, extract_uniform_frames, download_video
+import video_helpers
+from video_helpers import (
+    extract_audio,
+    extract_scene_frames,
+    extract_uniform_frames,
+    download_video,
+    detect_scene_cuts,
+    _avoid_cuts,
+)
 
 
 def _make_tiny_video(path: str):
@@ -43,6 +51,132 @@ async def test_extract_scene_frames_finds_the_cut():
         ts, jpeg = frames[0]
         assert isinstance(ts, float)
         assert jpeg[:2] == b"\xff\xd8", "JPEG SOI marker"
+
+
+# ── Scene-avoidance frame extraction unit tests ──────────────────────────────
+
+@pytest.mark.asyncio
+async def test_detect_scene_cuts_parses_pts_time(monkeypatch):
+    """detect_scene_cuts parses pts_time: floats from ffmpeg stderr (sorted)."""
+    stderr = (
+        b"[Parsed_showinfo] n:0 pts:120 pts_time:5.0 pos:1\n"
+        b"some noise without a timestamp\n"
+        b"[Parsed_showinfo] n:1 pts:24 pts_time:1.0 pos:2\n"
+        b"[Parsed_showinfo] n:2 pts:300 pts_time:12.5 pos:3\n"
+        b"[Parsed_showinfo] garbage pts_time:notanumber pos:4\n"
+    )
+
+    async def fake_run(*args):
+        # Verify the scene-detect filter is wired up correctly.
+        assert "showinfo" in " ".join(args)
+        return 0, b"", stderr
+    monkeypatch.setattr(video_helpers, "_run", fake_run)
+
+    cuts = await detect_scene_cuts("dummy.mp4")
+    assert cuts == [1.0, 5.0, 12.5]
+
+
+@pytest.mark.asyncio
+async def test_detect_scene_cuts_returns_empty_on_ffmpeg_error(monkeypatch):
+    """ffmpeg non-zero exit → empty list (graceful degradation, no raise)."""
+    async def fake_run(*args):
+        return 1, b"", b"ffmpeg blew up"
+    monkeypatch.setattr(video_helpers, "_run", fake_run)
+    assert await detect_scene_cuts("dummy.mp4") == []
+
+
+def test_avoid_cuts_no_cuts_returns_unchanged():
+    assert _avoid_cuts(10.0, [], duration=60.0) == 10.0
+
+
+def test_avoid_cuts_far_from_cut_returns_unchanged():
+    # Cut at 30s, ts at 10s — well outside the ±gap window.
+    assert _avoid_cuts(10.0, [30.0], duration=60.0, gap=2.0) == 10.0
+
+
+def test_avoid_cuts_wide_window_returns_midpoint():
+    # ts=10 sits near cut at 9; surrounding window (9, 40) is wider than 2*gap=4,
+    # so the corrected ts is the window midpoint (9+40)/2 = 24.5.
+    ts = _avoid_cuts(10.0, [9.0, 40.0], duration=60.0, gap=2.0)
+    assert ts == pytest.approx(24.5)
+    # And it is no longer within gap of any cut.
+    assert all(abs(ts - c) > 2.0 for c in [9.0, 40.0])
+
+
+def test_avoid_cuts_narrow_window_shifts_by_gap():
+    # Cuts at 9 and 12 → window width 3 < 2*gap=4. prev+gap = 11, but that is
+    # > next-gap (10), so it falls back to next-gap = 10.
+    ts = _avoid_cuts(10.5, [9.0, 12.0], duration=60.0, gap=2.0)
+    assert ts == pytest.approx(10.0)
+
+
+def test_avoid_cuts_clamps_to_video_bounds():
+    # A cut at 0.5 near ts=1, no right cut → window (0.5, duration). Midpoint may
+    # be huge but stays within [0, duration]; just assert it never escapes bounds.
+    ts = _avoid_cuts(1.0, [0.5], duration=20.0, gap=2.0)
+    assert 0.0 <= ts <= 20.0
+
+
+@pytest.mark.asyncio
+async def test_extract_uniform_frames_avoids_scene_cuts(monkeypatch):
+    """Candidate timestamps near scene cuts are nudged out of the ±gap window."""
+    duration = 100.0
+    cuts = [25.0, 50.0, 75.0]
+    gap = 2.0
+
+    # ── Mock ffprobe (duration) + detect_scene_cuts + per-frame ffmpeg ──
+    async def fake_run(*args):
+        if args[0] == "ffprobe":
+            return 0, f"{duration}".encode(), b""
+        # ffmpeg frame extraction: write the expected output file so the
+        # extractor reads it back.  out_path is the last positional arg.
+        out_path = args[-1]
+        with open(out_path, "wb") as f:
+            f.write(b"\xff\xd8\xff")  # tiny JPEG-ish blob
+        return 0, b"", b""
+    monkeypatch.setattr(video_helpers, "_run", fake_run)
+
+    async def fake_cuts(path, threshold=0.3):
+        return cuts
+    monkeypatch.setattr(video_helpers, "detect_scene_cuts", fake_cuts)
+
+    frames = await extract_uniform_frames("dummy.mp4", count=8)
+
+    assert frames, "expected some frames"
+    timestamps = [ts for ts, _ in frames]
+    # No emitted timestamp may sit within `gap` of any detected cut.
+    for ts in timestamps:
+        for c in cuts:
+            assert abs(ts - c) >= gap, f"ts {ts} too close to cut {c}"
+    # Sorted by time.
+    assert timestamps == sorted(timestamps)
+
+
+@pytest.mark.asyncio
+async def test_extract_uniform_frames_dedups_close_timestamps(monkeypatch):
+    """Two base points nudged into the same stable point collapse to one frame."""
+    duration = 30.0
+    # A single wide gap with cuts that funnel several base points to one midpoint.
+    cuts = [5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0]
+
+    async def fake_run(*args):
+        if args[0] == "ffprobe":
+            return 0, f"{duration}".encode(), b""
+        out_path = args[-1]
+        with open(out_path, "wb") as f:
+            f.write(b"\xff\xd8\xff")
+        return 0, b"", b""
+    monkeypatch.setattr(video_helpers, "_run", fake_run)
+
+    async def fake_cuts(path, threshold=0.3):
+        return cuts
+    monkeypatch.setattr(video_helpers, "detect_scene_cuts", fake_cuts)
+
+    frames = await extract_uniform_frames("dummy.mp4", count=10)
+    timestamps = [ts for ts, _ in frames]
+    # No two emitted timestamps may be within 1.0s of each other (dedup invariant).
+    for a, b in zip(timestamps, timestamps[1:]):
+        assert b - a >= 1.0, f"timestamps {a} and {b} not deduped"
 
 
 class _FakeSTT:
