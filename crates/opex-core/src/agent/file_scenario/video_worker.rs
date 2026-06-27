@@ -52,10 +52,14 @@ pub struct NoteResult {
 ///
 /// `digest_mode` selects the digest strategy: `Some("mapreduce")` runs the
 /// per-segment map-reduce path (topical segmentation → per-segment digest →
-/// merge → final summary); anything else (`Some("single")` / `None`) runs the
-/// legacy single-pass digest. The map-reduce path degrades gracefully — any
-/// segmentation/JSON failure logs a warning and falls back to uniform segments
-/// (and, if even that yields nothing, to single-pass) rather than failing the job.
+/// merge → final summary); `Some("checklist")` runs the extract-then-abstract
+/// path (exhaustive checklist extraction → single-pass digest with the checklist
+/// injected) to capture rare single-mention details; anything else
+/// (`Some("single")` / `None`) runs the legacy single-pass digest. The
+/// map-reduce path degrades gracefully — any segmentation/JSON failure logs a
+/// warning and falls back to uniform segments (and, if even that yields nothing,
+/// to single-pass) rather than failing the job. The checklist path degrades
+/// gracefully too — a failed extraction pass falls back to plain single-pass.
 pub async fn process_one(
     http: &reqwest::Client,
     toolgate_url: &str,
@@ -126,6 +130,8 @@ pub async fn process_one(
 
     let note = if matches!(digest_mode, Some("mapreduce")) {
         build_note_mapreduce(provider, &raw, &title_for_note, &frame_names, on_phase).await?
+    } else if matches!(digest_mode, Some("checklist")) {
+        build_note_checklist(provider, &raw, &title_for_note, &frame_names, on_phase).await?
     } else {
         on_phase("digest", "📝 Составляю конспект…");
         let messages = build_summary_messages(&raw, &frame_names);
@@ -292,6 +298,56 @@ async fn build_note_mapreduce(
     };
 
     Ok(build_note_from_parts(raw, title, &summary, &merged, frame_names))
+}
+
+/// Extract-then-abstract digest ("checklist"): pass 1 extracts an exhaustive
+/// flat checklist of every topic/technique/tool/setting from the transcript;
+/// pass 2 runs the single-pass digest with that checklist injected and the model
+/// instructed to expand every item — so rare single-mention details (which both
+/// single-pass and map-reduce can drop) are guaranteed to land. Two LLM calls.
+///
+/// Graceful: if pass 1 (extraction) fails, we log a warning and fall back to the
+/// plain single-pass digest (empty checklist), so the job still completes. Pass
+/// 2 failures propagate (`?`), matching the single-pass path.
+async fn build_note_checklist(
+    provider: &dyn LlmProvider,
+    raw: &crate::agent::file_scenario::video_summary::RawMaterial,
+    title: &str,
+    frame_names: &[String],
+    on_phase: &(dyn Fn(&str, &str) + Sync),
+) -> anyhow::Result<String> {
+    use crate::agent::file_scenario::video_summary::{
+        build_note, build_summary_messages, build_summary_messages_with_checklist,
+        checklist_messages,
+    };
+
+    // ── Pass 1 (EXTRACT): exhaustive flat checklist ───────────────────────────
+    on_phase("digest", "📝 Извлекаю темы…");
+    let checklist = match provider
+        .chat(&checklist_messages(raw), &[], digest_opts())
+        .await
+    {
+        Ok(resp) => resp.content.trim().to_string(),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "video_worker: checklist extraction LLM call failed — falling back to plain single-pass digest"
+            );
+            String::new()
+        }
+    };
+
+    // ── Pass 2 (ABSTRACT): digest with the checklist injected ─────────────────
+    on_phase("digest", "📝 Пишу конспект…");
+    let messages = if checklist.is_empty() {
+        // No checklist → behave exactly like single-pass (no empty checklist block).
+        build_summary_messages(raw, frame_names)
+    } else {
+        build_summary_messages_with_checklist(raw, frame_names, &checklist)
+    };
+    let llm_body = provider.chat(&messages, &[], digest_opts()).await?.content;
+
+    Ok(build_note(raw, title, &llm_body, frame_names))
 }
 
 // ── Delivery (web-only, v1) ───────────────────────────────────────────────────
@@ -1190,5 +1246,128 @@ mod tests {
         assert_eq!(b[0].0, 0.0);
         assert!((b[1].0 - 0.25).abs() < 1e-9);
         assert!((b[3].0 - 0.75).abs() < 1e-9);
+    }
+
+    // ── Extract-then-abstract (checklist) path ────────────────────────────────
+
+    #[tokio::test]
+    async fn process_one_checklist_two_calls_extract_then_digest() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/summarize-video"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "title": "Урок", "duration": 100.0,
+                "transcript": "речь про хорус и автоматизацию громкости",
+                "frames": [
+                    {"timestamp": 10.0, "description": "к1", "image_b64": "/9j/A"}
+                ],
+                "degraded": {"stt": false, "vision": false}
+            })))
+            .mount(&server)
+            .await;
+
+        // Call order: pass 1 EXTRACT (checklist) → pass 2 ABSTRACT (digest).
+        let provider = SeqLlm::new(vec![
+            "- хорус\n- автоматизация громкости",
+            "## Резюме\nкоротко\n\n## Конспект\n### Раздел\n- хорус раскрыт\n![](images/frame-01.jpg)",
+        ]);
+
+        let job = VideoJob {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            agent_name: "Atlas".into(),
+            channel_id: None,
+            source_type: "file".into(),
+            source_ref: "http://localhost/api/uploads/x?sig=1".into(),
+            source_title: Some("Урок".into()),
+            status: "processing".into(),
+            summary: None,
+            error: None,
+            attempts: 1,
+        };
+
+        let http = reqwest::Client::new();
+        let nr = process_one(
+            &http,
+            &server.uri(),
+            "0.0.0.0:18789",
+            &provider,
+            &job,
+            Some("checklist"),
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .unwrap();
+
+        // EXACTLY 2 LLM calls: extract + digest.
+        assert_eq!(provider.calls.lock().unwrap().len(), 2, "checklist = extract + digest");
+        // Pass 2's user block carried the extracted checklist (proves injection).
+        let calls = provider.calls.lock().unwrap();
+        assert!(calls[1].contains("ОБЯЗАТЕЛЬНЫЙ ЧЕК-ЛИСТ"), "digest user block injects checklist");
+        assert!(calls[1].contains("- хорус"), "extracted item injected into digest");
+        // Note assembled from the digest body.
+        assert!(nr.note.contains("## Конспект"), "digest section present");
+        assert!(nr.note.contains("хорус раскрыт"), "digest body retained");
+        assert!(nr.summary.contains("коротко"), "summary extracted: {}", nr.summary);
+        assert!(nr.note.contains("> [!note]- Полный транскрипт"), "transcript collapsed in");
+        assert!(!nr.media.is_empty(), "media collected for MCP");
+    }
+
+    #[tokio::test]
+    async fn process_one_checklist_empty_checklist_still_builds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/summarize-video"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "title": "Урок", "duration": 60.0,
+                "transcript": "речь целиком",
+                "frames": [],
+                "degraded": {"stt": false, "vision": false}
+            })))
+            .mount(&server)
+            .await;
+
+        // Pass 1 returns an empty string (extraction yielded nothing) → pass 2
+        // must run as plain single-pass (no empty checklist block) and NOT fail.
+        let provider = SeqLlm::new(vec![
+            "",
+            "## Резюме\nкоротко\n\n## Конспект\nтело",
+        ]);
+
+        let job = VideoJob {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            agent_name: "Atlas".into(),
+            channel_id: None,
+            source_type: "file".into(),
+            source_ref: "http://localhost/api/uploads/x?sig=1".into(),
+            source_title: Some("Урок".into()),
+            status: "processing".into(),
+            summary: None,
+            error: None,
+            attempts: 1,
+        };
+
+        let http = reqwest::Client::new();
+        let nr = process_one(
+            &http,
+            &server.uri(),
+            "0.0.0.0:18789",
+            &provider,
+            &job,
+            Some("checklist"),
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .expect("checklist must not hard-fail on empty extraction");
+
+        // Still exactly 2 calls.
+        assert_eq!(provider.calls.lock().unwrap().len(), 2, "extract + digest even when checklist empty");
+        // Pass 2 ran as plain single-pass → no checklist block injected.
+        let calls = provider.calls.lock().unwrap();
+        assert!(!calls[1].contains("ОБЯЗАТЕЛЬНЫЙ ЧЕК-ЛИСТ"),
+            "empty checklist → no checklist block, plain single-pass");
+        assert!(nr.summary.contains("коротко"), "summary extracted: {}", nr.summary);
+        assert!(nr.note.contains("## Конспект"), "digest section present");
     }
 }

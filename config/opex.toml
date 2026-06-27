@@ -156,8 +156,16 @@ vault_name = "zettelkasten"
 # digest_provider = "ollama-local"
 # Optional model override for the digest provider (uses provider default when absent).
 # digest_model = "qwen3:32b"
-# Digest strategy. "mapreduce" splits the transcript into 5-8 topical segments,
-# summarises each in its own small-context LLM call (preserves mid-transcript
-# detail — fixes "lost-in-the-middle" loss on long videos), then writes one final
-# ## Резюме over the merged body. "single" / unset = legacy single-pass (default).
+# Digest strategy. Allowed values: "single" (unset) | "mapreduce" | "checklist".
+# "single" / unset = legacy single-pass digest (one LLM call over the whole
+#   transcript) — the default, fully backward-compatible.
+# "mapreduce" splits the transcript into 5-8 topical segments, summarises each in
+#   its own small-context LLM call (preserves mid-transcript detail — fixes
+#   "lost-in-the-middle" loss on long videos), then writes one final ## Резюме
+#   over the merged body.
+# "checklist" (extract-then-abstract, 2 LLM calls): pass 1 extracts an exhaustive
+#   flat checklist of every topic/technique/tool/setting from the transcript;
+#   pass 2 runs the single-pass digest with that checklist injected and expands
+#   every item — best for capturing RARE single-mention details that both
+#   single-pass and map-reduce can drop.
 # digest_mode = "mapreduce"
