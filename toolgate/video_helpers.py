@@ -4,7 +4,6 @@ video-summary pipeline. System ffmpeg is required (already used by audio_trim)."
 import asyncio
 import glob
 import os
-import shutil
 import sys
 import tempfile
 
@@ -22,7 +21,18 @@ async def _run(*args: str) -> tuple[int, bytes, bytes]:
 # not a bot") to the datacenter/proxy IP for media-stream downloads — a valid
 # cookies file authenticates the request and passes the check.
 _DEFAULT_COOKIES = os.path.expanduser("~/docker/metube/.metube/cookies.txt")
-_COOKIES_WORKING_COPY = os.path.join(tempfile.gettempdir(), "opex_ytdlp_cookies.txt")
+
+
+def _cookie_working_copy() -> str:
+    """Owner-only working-copy path in a private per-user temp dir (0o700)."""
+    uid = getattr(os, "getuid", lambda: 0)()  # Windows (dev/tests) has no getuid
+    d = os.path.join(tempfile.gettempdir(), f"opex_ytdlp_{uid}")
+    os.makedirs(d, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    return os.path.join(d, "cookies.txt")
 
 
 def _cookie_args() -> list[str]:
@@ -32,13 +42,29 @@ def _cookie_args() -> list[str]:
     session back). Pointing it at MeTube's shared jar means a bot-checked /
     logged-out response overwrites and DEGRADES that jar — each failed attempt
     makes the next one worse. So copy the jar to a throwaway working file every
-    call and give yt-dlp the copy; the source jar is never mutated by us."""
+    call and give yt-dlp the copy; the source jar is never mutated by us.
+
+    The copy holds session credentials, so it is written owner-only (0o600) in a
+    private per-user dir, and created with O_NOFOLLOW after unlinking any existing
+    path so a planted symlink can't redirect the write or leak the cookies."""
     path = os.environ.get("YTDLP_COOKIES_FILE", _DEFAULT_COOKIES)
     if not (path and os.path.isfile(path)):
         return []
     try:
-        shutil.copyfile(path, _COOKIES_WORKING_COPY)
-        return ["--cookies", _COOKIES_WORKING_COPY]
+        with open(path, "rb") as src:
+            data = src.read()
+        copy = _cookie_working_copy()
+        try:
+            os.unlink(copy)
+        except FileNotFoundError:
+            pass
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(copy, flags, 0o600)
+        try:
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+        return ["--cookies", copy]
     except OSError:
         return ["--cookies", path]
 
