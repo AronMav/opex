@@ -6,6 +6,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import { markdown } from "@codemirror/lang-markdown";
 import { keymap, EditorView } from "@codemirror/view";
 import { imageDecorations, resolveAssetPath, findImageMatches, setUrls, urlField } from "./md-decorations/images";
+import { wikiLinkDecorations } from "./md-decorations/wikilinks";
 import { signWorkspacePaths } from "@/lib/api";
 
 export interface ObsidianEditorProps {
@@ -47,6 +48,9 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
     run: () => { onSaveRef.current?.(); return true; },
   }]), []);
 
+  const onNavigateRef = useRef(onNavigate);
+  useEffect(() => { onNavigateRef.current = onNavigate; }, [onNavigate]);
+
   const extensions = useMemo(
     () => [
       markdown(),
@@ -54,6 +58,7 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
       EditorView.lineWrapping,
       urlField,
       imageDecorations({ noteDir, getUrl: (p) => urlCacheRef.current[p] }),
+      wikiLinkDecorations((t) => onNavigateRef.current?.(t)),
     ],
     // noteDir change rebuilds the decoration extension with updated resolver
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -61,9 +66,6 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
   );
 
   const handleChange = useCallback((v: string) => onChange(v), [onChange]);
-
-  // onNavigate is consumed by wiki-link decoration extension (Task 12).
-  void onNavigate;
 
   return (
     <div className="flex-1 overflow-hidden">

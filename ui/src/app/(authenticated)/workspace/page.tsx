@@ -546,7 +546,10 @@ export default function WorkspacePage() {
                     onChange={setContent}
                     onSave={() => { if (isDirty) saveFile(); }}
                     noteDir={selectedFile.split("/").slice(0, -1).join("/")}
-                    onNavigate={() => {}}
+                    onNavigate={(target) => {
+                      const fname = target.endsWith(".md") ? target : `${target}.md`;
+                      loadFile(fname);
+                    }}
                   />
                 ) : (
                   <CodeEditor
