@@ -100,7 +100,7 @@ async def extract_uniform_frames(video_path: str, count: int) -> list[tuple[floa
                 "-ss", f"{ts:.3f}",
                 "-i", video_path,
                 "-frames:v", "1",
-                "-vf", "scale=1280:-1",
+                "-vf", "scale='min(1280,iw)':-1",
                 "-q:v", "2",
                 out_path,
             )
