@@ -200,7 +200,7 @@ export default function WorkspacePage() {
     }
   };
 
-  const createFile = async () => {
+  const createFile = useCallback(async () => {
     const name = newFileName.trim();
     if (!name) return;
     try {
@@ -213,9 +213,9 @@ export default function WorkspacePage() {
     } catch (e) {
       setError(`${e}`);
     }
-  };
+  }, [newFileName, currentPath, fetchFiles, loadFile]);
 
-  const createFolder = async () => {
+  const createFolder = useCallback(async () => {
     const name = newFolderName.trim();
     if (!name) return;
     try {
@@ -227,9 +227,9 @@ export default function WorkspacePage() {
     } catch (e) {
       setError(`${e}`);
     }
-  };
+  }, [newFolderName, currentPath, fetchFiles]);
 
-  const doRename = async () => {
+  const doRename = useCallback(async () => {
     if (!renameTarget) return;
     const newName = renameValue.trim();
     if (!newName || newName === renameTarget.name) {
@@ -250,9 +250,9 @@ export default function WorkspacePage() {
     } catch (e) {
       setError(`${e}`);
     }
-  };
+  }, [renameTarget, renameValue, currentPath, selectedFile, fetchFiles]);
 
-  const downloadEntry = async (name: string) => {
+  const downloadEntry = useCallback(async (name: string) => {
     const path = currentPath ? `${currentPath}/${name}` : name;
     let url: string;
     if (fileData && selectedFile === path && isBinaryFile(fileData)) {
@@ -264,9 +264,9 @@ export default function WorkspacePage() {
     }
     const a = document.createElement("a");
     a.href = url; a.download = name; a.click();
-  };
+  }, [currentPath, fileData, selectedFile, t]);
 
-  const doUpload = async (fileList: FileList | File[]) => {
+  const doUpload = useCallback(async (fileList: FileList | File[]) => {
     const uploadedFiles = Array.from(fileList);
     if (uploadedFiles.length === 0) return;
     try {
@@ -275,7 +275,7 @@ export default function WorkspacePage() {
     } catch (e) {
       setError(`${e}`);
     }
-  };
+  }, [currentPath, fetchFiles]);
 
   const isMarkdown = useMemo(() => selectedFile.endsWith(".md"), [selectedFile]);
   const language = useMemo(() => getLangFromFilename(selectedFile), [selectedFile]);
@@ -320,13 +320,13 @@ export default function WorkspacePage() {
     onDeleteFile: setDeleteTarget,
     onDeleteRecursive: setDeleteRecursiveTarget,
     onDownload: downloadEntry,
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [
     files, currentPath, selectedFile, showNewFolder, showNewFile,
     newFolderName, newFileName, renameTarget, renameValue,
     navigateTo, navigateUp, guardLoadFile,
     onShowNewFolder, onHideNewFolder, onShowNewFile, onHideNewFile,
     onRenameStart, onRenameCancel,
+    doUpload, createFile, createFolder, doRename, downloadEntry,
   ]);
 
   // Navigate to root — guarded
@@ -416,7 +416,11 @@ export default function WorkspacePage() {
 
         {/* Editor Area */}
         <div className="flex min-w-0 flex-1 flex-col bg-background relative">
-          {selectedFile ? (
+          {loadingFile ? (
+            <div className="flex flex-1 items-center justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : selectedFile ? (
             <>
               {/* Editor Toolbar */}
               <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border/50 bg-background px-4 py-2">
@@ -440,11 +444,7 @@ export default function WorkspacePage() {
 
               {/* Dynamic Editor Height Adjustment */}
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                {loadingFile ? (
-                  <div className="flex flex-1 items-center justify-center">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  </div>
-                ) : fileData && isBinaryFile(fileData) ? (
+                {fileData && isBinaryFile(fileData) ? (
                   <BinaryViewer file={fileData} />
                 ) : isMarkdown ? (
                   <ObsidianEditor
