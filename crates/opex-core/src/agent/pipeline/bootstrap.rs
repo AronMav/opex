@@ -67,6 +67,14 @@ pub struct BootstrapOutcome {
     /// Carried forward for diagnostics / downstream phases.
     #[allow(dead_code)]
     pub pending_alternatives: Vec<crate::agent::file_scenario::PendingAlternative>,
+    /// `true` when an async-video job was accepted during enrich (YouTube link
+    /// enqueued, or a `summarize_video` attachment outcome). The SSE/channel
+    /// adapters short-circuit the LLM loop and persist `video_ack_text` as the
+    /// assistant reply instead of running the agent.
+    pub video_accepted: bool,
+    /// Clean user-facing acknowledgement to emit as the assistant reply when
+    /// `video_accepted` is `true` (empty otherwise). NOT the enriched blob.
+    pub video_ack_text: String,
 }
 
 /// Input context for the bootstrap phase.
@@ -261,6 +269,21 @@ pub async fn bootstrap<S: EventSink>(
     .await;
     let enriched_text = enrich.text;
     let pending_alternatives = enrich.pending_alternatives;
+    let video_accepted = enrich.video_accepted;
+    // Clean user-facing ack for the short-circuit reply (never the whole enriched
+    // blob, which carries PII-redacted text and attachment rewrites). Prefer the
+    // precise per-attachment `summarize_video` ack; fall back to the canonical
+    // YouTube-link ack when the accept came from a detected link.
+    let video_ack_text = if video_accepted {
+        enrich
+            .outcomes
+            .iter()
+            .find(|o| o.video_accepted)
+            .map(|o| o.summary_text.clone())
+            .unwrap_or_else(|| "🎬 Видео по ссылке принято, готовлю сводку.".to_string())
+    } else {
+        String::new()
+    };
 
     if enrich.outcomes.iter().any(|o| !matches!(o.status, crate::agent::file_scenario::ScenarioStatus::Ok)) {
         tracing::info!("fse: at least one attachment took the failure-rewrite path");
@@ -509,6 +532,8 @@ pub async fn bootstrap<S: EventSink>(
         compressor,
         claude_md_content,
         pending_alternatives,
+        video_accepted,
+        video_ack_text,
     })
 }
 
@@ -555,9 +580,10 @@ mod enrich_result_shape {
     use crate::agent::pipeline::subagent::EnrichResult;
     #[test]
     fn enrich_result_exposes_text_and_pending() {
-        let r = EnrichResult { text: "hi".into(), outcomes: vec![], pending_alternatives: vec![] };
+        let r = EnrichResult { text: "hi".into(), outcomes: vec![], pending_alternatives: vec![], video_accepted: false };
         assert_eq!(r.text, "hi");
         assert!(r.outcomes.is_empty());
         assert!(r.pending_alternatives.is_empty());
+        assert!(!r.video_accepted);
     }
 }

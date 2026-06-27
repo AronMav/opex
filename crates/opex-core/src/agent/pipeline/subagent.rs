@@ -187,6 +187,14 @@ pub struct EnrichResult {
     pub text: String,
     pub outcomes: Vec<crate::agent::file_scenario::ScenarioOutcome>,
     pub pending_alternatives: Vec<crate::agent::file_scenario::PendingAlternative>,
+    /// `true` when this message was an async-video acceptance (a YouTube link
+    /// was enqueued and/or a `summarize_video` outcome carried `video_accepted`).
+    /// The pipeline uses this to SHORT-CIRCUIT the LLM agent loop: the ack text
+    /// is the whole reply, so the agent never tries to (slowly, misleadingly)
+    /// fetch/transcribe the YouTube link itself. Only the async-video path sets
+    /// this — synchronous scenarios (transcribe/describe/extract) leave it false
+    /// because their result must be handed to the agent for a real answer.
+    pub video_accepted: bool,
 }
 
 /// Enrich user text: auto-fetch URLs (max 2), add attachment hints, then run the
@@ -229,9 +237,15 @@ pub async fn enrich_message_text(
 
     // Enqueue a `url` video-summarization job for each YouTube link detected
     // in the original (pre-PII-redacted) user text so the job stores the real URL.
+    // A successful enqueue marks `video_accepted` so the caller short-circuits the
+    // LLM loop — the agent must NOT also try to fetch/transcribe the YouTube link.
+    let mut video_accepted = false;
     for link in detect_video_links(user_text) {
         match opex_db::video_jobs::enqueue_video_job(db, session_id, agent_name, "url", &link, None).await {
-            Ok(_) => enriched.push_str("\n\n🎬 Видео по ссылке принято, готовлю сводку."),
+            Ok(_) => {
+                enriched.push_str("\n\n🎬 Видео по ссылке принято, готовлю сводку.");
+                video_accepted = true;
+            }
             Err(e) => tracing::warn!(error = %e, link = %link, "video url enqueue failed"),
         }
     }
@@ -258,7 +272,11 @@ pub async fn enrich_message_text(
         &outcomes,
     );
 
-    EnrichResult { text: enriched, outcomes, pending_alternatives }
+    // Async-video acceptance: a YouTube-link enqueue above OR a `summarize_video`
+    // attachment outcome (video file) marks this turn for the LLM-loop short-circuit.
+    let video_accepted = video_accepted || outcomes.iter().any(|o| o.video_accepted);
+
+    EnrichResult { text: enriched, outcomes, pending_alternatives, video_accepted }
 }
 
 /// v1 video-URL allowlist: YouTube only (SSRF surface — see spec §9).
@@ -970,5 +988,62 @@ mod tests {
             "no dangling URL must survive: {}",
             result.text
         );
+        // Synchronous (document save) scenario MUST NOT short-circuit the agent loop.
+        assert!(
+            !result.video_accepted,
+            "synchronous document scenario must leave video_accepted=false"
+        );
+    }
+
+    /// A YouTube link in the user text enqueues a video job and marks the
+    /// EnrichResult `video_accepted=true` so the pipeline short-circuits the LLM loop.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enrich_youtube_link_sets_video_accepted(pool: sqlx::PgPool) {
+        let client = reqwest::Client::new();
+        let session_id = uuid::Uuid::new_v4();
+        let result = enrich_message_text(
+            &client,
+            "127.0.0.1:18789",
+            "http://localhost:9011", // unreachable toolgate is irrelevant: the link path enqueues directly
+            "ru",
+            &pool,
+            session_id,
+            "TestAgent",
+            "сделай конспект https://www.youtube.com/watch?v=abc123",
+            &[],
+        )
+        .await;
+
+        assert!(
+            result.video_accepted,
+            "YouTube link enqueue must set video_accepted=true"
+        );
+        // Exactly one video_jobs row was enqueued for this session.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM video_jobs WHERE session_id=$1")
+            .bind(session_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "one video job enqueued for the YouTube link");
+    }
+
+    /// A plain-text message with no video link / no attachments leaves
+    /// `video_accepted=false` — the agent loop runs normally.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enrich_plain_text_leaves_video_accepted_false(pool: sqlx::PgPool) {
+        let client = reqwest::Client::new();
+        let result = enrich_message_text(
+            &client,
+            "127.0.0.1:18789",
+            "http://localhost:9011",
+            "ru",
+            &pool,
+            uuid::Uuid::new_v4(),
+            "TestAgent",
+            "привет, как дела?",
+            &[],
+        )
+        .await;
+        assert!(!result.video_accepted, "plain text must not short-circuit the agent loop");
     }
 }
