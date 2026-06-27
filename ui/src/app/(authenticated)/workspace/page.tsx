@@ -18,8 +18,8 @@ import { Folder, FileCode, Save, Trash2, FilePlus, FolderTree, CornerDownRight, 
 import type { FileEntry } from "@/types/api";
 import { buildRenameTarget } from "./file-ops";
 
-const MarkdownEditor = dynamic(
-  () => import("@/components/workspace/markdown-editor").then((m) => m.MarkdownEditor),
+const ObsidianEditor = dynamic(
+  () => import("@/components/workspace/obsidian-editor").then((m) => m.ObsidianEditor),
   { ssr: false, loading: () => <div className="flex-1 animate-pulse bg-muted/20" /> },
 );
 
@@ -541,10 +541,12 @@ export default function WorkspacePage() {
                 {fileData && isBinaryFile(fileData) ? (
                   <BinaryViewer file={fileData} />
                 ) : isMarkdown ? (
-                  <MarkdownEditor
+                  <ObsidianEditor
                     value={content}
                     onChange={setContent}
                     onSave={() => { if (isDirty) saveFile(); }}
+                    noteDir={selectedFile.split("/").slice(0, -1).join("/")}
+                    onNavigate={() => {}}
                   />
                 ) : (
                   <CodeEditor
