@@ -46,8 +46,17 @@ mod tests {
                 .unwrap();
         inp.write_all(b"hi").await.unwrap();
         inp.shutdown().await.unwrap();
+        // Drop the write half so `cat` sees EOF on stdin and exits — otherwise
+        // its stdout never closes and read_to_string hangs forever (CI hang).
+        drop(inp);
         let mut s = String::new();
-        out.read_to_string(&mut s).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            out.read_to_string(&mut s),
+        )
+        .await
+        .expect("read_to_string timed out — child stdin not closed?")
+        .unwrap();
         assert_eq!(s, "hi");
         let _ = child.kill().await;
     }
