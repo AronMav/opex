@@ -289,17 +289,24 @@ mod tests {
         );
 
         // ── 5. Audit row ─────────────────────────────────────────────────
-        // audit_spawn is fire-and-forget; yield to let the spawned task run.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let audit_rows = crate::db::audit::query_events(
-            &pool,
-            Some("TestAgent"),
-            Some(crate::db::audit::event_types::FILE_SCENARIO_CREATED),
-            10,
-            0,
-        )
-        .await
-        .expect("audit query");
+        // audit_spawn is fire-and-forget; poll until the spawned task commits
+        // the row rather than relying on a fixed sleep (racy on slow CI runners).
+        let mut audit_rows = Vec::new();
+        for _ in 0..100 {
+            audit_rows = crate::db::audit::query_events(
+                &pool,
+                Some("TestAgent"),
+                Some(crate::db::audit::event_types::FILE_SCENARIO_CREATED),
+                10,
+                0,
+            )
+            .await
+            .expect("audit query");
+            if !audit_rows.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
         assert!(
             !audit_rows.is_empty(),
             "FILE_SCENARIO_CREATED audit event must be written"
@@ -444,18 +451,24 @@ mod tests {
         assert!(!result.starts_with("Error"),
             "create must succeed: {result}");
 
-        // audit_spawn is fire-and-forget; yield briefly to let it settle.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-
-        let audit_rows = crate::db::audit::query_events(
-            &pool,
-            Some("Hermes"),
-            Some(crate::db::audit::event_types::FILE_SCENARIO_CREATED),
-            10,
-            0,
-        )
-        .await
-        .expect("audit query");
+        // audit_spawn is fire-and-forget; poll until the spawned task commits
+        // the row rather than relying on a fixed sleep (racy on slow CI runners).
+        let mut audit_rows = Vec::new();
+        for _ in 0..100 {
+            audit_rows = crate::db::audit::query_events(
+                &pool,
+                Some("Hermes"),
+                Some(crate::db::audit::event_types::FILE_SCENARIO_CREATED),
+                10,
+                0,
+            )
+            .await
+            .expect("audit query");
+            if !audit_rows.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
 
         assert!(!audit_rows.is_empty(),
             "FILE_SCENARIO_CREATED audit event must be emitted for a successful create");
