@@ -1,5 +1,6 @@
 import { useAuthStore } from "@/stores/auth-store";
 import type { CheckpointListDto, RestoreReportDto } from "@/types/api.generated";
+import type { WorkspaceFile } from "@/types/api";
 
 const REQUEST_TIMEOUT = 30_000;
 
@@ -242,3 +243,26 @@ export const restoreCheckpoint = (agent: string, n: number, file?: string) =>
     `/api/agents/${encodeURIComponent(agent)}/checkpoints/${n}/restore`,
     file ? { file } : {},
   );
+
+// ── Workspace API helpers ─────────────────────────────────────────────────────
+
+export function isBinaryFile(
+  r: WorkspaceFile,
+): r is Extract<WorkspaceFile, { is_binary: true }> {
+  return "is_binary" in r && r.is_binary === true;
+}
+
+export const signWorkspacePaths = (paths: string[]) =>
+  apiPost<{ url_by_path: Record<string, string> }>("/api/workspace/sign", { paths }).then((r) => r.url_by_path);
+
+export const wsMkdir = (path: string) => apiPost("/api/workspace/mkdir", { path });
+export const wsRename = (from: string, to: string) => apiPost("/api/workspace/rename", { from, to });
+export const wsDeleteRecursive = (path: string) =>
+  apiDelete(`/api/workspace/${path}?recursive=true`);
+
+export function wsUpload(dir: string, files: File[]) {
+  const fd = new FormData();
+  fd.append("dir", dir); // MUST be appended before files (backend reads dir first)
+  for (const f of files) fd.append("file", f);
+  return apiPostFormData<{ ok: boolean; saved: string[]; errors: string[] }>("/api/workspace/upload", fd);
+}

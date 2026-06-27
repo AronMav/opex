@@ -188,6 +188,10 @@ export interface FileEntry {
   display: string;
 }
 
+export type WorkspaceFile =
+  | { content: string; path: string; is_dir: false }
+  | { is_binary: true; mime: string; size: number; url: string; path: string; is_dir: false };
+
 export interface SecretInfo {
   name: string;
   scope: string;
