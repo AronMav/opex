@@ -14,7 +14,7 @@ export function BinaryViewer({ file }: { file: BinaryFile }) {
     );
   }
   if (file.mime === "application/pdf") {
-    return <iframe src={file.url} title={file.path} className="flex-1 min-h-0 w-full border-0" />;
+    return <iframe src={file.url} title={file.path} className="flex-1 min-h-0 w-full border-0 min-h-[60vh]" />;
   }
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-3 text-muted-foreground">

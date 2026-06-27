@@ -101,6 +101,9 @@ export default function WorkspacePage() {
       if (!("is_binary" in data)) {
         setContent(data.content);
         setOriginal(data.content);
+      } else {
+        setContent("");
+        setOriginal("");
       }
       setSaved(false);
       setError("");
