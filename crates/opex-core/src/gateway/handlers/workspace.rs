@@ -19,12 +19,19 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/workspace/upload", post(api_workspace_upload))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1024 * 1024));
 
+    // PUT /api/workspace/{*path} accepts a JSON body; bound it to prevent large
+    // payloads from reaching the handler.  GET and DELETE have no body, so the
+    // layer is harmless for them.
+    let workspace_catchall = Router::new()
+        .route("/api/workspace/{*path}", get(api_workspace_browse).put(api_workspace_write).delete(api_workspace_delete))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1024 * 1024));
+
     Router::new()
         .route("/api/workspace", get(api_workspace_browse))
         .route("/api/workspace/sign", post(api_workspace_sign))
         .route("/api/workspace/mkdir", post(api_workspace_mkdir))
         .route("/api/workspace/rename", post(api_workspace_rename))
-        .route("/api/workspace/{*path}", get(api_workspace_browse).put(api_workspace_write).delete(api_workspace_delete))
+        .merge(workspace_catchall)
         .merge(upload)
 }
 
@@ -115,10 +122,20 @@ async fn resolve_workspace_path(
     resolve_within(std::path::Path::new(crate::config::WORKSPACE_DIR), rel_path).await
 }
 
+/// Files larger than this threshold that are NOT identified as binary by
+/// extension are served as binary (signed URL) to avoid reading large blobs
+/// into RAM during UTF-8 probing.
+const MAX_TEXT_READ_BYTES: u64 = MAX_UPLOAD_BYTES as u64;
+
 /// Build a JSON response for a single workspace file.
 ///
 /// Binary files (by extension or invalid UTF-8) return a signed URL;
 /// text files return their content inline.
+///
+/// Optimisation: files whose extension is in `BINARY_EXTS` are served via a
+/// signed URL **without reading the file content** — only `metadata.len()` is
+/// needed.  For unknown/text extensions, the file is read only if its size is
+/// ≤ `MAX_TEXT_READ_BYTES`; larger files are treated as binary.
 async fn build_file_response(
     base: &std::path::Path,
     rel: &str,
@@ -128,39 +145,56 @@ async fn build_file_response(
     let (base_canon, target) = resolve_within(base, rel).await?;
 
     let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    let bytes = tokio::fs::read(&target).await.map_err(|e| {
-        let status = if e.kind() == std::io::ErrorKind::NotFound {
-            StatusCode::NOT_FOUND
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        };
-        (status, Json(json!({"error": e.to_string()})))
-    })?;
 
-    // Binary if extension says so OR content is not valid UTF-8.
-    let is_binary = is_binary_filename(name) || std::str::from_utf8(&bytes).is_err();
-
-    if is_binary {
-        // Re-derive workspace-relative path so the signed URL matches what
-        // serve_workspace_file canonicalizes (C-2 bug class).
+    // Helper: build the binary JSON response given a file size.
+    let binary_response = |size: u64| {
         let rel_for_url = target
             .strip_prefix(&base_canon)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| rel.to_string());
         let url = crate::uploads::mint_workspace_file_url(&rel_for_url, key, ttl);
         let mime = crate::uploads::guess_mime_from_extension(name);
-        Ok(json!({
+        json!({
             "is_binary": true,
             "mime": mime,
-            "size": bytes.len(),
+            "size": size,
             "url": url,
             "path": rel,
             "is_dir": false,
-        }))
-    } else {
-        let content = String::from_utf8(bytes).unwrap_or_default();
-        Ok(json!({ "content": content, "path": rel, "is_dir": false }))
+        })
+    };
+
+    // Map a metadata / read IO error to the appropriate HTTP status.
+    let map_io_err = |e: std::io::Error| {
+        let status = if e.kind() == std::io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, Json(json!({"error": e.to_string()})))
+    };
+
+    if is_binary_filename(name) {
+        // Known-binary extension: stat only — never read the file.
+        let meta = tokio::fs::metadata(&target).await.map_err(map_io_err)?;
+        return Ok(binary_response(meta.len()));
     }
+
+    // Unknown / text extension: read, but cap at MAX_TEXT_READ_BYTES first.
+    let meta = tokio::fs::metadata(&target).await.map_err(map_io_err)?;
+    if meta.len() > MAX_TEXT_READ_BYTES {
+        return Ok(binary_response(meta.len()));
+    }
+
+    let bytes = tokio::fs::read(&target).await.map_err(map_io_err)?;
+
+    // Still might not be valid UTF-8 (e.g. `.bin` file, extensionless binary).
+    if std::str::from_utf8(&bytes).is_err() {
+        return Ok(binary_response(bytes.len() as u64));
+    }
+
+    let content = String::from_utf8(bytes).unwrap_or_default();
+    Ok(json!({ "content": content, "path": rel, "is_dir": false }))
 }
 
 /// List directory contents as JSON entries.
@@ -635,6 +669,47 @@ mod tests {
         assert!(resolve_within(base.path(), "a/../b").await.is_err());
         assert!(resolve_within(base.path(), "..").await.is_err());
         assert!(resolve_within(base.path(), "ok/inside.md").await.is_ok());
+    }
+
+    /// Binary-by-extension files must NOT be read; size comes from metadata.
+    #[tokio::test]
+    async fn build_response_binary_stat_only_no_content_read() {
+        let base = tempfile::tempdir().unwrap();
+        // Write a 5-byte .mp4 file; the handler must return size=5 via metadata,
+        // never reading bytes into RAM (we can't intercept the syscall, but we
+        // verify the correct size is reported and is_binary=true).
+        tokio::fs::write(base.path().join("clip.mp4"), b"12345").await.unwrap();
+        let v = build_file_response(base.path(), "clip.mp4", &[9u8; 32], 3600).await.unwrap();
+        assert_eq!(v["is_binary"], true);
+        assert_eq!(v["size"], 5u64);
+        let url = v["url"].as_str().unwrap();
+        assert!(url.starts_with("/workspace-files/clip.mp4?sig="), "got {url}");
+        // No "content" field.
+        assert!(v.get("content").is_none());
+    }
+
+    /// A non-binary-extension file larger than MAX_TEXT_READ_BYTES must be
+    /// served as binary (signed URL with size from metadata) without reading it.
+    #[tokio::test]
+    async fn build_response_oversized_text_ext_treated_as_binary() {
+        let base = tempfile::tempdir().unwrap();
+        // Create a file that exceeds MAX_TEXT_READ_BYTES using a real temp file,
+        // but we verify the cap logic by temporarily creating exactly
+        // MAX_TEXT_READ_BYTES + 1 bytes.  Writing 50 MiB + 1 bytes is possible
+        // but slow; instead we rely on the metadata branch: write a small file,
+        // then use std::fs to truncate/extend it to the cap + 1.
+        let path = base.path().join("big.log");
+        {
+            let f = std::fs::File::create(&path).unwrap();
+            f.set_len(MAX_TEXT_READ_BYTES + 1).unwrap();
+        }
+        let meta = tokio::fs::metadata(&path).await.unwrap();
+        assert_eq!(meta.len(), MAX_TEXT_READ_BYTES + 1);
+
+        let v = build_file_response(base.path(), "big.log", &[11u8; 32], 3600).await.unwrap();
+        assert_eq!(v["is_binary"], true, "oversized non-binary-ext file should be treated as binary");
+        assert_eq!(v["size"], MAX_TEXT_READ_BYTES + 1);
+        assert!(v.get("content").is_none());
     }
 
     #[tokio::test]
