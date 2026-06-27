@@ -10,24 +10,26 @@ export const urlField = StateField.define<Record<string, string>>({
   },
 });
 
-const IMG_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g;
+const IMG_RE = /!\[([^\]]*)\]\(([^)]+)\)/g;
 
 export function resolveAssetPath(noteDir: string, src: string): string | null {
   if (/^https?:\/\//i.test(src) || src.startsWith("/")) return null;
   return noteDir ? `${noteDir}/${src}` : src;
 }
 
-export function findImageMatches(text: string): { from: number; to: number; src: string }[] {
-  const out: { from: number; to: number; src: string }[] = [];
+export function findImageMatches(text: string): { from: number; to: number; src: string; alt: string }[] {
+  const out: { from: number; to: number; src: string; alt: string }[] = [];
   for (const m of text.matchAll(IMG_RE)) {
-    out.push({ from: m.index!, to: m.index! + m[0].length, src: m[1] });
+    const src = m[2].trim();
+    if (!src) continue;
+    out.push({ from: m.index!, to: m.index! + m[0].length, src, alt: m[1] });
   }
   return out;
 }
 
 class ImageWidget extends WidgetType {
   constructor(readonly url: string | undefined, readonly alt: string) { super(); }
-  eq(o: ImageWidget) { return o.url === this.url; }
+  eq(o: ImageWidget) { return o.url === this.url && o.alt === this.alt; }
   toDOM() {
     const wrap = document.createElement("div");
     wrap.className = "cm-md-image";
@@ -70,7 +72,7 @@ export function imageDecorations(opts: {
             // REPLACE the `![](...)` source range with the image widget (Live Preview:
             // hide markup, show render). NOT a trailing block widget — that would show
             // source AND image together.
-            b.add(mf, mt, Decoration.replace({ widget: new ImageWidget(url, m.src) }));
+            b.add(mf, mt, Decoration.replace({ widget: new ImageWidget(url, m.alt) }));
           }
         }
         return b.finish();

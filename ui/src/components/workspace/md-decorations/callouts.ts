@@ -38,8 +38,8 @@ export function calloutDecorations(): Extension {
     { decorations: (v) => v.decorations },
   );
   const theme = EditorView.baseTheme({
-    ".cm-callout-header": { borderLeft: "3px solid #7aa2f7", paddingLeft: "8px", fontWeight: "600", background: "rgba(122,162,247,0.08)" },
-    ".cm-callout-body": { borderLeft: "3px solid #7aa2f7", paddingLeft: "8px", background: "rgba(122,162,247,0.04)" },
+    ".cm-callout-header": { borderLeft: "3px solid var(--primary, #7aa2f7)", paddingLeft: "8px", fontWeight: "600", background: "color-mix(in srgb, var(--primary, #7aa2f7) 8%, transparent)" },
+    ".cm-callout-body": { borderLeft: "3px solid var(--primary, #7aa2f7)", paddingLeft: "8px", background: "color-mix(in srgb, var(--primary, #7aa2f7) 4%, transparent)" },
   });
   return [plugin, theme];
 }

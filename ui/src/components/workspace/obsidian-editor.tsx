@@ -72,7 +72,7 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
   const handleChange = useCallback((v: string) => onChange(v), [onChange]);
 
   return (
-    <div className="flex-1 overflow-hidden">
+    <div className="flex-1 min-h-0 overflow-hidden">
       <CodeMirror
         value={value}
         onChange={handleChange}
