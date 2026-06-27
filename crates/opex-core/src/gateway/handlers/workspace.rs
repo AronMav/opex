@@ -79,6 +79,14 @@ async fn resolve_within(
     base: &std::path::Path,
     rel_path: &str,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), (StatusCode, Json<Value>)> {
+    // Reject any `..` component up front. PathBuf::starts_with does NOT resolve
+    // `..`, so a non-existent `..`-tail path could otherwise pass the
+    // component-level guard (Linux traversal bypass). No legitimate workspace
+    // path needs `..`.
+    if rel_path.split(['/', '\\']).any(|seg| seg == "..") {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "path traversal denied"}))));
+    }
+
     let _ = tokio::fs::create_dir_all(base).await; // workspace root — legitimately ensured
     let target = base.join(rel_path);
 
@@ -611,6 +619,22 @@ mod tests {
         let (b, t) = resolve_within(base.path(), "a/b/file.md").await.unwrap();
         assert!(t.starts_with(&b), "valid non-existent nested path resolves inside base");
         assert!(!base.path().join("a").exists(), "still no dir creation");
+    }
+
+    #[tokio::test]
+    async fn resolve_within_rejects_dotdot_bypass_payload() {
+        // Regression: "subdir/../.." ends in `..`; the lexical fallback used to pass
+        // the component-level starts_with check on Linux. Must be denied everywhere.
+        let base = tempfile::tempdir().unwrap();
+        assert!(resolve_within(base.path(), "subdir/../..").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_within_rejects_any_dotdot_component() {
+        let base = tempfile::tempdir().unwrap();
+        assert!(resolve_within(base.path(), "a/../b").await.is_err());
+        assert!(resolve_within(base.path(), "..").await.is_err());
+        assert!(resolve_within(base.path(), "ok/inside.md").await.is_ok());
     }
 
     #[tokio::test]
