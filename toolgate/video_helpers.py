@@ -4,6 +4,7 @@ video-summary pipeline. System ffmpeg is required (already used by audio_trim)."
 import asyncio
 import glob
 import os
+import sys
 import tempfile
 
 
@@ -69,8 +70,13 @@ async def download_video(url: str, dest_dir: str) -> str:
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError("download_video: only http/https URLs are allowed")
     out_tmpl = os.path.join(dest_dir, "dl.%(ext)s")
+    # Invoke yt-dlp via the venv interpreter (`python -m yt_dlp`), not a bare
+    # `yt-dlp` on PATH: toolgate's PATH does not include the venv's bin/, so a
+    # bare name raises FileNotFoundError ("source fetch failed"). `-m yt_dlp`
+    # resolves from the venv's site-packages regardless of PATH.
     code, _, err = await _run(
-        "yt-dlp", "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
+        sys.executable, "-m", "yt_dlp",
+        "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
     )
     if code != 0:
         raise RuntimeError(f"yt-dlp failed: {err.decode(errors='ignore')[:400]}")
