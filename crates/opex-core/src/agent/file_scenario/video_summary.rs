@@ -44,8 +44,11 @@ const SYSTEM_PROMPT: &str = "Ты помощник, который делает 
 ## Конспект\n\
 <структурированный конспект с подзаголовками ### и таймкодами>\n\
 \n\
-Там, где уместно, вставляй изображения из списка кадров, используя ТОЧНО такой синтаксис: \
-![[_System/media/<имя_файла>]]\n\
+Тебе даны кадры видео с таймкодами и описаниями. ОБЯЗАТЕЛЬНО размести КАЖДЫЙ предоставленный кадр \
+в наиболее релевантном по смыслу и таймкоду разделе ## Конспекта, вставив его embed-строку сразу \
+после соответствующего тезиса. Распределяй кадры РАВНОМЕРНО по всему конспекту — НЕ группируй их \
+в начале или в конце. Используй ВСЕ кадры из списка.\n\
+\n\
 Пиши по-русски, без воды.";
 
 /// Filesystem/Obsidian-safe slug; keeps Cyrillic, strips specials, spaces→'-'.
@@ -84,7 +87,7 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
         user.push_str("=== Ключевые кадры (таймкод → описание → embed-строка) ===\n");
         for (f, name) in raw.frames.iter().zip(frame_names.iter()) {
             user.push_str(&format!(
-                "[{:.0}s] {} → ![[_System/media/{}]]\n",
+                "[{:.0}s] {} → ![](images/{})\n",
                 f.timestamp, f.description, name
             ));
         }
@@ -140,7 +143,7 @@ pub fn build_note(raw: &RawMaterial, title: &str, llm_body: &str, frame_names: &
     if !unplaced.is_empty() {
         out.push_str("\n## Дополнительные кадры\n\n");
         for n in unplaced {
-            out.push_str(&format!("![[_System/media/{n}]]\n\n"));
+            out.push_str(&format!("![](images/{n})\n\n"));
         }
     }
     // Collapsed full transcript.
@@ -197,13 +200,13 @@ mod tests {
         };
         let names = vec!["t-frame-01.jpg".to_string(), "t-frame-02.jpg".to_string()];
         // LLM used only frame 1 inline; frame 2 must go to appendix.
-        let llm_body = "## Резюме\nкоротко\n\n## Конспект\n### Раздел\n![[_System/media/t-frame-01.jpg]]\n";
+        let llm_body = "## Резюме\nкоротко\n\n## Конспект\n### Раздел\n![](images/t-frame-01.jpg)\n";
         let note = build_note(&raw, "Тест", llm_body, &names);
         assert!(note.starts_with("---\n"), "frontmatter");
         assert!(note.contains("title: Тест"));
-        assert!(note.contains("![[_System/media/t-frame-01.jpg]]"));
+        assert!(note.contains("![](images/t-frame-01.jpg)"));
         assert!(note.contains("## Дополнительные кадры"));
-        assert!(note.contains("![[_System/media/t-frame-02.jpg]]"), "unplaced frame appended");
+        assert!(note.contains("![](images/t-frame-02.jpg)"), "unplaced frame appended");
         assert!(note.contains("> [!note]- Полный транскрипт"));
         assert!(note.contains("речь целиком"));
     }
@@ -244,6 +247,7 @@ mod tests {
         assert!(user.content.contains("полный текст речи"), "whole transcript embedded");
         assert!(user.content.contains("синий слайд"), "frame description embedded");
         assert!(user.content.contains("12"), "timestamp embedded");
+        assert!(user.content.contains("![](images/frame-01.jpg)"), "relative embed format used");
     }
 
     #[test]

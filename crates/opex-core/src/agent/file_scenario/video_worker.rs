@@ -100,7 +100,7 @@ pub async fn process_one(
     let note_slug = slug(&title, &id8);
 
     let frame_names: Vec<String> = (0..raw.frames.len())
-        .map(|i| format!("{note_slug}-{id8}-frame-{:02}.jpg", i + 1))
+        .map(|i| format!("frame-{:02}.jpg", i + 1))
         .collect();
 
     let media: Vec<(String, String)> = frame_names
@@ -340,14 +340,14 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                         folder = format!("Видео/{}-{}", nr.slug, suffix);
                     }
 
-                    // Save media frames
+                    // Save media frames into Видео/<slug>/images/
                     let mut ok = true;
                     for (name, b64) in &nr.media {
                         if let Err(e) = mcp
                             .call_tool(
                                 "mcp-obsidian",
                                 "save_media",
-                                &serde_json::json!({ "filename": name, "content_b64": b64 }),
+                                &serde_json::json!({ "filename": name, "content_b64": b64, "folder": format!("{folder}/images") }),
                             )
                             .await
                         {
@@ -517,7 +517,7 @@ mod tests {
 
         let client = reqwest::Client::new();
         let provider = FakeLlm::new(
-            "## Резюме\nкоротко\n\n## Конспект\n![[_System/media/тест-frame-01.jpg]]",
+            "## Резюме\nкоротко\n\n## Конспект\n![](images/frame-01.jpg)",
         );
 
         let note = process_one(

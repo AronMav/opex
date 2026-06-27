@@ -94,12 +94,13 @@ const MCP_TOOLS = [
   },
   {
     name: "save_media",
-    description: "Save an image into _System/media (base64).",
+    description: "Save an image into a vault folder (base64). Defaults to _System/media if folder is omitted.",
     inputSchema: {
       type: "object",
       properties: {
         filename: { type: "string" },
         content_b64: { type: "string" },
+        folder: { type: "string", description: "Target subfolder, e.g. 'Видео/slug/images'. Defaults to _System/media." },
       },
       required: ["filename", "content_b64"],
     },
@@ -264,7 +265,7 @@ app.post("/mcp", async (request, reply) => {
           result = await searchNotes(args.query, args.limit);
           break;
         case "save_media":
-          result = await ops.saveMedia(args.filename, args.content_b64); break;
+          result = await ops.saveMedia(args.filename, args.content_b64, args.folder); break;
         case "note_exists":
           result = String(await ops.noteExists(args.folder, args.filename)); break;
         case "commit_vault":
