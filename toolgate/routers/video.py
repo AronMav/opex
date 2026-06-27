@@ -15,7 +15,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from video_helpers import extract_audio, extract_scene_frames, extract_uniform_frames, download_video, _run
+from video_helpers import extract_audio, extract_scene_frames, extract_uniform_frames, download_video, _run, _cookie_args
 
 # Hostnames trusted for video_url (always a Core gateway upload URL — localhost only).
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
@@ -204,7 +204,7 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
         if not resolved_title and body.page_url and body.page_url.startswith(("http://", "https://")):
             try:
                 code, out, _ = await _run(
-                    sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno",
+                    sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno", *_cookie_args(),
                     "--print", "%(title)s", "--skip-download", "--", body.page_url,
                 )
                 if code == 0:

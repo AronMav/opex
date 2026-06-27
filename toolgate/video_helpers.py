@@ -16,6 +16,19 @@ async def _run(*args: str) -> tuple[int, bytes, bytes]:
     return proc.returncode or 0, out, err
 
 
+# Default to the cookies jar that MeTube maintains on the deploy server; override
+# with YTDLP_COOKIES_FILE. YouTube serves a bot-check ("Sign in to confirm you're
+# not a bot") to the datacenter/proxy IP for media-stream downloads — a valid
+# cookies file authenticates the request and passes the check.
+_DEFAULT_COOKIES = os.path.expanduser("~/docker/metube/.metube/cookies.txt")
+
+
+def _cookie_args() -> list[str]:
+    """`["--cookies", <path>]` if a cookies file is configured and exists, else `[]`."""
+    path = os.environ.get("YTDLP_COOKIES_FILE", _DEFAULT_COOKIES)
+    return ["--cookies", path] if path and os.path.isfile(path) else []
+
+
 async def extract_audio(video_path: str) -> bytes:
     """Decode the audio track to mono 16 kHz ogg/opus (small, STT-friendly)."""
     with tempfile.TemporaryDirectory() as d:
@@ -212,7 +225,7 @@ async def download_video(url: str, dest_dir: str) -> str:
     # serves a bot-check ("Sign in to confirm you're not a bot"). Deno must be on
     # toolgate's PATH (~/.local/bin/deno -> ~/.deno/bin/deno on the server).
     code, _, err = await _run(
-        sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno",
+        sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno", *_cookie_args(),
         "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
     )
     if code != 0:
