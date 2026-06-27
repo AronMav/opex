@@ -25,37 +25,52 @@ pub struct ScenarioOutcome {
     pub summary_text: String,
     pub artifact_urls: Vec<String>,
     pub reason: Option<String>,
+    /// `true` ONLY when this outcome is the async-video acceptance ack
+    /// (`summarize_video` successfully enqueued a durable `video_jobs` row).
+    /// Drives the pipeline short-circuit: when set, the LLM agent loop is
+    /// skipped and the ack is persisted directly as the assistant reply so the
+    /// agent does not redundantly try to process the YouTube link itself.
+    /// `#[serde(default)]` keeps wire/DB compatibility for older payloads.
+    #[serde(default)]
+    pub video_accepted: bool,
 }
 
 impl ScenarioOutcome {
     /// Successful tool/toolgate result. `summary_text` is surfaced to the LLM;
     /// produced artifacts (signed URLs) go in `artifact_urls`.
     pub fn ok(summary_text: String, artifact_urls: Vec<String>) -> Self {
-        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None }
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false }
+    }
+
+    /// Async-video acceptance ack: a `video_jobs` row was enqueued and `summary_text`
+    /// is the user-facing "video accepted, preparing summary" message. Marks
+    /// `video_accepted = true` so the pipeline short-circuits the LLM loop.
+    pub fn video_accepted(summary_text: String, artifact_urls: Vec<String>) -> Self {
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: true }
     }
 
     /// The rowless universal fallback: nothing processed, file persisted.
     /// Same shape as `ok` so downstream rendering treats it uniformly.
     pub fn save(summary_text: String, artifact_urls: Vec<String>) -> Self {
-        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None }
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false }
     }
 
     pub fn failed(reason: String) -> Self {
-        Self { status: ScenarioStatus::Failed, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason) }
+        Self { status: ScenarioStatus::Failed, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false }
     }
 
     /// Fail-closed backstop: an `executor=tool` action_ref not in the dispatch table.
     pub fn unsupported(reason: String) -> Self {
-        Self { status: ScenarioStatus::Unsupported, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason) }
+        Self { status: ScenarioStatus::Unsupported, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false }
     }
 
     pub fn timeout() -> Self {
-        Self { status: ScenarioStatus::Timeout, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some("per-execution timeout".to_string()) }
+        Self { status: ScenarioStatus::Timeout, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some("per-execution timeout".to_string()), video_accepted: false }
     }
 
     #[allow(dead_code)] // Phase 6: used when HTTP 413 from toolgate is surfaced as a UI chip message
     pub fn too_large(reason: String) -> Self {
-        Self { status: ScenarioStatus::TooLarge, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason) }
+        Self { status: ScenarioStatus::TooLarge, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false }
     }
 }
 
