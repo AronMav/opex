@@ -28,7 +28,7 @@ class WikiWidget extends WidgetType {
     a.textContent = this.label;
     a.setAttribute("role", "link");
     a.setAttribute("tabindex", "0");
-    a.onmousedown = (e) => { e.preventDefault(); this.onNavigate(this.target); };
+    a.onmousedown = (e) => { e.preventDefault(); };
     a.onclick = (e) => { e.preventDefault(); this.onNavigate(this.target); };
     a.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
