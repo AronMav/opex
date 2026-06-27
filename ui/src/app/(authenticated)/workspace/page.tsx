@@ -239,7 +239,7 @@ export default function WorkspacePage() {
     } else {
       const map = await signWorkspacePaths([path]);
       url = map[path];
-      if (!url) { setError("Не удалось подписать ссылку"); return; }
+      if (!url) { setError(t("workspace.sign_error")); return; }
     }
     const a = document.createElement("a");
     a.href = url; a.download = name; a.click();
@@ -351,24 +351,29 @@ export default function WorkspacePage() {
                   <span className="hidden group-hover:flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <span
                       role="button"
+                      tabIndex={0}
                       aria-label={t("workspace.rename")}
                       className="rounded p-0.5 hover:bg-muted/70 text-muted-foreground hover:text-foreground"
                       onClick={(e) => { e.stopPropagation(); setRenameTarget({ name: f.name, isDir: f.is_dir }); setRenameValue(f.name); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); setRenameTarget({ name: f.name, isDir: f.is_dir }); setRenameValue(f.name); } }}
                     >
                       <Pencil className="h-3 w-3" />
                     </span>
                     {!f.is_dir && (
                       <span
                         role="button"
+                        tabIndex={0}
                         aria-label={t("workspace.download")}
                         className="rounded p-0.5 hover:bg-muted/70 text-muted-foreground hover:text-foreground"
                         onClick={(e) => { e.stopPropagation(); downloadEntry(f.name); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); downloadEntry(f.name); } }}
                       >
                         <Download className="h-3 w-3" />
                       </span>
                     )}
                     <span
                       role="button"
+                      tabIndex={0}
                       aria-label={f.is_dir ? t("workspace.delete_recursive_title") : t("workspace.delete_file")}
                       className="rounded p-0.5 hover:bg-destructive/20 text-muted-foreground hover:text-destructive"
                       onClick={(e) => {
@@ -376,6 +381,15 @@ export default function WorkspacePage() {
                         const path = currentPath ? `${currentPath}/${f.name}` : f.name;
                         if (f.is_dir) setDeleteRecursiveTarget(path);
                         else setDeleteTarget(path);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const path = currentPath ? `${currentPath}/${f.name}` : f.name;
+                          if (f.is_dir) setDeleteRecursiveTarget(path);
+                          else setDeleteTarget(path);
+                        }
                       }}
                     >
                       <Trash2 className="h-3 w-3" />
