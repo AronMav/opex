@@ -507,3 +507,151 @@ async def test_vision_scoring_json_parse_fallback(monkeypatch):
     assert len(body["frames"]) == MAX_FRAMES
     # Degraded vision flag must NOT be set — vision responded, just with garbage.
     assert body["degraded"]["vision"] is False
+
+
+# ── YouTube video-id extraction (cache key + traversal guard) ────────────────
+
+def test_youtube_video_id_watch_param():
+    from routers.video import _youtube_video_id
+    assert _youtube_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    # Extra query params don't interfere.
+    assert _youtube_video_id("https://youtube.com/watch?v=dQw4w9WgXcQ&t=42s&list=PL1") == "dQw4w9WgXcQ"
+    # m.youtube.com / music.youtube.com share the watch?v= shape.
+    assert _youtube_video_id("https://m.youtube.com/watch?v=abcDEF12345") == "abcDEF12345"
+
+
+def test_youtube_video_id_short_url():
+    from routers.video import _youtube_video_id
+    assert _youtube_video_id("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+    # Trailing path / query after the id is ignored.
+    assert _youtube_video_id("https://youtu.be/dQw4w9WgXcQ?t=10") == "dQw4w9WgXcQ"
+
+
+def test_youtube_video_id_garbage_returns_none():
+    from routers.video import _youtube_video_id
+    assert _youtube_video_id("") is None
+    assert _youtube_video_id("not a url at all") is None
+    assert _youtube_video_id("https://example.com/page") is None
+    # No v= param.
+    assert _youtube_video_id("https://www.youtube.com/feed/subscriptions") is None
+    # Wrong-length id (10 chars, not 11) is rejected by the strict shape check.
+    assert _youtube_video_id("https://youtu.be/short") is None
+    assert _youtube_video_id("https://www.youtube.com/watch?v=tooLongVideoId123") is None
+
+
+def test_youtube_video_id_traversal_attempt_returns_none():
+    from routers.video import _youtube_video_id
+    # A path-traversal payload in v= must NOT pass — it would otherwise become a
+    # cache filename. `/` and `.` are outside [A-Za-z0-9_-], so it fails the regex.
+    assert _youtube_video_id("https://www.youtube.com/watch?v=../../etc") is None
+    assert _youtube_video_id("https://www.youtube.com/watch?v=../../../etc/passwd") is None
+    assert _youtube_video_id("https://youtu.be/../../etc/passwd") is None
+
+
+# ── Raw-material cache round-trip ─────────────────────────────────────────────
+
+class _CacheVision:
+    name = "v"
+    async def describe(self, http, image_bytes, ct, prompt, max_tokens=2000):
+        return '{"score": 5, "description": "ok"}'
+
+
+class _CacheSTT:
+    name = "s"
+    async def transcribe(self, http, audio_bytes, fn, lang, model=None):
+        return "кэш-транскрипт"
+
+
+def _wire_cache_test(monkeypatch, cache_dir, fetch_calls):
+    """Common setup: tmp cache dir, fake providers, and a _materialize_source that
+    counts invocations (so we can prove a cache hit skips the download)."""
+    import app as toolgate_app
+    import routers.video as video_mod
+
+    monkeypatch.setattr(toolgate_app, "AUTH_TOKEN", "")
+    monkeypatch.setattr(video_mod, "VIDEO_CACHE_DIR", cache_dir)
+
+    async def fake_active(cap):
+        return _CacheSTT() if cap == "stt" else _CacheVision()
+    monkeypatch.setattr(toolgate_app.registry, "aget_active", fake_active)
+
+    async def fake_fetch(http, url, work_dir):
+        fetch_calls.append(url)
+        vid = os.path.join(work_dir, "v.mp4")
+        _make_tiny_video(vid)
+        return vid
+    monkeypatch.setattr(video_mod, "_materialize_source", fake_fetch)
+    return toolgate_app
+
+
+def test_cache_round_trip_second_call_skips_download(monkeypatch):
+    """Two page_url requests for the same YouTube id: the second is served from
+    cache without re-invoking _materialize_source (download/STT/vision skipped)."""
+    page_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    fetch_calls: list[str] = []
+    with tempfile.TemporaryDirectory() as cache_dir:
+        toolgate_app = _wire_cache_test(monkeypatch, cache_dir, fetch_calls)
+        with TestClient(toolgate_app.app) as client:
+            r1 = client.post("/summarize-video", json={"page_url": page_url, "language": "ru"})
+            assert r1.status_code == 200, r1.text
+            assert len(fetch_calls) == 1, "first call must run the full pass"
+
+            r2 = client.post("/summarize-video", json={"page_url": page_url, "language": "ru"})
+            assert r2.status_code == 200, r2.text
+            # No new fetch — served from cache.
+            assert len(fetch_calls) == 1, "second call must be a cache hit (no download)"
+
+        # Both responses carry identical raw material.
+        assert r1.json()["transcript"] == "кэш-транскрипт"
+        assert r2.json() == r1.json()
+        # Cache file exists on disk keyed by video-id.
+        assert os.path.exists(os.path.join(cache_dir, "dQw4w9WgXcQ.json"))
+
+
+def test_cache_reuse_false_forces_full_run(monkeypatch):
+    """reuse_cache=False bypasses an existing cache and re-runs the full pass."""
+    page_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    fetch_calls: list[str] = []
+    with tempfile.TemporaryDirectory() as cache_dir:
+        toolgate_app = _wire_cache_test(monkeypatch, cache_dir, fetch_calls)
+        with TestClient(toolgate_app.app) as client:
+            # Prime the cache.
+            r1 = client.post("/summarize-video", json={"page_url": page_url})
+            assert r1.status_code == 200
+            assert len(fetch_calls) == 1
+
+            # reuse_cache=False → full run even though the cache file exists.
+            r2 = client.post("/summarize-video", json={"page_url": page_url, "reuse_cache": False})
+            assert r2.status_code == 200
+            assert len(fetch_calls) == 2, "reuse_cache=False must force a download"
+
+
+def test_cache_not_used_for_upload(monkeypatch):
+    """video_url (upload) sources never touch the cache — each call runs fully and
+    no cache file is written."""
+    fetch_calls: list[str] = []
+    with tempfile.TemporaryDirectory() as cache_dir:
+        toolgate_app = _wire_cache_test(monkeypatch, cache_dir, fetch_calls)
+        with TestClient(toolgate_app.app) as client:
+            r1 = client.post("/summarize-video", json={"video_url": "http://localhost/api/uploads/x"})
+            assert r1.status_code == 200
+            r2 = client.post("/summarize-video", json={"video_url": "http://localhost/api/uploads/x"})
+            assert r2.status_code == 200
+        # Both calls ran the full pass; nothing cached.
+        assert len(fetch_calls) == 2
+        assert os.listdir(cache_dir) == [], "upload sources must not write a cache file"
+
+
+def test_cache_unparseable_video_id_skips_cache(monkeypatch):
+    """A page_url with no extractable YouTube id runs fully every time and never
+    writes a cache file (no key to write under)."""
+    fetch_calls: list[str] = []
+    with tempfile.TemporaryDirectory() as cache_dir:
+        toolgate_app = _wire_cache_test(monkeypatch, cache_dir, fetch_calls)
+        with TestClient(toolgate_app.app) as client:
+            r1 = client.post("/summarize-video", json={"page_url": "https://example.com/video"})
+            assert r1.status_code == 200
+            r2 = client.post("/summarize-video", json={"page_url": "https://example.com/video"})
+            assert r2.status_code == 200
+        assert len(fetch_calls) == 2
+        assert os.listdir(cache_dir) == [], "no video-id → no cache file"
