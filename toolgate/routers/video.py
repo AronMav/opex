@@ -204,7 +204,7 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
         if not resolved_title and body.page_url and body.page_url.startswith(("http://", "https://")):
             try:
                 code, out, _ = await _run(
-                    sys.executable, "-m", "yt_dlp", "--js-runtimes", "node",
+                    sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno",
                     "--print", "%(title)s", "--skip-download", "--", body.page_url,
                 )
                 if code == 0:

@@ -205,11 +205,14 @@ async def download_video(url: str, dest_dir: str) -> str:
     # `yt-dlp` on PATH: toolgate's PATH does not include the venv's bin/, so a
     # bare name raises FileNotFoundError ("source fetch failed"). `-m yt_dlp`
     # resolves from the venv's site-packages regardless of PATH.
-    # `--js-runtimes node`: yt-dlp >=2025 needs a JS runtime for YouTube's nsig
-    # challenge (only deno is enabled by default; the host has node, not deno).
-    # Without it extraction is deprecated and fails ("No supported JavaScript runtime").
+    # `--js-runtimes deno`: yt-dlp >=2025 needs a JS runtime to solve YouTube's
+    # nsig/signature challenge. Deno is yt-dlp's preferred (default) runtime;
+    # node is NOT effectively honored ("Only deno is enabled by default") and
+    # produces an invalid signature -> media URL returns HTTP 403 / YouTube
+    # serves a bot-check ("Sign in to confirm you're not a bot"). Deno must be on
+    # toolgate's PATH (~/.local/bin/deno -> ~/.deno/bin/deno on the server).
     code, _, err = await _run(
-        sys.executable, "-m", "yt_dlp", "--js-runtimes", "node",
+        sys.executable, "-m", "yt_dlp", "--js-runtimes", "deno",
         "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
     )
     if code != 0:
