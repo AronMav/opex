@@ -36,7 +36,7 @@ pub struct CodeSandbox {
 
 impl CodeSandbox {
     pub fn new(docker_url: &str, cfg: &SandboxConfig) -> Result<Self> {
-        let docker = Docker::connect_with_http(docker_url, 10, bollard::API_DEFAULT_VERSION)?;
+        let docker = crate::containers::connect_docker(docker_url)?;
         Ok(Self {
             docker,
             image: cfg.image.clone(),
