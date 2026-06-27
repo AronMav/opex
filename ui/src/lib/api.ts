@@ -258,7 +258,7 @@ export const signWorkspacePaths = (paths: string[]) =>
 export const wsMkdir = (path: string) => apiPost("/api/workspace/mkdir", { path });
 export const wsRename = (from: string, to: string) => apiPost("/api/workspace/rename", { from, to });
 export const wsDeleteRecursive = (path: string) =>
-  apiDelete(`/api/workspace/${path}?recursive=true`);
+  apiDelete(`/api/workspace/${path.split("/").map(encodeURIComponent).join("/")}?recursive=true`);
 
 export function wsUpload(dir: string, files: File[]) {
   const fd = new FormData();
