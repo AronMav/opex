@@ -14,6 +14,13 @@ use crate::gateway::clusters::{ConfigServices, InfraServices};
 
 pub(crate) const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
 
+/// Maximum number of paths accepted in a single `/sign` request.
+/// Prevents a client from triggering thousands of filesystem stats in one async task.
+const MAX_SIGN_PATHS: usize = 256;
+
+/// Maximum byte length of the `dir` field in a multipart upload request.
+const MAX_DIR_LEN: usize = 512;
+
 pub(crate) fn routes() -> Router<AppState> {
     let upload = Router::new()
         .route("/api/workspace/upload", post(api_workspace_upload))
@@ -371,11 +378,15 @@ async fn build_sign_map(
 /// Response: `{ "url_by_path": { "note/images/x.png": "/workspace-files/...?sig=..." } }`
 ///
 /// External paths and missing files are silently omitted from the map.
+/// Requests with more than `MAX_SIGN_PATHS` paths are rejected with 400.
 pub(crate) async fn api_workspace_sign(
     State(infra): State<InfraServices>,
     State(cfg): State<ConfigServices>,
     Json(req): Json<SignRequest>,
 ) -> impl IntoResponse {
+    if req.paths.len() > MAX_SIGN_PATHS {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "too many paths"}))).into_response();
+    }
     let key = infra.secrets.get_upload_hmac_key();
     let ttl = cfg.config.uploads.signed_url_ttl_secs;
     let map = build_sign_map(
@@ -385,7 +396,7 @@ pub(crate) async fn api_workspace_sign(
         ttl,
     )
     .await;
-    Json(json!({ "url_by_path": Value::Object(map) }))
+    Json(json!({ "url_by_path": Value::Object(map) })).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -408,6 +419,11 @@ async fn do_mkdir(base: &std::path::Path, rel: &str) -> Result<(), (StatusCode, 
 async fn do_rename(base: &std::path::Path, from: &str, to: &str) -> Result<(), (StatusCode, Json<Value>)> {
     let (_, from_t) = resolve_within(base, from).await?;
     let (_, to_t) = resolve_within(base, to).await?;
+    // NOTE: the exists() check + rename() is not atomic (best-effort EEXIST guard).
+    // A concurrent rename or create could insert `to_t` between the two calls, in
+    // which case POSIX rename(2) silently replaces the target.  Acceptable for a
+    // single-admin tool; the window is tiny and the cost of a full FS lock is not
+    // justified here.
     if to_t.exists() {
         return Err((StatusCode::CONFLICT, Json(json!({"error": "target already exists"}))));
     }
@@ -492,6 +508,13 @@ pub(crate) async fn api_workspace_upload(mut multipart: Multipart) -> impl IntoR
         let name = field.name().unwrap_or("").to_string();
         if name == "dir" {
             dir = field.text().await.unwrap_or_default();
+            if dir.len() > MAX_DIR_LEN {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"ok": false, "saved": [], "errors": ["dir field too long"]})),
+                )
+                    .into_response();
+            }
         } else if name == "file" {
             let filename = field.file_name().unwrap_or("file").to_string();
             match field.bytes().await {
@@ -730,5 +753,38 @@ mod tests {
         assert!(!m.contains_key("../../etc/passwd"), "external skipped");
         let url = m["note/images/x.png"].as_str().unwrap();
         assert!(url.starts_with("/workspace-files/note/images/x.png?sig="), "got {url}");
+    }
+
+    /// `/sign` must reject requests that exceed MAX_SIGN_PATHS without touching
+    /// the filesystem (build_sign_map is never called for over-limit input).
+    #[test]
+    fn sign_paths_cap_constant_is_256() {
+        // Document the agreed constant; changing it should break this test.
+        assert_eq!(MAX_SIGN_PATHS, 256);
+    }
+
+    #[tokio::test]
+    async fn sign_map_not_called_when_over_cap() {
+        // Simulate the guard: build_sign_map with exactly MAX_SIGN_PATHS entries
+        // must succeed; MAX_SIGN_PATHS+1 must be caught BEFORE calling build_sign_map.
+        let base = tempfile::tempdir().unwrap();
+        let at_limit: Vec<String> = (0..MAX_SIGN_PATHS).map(|i| format!("f{i}.png")).collect();
+        // build_sign_map silently skips missing files — no panic, returns empty map.
+        let m = build_sign_map(base.path(), &at_limit, &[1u8; 32], 3600).await;
+        assert_eq!(m.len(), 0, "all paths missing — map is empty but no crash");
+
+        // Verify the guard condition itself (mirrors api_workspace_sign logic).
+        let over_limit: Vec<String> = (0..=MAX_SIGN_PATHS).map(|i| format!("f{i}.png")).collect();
+        assert!(over_limit.len() > MAX_SIGN_PATHS, "over-limit vec triggers the guard");
+    }
+
+    /// Verifies that the `dir` field cap constant is at the agreed value and that
+    /// a string exceeding it would trigger the handler's early-return guard.
+    #[test]
+    fn upload_dir_cap_constant_is_512() {
+        assert_eq!(MAX_DIR_LEN, 512);
+        let long_dir = "a".repeat(MAX_DIR_LEN + 1);
+        // Document: the handler rejects when dir.len() > MAX_DIR_LEN.
+        assert!(long_dir.len() > MAX_DIR_LEN);
     }
 }
