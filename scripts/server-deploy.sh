@@ -61,10 +61,32 @@ mkdir -p "${RUN_DIR}/migrations"
 cp -f "${SRC_DIR}"/migrations/*.sql "${RUN_DIR}/migrations/"
 echo "  synced $(ls "${SRC_DIR}"/migrations/*.sql | wc -l) files (latest: $(basename "$(ls "${SRC_DIR}"/migrations/*.sql | sort | tail -1)"))"
 
-# NOTE: Docker images (browser-renderer, etc.) build from ${RUN_DIR}/docker — NOT
-# ${SRC_DIR}. Docker-side changes still need a manual sync + rebuild:
-#   cp ${SRC_DIR}/docker/<svc>/* ${RUN_DIR}/docker/<svc>/ &&
-#   (cd ${RUN_DIR}/docker && docker compose build <svc> && docker compose up -d <svc>)
+# Toolgate is a managed Python process (NOT Rust, NOT Docker) launched by core
+# from ${RUN_DIR}/toolgate. `git pull` only updates ${SRC_DIR}, so its .py files
+# must be copied into the runtime dir before the core restart re-spawns toolgate,
+# or code changes (e.g. video pipeline) silently never apply. (.env / venv stay.)
+echo "==> sync toolgate sources to runtime"
+cp -f "${SRC_DIR}"/toolgate/*.py "${RUN_DIR}/toolgate/" 2>/dev/null || true
+mkdir -p "${RUN_DIR}/toolgate/routers"
+cp -f "${SRC_DIR}"/toolgate/routers/*.py "${RUN_DIR}/toolgate/routers/" 2>/dev/null || true
+echo "  synced toolgate .py (core restart re-spawns toolgate)"
+
+# On-demand MCP containers must EXIST (stopped) for core's ContainerManager to
+# start them — `ensure_running` only inspect+start, never create. `up --no-start`
+# is idempotent: creates any missing container from already-built images. If an
+# image is absent, build first: `docker compose --profile on-demand build`.
+echo "==> ensure on-demand MCP containers exist"
+if (cd "${RUN_DIR}/docker" && docker compose --profile on-demand up --no-start >/dev/null 2>&1); then
+    echo "  MCP containers ensured ($(docker ps -a --format '{{.Names}}' | grep -c '^mcp-') present)"
+else
+    echo "  MCP ensure skipped — build images: (cd ${RUN_DIR}/docker && docker compose --profile on-demand build)"
+fi
+
+# NOTE: Docker MCP/service IMAGE changes (Dockerfile/app.js/ops.js) still need a
+# manual rebuild — sync source + rebuild + recreate:
+#   cp ${SRC_DIR}/docker/mcp/<svc>/* ${RUN_DIR}/docker/mcp/<svc>/ &&
+#   (cd ${RUN_DIR}/docker && docker compose build mcp-<svc> &&
+#    docker compose --profile on-demand up --no-start --force-recreate mcp-<svc>)
 
 echo "==> restart systemd units"
 for SVC in "${RUN_NAMES[@]}"; do
