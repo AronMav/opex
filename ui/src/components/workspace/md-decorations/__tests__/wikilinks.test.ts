@@ -20,6 +20,12 @@ describe("findWikiLinks", () => {
     expect(m[0].target).toBe("Topic");
     expect(m[0].label).toBe("Custom Label");
   });
+  it("parses a plain link (no section, no alias)", () => {
+    const m = findWikiLinks("see [[Note]] now");
+    expect(m).toHaveLength(1);
+    expect(m[0].target).toBe("Note");
+    expect(m[0].label).toBe("Note");
+  });
   it("skips empty/whitespace-only links", () => {
     const m = findWikiLinks("[[ ]]");
     expect(m).toHaveLength(0);
