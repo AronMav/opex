@@ -858,6 +858,7 @@
   "workspace.delete_recursive_description": "Папка «{{name}}» и всё её содержимое будут удалены безвозвратно.",
   "workspace.delete_recursive_action": "Удалить",
   "workspace.drop_to_upload": "Перетащите файлы для загрузки",
+  "workspace.sign_error": "Не удалось подписать ссылку",
   "access.title": "Доступ",
   "access.subtitle": "Авторизация и привязка пользователей",
   "access.no_agents": "Агенты не найдены",

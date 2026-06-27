@@ -858,6 +858,7 @@
   "workspace.delete_recursive_description": "Folder \"{{name}}\" and ALL its contents will be permanently deleted.",
   "workspace.delete_recursive_action": "Delete",
   "workspace.drop_to_upload": "Drop files to upload",
+  "workspace.sign_error": "Could not sign the link",
   "access.title": "Access",
   "access.subtitle": "Authorization and user pairing",
   "access.no_agents": "No agents found",
