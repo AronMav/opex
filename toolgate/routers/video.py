@@ -4,6 +4,7 @@ built in opex-core, not here (toolgate has no text-LLM)."""
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import sys
@@ -14,7 +15,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from video_helpers import extract_audio, extract_scene_frames, download_video, _run
+from video_helpers import extract_audio, extract_scene_frames, extract_uniform_frames, download_video, _run
 
 # Hostnames trusted for video_url (always a Core gateway upload URL — localhost only).
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
@@ -23,11 +24,19 @@ log = logging.getLogger("toolgate.video")
 
 router = APIRouter(tags=["video"])
 
-# Scene cut sensitivity (0..1 ffmpeg scene score). Tunable; default mirrors
-# telesumbot's content detector intent. High ceiling guards pathological input.
+# Scene cut sensitivity (0..1 ffmpeg scene score). Kept for backward compat /
+# direct callers of extract_scene_frames; not used by summarize_video anymore.
 SCENE_THRESHOLD = float(os.environ.get("VIDEO_SCENE_THRESHOLD", "0.4"))
 FRAME_CEILING = int(os.environ.get("VIDEO_FRAME_CEILING", "200"))
+
 FRAME_VISION_CONCURRENCY = 4
+
+# VIDEO_FRAME_CANDIDATES — how many uniform frames to extract as vision candidates.
+# Higher → better coverage at the cost of more ffmpeg seek operations.
+VIDEO_FRAME_CANDIDATES = int(os.environ.get("VIDEO_FRAME_CANDIDATES", "54"))
+
+# VIDEO_NOTE_MAX_FRAMES — how many top-scored frames to keep in the final output.
+# Must be ≤ VIDEO_FRAME_CANDIDATES.  Frames are re-sorted by timestamp after pick.
 VIDEO_NOTE_MAX_FRAMES = int(os.environ.get("VIDEO_NOTE_MAX_FRAMES", "24"))
 
 
@@ -105,39 +114,75 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
         except Exception as e:
             return JSONResponse(status_code=502, content={"error": f"transcribe failed: {e}"})
 
-        # ── Scene frames → Vision descriptions (bounded concurrency) ──
+        # ── Uniform-candidate frames → Vision scoring → top-N selection ────────
         frames_out: list[dict] = []
         try:
-            frames = await extract_scene_frames(video_path, SCENE_THRESHOLD, FRAME_CEILING)
+            candidates = await extract_uniform_frames(video_path, VIDEO_FRAME_CANDIDATES)
         except Exception as e:
-            frames = []
-            log.warning("scene extract failed (continuing transcript-only): %s", e)
-
-        # Down-select to note frame cap BEFORE describing (saves Vision calls).
-        if len(frames) > VIDEO_NOTE_MAX_FRAMES:
-            step = len(frames) / VIDEO_NOTE_MAX_FRAMES
-            frames = [frames[int(i * step)] for i in range(VIDEO_NOTE_MAX_FRAMES)]
+            candidates = []
+            log.warning("uniform frame extract failed (continuing transcript-only): %s", e)
 
         vision = await registry.aget_active("vision")
-        if vision is None and frames:
+
+        if not candidates:
+            pass  # nothing to describe; frames_out stays empty
+        elif vision is None:
+            # Degraded: vision unavailable — even-spread fallback (no scoring).
             degraded["vision"] = True
-
-        if vision is not None and frames:
+            step = max(1, len(candidates) / VIDEO_NOTE_MAX_FRAMES)
+            selected = [candidates[int(i * step)] for i in range(min(VIDEO_NOTE_MAX_FRAMES, len(candidates)))]
+            frames_out = [
+                {
+                    "timestamp": ts,
+                    "description": "",
+                    "image_b64": base64.b64encode(jpeg).decode("ascii"),
+                }
+                for ts, jpeg in selected
+            ]
+        else:
+            # Vision-scoring: evaluate every candidate, pick top-N, re-sort by time.
             sem = asyncio.Semaphore(FRAME_VISION_CONCURRENCY)
-            prompt = "Опиши кадр кратко: что показано, текст на экране, ключевые объекты."
+            score_prompt = (
+                "Оцени кадр из обучающего видео (урок в программе). "
+                "Верни ТОЛЬКО JSON одной строкой: "
+                '{\"score\": <0-10>, \"description\": \"<краткое описание на русском>\"}. '
+                "score=10 если на кадре показан плагин, окно настроек, конкретное действие "
+                "в интерфейсе или важный технический момент; score=3-5 для общего вида программы; "
+                "score=0-2 если это говорящий человек на камеру, заставка, переход, "
+                "размытый или пустой кадр."
+            )
 
-            async def describe(ts: float, jpeg: bytes):
+            async def score_frame(ts: float, jpeg: bytes):
                 async with sem:
                     b64 = base64.b64encode(jpeg).decode("ascii")
+                    raw = ""
                     try:
-                        desc = await vision.describe(http, jpeg, "image/jpeg", prompt)
-                        return {"timestamp": ts, "description": desc, "image_b64": b64}
+                        raw = await vision.describe(http, jpeg, "image/jpeg", score_prompt)
+                        # Extract JSON between first { and last }
+                        start = raw.find("{")
+                        end = raw.rfind("}") + 1
+                        if start >= 0 and end > start:
+                            parsed = json.loads(raw[start:end])
+                            sc = int(parsed.get("score", 5))
+                            desc = str(parsed.get("description", "")).strip()
+                        else:
+                            raise ValueError("no JSON object in response")
                     except Exception as e:
-                        log.warning("frame describe failed at %.1fs: %s", ts, e)
-                        return {"timestamp": ts, "description": "", "image_b64": b64}
+                        log.warning("frame score failed at %.1fs: %s", ts, e)
+                        sc = 5
+                        desc = raw[:200] if raw else ""
+                    return (ts, sc, desc, b64)
 
-            results = await asyncio.gather(*(describe(ts, j) for ts, j in frames))
-            frames_out = list(results)
+            scored = await asyncio.gather(*(score_frame(ts, j) for ts, j in candidates))
+
+            # Sort by score descending, take top-N, then re-sort by timestamp.
+            top = sorted(scored, key=lambda x: x[1], reverse=True)[:VIDEO_NOTE_MAX_FRAMES]
+            top_by_time = sorted(top, key=lambda x: x[0])
+
+            frames_out = [
+                {"timestamp": ts, "description": desc, "image_b64": b64}
+                for ts, _sc, desc, b64 in top_by_time
+            ]
 
         # Probe duration (best-effort, non-fatal).
         duration = 0.0
