@@ -258,6 +258,7 @@ export interface ChatStore {
   agents: Record<string, AgentState>;
   currentAgent: string;
   sessionParticipants: Record<string, string[]>;
+  videoProgress: Record<string, { phase: string; text: string }>;
 
   setCurrentAgent: (name: string) => void;
   updateSessionParticipants: (sessionId: string, participants: string[]) => void;
@@ -282,6 +283,8 @@ export interface ChatStore {
   setThinkingLevel: (level: number) => void;
   markSessionActive: (agent: string, sessionId: string) => void;
   markSessionInactive: (agent: string, sessionId: string) => void;
+  setVideoProgress: (sessionId: string, phase: string, text: string) => void;
+  clearVideoProgress: (sessionId: string) => void;
   setModelOverride: (agent: string, model: string | null) => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
   // skipInvalidation=true suppresses per-call cache invalidation for bulk-delete
