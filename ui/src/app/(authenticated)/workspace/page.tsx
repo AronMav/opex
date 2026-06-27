@@ -18,6 +18,9 @@ import { Folder, FileCode, Save, Trash2, FolderTree, FolderMinus, Loader2 } from
 import type { FileEntry } from "@/types/api";
 import { buildRenameTarget, encodeWorkspacePath } from "./file-ops";
 
+// Pending navigation descriptor — stored when dirty guard intercepts an action
+type PendingNav = () => void;
+
 const ObsidianEditor = dynamic(
   () => import("@/components/workspace/obsidian-editor").then((m) => m.ObsidianEditor),
   { ssr: false, loading: () => <div className="flex-1 animate-pulse bg-muted/20" /> },
@@ -27,9 +30,6 @@ const CodeEditor = dynamic(
   () => import("@/components/workspace/code-editor").then((m) => m.CodeEditor),
   { ssr: false, loading: () => <div className="flex-1 animate-pulse bg-muted/20" /> },
 );
-
-// Pending navigation descriptor — stored when dirty guard intercepts an action
-type PendingNav = () => void;
 
 export default function WorkspacePage() {
   const { t } = useTranslation();
@@ -54,6 +54,15 @@ export default function WorkspacePage() {
   // Pending navigation thunk captured when dirty guard intercepts an action
   const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
   const loadFileRequestRef = useRef(0);
+  // Fix 3: track which file path is currently being loaded (set before fetch, cleared in finally)
+  const loadingPathRef = useRef("");
+  // Fix 5: store the "saved" flash timer id so we can cancel it on unmount or re-fire
+  const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fix 5: clear any pending "saved" flash timer on unmount
+  useEffect(() => () => {
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+  }, []);
 
   const isDirty = content !== original;
 
@@ -83,9 +92,10 @@ export default function WorkspacePage() {
   useEffect(() => { fetchFiles(); }, [fetchFiles]);
 
   // Guard helper: if dirty, stash the thunk and show the confirm dialog; otherwise run immediately.
+  // Fix 4: if a pendingNav is already set (dialog already open), ignore new nav to avoid overwriting.
   const guardNav = useCallback((action: PendingNav) => {
     if (isDirty) {
-      setPendingNav(() => action);
+      setPendingNav((prev) => prev !== null ? prev : action);
     } else {
       action();
     }
@@ -117,9 +127,11 @@ export default function WorkspacePage() {
 
   const loadFile = useCallback(async (name: string) => {
     const requestId = ++loadFileRequestRef.current;
+    const filePath = currentPath ? `${currentPath}/${name}` : name;
+    // Fix 3: record which path is being loaded so mutations can detect in-flight loads
+    loadingPathRef.current = filePath;
     setLoadingFile(true);
     try {
-      const filePath = currentPath ? `${currentPath}/${name}` : name;
       const data = await apiGet<WorkspaceFile>(`/api/workspace/${encodeWorkspacePath(filePath)}`);
       // Discard stale response if user clicked another file
       if (loadFileRequestRef.current !== requestId) return;
@@ -139,8 +151,11 @@ export default function WorkspacePage() {
       if (loadFileRequestRef.current !== requestId) return;
       setError(`${e}`);
     } finally {
-      // Only clear spinner if this is still the active request
-      if (loadFileRequestRef.current === requestId) setLoadingFile(false);
+      // Only clear spinner and loadingPath if this is still the active request
+      if (loadFileRequestRef.current === requestId) {
+        loadingPathRef.current = "";
+        setLoadingFile(false);
+      }
     }
   }, [currentPath]);
 
@@ -153,7 +168,9 @@ export default function WorkspacePage() {
       await apiPut(`/api/workspace/${encodeWorkspacePath(selectedFile)}`, { content });
       setOriginal(content);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      // Fix 5: cancel any prior flash timer before scheduling a new one
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
+      savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
     } catch (e) {
       setError(`${e}`);
     }
@@ -162,8 +179,11 @@ export default function WorkspacePage() {
   const doDelete = async () => {
     if (!deleteTarget) return;
     try {
+      // Fix 2: clear stale error before mutation
+      setError("");
       await apiDelete(`/api/workspace/${encodeWorkspacePath(deleteTarget)}`);
-      if (selectedFile === deleteTarget) {
+      // Fix 3: also clear editor if the file was being loaded in-flight
+      if (selectedFile === deleteTarget || loadingPathRef.current === deleteTarget) {
         setSelectedFile("");
         setFileData(null);
         setContent("");
@@ -179,9 +199,13 @@ export default function WorkspacePage() {
   const doDeleteRecursive = async () => {
     if (!deleteRecursiveTarget) return;
     try {
+      // Fix 2: clear stale error before mutation
+      setError("");
       await wsDeleteRecursive(deleteRecursiveTarget);
+      // Fix 3: also clear editor if the loading file was inside the deleted folder
       const wasOpen = selectedFile.startsWith(deleteRecursiveTarget + "/") || selectedFile === deleteRecursiveTarget;
-      if (wasOpen) {
+      const loadingInside = loadingPathRef.current.startsWith(deleteRecursiveTarget + "/") || loadingPathRef.current === deleteRecursiveTarget;
+      if (wasOpen || loadingInside) {
         setSelectedFile("");
         setFileData(null);
         setContent("");
@@ -204,6 +228,8 @@ export default function WorkspacePage() {
     const name = newFileName.trim();
     if (!name) return;
     try {
+      // Fix 2: clear stale error before mutation
+      setError("");
       const filePath = currentPath ? `${currentPath}/${name}` : name;
       await apiPut(`/api/workspace/${encodeWorkspacePath(filePath)}`, { content: "" });
       setNewFileName("");
@@ -219,6 +245,8 @@ export default function WorkspacePage() {
     const name = newFolderName.trim();
     if (!name) return;
     try {
+      // Fix 2: clear stale error before mutation
+      setError("");
       const dirPath = currentPath ? `${currentPath}/${name}` : name;
       await wsMkdir(dirPath);
       setNewFolderName("");
@@ -237,9 +265,12 @@ export default function WorkspacePage() {
       return;
     }
     try {
+      // Fix 2: clear stale error before mutation
+      setError("");
       const { from, to } = buildRenameTarget(currentPath, renameTarget.name, newName);
       await wsRename(from, to);
-      if (selectedFile === from) {
+      // Fix 3: also clear editor if the loading file is the one being renamed
+      if (selectedFile === from || loadingPathRef.current === from) {
         setSelectedFile("");
         setFileData(null);
         setContent("");
@@ -270,12 +301,19 @@ export default function WorkspacePage() {
     const uploadedFiles = Array.from(fileList);
     if (uploadedFiles.length === 0) return;
     try {
-      await wsUpload(currentPath, uploadedFiles);
+      // Fix 2: clear stale error before mutation
+      setError("");
+      const result = await wsUpload(currentPath, uploadedFiles);
+      // Fix 1: surface partial failures (name clash / >50MB) to the user
+      if (result.errors.length > 0) {
+        setError(t("workspace.upload_errors", { errors: result.errors.join(", ") }));
+      }
+      // Always refresh so the saved files appear even on partial failure
       await fetchFiles();
     } catch (e) {
       setError(`${e}`);
     }
-  }, [currentPath, fetchFiles]);
+  }, [currentPath, fetchFiles, t]);
 
   const isMarkdown = useMemo(() => selectedFile.endsWith(".md"), [selectedFile]);
   const language = useMemo(() => getLangFromFilename(selectedFile), [selectedFile]);

@@ -864,6 +864,7 @@
   "workspace.unsaved_title": "Несохранённые изменения",
   "workspace.unsaved_description": "Есть несохранённые изменения. Если продолжить, они будут потеряны.",
   "workspace.unsaved_discard": "Отменить изменения",
+  "workspace.upload_errors": "Часть файлов не загружена: {{errors}}",
   "access.title": "Доступ",
   "access.subtitle": "Авторизация и привязка пользователей",
   "access.no_agents": "Агенты не найдены",
