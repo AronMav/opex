@@ -167,7 +167,7 @@ export function WorkspaceFileTree({
             const entryPath = currentPath ? `${currentPath}/${f.name}` : f.name;
 
             return (
-              <div key={f.name} role="listitem">
+              <div key={entryPath} role="listitem">
                 {renameTarget?.name === f.name ? (
                   <div className="mt-1 p-2 border border-primary/30 rounded-lg bg-primary/5">
                     <Input
@@ -205,7 +205,7 @@ export function WorkspaceFileTree({
                       }`}
                     >
                       {f.is_dir ? <Folder className="h-4 w-4 shrink-0" /> : <FileCode className="h-4 w-4 shrink-0" />}
-                      <span className="truncate flex-1">{f.name}</span>
+                      <span className="truncate flex-1" title={f.name}>{f.name}</span>
                     </button>
 
                     {/* Touch-accessible actions dropdown — always visible, not hover-gated */}

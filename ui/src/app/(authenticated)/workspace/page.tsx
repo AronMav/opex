@@ -14,7 +14,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar";
 import { EmptyState } from "@/components/ui/empty-state";
 import { getLangFromFilename } from "@/components/workspace/code-editor";
 import { useTranslation } from "@/hooks/use-translation";
-import { Folder, FileCode, Save, Trash2, FolderTree, FolderMinus } from "lucide-react";
+import { Folder, FileCode, Save, Trash2, FolderTree, FolderMinus, Loader2 } from "lucide-react";
 import type { FileEntry } from "@/types/api";
 import { buildRenameTarget, encodeWorkspacePath } from "./file-ops";
 
@@ -27,6 +27,9 @@ const CodeEditor = dynamic(
   () => import("@/components/workspace/code-editor").then((m) => m.CodeEditor),
   { ssr: false, loading: () => <div className="flex-1 animate-pulse bg-muted/20" /> },
 );
+
+// Pending navigation descriptor — stored when dirty guard intercepts an action
+type PendingNav = () => void;
 
 export default function WorkspacePage() {
   const { t } = useTranslation();
@@ -47,11 +50,14 @@ export default function WorkspacePage() {
   const [renameTarget, setRenameTarget] = useState<{ name: string; isDir: boolean } | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [loadingFile, setLoadingFile] = useState(false);
+  // Pending navigation thunk captured when dirty guard intercepts an action
+  const [pendingNav, setPendingNav] = useState<PendingNav | null>(null);
   const loadFileRequestRef = useRef(0);
 
   const isDirty = content !== original;
 
-  // Warn user before navigating away with unsaved changes
+  // Warn user before navigating away with unsaved changes (tab close / reload)
   useEffect(() => {
     const handler = isDirty
       ? (e: BeforeUnloadEvent) => { e.preventDefault(); }
@@ -76,26 +82,42 @@ export default function WorkspacePage() {
 
   useEffect(() => { fetchFiles(); }, [fetchFiles]);
 
-  const navigateTo = (dirName: string) => {
-    setSelectedFile("");
-    setFileData(null);
-    setContent("");
-    setOriginal("");
-    setCurrentPath(currentPath ? `${currentPath}/${dirName}` : dirName);
-  };
+  // Guard helper: if dirty, stash the thunk and show the confirm dialog; otherwise run immediately.
+  const guardNav = useCallback((action: PendingNav) => {
+    if (isDirty) {
+      setPendingNav(() => action);
+    } else {
+      action();
+    }
+  }, [isDirty]);
 
-  const navigateUp = () => {
-    setSelectedFile("");
-    setFileData(null);
-    setContent("");
-    setOriginal("");
-    const parts = currentPath.split("/").filter(Boolean);
-    parts.pop();
-    setCurrentPath(parts.join("/"));
-  };
+  const navigateTo = useCallback((dirName: string) => {
+    guardNav(() => {
+      setSelectedFile("");
+      setFileData(null);
+      setContent("");
+      setOriginal("");
+      setCurrentPath((prev) => prev ? `${prev}/${dirName}` : dirName);
+    });
+  }, [guardNav]);
 
-  const loadFile = async (name: string) => {
+  const navigateUp = useCallback(() => {
+    guardNav(() => {
+      setSelectedFile("");
+      setFileData(null);
+      setContent("");
+      setOriginal("");
+      setCurrentPath((prev) => {
+        const parts = prev.split("/").filter(Boolean);
+        parts.pop();
+        return parts.join("/");
+      });
+    });
+  }, [guardNav]);
+
+  const loadFile = useCallback(async (name: string) => {
     const requestId = ++loadFileRequestRef.current;
+    setLoadingFile(true);
     try {
       const filePath = currentPath ? `${currentPath}/${name}` : name;
       const data = await apiGet<WorkspaceFile>(`/api/workspace/${encodeWorkspacePath(filePath)}`);
@@ -116,8 +138,15 @@ export default function WorkspacePage() {
     } catch (e) {
       if (loadFileRequestRef.current !== requestId) return;
       setError(`${e}`);
+    } finally {
+      // Only clear spinner if this is still the active request
+      if (loadFileRequestRef.current === requestId) setLoadingFile(false);
     }
-  };
+  }, [currentPath]);
+
+  const guardLoadFile = useCallback((name: string) => {
+    guardNav(() => { loadFile(name); });
+  }, [guardNav, loadFile]);
 
   const saveFile = async () => {
     try {
@@ -180,7 +209,7 @@ export default function WorkspacePage() {
       setNewFileName("");
       setShowNewFile(false);
       await fetchFiles();
-      loadFile(name);
+      await loadFile(name);
     } catch (e) {
       setError(`${e}`);
     }
@@ -238,10 +267,10 @@ export default function WorkspacePage() {
   };
 
   const doUpload = async (fileList: FileList | File[]) => {
-    const uploadFiles = Array.from(fileList);
-    if (uploadFiles.length === 0) return;
+    const uploadedFiles = Array.from(fileList);
+    if (uploadedFiles.length === 0) return;
     try {
-      await wsUpload(currentPath, uploadFiles);
+      await wsUpload(currentPath, uploadedFiles);
       await fetchFiles();
     } catch (e) {
       setError(`${e}`);
@@ -253,8 +282,16 @@ export default function WorkspacePage() {
   const selectedFileName = selectedFile.split("/").pop() || selectedFile;
   const breadcrumbs = currentPath ? currentPath.split("/").filter(Boolean) : [];
 
-  // Shared props for both WorkspaceFileTree instances (mobile Sheet + desktop sidebar)
-  const fileTreeProps = {
+  // Stable callbacks/object for both WorkspaceFileTree instances so the trees
+  // don't re-render on every editor keystroke.
+  const onShowNewFolder = useCallback(() => setShowNewFolder(true), []);
+  const onHideNewFolder = useCallback(() => setShowNewFolder(false), []);
+  const onShowNewFile = useCallback(() => setShowNewFile(true), []);
+  const onHideNewFile = useCallback(() => setShowNewFile(false), []);
+  const onRenameStart = useCallback((name: string, isDir: boolean) => setRenameTarget({ name, isDir }), []);
+  const onRenameCancel = useCallback(() => setRenameTarget(null), []);
+
+  const fileTreeProps = useMemo(() => ({
     files,
     currentPath,
     selectedFile,
@@ -266,24 +303,42 @@ export default function WorkspacePage() {
     renameValue,
     onNavigateTo: navigateTo,
     onNavigateUp: navigateUp,
-    onLoadFile: loadFile,
+    onLoadFile: guardLoadFile,
     onUpload: doUpload,
-    onShowNewFolder: () => setShowNewFolder(true),
-    onHideNewFolder: () => setShowNewFolder(false),
-    onShowNewFile: () => setShowNewFile(true),
-    onHideNewFile: () => setShowNewFile(false),
+    onShowNewFolder,
+    onHideNewFolder,
+    onShowNewFile,
+    onHideNewFile,
     onNewFolderNameChange: setNewFolderName,
     onNewFileNameChange: setNewFileName,
     onCreateFolder: createFolder,
     onCreateFile: createFile,
-    onRenameStart: (name: string, isDir: boolean) => setRenameTarget({ name, isDir }),
+    onRenameStart,
     onRenameValueChange: setRenameValue,
     onRenameCommit: doRename,
-    onRenameCancel: () => setRenameTarget(null),
+    onRenameCancel,
     onDeleteFile: setDeleteTarget,
     onDeleteRecursive: setDeleteRecursiveTarget,
     onDownload: downloadEntry,
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [
+    files, currentPath, selectedFile, showNewFolder, showNewFile,
+    newFolderName, newFileName, renameTarget, renameValue,
+    navigateTo, navigateUp, guardLoadFile,
+    onShowNewFolder, onHideNewFolder, onShowNewFile, onHideNewFile,
+    onRenameStart, onRenameCancel,
+  ]);
+
+  // Navigate to root — guarded
+  const navigateToRoot = useCallback(() => {
+    guardNav(() => {
+      setCurrentPath("");
+      setSelectedFile("");
+      setFileData(null);
+      setContent("");
+      setOriginal("");
+    });
+  }, [guardNav]);
 
   return (
     <div className="flex h-full flex-col bg-background selection:bg-primary/20 overflow-hidden">
@@ -306,25 +361,30 @@ export default function WorkspacePage() {
           <div className="flex items-center gap-2 font-mono text-sm overflow-hidden">
             <Folder className="h-4 w-4 text-primary shrink-0" />
             <div className="flex items-center whitespace-nowrap overflow-x-auto scrollbar-none pb-0.5">
-              <button onClick={() => { setCurrentPath(""); setSelectedFile(""); setFileData(null); setContent(""); setOriginal(""); }} className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">{t("workspace.breadcrumb_root")}</button>
+              <button onClick={navigateToRoot} className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">{t("workspace.breadcrumb_root")}</button>
               <span className="mx-1 text-muted-foreground/30">/</span>
-              {breadcrumbs.map((seg, i) => (
-                <span key={i} className="flex items-center">
-                  <button
-                    className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-                    onClick={() => {
-                      setSelectedFile("");
-                      setFileData(null);
-                      setContent("");
-                      setOriginal("");
-                      setCurrentPath(breadcrumbs.slice(0, i + 1).join("/"));
-                    }}
-                  >
-                    {seg}
-                  </button>
-                  <span className="mx-1 text-muted-foreground/30">/</span>
-                </span>
-              ))}
+              {breadcrumbs.map((seg, i) => {
+                const segPath = breadcrumbs.slice(0, i + 1).join("/");
+                return (
+                  <span key={segPath} className="flex items-center">
+                    <button
+                      className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                      onClick={() => {
+                        guardNav(() => {
+                          setSelectedFile("");
+                          setFileData(null);
+                          setContent("");
+                          setOriginal("");
+                          setCurrentPath(segPath);
+                        });
+                      }}
+                    >
+                      {seg}
+                    </button>
+                    <span className="mx-1 text-muted-foreground/30">/</span>
+                  </span>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -380,7 +440,11 @@ export default function WorkspacePage() {
 
               {/* Dynamic Editor Height Adjustment */}
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                {fileData && isBinaryFile(fileData) ? (
+                {loadingFile ? (
+                  <div className="flex flex-1 items-center justify-center">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : fileData && isBinaryFile(fileData) ? (
                   <BinaryViewer file={fileData} />
                 ) : isMarkdown ? (
                   <ObsidianEditor
@@ -390,7 +454,7 @@ export default function WorkspacePage() {
                     noteDir={selectedFile.split("/").slice(0, -1).join("/")}
                     onNavigate={(target) => {
                       const fname = target.endsWith(".md") ? target : `${target}.md`;
-                      loadFile(fname);
+                      guardLoadFile(fname);
                     }}
                   />
                 ) : (
@@ -434,6 +498,22 @@ export default function WorkspacePage() {
         title={t("workspace.delete_recursive_title")}
         description={t("workspace.delete_recursive_description", { name: deleteRecursiveTarget?.split("/").pop() ?? "" })}
         confirmLabel={t("workspace.delete_recursive_action")}
+      />
+
+      {/* Unsaved-changes guard dialog */}
+      <ConfirmDialog
+        open={!!pendingNav}
+        onClose={() => setPendingNav(null)}
+        onConfirm={() => {
+          const nav = pendingNav;
+          setPendingNav(null);
+          setContent(original); // discard edits so the follow-up load starts clean
+          nav?.();
+        }}
+        title={t("workspace.unsaved_title")}
+        description={t("workspace.unsaved_description")}
+        confirmLabel={t("workspace.unsaved_discard")}
+        variant="destructive"
       />
     </div>
   );
