@@ -1,5 +1,6 @@
 use axum::{
     Router,
+    extract::State,
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::get,
@@ -8,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::super::AppState;
+use crate::gateway::clusters::{ConfigServices, InfraServices};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
@@ -16,16 +18,12 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 /// Extensions treated as binary/media — browse returns a signed URL, never UTF-8.
-// Used by later tasks (workspace file viewer); allow dead_code until then.
-#[allow(dead_code)]
 const BINARY_EXTS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "svg", "pdf",
     "mp3", "wav", "ogg", "opus", "m4a", "mp4", "webm", "mov",
     "zip", "gz", "tar", "bin", "wasm",
 ];
 
-// Used by later tasks (workspace file viewer); allow dead_code until then.
-#[allow(dead_code)]
 pub(crate) fn is_binary_filename(name: &str) -> bool {
     std::path::Path::new(name)
         .extension()
@@ -77,6 +75,54 @@ async fn resolve_workspace_path(
     resolve_within(std::path::Path::new(crate::config::WORKSPACE_DIR), rel_path).await
 }
 
+/// Build a JSON response for a single workspace file.
+///
+/// Binary files (by extension or invalid UTF-8) return a signed URL;
+/// text files return their content inline.
+async fn build_file_response(
+    base: &std::path::Path,
+    rel: &str,
+    key: &[u8; 32],
+    ttl: u64,
+) -> Result<Value, (StatusCode, Json<Value>)> {
+    let (base_canon, target) = resolve_within(base, rel).await?;
+
+    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let bytes = tokio::fs::read(&target).await.map_err(|e| {
+        let status = if e.kind() == std::io::ErrorKind::NotFound {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (status, Json(json!({"error": e.to_string()})))
+    })?;
+
+    // Binary if extension says so OR content is not valid UTF-8.
+    let is_binary = is_binary_filename(name) || std::str::from_utf8(&bytes).is_err();
+
+    if is_binary {
+        // Re-derive workspace-relative path so the signed URL matches what
+        // serve_workspace_file canonicalizes (C-2 bug class).
+        let rel_for_url = target
+            .strip_prefix(&base_canon)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| rel.to_string());
+        let url = crate::uploads::mint_workspace_file_url(&rel_for_url, key, ttl);
+        let mime = crate::uploads::guess_mime_from_extension(name);
+        Ok(json!({
+            "is_binary": true,
+            "mime": mime,
+            "size": bytes.len(),
+            "url": url,
+            "path": rel,
+            "is_dir": false,
+        }))
+    } else {
+        let content = String::from_utf8(bytes).unwrap_or_default();
+        Ok(json!({ "content": content, "path": rel, "is_dir": false }))
+    }
+}
+
 /// List directory contents as JSON entries.
 async fn list_dir_entries(dir: &std::path::Path) -> Result<Vec<Value>, String> {
     let mut entries = Vec::new();
@@ -113,8 +159,11 @@ pub(crate) fn format_workspace_size(bytes: u64) -> String {
 }
 
 /// Browse workspace: GET /api/workspace or GET /api/workspace/{path}
-/// Directories return file list; files return content.
+/// Directories return file list; text files return content inline;
+/// binary files return a signed URL.
 pub(crate) async fn api_workspace_browse(
+    State(infra): State<InfraServices>,
+    State(cfg): State<ConfigServices>,
     path: Option<axum::extract::Path<String>>,
 ) -> impl IntoResponse {
     let rel_path = path.as_ref().map_or(".", |p| p.as_str());
@@ -130,12 +179,11 @@ pub(crate) async fn api_workspace_browse(
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))).into_response(),
         }
     } else if target.is_file() {
-        match tokio::fs::read_to_string(&target).await {
-            Ok(content) => Json(json!({ "content": content, "path": rel_path, "is_dir": false })).into_response(),
-            Err(e) => {
-                let status = if e.kind() == std::io::ErrorKind::NotFound { StatusCode::NOT_FOUND } else { StatusCode::INTERNAL_SERVER_ERROR };
-                (status, Json(json!({"error": e.to_string()}))).into_response()
-            }
+        let key = infra.secrets.get_upload_hmac_key();
+        let ttl = cfg.config.uploads.signed_url_ttl_secs;
+        match build_file_response(std::path::Path::new(crate::config::WORKSPACE_DIR), rel_path, &key, ttl).await {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => e.into_response(),
         }
     } else {
         (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response()
@@ -196,6 +244,29 @@ pub(crate) async fn api_workspace_delete(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn build_response_text_returns_content() {
+        let base = tempfile::tempdir().unwrap();
+        tokio::fs::write(base.path().join("n.md"), b"# Hi").await.unwrap();
+        let v = build_file_response(base.path(), "n.md", &[7u8; 32], 3600).await.unwrap();
+        assert_eq!(v["content"], "# Hi");
+        assert_eq!(v["is_dir"], false);
+        assert!(v.get("is_binary").is_none());
+    }
+
+    #[tokio::test]
+    async fn build_response_binary_returns_signed_url() {
+        let base = tempfile::tempdir().unwrap();
+        // 1-byte PNG-ish binary (invalid UTF-8 byte 0xFF ensures non-text).
+        tokio::fs::write(base.path().join("img.png"), [0xFFu8, 0x00, 0x01]).await.unwrap();
+        let v = build_file_response(base.path(), "img.png", &[7u8; 32], 3600).await.unwrap();
+        assert_eq!(v["is_binary"], true);
+        assert_eq!(v["mime"], "image/png");
+        assert_eq!(v["size"], 3);
+        let url = v["url"].as_str().unwrap();
+        assert!(url.starts_with("/workspace-files/img.png?sig="), "got {url}");
+    }
 
     #[test]
     fn binary_classification_by_extension() {
