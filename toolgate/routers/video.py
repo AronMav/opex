@@ -320,8 +320,11 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
 
         # Persist raw material for url sources with a valid video-id so the next
         # request can short-circuit the full pass. Best-effort: a cache write
-        # failure never affects the returned result.
-        if video_id:
+        # failure never affects the returned result. Degraded runs (STT or
+        # vision failed → partial transcript / frames without descriptions) are
+        # NOT cached: otherwise a transient provider outage would pin a poor
+        # result forever; the next clean run should re-materialize.
+        if video_id and not degraded.get("stt") and not degraded.get("vision"):
             _write_cache(video_id, result)
 
         return result
