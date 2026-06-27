@@ -216,29 +216,51 @@ pub(crate) async fn api_workspace_write(
     }
 }
 
-pub(crate) async fn api_workspace_delete(
-    axum::extract::Path(rel_path): axum::extract::Path<String>,
-) -> impl IntoResponse {
-    let (_, target) = match resolve_workspace_path(&rel_path).await {
-        Ok(v) => v,
-        Err(e) => return e.into_response(),
-    };
+#[derive(Debug, Deserialize)]
+pub(crate) struct DeleteQuery {
+    #[serde(default)]
+    recursive: bool,
+}
+
+async fn do_delete(
+    base: &std::path::Path,
+    rel: &str,
+    recursive: bool,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let (base_canon, target) = resolve_within(base, rel).await?;
+
+    // Never delete the workspace root itself.
+    if target == base_canon {
+        return Err((StatusCode::FORBIDDEN, Json(json!({"error": "cannot delete workspace root"}))));
+    }
 
     if target.is_dir() {
-        // Only allow deleting empty directories (safety: no recursive delete).
-        // ENOTEMPTY = 39 on Linux, 145 on Windows.
-        match tokio::fs::remove_dir(&target).await {
-            Ok(()) => Json(json!({"ok": true})).into_response(),
-            Err(e) if matches!(e.raw_os_error(), Some(39 | 145)) => {
-                (StatusCode::CONFLICT, Json(json!({"error": "Directory is not empty"}))).into_response()
+        if recursive {
+            tokio::fs::remove_dir_all(&target).await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))
+        } else {
+            // ENOTEMPTY = 39 on Linux, 145 on Windows.
+            match tokio::fs::remove_dir(&target).await {
+                Ok(()) => Ok(()),
+                Err(e) if matches!(e.raw_os_error(), Some(39 | 145)) => {
+                    Err((StatusCode::CONFLICT, Json(json!({"error": "Directory is not empty"}))))
+                }
+                Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
             }
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
         }
     } else {
-        match tokio::fs::remove_file(&target).await {
-            Ok(()) => Json(json!({"ok": true})).into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
-        }
+        tokio::fs::remove_file(&target).await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))
+    }
+}
+
+pub(crate) async fn api_workspace_delete(
+    axum::extract::Path(rel_path): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<DeleteQuery>,
+) -> impl IntoResponse {
+    match do_delete(std::path::Path::new(crate::config::WORKSPACE_DIR), &rel_path, q.recursive).await {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => e.into_response(),
     }
 }
 
@@ -358,6 +380,28 @@ mod tests {
         tokio::fs::write(base.path().join("ok.md"), b"hi").await.unwrap();
         let (b, t) = resolve_within(base.path(), "ok.md").await.unwrap();
         assert!(t.starts_with(&b));
+    }
+
+    #[tokio::test]
+    async fn delete_nonempty_dir_requires_recursive() {
+        let base = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir_all(base.path().join("d")).await.unwrap();
+        tokio::fs::write(base.path().join("d/f.txt"), b"x").await.unwrap();
+
+        // Without recursive → error (409).
+        let err = do_delete(base.path(), "d", false).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::CONFLICT);
+
+        // With recursive → removed.
+        do_delete(base.path(), "d", true).await.unwrap();
+        assert!(!base.path().join("d").exists());
+    }
+
+    #[tokio::test]
+    async fn delete_refuses_workspace_root() {
+        let base = tempfile::tempdir().unwrap();
+        let err = do_delete(base.path(), ".", true).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
