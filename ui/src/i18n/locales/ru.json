@@ -852,6 +852,8 @@
   "workspace.create_folder": "Новая папка",
   "workspace.rename": "Переименовать",
   "workspace.download": "Скачать",
+  "workspace.image_load_error": "Не удалось загрузить изображение",
+  "workspace.pdf_load_error": "Если PDF не отобразился —",
   "workspace.upload": "Загрузить",
   "workspace.rename_title": "Переименовать",
   "workspace.delete_recursive_title": "Удалить папку?",
