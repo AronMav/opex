@@ -3,7 +3,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::get,
+    routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -14,6 +14,7 @@ use crate::gateway::clusters::{ConfigServices, InfraServices};
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/workspace", get(api_workspace_browse))
+        .route("/api/workspace/sign", post(api_workspace_sign))
         .route("/api/workspace/{*path}", get(api_workspace_browse).put(api_workspace_write).delete(api_workspace_delete))
 }
 
@@ -241,6 +242,57 @@ pub(crate) async fn api_workspace_delete(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct SignRequest {
+    paths: Vec<String>,
+}
+
+/// Build a map from requested path string → signed URL for every path that
+/// resolves to an existing file inside `base`. External paths and missing
+/// files are silently skipped (never 4xx the whole batch).
+async fn build_sign_map(
+    base: &std::path::Path,
+    paths: &[String],
+    key: &[u8; 32],
+    ttl: u64,
+) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    for p in paths {
+        let Ok((base_canon, target)) = resolve_within(base, p).await else { continue };
+        if !target.is_file() { continue }
+        let rel_for_url = target
+            .strip_prefix(&base_canon)
+            .map(|x| x.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| p.clone());
+        let url = crate::uploads::mint_workspace_file_url(&rel_for_url, key, ttl);
+        out.insert(p.clone(), Value::String(url));
+    }
+    out
+}
+
+/// POST /api/workspace/sign — batch-sign inline asset URLs.
+///
+/// Body: `{ "paths": ["note/images/x.png", ...] }`
+/// Response: `{ "url_by_path": { "note/images/x.png": "/workspace-files/...?sig=..." } }`
+///
+/// External paths and missing files are silently omitted from the map.
+pub(crate) async fn api_workspace_sign(
+    State(infra): State<InfraServices>,
+    State(cfg): State<ConfigServices>,
+    Json(req): Json<SignRequest>,
+) -> impl IntoResponse {
+    let key = infra.secrets.get_upload_hmac_key();
+    let ttl = cfg.config.uploads.signed_url_ttl_secs;
+    let map = build_sign_map(
+        std::path::Path::new(crate::config::WORKSPACE_DIR),
+        &req.paths,
+        &key,
+        ttl,
+    )
+    .await;
+    Json(json!({ "url_by_path": Value::Object(map) }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,5 +358,25 @@ mod tests {
         tokio::fs::write(base.path().join("ok.md"), b"hi").await.unwrap();
         let (b, t) = resolve_within(base.path(), "ok.md").await.unwrap();
         assert!(t.starts_with(&b));
+    }
+
+    #[tokio::test]
+    async fn sign_map_skips_external_and_missing() {
+        let base = tempfile::tempdir().unwrap();
+        tokio::fs::create_dir_all(base.path().join("note/images")).await.unwrap();
+        tokio::fs::write(base.path().join("note/images/x.png"), b"x").await.unwrap();
+
+        let paths = vec![
+            "note/images/x.png".to_string(),
+            "note/images/missing.png".to_string(),
+            "../../etc/passwd".to_string(),
+        ];
+        let m = build_sign_map(base.path(), &paths, &[3u8; 32], 3600).await;
+
+        assert!(m.contains_key("note/images/x.png"));
+        assert!(!m.contains_key("note/images/missing.png"), "missing skipped");
+        assert!(!m.contains_key("../../etc/passwd"), "external skipped");
+        let url = m["note/images/x.png"].as_str().unwrap();
+        assert!(url.starts_with("/workspace-files/note/images/x.png?sig="), "got {url}");
     }
 }
