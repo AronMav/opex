@@ -977,6 +977,11 @@ mod tests {
     fn fake_db() -> sqlx::PgPool {
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
+            // Fail DB ops fast (~200ms) instead of the default 30s acquire
+            // timeout: the ui_session_does_not_panic_* tests intentionally hit
+            // the notify()/upload DB path on this dead pool and must NOT hang
+            // the CI suite waiting on 127.0.0.1:1.
+            .acquire_timeout(std::time::Duration::from_millis(200))
             .connect_lazy("postgres://invalid:invalid@127.0.0.1:1/invalid")
             .expect("lazy connect cannot fail")
     }
