@@ -163,7 +163,7 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
                         end = raw.rfind("}") + 1
                         if start >= 0 and end > start:
                             parsed = json.loads(raw[start:end])
-                            sc = int(parsed.get("score", 5))
+                            sc = max(0, min(10, int(parsed.get("score", 5))))
                             desc = str(parsed.get("description", "")).strip()
                         else:
                             raise ValueError("no JSON object in response")
