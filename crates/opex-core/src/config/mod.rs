@@ -76,6 +76,9 @@ pub struct AppConfig {
     /// Language server (LSP) orchestration config (disabled by default).
     #[serde(default)]
     pub lsp: LspConfig,
+    /// Video-summarisation tunables (`[video]` section).
+    #[serde(default)]
+    pub video: VideoConfig,
 }
 
 // ── SecurityConfig ────────────────────────────────────────────────────────────
@@ -1532,6 +1535,49 @@ impl Default for DockerConfig {
             rebuild_timeout_secs: default_rebuild_timeout(),
         }
     }
+}
+
+// ── VideoConfig ───────────────────────────────────────────────────────────────
+
+/// Video-summarisation tunables (`[video]` in opex.toml).
+///
+/// `digest_provider` / `digest_model` let you route the LLM digest step to a
+/// different provider than the job-owning agent's configured provider — useful
+/// for testing large-context or local models (e.g. ollama) without changing
+/// the agent's own connection.  When unset, the worker falls back to the
+/// agent's own provider (previous behaviour, no change).
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+pub struct VideoConfig {
+    /// Scene-cut sensitivity for key-frame extraction (0..1 ffmpeg scene score).
+    #[serde(default)]
+    pub scene_threshold: Option<f64>,
+    /// High safety ceiling on extracted frames (NOT a product cap).
+    #[serde(default)]
+    pub frame_ceiling: Option<u32>,
+    /// Liveness guard per job (seconds) — fails a wedged job, not a cap on long video.
+    #[serde(default)]
+    pub job_timeout_secs: Option<u32>,
+    /// v1 video-URL download allowlist (yt-dlp).
+    #[serde(default)]
+    pub url_allowlist: Vec<String>,
+    /// Max screenshots embedded per note.
+    #[serde(default)]
+    pub note_max_frames: Option<u32>,
+    /// Obsidian vault name for the obsidian:// deep link.
+    #[serde(default)]
+    pub vault_name: Option<String>,
+    /// Named provider (from the `providers` DB table) to use for the LLM
+    /// digest step.  When absent, falls back to the job agent's own provider.
+    ///
+    /// Example: `digest_provider = "ollama-local"`
+    #[serde(default)]
+    pub digest_provider: Option<String>,
+    /// Optional model override for the digest provider.  When absent, the
+    /// provider's `default_model` is used.
+    ///
+    /// Example: `digest_model = "qwen3:32b"`
+    #[serde(default)]
+    pub digest_model: Option<String>,
 }
 
 // ── Tailscale Funnel config ──
@@ -3191,5 +3237,65 @@ allow_internal = true"#;
         assert_eq!(w.timeout_ms, 1500);
         assert!(w.allow_internal);
         assert_eq!(w.tool_matcher.as_deref(), Some("code_exec|workspace_.*"));
+    }
+
+    #[test]
+    fn video_config_digest_provider_and_model_round_trip() {
+        let toml = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+
+[video]
+digest_provider = "ollama-local"
+digest_model = "qwen3:32b"
+"#;
+        let f = write_temp_toml(toml);
+        let cfg = AppConfig::load(f.path()).expect("video config must parse");
+        assert_eq!(cfg.video.digest_provider.as_deref(), Some("ollama-local"));
+        assert_eq!(cfg.video.digest_model.as_deref(), Some("qwen3:32b"));
+    }
+
+    #[test]
+    fn video_config_digest_fields_default_to_none() {
+        let toml = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+"#;
+        let f = write_temp_toml(toml);
+        let cfg = AppConfig::load(f.path()).expect("minimal config must parse");
+        assert!(cfg.video.digest_provider.is_none(), "digest_provider defaults to None");
+        assert!(cfg.video.digest_model.is_none(), "digest_model defaults to None");
+    }
+
+    #[test]
+    fn video_config_legacy_keys_still_parse() {
+        // Ensure existing [video] sections with old numeric keys still parse
+        // (no deny_unknown_fields on VideoConfig — forward/backward compat).
+        let toml = r#"
+[gateway]
+listen = "0.0.0.0:18789"
+
+[database]
+url = "postgres://localhost/test"
+
+[video]
+scene_threshold = 0.4
+frame_ceiling = 200
+job_timeout_secs = 1800
+note_max_frames = 24
+vault_name = "zettelkasten"
+digest_provider = "my-provider"
+"#;
+        let f = write_temp_toml(toml);
+        let cfg = AppConfig::load(f.path()).expect("video config with all keys must parse");
+        assert_eq!(cfg.video.digest_provider.as_deref(), Some("my-provider"));
+        assert!(cfg.video.digest_model.is_none());
+        assert_eq!(cfg.video.vault_name.as_deref(), Some("zettelkasten"));
     }
 }

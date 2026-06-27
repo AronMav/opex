@@ -197,6 +197,90 @@ fn emit_video_progress(
     let _ = ui_tx.send(ev.to_string());
 }
 
+// ── Digest-provider resolution ────────────────────────────────────────────────
+
+/// Resolve the provider used for the LLM digest step.
+///
+/// If `[video] digest_provider` is configured, we look up the named provider
+/// row in the DB and build an HTTP provider from it (CLI providers are not
+/// supported here — they need a sandbox + agent context).  On any failure we
+/// warn and fall back to the agent's own provider.  When `digest_provider` is
+/// not set we return `None` and the caller uses the engine provider as before.
+async fn resolve_digest_provider(
+    state: &AppState,
+    provider_name: &str,
+    model_override: Option<&str>,
+) -> Option<Arc<dyn LlmProvider>> {
+    use crate::agent::providers::{build_provider, ProviderOverrides};
+    use crate::agent::providers::timeouts::ProviderOptions;
+    use tokio_util::sync::CancellationToken;
+
+    let row = match crate::db::providers::get_provider_by_name(&state.infra.db, provider_name).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            tracing::warn!(
+                digest_provider = %provider_name,
+                "video_worker: digest_provider not found in DB — falling back to agent provider"
+            );
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                digest_provider = %provider_name,
+                "video_worker: DB error resolving digest_provider — falling back to agent provider"
+            );
+            return None;
+        }
+    };
+
+    if row.category != "text" && row.category != "llm" {
+        tracing::warn!(
+            digest_provider = %provider_name,
+            category = %row.category,
+            "video_worker: digest_provider is not a text/llm provider — falling back to agent provider"
+        );
+        return None;
+    }
+
+    if matches!(row.provider_type.as_str(), "claude-cli" | "gemini-cli" | "codex-cli") {
+        tracing::warn!(
+            digest_provider = %provider_name,
+            provider_type = %row.provider_type,
+            "video_worker: CLI providers are not supported as digest_provider — falling back to agent provider"
+        );
+        return None;
+    }
+
+    let opts: ProviderOptions = serde_json::from_value(row.options.clone()).unwrap_or_default();
+    let timeouts = opts.timeouts;
+    let overrides = ProviderOverrides {
+        model: model_override.map(str::to_string),
+        temperature: None,
+        max_tokens: None,
+        prompt_cache: None,
+    };
+
+    match build_provider(&row, state.auth.secrets.clone(), &timeouts, CancellationToken::new(), overrides) {
+        Ok(provider) => {
+            tracing::info!(
+                digest_provider = %provider_name,
+                model = ?model_override,
+                "video_worker: using override digest provider"
+            );
+            Some(Arc::from(provider))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                digest_provider = %provider_name,
+                "video_worker: failed to build digest_provider — falling back to agent provider"
+            );
+            None
+        }
+    }
+}
+
 // ── Poll loop ─────────────────────────────────────────────────────────────────
 
 /// Spawn the background video-job worker (concurrency = 1 in v1).
@@ -222,6 +306,13 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
         .unwrap_or_else(|| "http://localhost:9011".to_string());
 
     let gateway_listen = state.config.config.gateway.listen.clone();
+
+    // Capture video config overrides at spawn time.
+    let digest_provider_name = state.config.config.video.digest_provider.clone();
+    let digest_model = state.config.config.video.digest_model.clone();
+
+    // Clone the state for async use inside the spawned task.
+    let state_for_worker = state.clone();
 
     // The worker owns its own reqwest::Client — pooled, reused across polls.
     let http = reqwest::Client::new();
@@ -272,7 +363,18 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                     }
                 };
 
-            let provider: Arc<dyn LlmProvider> = engine.provider_arc();
+            // Resolve digest provider: use config override if set, else fall back to engine's own.
+            let provider: Arc<dyn LlmProvider> = if let Some(ref name) = digest_provider_name {
+                let override_p = resolve_digest_provider(
+                    &state_for_worker,
+                    name,
+                    digest_model.as_deref(),
+                )
+                .await;
+                override_p.unwrap_or_else(|| engine.provider_arc())
+            } else {
+                engine.provider_arc()
+            };
 
             let mcp = match engine.mcp() {
                 Some(m) => m.clone(),
