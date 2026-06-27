@@ -61,13 +61,83 @@ async def extract_scene_frames(
         return frames
 
 
-async def extract_uniform_frames(video_path: str, count: int) -> list[tuple[float, bytes]]:
-    """Extract `count` frames evenly spaced across the video, high JPEG quality.
+async def detect_scene_cuts(video_path: str, threshold: float = 0.3) -> list[float]:
+    """Return timestamps (seconds) of scene cuts via ffmpeg scene detection.
 
-    Uses ffprobe to get duration, then extracts frames at computed timestamps
-    via -ss seek (one ffmpeg call per frame, precise and simple). Each frame is
-    encoded as JPEG with -q:v 2 (highest quality) and scaled to 1280px wide
-    while preserving aspect ratio.
+    Runs `select='gt(scene,{threshold})',showinfo` over the whole video and
+    parses `pts_time:` from ffmpeg's stderr (same mechanism as
+    `extract_scene_frames`, but discards the frames — we only want the cut
+    timestamps). Threshold 0.3 is intentionally more sensitive than the default
+    0.4 so we catch more transitions and can steer extraction AWAY from them.
+
+    On ANY ffmpeg failure this returns an empty list (never raises): the caller
+    then degrades gracefully to pure uniform extraction.
+    """
+    try:
+        code, _, err = await _run(
+            "ffmpeg", "-i", video_path,
+            "-vf", f"select='gt(scene,{threshold})',showinfo",
+            "-f", "null", "-",
+        )
+    except Exception:
+        return []
+    if code != 0:
+        return []
+    times: list[float] = []
+    for line in err.decode(errors="ignore").splitlines():
+        if "pts_time:" in line:
+            try:
+                times.append(float(line.split("pts_time:")[1].split()[0]))
+            except (IndexError, ValueError):
+                pass
+    return sorted(times)
+
+
+def _avoid_cuts(ts: float, cuts: list[float], duration: float, gap: float = 2.0) -> float:
+    """Nudge a candidate timestamp away from any nearby scene cut.
+
+    If a scene cut lies within `[ts-gap, ts+gap]`, move `ts` into the middle of
+    the nearest stable window between the surrounding cuts:
+      - find the closest cut on the left (`prev`, default 0) and right (`next`,
+        default `duration`) of `ts`;
+      - if that window `(prev, next)` is wider than `2*gap`, return its midpoint
+        `(prev+next)/2` (the most stable point);
+      - otherwise shift to `prev+gap` (or, if that would overshoot the window,
+        `next-gap`), whichever stays inside the video.
+    The result is clamped to `[0, duration]`. If no cut is near, `ts` is returned
+    unchanged.
+    """
+    if not cuts:
+        return ts
+    # Is there a cut within the danger window around ts?
+    near = any(ts - gap <= c <= ts + gap for c in cuts)
+    if not near:
+        return ts
+    # Closest cut on each side of ts (window boundaries default to the video ends).
+    prev = max((c for c in cuts if c <= ts), default=0.0)
+    nxt = min((c for c in cuts if c >= ts), default=duration)
+    if nxt - prev > 2 * gap:
+        corrected = (prev + nxt) / 2.0
+    else:
+        # Narrow window: prefer prev+gap, fall back to next-gap if it overshoots.
+        corrected = prev + gap
+        if corrected > nxt - gap:
+            corrected = nxt - gap
+    return max(0.0, min(duration, corrected))
+
+
+async def extract_uniform_frames(video_path: str, count: int) -> list[tuple[float, bytes]]:
+    """Extract `count` scene-aware frames spread across the video, high JPEG quality.
+
+    Frames are placed at evenly-spaced midpoints, but each candidate timestamp is
+    nudged AWAY from detected scene cuts (`detect_scene_cuts` + `_avoid_cuts`) so
+    we never grab a blurry / motion-blurred transition frame. If scene detection
+    yields nothing (or ffmpeg fails) this degrades to pure uniform spacing.
+
+    Uses ffprobe for duration, then one `-ss`-seek ffmpeg call per corrected
+    timestamp. Each frame is JPEG `-q:v 2` (highest quality), scaled to 1280px
+    wide while preserving aspect ratio. Near-duplicate timestamps (two base
+    points nudged within <1.0s of each other) are de-duplicated.
 
     Returns [(timestamp_seconds, jpeg_bytes)] sorted by time.
     """
@@ -85,15 +155,24 @@ async def extract_uniform_frames(video_path: str, count: int) -> list[tuple[floa
     if count <= 0:
         return []
 
-    # ── 2. Compute evenly-spaced timestamps ──────────────────────────────────
-    # Use midpoint of each interval so first/last frames aren't at 0s/end.
-    step = duration / count
-    timestamps = [step * (i + 0.5) for i in range(count)]
+    # ── 2. Detect scene cuts (best-effort) ───────────────────────────────────
+    cuts = await detect_scene_cuts(video_path)
 
-    # ── 3. Extract each frame with high-quality JPEG + width normalisation ───
+    # ── 3. Compute evenly-spaced midpoints, then steer away from cuts ─────────
+    base_ts = [duration * (i + 0.5) / count for i in range(count)]
+    corrected: list[float] = []
+    for ts in base_ts:
+        new_ts = _avoid_cuts(ts, cuts, duration)
+        # Dedup: drop a candidate that landed within 1.0s of an already-kept one.
+        if any(abs(new_ts - kept) < 1.0 for kept in corrected):
+            continue
+        corrected.append(new_ts)
+    corrected.sort()
+
+    # ── 4. Extract each frame with high-quality JPEG + width normalisation ───
     frames: list[tuple[float, bytes]] = []
     with tempfile.TemporaryDirectory() as d:
-        for i, ts in enumerate(timestamps):
+        for i, ts in enumerate(corrected):
             out_path = os.path.join(d, f"f_{i:05d}.jpg")
             c, _, e = await _run(
                 "ffmpeg", "-y",
