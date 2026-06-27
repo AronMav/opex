@@ -232,6 +232,10 @@ async fn run_extract_document(input: &DispatchInput<'_>) -> ScenarioOutcome {
 
 /// Async built-in: enqueue a durable video_jobs row and return an instant ack.
 /// The heavy pipeline runs out-of-band in the in-core video worker.
+///
+/// Dedup: if an active (pending/processing) job for the same `source_ref` already
+/// exists in this session within a 2-minute window, we skip enqueue and return a
+/// duplicate-ack instead — preventing double-jobs from mobile client reloads.
 async fn run_summarize_video(input: &DispatchInput<'_>) -> ScenarioOutcome {
     let ctx = match &input.enqueue {
         Some(c) => c,
@@ -241,19 +245,38 @@ async fn run_summarize_video(input: &DispatchInput<'_>) -> ScenarioOutcome {
             )
         }
     };
+    let source_ref = &input.attachment.url;
+
+    // Dedup check: return early if a live job for this URL already exists.
+    match opex_db::video_jobs::find_recent_active_video_job(ctx.db, ctx.session_id, source_ref)
+        .await
+    {
+        Ok(Some(_)) => {
+            return ScenarioOutcome::ok(
+                "🎬 это видео уже в обработке — пришлю конспект, когда будет готов.".into(),
+                vec![source_ref.clone()],
+            );
+        }
+        Ok(None) => {}
+        Err(e) => {
+            // Non-fatal: log and fall through to enqueue normally rather than blocking.
+            tracing::warn!(error = %e, "dedup check for video job failed; proceeding with enqueue");
+        }
+    }
+
     match opex_db::video_jobs::enqueue_video_job(
         ctx.db,
         ctx.session_id,
         ctx.agent_name,
         ctx.source_type,
-        &input.attachment.url,
+        source_ref,
         input.attachment.file_name.as_deref(),
     )
     .await
     {
         Ok(_id) => ScenarioOutcome::ok(
             "🎬 видео принято, готовлю сводку — пришлю, когда будет готова.".into(),
-            vec![input.attachment.url.clone()],
+            vec![source_ref.clone()],
         ),
         Err(e) => ScenarioOutcome::failed(format!("could not enqueue video job: {e}")),
     }
@@ -497,6 +520,65 @@ mod tests {
         let title: Option<String> = sqlx::query_scalar("SELECT source_title FROM video_jobs WHERE session_id=$1")
             .bind(sid).fetch_one(&pool).await.unwrap();
         assert_eq!(title.as_deref(), Some("Лекция.mp4"));
+    }
+
+    /// Second dispatch of the same attachment URL within 2 minutes must return the
+    /// dedup ack WITHOUT inserting a second row in video_jobs.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn summarize_video_dedup_skips_second_enqueue(pool: sqlx::PgPool) {
+        use opex_types::{MediaAttachment, MediaType};
+        let sid = uuid::Uuid::new_v4();
+        let att = MediaAttachment {
+            url: "https://h/api/uploads/dup-clip?sig=y".into(),
+            media_type: MediaType::Video,
+            file_name: Some("dup.mp4".into()),
+            mime_type: Some("video/mp4".into()),
+            file_size: None,
+        };
+        let client = reqwest::Client::new();
+
+        // First call: enqueues normally.
+        let out1 = dispatch_action(DispatchInput {
+            action_ref: "summarize_video",
+            attachment: &att,
+            toolgate_url: "http://localhost:9011",
+            gateway_listen: "0.0.0.0:18789",
+            language: "ru",
+            http_client: &client,
+            timeout: std::time::Duration::from_secs(60),
+            enqueue: Some(EnqueueCtx { db: &pool, session_id: sid, agent_name: "Atlas", source_type: "file" }),
+        })
+        .await;
+        assert_eq!(out1.status, ScenarioStatus::Ok);
+        assert!(out1.summary_text.contains("принято"), "first ack: {}", out1.summary_text);
+
+        // Second call (same session, same URL, job still pending): must dedup.
+        let out2 = dispatch_action(DispatchInput {
+            action_ref: "summarize_video",
+            attachment: &att,
+            toolgate_url: "http://localhost:9011",
+            gateway_listen: "0.0.0.0:18789",
+            language: "ru",
+            http_client: &client,
+            timeout: std::time::Duration::from_secs(60),
+            enqueue: Some(EnqueueCtx { db: &pool, session_id: sid, agent_name: "Atlas", source_type: "file" }),
+        })
+        .await;
+        assert_eq!(out2.status, ScenarioStatus::Ok);
+        assert!(
+            out2.summary_text.contains("уже в обработке"),
+            "dedup ack expected, got: {}",
+            out2.summary_text
+        );
+
+        // Exactly one row in video_jobs.
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM video_jobs WHERE session_id=$1")
+                .bind(sid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1, "dedup must prevent second row from being inserted");
     }
 
     #[tokio::test]
