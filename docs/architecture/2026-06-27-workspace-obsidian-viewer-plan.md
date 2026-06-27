@@ -1219,7 +1219,7 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
 }
 ```
 
-В `page.tsx`: импортировать `ObsidianEditor` (через `dynamic`, как `MarkdownEditor`) и заменить ветку `isMarkdown` на него:
+В `page.tsx`: импортировать `ObsidianEditor` (через `dynamic`, как `MarkdownEditor`) и заменить ветку `isMarkdown` на него. **Удалить теперь неиспользуемый `dynamic`-импорт `MarkdownEditor`** (иначе ESLint/`next build` ругнётся на unused import).
 
 ```tsx
 const ObsidianEditor = dynamic(
@@ -1326,6 +1326,7 @@ class ImageWidget extends WidgetType {
   toDOM() {
     const wrap = document.createElement("div");
     wrap.className = "cm-md-image";
+    wrap.style.display = "block";
     if (this.url) {
       const img = document.createElement("img");
       img.src = this.url; img.alt = this.alt;
@@ -1360,7 +1361,10 @@ export function imageDecorations(opts: {
             if (cursor >= mf && cursor <= mt) continue; // show raw syntax on cursor line
             const resolved = resolveAssetPath(opts.noteDir, m.src);
             const url = resolved ? opts.getUrl(resolved) : m.src;
-            b.add(mt, mt, Decoration.widget({ widget: new ImageWidget(url, m.src), block: true, side: 1 }));
+            // REPLACE the `![](...)` source range with the image widget (Live Preview:
+            // hide markup, show render). NOT a trailing block widget — that would show
+            // source AND image together.
+            b.add(mf, mt, Decoration.replace({ widget: new ImageWidget(url, m.src) }));
           }
         }
         return b.finish();
