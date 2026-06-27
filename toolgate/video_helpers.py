@@ -74,8 +74,11 @@ async def download_video(url: str, dest_dir: str) -> str:
     # `yt-dlp` on PATH: toolgate's PATH does not include the venv's bin/, so a
     # bare name raises FileNotFoundError ("source fetch failed"). `-m yt_dlp`
     # resolves from the venv's site-packages regardless of PATH.
+    # `--js-runtimes node`: yt-dlp >=2025 needs a JS runtime for YouTube's nsig
+    # challenge (only deno is enabled by default; the host has node, not deno).
+    # Without it extraction is deprecated and fails ("No supported JavaScript runtime").
     code, _, err = await _run(
-        sys.executable, "-m", "yt_dlp",
+        sys.executable, "-m", "yt_dlp", "--js-runtimes", "node",
         "-f", "best[ext=mp4]/best", "-o", out_tmpl, "--no-playlist", "--", url
     )
     if code != 0:
