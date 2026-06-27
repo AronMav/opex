@@ -864,6 +864,7 @@
   "workspace.unsaved_title": "Unsaved changes",
   "workspace.unsaved_description": "You have unsaved changes. If you continue, your edits will be lost.",
   "workspace.unsaved_discard": "Discard changes",
+  "workspace.upload_errors": "Some files failed: {{errors}}",
   "access.title": "Access",
   "access.subtitle": "Authorization and user pairing",
   "access.no_agents": "No agents found",

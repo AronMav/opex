@@ -28,8 +28,13 @@ export function findImageMatches(text: string): { from: number; to: number; src:
 }
 
 class ImageWidget extends WidgetType {
-  constructor(readonly url: string | undefined, readonly alt: string) { super(); }
-  eq(o: ImageWidget) { return o.url === this.url && o.alt === this.alt; }
+  constructor(
+    readonly url: string | undefined,
+    readonly alt: string,
+    readonly assetPath: string | null,
+    readonly onError?: (assetPath: string) => void,
+  ) { super(); }
+  eq(o: ImageWidget) { return o.url === this.url && o.alt === this.alt && o.assetPath === this.assetPath; }
   toDOM() {
     const wrap = document.createElement("div");
     wrap.className = "cm-md-image";
@@ -38,6 +43,20 @@ class ImageWidget extends WidgetType {
       const img = document.createElement("img");
       img.src = this.url; img.alt = this.alt;
       img.style.maxWidth = "100%"; img.style.borderRadius = "6px";
+      if (this.assetPath && this.onError) {
+        const path = this.assetPath;
+        const cb = this.onError;
+        let fired = false;
+        img.onerror = () => {
+          if (fired) return;
+          fired = true;
+          // Show placeholder while re-sign is in flight
+          wrap.removeChild(img);
+          wrap.textContent = "🖼 ⚠";
+          wrap.style.opacity = "0.5";
+          cb(path);
+        };
+      }
       wrap.appendChild(img);
     } else {
       wrap.textContent = "🖼 …"; // placeholder until signed URL arrives
@@ -50,6 +69,8 @@ class ImageWidget extends WidgetType {
 export function imageDecorations(opts: {
   noteDir: string;
   getUrl: (path: string) => string | undefined;
+  /** Called with the resolved asset path when an image fails to load (e.g. expired signed URL). */
+  onImageError?: (assetPath: string) => void;
 }): Extension {
   return ViewPlugin.fromClass(
     class {
@@ -72,7 +93,9 @@ export function imageDecorations(opts: {
             // REPLACE the `![](...)` source range with the image widget (Live Preview:
             // hide markup, show render). NOT a trailing block widget — that would show
             // source AND image together.
-            b.add(mf, mt, Decoration.replace({ widget: new ImageWidget(url, m.alt) }));
+            b.add(mf, mt, Decoration.replace({
+              widget: new ImageWidget(url, m.alt, resolved ?? null, opts.onImageError),
+            }));
           }
         }
         return b.finish();
