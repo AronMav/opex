@@ -74,6 +74,30 @@ services:
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════
+  # Web search — searxng DISABLED (active websearch = ws-ollama). Uncomment to re-enable.
+  # ═══════════════════════════════════════════════════
+#  searxng:
+#    image: searxng/searxng:latest
+#    mem_limit: ${SEARXNG_MEM_LIMIT:-256m}
+#    cpus: ${SEARXNG_CPUS:-0.5}
+#    environment:
+#      # SearXNG entrypoint replaces the `ultrasecretkey` sentinel in settings.yml with this value.
+#      SEARXNG_SECRET: ${SEARXNG_SECRET_KEY:-ultrasecretkey}
+#    ports:
+#      - "127.0.0.1:8080:8080"
+#    volumes:
+#      - ./config/searxng:/etc/searxng
+#      - /etc/localtime:/etc/localtime:ro
+#      - /etc/timezone:/etc/timezone:ro
+#    healthcheck:
+#      test: [ "CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1" ]
+#      interval: 30s
+#      timeout: 5s
+#      retries: 3
+#    networks: [ opex ]
+#    profiles: [ "on-demand" ]
+
+  # ═══════════════════════════════════════════════════
   # MCP servers (on-demand, managed by core via bollard)
   # ═══════════════════════════════════════════════════
   mcp-stock-analysis:
