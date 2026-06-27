@@ -5,19 +5,27 @@ use axum::{
     response::{IntoResponse, Json},
     routing::{get, post},
 };
+use axum::extract::{DefaultBodyLimit, Multipart};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::super::AppState;
 use crate::gateway::clusters::{ConfigServices, InfraServices};
 
+pub(crate) const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+
 pub(crate) fn routes() -> Router<AppState> {
+    let upload = Router::new()
+        .route("/api/workspace/upload", post(api_workspace_upload))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 1024 * 1024));
+
     Router::new()
         .route("/api/workspace", get(api_workspace_browse))
         .route("/api/workspace/sign", post(api_workspace_sign))
         .route("/api/workspace/mkdir", post(api_workspace_mkdir))
         .route("/api/workspace/rename", post(api_workspace_rename))
         .route("/api/workspace/{*path}", get(api_workspace_browse).put(api_workspace_write).delete(api_workspace_delete))
+        .merge(upload)
 }
 
 /// Extensions treated as binary/media — browse returns a signed URL, never UTF-8.
@@ -367,6 +375,74 @@ pub(crate) async fn api_workspace_rename(Json(req): Json<RenameRequest>) -> impl
     }
 }
 
+/// Validate, sanitize, and write a single uploaded file.
+///
+/// - Rejects bytes exceeding `MAX_UPLOAD_BYTES` with 413.
+/// - Strips all directory components from `filename` (basename only) and
+///   rejects an empty or dot-only result with 400.
+/// - Writes to `<base>/<dir>/<basename>`, creating parent dirs as needed.
+/// - Returns the saved workspace-relative path (e.g. `"sub/evil.png"`).
+async fn save_upload(
+    base: &std::path::Path,
+    dir: &str,
+    filename: &str,
+    bytes: &[u8],
+) -> Result<String, (StatusCode, Json<Value>)> {
+    if bytes.len() > MAX_UPLOAD_BYTES {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, Json(json!({"error": "file too large"}))));
+    }
+    let basename = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty() && *n != "." && *n != "..")
+        .ok_or((StatusCode::BAD_REQUEST, Json(json!({"error": "invalid filename"}))))?;
+
+    let rel = if dir.is_empty() {
+        basename.to_string()
+    } else {
+        format!("{}/{}", dir.trim_end_matches('/'), basename)
+    };
+
+    let (_, target) = resolve_within(base, &rel).await?;
+    if let Some(parent) = target.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    tokio::fs::write(&target, bytes).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(rel)
+}
+
+/// POST /api/workspace/upload — multipart file upload.
+///
+/// Form fields (in order):
+/// - `dir` (text) — workspace-relative target directory; empty string = workspace root.
+/// - `file` (file, one or more) — files to upload.
+///
+/// Response: `{ "ok": bool, "saved": [rel_path, ...], "errors": [...] }`
+pub(crate) async fn api_workspace_upload(mut multipart: Multipart) -> impl IntoResponse {
+    let base = std::path::Path::new(crate::config::WORKSPACE_DIR);
+    let mut dir = String::new();
+    let mut saved: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "dir" {
+            dir = field.text().await.unwrap_or_default();
+        } else if name == "file" {
+            let filename = field.file_name().unwrap_or("file").to_string();
+            match field.bytes().await {
+                Ok(bytes) => match save_upload(base, &dir, &filename, &bytes).await {
+                    Ok(rel) => saved.push(rel),
+                    Err((_, e)) => errors.push(format!("{}: {}", filename, e.0["error"])),
+                },
+                Err(e) => errors.push(format!("{filename}: {e}")),
+            }
+        }
+    }
+    Json(json!({ "ok": errors.is_empty(), "saved": saved, "errors": errors })).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +552,23 @@ mod tests {
         tokio::fs::write(base.path().join("a.md"), b"a").await.unwrap();
         let err = do_rename(base.path(), "a.md", "new.md").await.unwrap_err();
         assert_eq!(err.0, StatusCode::CONFLICT, "collision must 409");
+    }
+
+    #[tokio::test]
+    async fn upload_sanitizes_basename_and_writes() {
+        let base = tempfile::tempdir().unwrap();
+        // Path components in filename are stripped to basename.
+        let rel = save_upload(base.path(), "sub", "../../evil.png", b"data").await.unwrap();
+        assert_eq!(rel, "sub/evil.png");
+        assert_eq!(tokio::fs::read(base.path().join("sub/evil.png")).await.unwrap(), b"data");
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_oversize() {
+        let base = tempfile::tempdir().unwrap();
+        let big = vec![0u8; MAX_UPLOAD_BYTES + 1];
+        let err = save_upload(base.path(), "", "big.bin", &big).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
