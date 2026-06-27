@@ -22,6 +22,7 @@ import { ReadOnlyFooter } from "./read-only/ReadOnlyFooter";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { ChatComposer } from "./composer/ChatComposer";
 import { ShortcutHelp } from "@/components/chat/ShortcutHelp";
+import { VideoProgressIndicator } from "@/components/chat/VideoProgressIndicator";
 import { useEngineRunning } from "./hooks/use-engine-running";
 import { useRenderMessages } from "./hooks/use-render-messages";
 import { selectIsLive, selectIsReplayingHistory, selectLiveHasContent } from "@/stores/chat-selectors";
@@ -324,6 +325,9 @@ export function ChatThread({
           onRetry={onRetry}
         />
       )}
+
+      {/* Video processing progress indicator */}
+      <VideoProgressIndicator sessionId={activeSessionId} />
 
       {/* Input area */}
       {isReadOnly ? (
