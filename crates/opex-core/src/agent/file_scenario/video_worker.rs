@@ -252,7 +252,7 @@ async fn build_note_mapreduce(
     for (i, (_seg_title, seg_text)) in segments.iter().enumerate() {
         let seg_start = boundaries[i].0;
         let seg_end = boundaries.get(i + 1).map(|b| b.0).unwrap_or(1.0);
-        let seg_frames = frames_for_segment(raw, frame_names, seg_start, seg_end);
+        let seg_frames = frames_for_segment(raw, frame_names, seg_start, seg_end, i + 1 == total);
 
         on_phase("digest", &format!("📝 Конспект сегмента {}/{}…", i + 1, total));
         match provider

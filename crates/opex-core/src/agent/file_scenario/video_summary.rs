@@ -372,19 +372,22 @@ pub fn slice_segments(transcript: &str, boundaries: &[(f64, String)]) -> Vec<(St
 
 /// Frames whose timestamp falls in this segment's fractional [start,end) range.
 ///
-/// Frame position is `timestamp / duration`. The last segment is inclusive of
-/// the upper bound so a frame exactly at `duration` is not dropped. Returns the
-/// matching `frame_names` (aligned by index with `raw.frames`).
+/// Frame position is `timestamp / duration`. The last segment (`is_last`) is
+/// inclusive of the upper bound so a frame exactly at `duration` is not dropped.
+/// `is_last` is the caller's real index check (`i + 1 == total`), NOT derived
+/// from `hi`: deriving it from `hi >= 1.0` would embed the final frame in every
+/// trailing segment if a flaky LLM emits duplicate `start_frac = 1.0` boundaries.
+/// Returns the matching `frame_names` (aligned by index with `raw.frames`).
 pub fn frames_for_segment(
     raw: &RawMaterial,
     frame_names: &[String],
     seg_start_frac: f64,
     seg_end_frac: f64,
+    is_last: bool,
 ) -> Vec<String> {
     let dur = if raw.duration > 0.0 { raw.duration } else { 1.0 };
     let lo = seg_start_frac.clamp(0.0, 1.0);
     let hi = seg_end_frac.clamp(0.0, 1.0);
-    let is_last = hi >= 1.0;
     raw.frames
         .iter()
         .enumerate()
@@ -591,14 +594,26 @@ mod tests {
         let raw = mr_raw(); // frames at 10s, 50s, 95s of 100s → fracs 0.10, 0.50, 0.95
         let names = vec!["frame-01.jpg".to_string(), "frame-02.jpg".to_string(), "frame-03.jpg".to_string()];
         // Segment 0: [0.0, 0.25) → frame 0 (0.10)
-        let s0 = frames_for_segment(&raw, &names, 0.0, 0.25);
+        let s0 = frames_for_segment(&raw, &names, 0.0, 0.25, false);
         assert_eq!(s0, vec!["frame-01.jpg".to_string()]);
         // Segment 1: [0.25, 0.75) → frame 1 (0.50)
-        let s1 = frames_for_segment(&raw, &names, 0.25, 0.75);
+        let s1 = frames_for_segment(&raw, &names, 0.25, 0.75, false);
         assert_eq!(s1, vec!["frame-02.jpg".to_string()]);
         // Segment 2 (last): [0.75, 1.0] inclusive → frame 2 (0.95)
-        let s2 = frames_for_segment(&raw, &names, 0.75, 1.0);
+        let s2 = frames_for_segment(&raw, &names, 0.75, 1.0, true);
         assert_eq!(s2, vec!["frame-03.jpg".to_string()]);
+    }
+
+    #[test]
+    fn frames_for_segment_duplicate_one_boundary_no_double_embed() {
+        // A flaky LLM emits a trailing segment with start=end=1.0 that is NOT the
+        // real last segment. With is_last=false it must NOT capture the final
+        // frame (frac 0.95 < 1.0 still excluded; the frame at exactly 1.0 too).
+        let raw = mr_raw(); // frames at fracs 0.10, 0.50, 0.95
+        let names = vec!["frame-01.jpg".to_string(), "frame-02.jpg".to_string(), "frame-03.jpg".to_string()];
+        // Spurious zero-width non-last segment at the very end.
+        let spurious = frames_for_segment(&raw, &names, 1.0, 1.0, false);
+        assert!(spurious.is_empty(), "non-last zero-width segment captures no frames");
     }
 
     #[test]
@@ -608,9 +623,9 @@ mod tests {
         let names = vec!["frame-01.jpg".to_string(), "frame-02.jpg".to_string(), "frame-03.jpg".to_string()];
         // No division-by-zero panic. With unknown duration we use dur=1.0, so any
         // nonzero timestamp clamps to frac 1.0 → all frames land in the LAST segment.
-        let s0 = frames_for_segment(&raw, &names, 0.0, 0.5);
+        let s0 = frames_for_segment(&raw, &names, 0.0, 0.5, false);
         assert!(s0.is_empty(), "non-last segment gets no frames when duration is 0");
-        let s_last = frames_for_segment(&raw, &names, 0.5, 1.0);
+        let s_last = frames_for_segment(&raw, &names, 0.5, 1.0, true);
         assert_eq!(s_last.len(), 3, "all frames land in the last segment when duration is 0");
     }
 
