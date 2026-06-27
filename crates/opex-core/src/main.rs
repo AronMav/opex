@@ -560,7 +560,7 @@ async fn main() -> Result<()> {
     let tool_embed_cache = Arc::new(tools::embedding::ToolEmbeddingCache::new());
 
     let docker_url = std::env::var("DOCKER_HOST")
-        .unwrap_or_else(|_| "tcp://127.0.0.1:2375".to_string());
+        .unwrap_or_else(|_| "unix:///var/run/docker.sock".to_string());
 
     let sandbox = if cfg.sandbox.enabled {
         match containers::sandbox::CodeSandbox::new(&docker_url, &cfg.sandbox) {
@@ -1124,7 +1124,7 @@ async fn init_container_manager(
     shutdown: tokio_util::sync::CancellationToken,
 ) -> Option<Arc<containers::ContainerManager>> {
     let docker_url = std::env::var("DOCKER_HOST")
-        .unwrap_or_else(|_| "tcp://127.0.0.1:2375".to_string());
+        .unwrap_or_else(|_| "unix:///var/run/docker.sock".to_string());
     let mcp_map = crate::tools::mcp_workspace::load_mcp_map(crate::config::MCP_DIR).await;
     tracing::info!(count = mcp_map.len(), dir = crate::config::MCP_DIR, "loaded MCP configs from workspace");
 

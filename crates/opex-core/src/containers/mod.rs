@@ -11,6 +11,28 @@ use tokio::time::Instant;
 
 use crate::config::McpConfig;
 
+/// Connect to Docker, choosing the transport from the URL scheme. A `unix://`
+/// socket uses the dedicated unix connector: the HTTP connector
+/// (`connect_with_http`) expects a TCP listener AND routes through `HTTP_PROXY`,
+/// so against the default Linux unix socket it fails with a "Connect" error
+/// (this broke every on-demand MCP on the proxied server). tcp/http URLs keep
+/// the HTTP connector.
+pub(crate) fn connect_docker(docker_url: &str) -> Result<Docker> {
+    #[cfg(unix)]
+    if docker_url.starts_with("unix://") {
+        return Ok(Docker::connect_with_unix(
+            docker_url,
+            10,
+            bollard::API_DEFAULT_VERSION,
+        )?);
+    }
+    Ok(Docker::connect_with_http(
+        docker_url,
+        10,
+        bollard::API_DEFAULT_VERSION,
+    )?)
+}
+
 /// Manages Docker container lifecycle for on-demand MCP servers.
 pub struct ContainerManager {
     docker: Docker,
@@ -22,7 +44,7 @@ pub struct ContainerManager {
 impl ContainerManager {
     /// Connect to Docker via Unix socket (default) or TCP.
     pub fn new(docker_url: &str, mcp: HashMap<String, McpConfig>) -> Result<Self> {
-        let docker = Docker::connect_with_http(docker_url, 10, bollard::API_DEFAULT_VERSION)?;
+        let docker = connect_docker(docker_url)?;
         Ok(Self {
             docker,
             mcp: Arc::new(RwLock::new(mcp)),
@@ -377,6 +399,20 @@ mod tests {
     fn test_container_manager() -> ContainerManager {
         ContainerManager::new("http://127.0.0.1:1", HashMap::new())
             .expect("ContainerManager::new")
+    }
+
+    #[test]
+    fn connect_docker_accepts_tcp_url() {
+        // Lazy connect — construction succeeds without I/O.
+        assert!(connect_docker("tcp://127.0.0.1:2375").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn connect_docker_accepts_unix_socket() {
+        // Previously this URL went through connect_with_http and failed against
+        // the Linux unix socket; now it routes to the unix connector.
+        assert!(connect_docker("unix:///var/run/docker.sock").is_ok());
     }
 
     #[tokio::test]
