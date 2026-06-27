@@ -94,6 +94,28 @@ pub async fn mark_video_job_failed(db: &PgPool, id: Uuid, error: &str) -> anyhow
     Ok(())
 }
 
+/// Find an active (pending/processing) job for the same source in this session
+/// within the dedup window — used to suppress duplicate enqueues from client
+/// resubmits (e.g. mobile page reload). Returns the existing job id if found.
+pub async fn find_recent_active_video_job(
+    db: &PgPool,
+    session_id: Uuid,
+    source_ref: &str,
+) -> anyhow::Result<Option<Uuid>> {
+    let id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM video_jobs \
+         WHERE session_id = $1 AND source_ref = $2 \
+           AND status IN ('pending','processing') \
+           AND created_at > NOW() - INTERVAL '2 minutes' \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(session_id)
+    .bind(source_ref)
+    .fetch_optional(db)
+    .await?;
+    Ok(id)
+}
+
 pub async fn get_video_job(db: &PgPool, id: Uuid) -> anyhow::Result<Option<VideoJob>> {
     let job: Option<VideoJob> = sqlx::query_as(
         "SELECT id, session_id, agent_name, channel_id, source_type, source_ref, \
@@ -238,6 +260,61 @@ mod tests {
         let j2 = get_video_job(&pool, id2).await.unwrap().unwrap();
         assert_eq!(j2.status, "failed");
         assert_eq!(j2.error.as_deref(), Some("yt-dlp: private video"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn find_recent_active_returns_existing_job(pool: PgPool) {
+        let sid = Uuid::new_v4();
+        let source = "https://h/api/uploads/dup-video?sig=1";
+
+        let id = enqueue_video_job(&pool, sid, "Atlas", "file", source, None)
+            .await
+            .unwrap();
+
+        // Same session + same source_ref within 2 minutes → dedup fires.
+        let found = find_recent_active_video_job(&pool, sid, source)
+            .await
+            .unwrap();
+        assert_eq!(found, Some(id), "must return the existing pending job id");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn find_recent_active_different_source_ref_returns_none(pool: PgPool) {
+        let sid = Uuid::new_v4();
+        enqueue_video_job(&pool, sid, "Atlas", "file", "https://h/api/uploads/a?sig=1", None)
+            .await
+            .unwrap();
+
+        // Different source_ref → no match.
+        let found = find_recent_active_video_job(&pool, sid, "https://h/api/uploads/b?sig=1")
+            .await
+            .unwrap();
+        assert!(found.is_none(), "different source_ref must not match");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn find_recent_active_unknown_session_returns_none(pool: PgPool) {
+        let sid = Uuid::new_v4();
+        let source = "https://h/api/uploads/orphan?sig=1";
+
+        // Non-existent session → no rows.
+        let found = find_recent_active_video_job(&pool, sid, source).await.unwrap();
+        assert!(found.is_none(), "non-existent session must return None");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn find_recent_active_done_job_returns_none(pool: PgPool) {
+        let sid = Uuid::new_v4();
+        let source = "https://h/api/uploads/done-vid?sig=1";
+
+        let id = enqueue_video_job(&pool, sid, "Atlas", "url", source, None)
+            .await
+            .unwrap();
+        mark_video_job_done(&pool, id, "summary text").await.unwrap();
+
+        // status='done' is NOT in ('pending','processing') → dedup must ignore it.
+        let found = find_recent_active_video_job(&pool, sid, source).await.unwrap();
+        assert!(found.is_none(), "done job must not block re-enqueue");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
