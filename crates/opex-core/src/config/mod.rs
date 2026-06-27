@@ -1578,12 +1578,18 @@ pub struct VideoConfig {
     /// Example: `digest_model = "qwen3:32b"`
     #[serde(default)]
     pub digest_model: Option<String>,
-    /// Digest assembly strategy. `"mapreduce"` segments the transcript by topic,
-    /// summarises each segment in its own small-context LLM call (preserves
-    /// mid-transcript detail — fixes "lost-in-the-middle"), then writes one final
-    /// `## Резюме` over the merged body. `"single"` / `None` use the legacy
-    /// single-pass digest (one LLM call over the whole transcript) — the default,
-    /// fully backward-compatible.
+    /// Digest assembly strategy. Allowed values: `"single"` (`None`) |
+    /// `"mapreduce"` | `"checklist"`.
+    ///
+    /// `"mapreduce"` segments the transcript by topic, summarises each segment in
+    /// its own small-context LLM call (preserves mid-transcript detail — fixes
+    /// "lost-in-the-middle"), then writes one final `## Резюме` over the merged
+    /// body. `"checklist"` (extract-then-abstract, 2 LLM calls) first extracts an
+    /// exhaustive flat checklist of every topic/technique/tool/setting, then runs
+    /// the single-pass digest with that checklist injected and expands every item
+    /// — best for capturing RARE single-mention details. `"single"` / `None` use
+    /// the legacy single-pass digest (one LLM call over the whole transcript) —
+    /// the default, fully backward-compatible.
     ///
     /// Example: `digest_mode = "mapreduce"`
     #[serde(default)]

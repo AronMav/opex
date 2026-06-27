@@ -77,10 +77,18 @@ pub fn slug(title: &str, fallback_id: &str) -> String {
     if s.is_empty() { format!("видео-{fallback_id}") } else { s }
 }
 
-/// Build the system+user messages for the digest. The entire transcript is
-/// embedded (large-context model — no chunking). `frame_names` are the
-/// filenames that will be saved to `_System/media/` so the LLM can embed them.
-pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<Message> {
+/// Additional system-prompt paragraph appended to `SYSTEM_PROMPT` for the
+/// checklist (extract-then-abstract) digest: the model must expand EVERY
+/// extracted checklist item so rare single-mention details survive.
+const CHECKLIST_DIGEST_SUFFIX: &str = "\n\nТебе дан ИСЧЕРПЫВАЮЩИЙ чек-лист тем и деталей, \
+извлечённый из этого видео. Раскрой В КОНСПЕКТЕ КАЖДЫЙ пункт чек-листа — НЕ пропусти ни одного, \
+даже упомянутого однократно. Размещай детали в соответствующих разделах по смыслу и таймкоду.";
+
+/// Build the shared user block (duration + transcript + frame embeds + the
+/// `Сделай конспект` instruction) used by both the single-pass digest and the
+/// checklist digest. Kept byte-for-byte identical to the original inline body
+/// so single-pass behaviour does not change.
+fn summary_user_block(raw: &RawMaterial, frame_names: &[String]) -> String {
     let mut user = String::new();
     user.push_str(&format!("Длительность видео: {:.0} сек.\n\n", raw.duration));
     user.push_str("=== Транскрипт ===\n");
@@ -108,25 +116,72 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
         }
     }
     user.push_str("\nСделай конспект по инструкции.");
+    user
+}
 
-    vec![
-        Message {
-            role: MessageRole::System,
-            content: SYSTEM_PROMPT.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-            thinking_blocks: vec![],
-            db_id: None,
-        },
-        Message {
-            role: MessageRole::User,
-            content: user,
-            tool_calls: None,
-            tool_call_id: None,
-            thinking_blocks: vec![],
-            db_id: None,
-        },
-    ]
+/// Build the system+user messages for the digest. The entire transcript is
+/// embedded (large-context model — no chunking). `frame_names` are the
+/// filenames that will be saved to `_System/media/` so the LLM can embed them.
+pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<Message> {
+    sys_user(SYSTEM_PROMPT, summary_user_block(raw, frame_names))
+}
+
+// ── Extract-then-abstract digest (checklist) ─────────────────────────────────
+//
+// Single-pass loses rare single-mention details under the cognitive load of a
+// full detailed digest; map-reduce can lose a term whose only mention sits at a
+// segment seam. The checklist mode runs two passes:
+//   1. EXTRACT — the LLM reads the whole transcript and emits an EXHAUSTIVE flat
+//      checklist of every topic/technique/tool/plugin/setting/number, including
+//      one-off mentions (low cognitive load → better rare-term recall),
+//   2. ABSTRACT — the single-pass digest, but with the checklist injected and an
+//      instruction to expand EVERY item, so rare terms are guaranteed to land.
+// Two LLM calls.
+
+const CHECKLIST_EXTRACT_PROMPT: &str = "Ты извлекаешь ИСЧЕРПЫВАЮЩИЙ перечень из транскрипта \
+обучающего видео. Выведи ПЛОСКИЙ список — по одному пункту на строку, каждая строка начинается \
+с \"- \". Перечисли ВСЕ упомянутые: темы, шаги, приёмы, инструменты, плагины, функции, \
+горячие клавиши, числовые значения и настройки (частоты, BPM, проценты, дБ). ОБЯЗАТЕЛЬНО включай \
+даже однократно упомянутые детали — это важнее краткости. НЕ группируй, НЕ обобщай, \
+НЕ пиши вступлений/заключений — только список фактов как они есть в видео.";
+
+/// Checklist pass 1 (EXTRACT): ask the LLM for an exhaustive flat checklist of
+/// every topic/technique/tool/setting in the transcript. No frames — this is a
+/// text extraction, not a visual digest.
+pub fn checklist_messages(raw: &RawMaterial) -> Vec<Message> {
+    let mut user = String::new();
+    user.push_str(&format!("Длительность видео: {:.0} сек.\n\n", raw.duration));
+    user.push_str("=== Транскрипт ===\n");
+    user.push_str(&raw.transcript);
+    user.push_str("\n\nИзвлеки исчерпывающий список.");
+    sys_user(CHECKLIST_EXTRACT_PROMPT, user)
+}
+
+/// Checklist pass 2 (ABSTRACT): the single-pass digest, but the system prompt is
+/// extended to demand every checklist item is expanded, and the extracted
+/// `checklist` is injected into the user block before the `Сделай конспект`
+/// instruction. Reuses `summary_user_block` so the transcript/frame embedding
+/// stays identical to single-pass.
+pub fn build_summary_messages_with_checklist(
+    raw: &RawMaterial,
+    frame_names: &[String],
+    checklist: &str,
+) -> Vec<Message> {
+    let system = format!("{SYSTEM_PROMPT}{CHECKLIST_DIGEST_SUFFIX}");
+
+    // Take the shared user block and splice the mandatory-checklist section in
+    // right before the trailing "Сделай конспект по инструкции." line.
+    let base = summary_user_block(raw, frame_names);
+    const TAIL: &str = "\nСделай конспект по инструкции.";
+    let body = base.strip_suffix(TAIL).unwrap_or(&base);
+    let mut user = String::with_capacity(base.len() + checklist.len() + 96);
+    user.push_str(body);
+    user.push_str("=== ОБЯЗАТЕЛЬНЫЙ ЧЕК-ЛИСТ (раскрой каждый пункт) ===\n");
+    user.push_str(checklist);
+    user.push('\n');
+    user.push_str(TAIL);
+
+    sys_user(&system, user)
 }
 
 /// Write the frontmatter block (`---` … `---`) + `# title` heading into `out`.
@@ -686,5 +741,88 @@ mod tests {
         assert_eq!(user.role, MessageRole::User);
         assert!(user.content.contains(merged), "merged body embedded");
         assert!(msgs[0].content.contains("резюме"), "asks for a summary");
+    }
+
+    // ── Extract-then-abstract (checklist) ─────────────────────────────────────
+
+    #[test]
+    fn checklist_messages_smoke() {
+        let raw = RawMaterial {
+            title: None,
+            duration: 120.0,
+            transcript: "полный текст речи про хорус и автоматизацию".into(),
+            frames: vec![FrameDesc { timestamp: 5.0, description: "кадр".into(), image_b64: String::new() }],
+            degraded: Degraded::default(),
+        };
+        let msgs = checklist_messages(&raw);
+        assert_eq!(msgs[0].role, MessageRole::System);
+        // System demands the "- " flat-list format.
+        assert!(msgs[0].content.contains("- "), "system asks for '- ' line prefix");
+        assert!(msgs[0].content.contains("ИСЧЕРПЫВАЮЩИЙ"), "system asks for exhaustive list");
+        let user = &msgs[msgs.len() - 1];
+        assert_eq!(user.role, MessageRole::User);
+        assert!(user.content.contains("полный текст речи про хорус и автоматизацию"),
+            "whole transcript embedded in extraction user block");
+        // Frames are NOT embedded — this is a text extraction.
+        assert!(!user.content.contains("images/"), "checklist extraction carries no frame embeds");
+    }
+
+    #[test]
+    fn build_summary_messages_with_checklist_embeds_all() {
+        let raw = RawMaterial {
+            title: None,
+            duration: 90.0,
+            transcript: "полный текст речи".into(),
+            frames: vec![FrameDesc { timestamp: 12.5, description: "синий слайд".into(), image_b64: String::new() }],
+            degraded: Degraded::default(),
+        };
+        let frame_names = vec!["frame-01.jpg".to_string()];
+        let checklist = "- хорус\n- автоматизация громкости\n- BPM 128";
+        let msgs = build_summary_messages_with_checklist(&raw, &frame_names, checklist);
+
+        // System = base prompt + the "expand every item" suffix.
+        assert!(msgs[0].content.contains("структурированный"), "base SYSTEM_PROMPT retained");
+        assert!(msgs[0].content.contains("КАЖДЫЙ пункт чек-листа"),
+            "system instructs to expand each checklist item");
+
+        let user = &msgs[msgs.len() - 1];
+        assert_eq!(user.role, MessageRole::User);
+        // Transcript present.
+        assert!(user.content.contains("полный текст речи"), "transcript embedded");
+        // Frame embed present.
+        assert!(user.content.contains("![](images/frame-01.jpg)"), "frame embed present");
+        // Checklist block + items present.
+        assert!(user.content.contains("ОБЯЗАТЕЛЬНЫЙ ЧЕК-ЛИСТ"), "checklist block header present");
+        assert!(user.content.contains("- хорус"), "checklist item embedded");
+        assert!(user.content.contains("- автоматизация громкости"), "checklist item embedded");
+        // Final instruction still present, AFTER the checklist block.
+        let cl = user.content.find("ОБЯЗАТЕЛЬНЫЙ ЧЕК-ЛИСТ").unwrap();
+        let instr = user.content.find("Сделай конспект по инструкции").unwrap();
+        assert!(cl < instr, "checklist comes before the final instruction");
+    }
+
+    /// Refactor invariant: the checklist-injected user block, with the checklist
+    /// section removed, must equal the plain single-pass user block byte-for-byte.
+    /// (Belt-and-braces alongside `prompt_embeds_transcript_and_frames`.)
+    #[test]
+    fn checklist_digest_reuses_single_pass_block() {
+        let raw = RawMaterial {
+            title: None,
+            duration: 42.0,
+            transcript: "речь целиком".into(),
+            frames: vec![FrameDesc { timestamp: 1.0, description: "к".into(), image_b64: String::new() }],
+            degraded: Degraded::default(),
+        };
+        let names = vec!["frame-01.jpg".to_string()];
+        let single = build_summary_messages(&raw, &names);
+        let single_user = &single[single.len() - 1].content;
+        // The single-pass user block must be embedded verbatim (minus the checklist)
+        // — confirm both the transcript section and the closing instruction match.
+        let head = single_user.strip_suffix("\nСделай конспект по инструкции.").unwrap();
+        let with = build_summary_messages_with_checklist(&raw, &names, "- x");
+        let with_user = &with[with.len() - 1].content;
+        assert!(with_user.starts_with(head), "checklist block reuses the exact single-pass head");
+        assert!(with_user.ends_with("\nСделай конспект по инструкции."),
+            "closing instruction preserved");
     }
 }
