@@ -68,6 +68,13 @@ export interface WsNotification {
   data: import("./api").NotificationRow;
 }
 
+export interface WsVideoProgress {
+  type: "video_progress";
+  session_id: string;
+  phase: "fetch" | "digest" | "saving" | "done" | "failed";
+  text: string;
+}
+
 /** Union of all known WS event types. */
 export type WsEvent =
   | WsSessionUpdated
@@ -79,7 +86,8 @@ export type WsEvent =
   | WsApprovalResolved
   | WsAuditEvent
   | WsNotification
-  | WsPong;
+  | WsPong
+  | WsVideoProgress;
 
 /** All valid WS event type strings. */
 export type WsEventType = WsEvent["type"];

@@ -55,11 +55,17 @@ export const useChatStore = create<ChatStore>()(
     agents: {},
     currentAgent: "",
     sessionParticipants: {},
+    videoProgress: {},
 
     ...navigationActions,
     ...streamActions,
     ...sessionCrudActions,
     ...composerActions,
+
+    setVideoProgress: (sessionId: string, phase: string, text: string) =>
+      set((s: any) => { s.videoProgress[sessionId] = { phase, text }; }),
+    clearVideoProgress: (sessionId: string) =>
+      set((s: any) => { delete s.videoProgress[sessionId]; }),
   };
     }),
     { name: "ChatStore", enabled: process.env.NODE_ENV !== "production" },

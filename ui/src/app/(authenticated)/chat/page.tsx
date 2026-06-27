@@ -312,6 +312,18 @@ export default function ChatPage() {
     }
   }, []));
 
+  useWsSubscription("video_progress", useCallback((data: {
+    session_id: string; phase: string; text: string;
+  }) => {
+    const store = useChatStore.getState();
+    if (data.phase === "done" || data.phase === "failed") {
+      store.clearVideoProgress(data.session_id);
+      queryClient.invalidateQueries({ queryKey: qk.sessionMessages(data.session_id) });
+    } else {
+      store.setVideoProgress(data.session_id, data.phase, data.text);
+    }
+  }, []));
+
   // approval_requested handler moved to layout.tsx (must be visible on any page)
 
   const [sheetOpen, setSheetOpen] = useState(false);
