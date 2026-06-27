@@ -1,5 +1,14 @@
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
-import { type Extension, RangeSetBuilder } from "@codemirror/state";
+import { type Extension, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+
+export const setUrls = StateEffect.define<Record<string, string>>();
+export const urlField = StateField.define<Record<string, string>>({
+  create: () => ({}),
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setUrls)) value = { ...value, ...e.value };
+    return value;
+  },
+});
 
 const IMG_RE = /!\[[^\]]*\]\(([^)\s]+)\)/g;
 
@@ -45,7 +54,8 @@ export function imageDecorations(opts: {
       decorations: DecorationSet;
       constructor(view: EditorView) { this.decorations = this.build(view); }
       update(u: ViewUpdate) {
-        if (u.docChanged || u.viewportChanged || u.selectionSet) this.decorations = this.build(u.view);
+        const urlsChanged = u.transactions.some((tr) => tr.effects.some((e) => e.is(setUrls)));
+        if (u.docChanged || u.viewportChanged || u.selectionSet || urlsChanged) this.decorations = this.build(u.view);
       }
       build(view: EditorView): DecorationSet {
         const b = new RangeSetBuilder<Decoration>();
