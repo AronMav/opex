@@ -2,7 +2,9 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import dynamic from "next/dynamic";
-import { apiGet, apiPut, apiDelete } from "@/lib/api";
+import { apiGet, apiPut, apiDelete, isBinaryFile } from "@/lib/api";
+import type { WorkspaceFile } from "@/types/api";
+import { BinaryViewer } from "@/components/workspace/binary-viewer";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Input } from "@/components/ui/input";
@@ -32,6 +34,7 @@ export default function WorkspacePage() {
   const [currentPath, setCurrentPath] = useState("");
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [selectedFile, setSelectedFile] = useState("");
+  const [fileData, setFileData] = useState<WorkspaceFile | null>(null);
   const [content, setContent] = useState("");
   const [original, setOriginal] = useState("");
   const [error, setError] = useState("");
@@ -70,6 +73,7 @@ export default function WorkspacePage() {
 
   const navigateTo = (dirName: string) => {
     setSelectedFile("");
+    setFileData(null);
     setContent("");
     setOriginal("");
     setCurrentPath(currentPath ? `${currentPath}/${dirName}` : dirName);
@@ -77,6 +81,7 @@ export default function WorkspacePage() {
 
   const navigateUp = () => {
     setSelectedFile("");
+    setFileData(null);
     setContent("");
     setOriginal("");
     const parts = currentPath.split("/").filter(Boolean);
@@ -88,12 +93,15 @@ export default function WorkspacePage() {
     const requestId = ++loadFileRequestRef.current;
     try {
       const filePath = currentPath ? `${currentPath}/${name}` : name;
-      const data = await apiGet<{ content: string }>(`/api/workspace/${filePath}`);
+      const data = await apiGet<WorkspaceFile>(`/api/workspace/${filePath}`);
       // Discard stale response if user clicked another file
       if (loadFileRequestRef.current !== requestId) return;
       setSelectedFile(filePath);
-      setContent(data.content);
-      setOriginal(data.content);
+      setFileData(data);
+      if (!("is_binary" in data)) {
+        setContent(data.content);
+        setOriginal(data.content);
+      }
       setSaved(false);
       setError("");
       setIsSidebarOpen(false);
@@ -120,6 +128,7 @@ export default function WorkspacePage() {
       await apiDelete(`/api/workspace/${deleteTarget}`);
       if (selectedFile === deleteTarget) {
         setSelectedFile("");
+        setFileData(null);
         setContent("");
         setOriginal("");
       }
@@ -246,7 +255,7 @@ export default function WorkspacePage() {
           <div className="flex items-center gap-2 font-mono text-sm overflow-hidden">
             <Folder className="h-4 w-4 text-primary shrink-0" />
             <div className="flex items-center whitespace-nowrap overflow-x-auto scrollbar-none pb-0.5">
-              <button onClick={() => { setCurrentPath(""); setSelectedFile(""); }} className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">{t("workspace.breadcrumb_root")}</button>
+              <button onClick={() => { setCurrentPath(""); setSelectedFile(""); setFileData(null); setContent(""); setOriginal(""); }} className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">{t("workspace.breadcrumb_root")}</button>
               <span className="mx-1 text-muted-foreground/30">/</span>
               {breadcrumbs.map((seg, i) => (
                 <span key={i} className="flex items-center">
@@ -254,6 +263,7 @@ export default function WorkspacePage() {
                     className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                     onClick={() => {
                       setSelectedFile("");
+                      setFileData(null);
                       setContent("");
                       setOriginal("");
                       setCurrentPath(breadcrumbs.slice(0, i + 1).join("/"));
@@ -303,21 +313,25 @@ export default function WorkspacePage() {
                   <span className="font-mono text-sm font-bold text-foreground truncate">
                     {selectedFileName}
                   </span>
-                  {isDirty && <span className="text-xs text-primary font-medium">{t("workspace.modified")}</span>}
+                  {!(fileData && isBinaryFile(fileData)) && isDirty && <span className="text-xs text-primary font-medium">{t("workspace.modified")}</span>}
                 </div>
-                <Button
-                  size="sm"
-                  onClick={saveFile}
-                  disabled={!isDirty}
-                >
-                  <Save className="h-4 w-4 mr-2" />
-                  {t("workspace.save")}
-                </Button>
+                {!(fileData && isBinaryFile(fileData)) && (
+                  <Button
+                    size="sm"
+                    onClick={saveFile}
+                    disabled={!isDirty}
+                  >
+                    <Save className="h-4 w-4 mr-2" />
+                    {t("workspace.save")}
+                  </Button>
+                )}
               </div>
-              
+
               {/* Dynamic Editor Height Adjustment */}
               <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                {isMarkdown ? (
+                {fileData && isBinaryFile(fileData) ? (
+                  <BinaryViewer file={fileData} />
+                ) : isMarkdown ? (
                   <MarkdownEditor
                     value={content}
                     onChange={setContent}
