@@ -6,6 +6,7 @@ import asyncio
 import base64
 import logging
 import os
+import sys
 import tempfile
 from urllib.parse import urlparse
 
@@ -157,7 +158,8 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
         if not resolved_title and body.page_url and body.page_url.startswith(("http://", "https://")):
             try:
                 code, out, _ = await _run(
-                    "yt-dlp", "--print", "%(title)s", "--skip-download", "--", body.page_url,
+                    sys.executable, "-m", "yt_dlp",
+                    "--print", "%(title)s", "--skip-download", "--", body.page_url,
                 )
                 if code == 0:
                     resolved_title = out.decode(errors="ignore").strip()
