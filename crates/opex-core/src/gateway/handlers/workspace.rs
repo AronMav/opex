@@ -15,10 +15,32 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/workspace/{*path}", get(api_workspace_browse).put(api_workspace_write).delete(api_workspace_delete))
 }
 
-/// Resolve and validate a path within the workspace/ directory.
-/// Returns (`base_dir`, `target_path`) where target is guaranteed strictly inside workspace.
-async fn resolve_workspace_path(rel_path: &str) -> Result<(std::path::PathBuf, std::path::PathBuf), (StatusCode, Json<Value>)> {
-    let base = std::path::Path::new(crate::config::WORKSPACE_DIR);
+/// Extensions treated as binary/media — browse returns a signed URL, never UTF-8.
+// Used by later tasks (workspace file viewer); allow dead_code until then.
+#[allow(dead_code)]
+const BINARY_EXTS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "bmp", "ico", "svg", "pdf",
+    "mp3", "wav", "ogg", "opus", "m4a", "mp4", "webm", "mov",
+    "zip", "gz", "tar", "bin", "wasm",
+];
+
+// Used by later tasks (workspace file viewer); allow dead_code until then.
+#[allow(dead_code)]
+pub(crate) fn is_binary_filename(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .map(|e| BINARY_EXTS.contains(&e.as_str()))
+        .unwrap_or(false)
+}
+
+/// Resolve and validate a path within `base`.
+/// Returns `(base_canonical, target_canonical)` where target is guaranteed strictly inside base.
+async fn resolve_within(
+    base: &std::path::Path,
+    rel_path: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), (StatusCode, Json<Value>)> {
     let _ = tokio::fs::create_dir_all(base).await;
     let target = base.join(rel_path);
 
@@ -28,25 +50,31 @@ async fn resolve_workspace_path(rel_path: &str) -> Result<(std::path::PathBuf, s
     let target_canonical = if target.exists() {
         tokio::fs::canonicalize(&target).await
             .unwrap_or_else(|_| target.clone())
-    } else {
+    } else if let Some(parent) = target.parent() {
         // For new files, canonicalize parent
-        if let Some(parent) = target.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-            let parent_canonical = tokio::fs::canonicalize(parent).await
-                .unwrap_or_else(|_| parent.to_path_buf());
-            let file_name = target.file_name().unwrap_or_default();
-            parent_canonical.join(file_name)
-        } else {
-            target.clone()
-        }
+        let _ = tokio::fs::create_dir_all(parent).await;
+        let parent_canonical = tokio::fs::canonicalize(parent).await
+            .unwrap_or_else(|_| parent.to_path_buf());
+        let file_name = target.file_name().unwrap_or_default();
+        parent_canonical.join(file_name)
+    } else {
+        target.clone()
     };
 
-    // Strictly require paths inside workspace — no install dir escape via symlinks
+    // Strictly require paths inside base — no escape via symlinks or traversal
     if !target_canonical.starts_with(&base_canonical) {
         return Err((StatusCode::FORBIDDEN, Json(json!({"error": "path traversal denied"}))));
     }
 
     Ok((base_canonical, target_canonical))
+}
+
+/// Resolve and validate a path within the workspace/ directory.
+/// Returns (`base_dir`, `target_path`) where target is guaranteed strictly inside workspace.
+async fn resolve_workspace_path(
+    rel_path: &str,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), (StatusCode, Json<Value>)> {
+    resolve_within(std::path::Path::new(crate::config::WORKSPACE_DIR), rel_path).await
 }
 
 /// List directory contents as JSON entries.
@@ -162,5 +190,42 @@ pub(crate) async fn api_workspace_delete(
             Ok(()) => Json(json!({"ok": true})).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_classification_by_extension() {
+        for n in ["a.png", "a.JPG", "photo.jpeg", "x.webp", "y.gif", "doc.pdf", "icon.svg"] {
+            assert!(is_binary_filename(n), "{n} must be binary");
+        }
+        for n in ["note.md", "data.json", "cfg.toml", "log.txt", "s.yaml", "x.csv"] {
+            assert!(!is_binary_filename(n), "{n} must be text");
+        }
+    }
+
+    #[test]
+    fn unknown_extension_defaults_to_text() {
+        // No extension / unknown → treated as text (browse falls back to UTF-8 probe).
+        assert!(!is_binary_filename("Makefile"));
+        assert!(!is_binary_filename("weird.xyz"));
+    }
+
+    #[tokio::test]
+    async fn resolve_within_rejects_traversal() {
+        let base = tempfile::tempdir().unwrap();
+        let res = resolve_within(base.path(), "../escape.txt").await;
+        assert!(res.is_err(), "traversal must be denied");
+    }
+
+    #[tokio::test]
+    async fn resolve_within_accepts_inside() {
+        let base = tempfile::tempdir().unwrap();
+        tokio::fs::write(base.path().join("ok.md"), b"hi").await.unwrap();
+        let (b, t) = resolve_within(base.path(), "ok.md").await.unwrap();
+        assert!(t.starts_with(&b));
     }
 }
