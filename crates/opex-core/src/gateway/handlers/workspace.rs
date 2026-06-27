@@ -15,6 +15,8 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/workspace", get(api_workspace_browse))
         .route("/api/workspace/sign", post(api_workspace_sign))
+        .route("/api/workspace/mkdir", post(api_workspace_mkdir))
+        .route("/api/workspace/rename", post(api_workspace_rename))
         .route("/api/workspace/{*path}", get(api_workspace_browse).put(api_workspace_write).delete(api_workspace_delete))
 }
 
@@ -315,6 +317,56 @@ pub(crate) async fn api_workspace_sign(
     Json(json!({ "url_by_path": Value::Object(map) }))
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct MkdirRequest {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct RenameRequest {
+    from: String,
+    to: String,
+}
+
+async fn do_mkdir(base: &std::path::Path, rel: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    let (_, target) = resolve_within(base, rel).await?;
+    tokio::fs::create_dir_all(&target).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))
+}
+
+async fn do_rename(base: &std::path::Path, from: &str, to: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    let (_, from_t) = resolve_within(base, from).await?;
+    let (_, to_t) = resolve_within(base, to).await?;
+    if to_t.exists() {
+        return Err((StatusCode::CONFLICT, Json(json!({"error": "target already exists"}))));
+    }
+    if let Some(parent) = to_t.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    tokio::fs::rename(&from_t, &to_t).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))
+}
+
+pub(crate) async fn api_workspace_mkdir(Json(req): Json<MkdirRequest>) -> impl IntoResponse {
+    match do_mkdir(std::path::Path::new(crate::config::WORKSPACE_DIR), &req.path).await {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+pub(crate) async fn api_workspace_rename(Json(req): Json<RenameRequest>) -> impl IntoResponse {
+    match do_rename(
+        std::path::Path::new(crate::config::WORKSPACE_DIR),
+        &req.from,
+        &req.to,
+    )
+    .await
+    {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +454,28 @@ mod tests {
         let base = tempfile::tempdir().unwrap();
         let err = do_delete(base.path(), ".", true).await.unwrap_err();
         assert_eq!(err.0, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn mkdir_creates_nested() {
+        let base = tempfile::tempdir().unwrap();
+        do_mkdir(base.path(), "a/b/c").await.unwrap();
+        assert!(base.path().join("a/b/c").is_dir());
+        // Idempotent.
+        do_mkdir(base.path(), "a/b/c").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rename_moves_file_refuses_collision() {
+        let base = tempfile::tempdir().unwrap();
+        tokio::fs::write(base.path().join("old.md"), b"x").await.unwrap();
+        do_rename(base.path(), "old.md", "new.md").await.unwrap();
+        assert!(base.path().join("new.md").exists());
+        assert!(!base.path().join("old.md").exists());
+
+        tokio::fs::write(base.path().join("a.md"), b"a").await.unwrap();
+        let err = do_rename(base.path(), "a.md", "new.md").await.unwrap_err();
+        assert_eq!(err.0, StatusCode::CONFLICT, "collision must 409");
     }
 
     #[tokio::test]
