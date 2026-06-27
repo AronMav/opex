@@ -14,16 +14,17 @@ function safeFolder(folder) {
   return norm.replace(/^\/+/, "");
 }
 
-async function saveMedia(filename, contentB64) {
+async function saveMedia(filename, contentB64, folder) {
   const base = path.basename(filename);
   if (base !== filename) throw new Error(`invalid media name: ${filename}`);
   if (!MEDIA_EXT.has(path.extname(base).toLowerCase())) throw new Error(`extension not allowed: ${base}`);
   const buf = Buffer.from(contentB64, "base64");
   if (buf.length > MAX_MEDIA_BYTES) throw new Error(`media too large: ${buf.length}`);
-  const dir = path.join(ZK_PATH(), "_System", "media");
+  const rel = safeFolder(folder || "_System/media");
+  const dir = path.join(ZK_PATH(), rel);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, base), buf);
-  return `Сохранено: _System/media/${base}`;
+  return `Сохранено: ${rel}/${base}`;
 }
 
 async function createNote(folder, filename, content) {

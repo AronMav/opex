@@ -11,12 +11,18 @@ fs.mkdirSync(path.join(tmp, "_System", "media"), { recursive: true });
 const ops = require("./ops"); // pure functions extracted from app.js
 
 (async () => {
-  // save_media
+  // save_media — default folder (_System/media)
   const b64 = Buffer.from([0xff, 0xd8, 0xff, 0x00]).toString("base64");
   await ops.saveMedia("frame-01.jpg", b64);
-  assert.ok(fs.existsSync(path.join(tmp, "_System/media/frame-01.jpg")), "media saved");
+  assert.ok(fs.existsSync(path.join(tmp, "_System/media/frame-01.jpg")), "media saved to default folder");
   await assert.rejects(ops.saveMedia("../evil.jpg", b64), /name|path|invalid/i);
   await assert.rejects(ops.saveMedia("x.exe", b64), /extension|allowed/i);
+
+  // save_media — custom folder (Видео/test/images)
+  await ops.saveMedia("t.jpg", b64, "Видео/test/images");
+  assert.ok(fs.existsSync(path.join(tmp, "Видео/test/images/t.jpg")), "media saved to custom folder");
+  // cleanup custom folder test file
+  fs.rmSync(path.join(tmp, "Видео/test/images/t.jpg"));
 
   // create_note in a subfolder
   await ops.createNote("Видео/тест", "конспект.md", "# Заметка\n");
