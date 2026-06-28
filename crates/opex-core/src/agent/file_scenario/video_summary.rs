@@ -7,9 +7,8 @@ use opex_types::{Message, MessageRole};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FrameDesc {
-    /// Present in the toolgate response; no longer read since screenshots were
-    /// dropped (only `description` feeds the digest as on-screen context).
-    #[allow(dead_code)]
+    /// Absolute seconds of the frame. Used to assign a frame's on-screen
+    /// description to its time-chunk in the chunked (long-video) digest.
     #[serde(default)]
     pub timestamp: f64,
     pub description: String,
@@ -106,6 +105,205 @@ fn strip_transcript_timecodes(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+// ── Chunked digest (long videos) ───────────────────────────────────────────────
+//
+// Single-pass digest is great up to ~2 h, but a multi-hour transcript gets
+// diluted (lost-in-the-middle + the model's modest output budget) — a 6 h note
+// ended up sparser per hour than a 2 h one. For long videos we map-reduce:
+// split the transcript into time windows, write a DETAILED partial conspect for
+// each window (small context → full density), then merge the partials into one
+// coherent note. The merge is told to PRESERVE detail (only dedupe/restructure),
+// not re-summarise — otherwise the reduce step would re-introduce the dilution.
+
+/// Videos longer than this (whole minutes of transcript) use the chunked
+/// map-reduce digest; shorter ones keep the single-pass path.
+pub const DIGEST_CHUNK_THRESHOLD_MIN: u32 = 150;
+
+/// Length of each transcript window (minutes) in the chunked digest.
+pub const DIGEST_CHUNK_MINUTES: u32 = 45;
+
+/// Parse the leading `[MM:SS]` / `[MMM:SS]` marker of a transcript line into
+/// whole minutes. Returns None for lines without a valid leading timecode.
+fn parse_line_minute(line: &str) -> Option<u32> {
+    let rest = line.trim_start().strip_prefix('[')?;
+    let close = rest.find(']')?;
+    let (m, s) = rest[..close].split_once(':')?;
+    if m.is_empty() || !m.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    if s.len() != 2 || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    m.parse::<u32>().ok()
+}
+
+/// Whole minutes covered by the transcript (its last `[MM:SS]` marker; 0 if none).
+pub fn transcript_minutes(transcript: &str) -> u32 {
+    transcript.lines().rev().find_map(parse_line_minute).unwrap_or(0)
+}
+
+/// True when the transcript is long enough to warrant the chunked map-reduce digest.
+pub fn should_chunk(transcript: &str) -> bool {
+    transcript_minutes(transcript) > DIGEST_CHUNK_THRESHOLD_MIN
+}
+
+/// One time-window of the transcript (raw lines, timecodes intact — they are
+/// stripped at prompt-build time).
+#[derive(Debug, Clone)]
+pub struct TranscriptChunk {
+    pub start_min: u32,
+    pub end_min: u32,
+    pub text: String,
+}
+
+/// Split the timecoded transcript into `chunk_min`-minute windows on line
+/// boundaries (each line is one STT segment). A line's window is `minute /
+/// chunk_min`; lines without a timecode inherit the previous line's minute, so
+/// any preamble before the first marker lands in window 0.
+pub fn split_transcript_by_time(transcript: &str, chunk_min: u32) -> Vec<TranscriptChunk> {
+    let chunk_min = chunk_min.max(1);
+    let mut chunks: Vec<TranscriptChunk> = Vec::new();
+    let mut cur_idx: Option<u32> = None;
+    let mut cur_lines: Vec<&str> = Vec::new();
+    let mut last_min: u32 = 0;
+    for line in transcript.lines() {
+        let min = parse_line_minute(line).unwrap_or(last_min);
+        last_min = min;
+        let idx = min / chunk_min;
+        match cur_idx {
+            None => cur_idx = Some(idx),
+            Some(c) if idx != c => {
+                chunks.push(TranscriptChunk {
+                    start_min: c * chunk_min,
+                    end_min: (c + 1) * chunk_min,
+                    text: std::mem::take(&mut cur_lines).join("\n"),
+                });
+                cur_idx = Some(idx);
+            }
+            _ => {}
+        }
+        cur_lines.push(line);
+    }
+    if let Some(c) = cur_idx {
+        chunks.push(TranscriptChunk {
+            start_min: c * chunk_min,
+            end_min: last_min + 1,
+            text: cur_lines.join("\n"),
+        });
+    }
+    chunks
+}
+
+fn sys_msg(content: &str) -> Message {
+    Message {
+        role: MessageRole::System,
+        content: content.to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+        thinking_blocks: vec![],
+        db_id: None,
+    }
+}
+
+fn user_msg(content: String) -> Message {
+    Message {
+        role: MessageRole::User,
+        content,
+        tool_calls: None,
+        tool_call_id: None,
+        thinking_blocks: vec![],
+        db_id: None,
+    }
+}
+
+const CHUNK_SYSTEM_PROMPT: &str = "Ты делаешь ПОДРОБНЫЙ конспект ОДНОГО фрагмента длинной \
+видео-лекции. Перед тобой транскрипт ТОЛЬКО этого фрагмента. Сделай развёрнутый \
+структурированный конспект именно этого фрагмента с подзаголовками ### и пунктами списком.\n\
+\n\
+Изложи ВСЕ технические детали из фрагмента: точную последовательность действий, названия \
+инструментов/функций/настроек/кнопок, горячие клавиши, числовые значения и параметры, формулы, \
+команды, важные нюансы и причины («зачем так делается»). Пиши настолько подробно, чтобы по \
+конспекту можно было ПОВТОРИТЬ материал без просмотра. НЕ опускай детали ради краткости.\n\
+\n\
+НЕ добавляй таймкоды. НЕ добавляй раздел «Резюме» и общие выводы про всю лекцию — только \
+содержательный конспект ЭТОГО фрагмента. НЕ вставляй изображения или embed-строки вида ![](...). \
+По-русски, без воды.";
+
+/// Build the map-step messages: a detailed partial conspect for one time-window.
+/// Frame descriptions whose timestamp lands inside the window are passed as
+/// on-screen context. `idx` is 0-based; `total` is the chunk count.
+pub fn build_chunk_messages(
+    chunk: &TranscriptChunk,
+    idx: usize,
+    total: usize,
+    frames: &[FrameDesc],
+) -> Vec<Message> {
+    let mut user = String::new();
+    user.push_str(&format!(
+        "Фрагмент {} из {} (примерно минуты {}–{}).\n\n",
+        idx + 1,
+        total,
+        chunk.start_min,
+        chunk.end_min
+    ));
+    user.push_str("=== Транскрипт фрагмента ===\n");
+    user.push_str(&strip_transcript_timecodes(&chunk.text));
+    user.push_str("\n\n");
+
+    let lo = chunk.start_min as f64 * 60.0;
+    let hi = chunk.end_min as f64 * 60.0;
+    let mut any_frame = false;
+    for f in frames {
+        if f.timestamp >= lo && f.timestamp < hi && !f.description.trim().is_empty() {
+            if !any_frame {
+                user.push_str("=== Что показано на экране в этом фрагменте ===\n");
+                any_frame = true;
+            }
+            user.push_str(&format!("- {}\n", f.description));
+        }
+    }
+    user.push_str("\nСделай подробный конспект этого фрагмента.");
+
+    vec![sys_msg(CHUNK_SYSTEM_PROMPT), user_msg(user)]
+}
+
+const REDUCE_SYSTEM_PROMPT: &str = "Тебе даны подробные конспекты последовательных фрагментов \
+ОДНОЙ видео-лекции, по порядку. Объедини их в ОДИН цельный конспект.\n\
+\n\
+Выведи ДВА раздела, точно в таком формате (ничего лишнего до первого раздела):\n\
+\n\
+## Резюме\n\
+<3-5 предложений — суть всей лекции>\n\
+\n\
+## Конспект\n\
+<подробный конспект всей лекции с подзаголовками ###, сгруппированный по темам>\n\
+\n\
+КРИТИЧЕСКИ ВАЖНО: СОХРАНИ ВСЕ детали, формулы, числа, названия, команды и нюансы из фрагментов — \
+ничего не выбрасывай и НЕ сокращай ради краткости. Твоя задача — ОБЪЕДИНИТЬ и упорядочить материал \
+по темам и убрать только дословные повторы на стыках фрагментов, а НЕ пересказать короче. Итоговый \
+конспект должен быть по объёму и детальности сопоставим с суммой фрагментов, а не короче их.\n\
+\n\
+НЕ добавляй таймкоды. НЕ вставляй изображения или embed-строки. По-русски.";
+
+/// Build the reduce-step messages: merge the per-chunk partial conspects into one
+/// coherent note (## Резюме + ## Конспект), preserving all detail.
+pub fn build_reduce_messages(partials: &[String]) -> Vec<Message> {
+    let total = partials.len();
+    let mut user = String::new();
+    user.push_str(&format!(
+        "Ниже {total} конспектов последовательных фрагментов лекции (по порядку времени). \
+         Объедини их в один конспект по инструкции.\n\n"
+    ));
+    for (i, p) in partials.iter().enumerate() {
+        user.push_str(&format!("===== Фрагмент {}/{} =====\n", i + 1, total));
+        user.push_str(p.trim());
+        user.push_str("\n\n");
+    }
+    user.push_str("Склей фрагменты в единый конспект, сохранив все детали.");
+
+    vec![sys_msg(REDUCE_SYSTEM_PROMPT), user_msg(user)]
 }
 
 /// Build the system+user messages for the digest. The entire transcript is
@@ -301,6 +499,63 @@ mod tests {
         let user = &build_summary_messages(&raw)[1].content;
         assert!(user.contains("начало") && user.contains("середина"), "text kept");
         assert!(!user.contains("[00:04]") && !user.contains("[01:30]"), "no timecodes in prompt");
+    }
+
+    // ── Chunked digest ───────────────────────────────────────────────────────
+
+    #[test]
+    fn transcript_minutes_and_should_chunk_threshold() {
+        let short = "[00:04] раз\n[120:00] два"; // 2h
+        assert_eq!(transcript_minutes(short), 120);
+        assert!(!should_chunk(short), "2h stays single-pass");
+        let long = "[00:00] a\n[200:30] b"; // 3h20m
+        assert_eq!(transcript_minutes(long), 200);
+        assert!(should_chunk(long), ">2.5h uses chunked");
+        assert_eq!(transcript_minutes("без меток"), 0);
+    }
+
+    #[test]
+    fn split_transcript_by_time_groups_lines_into_windows() {
+        // 45-min windows: lines at 0,10,44 -> window 0; 46,89 -> window 1; 91 -> window 2.
+        let t = "[00:10] a\n[10:00] b\n[44:59] c\nпродолжение без метки\n[46:00] d\n[89:00] e\n[91:00] f";
+        let chunks = split_transcript_by_time(t, 45);
+        assert_eq!(chunks.len(), 3, "three 45-min windows");
+        assert_eq!((chunks[0].start_min, chunks[0].end_min), (0, 45));
+        assert!(chunks[0].text.contains("[00:10] a") && chunks[0].text.contains("[44:59] c"));
+        assert!(chunks[0].text.contains("продолжение без метки"), "untimed line attaches to current window");
+        assert_eq!(chunks[1].start_min, 45);
+        assert!(chunks[1].text.contains("[46:00] d") && chunks[1].text.contains("[89:00] e"));
+        assert!(chunks[2].text.contains("[91:00] f"));
+    }
+
+    #[test]
+    fn build_chunk_messages_strips_timecodes_labels_part_and_filters_frames() {
+        let chunk = TranscriptChunk { start_min: 45, end_min: 90, text: "[46:00] середина урока".into() };
+        let frames = vec![
+            FrameDesc { timestamp: 30.0, description: "кадр из части 1".into(), image_b64: String::new() },
+            FrameDesc { timestamp: 3000.0, description: "кадр из части 2".into(), image_b64: String::new() }, // 50 min
+        ];
+        let msgs = build_chunk_messages(&chunk, 1, 5, &frames);
+        assert_eq!(msgs[0].role, MessageRole::System);
+        let user = &msgs[1].content;
+        assert!(user.contains("Фрагмент 2 из 5"), "1-based part label");
+        assert!(user.contains("минуты 45–90"));
+        assert!(user.contains("середина урока") && !user.contains("[46:00]"), "timecodes stripped");
+        assert!(user.contains("кадр из части 2"), "in-window frame included");
+        assert!(!user.contains("кадр из части 1"), "out-of-window frame excluded");
+    }
+
+    #[test]
+    fn build_reduce_messages_includes_all_partials_in_order() {
+        let partials = vec!["конспект A".to_string(), "конспект B".to_string()];
+        let msgs = build_reduce_messages(&partials);
+        assert!(msgs[0].content.contains("## Резюме") && msgs[0].content.contains("СОХРАНИ ВСЕ"),
+            "reduce system demands format + detail preservation");
+        let user = &msgs[1].content;
+        let a = user.find("конспект A").unwrap();
+        let b = user.find("конспект B").unwrap();
+        assert!(a < b, "partials kept in order");
+        assert!(user.contains("Фрагмент 1/2") && user.contains("Фрагмент 2/2"));
     }
 
     #[test]

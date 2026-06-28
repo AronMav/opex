@@ -56,8 +56,11 @@ pub async fn process_one(
     on_phase: &(dyn Fn(&str, &str) + Sync),
 ) -> anyhow::Result<NoteResult> {
     use crate::agent::file_scenario::video_summary::{
-        build_note, build_summary_messages, extract_summary, slug, RawMaterial,
+        build_chunk_messages, build_note, build_reduce_messages, build_summary_messages,
+        extract_summary, should_chunk, slug, split_transcript_by_time, RawMaterial,
+        DIGEST_CHUNK_MINUTES,
     };
+    use futures_util::stream::{StreamExt, TryStreamExt};
 
     on_phase("fetch", "🎬 Скачиваю и расшифровываю видео…");
 
@@ -100,13 +103,54 @@ pub async fn process_one(
     // ── 3. Build LLM body ─────────────────────────────────────────────────────
     // Screenshots are no longer embedded — frame DESCRIPTIONS still feed the
     // digest as on-screen context, but no images are uploaded to the vault.
-    on_phase("digest", "📝 Составляю конспект…");
-    let messages = build_summary_messages(&raw);
-    let opts = CallOptions {
+    //
+    // Long videos (transcript > threshold) use a map-reduce digest: a detailed
+    // partial conspect per time-window (run concurrently), then a merge call that
+    // preserves detail. Short videos keep the single-pass path. See video_summary.
+    const MAP_CONCURRENCY: usize = 4;
+    let opts = || CallOptions {
         thinking_level: 0,
         claude_md_content: None,
     };
-    let llm_body = provider.chat(&messages, &[], opts).await?.content;
+
+    let chunks = if should_chunk(&raw.transcript) {
+        split_transcript_by_time(&raw.transcript, DIGEST_CHUNK_MINUTES)
+    } else {
+        Vec::new()
+    };
+
+    let llm_body = if chunks.len() >= 2 {
+        let total = chunks.len();
+        on_phase(
+            "digest",
+            &format!("📝 Длинное видео: конспектирую по частям ({total})…"),
+        );
+        // Map: one detailed partial conspect per window, run concurrently (ordered).
+        let chunk_msgs: Vec<Vec<opex_types::Message>> = chunks
+            .iter()
+            .enumerate()
+            .map(|(i, c)| build_chunk_messages(c, i, total, &raw.frames))
+            .collect();
+        // Build the per-chunk futures in an explicit loop (a `.map` closure that
+        // returns a future borrowing its argument trips HRTB inference here).
+        let mut map_futs = Vec::with_capacity(total);
+        for m in &chunk_msgs {
+            map_futs.push(provider.chat(m, &[], opts()));
+        }
+        let responses = futures_util::stream::iter(map_futs)
+            .buffered(MAP_CONCURRENCY)
+            .try_collect::<Vec<_>>()
+            .await?;
+        let partials: Vec<String> = responses.into_iter().map(|r| r.content).collect();
+        // Reduce: merge the partials into one coherent note (detail-preserving).
+        on_phase("digest", "📝 Свожу части в единый конспект…");
+        let reduce_msgs = build_reduce_messages(&partials);
+        provider.chat(&reduce_msgs, &[], opts()).await?.content
+    } else {
+        on_phase("digest", "📝 Составляю конспект…");
+        let messages = build_summary_messages(&raw);
+        provider.chat(&messages, &[], opts()).await?.content
+    };
 
     // ── 4. Build note + extract summary ──────────────────────────────────────
     let title_for_note = if title.is_empty() {
@@ -785,5 +829,140 @@ mod tests {
             .expect("ok");
 
         assert_eq!(*phases.lock().unwrap(), vec!["fetch".to_string(), "digest".to_string()]);
+    }
+
+    // ── Chunked map-reduce for long videos ───────────────────────────────────
+
+    /// Counts calls and returns map- vs reduce-specific content (detected by the
+    /// reduce system prompt) so we can assert the map-reduce shape.
+    struct CountingLlm {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agent::providers::LlmProvider for CountingLlm {
+        async fn chat(
+            &self,
+            messages: &[Message],
+            _tools: &[opex_types::ToolDefinition],
+            _opts: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<opex_types::LlmResponse> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let is_reduce = messages
+                .first()
+                .map(|m| m.content.contains("Объедини их в ОДИН цельный конспект"))
+                .unwrap_or(false);
+            let content = if is_reduce {
+                "## Резюме\nсводное резюме\n\n## Конспект\nсклеено из частей".to_string()
+            } else {
+                "### Раздел фрагмента\nдетали фрагмента".to_string()
+            };
+            Ok(opex_types::LlmResponse {
+                content,
+                tool_calls: vec![],
+                usage: None,
+                finish_reason: None,
+                model: None,
+                provider: None,
+                fallback_notice: None,
+                tools_used: vec![],
+                iterations: 1,
+                thinking_blocks: vec![],
+            })
+        }
+
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        fn current_model(&self) -> String {
+            "counting".into()
+        }
+    }
+
+    fn mock_summarize(server: &MockServer, transcript: &str) -> impl std::future::Future<Output = ()> {
+        let body = serde_json::json!({
+            "duration": 12000.0,
+            "transcript": transcript,
+            "frames": [],
+            "degraded": {"stt": false, "vision": false}
+        });
+        Mock::given(method("POST"))
+            .and(path("/summarize-video"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+    }
+
+    fn url_job() -> VideoJob {
+        VideoJob {
+            id: uuid::Uuid::new_v4(),
+            session_id: uuid::Uuid::new_v4(),
+            agent_name: "Atlas".into(),
+            channel_id: None,
+            source_type: "url".into(),
+            source_ref: "https://youtu.be/x".into(),
+            source_title: None,
+            status: "processing".into(),
+            summary: None,
+            error: None,
+            attempts: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn process_one_long_video_uses_map_reduce() {
+        let server = MockServer::start().await;
+        // 199-min transcript -> 45-min windows at 0/50/100/150/199 -> 5 chunks.
+        mock_summarize(
+            &server,
+            "[00:00] вступление\n[50:00] часть А\n[100:00] часть Б\n[150:00] часть В\n[199:00] финал",
+        )
+        .await;
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingLlm { calls: calls.clone() };
+        let nr = process_one(
+            &reqwest::Client::new(),
+            &server.uri(),
+            "127.0.0.1:18789",
+            &provider,
+            &url_job(),
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            6,
+            "5 map calls + 1 reduce"
+        );
+        assert!(nr.summary.contains("сводное резюме"), "reduce summary used: {}", nr.summary);
+        assert!(nr.note.contains("склеено из частей"), "reduce body in note");
+    }
+
+    #[tokio::test]
+    async fn process_one_short_video_stays_single_pass() {
+        let server = MockServer::start().await;
+        mock_summarize(&server, "[00:10] короткая речь\n[09:00] конец").await;
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = CountingLlm { calls: calls.clone() };
+        let _ = process_one(
+            &reqwest::Client::new(),
+            &server.uri(),
+            "127.0.0.1:18789",
+            &provider,
+            &url_job(),
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "short video = single-pass = 1 call"
+        );
     }
 }
