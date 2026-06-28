@@ -281,31 +281,41 @@ pub async fn enrich_message_text(
 
 /// v1 video-URL allowlist: YouTube only (SSRF surface — see spec §9).
 ///
-/// Filters `extract_urls(text)` keeping only hosts that end with `youtube.com`
-/// or are equal to / end with `youtu.be`.  The host is extracted as the third
-/// `/`-delimited segment so that `evil.com/youtube.com/path` is rejected.
-///
-/// Domain-label boundary enforcement prevents byte-suffix attacks:
-/// `notayoutube.com` and `fakeyoutube.com` are rejected because their last 11 bytes
-/// are `youtube.com` but they are not valid YouTube domains.
+/// True for hosts we accept as downloadable video links: YouTube and Yandex Disk
+/// public-share links (both handled by yt-dlp extractors). YouTube allows the
+/// exact label or any dot-prefixed subdomain; Yandex Disk hosts are matched
+/// EXACTLY (no suffix/prefix rule) so `disk.yandex.evil.com` cannot sneak through.
+fn is_supported_video_host(host: &str) -> bool {
+    // YouTube
+    host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtu.be"
+        || host.ends_with(".youtu.be")
+        // Yandex Disk public-share links (yt-dlp `YandexDisk` extractor) — exact hosts only.
+        || host == "yadi.sk"
+        || host == "disk.yandex.ru"
+        || host == "disk.yandex.com"
+        || host == "disk.yandex.kz"
+        || host == "disk.yandex.by"
+        || host == "disk.yandex.uz"
+        || host == "disk.360.yandex.ru"
+}
+
+/// Filters `extract_urls(text)` keeping only supported video hosts (YouTube,
+/// Yandex Disk). The host is parsed with a real URL parser so that userinfo
+/// (`youtube.com@evil.com`), case, trailing dot, ports and byte-suffix attacks
+/// (`notayoutube.com`, `disk.yandex.evil.com`) are all rejected.
 fn detect_video_links(text: &str) -> Vec<String> {
     extract_urls(text)
         .into_iter()
         .filter(|u| {
-            // Parse with a real URL parser — a naive `split('/')` is fooled by
-            // userinfo (`youtube.com@evil.com`), case (`YouTube.com`), trailing
-            // dot, and ports. Only http/https YouTube domains (exact label or
-            // dot-prefixed suffix) pass.
             let Ok(parsed) = url::Url::parse(u) else { return false };
             if !matches!(parsed.scheme(), "http" | "https") {
                 return false;
             }
             let Some(h) = parsed.host_str() else { return false };
             let host = h.trim_end_matches('.').to_ascii_lowercase();
-            host == "youtube.com"
-                || host.ends_with(".youtube.com")
-                || host == "youtu.be"
-                || host.ends_with(".youtu.be")
+            is_supported_video_host(&host)
         })
         .collect()
 }
@@ -937,6 +947,22 @@ mod tests {
         assert!(detect_video_links("https://youtube.com@evil.com/x").is_empty(), "userinfo confusion rejected");
         assert!(detect_video_links("https://YOUTUBE.com/watch?v=z").len() == 1, "uppercase host accepted");
         assert!(detect_video_links("ftp://youtube.com/x").is_empty(), "non-http scheme rejected");
+    }
+
+    #[test]
+    fn detect_video_links_accepts_yandex_disk() {
+        // Public Yandex Disk share links (yt-dlp YandexDisk extractor).
+        assert_eq!(detect_video_links("видео: https://disk.yandex.ru/i/abc123").len(), 1, "disk.yandex.ru");
+        assert_eq!(detect_video_links("https://yadi.sk/i/xyz789").len(), 1, "yadi.sk short link");
+        assert_eq!(detect_video_links("https://disk.yandex.com/d/folderId").len(), 1, "disk.yandex.com");
+        assert_eq!(detect_video_links("https://disk.360.yandex.ru/i/q").len(), 1, "yandex 360");
+        assert_eq!(detect_video_links("https://DISK.Yandex.RU/i/A").len(), 1, "case-insensitive");
+
+        // Security: exact-host match → suffix/userinfo confusion rejected.
+        assert!(detect_video_links("https://disk.yandex.evil.com/i/x").is_empty(), "suffix attack rejected");
+        assert!(detect_video_links("https://disk.yandex.ru@evil.com/x").is_empty(), "userinfo confusion rejected");
+        assert!(detect_video_links("https://notyadi.sk/i/x").is_empty(), "byte-suffix attack rejected");
+        assert!(detect_video_links("ftp://disk.yandex.ru/i/x").is_empty(), "non-http scheme rejected");
     }
 
     // ── enrich_message_text → EnrichResult ──────────────────────────────────
