@@ -270,9 +270,10 @@ def test_summarize_video_returns_images_and_title(monkeypatch):
         body = r.json()
         assert body["title"] == "Тест"
         assert len(body["frames"]) >= 1
-        import base64
-        jpeg = base64.b64decode(body["frames"][0]["image_b64"])
-        assert jpeg[:2] == b"\xff\xd8", "frame image is JPEG"
+        # Screenshots are dropped: frames carry a description (on-screen context for
+        # the text) but no image payload.
+        assert "image_b64" not in body["frames"][0], "no image payload in response"
+        assert "description" in body["frames"][0], "frame description present for the digest"
         assert len(body["frames"]) <= 24, "note frame cap"
 
 

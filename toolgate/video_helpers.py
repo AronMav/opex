@@ -66,7 +66,9 @@ def _cookie_args() -> list[str]:
             os.close(fd)
         return ["--cookies", copy]
     except OSError:
-        return ["--cookies", path]
+        # Copy failed (disk/perms). Run WITHOUT cookies rather than handing yt-dlp
+        # the shared MeTube jar directly — it would rewrite and degrade that jar.
+        return []
 
 
 async def extract_audio(video_path: str) -> bytes:

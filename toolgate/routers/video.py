@@ -3,7 +3,6 @@ Returns RAW MATERIAL (transcript + frame descriptions); the final LLM digest is
 built in opex-core, not here (toolgate has no text-LLM)."""
 
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -127,18 +126,10 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
         if not candidates:
             pass  # nothing to describe; frames_out stays empty
         elif vision is None:
-            # Degraded: vision unavailable — even-spread fallback (no scoring).
+            # Vision unavailable → no descriptions; screenshots are no longer
+            # embedded, so there is nothing to add from frames.
             degraded["vision"] = True
-            step = max(1, len(candidates) / VIDEO_NOTE_MAX_FRAMES)
-            selected = [candidates[int(i * step)] for i in range(min(VIDEO_NOTE_MAX_FRAMES, len(candidates)))]
-            frames_out = [
-                {
-                    "timestamp": ts,
-                    "description": "",
-                    "image_b64": base64.b64encode(jpeg).decode("ascii"),
-                }
-                for ts, jpeg in selected
-            ]
+            frames_out = []
         else:
             # Vision-scoring: evaluate every candidate, pick top-N, re-sort by time.
             sem = asyncio.Semaphore(FRAME_VISION_CONCURRENCY)
@@ -155,7 +146,6 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
 
             async def score_frame(ts: float, jpeg: bytes):
                 async with sem:
-                    b64 = base64.b64encode(jpeg).decode("ascii")
                     raw = ""
                     try:
                         raw = await vision.describe(http, jpeg, "image/jpeg", score_prompt)
@@ -172,7 +162,7 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
                         log.warning("frame score failed at %.1fs: %s", ts, e)
                         sc = 5
                         desc = raw[:200] if raw else ""
-                    return (ts, sc, desc, b64)
+                    return (ts, sc, desc)
 
             scored = await asyncio.gather(*(score_frame(ts, j) for ts, j in candidates))
 
@@ -181,8 +171,8 @@ async def summarize_video(body: SummarizeVideoRequest, request: Request):
             top_by_time = sorted(top, key=lambda x: x[0])
 
             frames_out = [
-                {"timestamp": ts, "description": desc, "image_b64": b64}
-                for ts, _sc, desc, b64 in top_by_time
+                {"timestamp": ts, "description": desc}
+                for ts, _sc, desc in top_by_time
             ]
 
         # Probe duration (best-effort, non-fatal).
