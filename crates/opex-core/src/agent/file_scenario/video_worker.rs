@@ -99,19 +99,11 @@ pub async fn process_one(
     };
     let note_slug = slug(&title, &id8);
 
-    let frame_names: Vec<String> = (0..raw.frames.len())
-        .map(|i| format!("frame-{:02}.jpg", i + 1))
-        .collect();
-
-    let media: Vec<(String, String)> = frame_names
-        .iter()
-        .cloned()
-        .zip(raw.frames.iter().map(|f| f.image_b64.clone()))
-        .collect();
-
     // ── 3. Build LLM body ─────────────────────────────────────────────────────
+    // Screenshots are no longer embedded — frame DESCRIPTIONS still feed the
+    // digest as on-screen context, but no images are uploaded to the vault.
     on_phase("digest", "📝 Составляю конспект…");
-    let messages = build_summary_messages(&raw, &frame_names);
+    let messages = build_summary_messages(&raw);
     let opts = CallOptions {
         thinking_level: 0,
         claude_md_content: None,
@@ -124,14 +116,14 @@ pub async fn process_one(
     } else {
         title
     };
-    let note = build_note(&raw, &title_for_note, &llm_body, &frame_names);
+    let note = build_note(&raw, &title_for_note, &llm_body);
     let summary = extract_summary(&note);
 
     Ok(NoteResult {
         slug: note_slug,
         note,
         summary,
-        media,
+        media: Vec::new(), // no screenshots to upload
     })
 }
 
@@ -639,7 +631,9 @@ mod tests {
             "collapsed transcript"
         );
         assert!(note.summary.contains("коротко"), "summary extracted");
-        assert!(!note.media.is_empty(), "media collected for MCP save");
+        // Screenshots removed: no media to upload and the LLM's image embed is stripped.
+        assert!(note.media.is_empty(), "no media — screenshots removed");
+        assert!(!note.note.contains("![](images/"), "image embed stripped from note");
     }
 
     // ── Test: process_one calls toolgate and returns LLM digest ─────────────
