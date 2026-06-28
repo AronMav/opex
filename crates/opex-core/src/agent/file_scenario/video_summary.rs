@@ -7,8 +7,13 @@ use opex_types::{Message, MessageRole};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FrameDesc {
+    /// Present in the toolgate response; no longer read since screenshots were
+    /// dropped (only `description` feeds the digest as on-screen context).
+    #[allow(dead_code)]
+    #[serde(default)]
     pub timestamp: f64,
     pub description: String,
+    #[allow(dead_code)]
     #[serde(default)]
     pub image_b64: String,
 }

@@ -34,8 +34,6 @@ pub struct NoteResult {
     pub slug: String,
     pub note: String,
     pub summary: String,
-    /// `(filename, image_b64)` pairs — one per frame — to upload via `save_media`.
-    pub media: Vec<(String, String)>,
 }
 
 // ── Core logic (unit-testable, no DB) ────────────────────────────────────────
@@ -123,7 +121,6 @@ pub async fn process_one(
         slug: note_slug,
         note,
         summary,
-        media: Vec::new(), // no screenshots to upload
     })
 }
 
@@ -413,8 +410,10 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                     tracing::info!(job_id = %job.id, slug = %nr.slug, "video_worker: note assembled");
                     emit_video_progress(&ui_tx, job.session_id, "saving", "💾 Сохраняю в Obsidian…");
 
-                    // Free folder name — collision avoidance
-                    let mut folder = format!("Видео/{}", nr.slug);
+                    // Note goes directly into `Summary/` as `<slug>.md` — no
+                    // per-note subfolder and no images (screenshots were dropped).
+                    let folder = "Summary".to_string();
+                    let mut filename = format!("{}.md", nr.slug);
                     for suffix in 2..=20 {
                         let exists = mcp
                             .call_tool(
@@ -422,7 +421,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                                 "note_exists",
                                 &serde_json::json!({
                                     "folder": folder,
-                                    "filename": "конспект.md"
+                                    "filename": filename
                                 }),
                             )
                             .await
@@ -431,36 +430,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                         if !exists {
                             break;
                         }
-                        folder = format!("Видео/{}-{}", nr.slug, suffix);
-                    }
-
-                    // Save media frames into Видео/<slug>/images/
-                    let mut ok = true;
-                    for (name, b64) in &nr.media {
-                        if let Err(e) = mcp
-                            .call_tool(
-                                "mcp-obsidian",
-                                "save_media",
-                                &serde_json::json!({ "filename": name, "content_b64": b64, "folder": format!("{folder}/images") }),
-                            )
-                            .await
-                        {
-                            tracing::warn!(error = %e, frame = %name, "video_worker: save_media failed");
-                            ok = false;
-                            break;
-                        }
-                    }
-
-                    if !ok {
-                        let _ = opex_db::video_jobs::mark_video_job_failed(
-                            &db,
-                            job.id,
-                            "save_media failed",
-                        )
-                        .await;
-                        deliver(&db, &ui_tx, &job, "Не удалось сохранить кадры конспекта").await;
-                        emit_video_progress(&ui_tx, job.session_id, "failed", "");
-                        continue;
+                        filename = format!("{}-{}.md", nr.slug, suffix);
                     }
 
                     // Create the note
@@ -470,7 +440,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                             "create_note",
                             &serde_json::json!({
                                 "folder": folder,
-                                "filename": "конспект.md",
+                                "filename": filename,
                                 "content": nr.note
                             }),
                         )
@@ -505,7 +475,7 @@ pub fn spawn_video_worker(state: &AppState, shutdown: CancellationToken) {
                         )
                         .await;
 
-                    let path = format!("{folder}/конспект.md");
+                    let path = format!("{folder}/{filename}");
                     let chat = format!("{}\n\n📓 Конспект: {}", nr.summary, path);
                     let _ = opex_db::video_jobs::mark_video_job_done(&db, job.id, &nr.summary)
                         .await;
@@ -631,8 +601,7 @@ mod tests {
             "collapsed transcript"
         );
         assert!(note.summary.contains("коротко"), "summary extracted");
-        // Screenshots removed: no media to upload and the LLM's image embed is stripped.
-        assert!(note.media.is_empty(), "no media — screenshots removed");
+        // Screenshots removed: the LLM's image embed is stripped from the note.
         assert!(!note.note.contains("![](images/"), "image embed stripped from note");
     }
 
