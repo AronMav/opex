@@ -60,7 +60,7 @@ pub async fn process_one(
         extract_summary, should_chunk, slug, split_transcript_by_time, RawMaterial,
         DIGEST_CHUNK_MINUTES,
     };
-    use futures_util::stream::{StreamExt, TryStreamExt};
+    use futures_util::stream::StreamExt;
 
     on_phase("fetch", "🎬 Скачиваю и расшифровываю видео…");
 
@@ -137,11 +137,37 @@ pub async fn process_one(
         for m in &chunk_msgs {
             map_futs.push(provider.chat(m, &[], opts()));
         }
+        // Collect WITHOUT short-circuiting: a long job already paid for download +
+        // STT (hours) before reaching the digest, so one transient map failure must
+        // not discard the whole result. A failed window degrades to a placeholder
+        // partial; only an all-windows failure aborts.
         let responses = futures_util::stream::iter(map_futs)
             .buffered(MAP_CONCURRENCY)
-            .try_collect::<Vec<_>>()
-            .await?;
-        let partials: Vec<String> = responses.into_iter().map(|r| r.content).collect();
+            .collect::<Vec<_>>()
+            .await;
+        let mut ok = 0usize;
+        let partials: Vec<String> = responses
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| match r {
+                Ok(resp) => {
+                    ok += 1;
+                    resp.content
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        job_id = %job.id,
+                        chunk = i,
+                        error = %e,
+                        "video_worker: digest chunk failed — using placeholder"
+                    );
+                    format!("(Фрагмент {} из {} не удалось обработать.)", i + 1, total)
+                }
+            })
+            .collect();
+        if ok == 0 {
+            anyhow::bail!("all {total} digest chunks failed");
+        }
         // Reduce: merge the partials into one coherent note (detail-preserving).
         on_phase("digest", "📝 Свожу части в единый конспект…");
         let reduce_msgs = build_reduce_messages(&partials);
@@ -964,5 +990,81 @@ mod tests {
             1,
             "short video = single-pass = 1 call"
         );
+    }
+
+    /// Fails the Nth chat call; otherwise returns map/reduce content like CountingLlm.
+    struct FlakyLlm {
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        fail_on: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agent::providers::LlmProvider for FlakyLlm {
+        async fn chat(
+            &self,
+            messages: &[Message],
+            _tools: &[opex_types::ToolDefinition],
+            _opts: crate::agent::providers::CallOptions,
+        ) -> anyhow::Result<opex_types::LlmResponse> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == self.fail_on {
+                anyhow::bail!("simulated transient digest failure");
+            }
+            let is_reduce = messages
+                .first()
+                .map(|m| m.content.contains("Объедини их в ОДИН цельный конспект"))
+                .unwrap_or(false);
+            let content = if is_reduce {
+                "## Резюме\nсводное\n\n## Конспект\nсклеено".to_string()
+            } else {
+                "### часть\nдетали".to_string()
+            };
+            Ok(opex_types::LlmResponse {
+                content,
+                tool_calls: vec![],
+                usage: None,
+                finish_reason: None,
+                model: None,
+                provider: None,
+                fallback_notice: None,
+                tools_used: vec![],
+                iterations: 1,
+                thinking_blocks: vec![],
+            })
+        }
+        fn name(&self) -> &str {
+            "flaky"
+        }
+        fn current_model(&self) -> String {
+            "flaky".into()
+        }
+    }
+
+    #[tokio::test]
+    async fn process_one_long_video_degrades_on_chunk_failure() {
+        let server = MockServer::start().await;
+        // 5 windows -> 5 map calls (indices 0..4) + 1 reduce (index 5).
+        mock_summarize(
+            &server,
+            "[00:00] a\n[50:00] b\n[100:00] c\n[150:00] d\n[199:00] e",
+        )
+        .await;
+
+        // Fail one map call. The job must still complete (degraded), not error out.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider = FlakyLlm { calls: calls.clone(), fail_on: 2 };
+        let nr = process_one(
+            &reqwest::Client::new(),
+            &server.uri(),
+            "127.0.0.1:18789",
+            &provider,
+            &url_job(),
+            &|_: &str, _: &str| {},
+        )
+        .await
+        .expect("one failed chunk degrades to a placeholder, job still succeeds");
+
+        // Reduce ran on the surviving partials + placeholder and produced the note.
+        assert!(nr.note.contains("склеено"), "reduce ran despite a failed chunk");
     }
 }
