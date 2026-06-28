@@ -92,19 +92,15 @@ fn strip_transcript_timecodes(text: &str) -> String {
     text.lines()
         .map(|line| {
             let t = line.trim_start();
-            if let Some(rest) = t.strip_prefix('[') {
-                if let Some(close) = rest.find(']') {
-                    let inside = &rest[..close];
-                    if let Some((m, s)) = inside.split_once(':') {
-                        if !m.is_empty()
-                            && m.bytes().all(|b| b.is_ascii_digit())
-                            && s.len() == 2
-                            && s.bytes().all(|b| b.is_ascii_digit())
-                        {
-                            return rest[close + 1..].trim_start().to_string();
-                        }
-                    }
-                }
+            if let Some(rest) = t.strip_prefix('[')
+                && let Some(close) = rest.find(']')
+                && let Some((m, s)) = rest[..close].split_once(':')
+                && !m.is_empty()
+                && m.bytes().all(|b| b.is_ascii_digit())
+                && s.len() == 2
+                && s.bytes().all(|b| b.is_ascii_digit())
+            {
+                return rest[close + 1..].trim_start().to_string();
             }
             line.to_string()
         })
