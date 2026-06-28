@@ -42,7 +42,10 @@ const SYSTEM_PROMPT: &str = "Ты помощник, который делает 
 <3-5 предложений, суть видео>\n\
 \n\
 ## Конспект\n\
-<ПОДРОБНЫЙ пошаговый конспект с подзаголовками ### и таймкодами>\n\
+<ПОДРОБНЫЙ пошаговый конспект с подзаголовками ###>\n\
+\n\
+НЕ добавляй таймкоды или тайминги (например «[00:00]», «5:30», «(2:15)») нигде в конспекте — \
+ни в заголовки ###, ни в пункты. Конспект должен быть чистым связным текстом без таймингов.\n\
 \n\
 КРИТИЧЕСКИ ВАЖНО — ПОДРОБНОСТЬ: каждый раздел ## Конспекта должен быть РАЗВЁРНУТЫМ — несколько \
 пунктов списком (-) или полноценный абзац, а НЕ одна короткая строка-аннотация. В каждом разделе \
@@ -52,8 +55,8 @@ const SYSTEM_PROMPT: &str = "Ты помощник, который делает 
 конспекту можно было ПОВТОРИТЬ каждый шаг урока БЕЗ просмотра видео. НЕ опускай практические детали, \
 приёмы и второстепенные советы ради краткости — лучше длиннее и полнее, чем коротко.\n\
 \n\
-Тебе даны кадры видео с таймкодами и описаниями. После КАЖДОГО отдельного тезиса/пункта, \
-к которому кадр относится по таймкоду и смыслу, вставь РОВНО ОДНУ embed-строку этого кадра. \
+Тебе даны описания ключевых кадров видео. После КАЖДОГО отдельного тезиса/пункта, \
+к которому кадр относится по смыслу, вставь РОВНО ОДНУ embed-строку этого кадра. \
 КАТЕГОРИЧЕСКИ НЕ группируй несколько кадров подряд (две и более embed-строки вплотную — запрещено). \
 Размещай кадры ПО ОДНОМУ, разнося их по разным пунктам и разделам конспекта. \
 Каждый предоставленный кадр должен появиться в теле ровно один раз; используй ВСЕ кадры.\n\
@@ -77,6 +80,34 @@ pub fn slug(title: &str, fallback_id: &str) -> String {
     if s.is_empty() { format!("видео-{fallback_id}") } else { s }
 }
 
+/// Strip leading `[MM:SS]` / `[MMM:SS]` timecode markers (carried by the
+/// timestamped transcript) so the DIGEST PROMPT sees plain text and the LLM does
+/// not copy timecodes into the conspect body. The stored transcript in the note
+/// keeps its markers for navigation — only the prompt copy is stripped.
+fn strip_transcript_timecodes(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix('[') {
+                if let Some(close) = rest.find(']') {
+                    let inside = &rest[..close];
+                    if let Some((m, s)) = inside.split_once(':') {
+                        if !m.is_empty()
+                            && m.bytes().all(|b| b.is_ascii_digit())
+                            && s.len() == 2
+                            && s.bytes().all(|b| b.is_ascii_digit())
+                        {
+                            return rest[close + 1..].trim_start().to_string();
+                        }
+                    }
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Build the system+user messages for the digest. The entire transcript is
 /// embedded (large-context model — no chunking). `frame_names` are the
 /// filenames that will be saved to `_System/media/` so the LLM can embed them.
@@ -84,7 +115,8 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
     let mut user = String::new();
     user.push_str(&format!("Длительность видео: {:.0} сек.\n\n", raw.duration));
     user.push_str("=== Транскрипт ===\n");
-    user.push_str(&raw.transcript);
+    // Strip timecodes from the prompt copy so the LLM does not reproduce them.
+    user.push_str(&strip_transcript_timecodes(&raw.transcript));
     user.push_str("\n\n");
 
     if raw.frames.is_empty() {
@@ -93,17 +125,14 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
                            сделай сводку без кадров.)\n");
         }
     } else {
-        user.push_str("=== Ключевые кадры (таймкод → описание → embed-строка) ===\n");
+        user.push_str("=== Ключевые кадры (описание → embed-строка) ===\n");
         for (f, name) in raw.frames.iter().zip(frame_names.iter()) {
-            user.push_str(&format!(
-                "[{:.0}s] {} → ![](images/{})\n",
-                f.timestamp, f.description, name
-            ));
+            user.push_str(&format!("{} → ![](images/{})\n", f.description, name));
         }
         // Frames without a corresponding name (shouldn't happen, but be safe).
         if raw.frames.len() > frame_names.len() {
             for f in raw.frames.iter().skip(frame_names.len()) {
-                user.push_str(&format!("[{:.0}s] {}\n", f.timestamp, f.description));
+                user.push_str(&format!("{}\n", f.description));
             }
         }
     }
@@ -342,8 +371,25 @@ mod tests {
         assert_eq!(user.role, MessageRole::User);
         assert!(user.content.contains("полный текст речи"), "whole transcript embedded");
         assert!(user.content.contains("синий слайд"), "frame description embedded");
-        assert!(user.content.contains("12"), "timestamp embedded");
         assert!(user.content.contains("![](images/frame-01.jpg)"), "relative embed format used");
+    }
+
+    #[test]
+    fn digest_prompt_strips_transcript_timecodes() {
+        // The timestamped transcript must NOT carry [MM:SS] into the digest prompt
+        // (else the LLM copies them into the conspect body). The stored note keeps them.
+        assert_eq!(
+            strip_transcript_timecodes("[00:04] раз\n[131:20] два\nбез метки"),
+            "раз\nдва\nбез метки"
+        );
+        let raw = RawMaterial {
+            title: None, duration: 60.0,
+            transcript: "[00:04] начало\n[01:30] середина".into(),
+            frames: vec![], degraded: Degraded::default(),
+        };
+        let user = &build_summary_messages(&raw, &[])[1].content;
+        assert!(user.contains("начало") && user.contains("середина"), "text kept");
+        assert!(!user.contains("[00:04]") && !user.contains("[01:30]"), "no timecodes in prompt");
     }
 
     #[test]
