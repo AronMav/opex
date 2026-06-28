@@ -55,11 +55,10 @@ const SYSTEM_PROMPT: &str = "Ты помощник, который делает 
 конспекту можно было ПОВТОРИТЬ каждый шаг урока БЕЗ просмотра видео. НЕ опускай практические детали, \
 приёмы и второстепенные советы ради краткости — лучше длиннее и полнее, чем коротко.\n\
 \n\
-Тебе даны описания ключевых кадров видео. После КАЖДОГО отдельного тезиса/пункта, \
-к которому кадр относится по смыслу, вставь РОВНО ОДНУ embed-строку этого кадра. \
-КАТЕГОРИЧЕСКИ НЕ группируй несколько кадров подряд (две и более embed-строки вплотную — запрещено). \
-Размещай кадры ПО ОДНОМУ, разнося их по разным пунктам и разделам конспекта. \
-Каждый предоставленный кадр должен появиться в теле ровно один раз; используй ВСЕ кадры.\n\
+Тебе также даны описания того, ЧТО ПОКАЗАНО НА ЭКРАНЕ в ключевые моменты (окна плагинов, \
+панели настроек, значения параметров). Используй их, чтобы точнее и подробнее изложить детали \
+в ТЕКСТЕ конспекта (точные значения, названия окон/параметров, что именно видно). \
+НЕ вставляй в конспект изображения, кадры или embed-строки вида ![](...) — только текст.\n\
 \n\
 Пиши по-русски, без воды.";
 
@@ -109,9 +108,9 @@ fn strip_transcript_timecodes(text: &str) -> String {
 }
 
 /// Build the system+user messages for the digest. The entire transcript is
-/// embedded (large-context model — no chunking). `frame_names` are the
-/// filenames that will be saved to `_System/media/` so the LLM can embed them.
-pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<Message> {
+/// embedded (large-context model — no chunking). Frame DESCRIPTIONS are passed as
+/// on-screen context to enrich the TEXT; screenshots are no longer embedded.
+pub fn build_summary_messages(raw: &RawMaterial) -> Vec<Message> {
     let mut user = String::new();
     user.push_str(&format!("Длительность видео: {:.0} сек.\n\n", raw.duration));
     user.push_str("=== Транскрипт ===\n");
@@ -121,19 +120,13 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
 
     if raw.frames.is_empty() {
         if raw.degraded.vision {
-            user.push_str("(Описания кадров недоступны — vision-провайдер не активен; \
-                           сделай сводку без кадров.)\n");
+            user.push_str("(Описания экрана недоступны — vision-провайдер не активен; \
+                           сделай сводку только по транскрипту.)\n");
         }
     } else {
-        user.push_str("=== Ключевые кадры (описание → embed-строка) ===\n");
-        for (f, name) in raw.frames.iter().zip(frame_names.iter()) {
-            user.push_str(&format!("{} → ![](images/{})\n", f.description, name));
-        }
-        // Frames without a corresponding name (shouldn't happen, but be safe).
-        if raw.frames.len() > frame_names.len() {
-            for f in raw.frames.iter().skip(frame_names.len()) {
-                user.push_str(&format!("{}\n", f.description));
-            }
+        user.push_str("=== Что показано на экране в ключевые моменты (для деталей в тексте) ===\n");
+        for f in &raw.frames {
+            user.push_str(&format!("- {}\n", f.description));
         }
     }
     user.push_str("\nСделай конспект по инструкции.");
@@ -158,71 +151,29 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
     ]
 }
 
-/// Place EVERY frame into `body` deterministically by its own timestamp, in clean
-/// chronological order. Any frame embeds the LLM wrote itself are first stripped,
-/// then all frames are re-distributed — so ordering never depends on how (or
-/// whether) the LLM followed the "embed a frame after each thesis" instruction.
-/// The conspect text runs chronologically, so a frame at fraction `t/duration`
-/// of the video is inserted at that fraction of the text. A monotonic cursor
-/// guarantees frame N+1 never lands before frame N (no wrap-around reordering).
-/// Does NOT rely on the LLM writing section timecodes; uses `frames[i].timestamp`.
-fn place_frames_chronologically(body: &str, raw: &RawMaterial, frame_names: &[String]) -> String {
-    // Strip EVERY image embed the LLM wrote — real ones AND hallucinated ones
-    // (e.g. a non-existent `frame-25` when only 24 frames exist, which would be a
-    // broken link). We then re-place only the real `frame_names`.
-    let cleaned: String = body
-        .lines()
+/// Remove every image embed line (`![](images/...)`) from `body`. Screenshots are
+/// no longer included in the note — full-frame screencap thumbnails did not help
+/// the reader (arbitrary moment, uncropped, redundant with the text). The frame
+/// DESCRIPTIONS still feed the digest prompt so on-screen content reaches the text;
+/// only the images themselves are dropped. This also strips any embed the LLM
+/// hallucinated, leaving a clean text conspect.
+fn strip_image_embeds(body: &str) -> String {
+    body.lines()
         .filter(|l| {
             let t = l.trim();
             !(t.starts_with("![](images/") && t.ends_with(')'))
         })
         .collect::<Vec<_>>()
-        .join("\n");
-
-    let blocks: Vec<&str> = cleaned
-        .split("\n\n")
-        .map(str::trim)
-        .filter(|b| !b.is_empty())
-        .collect();
-    if blocks.is_empty() {
-        return body.to_string();
-    }
-    let dur = if raw.duration > 0.0 { raw.duration } else { 1.0 };
-    let last = blocks.len() - 1;
-    let mut inserts: Vec<Vec<String>> = vec![Vec::new(); blocks.len()];
-    let mut cursor = 0usize; // only moves forward → chronological, never wraps
-    for (i, name) in frame_names.iter().enumerate() {
-        let frac = raw
-            .frames
-            .get(i)
-            .map(|f| (f.timestamp / dur).clamp(0.0, 1.0))
-            .unwrap_or(0.0);
-        let target = ((frac * blocks.len() as f64) as usize).min(last);
-        let idx = target.max(cursor).min(last);
-        inserts[idx].push(format!("![](images/{name})"));
-        cursor = (idx + 1).min(last);
-    }
-    let mut out = String::new();
-    for (i, block) in blocks.iter().enumerate() {
-        out.push_str(block);
-        for emb in &inserts[i] {
-            out.push_str("\n\n");
-            out.push_str(emb);
-        }
-        if i + 1 < blocks.len() {
-            out.push_str("\n\n");
-        }
-    }
-    out
+        .join("\n")
 }
 
-/// Build the full Obsidian note: frontmatter + LLM body (with all frames placed
-/// chronologically by timestamp) + collapsed transcript.
+/// Build the full Obsidian note: frontmatter + LLM body (text only, no screenshots)
+/// + collapsed transcript.
 ///
 /// Deterministic — does NOT call `Utc::now()`. The worker (Task 6) prepends the
 /// `created` date field before writing.
-pub fn build_note(raw: &RawMaterial, title: &str, llm_body: &str, frame_names: &[String]) -> String {
-    let body = place_frames_chronologically(llm_body.trim(), raw, frame_names);
+pub fn build_note(raw: &RawMaterial, title: &str, llm_body: &str) -> String {
+    let body = strip_image_embeds(llm_body.trim());
 
     let mut out = String::new();
     out.push_str("---\n");
@@ -234,17 +185,6 @@ pub fn build_note(raw: &RawMaterial, title: &str, llm_body: &str, frame_names: &
     out.push_str(body.trim());
     out.push('\n');
 
-    // Safety net: any frame still not present (e.g. empty body) goes in an
-    // appendix so no frame is ever lost.
-    let unplaced: Vec<&String> = frame_names.iter()
-        .filter(|n| !body.contains(n.as_str()))
-        .collect();
-    if !unplaced.is_empty() {
-        out.push_str("\n## Дополнительные кадры\n\n");
-        for n in unplaced {
-            out.push_str(&format!("![](images/{n})\n\n"));
-        }
-    }
     // Collapsed full transcript.
     out.push_str("\n> [!note]- Полный транскрипт\n");
     for line in raw.transcript.lines() {
@@ -288,75 +228,23 @@ mod tests {
     }
 
     #[test]
-    fn build_note_strips_llm_embed_and_replaces_chronologically_no_dup() {
+    fn build_note_is_text_only_strips_all_image_embeds() {
         let raw = RawMaterial {
             title: Some("Тест".into()), duration: 65.0, transcript: "речь целиком".into(),
             frames: vec![
                 FrameDesc { timestamp: 5.0, description: "слайд".into(), image_b64: "x".into() },
-                FrameDesc { timestamp: 9.0, description: "график".into(), image_b64: "y".into() },
             ],
             degraded: Degraded::default(),
         };
-        let names = vec!["t-frame-01.jpg".to_string(), "t-frame-02.jpg".to_string()];
-        // LLM embedded frame 1 inline; it is stripped and re-placed deterministically.
-        let llm_body = "## Резюме\nкоротко\n\n## Конспект\n### Раздел\n![](images/t-frame-01.jpg)\n\nещё абзац";
-        let note = build_note(&raw, "Тест", llm_body, &names);
+        // The LLM embedded a real frame AND hallucinated one — BOTH must be removed.
+        let llm_body = "## Резюме\nкоротко\n\n## Конспект\n### Раздел\nтекст\n![](images/frame-01.jpg)\n\n![](images/frame-99.jpg)\n\nещё абзац";
+        let note = build_note(&raw, "Тест", llm_body);
         assert!(note.starts_with("---\n"), "frontmatter");
-        // The LLM's embed is stripped and re-added once — no duplicate.
-        assert_eq!(note.matches("![](images/t-frame-01.jpg)").count(), 1, "frame 1 appears exactly once");
-        assert_eq!(note.matches("![](images/t-frame-02.jpg)").count(), 1, "frame 2 appears exactly once");
-        assert!(!note.contains("## Дополнительные кадры"), "no appendix — frames placed inline");
-        // Chronological: frame 1 (5s) before frame 2 (9s), both before the transcript.
-        let f1 = note.find("t-frame-01.jpg").unwrap();
-        let f2 = note.find("t-frame-02.jpg").unwrap();
-        let tr = note.find("Полный транскрипт").unwrap();
-        assert!(f1 < f2 && f2 < tr, "frames chronological and in the body");
-        assert!(note.contains("> [!note]- Полный транскрипт"));
-        assert!(note.contains("речь целиком"));
-    }
-
-    #[test]
-    fn build_note_drops_hallucinated_frame_embed() {
-        // The LLM invents `frame-25` though only 2 real frames exist — it must be
-        // stripped (no broken image link), and only the real frames placed.
-        let raw = RawMaterial {
-            title: Some("X".into()), duration: 100.0, transcript: "t".into(),
-            frames: vec![
-                FrameDesc { timestamp: 10.0, description: "a".into(), image_b64: "x".into() },
-                FrameDesc { timestamp: 90.0, description: "b".into(), image_b64: "y".into() },
-            ],
-            degraded: Degraded::default(),
-        };
-        let names = vec!["frame-01.jpg".to_string(), "frame-02.jpg".to_string()];
-        let llm_body = "## Конспект\n\n### A\nтекст\n![](images/frame-25.jpg)\n\n### B\nещё";
-        let note = build_note(&raw, "X", llm_body, &names);
-        assert!(!note.contains("frame-25"), "hallucinated frame removed");
-        assert_eq!(note.matches("![](images/frame-01.jpg)").count(), 1);
-        assert_eq!(note.matches("![](images/frame-02.jpg)").count(), 1);
-    }
-
-    #[test]
-    fn build_note_places_all_frames_in_clean_chronological_order() {
-        // Этап-2 failure mode: the LLM embedded ZERO frames. ALL must spread
-        // through the body by timestamp in order, none dumped in a trailing appendix.
-        let raw = RawMaterial {
-            title: Some("Длинное".into()), duration: 120.0, transcript: "t".into(),
-            frames: vec![
-                FrameDesc { timestamp: 6.0, description: "a".into(), image_b64: "x".into() },
-                FrameDesc { timestamp: 60.0, description: "b".into(), image_b64: "y".into() },
-                FrameDesc { timestamp: 114.0, description: "c".into(), image_b64: "z".into() },
-            ],
-            degraded: Degraded::default(),
-        };
-        let names = vec!["f-01.jpg".to_string(), "f-02.jpg".to_string(), "f-03.jpg".to_string()];
-        let llm_body = "## Конспект\n\n### Начало\nтекст1\n\n### Середина\nтекст2\n\n### Конец\nтекст3";
-        let note = build_note(&raw, "Длинное", llm_body, &names);
-        assert!(!note.contains("## Дополнительные кадры"), "no appendix dump");
-        // Strictly chronological: f-01 < f-02 < f-03 by position.
-        let p1 = note.find("f-01.jpg").unwrap();
-        let p2 = note.find("f-02.jpg").unwrap();
-        let p3 = note.find("f-03.jpg").unwrap();
-        assert!(p1 < p2 && p2 < p3, "frames in clean chronological order");
+        assert!(!note.contains("![](images/"), "no image embeds at all — screenshots removed");
+        assert!(!note.contains("## Дополнительные кадры"), "no frame appendix");
+        // Real text is kept.
+        assert!(note.contains("коротко") && note.contains("ещё абзац"), "body text kept");
+        assert!(note.contains("> [!note]- Полный транскрипт") && note.contains("речь целиком"));
     }
 
     #[test]
@@ -379,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_embeds_transcript_and_frames() {
+    fn prompt_has_transcript_and_frame_descriptions_no_embeds() {
         let raw = RawMaterial {
             title: None,
             duration: 90.0,
@@ -387,14 +275,13 @@ mod tests {
             frames: vec![FrameDesc { timestamp: 12.5, description: "синий слайд".into(), image_b64: String::new() }],
             degraded: Degraded::default(),
         };
-        let frame_names = vec!["frame-01.jpg".to_string()];
-        let msgs = build_summary_messages(&raw, &frame_names);
+        let msgs = build_summary_messages(&raw);
         assert_eq!(msgs[0].role, MessageRole::System);
         let user = &msgs[msgs.len() - 1];
         assert_eq!(user.role, MessageRole::User);
         assert!(user.content.contains("полный текст речи"), "whole transcript embedded");
-        assert!(user.content.contains("синий слайд"), "frame description embedded");
-        assert!(user.content.contains("![](images/frame-01.jpg)"), "relative embed format used");
+        assert!(user.content.contains("синий слайд"), "frame description passed as on-screen context");
+        assert!(!user.content.contains("![](images/"), "no embed strings in the prompt");
     }
 
     #[test]
@@ -410,7 +297,7 @@ mod tests {
             transcript: "[00:04] начало\n[01:30] середина".into(),
             frames: vec![], degraded: Degraded::default(),
         };
-        let user = &build_summary_messages(&raw, &[])[1].content;
+        let user = &build_summary_messages(&raw)[1].content;
         assert!(user.contains("начало") && user.contains("середина"), "text kept");
         assert!(!user.contains("[00:04]") && !user.contains("[01:30]"), "no timecodes in prompt");
     }
@@ -424,9 +311,9 @@ mod tests {
             frames: vec![],
             degraded: Degraded { stt: false, vision: true },
         };
-        let msgs = build_summary_messages(&raw, &[]);
+        let msgs = build_summary_messages(&raw);
         let user = &msgs[msgs.len() - 1];
-        assert!(user.content.contains("без кадров") || user.content.contains("кадры недоступны"),
+        assert!(user.content.contains("Описания экрана недоступны") || user.content.contains("только по транскрипту"),
             "degraded vision is noted to the model");
     }
 }
