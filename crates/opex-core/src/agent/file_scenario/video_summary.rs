@@ -167,12 +167,15 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
 /// guarantees frame N+1 never lands before frame N (no wrap-around reordering).
 /// Does NOT rely on the LLM writing section timecodes; uses `frames[i].timestamp`.
 fn place_frames_chronologically(body: &str, raw: &RawMaterial, frame_names: &[String]) -> String {
-    // Strip the LLM's own frame embed lines so we don't duplicate them.
-    let embed_lines: std::collections::HashSet<String> =
-        frame_names.iter().map(|n| format!("![](images/{n})")).collect();
+    // Strip EVERY image embed the LLM wrote — real ones AND hallucinated ones
+    // (e.g. a non-existent `frame-25` when only 24 frames exist, which would be a
+    // broken link). We then re-place only the real `frame_names`.
     let cleaned: String = body
         .lines()
-        .filter(|l| !embed_lines.contains(l.trim()))
+        .filter(|l| {
+            let t = l.trim();
+            !(t.starts_with("![](images/") && t.ends_with(')'))
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -310,6 +313,26 @@ mod tests {
         assert!(f1 < f2 && f2 < tr, "frames chronological and in the body");
         assert!(note.contains("> [!note]- Полный транскрипт"));
         assert!(note.contains("речь целиком"));
+    }
+
+    #[test]
+    fn build_note_drops_hallucinated_frame_embed() {
+        // The LLM invents `frame-25` though only 2 real frames exist — it must be
+        // stripped (no broken image link), and only the real frames placed.
+        let raw = RawMaterial {
+            title: Some("X".into()), duration: 100.0, transcript: "t".into(),
+            frames: vec![
+                FrameDesc { timestamp: 10.0, description: "a".into(), image_b64: "x".into() },
+                FrameDesc { timestamp: 90.0, description: "b".into(), image_b64: "y".into() },
+            ],
+            degraded: Degraded::default(),
+        };
+        let names = vec!["frame-01.jpg".to_string(), "frame-02.jpg".to_string()];
+        let llm_body = "## Конспект\n\n### A\nтекст\n![](images/frame-25.jpg)\n\n### B\nещё";
+        let note = build_note(&raw, "X", llm_body, &names);
+        assert!(!note.contains("frame-25"), "hallucinated frame removed");
+        assert_eq!(note.matches("![](images/frame-01.jpg)").count(), 1);
+        assert_eq!(note.matches("![](images/frame-02.jpg)").count(), 1);
     }
 
     #[test]
