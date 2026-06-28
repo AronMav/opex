@@ -67,9 +67,19 @@ echo "  synced $(ls "${SRC_DIR}"/migrations/*.sql | wc -l) files (latest: $(base
 # or code changes (e.g. video pipeline) silently never apply. (.env / venv stay.)
 echo "==> sync toolgate sources to runtime"
 cp -f "${SRC_DIR}"/toolgate/*.py "${RUN_DIR}/toolgate/" 2>/dev/null || true
-mkdir -p "${RUN_DIR}/toolgate/routers"
-cp -f "${SRC_DIR}"/toolgate/routers/*.py "${RUN_DIR}/toolgate/routers/" 2>/dev/null || true
-echo "  synced toolgate .py (core restart re-spawns toolgate)"
+# Sync every toolgate package subdir (routers/, providers/, …), not just the
+# top level — a missed subdir silently ships stale provider code (the verbose_json
+# STT change once shipped only after a manual scp because providers/ was skipped).
+for sub in "${SRC_DIR}"/toolgate/*/; do
+  case "$(basename "$sub")" in
+    .venv|__pycache__|tests) continue ;;
+  esac
+  if compgen -G "${sub}*.py" >/dev/null; then
+    mkdir -p "${RUN_DIR}/toolgate/$(basename "$sub")"
+    cp -f "${sub}"*.py "${RUN_DIR}/toolgate/$(basename "$sub")/" 2>/dev/null || true
+  fi
+done
+echo "  synced toolgate .py incl. subpackages (core restart re-spawns toolgate)"
 
 # On-demand MCP containers must EXIST (stopped) for core's ContainerManager to
 # start them — `ensure_running` only inspect+start, never create. `up --no-start`

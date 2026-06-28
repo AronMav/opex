@@ -129,42 +129,46 @@ pub fn build_summary_messages(raw: &RawMaterial, frame_names: &[String]) -> Vec<
     ]
 }
 
-/// Insert the embed lines for frames the LLM did NOT place inline, distributing
-/// them through `body` by each frame's own timestamp (the conspect text follows
-/// the video chronologically, so timestamp position maps roughly to text
-/// position). This avoids the failure mode where the LLM — especially on long
-/// transcripts — ignores the "embed a frame after each thesis" instruction and
-/// leaves ALL frames to be dumped in a trailing appendix. Frames the LLM already
-/// embedded keep their position. Does NOT rely on the LLM writing section
-/// timecodes; uses `raw.frames[i].timestamp` directly.
-fn distribute_unplaced_frames(body: &str, raw: &RawMaterial, frame_names: &[String]) -> String {
-    let blocks: Vec<&str> = body.split("\n\n").collect();
+/// Place EVERY frame into `body` deterministically by its own timestamp, in clean
+/// chronological order. Any frame embeds the LLM wrote itself are first stripped,
+/// then all frames are re-distributed — so ordering never depends on how (or
+/// whether) the LLM followed the "embed a frame after each thesis" instruction.
+/// The conspect text runs chronologically, so a frame at fraction `t/duration`
+/// of the video is inserted at that fraction of the text. A monotonic cursor
+/// guarantees frame N+1 never lands before frame N (no wrap-around reordering).
+/// Does NOT rely on the LLM writing section timecodes; uses `frames[i].timestamp`.
+fn place_frames_chronologically(body: &str, raw: &RawMaterial, frame_names: &[String]) -> String {
+    // Strip the LLM's own frame embed lines so we don't duplicate them.
+    let embed_lines: std::collections::HashSet<String> =
+        frame_names.iter().map(|n| format!("![](images/{n})")).collect();
+    let cleaned: String = body
+        .lines()
+        .filter(|l| !embed_lines.contains(l.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let blocks: Vec<&str> = cleaned
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .collect();
     if blocks.is_empty() {
         return body.to_string();
     }
     let dur = if raw.duration > 0.0 { raw.duration } else { 1.0 };
-    // Trailing embeds to append after each block.
+    let last = blocks.len() - 1;
     let mut inserts: Vec<Vec<String>> = vec![Vec::new(); blocks.len()];
+    let mut cursor = 0usize; // only moves forward → chronological, never wraps
     for (i, name) in frame_names.iter().enumerate() {
-        if body.contains(name.as_str()) {
-            continue; // already placed inline by the LLM — leave it
-        }
         let frac = raw
             .frames
             .get(i)
             .map(|f| (f.timestamp / dur).clamp(0.0, 1.0))
             .unwrap_or(0.0);
-        let mut idx = ((frac * blocks.len() as f64) as usize).min(blocks.len() - 1);
-        // Spread: if the target block already holds an embed, walk forward
-        // (wrapping) so two frames don't pile onto the same spot.
-        let start = idx;
-        while !inserts[idx].is_empty() {
-            idx = (idx + 1) % blocks.len();
-            if idx == start {
-                break;
-            }
-        }
+        let target = ((frac * blocks.len() as f64) as usize).min(last);
+        let idx = target.max(cursor).min(last);
         inserts[idx].push(format!("![](images/{name})"));
+        cursor = (idx + 1).min(last);
     }
     let mut out = String::new();
     for (i, block) in blocks.iter().enumerate() {
@@ -180,13 +184,13 @@ fn distribute_unplaced_frames(body: &str, raw: &RawMaterial, frame_names: &[Stri
     out
 }
 
-/// Build the full Obsidian note: frontmatter + LLM body (with any unplaced frames
-/// distributed inline by timestamp) + collapsed transcript.
+/// Build the full Obsidian note: frontmatter + LLM body (with all frames placed
+/// chronologically by timestamp) + collapsed transcript.
 ///
 /// Deterministic — does NOT call `Utc::now()`. The worker (Task 6) prepends the
 /// `created` date field before writing.
 pub fn build_note(raw: &RawMaterial, title: &str, llm_body: &str, frame_names: &[String]) -> String {
-    let body = distribute_unplaced_frames(llm_body.trim(), raw, frame_names);
+    let body = place_frames_chronologically(llm_body.trim(), raw, frame_names);
 
     let mut out = String::new();
     out.push_str("---\n");
@@ -252,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn build_note_keeps_placed_frame_and_distributes_unplaced_inline() {
+    fn build_note_strips_llm_embed_and_replaces_chronologically_no_dup() {
         let raw = RawMaterial {
             title: Some("Тест".into()), duration: 65.0, transcript: "речь целиком".into(),
             frames: vec![
@@ -262,25 +266,27 @@ mod tests {
             degraded: Degraded::default(),
         };
         let names = vec!["t-frame-01.jpg".to_string(), "t-frame-02.jpg".to_string()];
-        // LLM placed frame 1 inline; frame 2 was left unplaced → distributed into body.
+        // LLM embedded frame 1 inline; it is stripped and re-placed deterministically.
         let llm_body = "## Резюме\nкоротко\n\n## Конспект\n### Раздел\n![](images/t-frame-01.jpg)\n\nещё абзац";
         let note = build_note(&raw, "Тест", llm_body, &names);
         assert!(note.starts_with("---\n"), "frontmatter");
-        assert!(note.contains("title: Тест"));
-        assert!(note.contains("![](images/t-frame-01.jpg)"), "LLM-placed frame kept");
-        assert!(note.contains("![](images/t-frame-02.jpg)"), "unplaced frame distributed");
-        assert!(!note.contains("## Дополнительные кадры"), "no appendix — frame went inline");
+        // The LLM's embed is stripped and re-added once — no duplicate.
+        assert_eq!(note.matches("![](images/t-frame-01.jpg)").count(), 1, "frame 1 appears exactly once");
+        assert_eq!(note.matches("![](images/t-frame-02.jpg)").count(), 1, "frame 2 appears exactly once");
+        assert!(!note.contains("## Дополнительные кадры"), "no appendix — frames placed inline");
+        // Chronological: frame 1 (5s) before frame 2 (9s), both before the transcript.
+        let f1 = note.find("t-frame-01.jpg").unwrap();
         let f2 = note.find("t-frame-02.jpg").unwrap();
         let tr = note.find("Полный транскрипт").unwrap();
-        assert!(f2 < tr, "distributed frame sits in the body, not after the transcript");
+        assert!(f1 < f2 && f2 < tr, "frames chronological and in the body");
         assert!(note.contains("> [!note]- Полный транскрипт"));
         assert!(note.contains("речь целиком"));
     }
 
     #[test]
-    fn build_note_distributes_all_frames_when_llm_embedded_none() {
-        // Этап-2 failure mode: the LLM embedded ZERO frames. They must spread
-        // through the body by timestamp, none dumped in a trailing appendix.
+    fn build_note_places_all_frames_in_clean_chronological_order() {
+        // Этап-2 failure mode: the LLM embedded ZERO frames. ALL must spread
+        // through the body by timestamp in order, none dumped in a trailing appendix.
         let raw = RawMaterial {
             title: Some("Длинное".into()), duration: 120.0, transcript: "t".into(),
             frames: vec![
@@ -293,13 +299,12 @@ mod tests {
         let names = vec!["f-01.jpg".to_string(), "f-02.jpg".to_string(), "f-03.jpg".to_string()];
         let llm_body = "## Конспект\n\n### Начало\nтекст1\n\n### Середина\nтекст2\n\n### Конец\nтекст3";
         let note = build_note(&raw, "Длинное", llm_body, &names);
-        for n in &names {
-            assert!(note.contains(&format!("![](images/{n})")), "{n} present");
-        }
         assert!(!note.contains("## Дополнительные кадры"), "no appendix dump");
-        // Spread by timestamp: early frame before late frame in the text.
-        assert!(note.find("f-01.jpg").unwrap() < note.find("f-03.jpg").unwrap(),
-            "early-timestamp frame placed before late-timestamp frame");
+        // Strictly chronological: f-01 < f-02 < f-03 by position.
+        let p1 = note.find("f-01.jpg").unwrap();
+        let p2 = note.find("f-02.jpg").unwrap();
+        let p3 = note.find("f-03.jpg").unwrap();
+        assert!(p1 < p2 && p2 < p3, "frames in clean chronological order");
     }
 
     #[test]
