@@ -309,16 +309,20 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         headers.insert("X-Frame-Options", "DENY".parse().expect("valid header value"));
         headers.insert("X-XSS-Protection", "1; mode=block".parse().expect("valid header value"));
         headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().expect("valid header value"));
-        // Content-Security-Policy: defense-in-depth for the static SPA. The UI
-        // bundles every asset locally (no external CDN/fonts), so 'self' covers
-        // scripts/styles/connect/img. 'unsafe-inline' + 'unsafe-eval' +
-        // 'wasm-unsafe-eval' are required by the Next.js static export (inline
-        // hydration scripts) and WASM-backed libs (shiki highlighter); the
-        // policy still hard-locks object/base/form/frame-ancestors and confines
-        // connect/img/font to first-party + data:/blob:.
+        // Content-Security-Policy: defense-in-depth for the static SPA. The app
+        // bundles its own assets locally, so 'self' covers them; 'unsafe-inline'
+        // + 'unsafe-eval' + 'wasm-unsafe-eval' are required by the Next.js
+        // static export (inline hydration scripts) and WASM-backed libs (shiki).
+        // The trusted CDNs (jsdelivr/unpkg/cdnjs) are allowed for script/style/
+        // font because agent-generated canvas HTML renders inside a sandboxed
+        // iframe (`sandbox="allow-scripts"`, no same-origin → isolated from the
+        // parent) and legitimately pulls libs like mermaid from a CDN; srcdoc
+        // iframes inherit this CSP, so the allowance must live here. The policy
+        // still hard-locks object/base/form/frame-ancestors and keeps
+        // connect-src first-party.
         headers.insert(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; img-src 'self' data: blob:; font-src 'self' data: https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
                 .parse().expect("valid header value"),
         );
         // HSTS: the public origin (hc.aronmav.ru) is HTTPS-only behind nginx.
