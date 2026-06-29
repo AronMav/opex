@@ -1691,6 +1691,11 @@ pub fn compute_next_heartbeat_at(
 
 /// Get UTC offset hours for common Russian timezones (no DST).
 pub fn timezone_offset_hours(tz: &str) -> i32 {
+    // Tolerate a human-readable suffix such as "Europe/Samara (UTC+4)" — agents
+    // populate USER.md from the owner's Telegram locale and may append it. IANA
+    // identifiers never contain a space, so everything from the first " (" is
+    // decoration we can safely drop before matching.
+    let tz = tz.split(" (").next().unwrap_or(tz).trim();
     match tz {
         "Europe/Samara" => 4,
         "Europe/Moscow" => 3,
@@ -2023,6 +2028,20 @@ mod tests {
             "expected valid RFC3339, got: {}",
             ts
         );
+    }
+
+    #[test]
+    fn timezone_offset_tolerates_human_readable_suffix() {
+        // USER.md (and agent-written values derived from a Telegram locale) may
+        // carry a human-readable suffix, e.g. "Europe/Samara (UTC+4)". The IANA
+        // prefix must still resolve — otherwise the offset silently falls back
+        // to 0 and every cron for that agent fires `offset` hours off.
+        assert_eq!(timezone_offset_hours("Europe/Samara (UTC+4)"), 4);
+        assert_eq!(timezone_offset_hours("Europe/Moscow (UTC+3)"), 3);
+        // Plain IANA identifiers keep working unchanged.
+        assert_eq!(timezone_offset_hours("Europe/Samara"), 4);
+        // A genuinely unknown zone still falls back to 0 (UTC).
+        assert_eq!(timezone_offset_hours("Mars/Olympus"), 0);
     }
 
     #[test]
