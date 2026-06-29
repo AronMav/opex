@@ -359,10 +359,13 @@ impl SessionLifecycleGuard {
 impl Drop for SessionLifecycleGuard {
     fn drop(&mut self) {
         if matches!(self.outcome, SessionOutcome::Running) {
-            tracing::warn!(
-                session_id = %self.session_id,
-                "session guard dropped while still Running — spawning fallback mark-failed"
-            );
+            // The guard sees `Running` at drop. This is the EXPECTED state for
+            // client-gone / cancel-grace interrupts — those paths mark the DB
+            // directly (not via the guard), so warning up front produced a
+            // misleading "fallback mark-failed" line on every normal interrupt.
+            // The atomic running→failed claim below is idempotent; we log per
+            // outcome instead: a genuine early exit (Ok(true)) warns, a benign
+            // no-op (Ok(false), already terminal) stays at debug.
             let db = self.db.clone();
             let sid = self.session_id;
             // Snapshot agent_id + recorded so the async block doesn't borrow
@@ -385,6 +388,13 @@ impl Drop for SessionLifecycleGuard {
                 .await
                 {
                     Ok(true) => {
+                        // We won the running→failed claim, so no other writer
+                        // finalized this session — a genuine early exit (panic /
+                        // `?` bubble) worth surfacing.
+                        tracing::warn!(
+                            session_id = %sid,
+                            "session guard dropped while Running — marked session failed (early exit)"
+                        );
                         // Structured `session_failures` row — best-effort.
                         // Skipped when the explicit failure path
                         // (`finalize::finalize` Failed branch) already spawned
