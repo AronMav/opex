@@ -309,6 +309,26 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         headers.insert("X-Frame-Options", "DENY".parse().expect("valid header value"));
         headers.insert("X-XSS-Protection", "1; mode=block".parse().expect("valid header value"));
         headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().expect("valid header value"));
+        // Content-Security-Policy: defense-in-depth for the static SPA. The UI
+        // bundles every asset locally (no external CDN/fonts), so 'self' covers
+        // scripts/styles/connect/img. 'unsafe-inline' + 'unsafe-eval' +
+        // 'wasm-unsafe-eval' are required by the Next.js static export (inline
+        // hydration scripts) and WASM-backed libs (shiki highlighter); the
+        // policy still hard-locks object/base/form/frame-ancestors and confines
+        // connect/img/font to first-party + data:/blob:.
+        headers.insert(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+                .parse().expect("valid header value"),
+        );
+        // HSTS: the public origin (hc.aronmav.ru) is HTTPS-only behind nginx.
+        // Browsers ignore this header over plain HTTP (LAN / loopback), so it is
+        // safe to emit unconditionally. No includeSubDomains — scoped to the
+        // serving host to avoid affecting sibling HTTP subdomains.
+        headers.insert(
+            "Strict-Transport-Security",
+            "max-age=31536000".parse().expect("valid header value"),
+        );
         response
     }));
 
