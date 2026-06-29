@@ -1708,6 +1708,11 @@ pub fn timezone_offset_hours(tz: &str) -> i32 {
         "Asia/Vladivostok" => 10,
         "Asia/Magadan" => 11,
         "Asia/Kamchatka" => 12,
+        // UTC and equivalents are a valid zero offset, not an "unknown" zone.
+        // The daily-backup cron stores timezone="UTC"; routing it through the
+        // `_` arm spammed a misleading "unknown timezone" WARN on every load.
+        // Empty string is treated as UTC too.
+        "" | "UTC" | "Etc/UTC" | "Z" => 0,
         _ => {
             tracing::warn!(timezone = %tz, "unknown timezone, using UTC");
             0
@@ -2042,6 +2047,12 @@ mod tests {
         assert_eq!(timezone_offset_hours("Europe/Samara"), 4);
         // A genuinely unknown zone still falls back to 0 (UTC).
         assert_eq!(timezone_offset_hours("Mars/Olympus"), 0);
+        // UTC and equivalents are a valid zero offset — handled explicitly so
+        // they do NOT log an "unknown timezone" warning (the daily-backup cron
+        // uses timezone="UTC").
+        assert_eq!(timezone_offset_hours("UTC"), 0);
+        assert_eq!(timezone_offset_hours("Etc/UTC"), 0);
+        assert_eq!(timezone_offset_hours(""), 0);
     }
 
     #[test]
