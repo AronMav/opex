@@ -42,6 +42,7 @@ pub mod pipeline;
 pub mod compressor;
 pub mod dispatcher;
 pub mod fse;  // allowlist validators + AllowlistError (SoT for Phase 5+ binding writes); file_scenario = dispatch/outcome/sniff/rewrite/seam
+pub mod handler_registry;
 // Phase 64 SEC-02: workspace path canonicalization guard. Leaf module with
 // zero crate::* deps (only std + dunce) so the lib facade can re-export it
 // without cascading the agent subtree.
