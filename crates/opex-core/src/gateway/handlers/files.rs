@@ -1,0 +1,494 @@
+//! File Handler Hub — core orchestration routes (sync path).
+//!
+//! `GET /api/files/{upload_id}/actions` returns the per-file button list;
+//! `POST /api/files/{upload_id}/run` re-checks the tiered gate server-side,
+//! downloads the upload bytes over LOOPBACK (in Rust), POSTs them as
+//! multipart/form-data to toolgate `/handlers/{id}/run`, then persists the
+//! result as a provenance-wrapped `source='file_handler'` message and returns
+//! the outcome in the POST body (the chat-delivery path). Produced artifacts
+//! are also broadcast best-effort on the GLOBAL `ui_event_tx` bus.
+//!
+//! Toolgate never receives a loopback URL (its SSRF guard would reject it) —
+//! mirrors `dispatch.rs::run_transcribe` (R12, SSRF×loopback note).
+//!
+//! Chat-delivery note (R-CHAT): the POST `/run` response body IS the
+//! chat-delivery path (it returns the full `ScenarioOutcome` to the composer).
+//! The `ui_event_tx.send(...)` broadcast on the success path uses the GLOBAL
+//! UI WebSocket event bus (the same channel that carries `session_updated` /
+//! `notification`), NOT the per-session chat SSE stream. It is therefore a
+//! best-effort cross-surface notification, and may be a no-op until a UI
+//! consumer for a global `type:"file"` ui_event is wired in Phase 4.
+
+use axum::{
+    Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Json},
+    routing::{get, post},
+};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use crate::agent::file_scenario::outcome::{ScenarioOutcome, ScenarioStatus};
+use crate::agent::handler_registry::{HandlerRegistry, match_buttons};
+use crate::gateway::AppState;
+use crate::gateway::clusters::{ChannelBus, ConfigServices, InfraServices};
+
+// ── Process-wide HTTP client ──────────────────────────────────────────────────
+
+/// Process-wide pooled client for loopback downloads and toolgate calls.
+/// Consistent with the `RUN_HTTP_CLIENT` pattern in `file_scenarios/run.rs`.
+static FILES_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+fn files_http_client() -> &'static reqwest::Client {
+    FILES_HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+
+pub(crate) fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/files/{upload_id}/actions", get(get_file_actions))
+        .route("/api/files/{upload_id}/run", post(run_file_handler))
+}
+
+// ── Request / query types ─────────────────────────────────────────────────────
+
+/// Query parameters for the actions endpoint.
+///
+/// Only `lang` is read. `agent` and `session` are intentionally excluded:
+/// action discovery is keyed purely on mime+size+allowlist; including unread
+/// serde fields trips `clippy -D warnings` (`dead_code` on struct fields).
+#[derive(Deserialize)]
+pub(crate) struct ActionsQuery {
+    #[serde(default)]
+    pub lang: Option<String>,
+}
+
+/// Request body for `POST /api/files/{upload_id}/run`.
+#[derive(Deserialize)]
+pub(crate) struct FileRunRequest {
+    pub handler_id: String,
+    #[serde(default)]
+    pub params: Value,
+    pub session_id: Uuid,
+    pub agent: String,
+    #[serde(default)]
+    pub lang: Option<String>,
+}
+
+// ── Owner-gate ────────────────────────────────────────────────────────────────
+
+/// Minimal upload facts the owner-gate proves before any handler runs.
+#[derive(Debug, Clone)]
+pub(crate) struct UploadMeta {
+    pub mime: String,
+    pub size: u64,
+}
+
+/// R3 owner-gate (single-tenant v1): the upload must exist and be one of the
+/// user-facing owner types (`client_upload` or `tool_output`). Existence + type
+/// is the full gate for v1; per-user ACL is deferred to multi-tenant follow-up.
+/// Returns `UploadMeta{mime, size}` so the row is read exactly once.
+pub(crate) async fn assert_upload_accessible(
+    db: &sqlx::PgPool,
+    upload_id: Uuid,
+) -> Result<UploadMeta, (StatusCode, Json<Value>)> {
+    // Scalar query for `owner_type`: avoids fetching the BYTEA `data` column.
+    let owner_type: Option<String> = sqlx::query_scalar(
+        r#"SELECT owner_type FROM uploads
+           WHERE id = $1 AND (expires_at IS NULL OR expires_at > NOW())"#,
+    )
+    .bind(upload_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| {
+        tracing::warn!(error = %e, upload_id = %upload_id, "assert_upload_accessible: owner_type lookup failed");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "database error"})),
+        )
+    })?;
+
+    let owner_type = match owner_type {
+        Some(t) => t,
+        None => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "upload not found"})),
+            ));
+        }
+    };
+
+    if owner_type != "client_upload" && owner_type != "tool_output" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "upload not accessible"})),
+        ));
+    }
+
+    // Now fetch mime+size (no BYTEA) for the caller.
+    let row = crate::db::uploads::get_by_id(db, upload_id)
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, upload_id = %upload_id, "assert_upload_accessible: row lookup failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "database error"})),
+            )
+        })?
+        .ok_or((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "upload not found"})),
+        ))?;
+
+    Ok(UploadMeta {
+        mime: row.mime,
+        size: row.size_bytes.max(0) as u64,
+    })
+}
+
+// ── Utility ───────────────────────────────────────────────────────────────────
+
+/// Build the toolgate handler run URL, tolerant of a trailing slash in
+/// `toolgate_url`.
+pub(crate) fn toolgate_run_url(toolgate_url: &str, handler_id: &str) -> String {
+    format!(
+        "{}/handlers/{}/run",
+        toolgate_url.trim_end_matches('/'),
+        handler_id
+    )
+}
+
+// ── Handlers ──────────────────────────────────────────────────────────────────
+
+/// `GET /api/files/{upload_id}/actions`
+///
+/// Returns the list of composer buttons available for the identified upload.
+/// Calls the owner-gate, reads the enabled allowlist from the DB, refreshes
+/// (conditionally) the handler manifest cache from toolgate, then runs the
+/// tiered trust filter to produce localized `HandlerButton` items.
+async fn get_file_actions(
+    State(infra): State<InfraServices>,
+    State(handlers): State<HandlerRegistry>,
+    Path(upload_id): Path<Uuid>,
+    Query(q): Query<ActionsQuery>,
+) -> impl IntoResponse {
+    let meta = match assert_upload_accessible(&infra.db, upload_id).await {
+        Ok(m) => m,
+        Err((status, body)) => return (status, body).into_response(),
+    };
+
+    handlers.refresh().await;
+    let manifests = handlers.manifests().await;
+    let enabled = crate::agent::fse::allowlist_store::get_enabled_allowlist(&infra.db).await;
+    let lang = q.lang.as_deref().unwrap_or("ru");
+    let buttons = match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang);
+
+    Json(json!({"buttons": buttons})).into_response()
+}
+
+/// `POST /api/files/{upload_id}/run`
+///
+/// Sync path (the only Phase-3 path for sync handlers):
+/// 1. Owner-gate (R3).
+/// 2. Server-side tiered gate re-check (button trust not assumed).
+/// 3. Async-path stub: 202 Accepted (Phase 5 amends this branch to enqueue a
+///    `handler_jobs` row per R13).
+/// 4. Mint a LOOPBACK signed URL; core downloads the bytes in Rust (R12).
+///    Toolgate never sees the URL — its SSRF guard would reject it.
+/// 5. POST multipart/form-data to `{toolgate_url}/handlers/{id}/run`.
+/// 6. On `ok`: persist a provenance-wrapped `source='file_handler'` message
+///    (no explicit status → table default); broadcast best-effort `ui_event_tx`.
+/// 7. Return the full `ScenarioOutcome` in the POST body (chat-delivery path).
+async fn run_file_handler(
+    State(infra): State<InfraServices>,
+    State(handlers): State<HandlerRegistry>,
+    State(config): State<ConfigServices>,
+    State(channels): State<ChannelBus>,
+    Path(upload_id): Path<Uuid>,
+    Json(req): Json<FileRunRequest>,
+) -> impl IntoResponse {
+    // ── 1. Owner-gate ─────────────────────────────────────────────────────────
+    let meta = match assert_upload_accessible(&infra.db, upload_id).await {
+        Ok(m) => m,
+        Err((status, body)) => return (status, body).into_response(),
+    };
+
+    // ── 2. Server-side tiered gate re-check ───────────────────────────────────
+    let lang = req.lang.as_deref().unwrap_or("ru");
+    handlers.refresh().await;
+    let manifests = handlers.manifests().await;
+    let enabled = crate::agent::fse::allowlist_store::get_enabled_allowlist(&infra.db).await;
+    let allowed = match_buttons(&manifests, &meta.mime, meta.size, &enabled, lang)
+        .iter()
+        .any(|b| b.id == req.handler_id);
+
+    if !allowed {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "handler not permitted for this file"})),
+        )
+            .into_response();
+    }
+
+    // ── 3. Async-handler stub (Phase 5 amends this branch) ───────────────────
+    let is_async = manifests
+        .iter()
+        .find(|m| m.id == req.handler_id)
+        .map(|m| m.execution.as_str() == "async")
+        .unwrap_or(false);
+
+    if is_async {
+        // Phase 5 will insert a `handler_jobs` row here and return the job id.
+        // For now this is a 202 stub that acknowledges the request.
+        return (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "accepted": true,
+                "note": "async handler support is wired in Phase 5"
+            })),
+        )
+            .into_response();
+    }
+
+    // ── 4. Mint a loopback signed URL; download bytes in Rust (R12) ───────────
+    //    Toolgate NEVER receives this URL — its SSRF guard rejects loopback.
+    let key = infra.secrets.get_upload_hmac_key();
+    let ttl = config.config.uploads.signed_url_ttl_secs;
+    let web_url =
+        crate::uploads::mint_uploads_url(crate::uploads::web_uploads_base(), upload_id, &key, ttl);
+    let loopback =
+        crate::agent::url_tools::uploads_local_url(&web_url, &config.config.gateway.listen);
+
+    let http = files_http_client();
+    let bytes = match http.get(&loopback).send().await {
+        Ok(r) if r.status().is_success() => match r.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(error = %e, upload_id = %upload_id, "files::run: failed to read upload bytes");
+                return Json(ScenarioOutcome::failed(format!("upload read error: {e}")))
+                    .into_response();
+            }
+        },
+        Ok(r) => {
+            tracing::warn!(status = %r.status(), upload_id = %upload_id, "files::run: loopback download non-2xx");
+            return Json(ScenarioOutcome::failed(format!(
+                "upload fetch failed: HTTP {}",
+                r.status().as_u16()
+            )))
+            .into_response();
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, upload_id = %upload_id, "files::run: loopback download failed");
+            return Json(ScenarioOutcome::failed(format!("upload fetch error: {e}")))
+                .into_response();
+        }
+    };
+
+    // ── 5. POST multipart/form-data to toolgate /handlers/{id}/run (R12) ──────
+    //    Mirrors dispatch.rs::run_transcribe: bytes in field "file" + text fields.
+    let toolgate_url = config
+        .config
+        .toolgate_url
+        .as_deref()
+        .unwrap_or("http://localhost:9011");
+    let url = toolgate_run_url(toolgate_url, &req.handler_id);
+    let params_str =
+        serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
+
+    let file_part = reqwest::multipart::Part::bytes(bytes.to_vec())
+        .file_name(upload_id.to_string())
+        .mime_str(&meta.mime)
+        .unwrap_or_else(|_| reqwest::multipart::Part::bytes(bytes.to_vec()));
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("mime", meta.mime.clone())
+        .text("filename", upload_id.to_string())
+        .text("size", meta.size.to_string())
+        .text("params", params_str)
+        .text("language", lang.to_string());
+
+    let outcome: ScenarioOutcome = match http.post(&url).multipart(form).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.json::<ScenarioOutcome>().await {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(error = %e, handler = %req.handler_id, "files::run: toolgate returned bad JSON");
+                ScenarioOutcome::failed(format!("toolgate bad JSON: {e}"))
+            }
+        },
+        Ok(resp) => {
+            let code = resp.status().as_u16();
+            tracing::warn!(status = code, handler = %req.handler_id, "files::run: toolgate non-2xx");
+            ScenarioOutcome::failed(format!("toolgate HTTP {code}"))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, handler = %req.handler_id, "files::run: toolgate request failed");
+            ScenarioOutcome::failed(format!("toolgate request error: {e}"))
+        }
+    };
+
+    // ── 6. On ok: persist provenance-wrapped message + best-effort ui_event ───
+    if matches!(outcome.status, ScenarioStatus::Ok) {
+        let content = crate::agent::provenance::wrap_file_output(
+            &req.handler_id,
+            &upload_id.to_string(),
+            &outcome.summary_text,
+        );
+
+        // INSERT without explicit `status`: table default applies (NULL → treated as
+        // complete by the query layer). `source='file_handler'` is the provenance tag
+        // (migration 066). `is_mirror=false` (default) keeps it on the main branch.
+        if let Err(e) = sqlx::query(
+            r#"INSERT INTO messages (session_id, agent_id, role, content, source)
+               VALUES ($1, $2, 'assistant', $3, 'file_handler')"#,
+        )
+        .bind(req.session_id)
+        .bind(&req.agent)
+        .bind(&content)
+        .execute(&infra.db)
+        .await
+        {
+            // Non-fatal: the outcome is still returned to the composer below.
+            tracing::warn!(
+                error = %e,
+                session_id = %req.session_id,
+                handler = %req.handler_id,
+                "files::run: failed to persist file_handler message"
+            );
+        }
+
+        // Best-effort GLOBAL UI-bus notification (NOT the per-session chat SSE stream;
+        // see the Chat-delivery note at the module top). A UI consumer for
+        // `type:"file"` is wired in Phase 4; until then this send is a no-op.
+        for artifact in &outcome.artifact_urls {
+            let _ = channels.ui_event_tx.send(
+                json!({"type": "file", "url": artifact, "mediaType": meta.mime}).to_string(),
+            );
+        }
+    }
+
+    // ── 7. Chat-delivery path: return the full outcome to the composer ─────────
+    Json(outcome).into_response()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_outcome_four_key_json_defaults_video_accepted() {
+        // R9: toolgate emits 4 keys; ScenarioOutcome has a 5th (video_accepted,
+        // serde default) — deserialization must succeed with it false.
+        let raw = r#"{"status":"ok","summary_text":"привет мир","artifact_urls":["/api/uploads/1?sig=x"],"reason":null}"#;
+        let o: crate::agent::file_scenario::outcome::ScenarioOutcome =
+            serde_json::from_str(raw).unwrap();
+        assert_eq!(o.status, crate::agent::file_scenario::outcome::ScenarioStatus::Ok);
+        assert_eq!(o.summary_text, "привет мир");
+        assert_eq!(o.artifact_urls, vec!["/api/uploads/1?sig=x".to_string()]);
+        assert!(!o.video_accepted, "missing key defaults to false");
+    }
+
+    #[test]
+    fn parse_outcome_too_large_from_toolgate_json() {
+        let raw = r#"{"status":"too_large","summary_text":"","artifact_urls":[],"reason":"over 50MB"}"#;
+        let o: crate::agent::file_scenario::outcome::ScenarioOutcome =
+            serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            o.status,
+            crate::agent::file_scenario::outcome::ScenarioStatus::TooLarge
+        );
+        assert_eq!(o.reason.as_deref(), Some("over 50MB"));
+    }
+
+    #[test]
+    fn run_request_deserializes_from_composer_body() {
+        let raw = serde_json::json!({
+            "handler_id": "transcribe",
+            "params": {"language": "ru"},
+            "session_id": "00000000-0000-0000-0000-000000000001",
+            "agent": "Atlas"
+        });
+        let req: FileRunRequest = serde_json::from_value(raw).unwrap();
+        assert_eq!(req.handler_id, "transcribe");
+        assert_eq!(req.agent, "Atlas");
+        assert_eq!(req.params["language"], "ru");
+    }
+
+    #[test]
+    fn run_toolgate_url_is_built_correctly() {
+        assert_eq!(
+            toolgate_run_url("http://localhost:9011/", "transcribe"),
+            "http://localhost:9011/handlers/transcribe/run"
+        );
+        assert_eq!(
+            toolgate_run_url("http://localhost:9011", "describe"),
+            "http://localhost:9011/handlers/describe/run"
+        );
+    }
+
+    #[test]
+    fn persisted_content_carries_file_output_wrapper() {
+        // The persist body for an ok outcome is the wrapped summary (R4).
+        let upload = "11111111-1111-1111-1111-111111111111";
+        let wrapped =
+            crate::agent::provenance::wrap_file_output("transcribe", upload, "распознанный текст");
+        assert!(wrapped.starts_with(&format!(
+            "<file_output handler=\"transcribe\" upload=\"{upload}\" trust=\"untrusted\">"
+        )));
+        assert!(wrapped.contains("\nраспознанный текст\n"));
+    }
+
+    // ── DB-backed tests (require DATABASE_URL — skipped without it) ───────────
+    // Run with `make test-db` or with DATABASE_URL set.
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn owner_gate_accepts_client_upload_and_yields_mime(pool: sqlx::PgPool) {
+        // `insert_with_retention(pool, owner_type, owner_id: Option<&str>, mime, data: &[u8], retention_days)`.
+        // Pass a byte slice (`b"OggSfake"` coerces to `&[u8]`) — the `data` param is `&[u8]`,
+        // an owned `Vec<u8>` does NOT auto-coerce there.
+        let id = crate::db::uploads::insert_with_retention(
+            &pool,
+            "client_upload",
+            Some("user-1"),
+            "audio/ogg",
+            b"OggSfake",
+            30,
+        )
+        .await
+        .unwrap();
+        let meta = assert_upload_accessible(&pool, id).await.unwrap();
+        assert_eq!(meta.mime, "audio/ogg");
+        assert_eq!(meta.size, b"OggSfake".len() as u64); // 8
+
+        // missing upload → 404
+        let err = assert_upload_accessible(&pool, uuid::Uuid::new_v4())
+            .await
+            .unwrap_err();
+        assert_eq!(err.0, axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn messages_source_column_exists_after_066(pool: sqlx::PgPool) {
+        // Migration 066 must apply: inserting with source='file_handler' succeeds
+        // and the column defaults NULL otherwise.
+        sqlx::query(
+            r#"INSERT INTO messages (session_id, agent_id, role, content, source)
+               VALUES (gen_random_uuid(), 'Atlas', 'assistant', 'x', 'file_handler')"#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let src: Option<String> = sqlx::query_scalar(
+            r#"SELECT source FROM messages WHERE source = 'file_handler' LIMIT 1"#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(src.as_deref(), Some("file_handler"));
+    }
+}
