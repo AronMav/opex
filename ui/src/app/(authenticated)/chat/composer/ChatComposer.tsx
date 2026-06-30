@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { SlashMenu } from "../parts/SlashMenu";
 import { MentionAutocomplete } from "./MentionAutocomplete";
 import { ModelDropdown } from "./ModelDropdown";
+import { FileActionButtons } from "./FileActionButtons";
 import { useVoiceRecorder } from "../hooks/use-voice-recorder";
 import { useProviderActive } from "@/lib/queries";
 import {
@@ -117,6 +118,8 @@ export function ChatComposer() {
   const currentAgent = useChatStore((s) => s.currentAgent);
   const agents = useAuthStore((s) => s.agents);
   const messageSource = useChatStore((s) => s.agents[s.currentAgent]?.messageSource ?? EMPTY_MESSAGE_SOURCE);
+  const activeSessionId =
+    "sessionId" in messageSource ? (messageSource as { mode: string; sessionId: string }).sessionId : null;
   const connectionPhase = useChatStore((s) => s.agents[s.currentAgent]?.connectionPhase ?? "idle");
   const isStreaming = isActivePhase(connectionPhase);
   const pendingMessage = useChatStore((s) => s.agents[s.currentAgent]?.pendingMessage ?? null);
@@ -653,17 +656,25 @@ export function ChatComposer() {
             />
           )}
           {attachments.length > 0 && attachments.map((att) => (
-            <div key={att.id} data-upload-id={att.uploadId} className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground">
-              <Paperclip className="h-3 w-3" />
-              <span className="truncate max-w-[200px]">{att.name}</span>
-              <button
-                type="button"
-                aria-label={t("chat.remove_attachment")}
-                onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <X size={12} />
-              </button>
+            <div key={att.id} className="flex flex-col">
+              <div data-upload-id={att.uploadId} className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground">
+                <Paperclip className="h-3 w-3" />
+                <span className="truncate max-w-[200px]">{att.name}</span>
+                <button
+                  type="button"
+                  aria-label={t("chat.remove_attachment")}
+                  onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                  className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+              <FileActionButtons
+                uploadId={att.uploadId}
+                mime={att.content[0]?.mimeType ?? att.file.type}
+                agent={currentAgent}
+                sessionId={activeSessionId}
+              />
             </div>
           ))}
           {pendingMessage && (
