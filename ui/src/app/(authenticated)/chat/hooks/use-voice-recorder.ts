@@ -137,6 +137,16 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
       return "";
     }
 
+    // A valid webm/opus utterance is at least ~1 KB. A tinier blob is a clipped
+    // or empty capture (common with fast VAD cycles in hands-free) whose container
+    // the STT server can't decode — it answers 415 and the turn never starts. Skip
+    // it instead of letting it error the loop.
+    if (blob.size < 1024) {
+      setState("idle");
+      setElapsed(0);
+      return "";
+    }
+
     setState("transcribing");
     try {
       const ext = mimeTypeRef.current.includes("mp4") ? "mp4" : "webm";
@@ -158,8 +168,12 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
       setElapsed(0);
       return text;
     } catch (err) {
-      const { toast } = await import("sonner");
-      toast.error(t("chat.voice_recognize_error", { error: err instanceof Error ? err.message : "unknown" }));
+      // VAD auto-stop can clip a recording into something the STT server rejects;
+      // a toast per cycle would spam hands-free. Only alert in manual (non-VAD) mode.
+      if (!vad) {
+        const { toast } = await import("sonner");
+        toast.error(t("chat.voice_recognize_error", { error: err instanceof Error ? err.message : "unknown" }));
+      }
       setState("idle");
       setElapsed(0);
       return "";
