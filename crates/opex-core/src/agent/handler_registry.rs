@@ -4,8 +4,10 @@
 //! workspace default-on) that turns a mime+size into composer buttons.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 use crate::agent::fse::allowlist::FSE_DEFAULT_ALLOWLIST;
 
@@ -116,6 +118,88 @@ pub fn match_buttons(
             params: m.params.clone(),
         })
         .collect()
+}
+
+// ── HandlerRegistry ─────────────────────────────────────────────────────────
+
+/// Cached state behind the registry lock.
+#[derive(Default)]
+pub struct HandlerCache {
+    manifests: Vec<HandlerManifest>,
+    etag: Option<String>,
+}
+
+/// Discovery cache of toolgate handler manifests. Refresh via conditional GET
+/// (`If-None-Match` ETag); a 304 or a transport error keeps the prior cache
+/// (fail-soft, so composer buttons still render when toolgate is briefly down).
+#[derive(Clone)]
+pub struct HandlerRegistry {
+    inner: Arc<RwLock<HandlerCache>>,
+    toolgate_url: String,
+    http: reqwest::Client,
+}
+
+/// Top-level shape of the toolgate `GET /handlers` response.
+#[derive(Deserialize)]
+struct HandlersResponse {
+    handlers: Vec<HandlerManifest>,
+    #[serde(default)]
+    etag: Option<String>,
+}
+
+impl HandlerRegistry {
+    pub fn new(toolgate_url: String, http: reqwest::Client) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(HandlerCache::default())),
+            toolgate_url,
+            http,
+        }
+    }
+
+    /// Conditional GET of `{toolgate_url}/handlers`. 200 replaces the cache;
+    /// 304 / any non-2xx / transport error / bad JSON leaves it untouched.
+    pub async fn refresh(&self) {
+        let url = format!("{}/handlers", self.toolgate_url.trim_end_matches('/'));
+        let prior_etag = self.inner.read().await.etag.clone();
+        let mut req = self.http.get(&url);
+        if let Some(tag) = &prior_etag {
+            req = req.header(reqwest::header::IF_NONE_MATCH, tag.clone());
+        }
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "handler registry refresh failed; keeping cache");
+                return;
+            }
+        };
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return;
+        }
+        if !resp.status().is_success() {
+            tracing::warn!(status = %resp.status(), "handler registry refresh non-2xx; keeping cache");
+            return;
+        }
+        let header_etag = resp
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        match resp.json::<HandlersResponse>().await {
+            Ok(parsed) => {
+                let mut guard = self.inner.write().await;
+                guard.manifests = parsed.handlers;
+                guard.etag = header_etag.or(parsed.etag);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "handler registry bad JSON; keeping cache");
+            }
+        }
+    }
+
+    /// Snapshot of the cached manifests (clones the Vec — small, ≤ ~20 items).
+    pub async fn manifests(&self) -> Vec<HandlerManifest> {
+        self.inner.read().await.manifests.clone()
+    }
 }
 
 #[cfg(test)]
@@ -241,5 +325,62 @@ mod tests {
         let out = match_buttons(&ms, "image/png", 1, &full(), "fr");
         assert_eq!(out.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), vec!["save", "describe"]);
         assert_eq!(out[0].label, "save-en");
+    }
+
+    #[tokio::test]
+    async fn refresh_loads_then_keeps_cache_on_304() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "handlers": [{
+                "id": "transcribe",
+                "labels": {"ru": "Транскрибировать"},
+                "icon": "mic",
+                "match": {"mime": ["audio/*"], "max_size_mb": 200},
+                "execution": "sync",
+                "output": "text",
+                "params": [],
+                "order": 10,
+                "tier": "builtin"
+            }],
+            "etag": "abc123"
+        });
+        // First GET → 200 with ETag.
+        Mock::given(method("GET"))
+            .and(path("/handlers"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("ETag", "\"abc123\"")
+                    .set_body_json(&body),
+            )
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        // Subsequent GETs (conditional) → 304.
+        Mock::given(method("GET"))
+            .and(path("/handlers"))
+            .respond_with(ResponseTemplate::new(304))
+            .mount(&server)
+            .await;
+
+        let reg = HandlerRegistry::new(server.uri(), reqwest::Client::new());
+        reg.refresh().await;
+        let ms = reg.manifests().await;
+        assert_eq!(ms.len(), 1);
+        assert_eq!(ms[0].id, "transcribe");
+
+        // second refresh: server returns 304 → cache kept, manifests unchanged
+        reg.refresh().await;
+        assert_eq!(reg.manifests().await.len(), 1, "304 must keep prior cache");
+    }
+
+    #[tokio::test]
+    async fn refresh_failsoft_keeps_cache_when_toolgate_down() {
+        let reg = HandlerRegistry::new("http://127.0.0.1:1".to_string(), reqwest::Client::new());
+        // never loaded; a failing refresh must not panic and leaves empty cache
+        reg.refresh().await;
+        assert!(reg.manifests().await.is_empty());
     }
 }
