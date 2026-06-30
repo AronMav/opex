@@ -1329,6 +1329,7 @@ async fn spawn_background_tasks(
     let health_channels = state.channels.connected_channels.clone();
     let health_pm = process_manager;
     let shutdown_video = shutdown.clone();
+    let shutdown_file = shutdown.clone();
     let shutdown_health = shutdown;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(120));
@@ -1357,6 +1358,9 @@ async fn spawn_background_tasks(
 
     // Video summarization worker (durable video_jobs queue).
     crate::agent::file_scenario::video_worker::spawn_video_worker(state, shutdown_video);
+
+    // File Handler Hub: universal async-handler worker (handler_jobs queue).
+    crate::agent::file_handler_worker::spawn_file_handler_worker(state, shutdown_file);
 }
 
 /// Start all agents defined in the configuration.

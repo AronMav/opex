@@ -242,11 +242,8 @@ const JOB_CB_NS: &str = "jobcb";
 /// prefix domain-separates this token from all `/uploads/` and
 /// `/workspace-files/` signatures — a job token cannot be replayed elsewhere.
 ///
-/// This function is `pub` so Task 5 (the async-job worker that enqueues the
-/// spec) can call it from `gateway/handlers/file_scenarios/run.rs`.
-// Called by Task 5 (gateway/handlers/file_scenarios/run.rs); not yet wired in this
-// compilation unit, so suppress the dead_code lint until Task 5 lands.
-#[allow(dead_code)]
+/// This function is `pub` so the async-job worker (`file_handler_worker.rs`)
+/// can call it when dispatching handler_jobs to toolgate.
 pub fn mint_job_callback_token(key: &[u8; 32], job_id: uuid::Uuid, ttl_secs: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
