@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { assertToken } from "@/lib/api";
 import { useChatStore, isActivePhase } from "@/stores/chat-store";
 import { uuid, getLiveMessages, type MessageSource } from "@/stores/chat-types";
+import { useVoicePlaybackStore } from "@/stores/voice-playback-store";
 import { useTranslation } from "@/hooks/use-translation";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
@@ -149,6 +150,9 @@ export function ChatComposer() {
   const voiceReplyPendingRef = useRef(false);
   const ttsPlayingRef = useRef(false);
   const [ttsPlaying, setTtsPlaying] = useState(false);
+  // Set by the inline AudioPlayer while a synthesize_speech voice reply plays —
+  // gates the hands-free re-arm so the mic never records the agent's own voice.
+  const voicePlaying = useVoicePlaybackStore((s) => s.playing);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
 
@@ -287,27 +291,9 @@ export function ChatComposer() {
     [getTtsEl, stopTts, t],
   );
 
-  // Play an already-synthesised audio URL (the model's synthesize_speech reply)
-  // on the SAME pre-unlocked element playReply uses — a fresh `new Audio()` would
-  // be blocked by the browser autoplay policy on the first hands-free reply.
-  const playAudioUrl = useCallback(
-    async (url: string) => {
-      try {
-        if (ttsUrlRef.current) {
-          URL.revokeObjectURL(ttsUrlRef.current);
-          ttsUrlRef.current = null;
-        }
-        const a = getTtsEl();
-        a.src = url;
-        await a.play();
-      } catch {
-        stopTts();
-      }
-    },
-    [getTtsEl, stopTts],
-  );
-
-  // When a voice-initiated turn finishes streaming, speak the agent's reply.
+  // When a voice-initiated turn finishes streaming, voice the agent's reply: the
+  // model's synthesize_speech audio auto-plays on its visible inline player; a
+  // plain-text reply is synthesised here and played on the hidden TTS element.
   const prevStreamingRef = useRef(false);
   useEffect(() => {
     const was = prevStreamingRef.current;
@@ -318,15 +304,22 @@ export function ChatComposer() {
       // otherwise synthesise the reply TEXT. Mutually exclusive — synthesize_speech
       // ends the turn with empty text, so this never double-voices.
       const audioUrl = lastAssistantAudioUrl(messageSource);
-      const text = audioUrl ? "" : lastAssistantSpokenText(messageSource);
-      if (audioUrl || text) {
-        ttsPlayingRef.current = true; // synchronous guard so continuous re-arm waits
-        setTtsPlaying(true);
-        if (audioUrl) void playAudioUrl(audioUrl);
-        else void playReply(text);
+      if (audioUrl) {
+        // The model voiced its reply (synthesize_speech): auto-play the VISIBLE
+        // inline player in the chat (it reports `playing` to gate hands-free
+        // re-arm). Mutually exclusive with the text branch — synthesize_speech
+        // ends the turn with empty text — so this never double-voices.
+        useVoicePlaybackStore.getState().requestAutoplay(audioUrl);
+      } else {
+        const text = lastAssistantSpokenText(messageSource);
+        if (text) {
+          ttsPlayingRef.current = true; // synchronous guard so continuous re-arm waits
+          setTtsPlaying(true);
+          void playReply(text);
+        }
       }
     }
-  }, [isStreaming, messageSource, playReply, playAudioUrl]);
+  }, [isStreaming, messageSource, playReply]);
 
   // Continuous loop: re-arm recording once a turn finishes (idle, not streaming,
   // and not while the spoken reply is still playing — avoids recording the TTS).
@@ -335,10 +328,10 @@ export function ChatComposer() {
     voiceStartRef.current = voice.start;
   });
   useEffect(() => {
-    if (continuous && voice.state === "idle" && !isStreaming && !ttsPlayingRef.current) {
+    if (continuous && voice.state === "idle" && !isStreaming && !ttsPlayingRef.current && !voicePlaying) {
       void voiceStartRef.current();
     }
-  }, [continuous, voice.state, isStreaming, ttsPlaying]);
+  }, [continuous, voice.state, isStreaming, ttsPlaying, voicePlaying]);
 
   // Focus textarea on desktop only (avoid opening mobile keyboard on page load)
   useEffect(() => {
