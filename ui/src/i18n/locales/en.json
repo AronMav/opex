@@ -288,6 +288,8 @@
   "chat.dislike_tooltip": "Dislike",
   "chat.edit_tooltip": "Edit message",
   "chat.tts_error": "Failed to synthesize speech",
+  "chat.voice_preparing": "Preparing voice reply…",
+  "chat.voice_speaking": "Speaking…",
   "chat.feedback_error": "Failed to submit feedback",
   "chat.copy_error": "Failed to copy to clipboard",
   "chat.more_actions": "More actions",

@@ -23,6 +23,7 @@ import {
   Mic,
   Repeat,
   SlidersHorizontal,
+  Volume2,
 } from "lucide-react";
 
 // ── Draft persistence helpers ─────────────────────────────────────────────────
@@ -149,6 +150,10 @@ export function ChatComposer() {
   const voiceReplyPendingRef = useRef(false);
   const ttsPlayingRef = useRef(false);
   const [ttsPlaying, setTtsPlaying] = useState(false);
+  // Drives the composer's voice-status indicator: true from a voice submit until
+  // the spoken reply finishes (covers the slow synthesize_speech TTS synthesis,
+  // when the chat is otherwise empty, plus playback).
+  const [voiceReplyActive, setVoiceReplyActive] = useState(false);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsUrlRef = useRef<string | null>(null);
 
@@ -199,6 +204,7 @@ export function ChatComposer() {
         emptyCountRef.current = 0;
         insertTranscript(text);
         voiceReplyPendingRef.current = true;
+        setVoiceReplyActive(true);
         formRef.current?.requestSubmit();
       } else if (continuousRef.current) {
         // Empty cycle (no speech). Stop hands-free after 3 in a row.
@@ -225,6 +231,7 @@ export function ChatComposer() {
     }
     ttsPlayingRef.current = false;
     setTtsPlaying(false);
+    setVoiceReplyActive(false);
   }, []);
 
   const getTtsEl = useCallback(() => {
@@ -324,6 +331,8 @@ export function ChatComposer() {
         setTtsPlaying(true);
         if (audioUrl) void playAudioUrl(audioUrl);
         else void playReply(text);
+      } else {
+        setVoiceReplyActive(false); // nothing to voice — clear the indicator
       }
     }
   }, [isStreaming, messageSource, playReply, playAudioUrl]);
@@ -568,6 +577,7 @@ export function ChatComposer() {
       if (text) {
         insertTranscript(text);
         voiceReplyPendingRef.current = true;
+        setVoiceReplyActive(true);
         formRef.current?.requestSubmit();
       }
     } else if (voice.state === "idle") {
@@ -585,6 +595,25 @@ export function ChatComposer() {
   return (
     <div className="shrink-0 w-full p-3 md:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-border/50 bg-background/80 backdrop-blur-sm">
       <div className="mx-auto max-w-4xl">
+        {(voiceReplyActive || ttsPlaying) && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-2 flex items-center gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs font-medium text-primary"
+          >
+            {ttsPlaying ? (
+              <>
+                <Volume2 className="h-3.5 w-3.5 animate-pulse" />
+                {t("chat.voice_speaking")}
+              </>
+            ) : (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {t("chat.voice_preparing")}
+              </>
+            )}
+          </div>
+        )}
         <form
           ref={formRef}
           data-composer-input

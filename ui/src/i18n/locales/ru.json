@@ -288,6 +288,8 @@
   "chat.dislike_tooltip": "Не нравится",
   "chat.edit_tooltip": "Редактировать",
   "chat.tts_error": "Ошибка синтеза речи",
+  "chat.voice_preparing": "Готовлю голосовой ответ…",
+  "chat.voice_speaking": "Озвучиваю ответ…",
   "chat.feedback_error": "Ошибка отправки отзыва",
   "chat.copy_error": "Ошибка копирования",
   "chat.more_actions": "Ещё",
