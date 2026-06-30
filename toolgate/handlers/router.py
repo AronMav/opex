@@ -96,6 +96,7 @@ async def run_handler(
     language: str = Form(default="ru"),
     job_id: str | None = Form(default=None),
     source_url: str | None = Form(default=None),
+    callback_token: str | None = Form(default=None),
 ):
     registry = request.app.state.handlers
     lh = registry.get(handler_id)
@@ -133,6 +134,7 @@ async def run_handler(
             "job_id": job_id,
             "core_url": os.environ.get("CORE_API_URL", "http://127.0.0.1:18789"),
             "auth_token": os.environ.get("OPEX_AUTH_TOKEN", ""),
+            "callback_token": callback_token,
         }
         await asyncio.create_subprocess_exec(
             sys.executable, "-m", _RUNNER_MODULE, json.dumps(spec)
