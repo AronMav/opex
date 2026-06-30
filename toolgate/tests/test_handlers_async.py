@@ -160,3 +160,88 @@ async def test_runner_reads_tempfile_then_posts_progress_and_complete(monkeypatc
                         "artifact_urls": [], "reason": None}
     # Temp file deleted by the runner's finally.
     assert not temp.exists(), "runner must delete the temp file"
+
+
+@pytest.mark.asyncio
+async def test_runner_sends_x_job_token_header_when_spec_has_callback_token(monkeypatch, tmp_path):
+    """FIX 5: when the job spec contains 'callback_token', the runner must
+    forward it as the 'X-Job-Token' header on ALL POST requests (progress +
+    complete). When absent, no X-Job-Token header is sent."""
+    posts: list[tuple[str, dict | None, dict | None]] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *a, **k):
+            pass
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return False
+        async def post(self, url, json=None, headers=None, **k):
+            posts.append((url, json, dict(headers) if headers else {}))
+            return httpx.Response(200, request=httpx.Request("POST", url))
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(runner_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    class FakeLoaded:
+        class descriptor:
+            execution = "async"
+
+        @staticmethod
+        async def run(ctx, file, params):
+            await ctx.progress("digest", 50)
+
+            class _R:
+                def to_dict(self):
+                    return {"status": "ok", "summary_text": "done",
+                            "artifact_urls": [], "reason": None}
+            return _R()
+
+    class FakeReg:
+        def load_all(self, **k): pass
+        def get(self, _id): return FakeLoaded()
+
+    class FakeCtx:
+        async def progress(self, phase, pct):
+            pass
+
+    monkeypatch.setattr(runner_mod, "_load_registry", lambda http: FakeReg())
+    monkeypatch.setattr(runner_mod, "build_context", lambda *a, **k: FakeCtx())
+
+    temp = tmp_path / "upload.bin"
+    temp.write_bytes(b"DATA")
+
+    # ── Case 1: callback_token present — must appear in X-Job-Token header ─────
+    spec_with_token = {
+        "handler_id": "summarize_video",
+        "temp_path": str(temp),
+        "source_url": None,
+        "mime": "video/mp4",
+        "filename": "v.mp4",
+        "params": {},
+        "language": "ru",
+        "job_id": "job-abc",
+        "core_url": "http://127.0.0.1:18789",
+        "auth_token": "tok",
+        "callback_token": "12345.deadbeef",
+    }
+    temp.write_bytes(b"DATA")
+    await runner_mod.run_job(spec_with_token)
+
+    for url, _body, hdrs in posts:
+        assert hdrs.get("X-Job-Token") == "12345.deadbeef", (
+            f"X-Job-Token missing on POST to {url}: headers={hdrs}"
+        )
+
+    # ── Case 2: callback_token absent — no X-Job-Token header sent ────────────
+    posts.clear()
+    spec_no_token = {**spec_with_token}
+    del spec_no_token["callback_token"]
+    temp.write_bytes(b"DATA")
+    await runner_mod.run_job(spec_no_token)
+
+    for url, _body, hdrs in posts:
+        assert "X-Job-Token" not in hdrs, (
+            f"Unexpected X-Job-Token on POST to {url} when spec has no callback_token"
+        )
