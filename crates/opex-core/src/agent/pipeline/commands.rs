@@ -390,11 +390,14 @@ where
             ))
         }
         "/voice" => {
-            // Messaging channels carry the chat id in context; web/UI turns fall
-            // back to the agent name so /voice works on the web UI too.
-            let Some(chat_id) = crate::agent::channel_kind::voice_chat_id(msg) else {
+            let chat_id = msg
+                .context
+                .get("chat_id")
+                .map(|v| v.to_string().trim_matches('"').to_string())
+                .filter(|c| !c.is_empty() && c != "null");
+            let Some(chat_id) = chat_id else {
                 return Some(Ok(
-                    "/voice is not available for this turn.".to_string(),
+                    "/voice only applies to chat channels (Telegram, etc.).".to_string(),
                 ));
             };
             let channel = msg.channel.as_str();
