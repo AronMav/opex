@@ -26,6 +26,29 @@ import type {
 } from "../chat-types";
 import type { StreamSession } from "../stream-session";
 
+// ── Auto-play freshly-streamed voice replies ───────────────────────────────────
+// When the agent voices its answer (synthesize_speech → inline audio `file`
+// event) play it immediately so the model "speaks" without a manual click —
+// only on the LIVE stream (history reloads render via chat-history, bypassing
+// this dispatcher). Plays once per URL through a single shared element. The user
+// has already interacted this session (they sent the message), so the browser
+// autoplay policy permits play(); a rejected play() silently leaves the visible
+// inline player for manual control.
+const _autoPlayedVoiceUrls = new Set<string>();
+let _voiceAudioEl: HTMLAudioElement | null = null;
+
+export function autoPlayVoiceReply(url: string): void {
+  if (typeof window === "undefined" || !url || _autoPlayedVoiceUrls.has(url)) return;
+  _autoPlayedVoiceUrls.add(url);
+  try {
+    if (!_voiceAudioEl) _voiceAudioEl = new Audio();
+    _voiceAudioEl.src = url;
+    void _voiceAudioEl.play()?.catch(() => {});
+  } catch {
+    /* best-effort — the visible inline player remains for manual control */
+  }
+}
+
 // ── Public interface ──────────────────────────────────────────────────────────
 
 export interface StreamProcessorCallbacks {
@@ -349,6 +372,11 @@ export async function processSSEStream(
               url: event.url,
               mediaType: event.mediaType || "application/octet-stream",
             });
+            // Speak the reply: auto-play a freshly-streamed voice file so the
+            // agent answers aloud without a manual click. Live audio only.
+            if ((event.mediaType || "").startsWith("audio/")) {
+              autoPlayVoiceReply(event.url);
+            }
             session.scheduleCommit();
             break;
           }
