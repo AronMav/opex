@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { useLanguageStore } from "@/stores/language-store";
 import type { FileActionButton, FileActionsResponse } from "@/types/api";
@@ -34,6 +35,9 @@ export function FileActionButtons({ uploadId, mime, agent, sessionId }: FileActi
   const locale = useLanguageStore((s) => s.locale);
   const [buttons, setButtons] = useState<FileActionButton[]>([]);
   const [running, setRunning] = useState<string | null>(null);
+  // Ref-based guard: prevents a second concurrent run without capturing `running`
+  // in the useCallback dependency array (avoids stale-closure recreation on every state tick).
+  const runningRef = useRef(false);
 
   useEffect(() => {
     if (!uploadId) {
@@ -59,7 +63,8 @@ export function FileActionButtons({ uploadId, mime, agent, sessionId }: FileActi
 
   const run = useCallback(
     async (btn: FileActionButton) => {
-      if (running) return;
+      if (runningRef.current) return;
+      runningRef.current = true;
       setRunning(btn.id);
       try {
         await apiPost(`/api/files/${encodeURIComponent(uploadId)}/run`, {
@@ -69,13 +74,13 @@ export function FileActionButtons({ uploadId, mime, agent, sessionId }: FileActi
           agent,
         });
       } catch (err) {
-        const { toast } = await import("sonner");
         toast.error(err instanceof Error ? err.message : "run failed");
       } finally {
+        runningRef.current = false;
         setRunning(null);
       }
     },
-    [running, uploadId, sessionId, agent],
+    [uploadId, sessionId, agent],
   );
 
   if (buttons.length === 0) return null;

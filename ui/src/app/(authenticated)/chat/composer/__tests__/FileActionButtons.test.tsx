@@ -85,4 +85,18 @@ describe("FileActionButtons", () => {
     resolveRun({});
     await waitFor(() => expect(btn).not.toBeDisabled());
   });
+
+  it("rapid double-click fires only a single POST", async () => {
+    let resolveRun: (v: unknown) => void = () => {};
+    apiPost.mockImplementation(() => new Promise((r) => { resolveRun = r; }));
+    render(<FileActionButtons {...PROPS} />);
+    const btn = await screen.findByRole("button", { name: "Транскрибировать" });
+    // Two synchronous clicks before the first async tick resolves
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    // Let the in-flight run settle
+    resolveRun({});
+    await waitFor(() => expect(btn).not.toBeDisabled());
+    expect(apiPost).toHaveBeenCalledTimes(1);
+  });
 });
