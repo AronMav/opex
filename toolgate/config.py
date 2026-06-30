@@ -26,6 +26,10 @@ class ProvidersConfig(BaseModel):
     version: int = 1
     active: dict[str, str | None] = Field(default_factory=dict)
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
+    # Absolute path to the OPEX workspace dir, supplied by Core via
+    # /api/media-config so toolgate loads workspace/file_handlers/*.py without
+    # guessing. None when Core hasn't sent it yet (degraded/old core).
+    workspace_dir: str | None = None
 
 
 async def _aload_config_from_api() -> ProvidersConfig | None:
