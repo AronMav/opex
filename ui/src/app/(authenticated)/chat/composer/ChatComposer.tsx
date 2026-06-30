@@ -653,7 +653,7 @@ export function ChatComposer() {
             />
           )}
           {attachments.length > 0 && attachments.map((att) => (
-            <div key={att.id} className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground">
+            <div key={att.id} data-upload-id={att.uploadId} className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground">
               <Paperclip className="h-3 w-3" />
               <span className="truncate max-w-[200px]">{att.name}</span>
               <button
