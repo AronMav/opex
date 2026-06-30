@@ -6,6 +6,9 @@ whose leading "# <handler> ... # </handler>" comment block describes it.
 
 from __future__ import annotations
 
+import re
+
+import defusedxml.ElementTree as ET
 from dataclasses import dataclass
 
 
@@ -28,3 +31,107 @@ class HandlerDescriptor:
     order: int
     enabled: bool
     tier: str  # "builtin" | "workspace"
+
+
+# ── Parser ──────────────────────────────────────────────────────────────────
+
+_BLOCK_RE = re.compile(r"#\s*<handler>(.*?)#\s*</handler>", re.DOTALL)
+
+
+def _extract_block(source: str) -> str:
+    """Pull the leading '# <handler> ... # </handler>' comment block out of a
+    handler source file and strip the leading '# ' from each line so the
+    remainder is valid XML."""
+    m = _BLOCK_RE.search(source)
+    if not m:
+        raise DescriptorError("no <handler> descriptor block found")
+    inner = m.group(0)
+    lines = []
+    for line in inner.splitlines():
+        stripped = line.lstrip()
+        if not stripped.startswith("#"):
+            continue
+        # remove the leading '#' and a single following space if present
+        body = stripped[1:]
+        if body.startswith(" "):
+            body = body[1:]
+        lines.append(body)
+    return "\n".join(lines)
+
+
+def _text(el: ET.Element, tag: str, default: str | None = None) -> str | None:
+    child = el.find(tag)
+    if child is None or child.text is None:
+        return default
+    return child.text.strip()
+
+
+def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
+    """Parse a handler source file's descriptor block into a validated
+    HandlerDescriptor. Raises DescriptorError on any structural or validation
+    failure (fail-closed)."""
+    xml_str = _extract_block(source)
+    try:
+        root = ET.fromstring(xml_str)
+    except ET.ParseError as e:
+        raise DescriptorError(f"malformed descriptor XML: {e}") from e
+
+    labels: dict[str, str] = {}
+    for el in root.findall("label"):
+        lang = el.get("lang")
+        if lang and el.text:
+            labels[lang] = el.text.strip()
+
+    descriptions: dict[str, str] = {}
+    for el in root.findall("description"):
+        lang = el.get("lang")
+        if lang and el.text:
+            descriptions[lang] = el.text.strip()
+
+    match_el = root.find("match")
+    match_mimes: list[str] = []
+    max_size_mb: int | None = None
+    if match_el is not None:
+        for m in match_el.findall("mime"):
+            if m.text:
+                match_mimes.append(m.text.strip())
+        size_txt = _text(match_el, "max_size_mb")
+        if size_txt is not None:
+            try:
+                max_size_mb = int(size_txt)
+            except ValueError as e:
+                raise DescriptorError(
+                    f"descriptor max_size_mb must be an integer, got '{size_txt}'"
+                ) from e
+
+    params: list[dict] = []
+    params_el = root.find("params")
+    if params_el is not None:
+        for p in params_el.findall("param"):
+            params.append(
+                {
+                    "name": p.get("name", ""),
+                    "type": p.get("type", "string"),
+                    "default": p.get("default"),
+                    "required": p.get("required", "false").strip().lower() == "true",
+                }
+            )
+
+    order_txt = _text(root, "order")
+    enabled_txt = _text(root, "enabled")
+
+    return HandlerDescriptor(
+        id=(_text(root, "id") or "").strip(),
+        labels=labels,
+        descriptions=descriptions,
+        icon=_text(root, "icon", "file") or "file",
+        match_mimes=match_mimes,
+        max_size_mb=max_size_mb,
+        capability=_text(root, "capability"),
+        execution=(_text(root, "execution") or "").strip(),
+        output=_text(root, "output", "text") or "text",
+        params=params,
+        order=int(order_txt) if order_txt is not None else 100,
+        enabled=(enabled_txt is None) or enabled_txt.strip().lower() == "true",
+        tier=tier,
+    )
