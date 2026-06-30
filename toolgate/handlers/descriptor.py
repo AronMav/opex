@@ -36,6 +36,8 @@ class HandlerDescriptor:
 # ── Parser ──────────────────────────────────────────────────────────────────
 
 _BLOCK_RE = re.compile(r"#\s*<handler>(.*?)#\s*</handler>", re.DOTALL)
+_ID_RE = re.compile(r"^[a-z0-9_-]+$")
+_VALID_EXECUTION = {"sync", "async"}
 
 
 def _extract_block(source: str) -> str:
@@ -120,15 +122,35 @@ def parse_descriptor(source: str, tier: str) -> HandlerDescriptor:
     order_txt = _text(root, "order")
     enabled_txt = _text(root, "enabled")
 
+    hid = (_text(root, "id") or "").strip()
+    execution = (_text(root, "execution") or "").strip()
+
+    if not hid:
+        raise DescriptorError("descriptor missing required <id>")
+    if not _ID_RE.match(hid):
+        raise DescriptorError(
+            f"descriptor id '{hid}' must match ^[a-z0-9_-]+$"
+        )
+    if not labels:
+        raise DescriptorError(f"descriptor '{hid}' missing required <label>")
+    if not match_mimes:
+        raise DescriptorError(
+            f"descriptor '{hid}' must declare at least one <mime>"
+        )
+    if execution not in _VALID_EXECUTION:
+        raise DescriptorError(
+            f"descriptor '{hid}' execution must be 'sync' or 'async', got '{execution}'"
+        )
+
     return HandlerDescriptor(
-        id=(_text(root, "id") or "").strip(),
+        id=hid,
         labels=labels,
         descriptions=descriptions,
         icon=_text(root, "icon", "file") or "file",
         match_mimes=match_mimes,
         max_size_mb=max_size_mb,
         capability=_text(root, "capability"),
-        execution=(_text(root, "execution") or "").strip(),
+        execution=execution,
         output=_text(root, "output", "text") or "text",
         params=params,
         order=int(order_txt) if order_txt is not None else 100,
