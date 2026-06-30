@@ -3,7 +3,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import { Play, Pause } from "lucide-react";
 import { useTranslation } from "@/hooks/use-translation";
-import { useVoicePlaybackStore } from "@/stores/voice-playback-store";
 
 // Single visual language for both shape AND progress: a bar waveform built
 // from the actual audio buffer (RMS per bucket), where bars to the left of
@@ -90,12 +89,6 @@ export function AudioPlayer({ src }: { src: string }) {
   const [seekableEnd, setSeekableEnd] = useState(0);
   const [error, setError] = useState(false);
 
-  // ── Voice-reply auto-play (visible element) ────────────────────────────────
-  const autoplayUrl = useVoicePlaybackStore((s) => s.autoplayUrl);
-  const consumeAutoplay = useVoicePlaybackStore((s) => s.consumeAutoplay);
-  const setVoicePlaying = useVoicePlaybackStore((s) => s.setPlaying);
-  const isVoiceReplyRef = useRef(false);
-
   // ── Decode bars once per src ──────────────────────────────────────────────
   useEffect(() => {
     setDecoded(false);
@@ -109,23 +102,6 @@ export function AudioPlayer({ src }: { src: string }) {
     });
     return () => ctrl.abort();
   }, [src]);
-
-  // When ChatComposer requests autoplay of this src (the model's synthesize_speech
-  // reply just streamed in), play it on THIS visible element exactly once. The
-  // page is already user-activated (mic / continuous gesture) so play() is
-  // permitted; if the browser still blocks it, release the hands-free gate so the
-  // continuous loop never stalls waiting on a reply that won't sound.
-  useEffect(() => {
-    if (isVoiceReplyRef.current || !autoplayUrl || autoplayUrl !== src) return;
-    isVoiceReplyRef.current = true;
-    consumeAutoplay();
-    const a = audioRef.current;
-    if (!a) {
-      setVoicePlaying(false);
-      return;
-    }
-    a.play().catch(() => setVoicePlaying(false));
-  }, [autoplayUrl, src, consumeAutoplay, setVoicePlaying]);
 
   // ── Audio handlers ────────────────────────────────────────────────────────
   const handleDurationUpdate = useCallback(() => {
@@ -249,20 +225,15 @@ export function AudioPlayer({ src }: { src: string }) {
         onCanPlay={handleDurationUpdate}
         onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime ?? 0)}
         onPlay={() => setPlaying(true)}
-        onPause={() => {
-          setPlaying(false);
-          if (isVoiceReplyRef.current) setVoicePlaying(false);
-        }}
+        onPause={() => setPlaying(false)}
         onEnded={() => {
           setPlaying(false);
           setCurrentTime(0);
           handleDurationUpdate();
-          if (isVoiceReplyRef.current) setVoicePlaying(false);
         }}
         onError={() => {
           setPlaying(false);
           setError(true);
-          if (isVoiceReplyRef.current) setVoicePlaying(false);
         }}
       />
 
