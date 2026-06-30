@@ -166,4 +166,63 @@ mod tests {
         assert_eq!(status_from_http(502), ScenarioStatus::Failed);
         assert_eq!(status_from_http(503), ScenarioStatus::Failed);
     }
+
+    // ── Wire-contract tests (R9): toolgate 4-key JSON ↔ ScenarioOutcome ──────
+
+    #[test]
+    fn toolgate_ok_json_deserialises_into_outcome() {
+        // The EXACT 4-key JSON a toolgate ResultBuilder.text(...) emits (Phase 2).
+        // `video_accepted` is absent on the wire; serde default => false (R9).
+        let wire = r#"{"status":"ok","summary_text":"transcript here","artifact_urls":["/api/uploads/1?sig=x&exp=9"],"reason":null}"#;
+        let o: ScenarioOutcome = serde_json::from_str(wire).unwrap();
+        assert_eq!(o.status, ScenarioStatus::Ok);
+        assert_eq!(o.summary_text, "transcript here");
+        assert_eq!(o.artifact_urls, vec!["/api/uploads/1?sig=x&exp=9".to_string()]);
+        assert!(o.reason.is_none());
+        assert!(!o.video_accepted, "absent video_accepted must default to false");
+    }
+
+    #[test]
+    fn toolgate_failed_json_deserialises_into_outcome() {
+        let wire = r#"{"status":"failed","summary_text":"","artifact_urls":[],"reason":"HTTP 502"}"#;
+        let o: ScenarioOutcome = serde_json::from_str(wire).unwrap();
+        assert_eq!(o.status, ScenarioStatus::Failed);
+        assert_eq!(o.reason.as_deref(), Some("HTTP 502"));
+        assert!(o.artifact_urls.is_empty());
+        assert!(!o.video_accepted);
+    }
+
+    #[test]
+    fn toolgate_unsupported_too_large_timeout_statuses_deserialise() {
+        for (wire_status, expected) in [
+            ("too_large", ScenarioStatus::TooLarge),
+            ("unsupported", ScenarioStatus::Unsupported),
+            ("timeout", ScenarioStatus::Timeout),
+        ] {
+            let wire = format!(
+                r#"{{"status":"{}","summary_text":"","artifact_urls":[],"reason":"x"}}"#,
+                wire_status
+            );
+            let o: ScenarioOutcome = serde_json::from_str(&wire).unwrap();
+            assert_eq!(o.status, expected, "status {} must map", wire_status);
+        }
+    }
+
+    #[test]
+    fn outcome_reserialises_to_toolgate_compatible_shape() {
+        // Re-serialising the Rust type keeps the 4 toolgate keys with the right
+        // names/values, plus the benign 5th `video_accepted` key (R9). The
+        // assertion checks the toolgate-consumed keys, not exact-key equality.
+        let o = ScenarioOutcome::ok(
+            "hi".into(),
+            vec!["/api/uploads/2?sig=y&exp=9".into()],
+        );
+        let json = serde_json::to_value(&o).unwrap();
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["summary_text"], "hi");
+        assert_eq!(json["artifact_urls"][0], "/api/uploads/2?sig=y&exp=9");
+        assert!(json["reason"].is_null());
+        // The Rust type intentionally emits a 5th key the Python side omits.
+        assert_eq!(json["video_accepted"], false, "video_accepted always serialises (R9)");
+    }
 }
