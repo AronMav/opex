@@ -34,6 +34,7 @@ use crate::agent::file_scenario::outcome::{ScenarioOutcome, ScenarioStatus};
 use crate::agent::handler_registry::{HandlerRegistry, match_buttons};
 use crate::gateway::AppState;
 use crate::gateway::clusters::{ChannelBus, ConfigServices, InfraServices};
+use opex_db::handler_jobs;
 
 // ── Process-wide HTTP client ──────────────────────────────────────────────────
 
@@ -51,6 +52,8 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/files/{upload_id}/actions", get(get_file_actions))
         .route("/api/files/{upload_id}/run", post(run_file_handler))
+        .route("/api/files/jobs/{job_id}/progress", post(job_progress))
+        .route("/api/files/jobs/{job_id}/complete", post(job_complete))
 }
 
 // ── Request / query types ─────────────────────────────────────────────────────
@@ -374,11 +377,253 @@ async fn run_file_handler(
     Json(outcome).into_response()
 }
 
+// ── Async-job callback types ───────────────────────────────────────────────────
+
+/// Body for `POST /api/files/jobs/{job_id}/progress`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct JobProgressBody {
+    pub phase: String,
+    pub pct: i32,
+}
+
+// ── Async-job callback helpers ────────────────────────────────────────────────
+
+/// Generic WS event broadcast on every async-job progress/terminal step.
+/// Generalization of `video_progress` (the queue is handler-agnostic).
+pub(crate) fn file_job_progress_event(
+    job_id: &str,
+    handler_id: &str,
+    session_id: &str,
+    phase: &str,
+    pct: i32,
+    status: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "file_job_progress",
+        "job_id": job_id,
+        "handler_id": handler_id,
+        "session_id": session_id,
+        "phase": phase,
+        "pct": pct,
+        "status": status,
+    })
+}
+
+// ── Async-job callback endpoints ──────────────────────────────────────────────
+
+/// `POST /api/files/jobs/{job_id}/progress`
+///
+/// Internal callback posted by the async runner to report incremental progress.
+/// Auth is required (same Bearer token as all other /api routes — the runner has it).
+/// Updates the `handler_jobs` row and broadcasts a `file_job_progress` WS event.
+async fn job_progress(
+    State(state): State<AppState>,
+    Path(job_id): Path<Uuid>,
+    Json(body): Json<JobProgressBody>,
+) -> StatusCode {
+    let db = &state.infra.db;
+    if let Err(e) = handler_jobs::update_handler_job_progress(db, job_id, &body.phase, body.pct).await {
+        tracing::warn!(error = %e, %job_id, "job_progress: db update failed");
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
+    if let Ok(Some(job)) = handler_jobs::get_handler_job(db, job_id).await {
+        let ev = file_job_progress_event(
+            &job_id.to_string(),
+            &job.handler_id,
+            &job.session_id.to_string(),
+            &body.phase,
+            body.pct,
+            "processing",
+        );
+        let _ = state.channels.ui_event_tx.send(ev.to_string());
+    }
+    StatusCode::NO_CONTENT
+}
+
+/// `POST /api/files/jobs/{job_id}/complete`
+///
+/// Internal callback posted by the async runner with the final `ScenarioOutcome`.
+/// Auth is required (same Bearer token as all other /api routes).
+/// On success: marks the job done, persists a provenance-wrapped `source='file_handler'`
+/// message, runs the optional `post_action` (MCP vault write), emits a final WS event.
+/// On failure status: marks the job failed, emits a terminal WS event.
+async fn job_complete(
+    State(state): State<AppState>,
+    Path(job_id): Path<Uuid>,
+    Json(outcome): Json<ScenarioOutcome>,
+) -> StatusCode {
+    let db = &state.infra.db;
+    let job = match handler_jobs::get_handler_job(db, job_id).await {
+        Ok(Some(j)) => j,
+        Ok(None) => return StatusCode::NOT_FOUND,
+        Err(e) => {
+            tracing::warn!(error = %e, %job_id, "job_complete: load failed");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    let is_ok = matches!(outcome.status, ScenarioStatus::Ok);
+    let terminal = if is_ok { "done" } else { "failed" };
+
+    // ScenarioOutcome now carries post_action (default + skip_serializing_if),
+    // so this re-serialization PRESERVES the handler's vault-write request into
+    // the stored result JSON for run_post_action to read back.
+    let result_json = serde_json::to_value(&outcome).unwrap_or_else(|_| serde_json::json!({}));
+
+    if is_ok {
+        let _ = handler_jobs::mark_handler_job_done(db, job_id, &result_json).await;
+        // Persist as a file-derived message + run the generic post-action.
+        deliver_async_outcome(&state, &job, &outcome).await;
+    } else {
+        let reason = outcome.reason.clone().unwrap_or_else(|| "handler failed".to_string());
+        let _ = handler_jobs::mark_handler_job_failed(db, job_id, &reason).await;
+    }
+
+    let ev = file_job_progress_event(
+        &job_id.to_string(),
+        &job.handler_id,
+        &job.session_id.to_string(),
+        "done",
+        100,
+        terminal,
+    );
+    let _ = state.channels.ui_event_tx.send(ev.to_string());
+    StatusCode::NO_CONTENT
+}
+
+/// Persist the async outcome as a file-derived assistant message (R4/R8:
+/// provenance-wrapped content, source='file_handler', no explicit status) and
+/// run the generic post-completion action (MCP/Obsidian vault write).
+async fn deliver_async_outcome(
+    state: &AppState,
+    job: &handler_jobs::HandlerJob,
+    outcome: &ScenarioOutcome,
+) {
+    // 1. Provenance-wrap with the REAL handler_id + upload_id (R4). URL-based
+    //    jobs (no upload) carry an empty upload id in the wrapper.
+    let upload_id = job.upload_id.map(|u| u.to_string()).unwrap_or_default();
+    let content = crate::agent::provenance::wrap_file_output(
+        &job.handler_id,
+        &upload_id,
+        &outcome.summary_text,
+    );
+
+    // 2. Persist (R8: omit status → table default 'complete'; source='file_handler'
+    //    — column added by migration 066; mirrors video_worker deliver() + new tag).
+    if let Err(e) = sqlx::query(
+        "INSERT INTO messages (session_id, agent_id, role, content, is_mirror, source) \
+         VALUES ($1, $2, 'assistant', $3, true, 'file_handler')",
+    )
+    .bind(job.session_id)
+    .bind(&job.agent_name)
+    .bind(&content)
+    .execute(&state.infra.db)
+    .await
+    {
+        tracing::error!(error = %e, job_id = %job.id, "deliver_async_outcome: persist failed");
+    }
+
+    // 3. Generic post-action: the handler may request an MCP vault write via a
+    //    `post_action` object in the result JSON.
+    run_post_action(state, job, outcome).await;
+
+    // 4. Live push so open tabs render without a reload (mirrors video deliver()).
+    let ev = serde_json::json!({
+        "type": "video_summary_ready",
+        "session_id": job.session_id.to_string(),
+        "text": outcome.summary_text,
+    });
+    let _ = state.channels.ui_event_tx.send(ev.to_string());
+}
+
+/// Run the optional `post_action` carried in the outcome JSON. v1 supports the
+/// Obsidian vault note write (`post_action.kind == "obsidian_note"`), reusing
+/// the existing core MCP plumbing (R17). Any other kind is a safe no-op.
+async fn run_post_action(
+    state: &AppState,
+    job: &handler_jobs::HandlerJob,
+    outcome: &ScenarioOutcome,
+) {
+    // Re-read the row so we pick up the stored result_json (which now includes
+    // post_action, since ScenarioOutcome carries the field after mark_handler_job_done).
+    let row = match handler_jobs::get_handler_job(&state.infra.db, job.id).await {
+        Ok(Some(r)) => r,
+        _ => return,
+    };
+    let action = match row.result.as_ref().and_then(|r| r.get("post_action")) {
+        Some(a) => a.clone(),
+        None => return,
+    };
+    if action.get("kind").and_then(|k| k.as_str()) != Some("obsidian_note") {
+        return;
+    }
+    // R17: state.agents.get_engine(&str) -> Option<Arc<AgentEngine>>.
+    let engine = match state.agents.get_engine(&job.agent_name).await {
+        Some(e) => e,
+        None => return,
+    };
+    // R17: engine.mcp() -> &Option<Arc<McpRegistry>>.
+    let mcp = match engine.mcp() {
+        Some(m) => m.clone(),
+        None => {
+            tracing::warn!(job_id = %job.id, "run_post_action: MCP disabled — skipping vault write");
+            return;
+        }
+    };
+    let folder = action.get("folder").and_then(|v| v.as_str()).unwrap_or("Summary");
+    let filename = action.get("filename").and_then(|v| v.as_str()).unwrap_or("note.md");
+    let content = action
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&outcome.summary_text);
+    // R17: McpRegistry::call_tool(&self, mcp_name, tool_name, &serde_json::Value).
+    if let Err(e) = mcp
+        .call_tool(
+            "mcp-obsidian",
+            "create_note",
+            &serde_json::json!({ "folder": folder, "filename": filename, "content": content }),
+        )
+        .await
+    {
+        tracing::warn!(error = %e, job_id = %job.id, "run_post_action: create_note failed");
+    } else if let Err(e) = mcp
+        .call_tool(
+            "mcp-obsidian",
+            "commit_vault",
+            &serde_json::json!({ "message": format!("file-handler note: {filename}") }),
+        )
+        .await
+    {
+        tracing::warn!(error = %e, job_id = %job.id, "run_post_action: commit_vault failed");
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Async callback helper tests (Task 3) ──────────────────────────────────
+
+    #[test]
+    fn file_job_progress_event_has_generic_shape() {
+        let ev = file_job_progress_event(
+            "job-1",
+            "summarize_video",
+            "sess-9",
+            "digest",
+            42,
+            "processing",
+        );
+        assert_eq!(ev["type"], "file_job_progress");
+        assert_eq!(ev["job_id"], "job-1");
+        assert_eq!(ev["handler_id"], "summarize_video");
+        assert_eq!(ev["session_id"], "sess-9");
+        assert_eq!(ev["phase"], "digest");
+        assert_eq!(ev["pct"], 42);
+        assert_eq!(ev["status"], "processing");
+    }
 
     #[test]
     fn parse_outcome_four_key_json_defaults_video_accepted() {

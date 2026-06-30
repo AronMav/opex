@@ -105,6 +105,7 @@ async fn run_transcribe(input: &DispatchInput<'_>) -> ScenarioOutcome {
                     artifact_urls: Vec::new(),
                     reason: Some(format!("transcribe: HTTP {code}")),
                     video_accepted: false,
+                    post_action: None,
                 };
             }
             match resp.json::<serde_json::Value>().await {
@@ -166,6 +167,7 @@ async fn run_describe(input: &DispatchInput<'_>) -> ScenarioOutcome {
                     artifact_urls: Vec::new(),
                     reason: Some(format!("describe: HTTP {code}")),
                     video_accepted: false,
+                    post_action: None,
                 };
             }
             match resp.json::<serde_json::Value>().await {
@@ -210,6 +212,7 @@ async fn run_extract_document(input: &DispatchInput<'_>) -> ScenarioOutcome {
                     artifact_urls: Vec::new(),
                     reason: Some(format!("extract_document: HTTP {code}")),
                     video_accepted: false,
+                    post_action: None,
                 };
             }
             match resp.json::<serde_json::Value>().await {

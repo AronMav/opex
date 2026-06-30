@@ -144,6 +144,7 @@ mod tests {
             artifact_urls: vec![],
             reason: Some("vision 503".into()),
             video_accepted: false,
+            post_action: None,
         }];
         rewrite_enriched_text(&mut text, &[att(SIGNED, MediaType::Image)], &outcomes);
         assert!(!text.contains(SIGNED), "signed URL must be gone on failure: {text}");
@@ -161,6 +162,7 @@ mod tests {
             artifact_urls: vec![],
             reason: None,
             video_accepted: false,
+            post_action: None,
         }];
         rewrite_enriched_text(&mut text, &[att(SIGNED, MediaType::Audio)], &outcomes);
         assert!(!text.contains(SIGNED), "ok audio must not leave a bare signed URL: {text}");
@@ -175,6 +177,7 @@ mod tests {
             artifact_urls: vec![],
             reason: None,
             video_accepted: false,
+            post_action: None,
         }];
         rewrite_enriched_text(&mut text, &[att(SIGNED, MediaType::Image)], &outcomes);
         assert!(text.contains(SIGNED), "image-ok must keep the URL for FilePart reconstruction: {text}");
@@ -190,6 +193,7 @@ mod tests {
             artifact_urls: vec![SIGNED.into()],
             reason: None,
             video_accepted: false,
+            post_action: None,
         }];
         rewrite_enriched_text(&mut text, &[att(SIGNED, MediaType::Document)], &outcomes);
         assert!(!text.contains(SIGNED), "non-image ok must not leave a bare URL in the prompt: {text}");
