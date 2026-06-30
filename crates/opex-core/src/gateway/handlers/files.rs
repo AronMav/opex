@@ -190,6 +190,31 @@ pub(crate) fn toolgate_run_url(toolgate_url: &str, handler_id: &str) -> String {
     )
 }
 
+// ── Async-enqueue seam (R13) ──────────────────────────────────────────────────
+
+/// Enqueue an async handler run onto the universal `handler_jobs` queue (R13).
+/// Returns the new job id. Upload-based source → `Some(upload_id)`, `source_ref=None`.
+/// This is the surviving enqueue seam that Phase 6 keeps (not the dispatch.rs arm).
+pub(crate) async fn enqueue_async_run(
+    db: &sqlx::PgPool,
+    upload_id: uuid::Uuid,
+    handler_id: &str,
+    agent: &str,
+    session_id: uuid::Uuid,
+    params: &serde_json::Value,
+) -> anyhow::Result<uuid::Uuid> {
+    opex_db::handler_jobs::insert_handler_job(
+        db,
+        Some(upload_id),
+        None,
+        handler_id,
+        agent,
+        session_id,
+        params,
+    )
+    .await
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /api/files/{upload_id}/actions`
@@ -270,14 +295,31 @@ async fn run_file_handler(
         .unwrap_or(false);
 
     if is_async {
-        // Phase 5 will insert a `handler_jobs` row here and return the job id.
-        // For now this is a 202 stub that acknowledges the request.
+        // Enqueue onto handler_jobs (R13) — the file_handler_worker (Task 5)
+        // dispatches it to toolgate; the runner posts back via the callbacks.
+        let job_id = match enqueue_async_run(
+            &infra.db,
+            upload_id,
+            &req.handler_id,
+            &req.agent,
+            req.session_id,
+            &req.params,
+        )
+        .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!(error = %e, "file_run: async enqueue failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": "failed to enqueue job"})),
+                )
+                    .into_response();
+            }
+        };
         return (
             StatusCode::ACCEPTED,
-            Json(json!({
-                "accepted": true,
-                "note": "async handler support is wired in Phase 5"
-            })),
+            Json(json!({"accepted": true, "job_id": job_id.to_string()})),
         )
             .into_response();
     }
@@ -871,5 +913,38 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(src.as_deref(), Some("file_handler"));
+    }
+}
+
+// ── Async-enqueue seam tests (Task 4, Phase 5) ───────────────────────────────
+
+#[cfg(test)]
+mod async_enqueue_tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enqueue_async_run_inserts_queued_handler_job(pool: sqlx::PgPool) {
+        let upload = uuid::Uuid::new_v4();
+        let sid = uuid::Uuid::new_v4();
+        let job_id = enqueue_async_run(
+            &pool,
+            upload,
+            "summarize_video",
+            "Atlas",
+            sid,
+            &serde_json::json!({ "language": "ru" }),
+        )
+        .await
+        .unwrap();
+
+        let row = opex_db::handler_jobs::get_handler_job(&pool, job_id)
+            .await
+            .unwrap()
+            .expect("job exists");
+        assert_eq!(row.status, "queued");
+        assert_eq!(row.handler_id, "summarize_video");
+        assert_eq!(row.upload_id, Some(upload));
+        assert_eq!(row.session_id, sid);
+        assert_eq!(row.params["language"], "ru");
     }
 }
