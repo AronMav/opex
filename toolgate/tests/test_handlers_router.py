@@ -161,11 +161,22 @@ def test_run_missing_handler_404(tmp_path):
     assert r.status_code == 404
 
 
-def test_run_async_handler_returns_501_until_phase5(tmp_path):
+def test_run_async_handler_returns_202_and_accepted(tmp_path, monkeypatch):
+    """Phase 5: async handler returns 202 Accepted + spawns runner out-of-process."""
+    import asyncio
+    import handlers.router as rmod
+
+    async def _fake_exec(*args, **kwargs):
+        class _Proc:
+            pid = 9999
+        return _Proc()
+
+    monkeypatch.setattr(rmod.asyncio, "create_subprocess_exec", _fake_exec)
+
     client = _build_client(tmp_path)
     r = _run(client, "slow", content=b"vid", mime="video/mp4", filename="v.mp4")
-    assert r.status_code == 501
-    assert r.json()["error"] == "async_runner_not_available"
+    assert r.status_code == 202
+    assert r.json()["accepted"] is True
 
 
 def test_run_sync_timeout_returns_timeout_outcome(tmp_path, monkeypatch):

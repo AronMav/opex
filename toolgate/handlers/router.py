@@ -22,11 +22,17 @@ import asyncio
 import json
 import logging
 import os
+import sys
+import tempfile
 
 from fastapi import APIRouter, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from handlers.context import HandlerFile, build_context
+
+# Absolute path to runner.py — used to spawn the out-of-process runner via
+# `sys.executable -m handlers.runner` (portable across dev/prod venvs).
+_RUNNER_MODULE = "handlers.runner"
 
 log = logging.getLogger("toolgate.handlers")
 
@@ -98,9 +104,40 @@ async def run_handler(
 
     descriptor = lh.descriptor
     if descriptor.execution == "async":
-        # Out-of-process runner is delivered in Phase 5 (R10 extends THIS fn).
-        return JSONResponse(status_code=501,
-                            content={"error": "async_runner_not_available"})
+        # R12: persist upload bytes to a tempfile so the out-of-process runner
+        # can read the PATH (never a loopback signed URL). For url-based async
+        # handlers (video from source_url) no bytes are uploaded so no tempfile.
+        upload_bytes = await file.read() if file is not None else b""
+        temp_path: str | None = None
+        if upload_bytes:
+            tf = tempfile.NamedTemporaryFile(prefix="opex-handler-", delete=False)
+            tf.write(upload_bytes)
+            tf.close()
+            temp_path = tf.name
+
+        try:
+            parsed_params = json.loads(params) if params else {}
+        except json.JSONDecodeError:
+            parsed_params = {}
+        if not isinstance(parsed_params, dict):
+            parsed_params = {}
+
+        spec = {
+            "handler_id": handler_id,
+            "temp_path": temp_path,
+            "source_url": source_url,
+            "mime": mime,
+            "filename": filename,
+            "params": parsed_params,
+            "language": language,
+            "job_id": job_id,
+            "core_url": os.environ.get("CORE_API_URL", "http://127.0.0.1:18789"),
+            "auth_token": os.environ.get("OPEX_AUTH_TOKEN", ""),
+        }
+        await asyncio.create_subprocess_exec(
+            sys.executable, "-m", _RUNNER_MODULE, json.dumps(spec)
+        )
+        return JSONResponse(status_code=202, content={"accepted": True, "job_id": job_id})
 
     # R12: bytes arrive in the multipart `file` field — never fetched here.
     data = await file.read() if file is not None else b""
