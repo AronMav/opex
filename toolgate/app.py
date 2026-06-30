@@ -5,11 +5,13 @@ Utility services: document text extraction, URL content fetching.
 Configuration loaded from Core API at startup.
 """
 
+import asyncio
 import logging
 import os
 import secrets
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -18,9 +20,42 @@ import httpx
 log = logging.getLogger("toolgate")
 
 from registry import ProviderRegistry, CAPABILITIES
+from handlers.loader import HandlerRegistry
+from handlers import router as handlers_router_mod
 
 registry = ProviderRegistry()
 http_client: httpx.AsyncClient = None
+
+handler_registry = HandlerRegistry()
+
+
+def _builtin_handlers_dir() -> str:
+    return str(Path(__file__).resolve().parent / "handlers" / "builtin")
+
+
+async def _watch_workspace_handlers(app: FastAPI, ws_dir: str) -> None:
+    """Hot-reload workspace/file_handlers/*.py via watchfiles.awatch.
+
+    A parse/import error in a changed file is caught inside reload_file
+    (logged, previous registry kept). watchfiles debounces internally."""
+    from watchfiles import awatch, Change
+
+    target = os.path.join(ws_dir, "file_handlers")
+    os.makedirs(target, exist_ok=True)
+    try:
+        async for changes in awatch(target):
+            for change, path in changes:
+                if path.endswith(".py"):
+                    if change == Change.deleted:
+                        app.state.handlers.remove_file(path)
+                        log.info("removed handler file %s", path)
+                    else:
+                        app.state.handlers.reload_file(path)
+                        log.info("hot-reloaded handler file %s", path)
+    except asyncio.CancelledError:
+        return
+    except Exception as e:
+        log.warning("workspace handler watcher stopped: %s", e)
 
 
 @asynccontextmanager
@@ -46,7 +81,17 @@ async def lifespan(app: FastAPI):
     app.state.registry = registry
     app.state.http_client = http_client
     await registry.aload()
+
+    # File-handler hub: load builtins + workspace, mount in app.state.
+    app.state.handlers = handler_registry
+    ws_dir = registry.config.workspace_dir
+    handler_registry.load_all(_builtin_handlers_dir(), ws_dir)
+    watch_task = None
+    if ws_dir:
+        watch_task = asyncio.create_task(_watch_workspace_handlers(app, ws_dir))
     yield
+    if watch_task:
+        watch_task.cancel()
     if http_client:
         await http_client.aclose()
 
@@ -185,6 +230,7 @@ async def log_requests(request: Request, call_next):
 # Mount routers
 from routers import stt, vision, tts, imagegen, embedding, documents, fetch, search, video
 from primitives import imap, smtp, google_calendar, bcs
+app.include_router(handlers_router_mod.router)
 app.include_router(stt.router)
 app.include_router(vision.router)
 app.include_router(tts.router)
