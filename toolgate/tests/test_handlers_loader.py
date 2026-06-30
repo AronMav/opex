@@ -46,6 +46,56 @@ DUP_BUILTIN = textwrap.dedent('''\
         return ctx.result.text("shadow")
 ''')
 
+# ── Hot-reload fixtures ──────────────────────────────────────────────────────
+
+WS_V1 = textwrap.dedent('''\
+    # <handler>
+    #   <id>myhandler</id>
+    #   <label lang="en">My Handler v1</label>
+    #   <match><mime>text/*</mime></match>
+    #   <execution>sync</execution>
+    # </handler>
+
+    async def run(ctx, file, params):
+        return ctx.result.text("v1")
+''')
+
+WS_V2 = textwrap.dedent('''\
+    # <handler>
+    #   <id>myhandler</id>
+    #   <label lang="en">My Handler v2</label>
+    #   <match><mime>text/*</mime></match>
+    #   <execution>sync</execution>
+    # </handler>
+
+    async def run(ctx, file, params):
+        return ctx.result.text("v2")
+''')
+
+WS_RENAMED = textwrap.dedent('''\
+    # <handler>
+    #   <id>myhandler-renamed</id>
+    #   <label lang="en">Renamed Handler</label>
+    #   <match><mime>text/*</mime></match>
+    #   <execution>sync</execution>
+    # </handler>
+
+    async def run(ctx, file, params):
+        return ctx.result.text("renamed")
+''')
+
+WS_COLLIDE_BUILTIN = textwrap.dedent('''\
+    # <handler>
+    #   <id>echo</id>
+    #   <label lang="en">Workspace Echo</label>
+    #   <match><mime>text/*</mime></match>
+    #   <execution>sync</execution>
+    # </handler>
+
+    async def run(ctx, file, params):
+        return ctx.result.text("ws-echo")
+''')
+
 
 def _write(d: Path, name: str, body: str) -> Path:
     p = d / name
@@ -111,3 +161,98 @@ def test_manifests_and_etag(tmp_path):
     assert isinstance(e1, str) and e1
     # stable for identical content
     assert reg.etag() == e1
+
+
+# ── Hot-reload tests (new) ───────────────────────────────────────────────────
+
+def test_reload_file_updates_existing_workspace_handler(tmp_path):
+    """reload_file on an edited workspace file updates get(id) to new version."""
+    ws = tmp_path / "workspace"
+    fh = ws / "file_handlers"
+    fh.mkdir(parents=True)
+    p = _write(fh, "myhandler.py", WS_V1)
+
+    reg = HandlerRegistry()
+    reg.load_all(str(tmp_path / "builtin_empty"), str(ws))  # no builtin dir
+    assert reg.get("myhandler") is not None
+    assert reg.get("myhandler").descriptor.labels["en"] == "My Handler v1"
+
+    # Simulate file edit: overwrite with v2
+    p.write_text(WS_V2, encoding="utf-8")
+    reg.reload_file(str(p))
+
+    lh = reg.get("myhandler")
+    assert lh is not None
+    assert lh.descriptor.labels["en"] == "My Handler v2"
+    # Only one entry for this id
+    assert len([m for m in reg.manifests() if m["id"] == "myhandler"]) == 1
+
+
+def test_reload_file_id_renamed_evicts_old_registers_new(tmp_path):
+    """reload_file when the file's id changes evicts old id and registers new."""
+    ws = tmp_path / "workspace"
+    fh = ws / "file_handlers"
+    fh.mkdir(parents=True)
+    p = _write(fh, "myhandler.py", WS_V1)
+
+    reg = HandlerRegistry()
+    reg.load_all(str(tmp_path / "builtin_empty"), str(ws))
+    assert reg.get("myhandler") is not None
+
+    # Overwrite same file but id changed to myhandler-renamed
+    p.write_text(WS_RENAMED, encoding="utf-8")
+    reg.reload_file(str(p))
+
+    assert reg.get("myhandler") is None, "old id must be evicted"
+    lh = reg.get("myhandler-renamed")
+    assert lh is not None
+    assert lh.descriptor.labels["en"] == "Renamed Handler"
+
+
+def test_reload_file_workspace_builtin_collision_rejected(tmp_path):
+    """reload_file of a workspace file whose id collides with a builtin is rejected."""
+    builtin_dir = tmp_path / "builtin"
+    builtin_dir.mkdir()
+    _write(builtin_dir, "echo.py", GOOD)
+
+    ws = tmp_path / "workspace"
+    fh = ws / "file_handlers"
+    fh.mkdir(parents=True)
+    p = _write(fh, "ws_echo.py", WS_COLLIDE_BUILTIN)
+
+    reg = HandlerRegistry()
+    reg.load_all(str(builtin_dir), str(ws))
+    # builtin loaded; workspace collision was rejected at load_all time
+    assert reg.get("echo").tier == "builtin"
+
+    # Hot-reload should also reject workspace colliding with builtin
+    reg.reload_file(str(p))
+    assert reg.get("echo").tier == "builtin"
+    # The workspace file must not have displaced the builtin
+    assert reg.get("echo").descriptor.labels.get("en") != "Workspace Echo"
+
+
+def test_remove_file_evicts_workspace_handler(tmp_path):
+    """remove_file evicts the handler; get(id) returns None and not in manifests."""
+    ws = tmp_path / "workspace"
+    fh = ws / "file_handlers"
+    fh.mkdir(parents=True)
+    p = _write(fh, "myhandler.py", WS_V1)
+
+    reg = HandlerRegistry()
+    reg.load_all(str(tmp_path / "builtin_empty"), str(ws))
+    assert reg.get("myhandler") is not None
+
+    reg.remove_file(str(p))
+
+    assert reg.get("myhandler") is None
+    ids_in_manifests = [m["id"] for m in reg.manifests()]
+    assert "myhandler" not in ids_in_manifests
+
+
+def test_remove_file_unknown_path_noop(tmp_path):
+    """remove_file with an unknown path is a safe no-op."""
+    reg = HandlerRegistry()
+    reg.load_all(str(tmp_path / "builtin_empty"), None)
+    # Should not raise
+    reg.remove_file(str(tmp_path / "nonexistent.py"))

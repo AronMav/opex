@@ -49,9 +49,18 @@ def _import_run(path: str):
 class HandlerRegistry:
     def __init__(self) -> None:
         self._handlers: dict[str, LoadedHandler] = {}
+        # Maps normalized absolute path → workspace handler id registered from it.
+        # Builtin handlers are never tracked here (they are never hot-reloaded).
+        self._path_to_id: dict[str, str] = {}
+
+    @staticmethod
+    def _norm(path: str) -> str:
+        """Return a canonical, case-folded absolute path for use as a map key."""
+        return os.path.normcase(os.path.abspath(path))
 
     def load_all(self, builtin_dir: str, workspace_dir: str | None) -> None:
         self._handlers = {}
+        self._path_to_id = {}
         # Builtin tier FIRST — its ids become reserved.
         self._scan_dir(builtin_dir, "builtin")
         if workspace_dir:
@@ -79,6 +88,8 @@ class HandlerRegistry:
                 return
             run = _import_run(path)
             self._handlers[descriptor.id] = LoadedHandler(descriptor, run, tier)
+            if tier == "workspace":
+                self._path_to_id[self._norm(path)] = descriptor.id
             log.info("loaded handler %s (tier=%s)", descriptor.id, tier)
         except DescriptorError as e:
             log.warning("skipping handler file %s: descriptor error: %s", path, e)
@@ -91,12 +102,40 @@ class HandlerRegistry:
         return self._handlers.get(handler_id)
 
     def reload_file(self, path: str) -> None:
-        """Reload a single workspace file in place (hot-reload). Builtin-id
-        clashes are still rejected by _load_one. A deleted file is a no-op
-        (the previously loaded handler stays until the next full load_all)."""
+        """Upsert a workspace handler from *path* (hot-reload on MODIFY events).
+
+        - Evicts any previously-registered workspace handler from this path
+          first, so same-id edits and id-renames both work correctly.
+        - A workspace id that collides with a builtin is still rejected (builtin
+          wins).
+        - A parse/import error after eviction leaves NO entry for the path —
+          the stale version is not retained; a broken file disappears from the
+          registry rather than serving stale data.
+        - A missing file (DELETE was processed by remove_file instead) is a
+          no-op here.
+        """
         if not os.path.isfile(path):
             return
+        norm = self._norm(path)
+        # Evict any previously registered workspace handler from this path.
+        old_id = self._path_to_id.pop(norm, None)
+        if old_id is not None and old_id in self._handlers:
+            if self._handlers[old_id].tier == "workspace":
+                del self._handlers[old_id]
+                log.debug("evicted stale workspace handler %r (reload)", old_id)
         self._load_one(path, "workspace")
+
+    def remove_file(self, path: str) -> None:
+        """Evict the workspace handler registered from *path* (DELETE events).
+
+        No-op if the path was not previously registered as a workspace handler.
+        """
+        norm = self._norm(path)
+        old_id = self._path_to_id.pop(norm, None)
+        if old_id is not None and old_id in self._handlers:
+            if self._handlers[old_id].tier == "workspace":
+                del self._handlers[old_id]
+                log.info("removed workspace handler %r (file deleted)", old_id)
 
     def manifests(self) -> list[dict]:
         items = [self._manifest(h) for h in self._handlers.values()]
