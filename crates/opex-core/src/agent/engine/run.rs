@@ -228,10 +228,6 @@ impl AgentEngine {
             BehaviourLayers::for_interactive(&self.tool_loop_config(), msg.text.clone().unwrap_or_default());
         let pipeline_result: anyhow::Result<()> = async {
             let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await?;
-            // Auto-voice the reply inline when voice mode is on. Emits a File
-            // event on the live SSE stream BEFORE finalize's Finish so the audio
-            // player renders in the chat bubble. Best-effort; never fails the turn.
-            self.maybe_auto_tts(msg, &outcome.final_text, Some(&mut s)).await;
             let fin_ctx = finalize::finalize_context_from_engine(
                 self,
                 session_id,
@@ -248,7 +244,12 @@ impl AgentEngine {
                 outcome.final_text,
                 outcome.thinking_json,
             );
-            finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await?;
+            let final_text =
+                finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await?;
+            // Auto-voice the reply when this chat has voice mode on. Best-effort
+            // (never fails the turn); works on the web UI too because
+            // `voice_chat_id` falls back to the agent name for UI turns.
+            self.maybe_auto_tts(msg, &final_text).await;
             Ok(())
         }
         .await;
@@ -276,19 +277,10 @@ impl AgentEngine {
         Ok(session_id)
     }
 
-    /// If the chat has voice mode `on`, voice the final assistant text.
-    ///
-    /// Messaging channels (Telegram, …) get a background `send_voice` dispatch
-    /// (`ui_sink = None`). Web/UI turns (`ui_sink = Some`) synthesise inline and
-    /// emit a `File` event on the live SSE stream so an audio player renders in
-    /// the chat bubble — this MUST run before `finalize` emits `Finish`, while
-    /// the stream is still open. Best-effort: never fails the turn.
-    async fn maybe_auto_tts(
-        &self,
-        msg: &IncomingMessage,
-        final_text: &str,
-        ui_sink: Option<&mut sink::SseSink>,
-    ) {
+    /// If the chat has voice mode `on`, dispatch the final assistant text as a
+    /// voice message by reusing the `synthesize_speech` YAML tool's channel-action
+    /// path (background TTS → `send_voice`). Best-effort: never blocks or fails the turn.
+    async fn maybe_auto_tts(&self, msg: &IncomingMessage, final_text: &str) {
         if final_text.trim().is_empty() {
             return;
         }
@@ -325,30 +317,10 @@ impl AgentEngine {
             subagent_depth: 0,
         };
         let args = serde_json::json!({ "text": final_text, "_context": msg.context });
-        // For a UI turn (no chat_id in context) this synthesises inline and
-        // returns a `__file__:{json}` marker; for a channel turn it spawns a
-        // background send_voice and returns a system message.
         let result =
             crate::agent::pipeline::channel_actions::execute_yaml_channel_action(&ctx, &tool, &args, &ca)
                 .await;
-        // Channel path: the adapter delivers the voice — nothing more to emit.
-        let Some(s) = ui_sink else {
-            tracing::debug!(channel = %msg.channel, "auto-tts dispatched (channel): {result}");
-            return;
-        };
-        // UI path: turn the `__file__:` marker into a live File event so the
-        // audio player renders inline in the chat bubble.
-        let Some((url, media_type)) = parse_file_marker(&result) else {
-            tracing::warn!(channel = %msg.channel, "auto-tts(ui): no file marker in result: {result}");
-            return;
-        };
-        let _ = s
-            .emit(PipelineEvent::Stream(StreamEvent::File {
-                url: url.clone(),
-                media_type,
-            }))
-            .await;
-        tracing::info!(channel = %msg.channel, url = %url, "auto-tts(ui): inline voice emitted");
+        tracing::debug!(channel = %msg.channel, "auto-tts dispatched: {result}");
     }
 
     /// Handle with optional status callback for real-time phase updates.
@@ -518,8 +490,7 @@ impl AgentEngine {
             finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await;
         self.maybe_trim_session(session_id).await;
         if let Ok(ref final_text) = result {
-            // Channel turn (Telegram, …): background send_voice — no UI sink.
-            self.maybe_auto_tts(msg, final_text, None).await;
+            self.maybe_auto_tts(msg, final_text).await;
         }
         result
     }
@@ -822,56 +793,9 @@ impl AgentEngine {
     }
 }
 
-/// Parse a `synthesize_speech` channel-action result of the form
-/// `__file__:{json}\n[SYSTEM] …` into `(url, mediaType)`. Returns `None` when
-/// the result is not a file marker (e.g. an error string) or carries no `url`.
-/// `mediaType` defaults to `audio/ogg` when the marker omits it.
-fn parse_file_marker(result: &str) -> Option<(String, String)> {
-    let rest = result.strip_prefix(crate::agent::engine::FILE_PREFIX)?;
-    let marker_json = rest.split('\n').next().unwrap_or("");
-    let meta: serde_json::Value = serde_json::from_str(marker_json).ok()?;
-    let url = meta.get("url").and_then(|v| v.as_str())?.to_string();
-    let media_type = meta
-        .get("mediaType")
-        .and_then(|v| v.as_str())
-        .unwrap_or("audio/ogg")
-        .to_string();
-    Some((url, media_type))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::parse_file_marker;
     use std::path::Path;
-
-    #[test]
-    fn parse_file_marker_extracts_url_and_media_type() {
-        let r = "__file__:{\"url\":\"/api/uploads/abc?sig=x\",\"mediaType\":\"audio/ogg\"}\n[SYSTEM] Audio delivered inline.";
-        let (url, mt) = parse_file_marker(r).expect("marker must parse");
-        assert_eq!(url, "/api/uploads/abc?sig=x");
-        assert_eq!(mt, "audio/ogg");
-    }
-
-    #[test]
-    fn parse_file_marker_defaults_media_type() {
-        let (_url, mt) = parse_file_marker("__file__:{\"url\":\"/u/x\"}\n[SYSTEM] x")
-            .expect("marker must parse");
-        assert_eq!(mt, "audio/ogg", "missing mediaType defaults to audio/ogg");
-    }
-
-    #[test]
-    fn parse_file_marker_rejects_non_marker() {
-        // Error strings (e.g. failed synthesis) must not be mistaken for media.
-        assert!(parse_file_marker("Error: media generation failed: 500").is_none());
-        assert!(parse_file_marker("just some text").is_none());
-    }
-
-    #[test]
-    fn parse_file_marker_rejects_marker_without_url_or_bad_json() {
-        assert!(parse_file_marker("__file__:{\"mediaType\":\"audio/ogg\"}\n").is_none());
-        // Malformed JSON after the prefix → None, never a panic.
-        assert!(parse_file_marker("__file__:{not json}\n").is_none());
-    }
 
     fn source() -> String {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agent/engine/run.rs");
