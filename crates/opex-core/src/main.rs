@@ -617,6 +617,12 @@ async fn main() -> Result<()> {
         None
     };
 
+    // Resolve a concrete toolgate URL String for the handler registry BEFORE the
+    // `Option<String>` `toolgate_url` (bound above) is moved into AgentDeps.
+    let toolgate_url_for_handlers = toolgate_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:9011".to_string());
+
     let agent_deps = Arc::new(tokio::sync::RwLock::new(gateway::AgentDeps {
         mcp: mcp_registry.clone(),
         workspace_dir: config::WORKSPACE_DIR.to_string(),
@@ -727,6 +733,10 @@ async fn main() -> Result<()> {
             Arc::new(crate::gateway::state::PollingDiagnostics::new()),
             Arc::new(tokio::sync::RwLock::new(None)),
             std::time::Instant::now(),
+        ),
+        handlers: crate::agent::handler_registry::HandlerRegistry::new(
+            toolgate_url_for_handlers,
+            reqwest::Client::new(),
         ),
     };
 
