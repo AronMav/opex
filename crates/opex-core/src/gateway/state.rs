@@ -86,6 +86,8 @@ pub struct AppState {
     pub channels: ChannelBus,
     pub config:   ConfigServices,
     pub status:   StatusMonitor,
+    /// Discovery cache of toolgate-hosted file handlers (File Handler Hub).
+    pub handlers: crate::agent::handler_registry::HandlerRegistry,
 }
 
 impl FromRef<AppState> for AgentCore {
@@ -105,6 +107,9 @@ impl FromRef<AppState> for ConfigServices {
 }
 impl FromRef<AppState> for StatusMonitor {
     fn from_ref(s: &AppState) -> Self { s.status.clone() }
+}
+impl FromRef<AppState> for crate::agent::handler_registry::HandlerRegistry {
+    fn from_ref(s: &AppState) -> Self { s.handlers.clone() }
 }
 
 /// Shared dependencies needed to start new agents at runtime (from CRUD endpoints).
@@ -144,6 +149,29 @@ impl AgentDeps {
             )),
             lsp_manager: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod handlers_field_tests {
+    use super::*;
+    use crate::agent::handler_registry::HandlerRegistry;
+
+    #[tokio::test]
+    async fn appstate_exposes_handler_registry_via_fromref() {
+        let reg = HandlerRegistry::new("http://127.0.0.1:9011".to_string(), reqwest::Client::new());
+        let state = AppState {
+            agents: crate::gateway::clusters::AgentCore::test_empty().await,
+            auth: crate::gateway::clusters::AuthServices::test_new(),
+            infra: crate::gateway::clusters::InfraServices::test_new(),
+            channels: crate::gateway::clusters::ChannelBus::test_new(),
+            config: crate::gateway::clusters::ConfigServices::test_new(),
+            status: crate::gateway::clusters::StatusMonitor::test_new(),
+            handlers: reg,
+        };
+        // FromRef must resolve the new field for axum State extraction.
+        let extracted = HandlerRegistry::from_ref(&state);
+        assert!(extracted.manifests().await.is_empty());
     }
 }
 

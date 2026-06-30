@@ -499,6 +499,10 @@ mod tests {
             channels: ChannelBus::test_new(),
             config: ConfigServices::test_new(),
             status: StatusMonitor::test_new(),
+            handlers: crate::agent::handler_registry::HandlerRegistry::new(
+                "http://127.0.0.1:9011".to_string(),
+                reqwest::Client::new(),
+            ),
         };
         Router::new().merge(routes()).with_state(state)
     }
