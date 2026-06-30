@@ -597,6 +597,22 @@ pub(crate) async fn api_set_provider_active(
 
 // ── Toolgate config export (internal, unmasked keys) ────────────────────────
 
+/// Absolute path to the workspace dir, exported to toolgate via /api/media-config
+/// so it can load workspace/file_handlers/*.py without guessing. Falls back to
+/// the relative WORKSPACE_DIR string joined to CWD when canonicalize fails
+/// (e.g. the dir doesn't exist yet at first boot).
+pub(crate) fn media_config_workspace_dir() -> String {
+    let rel = std::path::Path::new(crate::config::WORKSPACE_DIR);
+    match std::fs::canonicalize(rel) {
+        Ok(abs) => abs.to_string_lossy().into_owned(),
+        Err(_) => std::env::current_dir()
+            .map(|cwd| cwd.join(rel))
+            .unwrap_or_else(|_| rel.to_path_buf())
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
 /// Internal endpoint for toolgate — returns full config with real `api_keys`.
 /// Emits `"driver"` field (mapped from `provider_type`) which toolgate matches on.
 /// Build media config JSON — used by API handler and main.rs toolgate export.
@@ -646,6 +662,7 @@ pub(crate) async fn build_media_config(infra: &InfraServices, auth: &AuthService
         "version": 1,
         "active": active_map,
         "providers": provider_map,
+        "workspace_dir": media_config_workspace_dir(),
     })
 }
 
@@ -1341,6 +1358,22 @@ mod tests {
         assert!(!is_valid_capability("compaction"));
         assert!(!is_valid_capability("text"));
         assert!(!is_valid_capability(""));
+    }
+}
+
+#[cfg(test)]
+mod workspace_dir_tests {
+    use super::media_config_workspace_dir;
+
+    #[test]
+    fn workspace_dir_is_absolute_and_ends_with_workspace() {
+        let dir = media_config_workspace_dir();
+        let p = std::path::Path::new(&dir);
+        assert!(p.is_absolute(), "workspace_dir must be absolute, got {dir}");
+        assert!(
+            dir.replace('\\', "/").ends_with("workspace"),
+            "workspace_dir must end with the workspace component, got {dir}"
+        );
     }
 }
 
