@@ -65,6 +65,7 @@ async def test_async_handler_run_returns_202_and_spawns_runner_with_tempfile(mon
         language="ru",
         job_id="job-123",
         source_url=None,
+        callback_token=None,
     )
     assert resp.status_code == 202
     payload = json.loads(bytes(resp.body))
@@ -160,6 +161,54 @@ async def test_runner_reads_tempfile_then_posts_progress_and_complete(monkeypatc
                         "artifact_urls": [], "reason": None}
     # Temp file deleted by the runner's finally.
     assert not temp.exists(), "runner must delete the temp file"
+
+
+@pytest.mark.asyncio
+async def test_run_handler_includes_callback_token_in_spec(monkeypatch, tmp_path):
+    """FIX 5 (router side): when run_handler receives a callback_token multipart
+    field, it must include it in the spec JSON passed to the runner subprocess.
+    Without the fix, FastAPI silently drops the undeclared form field and the
+    spec lacks callback_token -> runner omits X-Job-Token -> every callback 401s."""
+    from handlers import router as router_mod
+
+    reg = HandlerRegistry()
+    reg.load_all(
+        builtin_dir=str(Path(__file__).resolve().parents[1] / "handlers" / "builtin"),
+        workspace_dir=None,
+    )
+    assert reg.get("summarize_video") is not None
+    assert reg.get("summarize_video").descriptor.execution == "async"
+
+    spawned: dict = {}
+
+    async def fake_exec(*args, **kwargs):
+        spawned["argv"] = args
+
+        class _Proc:
+            pid = 7777
+        return _Proc()
+
+    monkeypatch.setattr(router_mod.asyncio, "create_subprocess_exec", fake_exec)
+
+    resp = await router_mod.run_handler(
+        "summarize_video",
+        _FakeRequest(reg),
+        file=_UploadFile(b"VID"),
+        mime="video/mp4",
+        filename="v.mp4",
+        params="{}",
+        language="ru",
+        job_id="job-xyz",
+        source_url=None,
+        callback_token="abc.token123",
+    )
+    assert resp.status_code == 202
+
+    spec_arg = spawned["argv"][-1]
+    spec = json.loads(spec_arg)
+    assert spec.get("callback_token") == "abc.token123", (
+        f"callback_token missing or wrong in spec: {spec}"
+    )
 
 
 @pytest.mark.asyncio
