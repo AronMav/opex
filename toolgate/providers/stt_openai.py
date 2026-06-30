@@ -6,6 +6,23 @@ import httpx
 
 from providers.base import resolve_request_timeout
 
+# Map a file extension to an audio MIME type. The STT server (speaches) returns
+# HTTP 415 when the multipart part's content-type disagrees with the actual
+# bytes, so the type must follow the filename — not a hardcoded `audio/ogg`.
+# This matters once silence-trim falls back to the original upload, whose
+# extension can be webm / wav / m4a rather than ogg.
+_AUDIO_MIME_BY_EXT = {
+    "ogg": "audio/ogg", "oga": "audio/ogg", "opus": "audio/ogg",
+    "webm": "audio/webm", "wav": "audio/wav", "mp3": "audio/mpeg",
+    "m4a": "audio/mp4", "mp4": "audio/mp4", "flac": "audio/flac",
+}
+
+
+def _content_type_for(filename: str) -> str:
+    """Pick an audio MIME from `filename`'s extension; octet-stream when unknown."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return _AUDIO_MIME_BY_EXT.get(ext, "application/octet-stream")
+
 
 def _fold_segments(segments: list | None, lines: list[str]) -> None:
     """Append `[MM:SS] text` for each non-empty segment into `lines`.
@@ -64,7 +81,7 @@ class OpenAISTT:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         # verbose_json yields per-segment timestamps, folded into `[MM:SS]` markers
         # so the downstream digest LLM has explicit time anchors.
-        files = {"file": (filename, audio_bytes, "audio/ogg")}
+        files = {"file": (filename, audio_bytes, _content_type_for(filename))}
         data = {"model": model or self.model, "language": language,
                 "response_format": "verbose_json"}
         url = f"{self.base_url}/audio/transcriptions"
