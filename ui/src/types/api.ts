@@ -518,3 +518,20 @@ export interface ScenarioChoice {
   label: string;
   executor: "tool" | "skill";
 }
+
+// ── File Handler Hub (Phase 4) ─────────────────────────────────────────────────
+// Source: crates/opex-core/src/gateway/handlers/files.rs (HandlerButton)
+// GET /api/files/{upload_id}/actions → { buttons: FileActionButton[] }
+// `upload_id` is the upload ROW UUID (the `filename` field of POST /api/media/upload).
+// `label` is already localized server-side by the request locale.
+
+export interface FileActionButton {
+  id: string;
+  label: string;
+  icon: string;
+  params: Record<string, unknown>;
+}
+
+export interface FileActionsResponse {
+  buttons: FileActionButton[];
+}
