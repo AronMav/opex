@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn(), refresh: vi.fn() }),
@@ -24,29 +24,17 @@ vi.mock("@/lib/api", () => ({
 }));
 
 // ChatComposer renders <ModelDropdown agent={currentAgent} /> unconditionally.
-// ModelDropdown calls useAgents/useProviders/useProviderModels from @/lib/queries —
-// none of which the factory mock below exports — so the real component would throw
-// `useAgents is not a function` and crash the render. Stub it to null.
+// Stub it to null so we don't need to provide all query context.
 vi.mock("../ModelDropdown", () => ({
   ModelDropdown: () => null,
 }));
 
-// Mock @/lib/queries providing ALL hooks ChatComposer's subtree calls so no hook
-// throws "is not a function".
+// Mock @/lib/queries providing ALL hooks ChatComposer's subtree calls.
 vi.mock("@/lib/queries", () => ({
   useProviderActive: () => ({ data: [] }),
   useAgents: () => ({ data: [] }),
   useProviders: () => ({ data: [] }),
   useProviderModels: () => ({ data: [] }),
-}));
-
-// Capture the props FileActionButtons is rendered with.
-const fabSpy = vi.fn();
-vi.mock("../FileActionButtons", () => ({
-  FileActionButtons: (props: Record<string, unknown>) => {
-    fabSpy(props);
-    return <div data-testid="fab" data-upload={String(props.uploadId)} />;
-  },
 }));
 
 vi.mock("@/stores/auth-store", () => ({
@@ -83,7 +71,8 @@ vi.mock("../../hooks/use-voice-recorder", () => ({
 
 import { ChatComposer } from "../ChatComposer";
 
-const UPLOAD_UUID = "abc-123-uuid";
+// The upload API returns: url = served path, filename = the row UUID (R1 requirement).
+const UPLOAD_UUID = "11111111-1111-1111-1111-111111111111";
 
 describe("ChatComposer captures upload row UUID", () => {
   const realFetch = global.fetch;
@@ -91,24 +80,34 @@ describe("ChatComposer captures upload row UUID", () => {
     vi.clearAllMocks();
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      // url is a served path, filename is the row UUID (R1).
-      json: async () => ({ url: "/uploads/something-else.ogg", filename: UPLOAD_UUID, size: 10 }),
+      json: async () => ({
+        url: "/uploads/some-served-path.ogg",
+        filename: UPLOAD_UUID,
+        size: 10,
+      }),
     }) as unknown as typeof fetch;
   });
   afterEach(() => {
     global.fetch = realFetch;
   });
 
-  it("passes uploadId = response.filename (the row UUID), not the URL path", async () => {
+  it("sets data-upload-id on the attachment chip to response.filename (the row UUID, not the URL path)", async () => {
     const { container } = render(<ChatComposer />);
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     const file = new File(["x"], "voice.ogg", { type: "audio/ogg" });
     Object.defineProperty(input, "files", { value: [file], configurable: true });
     input.dispatchEvent(new Event("change", { bubbles: true }));
 
-    await waitFor(() => expect(screen.getByTestId("fab")).toBeInTheDocument());
-    const props = fabSpy.mock.calls.at(-1)![0];
-    expect(props.uploadId).toBe(UPLOAD_UUID);
-    expect(String(props.uploadId)).not.toContain("/uploads/");
+    // Wait for the attachment chip to appear with the correct data-upload-id.
+    await waitFor(() => {
+      const chip = container.querySelector(`[data-upload-id="${UPLOAD_UUID}"]`);
+      expect(chip).toBeInTheDocument();
+    });
+
+    // The upload-id must be the row UUID, not a /uploads/... path.
+    const chip = container.querySelector(`[data-upload-id="${UPLOAD_UUID}"]`);
+    expect(chip).not.toBeNull();
+    expect(chip!.getAttribute("data-upload-id")).toBe(UPLOAD_UUID);
+    expect(chip!.getAttribute("data-upload-id")).not.toContain("/uploads/");
   });
 });
