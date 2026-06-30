@@ -141,6 +141,37 @@ Follow these rules strictly when creating HTML content.
 - **Mermaid**: `<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>`
 - Any CDN visualization library
 
+### Mermaid syntax (CRITICAL)
+
+The diagram definition MUST be **multi-line** — put each node and edge on its
+**own line** with real newlines. A flowchart squeezed onto one line
+(`flowchart TD A-->B B-->C ...`) fails with **"Syntax error in text"** in
+Mermaid v11. Edge labels (`-->|text|`) and special chars (`≥`, `–`, `°C`)
+guarantee the break on a single line.
+
+- One statement per line; indent edges under the `flowchart TD` header.
+- Define all nodes/edges first, then each `style ...` line on its own line.
+- Put the diagram in `<pre class="mermaid">…</pre>` and call
+  `mermaid.initialize({ startOnLoad: true, theme: 'dark' })`.
+
+```html
+<pre class="mermaid">
+flowchart TD
+  Start([Курица готова]) --> Wash[Промыть]
+  Wash --> Heat{Способ?}
+  Heat -->|Запекание| Oven[Духовка 180°C]
+  Heat -->|Жарка| Pan[Сковорода]
+  Oven --> Check{t ≥ 74°C?}
+  Pan --> Check
+  Check -->|Да| Serve([Подача])
+  Check -->|Нет| Oven
+  style Start fill:#2d1b33,stroke:#d4a574
+  style Serve fill:#3d2817,stroke:#d4a574
+</pre>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'dark' });</script>
+```
+
 ## Limits
 
 - **Max content size**: 5 MB
