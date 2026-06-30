@@ -33,44 +33,52 @@ pub struct ScenarioOutcome {
     /// `#[serde(default)]` keeps wire/DB compatibility for older payloads.
     #[serde(default)]
     pub video_accepted: bool,
+    /// Optional, handler-requested post-completion side effect, carried opaquely
+    /// from the toolgate runner's outcome JSON. v1 supports the Obsidian vault
+    /// note write (`{"kind":"obsidian_note", ...}`); read back by
+    /// `files.rs::run_post_action` after the job result is persisted.
+    /// `default` survives older payloads; `skip_serializing_if` keeps the wire
+    /// shape unchanged when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_action: Option<serde_json::Value>,
 }
 
 impl ScenarioOutcome {
     /// Successful tool/toolgate result. `summary_text` is surfaced to the LLM;
     /// produced artifacts (signed URLs) go in `artifact_urls`.
     pub fn ok(summary_text: String, artifact_urls: Vec<String>) -> Self {
-        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false }
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false, post_action: None }
     }
 
     /// Async-video acceptance ack: a `video_jobs` row was enqueued and `summary_text`
     /// is the user-facing "video accepted, preparing summary" message. Marks
     /// `video_accepted = true` so the pipeline short-circuits the LLM loop.
     pub fn video_accepted(summary_text: String, artifact_urls: Vec<String>) -> Self {
-        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: true }
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: true, post_action: None }
     }
 
     /// The rowless universal fallback: nothing processed, file persisted.
     /// Same shape as `ok` so downstream rendering treats it uniformly.
     pub fn save(summary_text: String, artifact_urls: Vec<String>) -> Self {
-        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false }
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false, post_action: None }
     }
 
     pub fn failed(reason: String) -> Self {
-        Self { status: ScenarioStatus::Failed, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false }
+        Self { status: ScenarioStatus::Failed, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
     }
 
     /// Fail-closed backstop: an `executor=tool` action_ref not in the dispatch table.
     pub fn unsupported(reason: String) -> Self {
-        Self { status: ScenarioStatus::Unsupported, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false }
+        Self { status: ScenarioStatus::Unsupported, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
     }
 
     pub fn timeout() -> Self {
-        Self { status: ScenarioStatus::Timeout, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some("per-execution timeout".to_string()), video_accepted: false }
+        Self { status: ScenarioStatus::Timeout, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some("per-execution timeout".to_string()), video_accepted: false, post_action: None }
     }
 
     #[allow(dead_code)] // Phase 6: used when HTTP 413 from toolgate is surfaced as a UI chip message
     pub fn too_large(reason: String) -> Self {
-        Self { status: ScenarioStatus::TooLarge, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false }
+        Self { status: ScenarioStatus::TooLarge, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
     }
 }
 
@@ -165,6 +173,38 @@ mod tests {
         assert_eq!(status_from_http(415), ScenarioStatus::Failed);
         assert_eq!(status_from_http(502), ScenarioStatus::Failed);
         assert_eq!(status_from_http(503), ScenarioStatus::Failed);
+    }
+
+    // ── post_action round-trip tests (Task 3) ─────────────────────────────────
+
+    #[test]
+    fn post_action_survives_deserialize_then_reserialize() {
+        // Wire shape the toolgate runner posts to /api/files/jobs/{id}/complete.
+        let wire = serde_json::json!({
+            "status": "ok",
+            "summary_text": "конспект",
+            "artifact_urls": [],
+            "reason": null,
+            "post_action": { "kind": "obsidian_note", "filename": "v.md" }
+        });
+        // job_complete does Json<ScenarioOutcome> → this deserialize MUST keep post_action.
+        let outcome: ScenarioOutcome = serde_json::from_value(wire).unwrap();
+        assert!(outcome.post_action.is_some(), "post_action survives deserialize");
+
+        // mark_handler_job_done stores serde_json::to_value(&outcome): post_action MUST persist.
+        let stored = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(
+            stored["post_action"]["kind"], "obsidian_note",
+            "post_action survives re-serialize into the stored result JSON"
+        );
+    }
+
+    #[test]
+    fn outcome_without_post_action_omits_the_key() {
+        // skip_serializing_if keeps the 4/5-key wire shape unchanged when unset.
+        let o = ScenarioOutcome::ok("x".into(), vec![]);
+        let v = serde_json::to_value(&o).unwrap();
+        assert!(v.get("post_action").is_none(), "no post_action key when None");
     }
 
     // ── Wire-contract tests (R9): toolgate 4-key JSON ↔ ScenarioOutcome ──────
