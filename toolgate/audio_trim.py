@@ -23,14 +23,25 @@ _SILENCEREMOVE = (
     "areverse"
 )
 
+# A successful trim that strips ALL audio (the recording was silence below the
+# -50dB threshold) still emits a valid Ogg container — just the OpusHead /
+# OpusTags header pages (~200-400 bytes) with no audio frames. faster-whisper's
+# `av.open()` then raises `EOFError` ("Failed to decode audio") on that
+# header-only stream and the STT call 500s. Anything below this floor carries no
+# real audio, so we fall back to the ORIGINAL upload (which still has a decodable
+# stream — the STT server's own VAD drops the silence and returns empty text
+# instead of failing).
+_MIN_TRIMMED_BYTES = 800
+
 
 async def trim_silence(audio: bytes, in_ext: str) -> tuple[bytes, str]:
     """Trim leading/trailing silence from `audio`.
 
     Returns ``(audio, ext)``:
-      * success      → ``(trimmed_ogg_opus_bytes, "ogg")``
-      * empty input  → ``(audio, in_ext)`` (no-op)
-      * any failure  → ``(original_audio, in_ext)`` (best-effort, never raises)
+      * success           → ``(trimmed_ogg_opus_bytes, "ogg")``
+      * empty input       → ``(audio, in_ext)`` (no-op)
+      * trimmed to silence → ``(original_audio, in_ext)`` (header-only guard)
+      * any failure       → ``(original_audio, in_ext)`` (best-effort, never raises)
     """
     if not audio:
         return audio, in_ext
@@ -52,6 +63,13 @@ async def trim_silence(audio: bytes, in_ext: str) -> tuple[bytes, str]:
                 "trim_silence ffmpeg rc=%s: %s",
                 proc.returncode,
                 err[:300].decode("utf-8", "ignore"),
+            )
+            return audio, in_ext
+        if len(out) < _MIN_TRIMMED_BYTES:
+            log.info(
+                "trim_silence produced %d bytes (header-only, no audio) — "
+                "falling back to original %d-byte upload",
+                len(out), len(audio),
             )
             return audio, in_ext
         return out, "ogg"

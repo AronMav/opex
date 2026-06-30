@@ -16,14 +16,30 @@ async def test_empty_input_passthrough():
 
 
 @pytest.mark.asyncio
-async def test_success_returns_trimmed_wav():
+async def test_success_returns_trimmed_ogg():
     proc = MagicMock()
     proc.returncode = 0
-    proc.communicate = AsyncMock(return_value=(b"WAVDATA", b""))
+    # Real trimmed audio — well above the header-only floor (_MIN_TRIMMED_BYTES).
+    trimmed = b"OggS" + b"\xab" * 2000
+    proc.communicate = AsyncMock(return_value=(trimmed, b""))
     with patch("audio_trim.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
         out, ext = await trim_silence(b"INPUTAUDIO", "webm")
-    assert out == b"WAVDATA"
+    assert out == trimmed
     assert ext == "ogg"
+
+
+@pytest.mark.asyncio
+async def test_header_only_output_falls_back_to_original():
+    """All-silence input → ffmpeg emits a header-only Ogg (no audio frames).
+    That tiny output would 500 the STT server (EOFError), so trim_silence must
+    fall back to the original upload (keeping its extension)."""
+    proc = MagicMock()
+    proc.returncode = 0
+    proc.communicate = AsyncMock(return_value=(b"OggS" + b"\x00" * 200, b""))  # ~204 bytes
+    with patch("audio_trim.asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+        out, ext = await trim_silence(b"ORIGINAL-WEBM-AUDIO-WITH-A-DECODABLE-STREAM", "webm")
+    assert out == b"ORIGINAL-WEBM-AUDIO-WITH-A-DECODABLE-STREAM"
+    assert ext == "webm"
 
 
 @pytest.mark.asyncio
