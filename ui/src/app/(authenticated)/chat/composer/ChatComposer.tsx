@@ -86,6 +86,23 @@ function lastAssistantSpokenText(source: MessageSource): string {
   return "";
 }
 
+/** URL of the most recent assistant message's audio file part (e.g. a
+ *  synthesize_speech voice reply) — "" when the latest assistant reply has none.
+ *  Lets us auto-play the voice the model produced itself instead of re-synthesising
+ *  its text. */
+function lastAssistantAudioUrl(source: MessageSource): string {
+  const msgs = getLiveMessages(source);
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.role !== "assistant") continue;
+    for (const p of m.parts) {
+      if (p.type === "file" && p.mediaType.startsWith("audio")) return p.url;
+    }
+    return ""; // latest assistant reply carries no audio part
+  }
+  return "";
+}
+
 interface AttachmentEntry {
   id: string;
   name: string;
@@ -270,6 +287,26 @@ export function ChatComposer() {
     [getTtsEl, stopTts, t],
   );
 
+  // Play an already-synthesised audio URL (the model's synthesize_speech reply)
+  // on the SAME pre-unlocked element playReply uses — a fresh `new Audio()` would
+  // be blocked by the browser autoplay policy on the first hands-free reply.
+  const playAudioUrl = useCallback(
+    async (url: string) => {
+      try {
+        if (ttsUrlRef.current) {
+          URL.revokeObjectURL(ttsUrlRef.current);
+          ttsUrlRef.current = null;
+        }
+        const a = getTtsEl();
+        a.src = url;
+        await a.play();
+      } catch {
+        stopTts();
+      }
+    },
+    [getTtsEl, stopTts],
+  );
+
   // When a voice-initiated turn finishes streaming, speak the agent's reply.
   const prevStreamingRef = useRef(false);
   useEffect(() => {
@@ -277,14 +314,19 @@ export function ChatComposer() {
     prevStreamingRef.current = isStreaming;
     if (was && !isStreaming && voiceReplyPendingRef.current) {
       voiceReplyPendingRef.current = false;
-      const text = lastAssistantSpokenText(messageSource);
-      if (text) {
+      // Prefer the voice the model produced itself (synthesize_speech audio part);
+      // otherwise synthesise the reply TEXT. Mutually exclusive — synthesize_speech
+      // ends the turn with empty text, so this never double-voices.
+      const audioUrl = lastAssistantAudioUrl(messageSource);
+      const text = audioUrl ? "" : lastAssistantSpokenText(messageSource);
+      if (audioUrl || text) {
         ttsPlayingRef.current = true; // synchronous guard so continuous re-arm waits
         setTtsPlaying(true);
-        void playReply(text);
+        if (audioUrl) void playAudioUrl(audioUrl);
+        else void playReply(text);
       }
     }
-  }, [isStreaming, messageSource, playReply]);
+  }, [isStreaming, messageSource, playReply, playAudioUrl]);
 
   // Continuous loop: re-arm recording once a turn finishes (idle, not streaming,
   // and not while the spoken reply is still playing — avoids recording the TTS).
