@@ -10,6 +10,8 @@
 
 **Source spec:** [docs/superpowers/specs/2026-06-30-file-handler-hub-design.md](../specs/2026-06-30-file-handler-hub-design.md)
 
+**Review status:** drafted, then hardened by 3 in-loop critic passes (overall_ok reached true) and one **grounded live-code review pass** (each phase's code verified against the real tree); all critical + major findings were fixed (`toolgate_url` move/shadow at AppState, `insert_with_retention` slice arg, ChatComposer test mocks for `useAgents/useProviders/useProviderModels`, `post_action` survival through `ScenarioOutcome` serde, `shutdown`/`&state` worker wiring, single-source `messages.source` migration). No `Implementation errata` block remains — all known mismatches are applied inline.
+
 ## Global Constraints
 
 - **rustls-tls only** — never add OpenSSL (all reqwest/sqlx use rustls features).
@@ -18,26 +20,16 @@
 - **Work in `master`**; **never `git push`** without explicit user approval.
 - toolgate HTTP facade stays **`--workers 1 --loop asyncio`**; long/async handlers run **out-of-process** (a `runner.py` subprocess per job).
 - toolgate uses **`watchfiles`** (already a dependency) for hot-reload — NOT `watchdog`.
-- **toolgate must never fetch a loopback URL** (`validate_url_ssrf` blocks loopback by design). The core downloads upload bytes over loopback **in Rust** and sends them as `multipart` to `/handlers/{id}/run`.
-- Migration numbers (next free; highest existing is `065`): **066** = `messages.source` column, **067** = `handler_jobs` table, **068** = `video_jobs` deprecation (non-destructive, no `DROP TABLE`).
+- **toolgate must never fetch a loopback URL** (`validate_url_ssrf` blocks loopback by design). The core downloads upload bytes over loopback **in Rust** and sends them as `multipart` to `/handlers/{id}/run`; handlers receive `file.bytes`.
+- Migration numbers (next free; highest existing is `065`): **066** = `messages.source` column (Phase 3, the single source of that column), **067** = `handler_jobs` table (Phase 5), **068** = `video_jobs` deprecation (Phase 6, non-destructive, no `DROP TABLE`).
 - **Builtin handler ids are reserved**; **workspace-tier handlers are allowed-by-default** (valid only under the v1 trusted-author model).
 - Bilingual **ru/en** labels everywhere a user-facing string is added.
-- Wire type: toolgate emits `ScenarioOutcome` snake_case JSON `{status, summary_text, artifact_urls, reason}`; `status ∈ {ok, failed, unsupported, too_large, timeout}` (core's `agent/file_scenario/outcome.rs` is the source of truth; its extra `video_accepted` field defaults on deserialize and is ignored by toolgate).
+- Wire type: toolgate emits `ScenarioOutcome` snake_case JSON; `status ∈ {ok, failed, unsupported, too_large, timeout}`. `agent/file_scenario/outcome.rs` is the source of truth; its `video_accepted` and (Phase-5-added) `post_action` fields carry `#[serde(default)]` so toolgate's 4-key payload deserializes cleanly.
 
-## Scope adjustments from multi-agent review
+## Scope adjustments from review
 
-This plan was drafted and then hardened across two adversarial critic passes. Two deliberate scope decisions came out of that:
-
-1. **Legacy post-send chips + Telegram `fse:` callbacks are NOT migrated here.** They keep using the existing in-core `file_scenarios` mechanism (`ScenarioChoice{scenario_id: Uuid, …}`). The new **composer buttons** are the v1 surface. Migrating channels/chips onto `HandlerRegistry` is a future follow-up (it needs a handler→scenario_id mapping). Consequently the in-core *sync* dispatch (`dispatch.rs`, `dispatch_seam.rs`) **stays**; only the **video** pipeline is removed in Phase 6.
-2. **Async video continuity:** Phase 3 keeps `summarize_video` on the legacy `video_jobs` path; Phase 5 builds the universal queue, ports `summarize_video` to a Python async handler, and re-points BOTH the composer async button (`files.rs`) and the legacy auto-YouTube-detection enqueue site onto `handler_jobs`; only then does Phase 6 delete the legacy video pipeline.
-
-## Implementation errata (apply these when you reach the cited spots)
-
-The final critic flagged three small mismatches between the drafted snippets and the live tree. Apply these:
-
-1. **`uploads_local_url` module path.** It lives at **`crate::agent::url_tools::uploads_local_url`** (`pub(crate)`), NOT `crate::uploads`. In **Phase 3 / Task 5** (`files.rs` sync run path) use `crate::agent::url_tools::uploads_local_url`. (Phase 5 already uses the correct path.) `crate::uploads` only exports `mint_uploads_url` + `web_uploads_base`.
-2. **Phase 4 / Task 3 composer edit.** The real `handleFileAdd` computes `uploadPath` via an IIFE (`(() => { try { return new URL(result.url).pathname } catch { return result.url } })()`) and uses `uuid()` (not `crypto.randomUUID()`). Apply the intended change — add `uploadId: result.filename` to the `AttachmentEntry` object — against that real surrounding code.
-3. **Phase 2 / Task 3 `extract_document`.** Use the existing in-repo idiom `import docx; docx.Document(io.BytesIO(file.bytes))` (both `import docx` and `from docx import Document` resolve via python-docx; match the existing `routers/documents.py` style).
+1. **Legacy post-send chips + Telegram `fse:` callbacks are NOT migrated here.** They keep using the existing in-core `file_scenarios` mechanism (`ScenarioChoice{scenario_id: Uuid, …}`). The new **composer buttons** are the v1 surface. Consequently the in-core *sync* dispatch (`dispatch.rs`, `dispatch_seam.rs`) **stays**; only the **video** pipeline is removed in Phase 6.
+2. **Async video continuity:** Phase 3 keeps `summarize_video` on the legacy `video_jobs` path; Phase 5 builds the universal queue, ports `summarize_video` to a Python async handler, and re-points BOTH the composer async button (`files.rs`) and the legacy auto-YouTube-detection enqueue site (`subagent.rs`) onto `handler_jobs`; only then does Phase 6 delete the legacy video pipeline.
 
 ---
 
@@ -1070,7 +1062,7 @@ def build_context(registry, http_client: httpx.AsyncClient, job_id: str | None =
 ```bash
 cd toolgate && pytest tests/test_handlers_context.py -q
 ```
-Expected: `11 passed`.
+Expected: `10 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -2162,14 +2154,20 @@ import os
 from fastapi.testclient import TestClient
 
 
-def _empty_load():
-    from config import ProvidersConfig
-    return ProvidersConfig()
+async def _async_noop(self):
+    # The real warm-up path: app.py lifespan calls registry.aload(), which
+    # delegates to ProviderRegistry._refresh() — that does an INLINE
+    # httpx GET to {CORE_API_URL}/api/media-config. Stub the bound method so
+    # lifespan startup never touches DNS/network (the autouse _clear_legacy_env
+    # fixture points CORE_API_URL at http://core-test:18789). The registry keeps
+    # its constructor default self.config = ProvidersConfig() (workspace_dir=None),
+    # so load_all is called with the builtin dir + ws_dir=None.
+    return None
 
 
 def test_app_mounts_handlers_and_state(monkeypatch):
-    # Keep registry warm-up from touching the network.
-    monkeypatch.setattr("registry._aload_config_from_api", _empty_load)
+    # Keep registry warm-up from touching the network (stub the real _refresh).
+    monkeypatch.setattr("registry.ProviderRegistry._refresh", _async_noop)
     import app as app_module
     importlib.reload(app_module)
     with TestClient(app_module.app) as client:
@@ -2185,7 +2183,7 @@ def test_app_mounts_handlers_and_state(monkeypatch):
 
 
 def test_builtin_dir_resolution(monkeypatch):
-    monkeypatch.setattr("registry._aload_config_from_api", _empty_load)
+    monkeypatch.setattr("registry.ProviderRegistry._refresh", _async_noop)
     import app as app_module
     importlib.reload(app_module)
     # the helper must resolve to an existing directory containing the builtins
@@ -2199,7 +2197,7 @@ def test_builtin_dir_resolution(monkeypatch):
 ```bash
 cd toolgate && pytest tests/test_handlers_app_wiring.py -q
 ```
-Expected: fails — `app.state` has no `handlers`, `app_module._builtin_handlers_dir` is undefined (`AttributeError`), and `/handlers` returns 404.
+Expected: fails — the stubbed `ProviderRegistry._refresh` lets lifespan startup complete without any network call, so the test reaches its assertions and they fail: `app.state` has no `handlers`, `app_module._builtin_handlers_dir` is undefined (`AttributeError`), and `/handlers` returns 404.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -2381,6 +2379,8 @@ git commit -m "feat(core): expose absolute workspace_dir in /api/media-config fo
 > **Deferred (per resolution R2):** migrating the post-send SSE "file-scenario-chips" event and the Telegram `fse:` callback onto `HandlerRegistry` is a future follow-up. `opex_types::sse::ScenarioChoice` is `{scenario_id: Uuid, label, executor}` — structurally incompatible with string handler ids — and those surfaces keep using the existing legacy `file_scenarios` mechanism (scenario_id: Uuid) untouched. Phase 3's only client surfaces are the new `GET /api/files/{upload_id}/actions` + `POST /api/files/{upload_id}/run` endpoints feeding the composer (Phase 4). The legacy in-core sync dispatch (`dispatch.rs`, `dispatch_seam.rs` incl. `PendingAlternative`) therefore STAYS — it still powers the legacy chips/Telegram path; and `summarize_video` stays on the legacy `video_jobs` dispatch in this phase (the async route here only returns a 202 stub; Phase 5 amends THIS files.rs async branch to enqueue `handler_jobs` — per R13).
 
 > **SSRF×loopback note (R12):** in this phase the core does the loopback upload download IN RUST (mirroring `dispatch.rs::run_transcribe`) and POSTs the raw bytes to toolgate as `multipart/form-data` (field `file` + text fields `mime`, `filename`, `params`, `language`). Toolgate NEVER receives a loopback URL — `validate_url_ssrf` would reject it. The minted signed url is used ONLY by core's own loopback GET.
+
+> **Chat-delivery note (R-CHAT):** in Phase 3 the chat-delivery path for a produced artifact is the **POST `/run` response body** (it returns the full `ScenarioOutcome` to the composer). The additional `channels.ui_event_tx.send(json!({"type":"file", ...}))` broadcast on the success path is the GLOBAL UI WebSocket event bus (the same channel that carries `session_updated`/`notification` — see `channel_ws/reader.rs` `type:"session_updated"` and `notifications.rs`), **NOT** the per-session chat SSE stream (chat `file` events flow through `StreamEvent` → `sse_converter.rs`). It is therefore a **best-effort cross-surface notification**, and may be a no-op until a UI consumer for a global `type:"file"` ui_event is wired (Phase 4). The spec data-flow line "SSE `file`/`card` to chat" (design §"Data flow — synchronous handler") is satisfied in Phase 3 by the POST response body; the `ui_event_tx` broadcast is supplementary, not the load-bearing chat render path.
 
 ---
 
@@ -2648,7 +2648,7 @@ pub fn match_buttons(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes** — `cargo test -p opex-core handler_registry:: 2>&1 | tail -20` — all 8 tests PASS.
+- [ ] **Step 4: Run test to verify it passes** — `cargo test -p opex-core handler_registry:: 2>&1 | tail -20` — all 7 tests PASS.
 
 - [ ] **Step 5: Commit**
 ```bash
@@ -2925,7 +2925,7 @@ git commit -m "feat(handlers): wrap_file_output provenance + migration 066 messa
 - Modify: `crates/opex-core/src/main.rs`
 
 **Interfaces:**
-- Consumes: `crate::agent::handler_registry::HandlerRegistry::new(toolgate_url, http)` (Task 2); the resolved `toolgate_url` String already bound at `main.rs:382`.
+- Consumes: `crate::agent::handler_registry::HandlerRegistry::new(toolgate_url, http)` (Task 2). NOTE on the live `toolgate_url` bindings: `main.rs:382` binds `let toolgate_url = ... .unwrap_or_else(...)` (a `String`), but that is **SHADOWED** at `main.rs:556` by `let toolgate_url = cfg.toolgate_url.clone().or_else(|| service_map.get("toolgate")...)` (an `Option<String>`), and that `Option<String>` is then **MOVED** into `AgentDeps { toolgate_url, .. }` at `main.rs:623` (the `agent_deps` `Arc` is in turn moved into `AgentCore::new` at `main.rs:690`). So at the `AppState` literal (`main.rs:687-731`) the `toolgate_url` binding is both the wrong type (`Option<String>`) AND already moved — it must NOT be referenced there. Capture a fresh resolved `String` BEFORE the `agent_deps` construction instead.
 - Produces: `AppState.handlers: HandlerRegistry` field + `impl FromRef<AppState> for HandlerRegistry` (consumed by `files.rs` handlers in Task 5).
 
 - [ ] **Step 1: Write the failing test** (append to `state.rs`, under `#[cfg(test)]`)
@@ -2976,15 +2976,23 @@ impl FromRef<AppState> for crate::agent::handler_registry::HandlerRegistry {
     fn from_ref(s: &AppState) -> Self { s.handlers.clone() }
 }
 ```
-In `main.rs`, inside the `let state = gateway::AppState { ... }` literal (after the `status: ...` field at ~line 730), add the new field using the already-resolved `toolgate_url` String (bound at line 382):
+In `main.rs`, **BEFORE** the `agent_deps` construction (i.e. before `main.rs:620`, while the line-556 `Option<String>` `toolgate_url` binding is still alive), capture a fresh owned `String` for the registry — do NOT depend on the bare `toolgate_url` binding surviving to the `AppState` literal (it is moved into `AgentDeps` at line 623):
+```rust
+    // Resolve a concrete toolgate URL String for the handler registry BEFORE the
+    // `Option<String>` `toolgate_url` (bound at ~line 556) is moved into AgentDeps.
+    let toolgate_url_for_handlers = toolgate_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:9011".to_string());
+```
+Then, inside the `let state = gateway::AppState { ... }` literal (after the `status: ...` field at ~`main.rs:730`), add the new field using that captured `String`:
 ```rust
         handlers: crate::agent::handler_registry::HandlerRegistry::new(
-            toolgate_url.clone(),
+            toolgate_url_for_handlers,
             reqwest::Client::new(),
         ),
 ```
 
-- [ ] **Step 4: Run test to verify it passes** — `cargo test -p opex-core handlers_field_tests 2>&1 | tail -20` — PASS; `cargo check -p opex-core 2>&1 | tail -5` — clean.
+- [ ] **Step 4: Run test to verify it passes** — `cargo test -p opex-core handlers_field_tests 2>&1 | tail -20` — PASS; `cargo check -p opex-core 2>&1 | tail -5` — clean (no use-after-move / type-mismatch on `toolgate_url`).
 
 - [ ] **Step 5: Commit**
 ```bash
@@ -3002,8 +3010,8 @@ git commit -m "feat(handlers): add HandlerRegistry to AppState + construct in ma
 - Modify: `crates/opex-core/src/gateway/mod.rs` (`.merge(handlers::files::routes())`)
 
 **Interfaces:**
-- Consumes: `HandlerRegistry::{refresh, manifests}` + `match_buttons` (Tasks 1-2); `db::uploads::get_by_id(pool,id)->Result<Option<UploadRow{mime,size_bytes,..}>>`; `agent::fse::allowlist_store::get_enabled_allowlist(db)->Vec<String>`; `infra.secrets.get_upload_hmac_key()->[u8;32]` (R6); `uploads::{mint_uploads_url, web_uploads_base, uploads_local_url}` (R6); `ScenarioOutcome`/`ScenarioStatus`; `provenance::wrap_file_output` (R4); `config.config.{toolgate_url, gateway.listen, uploads.signed_url_ttl_secs}`; `channels.ui_event_tx`. Mirrors the loopback-download + multipart-POST pattern of `agent/file_scenario/dispatch.rs::run_transcribe` (R12).
-- Produces: `pub(crate) fn routes()->Router<AppState>`; `pub(crate) async fn assert_upload_accessible(db, upload_id)->Result<UploadMeta,(StatusCode,Json)>` (R3); `GET /api/files/{upload_id}/actions`; `POST /api/files/{upload_id}/run` (sync path → loopback-download bytes in Rust → multipart POST toolgate → persist `source='file_handler'` message wrapped via `wrap_file_output` + broadcast `file` SSE; async path → 202 stub, amended in Phase 5).
+- Consumes: `HandlerRegistry::{refresh, manifests}` + `match_buttons` (Tasks 1-2); `db::uploads::get_by_id(pool,id)->Result<Option<UploadRow{mime,size_bytes,..}>>`; `agent::fse::allowlist_store::get_enabled_allowlist(db)->Vec<String>`; `infra.secrets.get_upload_hmac_key()->[u8;32]` (R6); `uploads::{mint_uploads_url, web_uploads_base}` + `agent::url_tools::uploads_local_url` (R6); `ScenarioOutcome`/`ScenarioStatus`; `provenance::wrap_file_output` (R4); `config.config.{toolgate_url, gateway.listen, uploads.signed_url_ttl_secs}`; `channels.ui_event_tx` (best-effort global UI bus — see Chat-delivery note). Mirrors the loopback-download + multipart-POST pattern of `agent/file_scenario/dispatch.rs::run_transcribe` (R12).
+- Produces: `pub(crate) fn routes()->Router<AppState>`; `pub(crate) async fn assert_upload_accessible(db, upload_id)->Result<UploadMeta,(StatusCode,Json)>` (R3); `GET /api/files/{upload_id}/actions`; `POST /api/files/{upload_id}/run` (sync path → loopback-download bytes in Rust → multipart POST toolgate → persist `source='file_handler'` message wrapped via `wrap_file_output`, return outcome in the POST body as the chat-delivery path + best-effort `ui_event_tx` notify; async path → 202 stub, amended in Phase 5).
 
 - [ ] **Step 1: Write the failing test** (in `files.rs` `#[cfg(test)]`)
 ```rust
@@ -3075,16 +3083,18 @@ mod tests {
 
 - [ ] **Step 2: Run test to verify it fails** — `cargo test -p opex-core gateway::handlers::files 2>&1 | tail -20` — fails: `cannot find type FileRunRequest` / `cannot find function toolgate_run_url`.
 
-- [ ] **Step 3: Write minimal implementation** (`files.rs`). The sync path mirrors `dispatch.rs::run_transcribe` exactly (R12): mint loopback signed url → core GETs the bytes over loopback → POST `multipart/form-data` (field `file` + text fields) to toolgate. Toolgate never sees the loopback url.
+- [ ] **Step 3: Write minimal implementation** (`files.rs`). The sync path mirrors `dispatch.rs::run_transcribe` exactly (R12): mint loopback signed url → core GETs the bytes over loopback → POST `multipart/form-data` (field `file` + text fields) to toolgate. Toolgate never sees the loopback url. The chat-delivery path is the **POST response body** (`Json(outcome)`); the `ui_event_tx` broadcast is a best-effort cross-surface notification, not the chat render mechanism (see Chat-delivery note above).
 ```rust
 //! File Handler Hub — core orchestration routes (sync path).
 //! `GET /api/files/{upload_id}/actions` returns the per-file button list;
 //! `POST /api/files/{upload_id}/run` re-checks the tiered gate server-side,
 //! downloads the upload bytes over LOOPBACK (in Rust), POSTs them as
 //! multipart/form-data to toolgate `/handlers/{id}/run`, then persists the
-//! result as a provenance-wrapped `source='file_handler'` message + SSE-
-//! broadcasts produced artifacts. Toolgate never receives a loopback URL
-//! (its SSRF guard would reject it) — mirrors dispatch.rs::run_transcribe (R12).
+//! result as a provenance-wrapped `source='file_handler'` message and returns
+//! the outcome in the POST body (the chat-delivery path). Produced artifacts
+//! are also broadcast best-effort on the GLOBAL `ui_event_tx` bus. Toolgate
+//! never receives a loopback URL (its SSRF guard would reject it) — mirrors
+//! dispatch.rs::run_transcribe (R12).
 
 use axum::{
     Router,
@@ -3108,12 +3118,12 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/files/{upload_id}/run", post(run_file_handler))
 }
 
+/// The actions endpoint only needs `lang` (the file is keyed by the path
+/// `upload_id`; `agent`/`session` are not part of action discovery). Keeping the
+/// struct to a single read field avoids a clippy `field never read` denial under
+/// `make lint` (`-D warnings`).
 #[derive(Deserialize)]
 pub(crate) struct ActionsQuery {
-    #[serde(default)]
-    pub agent: String,
-    #[serde(default)]
-    pub session: Option<Uuid>,
     #[serde(default)]
     pub lang: Option<String>,
 }
@@ -3250,7 +3260,7 @@ async fn run_file_handler(
     let key = infra.secrets.get_upload_hmac_key();
     let ttl = config.config.uploads.signed_url_ttl_secs;
     let web_url = crate::uploads::mint_uploads_url(crate::uploads::web_uploads_base(), upload_id, &key, ttl);
-    let loopback = crate::uploads::uploads_local_url(&web_url, &config.config.gateway.listen);
+    let loopback = crate::agent::url_tools::uploads_local_url(&web_url, &config.config.gateway.listen);
 
     let http = reqwest::Client::new();
     let bytes = match http.get(&loopback).send().await {
@@ -3298,7 +3308,11 @@ async fn run_file_handler(
     };
 
     // 5. On ok: persist a provenance-wrapped message (source='file_handler', no
-    //    explicit status → table default per R8) + SSE-broadcast artifacts.
+    //    explicit status → table default per R8). Chat delivery is the POST body
+    //    (`Json(outcome)` below); the per-artifact `ui_event_tx.send` is a
+    //    best-effort GLOBAL UI-bus notification (NOT the chat SSE stream — see
+    //    the Chat-delivery note at the top of this phase), and may be a no-op
+    //    until a UI consumer is wired in Phase 4.
     if matches!(outcome.status, ScenarioStatus::Ok) {
         let content = crate::agent::provenance::wrap_file_output(
             &req.handler_id,
@@ -3316,29 +3330,34 @@ async fn run_file_handler(
         .await;
 
         for artifact in &outcome.artifact_urls {
+            // Best-effort global UI notification (not the chat render path).
             let _ = channels.ui_event_tx.send(
                 json!({"type": "file", "url": artifact, "mediaType": meta.mime}).to_string(),
             );
         }
     }
 
+    // Chat-delivery path: the composer receives the full outcome here.
     Json(outcome).into_response()
 }
 ```
 Then register: in `gateway/handlers/mod.rs` add `pub(crate) mod files;`, and in `gateway/mod.rs` `router()` add `.merge(handlers::files::routes())` next to the other `.merge(...)` calls.
 
-> NOTE on accessor verification before writing Step 3: confirm with a quick read of `db/uploads.rs` that `get_by_id` returns `Result<Option<UploadRow>>` and the row field for size is `size_bytes: i64` (the grounding lists `insert_with_retention` + `MAX_UPLOAD_BYTES`; the row getter and field names must match the real struct — do not invent). Likewise confirm `ConfigServices` exposes `config.gateway.listen`, `config.toolgate_url: Option<String>`, and `config.uploads.signed_url_ttl_secs`, and that `InfraServices` exposes `db: PgPool` + `secrets.get_upload_hmac_key() -> [u8;32]` (R6). If any field/getter name differs, use the real one — the contract names above are authoritative for intent, the local field names are whatever `state.rs`/`uploads.rs` actually define.
+> NOTE on accessor verification before writing Step 3: confirm with a quick read of `db/uploads.rs` that `get_by_id` returns `Result<Option<UploadRow>>` and the row field for size is `size_bytes: i64` (verified: `UploadRow { id, mime, data, sha256, size_bytes: i64, expires_at }`). Confirm `uploads_local_url` lives in `crate::agent::url_tools` (verified — `dispatch.rs` imports `use crate::agent::url_tools::uploads_local_url;`), while `mint_uploads_url`/`web_uploads_base` live in `crate::uploads`. Likewise confirm `ConfigServices` exposes `config.gateway.listen`, `config.toolgate_url: Option<String>`, and `config.uploads.signed_url_ttl_secs: u64`, and that `InfraServices` exposes `db: PgPool` + `secrets.get_upload_hmac_key() -> [u8;32]` (R6, verified in `secrets.rs:137`). If any field/getter name differs, use the real one — the contract names above are authoritative for intent, the local field names are whatever `state.rs`/`uploads.rs` actually define.
 
 - [ ] **Step 3b: Add DB-backed tests** (append to the `tests` module — run under `make test-db`)
 ```rust
     #[sqlx::test(migrations = "../../migrations")]
     async fn owner_gate_accepts_client_upload_and_yields_mime(pool: sqlx::PgPool) {
+        // `insert_with_retention(pool, owner_type, owner_id: Option<&str>, mime, data: &[u8], retention_days)`.
+        // Pass a byte slice (`b"OggSfake"` coerces to `&[u8]`) — the `data` param is `&[u8]`,
+        // an owned `Vec<u8>` does NOT auto-coerce there.
         let id = crate::db::uploads::insert_with_retention(
-            &pool, "client_upload", Some("user-1"), "audio/ogg", b"OggSfake".to_vec(), 30,
+            &pool, "client_upload", Some("user-1"), "audio/ogg", b"OggSfake", 30,
         ).await.unwrap();
         let meta = super::assert_upload_accessible(&pool, id).await.unwrap();
         assert_eq!(meta.mime, "audio/ogg");
-        assert_eq!(meta.size, b"OggSfake".len() as u64);
+        assert_eq!(meta.size, b"OggSfake".len() as u64); // 8
 
         // missing upload → 404
         let err = super::assert_upload_accessible(&pool, uuid::Uuid::new_v4()).await.unwrap_err();
@@ -3360,7 +3379,7 @@ Then register: in `gateway/handlers/mod.rs` add `pub(crate) mod files;`, and in 
         assert_eq!(src.as_deref(), Some("file_handler"));
     }
 ```
-> NOTE: if `insert_with_retention`'s owner-id parameter is non-optional or typed differently than `Option<&str>`, match its real signature (grounding: `insert_with_retention(pool,"client_upload"|"tool_output",owner_id,mime,data,retention_days)->Uuid`). The owner-id value is irrelevant to the gate (the gate keys on owner_type only).
+> NOTE: `insert_with_retention`'s owner-id parameter is `Option<&str>` and `data` is `&[u8]` (verified in `db/uploads.rs:69`). The owner-id value is irrelevant to the gate (the gate keys on owner_type only).
 
 - [ ] **Step 4: Run test to verify it passes** — `cargo test -p opex-core gateway::handlers::files 2>&1 | tail -20` (unit tests PASS); with a DB: `make test-db` covers the `#[sqlx::test]` cases (migration 066 applies; owner-gate + column verified); `cargo check -p opex-core 2>&1 | tail -5` — clean.
 
@@ -3378,7 +3397,7 @@ git commit -m "feat(handlers): /api/files actions + sync run (loopback-download 
 - No code changes — verification only.
 
 **Interfaces:**
-- Confirms the Phase 3 surfaces compile, lint clean, and pass: `handler_registry` (Tasks 1-2), `provenance` (Task 3), `AppState.handlers` wiring (Task 4), `files.rs` actions/run + owner-gate + provenance persist (Task 5). No `context_builder`/`MessageRow` edit exists (R4: provenance is baked into stored `content` at persist time). No SSE-chips/Telegram migration exists (R2: deferred). Toolgate is never handed a loopback URL — core downloads bytes in Rust and POSTs multipart (R12). The async branch is a 202 stub only — Phase 5 amends THIS files.rs branch to enqueue `handler_jobs` (R13).
+- Confirms the Phase 3 surfaces compile, lint clean, and pass: `handler_registry` (Tasks 1-2), `provenance` (Task 3), `AppState.handlers` wiring (Task 4), `files.rs` actions/run + owner-gate + provenance persist (Task 5). No `context_builder`/`MessageRow` edit exists (R4: provenance is baked into stored `content` at persist time). No SSE-chips/Telegram migration exists (R2: deferred). Toolgate is never handed a loopback URL — core downloads bytes in Rust and POSTs multipart (R12). The async branch is a 202 stub only — Phase 5 amends THIS files.rs branch to enqueue `handler_jobs` (R13). Chat delivery is the POST `/run` response body; the `ui_event_tx` `type:"file"` broadcast is a best-effort global notification (R-CHAT).
 
 - [ ] **Step 1: Confirm no descoped / loopback-to-toolgate symbols leaked in.** Grep must return nothing — these were removed per R2/R4/R12 and must not exist in Phase 3 code:
 ```bash
@@ -3392,7 +3411,7 @@ make check 2>&1 | tail -5
 make lint 2>&1 | tail -10
 cargo test -p opex-core handler_registry:: provenance:: gateway::handlers::files 2>&1 | tail -20
 ```
-Expected: `cargo check` clean; `clippy` zero warnings; all unit tests PASS. (DB-backed `#[sqlx::test]` cases run under `make test-db`.)
+Expected: `cargo check` clean; `clippy` zero warnings (in particular no `field is never read` denial on `ActionsQuery` — it carries only `lang`); all unit tests PASS. (DB-backed `#[sqlx::test]` cases run under `make test-db`.)
 
 - [ ] **Step 3: (No-op) — verification task carries no implementation step.**
 
@@ -3736,6 +3755,15 @@ vi.mock("@/lib/queries", () => ({
   useProviderActive: () => ({ data: [] }),
 }));
 
+// ChatComposer renders <ModelDropdown agent={currentAgent} /> unconditionally
+// (ChatComposer.tsx line 859). ModelDropdown.tsx calls useAgents/useProviders/
+// useProviderModels from @/lib/queries — none of which the factory mock above
+// exports — so the real component would throw `useAgents is not a function` and
+// crash the render before any `fab` element mounts. Stub it to null.
+vi.mock("../ModelDropdown", () => ({
+  ModelDropdown: () => null,
+}));
+
 // Capture the props FileActionButtons is rendered with.
 const fabSpy = vi.fn();
 vi.mock("../FileActionButtons", () => ({
@@ -3810,7 +3838,7 @@ describe("ChatComposer captures upload row UUID", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails** — `cd ui && npm test -- ChatComposer.upload-id`. Expected failure: `expected '/uploads/something-else.ogg' to be 'abc-123-uuid'` (or `expected undefined to be 'abc-123-uuid'`) — `ChatComposer` neither stores `result.filename` on the attachment nor renders `FileActionButtons` with it yet. (Task 4 wires the render; this task's red comes from the missing `uploadId` field — the render assertion is satisfied once both Task 3 + Task 4 land, so run this test again at the end of Task 4 to confirm green.)
+- [ ] **Step 2: Run test to verify it fails** — `cd ui && npm test -- ChatComposer.upload-id`. Expected failure: a `waitFor` timeout at `await waitFor(() => expect(screen.getByTestId("fab")).toBeInTheDocument())` → `Unable to find an element by: [data-testid="fab"]`. The `fab` element never mounts because `ChatComposer` does not render `FileActionButtons` yet (that wiring lands in Task 4), so the later `props.uploadId` assertion is never reached. **TDD-ordering note:** this task adds only the `uploadId` field + capture; the render that makes the `fab` testid appear is Task 4. The test therefore stays red at this task's own commit (Step 5) and only turns green once Task 4 lands — re-run it at the end of Task 4 to confirm `props.uploadId === "abc-123-uuid"`.
 
 - [ ] **Step 3: Write minimal implementation** — two edits to `ChatComposer.tsx`.
 
@@ -3827,11 +3855,14 @@ interface AttachmentEntry {
 
 Edit 3b — inside `handleFileAdd`, after the upload `result` is parsed and `uploadPath` is derived, set `uploadId` from `result.filename` when building the new attachment:
 ```tsx
-      const uploadPath = new URL(result.url).pathname;
+      const uploadPath = (() => {
+        try { return new URL(result.url).pathname; }
+        catch { return result.url as string; }
+      })();
       setAttachments((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: uuid(),
           name: file.name,
           file,
           uploadId: result.filename, // R1: the row UUID, distinct from the served URL path
@@ -3882,6 +3913,15 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/queries", () => ({
   useProviderActive: () => ({ data: [] }),
+}));
+
+// ChatComposer renders <ModelDropdown agent={currentAgent} /> unconditionally
+// (ChatComposer.tsx line 859). ModelDropdown.tsx calls useAgents/useProviders/
+// useProviderModels from @/lib/queries — none of which the factory mock above
+// exports — so the real component would throw `useAgents is not a function` and
+// crash the render before any `fab` element mounts. Stub it to null.
+vi.mock("../ModelDropdown", () => ({
+  ModelDropdown: () => null,
 }));
 
 // Capture the props FileActionButtons is rendered with.
@@ -4020,6 +4060,8 @@ git commit -m "feat(ui): render per-attachment FileActionButtons above the compo
 > Scope note (R2/R11): this phase introduces the durable `handler_jobs` queue, the toolgate out-of-process runner, the core async worker + callback endpoints, and ports `summarize_video` to a toolgate async builtin. In this phase we ALSO re-point the surviving auto-trigger (URL-video detection in `subagent.rs`) and the composer async run-branch (files.rs) off the legacy `video_jobs` queue onto `handler_jobs`, so Phase 6 can delete the legacy in-core video pipeline without losing the auto-trigger. The legacy `video_jobs` table/worker still exist after this phase (deleted/deprecated in Phase 6); nothing NEW is enqueued onto it once this phase lands.
 >
 > SSRF/loopback rule (R12, BLOCKING): toolgate `helpers.validate_url_ssrf()` hard-blocks loopback and `download_limited()` always calls it, so toolgate must NEVER fetch a loopback signed URL. CORE downloads the upload bytes over loopback (mirroring the existing `dispatch.rs::run_transcribe`) and POSTs them to toolgate as `multipart/form-data`. The async runner receives the bytes via a tempfile PATH written by toolgate — it does NO network fetch of the upload.
+>
+> Schema note (grounded fix): the `messages` table (`migrations/001_init.sql`) has NO `source` column — only `is_mirror` (added by `043_messages_is_mirror.sql`). The `source` column is added by **Phase 3 migration `066_messages_source.sql`** (this phase does NOT add a migration for it) so the async outcome can be persisted as a file-derived message (`source='file_handler'`). The Rust `ScenarioOutcome` (`crates/opex-core/src/agent/file_scenario/outcome.rs`) has exactly 5 fields and no `post_action`; this phase adds a `post_action: Option<serde_json::Value>` field to it (Task 3) so the handler's vault-write request survives deserialize→re-serialize→DB round-trip and `run_post_action` can read it back.
 
 ---
 
@@ -4336,7 +4378,7 @@ pub async fn get_handler_job(db: &PgPool, id: Uuid) -> anyhow::Result<Option<Han
 }
 ```
 
-Register the module in `crates/opex-core/src/db/mod.rs`:
+Register the module in `crates/opex-core/src/db/mod.rs` (alongside the other `pub mod` declarations near `pub mod uploads; pub mod file_scenarios;`):
 ```rust
 pub mod handler_jobs;
 ```
@@ -4759,16 +4801,57 @@ git commit -m "feat(file-hub): toolgate async path — 202 + tempfile-backed out
 
 ---
 
-### Task 3: core callback endpoints in files.rs (progress + complete) → WS file_job_progress + deliver + post_action (R17 MCP)
+### Task 3: ScenarioOutcome.post_action field + core callback endpoints in files.rs (progress + complete) → WS file_job_progress + deliver + post_action (R17 MCP)
 **Files:**
+- Modify: `crates/opex-core/src/agent/file_scenario/outcome.rs` (add `post_action: Option<serde_json::Value>` so it survives the runner→DB round-trip)
 - Modify: `crates/opex-core/src/gateway/handlers/files.rs`
+- Test: `crates/opex-core/src/agent/file_scenario/outcome.rs` (inline `#[cfg(test)]`, post_action round-trip)
 - Test: `crates/opex-core/src/gateway/handlers/files.rs` (inline `#[cfg(test)]`, pure helper test)
 
 **Interfaces:**
-- Consumes: `crate::db::handler_jobs::{get_handler_job, update_handler_job_progress, mark_handler_job_done, mark_handler_job_failed, HandlerJob}` (Task 1); `crate::agent::file_scenario::outcome::{ScenarioOutcome, ScenarioStatus}` (grounding wire type); `crate::agent::provenance::wrap_file_output` (Phase 3); `AppState{infra.db, channels.ui_event_tx, agents}`; MCP plumbing (R17 — CONFIRMED real): `engine.mcp() -> &Option<Arc<crate::mcp::McpRegistry>>` (`agent/engine/mod.rs:241`), `McpRegistry::call_tool(&self, mcp_name:&str, tool_name:&str, arguments:&serde_json::Value) -> anyhow::Result<String>` (`mcp/mod.rs:212`), `state.agents.get_engine(&str) -> Option<Arc<AgentEngine>>` (`gateway/clusters/agent_core.rs:48`).
-- Produces: `POST /api/files/jobs/{job_id}/progress` (`JobProgressBody{phase, pct}`) and `POST /api/files/jobs/{job_id}/complete` (`ScenarioOutcome` JSON) routes merged into `files::routes()`; pure `fn file_job_progress_event(...) -> serde_json::Value` (tested). Persists the async outcome as a `source='file_handler'` message with provenance wrapping (R4/R8). Consumed by Task 4 worker + Task 6 UI.
+- Consumes: `crate::db::handler_jobs::{get_handler_job, update_handler_job_progress, mark_handler_job_done, mark_handler_job_failed, HandlerJob}` (Task 1); `crate::agent::file_scenario::outcome::{ScenarioOutcome, ScenarioStatus}` (grounding wire type, with the new `post_action` field added in this task); `crate::agent::provenance::wrap_file_output` (Phase 3); `AppState{infra.db, channels.ui_event_tx, agents}`; MCP plumbing (R17 — CONFIRMED real): `engine.mcp() -> &Option<Arc<crate::mcp::McpRegistry>>` (`agent/engine/mod.rs:241`), `McpRegistry::call_tool(&self, mcp_name:&str, tool_name:&str, arguments:&serde_json::Value) -> anyhow::Result<String>` (`mcp/mod.rs:212`), `state.agents.get_engine(&str) -> Option<Arc<AgentEngine>>` (`gateway/clusters/agent_core.rs:48`).
+- Produces: a `post_action: Option<serde_json::Value>` field on `ScenarioOutcome` (serde `default` + `skip_serializing_if = "Option::is_none"`) so the handler's vault-write request survives `Json<ScenarioOutcome>` deserialize → `serde_json::to_value(&outcome)` re-serialize → stored result JSON; `the `messages.source` column (Phase 3 migration `066_messages_source.sql`)` adding `messages.source TEXT`; `POST /api/files/jobs/{job_id}/progress` (`JobProgressBody{phase, pct}`) and `POST /api/files/jobs/{job_id}/complete` (`ScenarioOutcome` JSON) routes merged into `files::routes()`; pure `fn file_job_progress_event(...) -> serde_json::Value` (tested). Persists the async outcome as a `source='file_handler'` message with provenance wrapping (R4/R8). Consumed by Task 4 worker + Task 6 UI.
 
-- [ ] **Step 1: Write the failing test** (the WS-event-shape helper, inline in `files.rs`)
+> Grounded fix (Critical 1): the original plan's `INSERT INTO messages (... source ...)` fails at runtime — no `source` column exists. This task ships `migration 068` to add it (the existing video deliver in `video_worker.rs:213` inserts only `(session_id, agent_id, role, content, is_mirror)`; we extend that with the new `source` column).
+>
+> Grounded fix (Critical 2): the original plan dropped `post_action`. `job_complete` deserializes the body as `Json<ScenarioOutcome>`, and `ScenarioOutcome` (`outcome.rs`) has exactly `{status, summary_text, artifact_urls, reason, video_accepted}` — no `post_action`, no flatten catch-all — so an unknown `post_action` key was silently discarded, then `mark_handler_job_done(db, id, &serde_json::to_value(&outcome))` re-serialized the typed struct (still no `post_action`), and `run_post_action`'s `row.result.get("post_action")` was always `None`. The fix adds a real `post_action` field to `ScenarioOutcome` so it round-trips through deserialize → re-serialize → DB and `run_post_action` reads it back.
+
+- [ ] **Step 1: Write the failing tests**
+
+(a) post_action round-trip, inline in `crates/opex-core/src/agent/file_scenario/outcome.rs`:
+```rust
+    #[test]
+    fn post_action_survives_deserialize_then_reserialize() {
+        // Wire shape the toolgate runner posts to /api/files/jobs/{id}/complete.
+        let wire = serde_json::json!({
+            "status": "ok",
+            "summary_text": "конспект",
+            "artifact_urls": [],
+            "reason": null,
+            "post_action": { "kind": "obsidian_note", "filename": "v.md" }
+        });
+        // job_complete does Json<ScenarioOutcome> → this deserialize MUST keep post_action.
+        let outcome: ScenarioOutcome = serde_json::from_value(wire).unwrap();
+        assert!(outcome.post_action.is_some(), "post_action survives deserialize");
+
+        // mark_handler_job_done stores serde_json::to_value(&outcome): post_action MUST persist.
+        let stored = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(
+            stored["post_action"]["kind"], "obsidian_note",
+            "post_action survives re-serialize into the stored result JSON"
+        );
+    }
+
+    #[test]
+    fn outcome_without_post_action_omits_the_key() {
+        // skip_serializing_if keeps the 4/5-key wire shape unchanged when unset.
+        let o = ScenarioOutcome::ok("x".into(), vec![]);
+        let v = serde_json::to_value(&o).unwrap();
+        assert!(v.get("post_action").is_none(), "no post_action key when None");
+    }
+```
+
+(b) the WS-event-shape helper, inline in `files.rs`:
 ```rust
 #[cfg(test)]
 mod async_callback_tests {
@@ -4795,9 +4878,59 @@ mod async_callback_tests {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails** — `cargo test -p opex-core file_job_progress_event`. Expected failure: `cannot find function file_job_progress_event in this scope`.
+- [ ] **Step 2: Run tests to verify they fail** — `cargo test -p opex-core post_action_survives_deserialize_then_reserialize` (expected: assertion failure — `post_action` is dropped because the field does not exist yet) and `cargo test -p opex-core file_job_progress_event` (expected: `cannot find function file_job_progress_event in this scope`).
 
-- [ ] **Step 3: Write minimal implementation** — add to `files.rs`:
+- [ ] **Step 3: Write minimal implementation**
+
+(a) Add the `post_action` field to `ScenarioOutcome` in `crates/opex-core/src/agent/file_scenario/outcome.rs`. Insert the field after `video_accepted` and add it (as `None`) to every constructor literal:
+```rust
+    #[serde(default)]
+    pub video_accepted: bool,
+    /// Optional, handler-requested post-completion side effect, carried opaquely
+    /// from the toolgate runner's outcome JSON. v1 supports the Obsidian vault
+    /// note write (`{"kind":"obsidian_note", ...}`); read back by
+    /// `files.rs::run_post_action` after the job result is persisted.
+    /// `default` survives older payloads; `skip_serializing_if` keeps the wire
+    /// shape unchanged when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_action: Option<serde_json::Value>,
+```
+Then add `post_action: None` to each existing `Self { ... }` literal — `ok`, `video_accepted`, `save`, `failed`, `unsupported`, `timeout`, `too_large`:
+```rust
+    pub fn ok(summary_text: String, artifact_urls: Vec<String>) -> Self {
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false, post_action: None }
+    }
+
+    pub fn video_accepted(summary_text: String, artifact_urls: Vec<String>) -> Self {
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: true, post_action: None }
+    }
+
+    pub fn save(summary_text: String, artifact_urls: Vec<String>) -> Self {
+        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false, post_action: None }
+    }
+
+    pub fn failed(reason: String) -> Self {
+        Self { status: ScenarioStatus::Failed, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
+    }
+
+    pub fn unsupported(reason: String) -> Self {
+        Self { status: ScenarioStatus::Unsupported, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
+    }
+
+    pub fn timeout() -> Self {
+        Self { status: ScenarioStatus::Timeout, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some("per-execution timeout".to_string()), video_accepted: false, post_action: None }
+    }
+
+    #[allow(dead_code)] // Phase 6: used when HTTP 413 from toolgate is surfaced as a UI chip message
+    pub fn too_large(reason: String) -> Self {
+        Self { status: ScenarioStatus::TooLarge, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
+    }
+```
+
+(b) The `messages.source` column is already added by **Phase 3 migration `066_messages_source.sql`** — this task does NOT add a migration (a second `068_*` would also collide with Phase 6's `068_video_jobs_deprecate.sql`); it only USES the existing column.
+
+
+(c) add the callback endpoints to `files.rs`:
 ```rust
 use axum::extract::{Path as AxPath, State};
 use axum::Json;
@@ -4880,6 +5013,9 @@ pub(crate) async fn job_complete(
     let is_ok = matches!(outcome.status, ScenarioStatus::Ok);
     let terminal = if is_ok { "done" } else { "failed" };
 
+    // ScenarioOutcome now carries post_action (default + skip_serializing_if),
+    // so this re-serialization PRESERVES the handler's vault-write request into
+    // the stored result JSON for run_post_action to read back.
     let result_json = serde_json::to_value(&outcome).unwrap_or_else(|_| serde_json::json!({}));
     if is_ok {
         let _ = handler_jobs::mark_handler_job_done(db, job_id, &result_json).await;
@@ -4922,7 +5058,8 @@ async fn deliver_async_outcome(
     let content =
         crate::agent::provenance::wrap_file_output(&job.handler_id, &upload_id, &outcome.summary_text);
 
-    // 2. Persist (R8: omit status → table default 'complete'; source='file_handler').
+    // 2. Persist (R8: omit status → table default 'complete'; source='file_handler'
+    //    — column added by migration 068; mirrors video_worker deliver() + new tag).
     if let Err(e) = sqlx::query(
         "INSERT INTO messages (session_id, agent_id, role, content, is_mirror, source) \
          VALUES ($1, $2, 'assistant', $3, true, 'file_handler')",
@@ -4957,8 +5094,9 @@ async fn run_post_action(
     job: &handler_jobs::HandlerJob,
     outcome: &ScenarioOutcome,
 ) {
-    // mark_handler_job_done stored result_json before this runs, so re-read the
-    // row to pick up the `post_action` catch-all from the runner outcome.
+    // job_complete stored result_json (which now includes post_action, since
+    // ScenarioOutcome carries the field) via mark_handler_job_done before this
+    // runs, so re-read the row to pick the post_action up.
     let row = match handler_jobs::get_handler_job(&state.infra.db, job.id).await {
         Ok(Some(r)) => r,
         _ => return,
@@ -5015,14 +5153,14 @@ Register the two internal routes inside the existing `pub(crate) fn routes()` in
         .route("/api/files/jobs/{job_id}/progress", axum::routing::post(job_progress))
         .route("/api/files/jobs/{job_id}/complete", axum::routing::post(job_complete))
 ```
-Note: the result-JSON re-read in `run_post_action` happens after `mark_handler_job_done` has stored `result_json` (`job_complete` calls `mark_handler_job_done` before `deliver_async_outcome`, so `post_action` is present in the row). The MCP accessors above are the CONFIRMED real symbols (R17) — `engine.mcp()`, `McpRegistry::call_tool`, `state.agents.get_engine`. If MCP is unavailable, `run_post_action` is a safe no-op.
+Note: the result-JSON re-read in `run_post_action` happens after `mark_handler_job_done` has stored `result_json` (`job_complete` calls `mark_handler_job_done` before `deliver_async_outcome`, so `post_action` is present in the row now that `ScenarioOutcome` round-trips it). The MCP accessors above are the CONFIRMED real symbols (R17) — `engine.mcp()`, `McpRegistry::call_tool`, `state.agents.get_engine`. If MCP is unavailable, `run_post_action` is a safe no-op.
 
-- [ ] **Step 4: Run test to verify it passes** — `cargo test -p opex-core file_job_progress_event` then `make check`. Expected: `file_job_progress_event_has_generic_shape` PASSES and the crate compiles.
+- [ ] **Step 4: Run tests to verify they pass** — `cargo test -p opex-core post_action_survives_deserialize_then_reserialize outcome_without_post_action_omits_the_key file_job_progress_event` then `make check`. Expected: `post_action_survives_deserialize_then_reserialize`, `outcome_without_post_action_omits_the_key`, `file_job_progress_event_has_generic_shape` PASS and the crate compiles (the `INSERT … source` and `migration 068` are validated by `make test-db` migration auto-run).
 
 - [ ] **Step 5: Commit**
 ```bash
-git add crates/opex-core/src/gateway/handlers/files.rs
-git commit -m "feat(file-hub): core async callbacks — job progress/complete endpoints + provenance persist + post_action MCP write"
+git add crates/opex-core/src/agent/file_scenario/outcome.rs crates/opex-core/src/gateway/handlers/files.rs
+git commit -m "feat(file-hub): core async callbacks — ScenarioOutcome.post_action + messages.source (068) + job progress/complete + provenance persist + post_action MCP write"
 ```
 
 ---
@@ -5148,7 +5286,7 @@ git commit -m "feat(file-hub): wire files.rs async run-branch to insert handler_
 
 **Interfaces:**
 - Consumes: `crate::db::handler_jobs::{claim_next_handler_job, mark_handler_job_processing, mark_handler_job_failed, recover_stale_handler_jobs, HandlerJob}` (Task 1); `crate::uploads::{mint_uploads_url, web_uploads_base}` + `crate::agent::url_tools::uploads_local_url` (the real loopback helper, same as `dispatch.rs::run_transcribe`); `infra.secrets.get_upload_hmac_key() -> [u8;32]` (R6 — real accessor, NOT `master_key`); `AppState{config.config.toolgate_url, config.config.gateway.listen, config.config.uploads.signed_url_ttl_secs, infra.db, infra.secrets}`.
-- Produces: `pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken)`; `pub async fn dispatch_async_job(http, toolgate_url, gateway_listen, signed_url_base, key, ttl_secs, job) -> anyhow::Result<()>` (testable seam). R12: the worker DOWNLOADS the upload bytes over loopback in Rust and POSTs `multipart/form-data` (field `file` + text fields + `job_id`) to toolgate; url-based jobs send the `source_url` form field and no `file`. Consumed by `main.rs` startup.
+- Produces: `pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken)` (same `state: &AppState` signature as `spawn_video_worker`, confirmed at `video_worker.rs:354`); `pub async fn dispatch_async_job(http, toolgate_url, gateway_listen, signed_url_base, key, ttl_secs, job) -> anyhow::Result<()>` (testable seam). R12: the worker DOWNLOADS the upload bytes over loopback in Rust and POSTs `multipart/form-data` (field `file` + text fields + `job_id`) to toolgate; url-based jobs send the `source_url` form field and no `file`. Consumed by `main.rs` startup.
 
 - [ ] **Step 1: Write the failing test** (wiremock asserts multipart POST `/handlers/{id}/run` with `job_id`, accepts 202; R12)
 ```rust
@@ -5421,12 +5559,20 @@ Register the module in `crates/opex-core/src/agent/mod.rs`:
 ```rust
 pub mod file_handler_worker;
 ```
-In `crates/opex-core/src/main.rs`, alongside the existing `spawn_video_worker(&state, shutdown.clone())` call, add:
+In `crates/opex-core/src/main.rs`, wire the worker inside `spawn_background_tasks` next to the existing `spawn_video_worker` call. **Grounded fix (Major + Minor):** `shutdown_health` MOVES `shutdown` (`let shutdown_health = shutdown;`), so a later `shutdown.clone()` is a use-after-move; and `spawn_video_worker(state, …)` takes `state: &AppState` and is called with `state` (NOT `&state`). So clone the token BEFORE the move (next to the existing `let shutdown_video = shutdown.clone();`) and pass `state` directly. Change:
 ```rust
-    crate::agent::file_handler_worker::spawn_file_handler_worker(&state, shutdown.clone());
+    let shutdown_video = shutdown.clone();
+    let shutdown_file = shutdown.clone();
+    let shutdown_health = shutdown;
 ```
+and after the existing `spawn_video_worker(state, shutdown_video);` line, add:
+```rust
+    // File Handler Hub: universal async-handler worker (handler_jobs queue).
+    crate::agent::file_handler_worker::spawn_file_handler_worker(state, shutdown_file);
+```
+(`spawn_file_handler_worker` takes `state: &AppState`, mirroring `spawn_video_worker` at `video_worker.rs:354` — pass `state`, not `&state`, which would be `&&AppState`. The pre-move clone avoids the `use of moved value: shutdown` that `shutdown.clone()` after `let shutdown_health = shutdown;` would cause.)
 
-- [ ] **Step 4: Run test to verify it passes** — `cargo test -p opex-core file_handler_worker` then `make check`. Expected: `dispatch_upload_job_posts_multipart_with_loopback_bytes_and_accepts_202`, `dispatch_url_job_posts_source_url_without_file`, `dispatch_errors_on_non_2xx` PASS, crate compiles.
+- [ ] **Step 4: Run test to verify it passes** — `cargo test -p opex-core file_handler_worker` then `make check`. Expected: `dispatch_upload_job_posts_multipart_with_loopback_bytes_and_accepts_202`, `dispatch_url_job_posts_source_url_without_file`, `dispatch_errors_on_non_2xx` PASS, crate compiles (no use-after-move on `shutdown`, no `&&AppState` type error).
 
 - [ ] **Step 5: Commit**
 ```bash
@@ -5445,7 +5591,7 @@ git commit -m "feat(file-hub): universal async worker — multipart-dispatch han
 
 **Interfaces:**
 - Consumes (Phase 1–2): `HandlerContext{ stt, progress, result }`, `HandlerFile{bytes, mime, filename, source_url}`, descriptor XML block + `async def run(ctx, file, params)` convention; existing `video_helpers.extract_audio` (media logic stays in Python); `handlers.descriptor.parse_descriptor`. `crate::db::handler_jobs::insert_handler_job` (Task 1); existing `crate::agent::pipeline::subagent::detect_video_links`.
-- Produces: builtin handler id `summarize_video`, `execution=async`, emitting a `HandlerResult` whose serialized JSON carries a `post_action` requesting the Obsidian note write (Task 3 reads it). The subagent URL-video auto-trigger now enqueues `handler_jobs` (source_ref = the YouTube link, upload_id=None) instead of `video_jobs` — so Phase 6 can delete the legacy video pipeline without losing the auto-trigger (R13). The legacy `video_jobs` enqueue is removed from this path.
+- Produces: builtin handler id `summarize_video`, `execution=async`, emitting a `HandlerResult` whose serialized JSON carries a `post_action` requesting the Obsidian note write (Task 3's `ScenarioOutcome.post_action` field carries it core-side). The subagent URL-video auto-trigger now enqueues `handler_jobs` (source_ref = the YouTube link, upload_id=None) instead of `video_jobs` — so Phase 6 can delete the legacy video pipeline without losing the auto-trigger (R13). The legacy `video_jobs` enqueue is removed from this path.
 
 > R13/R15 note: the file-attachment `summarize_video` enqueue now lives in `files.rs` (Task 4, composer button). This task handles the OTHER surviving enqueue — the URL auto-detection in `subagent.rs` — re-pointing it to `handler_jobs`. The `dispatch.rs::run_summarize_video` arm is NOT edited here (Phase 6 deletes it).
 
@@ -6144,7 +6290,7 @@ fn dispatch_has_no_summarize_video_or_enqueue_plumbing() {
                 .await;
 ```
 
-  - Since `db`, `session_id`, `agent_name` are now no longer consumed by the (deleted) `EnqueueCtx` construction, verify they are still used elsewhere in `dispatch_attachments`: `db` is used by `get_enabled_allowlist(db)`, `list_enabled_for_match_type(db, …)`, and `audit_spawn(db.clone(), …)` — so it stays. `session_id` and `agent_name` were used ONLY by the deleted `EnqueueCtx`; they become unused params. To avoid `unused_variable` warnings under `-D warnings`, rename them to `_session_id` and `_agent_name` in the `dispatch_attachments` signature (do NOT change call sites — they remain positional). Add a one-line comment: `// `_session_id`/`_agent_name` retained for call-site signature stability; the only consumer (video EnqueueCtx) was removed in Phase 6.`
+  - Since `db`, `session_id`, `agent_name` are now no longer consumed by the (deleted) `EnqueueCtx` construction, verify they are still used elsewhere in `dispatch_attachments`: `db` is used by `get_enabled_allowlist(db)`, `list_enabled_for_match_type(db, …)`, and `audit_spawn(db.clone(), …)` — so it stays. `session_id` and `agent_name` were used ONLY by the deleted `EnqueueCtx`; they become unused params. To avoid `unused_variable` warnings under `-D warnings`, rename them to `_session_id` and `_agent_name` in the `dispatch_attachments` signature (do NOT change call sites — they remain positional). Add a one-line comment: `// _session_id / _agent_name retained for call-site signature stability; the only consumer (video EnqueueCtx) was removed in Phase 6.`
   - Delete the `#[sqlx::test] async fn video_default_enqueues_job_not_sync_call` test (lines ~1476–1515) — it seeds a `video/*` → `summarize_video` default and asserts a `video_jobs` row was written; that path is gone.
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -6345,48 +6491,53 @@ retained, not dropped (rollback/audit safety; checksums stay monotonic)."
 
 ---
 
-### Task 5: Confirm the kept FSE integration tests still compile + pass unchanged
+### Task 5: Fix the kept FSE integration tests for the removed `DispatchInput.enqueue` field
 
 **Files:**
-- Read-only verify (no edits expected): `crates/opex-core/tests/integration_fse_regression.rs`, `crates/opex-core/tests/integration_fse_security.rs`, `crates/opex-core/tests/integration_fse_affordance.rs`
+- Modify: `crates/opex-core/tests/integration_fse_regression.rs`
+- Modify: `crates/opex-core/tests/integration_fse_security.rs`
+- Read-only verify (no edit expected): `crates/opex-core/tests/integration_fse_affordance.rs`
 
 **Interfaces:**
 - Consumes (all KEPT per R2/R11, so these imports still resolve): `opex_core::agent::file_scenario::dispatch::{dispatch_action, DispatchInput, resolve}`, `dispatch_seam.rs` (via `include_str!`), `gateway/handlers/file_scenarios/run.rs` + `run_scenario_and_persist` (via `include_str!`), `opex_core::agent::fse::allowlist::{validate_binding_write, is_allowed_for_autorun, FSE_DEFAULT_ALLOWLIST}`, `opex_core::agent::file_scenario::assert_fse_owner`.
-- Produces: documented confirmation that NO retarget is needed (these three suites do not touch the deleted video pipeline) — they exercise the kept sync dispatch, the kept run executor, the allowlist, and the owner-gate. The one structural change from Task 2 that touches them is the removed `DispatchInput.enqueue` field: if any of these suites constructs a `DispatchInput { .. }` with an `enqueue:` field, that one field line must be dropped (otherwise no edit).
+- Produces: the three kept suites compile + pass after Task 2 deleted the `DispatchInput.enqueue` field. **Verified against the live tree:** `integration_fse_regression.rs` constructs `DispatchInput { ..., enqueue: None }` at **lines 158, 247, 330**, and `integration_fse_security.rs` does so at **line 154**. After Task 2 removes the `enqueue` field from `DispatchInput`, those 4 sites will fail to compile with `error[E0560]: struct DispatchInput has no field named enqueue` — so Step 3 (dropping the 4 `enqueue: None,` lines) is **mandatory**, not optional. `integration_fse_affordance.rs` only `include_str!`s `run.rs`/`inline.rs`/`dispatch_seam.rs` (all kept) and constructs no `DispatchInput`, so it needs no edit.
 
-> This task is a **verification gate**, not a deletion. R2/R11 keep `dispatch.rs`, `dispatch_seam.rs`, and `run.rs`, so every import in these three files still resolves. The only Task-2 ripple is (a) the removed `DispatchInput.enqueue` field and (b) `summarize_video` no longer resolving to an in-core builtin. The security file asserts the *allowlist const* has 5 members (still holds — the const is unchanged); the regression file dispatches only transcribe/describe/extract_document; the affordance file `include_str!`s `run.rs`/`inline.rs`/`dispatch_seam.rs`, all kept.
+> This task is a **field-removal ripple fix**, not a deletion of suites. R2/R11 keep `dispatch.rs`, `dispatch_seam.rs`, and `run.rs`, so every import in these three files still resolves. The one structural change from Task 2 that touches them is the removed `DispatchInput.enqueue` field. The security file's allowlist-const assertion (lines 63–67) still asserts all **5** ids and is UNCHANGED, and its `resolve()` loop (lines 243–248) only iterates `[transcribe, describe, extract_document, save]` — it never asserts `resolve("summarize_video").is_some()` — so beyond the one `enqueue: None,` line at 154 it needs no further edit. The regression suite dispatches only transcribe/describe/extract_document; the affordance suite `include_str!`s kept sources.
 
-- [ ] **Step 1: Write the failing test** — none. The check is that the kept suites still build after Tasks 1–4:
+- [ ] **Step 1: Write the failing test** — none. The check is a compile of the kept suites after Tasks 1–4, which surfaces the `enqueue` ripple as a hard compile error:
   - Command: `cargo test -p opex-core --test integration_fse_regression --test integration_fse_security --test integration_fse_affordance --no-run`
-  - Expected: COMPILE OK (no `unresolved import` — `dispatch`, `dispatch_seam`, `run.rs`, `assert_fse_owner`, the allowlist fns all still exist). If a suite constructs `DispatchInput { ..., enqueue: None }`, expect a `struct DispatchInput has no field named enqueue` error here pinpointing the exact line to fix in Step 3.
+  - Expected: COMPILE FAIL — `error[E0560]: struct DispatchInput has no field named enqueue` at `integration_fse_regression.rs:158`, `:247`, `:330` and `integration_fse_security.rs:154` (the 4 `enqueue: None,` sites verified in the live tree). No `unresolved import` errors (all kept modules still resolve).
 
-- [ ] **Step 2: Run test to verify** (failure mode to guard against = compile error)
+- [ ] **Step 2: Run test to verify it fails**
   - Command: `cargo test -p opex-core --test integration_fse_regression --test integration_fse_security --test integration_fse_affordance --no-run`
-  - Expected failure signals: `error[E0432]: unresolved import opex_core::agent::file_scenario::dispatch_seam` would mean a kept module was wrongly deleted (revert that deletion); `error[E0560]: struct ... has no field named enqueue` means a suite still threads the removed field (fix in Step 3). With Tasks 1–4 done correctly and no `enqueue:` literal in these suites, this compiles clean.
+  - Expected failure signal: exactly `error[E0560]: struct ... has no field named enqueue` at the 4 sites above — these suites still thread the field Task 2 removed (fixed in Step 3). An `error[E0432]: unresolved import opex_core::agent::file_scenario::dispatch_seam` would instead mean a KEPT module was wrongly deleted in Tasks 2–4 (revert that deletion) — but that is not expected.
 
-- [ ] **Step 3: Write minimal implementation** — **only if** Step 2 surfaced an error from a removed-field ripple or an over-reach. Permissible narrow edits: (a) drop a `enqueue: None,` / `enqueue: Some(...)` field line from any `DispatchInput { .. }` constructed in these suites; (b) if any suite asserted `resolve("summarize_video").is_some()`, change it to `resolve("summarize_video").is_none()` to match the Task-2 closed table. Otherwise leave all three files untouched. (The security file currently asserts only the const at line ~65 and `resolve(code_exec).is_none()` — both still valid; no edit expected there.)
+- [ ] **Step 3: Write minimal implementation** — drop the now-removed `enqueue` field line at each of the 4 verified sites:
+  - `crates/opex-core/tests/integration_fse_regression.rs`: delete the `enqueue: None,` line at **line 158**, **line 247**, and **line 330** (each inside a `DispatchInput { .. }` literal).
+  - `crates/opex-core/tests/integration_fse_security.rs`: delete the `enqueue: None,` line at **line 154**.
+  - `crates/opex-core/tests/integration_fse_affordance.rs`: no edit (constructs no `DispatchInput`).
+  - Make NO other change: the security const-membership assertion (5 ids, lines 63–67) and its `resolve()` loop (4 sync ids, lines 243–248) are both still valid post-Task-2.
 
 - [ ] **Step 4: Run test to verify it passes**
   - Command: `cargo test -p opex-core --test integration_fse_regression --test integration_fse_security --test integration_fse_affordance`
   - Expected: PASS — `test result: ok` for each suite (the wiremock-backed transcribe/describe/extract regression, the allowlist + fail-closed security guards, and the owner-gate/affordance source guards all still hold).
 
-- [ ] **Step 5: Commit** — only if Step 3 made an edit; otherwise skip this commit (nothing changed).
+- [ ] **Step 5: Commit**
 ```bash
-# Only if a removed-field ripple or drifted assertion was corrected:
 git add crates/opex-core/tests/integration_fse_regression.rs \
-        crates/opex-core/tests/integration_fse_security.rs \
-        crates/opex-core/tests/integration_fse_affordance.rs
-git commit -m "test(fse): keep FSE integration suites green after video-pipeline removal
+        crates/opex-core/tests/integration_fse_security.rs
+git commit -m "test(fse): drop removed DispatchInput.enqueue field from kept FSE suites
 
-dispatch.rs / dispatch_seam.rs / run.rs are kept (R2/R11), so the regression,
-security, and affordance suites still resolve and pass. Drops the removed
-DispatchInput.enqueue field where threaded; summarize_video is no longer an
-in-core builtin (the const-based allowlist guard is unchanged)."
+Task 2 removed the DispatchInput.enqueue field; the kept regression
+(lines 158/247/330) and security (line 154) suites threaded enqueue: None and no
+longer compiled (E0560). Drops those 4 field lines. dispatch.rs / dispatch_seam.rs
+/ run.rs are kept (R2/R11), so every import still resolves; the security
+allowlist const (5 ids) and resolve() loop (4 sync ids) are unchanged."
 ```
 
 ---
 
-### Task 6: Update CLAUDE.md architecture notes + final whole-branch gate
+### Task 6: Add the File Handler Hub doc section to CLAUDE.md + final whole-branch gate
 
 **Files:**
 - Modify: `d:\GIT\bogdan\opex\CLAUDE.md`
@@ -6394,17 +6545,19 @@ in-core builtin (the const-based allowlist guard is unchanged)."
 
 **Interfaces:**
 - Consumes: the entire post-cleanup tree (Tasks 1–5) + Phases 1–5 deliverables (`toolgate/handlers/*`, `agent/handler_registry.rs`, `gateway/handlers/files.rs`, `db/handler_jobs.rs`, `agent/file_handler_worker.rs`, `agent/provenance.rs`, migrations 066/067/068).
-- Produces: documentation that matches the shipped architecture (no live references to the deleted in-core video pipeline; accurate KEPT-vs-removed description) + a green full gate proving the whole branch builds, lints, and tests across Rust + Python + UI.
+- Produces: a new "File Handler Hub" subsection in CLAUDE.md documenting the shipped architecture (HandlerRegistry + ctx + bytes-multipart run + handler_jobs + provenance), an accurate KEPT-vs-removed description, and the Phase 6 video-pipeline removal note + a green full gate proving the whole branch builds, lints, and tests across Rust + Python + UI.
 
-- [ ] **Step 1: Write the failing test** — the "test" is a doc-accuracy grep gate. Confirm CLAUDE.md still describes the removed in-core video pipeline:
-  - Command: `grep -nE 'video_worker\.rs|video_summary\.rs|VIDEO async \(to generalize\)|video_jobs' CLAUDE.md`
-  - Expected: matches found (the "VIDEO async (to generalize)" block + `video_worker.rs`/`video_summary.rs`/`video_jobs` mentions describing the in-core pipeline, which must be replaced with the File Handler Hub description).
+> **Doc-state fact (verified against the live tree):** `CLAUDE.md` (734 lines) contains **ZERO** matches for `video`, `file.handler`, `file.scenario`, `fse`, `video_worker`, `video_summary`, `video_jobs`, or `VIDEO async`. There is **nothing to remove** — this task is a pure doc-ADDITION. The `### Tools (`src/tools/`)` heading exists at **line 169**; the new subsection is inserted under it (e.g. immediately after the existing `**MCP tools:**` line at line 194, before `### Channels`).
+
+- [ ] **Step 1: Write the failing test** — the "test" is a positive doc-presence grep. Before the edit, confirm the File Handler Hub section is NOT yet documented:
+  - Command: `grep -c 'File Handler Hub' CLAUDE.md`
+  - Expected: `0` — the section does not exist yet (the doc-addition has not been applied). (Note: there is no stale "VIDEO async" block to remove — the live CLAUDE.md has zero video references; this is an addition, not a replacement.)
 
 - [ ] **Step 2: Run test to verify it fails**
-  - Command: `grep -cE 'video_worker|video_summary|VIDEO async \(to generalize\)' CLAUDE.md`
-  - Expected: a non-zero count — the doc still mentions the removed in-core pipeline.
+  - Command: `grep -c 'File Handler Hub' CLAUDE.md`
+  - Expected: `0` — the doc does not yet describe the File Handler Hub. (The assertion to satisfy in Step 4 is that this count becomes `>= 1`.)
 
-- [ ] **Step 3: Write minimal implementation** — edit CLAUDE.md. Add a "File Handler Hub" subsection under "### Tools (`src/tools/`)" and rewrite/remove the stale "VIDEO async (to generalize)" block. Concrete new text:
+- [ ] **Step 3: Write minimal implementation** — edit CLAUDE.md. Insert a "File Handler Hub" subsection under "### Tools (`src/tools/`)" (after the `**MCP tools:**` line at line 194, before the `### Channels` heading at line 196). Concrete new text:
 
 ```markdown
 ### File Handler Hub (toolgate handlers + core orchestration)
@@ -6454,10 +6607,10 @@ table is deprecated, not dropped (m068, history-preserving). The
 `ScenarioOutcome.video_accepted` serde wire field is retained (defaults false).
 ```
 
-  Then **remove the existing "VIDEO async (to generalize)" block** (and any other `video_worker.rs` / `video_summary.rs` / `video_jobs` mention describing the removed in-core pipeline) so the grep gate is clean. Do NOT remove references that describe the kept legacy `file_scenarios` / dispatch path.
+  This is a pure addition — do NOT remove or rewrite any existing CLAUDE.md content (there is no stale "VIDEO async" block in the live file).
 
 - [ ] **Step 4: Run test to verify it passes** — doc gate + reference-cleanliness grep + full whole-branch gate (R11 final gate):
-  - Doc gate: `grep -cE 'video_worker\.rs|video_summary\.rs|VIDEO async \(to generalize\)' CLAUDE.md` → expected `0`.
+  - Doc gate: `grep -c 'File Handler Hub' CLAUDE.md` → expected `>= 1` (the subsection is present).
   - Reference-cleanliness grep (R11/R16): `grep -rn "spawn_video_worker\|video_jobs::\|video_summary::\|run_summarize_video\|BuiltinAction::SummarizeVideo\|detect_video_links\|is_supported_video_host\|EnqueueCtx\|recover_stuck_video_jobs" crates/ --include="*.rs" | grep -v "tests/integration_phase6_no_video_refs.rs"` → expected **no output** (no live reference to any deleted video/enqueue symbol remains; the only allowed hits are the guard-test string literals, which the grep excludes).
   - Rust build: `make check` → expected `Finished` (no errors). Then `make lint` → expected `Finished` with `-D warnings` clean.
   - Rust tests: `cargo test -p opex-core -p opex-db` (DB-backed `#[sqlx::test]` skipped without `DATABASE_URL`, as documented) → expected all non-DB tests `ok`, incl. `integration_phase6_no_video_refs` (5 guard tests) + the kept FSE suites.
@@ -6470,9 +6623,9 @@ git add CLAUDE.md
 git commit -m "docs: document File Handler Hub; record Phase 6 video-pipeline removal
 
 Adds the toolgate HandlerRegistry architecture (handlers + ctx + bytes-multipart
-run + handler_jobs + provenance), notes the KEPT legacy file_scenarios/dispatch/
-run path (R2), and removes the stale in-core 'VIDEO async' notes. Phase 6 deleted
-only the in-core video pipeline (video_summary/video_worker/video_jobs +
-SummarizeVideo arm + EnqueueCtx plumbing). Final whole-branch gate green:
-make check + make lint + toolgate pytest + ui vitest."
+run + handler_jobs + provenance) under the Tools section, notes the KEPT legacy
+file_scenarios/dispatch/run path (R2), and records that Phase 6 deleted only the
+in-core video pipeline (video_summary/video_worker/video_jobs + SummarizeVideo
+arm + EnqueueCtx plumbing). Final whole-branch gate green: make check + make lint
++ toolgate pytest + ui vitest."
 ```
