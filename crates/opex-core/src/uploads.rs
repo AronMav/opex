@@ -227,6 +227,77 @@ pub(crate) fn url_encode_keep_slash(s: &str) -> String {
     utf8_percent_encode(s, URL_KEEP_SLASH).to_string()
 }
 
+// ── Per-job HMAC callback tokens ──────────────────────────────────────────────
+
+/// Namespace for per-job callback tokens. Must differ from all upload namespaces
+/// so a job token cannot be replayed on an upload endpoint (domain separation).
+const JOB_CB_NS: &str = "jobcb";
+
+/// Mint a per-job HMAC-SHA256 callback token bound to `job_id`.
+///
+/// Token format: `"{exp}.{hex-HMAC}"`.
+/// HMAC payload: `"jobcb:{job_id}:{exp}"`.
+///
+/// The same 32-byte upload HMAC key is reused, but the `"jobcb:"` namespace
+/// prefix domain-separates this token from all `/uploads/` and
+/// `/workspace-files/` signatures — a job token cannot be replayed elsewhere.
+///
+/// This function is `pub` so Task 5 (the async-job worker that enqueues the
+/// spec) can call it from `gateway/handlers/file_scenarios/run.rs`.
+// Called by Task 5 (gateway/handlers/file_scenarios/run.rs); not yet wired in this
+// compilation unit, so suppress the dead_code lint until Task 5 lands.
+#[allow(dead_code)]
+pub fn mint_job_callback_token(key: &[u8; 32], job_id: uuid::Uuid, ttl_secs: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_secs();
+    let exp = now + ttl_secs;
+    let payload = format!("{JOB_CB_NS}:{job_id}:{exp}");
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key)
+        .expect("HMAC-SHA256 accepts 32-byte key");
+    mac.update(payload.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+    format!("{exp}.{sig}")
+}
+
+/// Verify a per-job callback token. Returns `true` iff the token is structurally
+/// valid, not expired (exp >= now), and the HMAC matches.
+///
+/// Constant-time comparison via `subtle::ConstantTimeEq`.
+///
+/// This function is `pub` so the gateway handler can call it from
+/// `gateway/handlers/files.rs`.
+pub fn verify_job_callback_token(key: &[u8; 32], job_id: uuid::Uuid, token: &str) -> bool {
+    // Parse "{exp}.{hex_sig}".
+    let Some((exp_str, hex_sig)) = token.split_once('.') else {
+        return false;
+    };
+    let Ok(exp) = exp_str.parse::<u64>() else {
+        return false;
+    };
+    let Ok(submitted) = hex::decode(hex_sig) else {
+        return false;
+    };
+
+    // Reject expired tokens (exp < now).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before Unix epoch")
+        .as_secs();
+    if now > exp {
+        return false;
+    }
+
+    // Recompute HMAC and constant-time compare.
+    let payload = format!("{JOB_CB_NS}:{job_id}:{exp}");
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key)
+        .expect("HMAC-SHA256 accepts 32-byte key");
+    mac.update(payload.as_bytes());
+    let expected = mac.finalize().into_bytes();
+    submitted.ct_eq(expected.as_slice()).into()
+}
+
 /// Guess MIME type from filename extension (no external dep).
 /// Used by handlers in the binary tree (`workspace_write/edit`, code-exec
 /// sandbox, `/workspace-files/` endpoint). The lib facade doesn't expose
@@ -448,6 +519,70 @@ mod tests {
     fn historical_url_ttl_secs_is_50_years() {
         // 50 * 365 * 24 * 3600
         assert_eq!(HISTORICAL_URL_TTL_SECS, 1_576_800_000u64);
+    }
+
+    // ── Per-job callback token tests ─────────────────────────────────────────
+
+    #[test]
+    fn job_callback_token_roundtrip() {
+        let key = [11u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let token = mint_job_callback_token(&key, id, 300);
+        assert!(verify_job_callback_token(&key, id, &token), "valid token must verify");
+    }
+
+    #[test]
+    fn job_callback_token_tampered_sig_rejected() {
+        let key = [22u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let token = mint_job_callback_token(&key, id, 300);
+        let (exp_part, _sig) = token.split_once('.').unwrap();
+        let bogus = format!("{exp_part}.{}", "00".repeat(32));
+        assert!(!verify_job_callback_token(&key, id, &bogus), "tampered sig must be rejected");
+    }
+
+    #[test]
+    fn job_callback_token_expired_rejected() {
+        let key = [33u8; 32];
+        let id = uuid::Uuid::new_v4();
+        // Mint with exp already in the past: ttl=0 means exp=now, and the
+        // verify check is now > exp. We produce a token with exp = now - 1.
+        let exp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(1);
+        let payload = format!("{JOB_CB_NS}:{id}:{exp}");
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key).unwrap();
+        mac.update(payload.as_bytes());
+        let sig = hex::encode(mac.finalize().into_bytes());
+        let token = format!("{exp}.{sig}");
+        assert!(!verify_job_callback_token(&key, id, &token), "expired token must be rejected");
+    }
+
+    #[test]
+    fn job_callback_token_wrong_job_id_rejected() {
+        let key = [44u8; 32];
+        let id1 = uuid::Uuid::new_v4();
+        let id2 = uuid::Uuid::new_v4();
+        let token = mint_job_callback_token(&key, id1, 300);
+        assert!(!verify_job_callback_token(&key, id2, &token), "token for id1 must not verify for id2");
+    }
+
+    #[test]
+    fn job_callback_token_cannot_forge_upload_sig() {
+        // A job token format must not accidentally verify as an upload URL sig.
+        // They share the same key but different namespaces ("jobcb:" vs "uploads:").
+        let key = [55u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let token = mint_job_callback_token(&key, id, 300);
+        // Parse exp from token and attempt to use it as an upload sig.
+        let (_exp_part, hex_sig) = token.split_once('.').unwrap();
+        let b64_sig = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(hex::decode(hex_sig).unwrap());
+        let token_exp: u64 = token.split('.').next().unwrap().parse().unwrap();
+        let result = verify_uploads_url(id, &b64_sig, token_exp, &key);
+        assert!(result.is_err(), "job token must not verify as upload URL sig");
     }
 
     fn parse_url_qs(url: &str) -> (String, u64) {

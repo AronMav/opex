@@ -64,6 +64,12 @@ async def run_job(spec: dict) -> None:
     core_url = spec["core_url"].rstrip("/")
     auth = spec.get("auth_token", "")
     headers: dict[str, str] = {"Authorization": f"Bearer {auth}"} if auth else {}
+    # FIX 5: forward the per-job HMAC token so core can verify the caller is
+    # the legitimate runner for this job (Task 5 mints and injects it into the
+    # spec; if absent, the header is omitted — core returns 401 in that case).
+    callback_token = spec.get("callback_token")
+    if callback_token:
+        headers["X-Job-Token"] = callback_token
     temp_path = spec.get("temp_path")
 
     try:

@@ -22,7 +22,7 @@
 use axum::{
     Router,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
 };
@@ -44,6 +44,32 @@ static FILES_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::Once
 
 fn files_http_client() -> &'static reqwest::Client {
     FILES_HTTP_CLIENT.get_or_init(reqwest::Client::new)
+}
+
+// ── post_action path-traversal allowlist ──────────────────────────────────────
+
+/// Compiled once. Allows filenames and folder names that contain only
+/// `A-Za-z0-9 _.-` (1–128 chars). No slashes, no backslashes, no `..`.
+/// This is the FIX 2 traversal guard for `run_post_action`.
+static SAFE_FILENAME_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+fn safe_filename_re() -> &'static regex::Regex {
+    SAFE_FILENAME_RE.get_or_init(|| {
+        regex::Regex::new(r"^[A-Za-z0-9 _.\-]{1,128}$").expect("static regex is valid")
+    })
+}
+
+/// Returns `true` iff `name` passes the post_action path traversal allowlist.
+/// Exported `pub(crate)` so the inline test module can exercise it directly.
+///
+/// Two-layer check:
+/// 1. Explicit rejection of lone `.` / `..` (these match the character class).
+/// 2. Regex `^[A-Za-z0-9 _.-]{1,128}$` — no slashes, no backslashes.
+pub(crate) fn is_safe_path_component(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." {
+        return false;
+    }
+    safe_filename_re().is_match(name)
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -415,12 +441,25 @@ pub(crate) fn file_job_progress_event(
 ///
 /// Internal callback posted by the async runner to report incremental progress.
 /// Auth is required (same Bearer token as all other /api routes — the runner has it).
+/// Additionally, the per-job HMAC token in `X-Job-Token` must verify (FIX 1 IDOR guard).
 /// Updates the `handler_jobs` row and broadcasts a `file_job_progress` WS event.
 async fn job_progress(
     State(state): State<AppState>,
     Path(job_id): Path<Uuid>,
+    headers: HeaderMap,
     Json(body): Json<JobProgressBody>,
 ) -> StatusCode {
+    // FIX 1: per-job HMAC token — reject if missing or invalid.
+    let key = state.infra.secrets.get_upload_hmac_key();
+    let token = headers
+        .get("x-job-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !crate::uploads::verify_job_callback_token(&key, job_id, token) {
+        tracing::warn!(%job_id, "job_progress: missing or invalid X-Job-Token");
+        return StatusCode::UNAUTHORIZED;
+    }
+
     let db = &state.infra.db;
     if let Err(e) = handler_jobs::update_handler_job_progress(db, job_id, &body.phase, body.pct).await {
         tracing::warn!(error = %e, %job_id, "job_progress: db update failed");
@@ -444,14 +483,27 @@ async fn job_progress(
 ///
 /// Internal callback posted by the async runner with the final `ScenarioOutcome`.
 /// Auth is required (same Bearer token as all other /api routes).
+/// Additionally, the per-job HMAC token in `X-Job-Token` must verify (FIX 1 IDOR guard).
 /// On success: marks the job done, persists a provenance-wrapped `source='file_handler'`
 /// message, runs the optional `post_action` (MCP vault write), emits a final WS event.
 /// On failure status: marks the job failed, emits a terminal WS event.
 async fn job_complete(
     State(state): State<AppState>,
     Path(job_id): Path<Uuid>,
+    headers: HeaderMap,
     Json(outcome): Json<ScenarioOutcome>,
 ) -> StatusCode {
+    // FIX 1: per-job HMAC token — reject if missing or invalid.
+    let key = state.infra.secrets.get_upload_hmac_key();
+    let token = headers
+        .get("x-job-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !crate::uploads::verify_job_callback_token(&key, job_id, token) {
+        tracing::warn!(%job_id, "job_complete: missing or invalid X-Job-Token");
+        return StatusCode::UNAUTHORIZED;
+    }
+
     let db = &state.infra.db;
     let job = match handler_jobs::get_handler_job(db, job_id).await {
         Ok(Some(j)) => j,
@@ -471,12 +523,21 @@ async fn job_complete(
     let result_json = serde_json::to_value(&outcome).unwrap_or_else(|_| serde_json::json!({}));
 
     if is_ok {
-        let _ = handler_jobs::mark_handler_job_done(db, job_id, &result_json).await;
-        // Persist as a file-derived message + run the generic post-action.
+        // FIX 3: log mark_done errors instead of swallowing. Side effects
+        // (deliver + post_action) still run even when the bookkeeping row fails.
+        if let Err(e) = handler_jobs::mark_handler_job_done(db, job_id, &result_json).await {
+            tracing::error!(error = %e, %job_id, "job_complete: mark_handler_job_done failed");
+        }
+        // FIX 3: pass in-hand `outcome` to deliver_async_outcome; it no longer
+        // re-reads from the DB, so post_action is not silently skipped when
+        // mark_handler_job_done failed.
         deliver_async_outcome(&state, &job, &outcome).await;
     } else {
         let reason = outcome.reason.clone().unwrap_or_else(|| "handler failed".to_string());
-        let _ = handler_jobs::mark_handler_job_failed(db, job_id, &reason).await;
+        // FIX 3: log mark_failed errors instead of swallowing.
+        if let Err(e) = handler_jobs::mark_handler_job_failed(db, job_id, &reason).await {
+            tracing::error!(error = %e, %job_id, "job_complete: mark_handler_job_failed failed");
+        }
     }
 
     let ev = file_job_progress_event(
@@ -539,20 +600,22 @@ async fn deliver_async_outcome(
 /// Run the optional `post_action` carried in the outcome JSON. v1 supports the
 /// Obsidian vault note write (`post_action.kind == "obsidian_note"`), reusing
 /// the existing core MCP plumbing (R17). Any other kind is a safe no-op.
+///
+/// FIX 3: uses the in-hand `outcome` directly (no DB re-read) so post_action is
+/// not silently skipped when mark_handler_job_done failed.
+/// FIX 2: validates `folder` and `filename` against a strict allowlist before
+/// passing to MCP to prevent path traversal.
 async fn run_post_action(
     state: &AppState,
     job: &handler_jobs::HandlerJob,
     outcome: &ScenarioOutcome,
 ) {
-    // Re-read the row so we pick up the stored result_json (which now includes
-    // post_action, since ScenarioOutcome carries the field after mark_handler_job_done).
-    let row = match handler_jobs::get_handler_job(&state.infra.db, job.id).await {
-        Ok(Some(r)) => r,
+    // FIX 3: read post_action directly from the in-hand outcome (avoids DB
+    // re-read and decouples post_action from the mark_done write succeeding).
+    let outcome_value = serde_json::to_value(outcome).unwrap_or_else(|_| serde_json::json!({}));
+    let action = match outcome_value.get("post_action") {
+        Some(a) if !a.is_null() => a.clone(),
         _ => return,
-    };
-    let action = match row.result.as_ref().and_then(|r| r.get("post_action")) {
-        Some(a) => a.clone(),
-        None => return,
     };
     if action.get("kind").and_then(|k| k.as_str()) != Some("obsidian_note") {
         return;
@@ -572,6 +635,19 @@ async fn run_post_action(
     };
     let folder = action.get("folder").and_then(|v| v.as_str()).unwrap_or("Summary");
     let filename = action.get("filename").and_then(|v| v.as_str()).unwrap_or("note.md");
+
+    // FIX 2: path traversal allowlist — reject folder or filename that contain
+    // slashes, backslashes, or '..' sequences. Only [A-Za-z0-9 _.-]{1,128}.
+    if !is_safe_path_component(folder) || !is_safe_path_component(filename) {
+        tracing::warn!(
+            job_id = %job.id,
+            folder = %folder,
+            filename = %filename,
+            "run_post_action: folder or filename failed allowlist — skipping MCP call"
+        );
+        return;
+    }
+
     let content = action
         .get("content")
         .and_then(|v| v.as_str())
@@ -686,6 +762,66 @@ mod tests {
             "<file_output handler=\"transcribe\" upload=\"{upload}\" trust=\"untrusted\">"
         )));
         assert!(wrapped.contains("\nраспознанный текст\n"));
+    }
+
+    // ── Job-callback token gate tests (non-DB, unit) ─────────────────────────
+
+    #[test]
+    fn verify_job_callback_token_accepts_valid() {
+        let key = [1u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let token = crate::uploads::mint_job_callback_token(&key, id, 300);
+        assert!(crate::uploads::verify_job_callback_token(&key, id, &token));
+    }
+
+    #[test]
+    fn verify_job_callback_token_rejects_missing() {
+        let key = [2u8; 32];
+        let id = uuid::Uuid::new_v4();
+        assert!(!crate::uploads::verify_job_callback_token(&key, id, ""));
+    }
+
+    #[test]
+    fn verify_job_callback_token_rejects_wrong_job_id() {
+        let key = [3u8; 32];
+        let id1 = uuid::Uuid::new_v4();
+        let id2 = uuid::Uuid::new_v4();
+        let token = crate::uploads::mint_job_callback_token(&key, id1, 300);
+        assert!(!crate::uploads::verify_job_callback_token(&key, id2, &token));
+    }
+
+    #[test]
+    fn verify_job_callback_token_rejects_tampered() {
+        let key = [4u8; 32];
+        let id = uuid::Uuid::new_v4();
+        let token = crate::uploads::mint_job_callback_token(&key, id, 300);
+        let tampered = format!("{}.{}", token.split('.').next().unwrap(), "00".repeat(32));
+        assert!(!crate::uploads::verify_job_callback_token(&key, id, &tampered));
+    }
+
+    // ── post_action path-traversal allowlist tests ────────────────────────────
+
+    #[test]
+    fn path_component_allowlist_accepts_valid_names() {
+        assert!(is_safe_path_component("Summary"));
+        assert!(is_safe_path_component("note.md"));
+        assert!(is_safe_path_component("My Notes 2024"));
+        assert!(is_safe_path_component("file_name-v2.txt"));
+    }
+
+    #[test]
+    fn path_component_allowlist_rejects_traversal() {
+        assert!(!is_safe_path_component("../etc/passwd"));
+        assert!(!is_safe_path_component("a/b"));
+        assert!(!is_safe_path_component("a\\b"));
+        assert!(!is_safe_path_component(".."));
+        assert!(!is_safe_path_component(""));
+    }
+
+    #[test]
+    fn path_component_allowlist_rejects_too_long() {
+        let long = "a".repeat(129);
+        assert!(!is_safe_path_component(&long));
     }
 
     // ── DB-backed tests (require DATABASE_URL — skipped without it) ───────────
