@@ -108,6 +108,7 @@ interface AttachmentEntry {
   id: string;
   name: string;
   file: File;
+  uploadId: string; // upload ROW UUID (result.filename), used for /api/files/{uploadId}/...
   content: Array<{ type: string; data: string; mimeType: string; filename?: string }>;
 }
 
@@ -478,6 +479,7 @@ export function ChatComposer() {
           id: uuid(),
           name: file.name,
           file,
+          uploadId: result.filename as string, // R1: the row UUID, distinct from the served URL path
           content: [{ type: "file", data: uploadPath, mimeType: file.type, filename: file.name }],
         },
       ]);
