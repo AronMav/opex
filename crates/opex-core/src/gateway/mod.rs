@@ -126,7 +126,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::uploads_serve::routes())   // /api/uploads/{id}
         .merge(handlers::workspace_files::routes()) // /workspace-files/{*path}?sig=&exp=
         .merge(handlers::workspace::routes())       // /api/workspace/*
-        .merge(handlers::clarify::routes());        // /api/clarify/{id}
+        .merge(handlers::clarify::routes())        // /api/clarify/{id}
+        .merge(handlers::files::routes());          // /api/files/{upload_id}/actions + /run
 
     #[cfg(feature = "gemini-cloudcode")]
     let app = app.merge(handlers::google_auth::routes()); // /api/auth/google/*

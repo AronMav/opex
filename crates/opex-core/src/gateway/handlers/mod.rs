@@ -33,6 +33,7 @@ pub(crate) mod csp;
 pub(crate) mod uploads_serve;
 pub(crate) mod workspace_files;
 pub(crate) mod file_scenarios;
+pub(crate) mod files;
 pub(crate) mod clarify;
 
 #[cfg(feature = "gemini-cloudcode")]
