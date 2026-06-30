@@ -137,3 +137,96 @@ async def run(ctx, file, params):
     assert d.order == 100  # default when <order> omitted
     assert d.enabled is True  # default when <enabled> omitted
     assert d.tier == "workspace"
+
+
+def test_parse_descriptor_rejects_missing_block():
+    with pytest.raises(DescriptorError, match="no <handler> descriptor block"):
+        parse_descriptor("async def run(ctx, file, params):\n    pass\n", tier="builtin")
+
+
+def test_parse_descriptor_rejects_empty_id():
+    src = '''\
+# <handler>
+#   <label lang="en">X</label>
+#   <match><mime>*/*</mime></match>
+#   <execution>sync</execution>
+# </handler>
+'''
+    with pytest.raises(DescriptorError, match="id"):
+        parse_descriptor(src, tier="builtin")
+
+
+def test_parse_descriptor_rejects_bad_id_chars():
+    src = '''\
+# <handler>
+#   <id>Bad ID!</id>
+#   <label lang="en">X</label>
+#   <match><mime>*/*</mime></match>
+#   <execution>sync</execution>
+# </handler>
+'''
+    with pytest.raises(DescriptorError, match="id"):
+        parse_descriptor(src, tier="builtin")
+
+
+def test_parse_descriptor_rejects_no_mime():
+    src = '''\
+# <handler>
+#   <id>nomime</id>
+#   <label lang="en">X</label>
+#   <match></match>
+#   <execution>sync</execution>
+# </handler>
+'''
+    with pytest.raises(DescriptorError, match="mime"):
+        parse_descriptor(src, tier="builtin")
+
+
+def test_parse_descriptor_rejects_missing_match_element():
+    src = '''\
+# <handler>
+#   <id>nomatch</id>
+#   <label lang="en">X</label>
+#   <execution>sync</execution>
+# </handler>
+'''
+    with pytest.raises(DescriptorError, match="mime"):
+        parse_descriptor(src, tier="builtin")
+
+
+def test_parse_descriptor_rejects_bad_execution():
+    src = '''\
+# <handler>
+#   <id>badexec</id>
+#   <label lang="en">X</label>
+#   <match><mime>*/*</mime></match>
+#   <execution>maybe</execution>
+# </handler>
+'''
+    with pytest.raises(DescriptorError, match="execution"):
+        parse_descriptor(src, tier="builtin")
+
+
+def test_parse_descriptor_accepts_async_execution():
+    src = '''\
+# <handler>
+#   <id>summarize_video</id>
+#   <label lang="en">Summarize</label>
+#   <match><mime>video/*</mime></match>
+#   <execution>async</execution>
+# </handler>
+'''
+    d = parse_descriptor(src, tier="builtin")
+    assert d.execution == "async"
+
+
+def test_parse_descriptor_rejects_missing_label():
+    src = '''\
+# <handler>
+#   <id>nolabel</id>
+#   <match><mime>*/*</mime></match>
+#   <execution>sync</execution>
+# </handler>
+'''
+    with pytest.raises(DescriptorError, match="label"):
+        parse_descriptor(src, tier="builtin")
