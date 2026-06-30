@@ -244,7 +244,12 @@ impl AgentEngine {
                 outcome.final_text,
                 outcome.thinking_json,
             );
-            finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await?;
+            let final_text =
+                finalize::finalize(fin_ctx, fin_outcome, &mut s, &mut lifecycle_guard).await?;
+            // Auto-voice the reply when this chat has voice mode on. Best-effort
+            // (never fails the turn); works on the web UI too because
+            // `voice_chat_id` falls back to the agent name for UI turns.
+            self.maybe_auto_tts(msg, &final_text).await;
             Ok(())
         }
         .await;
@@ -279,13 +284,13 @@ impl AgentEngine {
         if final_text.trim().is_empty() {
             return;
         }
-        let chat_id = match msg.context.get("chat_id") {
-            Some(v) => v.to_string().trim_matches('"').to_string(),
-            None => return, // web/UI turn — no chat to voice
+        // Resolve the voice-mode chat id: messaging channels carry it in context,
+        // web/UI turns fall back to the agent name (so /voice + auto-tts work on
+        // the web UI too). `None` → nothing to voice.
+        let chat_id = match crate::agent::channel_kind::voice_chat_id(msg) {
+            Some(id) => id,
+            None => return,
         };
-        if chat_id.is_empty() || chat_id == "null" {
-            return;
-        }
         let mode = crate::db::channel_voice_modes::get_voice_mode(&self.cfg().db, &msg.channel, &chat_id)
             .await
             .unwrap_or_else(|_| "off".to_string());
