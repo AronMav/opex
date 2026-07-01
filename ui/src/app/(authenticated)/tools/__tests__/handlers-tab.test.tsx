@@ -90,6 +90,11 @@ describe("File Handlers tab", () => {
     // The builtin has a Switch; toggling it fires the mutation with its id.
     const toggle = screen.getByLabelText("transcribe");
     fireEvent.click(toggle);
-    expect(mutate).toHaveBeenCalledWith({ action_ref: "transcribe", enabled: false });
+    // mutate is called with the toggle args + an options object carrying the
+    // per-row onSettled (clears the in-flight row's pending state).
+    expect(mutate).toHaveBeenCalledWith(
+      { action_ref: "transcribe", enabled: false },
+      expect.objectContaining({ onSettled: expect.any(Function) }),
+    );
   });
 });

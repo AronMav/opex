@@ -742,10 +742,30 @@ export function useSetHandlerAllowlist() {
   return useMutation({
     mutationFn: (data: { action_ref: string; enabled: boolean }) =>
       apiPut<{ action_ref: string; enabled: boolean }>("/api/handlers/allowlist", data),
-    onSuccess: () => {
+    // Optimistic: flip the toggled row's `enabled` immediately (the server derives
+    // it, so without this the thumb won't move until the PUT + toolgate-backed
+    // refetch completes). Mirrors useSetProviderActive.
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: qk.handlers })
+      const snapshot = qc.getQueryData<{ handlers: HandlerAdminRow[] }>(qk.handlers)
+      qc.setQueryData<{ handlers: HandlerAdminRow[] }>(qk.handlers, (old) =>
+        old
+          ? {
+              handlers: old.handlers.map((h) =>
+                h.id === vars.action_ref ? { ...h, enabled: vars.enabled } : h,
+              ),
+            }
+          : old,
+      )
+      return { snapshot }
+    },
+    onError: (e: Error, _vars, ctx) => {
+      if (ctx?.snapshot) qc.setQueryData(qk.handlers, ctx.snapshot)
+      toast.error(e.message)
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: qk.handlerAllowlist })
       qc.invalidateQueries({ queryKey: qk.handlers }) // handlers carry the merged `enabled`
     },
-    onError: (e: Error) => toast.error(e.message),
   })
 }

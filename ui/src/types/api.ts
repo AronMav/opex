@@ -487,7 +487,7 @@ export interface HandlerAdminRow {
   labels: Record<string, string>;        // { ru, en }
   descriptions: Record<string, string>;  // { ru, en }
   icon: string;
-  match: { mime?: string[]; max_size_mb?: number };
+  match: { mime: string[]; max_size_mb: number | null }; // backend always emits mime ([] if none); max_size_mb null when uncapped
   capability?: string | null;
   provider?: string | null;
   execution: "sync" | "async";
