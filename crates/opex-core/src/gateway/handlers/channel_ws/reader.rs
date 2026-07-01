@@ -117,12 +117,6 @@ pub(super) async fn run(
                         ).await;
                         if consumed { continue; }
 
-                        // FSE choice-callback intercept (owner-gated).
-                        let consumed_fse = inline::handle_fse_callback(
-                            &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
-                        ).await;
-                        if consumed_fse { continue; }
-
                         // Clarify button-callback intercept (owner-gated).
                         let consumed_clarify_cb = inline::handle_clarify_callback(
                             &ctx, &engine, &agent_name, &request_id, &msg, &out_tx,
@@ -230,15 +224,6 @@ pub(super) async fn run(
 
 #[cfg(test)]
 mod wire_guards {
-    #[test]
-    fn fse_callback_wired_before_dispatch() {
-        let src = include_str!("reader.rs");
-        let fse = src.find("handle_fse_callback").expect("fse intercept must be wired");
-        // Use the call-site pattern (with open-paren) to skip the doc-comment reference.
-        let dispatch = src.find("dispatcher::dispatch_message(").expect("dispatcher present");
-        assert!(fse < dispatch, "fse intercept must run before dispatch_message");
-    }
-
     #[test]
     fn clarify_callback_wired_before_dispatch() {
         let src = include_str!("reader.rs");
