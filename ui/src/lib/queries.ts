@@ -40,10 +40,6 @@ import type {
   SkillVersion,
   CuratorDecision,
   SkillCuratorDecisions,
-  FileScenario,
-  CreateFileScenarioInput,
-  UpdateFileScenarioInput,
-  FileScenarioAllowlistRow,
   HandlerAdminRow,
   HandlerAllowlistRow,
 } from "@/types/api"
@@ -91,8 +87,6 @@ export const qk = {
   curatorRuns: ["curator", "runs"] as const,
   curatorDecisions: ["curator-decisions"] as const,
   skillCuratorDecisions: (name: string) => ["skills", name, "curator-decisions"] as const,
-  fileScenarios: ["file-scenarios"] as const,
-  fileScenarioAllowlist: ["file-scenarios", "allowlist"] as const,
   checkpoints: (name: string) => ["agents", name, "checkpoints"] as const,
   handlers: ["handlers"] as const,
   handlerAllowlist: ["handlers", "allowlist"] as const,
@@ -698,76 +692,6 @@ export function useNotificationWsSync() {
   useWsSubscription("notification", (event) => {
     prependNotification(event.data);
   });
-}
-
-// ── File Scenario Engine ────────────────────────────────────────────────────
-
-export function useFileScenarios() {
-  return useQuery({
-    queryKey: qk.fileScenarios,
-    queryFn: () => apiGet<{ scenarios: FileScenario[] }>("/api/file-scenarios"),
-    select: (d) => d.scenarios,
-    staleTime: 30_000,
-  })
-}
-
-export function useCreateFileScenario() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (data: CreateFileScenarioInput) =>
-      apiPost<FileScenario>("/api/file-scenarios", data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileScenarios }),
-    onError: (e: Error) => toast.error(e.message),
-  })
-}
-
-export function useUpdateFileScenario() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, ...body }: { id: string } & UpdateFileScenarioInput) =>
-      apiPut<FileScenario>(`/api/file-scenarios/${id}`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileScenarios }),
-    onError: (e: Error) => toast.error(e.message),
-  })
-}
-
-export function useDeleteFileScenario() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: string) => apiDelete(`/api/file-scenarios/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileScenarios }),
-    onError: (e: Error) => toast.error(e.message),
-  })
-}
-
-export function useSetFileScenarioDefault() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: ({ id, is_default }: { id: string; is_default: boolean }) =>
-      apiPut<FileScenario>(`/api/file-scenarios/${id}/default`, { is_default }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileScenarios }),
-    onError: (e: Error) => toast.error(e.message),
-  })
-}
-
-export function useFileScenarioAllowlist() {
-  return useQuery({
-    queryKey: qk.fileScenarioAllowlist,
-    queryFn: () =>
-      apiGet<{ allowlist: FileScenarioAllowlistRow[] }>("/api/file-scenarios/allowlist"),
-    select: (d) => d.allowlist,
-    staleTime: 30_000,
-  })
-}
-
-export function useSetFileScenarioAllowlist() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (data: { action_ref: string; enabled: boolean }) =>
-      apiPut<{ action_ref: string; enabled: boolean }>("/api/file-scenarios/allowlist", data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.fileScenarioAllowlist }),
-    onError: (e: Error) => toast.error(e.message),
-  })
 }
 
 // ── Checkpoints ──────────────────────────────────────────────────────────────
