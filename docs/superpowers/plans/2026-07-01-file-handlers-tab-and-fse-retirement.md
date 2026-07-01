@@ -383,7 +383,7 @@ git commit -m "feat(handlers): add /api/handlers + /api/handlers/allowlist admin
 - Modify: `ui/src/types/api.ts` (add types after the hub types, ~line 537)
 - Modify: `ui/src/lib/queries.ts` (add qk keys ~line 93; add 3 hooks; add type imports)
 - Modify: `ui/src/app/(authenticated)/tools/page.tsx` (imports, data hooks, TabsTrigger, TabsContent, `renderHandlerCard`)
-- Modify: `ui/src/i18n/locales/en.json` + `ui/src/i18n/locales/ru.json` (12 `tools.*` keys)
+- Modify: `ui/src/i18n/locales/en.json` + `ui/src/i18n/locales/ru.json` (11 `tools.*` keys)
 - Test: `ui/src/app/(authenticated)/tools/__tests__/handlers-tab.test.tsx` (create)
 
 **Interfaces:**
@@ -444,6 +444,10 @@ export function useHandlers() {
   })
 }
 
+// Standalone allowlist-view API (the 5 members + enabled). The tab card reads
+// `handlers[].enabled` directly (server-merged), so this hook is NOT wired into
+// the card — it is exposed for API parity with the backend route and a possible
+// future allowlist-only view. Safe to leave unused.
 export function useHandlerAllowlist() {
   return useQuery({
     queryKey: qk.handlerAllowlist,
@@ -476,8 +480,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
 const mutate = vi.fn();
+// ToolsPage calls useQueryClient() directly (page.tsx) — without this mock the
+// hook throws "No QueryClient set" (there is no test-wide QueryClientProvider).
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return {
+    ...actual,
+    useQueryClient: () => ({ invalidateQueries: vi.fn(), setQueryData: vi.fn() }),
+  };
+});
 vi.mock("@/lib/queries", () => ({
-  qk: {},
+  qk: { handlers: ["handlers"], handlerAllowlist: ["handlers", "allowlist"] },
   useYamlTools: () => ({ data: [], isLoading: false, error: null }),
   useMcpServers: () => ({ data: [], isLoading: false, error: null }),
   useHandlers: () => ({
@@ -748,7 +761,7 @@ git commit -m "refactor(ui): remove legacy File Scenarios page, nav, queries, ty
 - Delete: `ui/src/__tests__/fixtures/sse/file-scenario-chips.json`
 - Delete: `ui/src/stores/stream/__tests__/fse-chips.test.ts`
 - Delete: `ui/src/__tests__/sse-fse-codegen.test.ts`
-- Modify: `ui/src/__tests__/sse-events.fixtures.test.ts` (remove the `file-scenario-chips` case ~178-226 AND fix the fixture-inventory test that hard-codes `"file-scenario-chips.json"` + the count `27`)
+- Modify: `ui/src/__tests__/sse-events.fixtures.test.ts` (remove the `file-scenario-chips` case ~178-189 AND fix the fixture-inventory test that hard-codes `"file-scenario-chips.json"` + the count `27`)
 
 **Interfaces:** none. The generated `sse.generated.ts` still contains the chips type until Phase C regen; nothing narrows on it after this task, so tsc stays green.
 
@@ -770,7 +783,7 @@ git rm ui/src/__tests__/sse-fse-codegen.test.ts
 
 - [ ] **Step 4: Fix the fixture-inventory test**
 
-In `ui/src/__tests__/sse-events.fixtures.test.ts`: remove the `file-scenario-chips` case (~178-226); in the "all N fixtures present" test remove `"file-scenario-chips.json"` from the expected Set and decrement the count in the title (e.g. `27` → `26`). Confirm the exact current count when editing (grep the test title).
+In `ui/src/__tests__/sse-events.fixtures.test.ts`: remove ONLY the `file-scenario-chips fixture ...` test block (~178-189 — the adjacent fixture tests at ~191+ for `tool-input-delta`/`finish`/`error` STAY); then in the "all N fixtures present" inventory test (~213) remove `"file-scenario-chips.json"` from the expected Set (~226) and decrement the count in the title (`27` → `26`). Confirm the exact current count when editing (grep the test title).
 
 - [ ] **Step 5: Verify suite**
 
@@ -843,7 +856,7 @@ Update the doc comment (~200-202) to:
 In `crates/opex-core/src/agent/pipeline/bootstrap.rs`:
 - Delete the `AffordanceTransport` enum + `affordance_transport()` helper + their doc (~14-34).
 - Delete the `pending_alternatives` field + its doc + `#[allow(dead_code)]` in `BootstrapOutcome` (~66-69).
-- Replace the enrich-consumption region (~270-290) with:
+- Replace the WHOLE enrich-consumption region (~270-290 **inclusive**) with the block below. This span deletes THREE things that read the now-removed fields: the `let pending_alternatives = enrich.pending_alternatives;` line (~271), the `enrich.outcomes`-based `video_ack_text` search (folded into the constant below), AND the trailing `if enrich.outcomes.iter().any(|o| !matches!(o.status, crate::agent::file_scenario::ScenarioStatus::Ok)) { tracing::info!("fse: ...") }` block (~288-290, reads the removed `outcomes` field — it will NOT compile if left). Replacement:
 
 ```rust
     let enriched_text = enrich.text;
@@ -1337,13 +1350,15 @@ Expected: all clean. (Clippy is where a missed dead symbol — e.g. `NotAllowlis
 Run each and expect ZERO hits (except this plan/spec docs):
 
 ```bash
-grep -rn "file_scenario\b\|file-scenario\|FileScenario\|fileScenario" crates/ ui/src/ --include=*.rs --include=*.ts --include=*.tsx | grep -v "file_scenario/outcome\|file_scenario::outcome\|ScenarioOutcome\|ScenarioStatus\|// \|//!"
+grep -rn "file_scenario\b\|file-scenario\|FileScenario\|fileScenario" crates/ ui/src/ --include=*.rs --include=*.ts --include=*.tsx | grep -v "file_scenario/outcome\|file_scenario::outcome\|mod file_scenario\|ScenarioOutcome\|ScenarioStatus\|// \|//!"
 grep -rn "dispatch_attachments\|dispatch_seam\|rewrite_enriched_text\|assert_fse_owner\|validate_binding_write\|seed_default_file_scenarios\|FileScenarioChips\|build_file_scenario_chips\|run_scenario_and_persist" crates/ ui/src/
 grep -rn "ScenarioChoice\|file-scenario-chips" ui/src/types/sse.generated.ts
 grep -rn "NotAllowlisted" crates/
 ```
 
-Any hit that is not `ScenarioOutcome`/`ScenarioStatus`/`FSE_DEFAULT_ALLOWLIST` (the MUST-STAY surface), a comment, or this plan/spec must be removed before the task is complete. Fix + re-run until clean.
+**Expected SURVIVORS (do NOT delete — these are the MUST-STAY hub surface):** the `agent::file_scenario::outcome` module and its two `mod file_scenario` declarations (`agent/mod.rs` `pub(crate) mod file_scenario;` and the `lib.rs` facade `pub mod file_scenario {`), plus `ScenarioOutcome`/`ScenarioStatus`/`FSE_DEFAULT_ALLOWLIST` — all needed because `gateway/handlers/files.rs` imports `crate::agent::file_scenario::outcome::{ScenarioOutcome, ScenarioStatus}`. The `-v` filter above already excludes `mod file_scenario`. Any OTHER hit that is not one of these survivors, a comment, or this plan/spec must be removed before the task is complete. Fix + re-run until clean.
+
+> Note: the `db/audit.rs` FSE event-type constants (`FSE_BINDING_*`, `FSE_DEFAULT_CHANGED`, `FSE_AUTO_RUN`, `FILE_SCENARIO_CREATED`) lose their producers in Phase C but are `pub const` self-referenced by audit.rs's own tests, so they neither fail clippy nor match this gate (`file_scenario\b` does not match `"file_scenario_created"` — no word boundary before `_`). Leaving them is harmless; trimming them + their audit.rs test entries is an optional tidy-up, not required.
 
 - [ ] **Step 5: Commit**
 
