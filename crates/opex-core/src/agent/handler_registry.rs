@@ -60,12 +60,18 @@ pub struct HandlerButton {
     pub params: serde_json::Value,
 }
 
-/// True if `mime` matches a glob like `audio/*` or an exact `application/pdf`.
+/// True if `mime` matches a glob like `audio/*`, the universal `*` / `*/*`, or
+/// an exact `application/pdf`.
+///
+/// The universal wildcard is checked FIRST: `"*/*".strip_suffix("/*")` yields
+/// `Some("*")`, so a naive suffix-first order would (wrongly) require the mime's
+/// type segment to equal the literal `"*"` and never match a real file — which
+/// silently disabled the `save` handler (mime `*/*`) for every upload.
 fn mime_glob_matches(pattern: &str, mime: &str) -> bool {
-    if let Some(prefix) = pattern.strip_suffix("/*") {
-        mime.split('/').next() == Some(prefix)
-    } else if pattern == "*" || pattern == "*/*" {
+    if pattern == "*" || pattern == "*/*" {
         true
+    } else if let Some(prefix) = pattern.strip_suffix("/*") {
+        mime.split('/').next() == Some(prefix)
     } else {
         pattern.eq_ignore_ascii_case(mime)
     }
@@ -305,6 +311,24 @@ mod tests {
         let out = match_buttons(&ms, "image/png", 1_000, &full(), "ru");
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].id, "my_ocr");
+    }
+
+    #[test]
+    fn universal_glob_matches_any_mime() {
+        // Regression: the `save` builtin declares mime `*/*` and must produce a
+        // button for ANY file. A suffix-first matcher broke this (see
+        // mime_glob_matches doc-comment) — 403 on run + no composer button.
+        assert!(mime_glob_matches("*/*", "text/plain"));
+        assert!(mime_glob_matches("*/*", "image/png"));
+        assert!(mime_glob_matches("*/*", "application/pdf"));
+        assert!(mime_glob_matches("*", "audio/ogg"));
+
+        let ms = vec![mf("save", "builtin", &["*/*"], None, 1)];
+        for mime in ["text/plain", "image/png", "application/pdf", "video/mp4"] {
+            let out = match_buttons(&ms, mime, 100, &full(), "ru");
+            assert_eq!(out.len(), 1, "save must match {mime}");
+            assert_eq!(out[0].id, "save");
+        }
     }
 
     #[test]
