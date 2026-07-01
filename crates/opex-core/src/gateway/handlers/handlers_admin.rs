@@ -6,6 +6,8 @@
 //! buttons appear per-file. Behind bearer auth (merged in `gateway/mod.rs`);
 //! not loopback-exempt.
 
+use std::path::{Path, PathBuf};
+
 use axum::{
     Router,
     extract::State,
@@ -80,6 +82,38 @@ pub(crate) struct SetAllowlistBody {
     pub enabled: bool,
 }
 
+/// `id` must be `^[a-z0-9_-]+$` — no path separators (traversal-safe).
+fn valid_handler_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+/// Workspace override/handler path: `workspace/file_handlers/{id}.py`.
+fn workspace_handler_path(id: &str) -> PathBuf {
+    Path::new(crate::config::WORKSPACE_DIR)
+        .join("file_handlers")
+        .join(format!("{id}.py"))
+}
+
+/// Pristine builtin source path (READ-ONLY): `toolgate/handlers/builtin/{id}.py`.
+/// Relative like `WORKSPACE_DIR` — resolves against the core process CWD (the
+/// deploy root `~/opex`, where `~/opex/toolgate/` lives). If CWD ever differs,
+/// the builtin-source GET degrades to a graceful 404 (empty editor start) —
+/// never a write path (builtin source is never written).
+fn builtin_handler_path(id: &str) -> PathBuf {
+    Path::new("toolgate")
+        .join("handlers")
+        .join("builtin")
+        .join(format!("{id}.py"))
+}
+
+/// Returns true if `id` is one of the 5 hard-coded builtin handler ids.
+fn is_builtin_id(id: &str) -> bool {
+    FSE_DEFAULT_ALLOWLIST.contains(&id)
+}
+
 /// Closed-domain check: only a member of the hard-coded `FSE_DEFAULT_ALLOWLIST`
 /// may be toggled (can never admit `code_exec` / a YAML tool). Mirrors the
 /// legacy `file_scenarios::is_allowlist_member`.
@@ -96,6 +130,7 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/handlers/allowlist",
             get(api_get_allowlist).put(api_set_allowlist),
         )
+        .route("/api/handlers/{id}/source", get(api_get_handler_source))
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -201,6 +236,37 @@ async fn api_set_allowlist(
     }
 }
 
+/// `GET /api/handlers/{id}/source` → raw `.py` for the editor. Precedence:
+/// workspace override → pristine builtin (starting point for a new override) →
+/// workspace-only handler. 404 if none exists and id is not a builtin.
+async fn api_get_handler_source(
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    if !valid_handler_id(&id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid handler id" })),
+        )
+            .into_response();
+    }
+    let ws = workspace_handler_path(&id);
+    if let Ok(src) = tokio::fs::read_to_string(&ws).await {
+        let kind = if is_builtin_id(&id) { "override" } else { "workspace" };
+        return Json(json!({ "id": id, "source": src, "source_kind": kind })).into_response();
+    }
+    if is_builtin_id(&id)
+        && let Ok(src) = tokio::fs::read_to_string(builtin_handler_path(&id)).await
+    {
+        return Json(json!({ "id": id, "source": src, "source_kind": "builtin" }))
+            .into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "handler source not found" })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,6 +288,16 @@ mod tests {
             tier: tier.to_string(),
             source: String::new(),
         }
+    }
+
+    #[test]
+    fn handler_id_validation_blocks_traversal() {
+        assert!(valid_handler_id("my_ocr"));
+        assert!(valid_handler_id("summarize_video"));
+        assert!(!valid_handler_id("../etc/passwd"));
+        assert!(!valid_handler_id("a/b"));
+        assert!(!valid_handler_id("Bad"));
+        assert!(!valid_handler_id(""));
     }
 
     #[test]
