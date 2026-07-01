@@ -48,6 +48,7 @@ vi.mock("@/components/ui/tabs", () => {
 });
 
 const mutate = vi.fn();
+const deleteMutate = vi.fn();
 // ToolsPage calls useQueryClient() directly (page.tsx) — without this mock the
 // hook throws "No QueryClient set" (there is no test-wide QueryClientProvider).
 vi.mock("@tanstack/react-query", async (importOriginal) => {
@@ -65,21 +66,26 @@ vi.mock("@/lib/queries", () => ({
     data: [
       { id: "transcribe", labels: { en: "Transcribe" }, descriptions: { en: "STT" },
         icon: "mic", match: { mime: ["audio/*"] }, capability: "stt", provider: "Whisper",
-        execution: "async", output: "text", order: 10, tier: "builtin", enabled: true },
+        execution: "async", output: "text", order: 10, tier: "builtin", enabled: true,
+        source: "builtin" },
       { id: "my_handler", labels: { en: "My Handler" }, descriptions: {},
         icon: "", match: {}, execution: "sync", output: "text", order: 20,
-        tier: "workspace", enabled: true },
+        tier: "workspace", enabled: true, source: "workspace" },
     ],
     isLoading: false, error: null,
   }),
   useHandlerAllowlist: () => ({ data: [] }),
   useSetHandlerAllowlist: () => ({ mutate, isPending: false }),
+  useHandlerSource: () => ({ data: null, isLoading: false }),
+  useCreateHandler: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdateHandler: () => ({ mutate: vi.fn(), isPending: false }),
+  useDeleteHandler: () => ({ mutate: deleteMutate, isPending: false, variables: null }),
 }));
 
 import ToolsPage from "../page";
 
 describe("File Handlers tab", () => {
-  beforeEach(() => mutate.mockClear());
+  beforeEach(() => { mutate.mockClear(); deleteMutate.mockClear(); });
 
   it("renders a card per handler and toggles a builtin via PUT", async () => {
     render(<ToolsPage />);
@@ -96,5 +102,33 @@ describe("File Handlers tab", () => {
       { action_ref: "transcribe", enabled: false },
       expect.objectContaining({ onSettled: expect.any(Function) }),
     );
+  });
+
+  it("workspace card shows Edit and Delete; builtin card shows Edit but not Delete", async () => {
+    render(<ToolsPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /File Handlers|Обработчики/i }));
+    expect(await screen.findByText("My Handler")).toBeInTheDocument();
+
+    // Both cards should have an Edit button (aria-label).
+    const editButtons = screen.getAllByRole("button", { name: /Edit|Редактировать/i });
+    expect(editButtons.length).toBeGreaterThanOrEqual(2);
+
+    // The workspace card should have a Delete button.
+    const deleteButtons = screen.getAllByRole("button", { name: /Delete|Удалить/i });
+    expect(deleteButtons.length).toBeGreaterThanOrEqual(1);
+
+    // The builtin card (transcribe, source="builtin") must NOT have a Delete/Reset button.
+    // Only the workspace card delete button should exist.
+    expect(deleteButtons.length).toBe(1);
+  });
+
+  it("clicking Delete on the workspace card calls deleteHandler.mutate with its id", async () => {
+    render(<ToolsPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /File Handlers|Обработчики/i }));
+    expect(await screen.findByText("My Handler")).toBeInTheDocument();
+
+    const deleteButton = screen.getByRole("button", { name: /Delete|Удалить/i });
+    fireEvent.click(deleteButton);
+    expect(deleteMutate).toHaveBeenCalledWith("my_handler");
   });
 });

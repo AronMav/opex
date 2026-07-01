@@ -3,7 +3,11 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
-import { useYamlTools, useMcpServers, useHandlers, useSetHandlerAllowlist, qk } from "@/lib/queries";
+import {
+  useYamlTools, useMcpServers, useHandlers, useSetHandlerAllowlist,
+  useHandlerSource, useDeleteHandler,
+  qk,
+} from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -37,6 +41,7 @@ import { Switch } from "@/components/ui/switch";
 import { useLanguageStore } from "@/stores/language-store";
 import type { McpEntry, YamlToolEntry, HandlerAdminRow } from "@/types/api";
 import { Field, Row, TypeBadge, StatusBadge } from "./ToolHelpers";
+import { HandlerEditor } from "./HandlerEditor";
 
 /* ── MCP Form helpers ───────────────────────────────────────────── */
 
@@ -74,6 +79,59 @@ type EditView =
   | { kind: "mcp"; id: string }
   | { kind: "yaml"; id: string };
 
+/* ── HandlerEditor wrapper (resolves source before opening editor) ── */
+
+const HANDLER_STARTER_TEMPLATE = `"""
+<handler>
+  id: my_handler
+  labels:
+    en: My Handler
+  descriptions:
+    en: Describe what this handler does
+  icon: file
+  match:
+    mime:
+      - application/octet-stream
+  execution: sync
+  order: 100
+  enabled: true
+</handler>
+"""
+
+async def run(ctx, file, params):
+    text = await file.read_text()
+    return ctx.result(text)
+`;
+
+function HandlerEditorWrapper({
+  editorId,
+  onSaved,
+  onClose,
+}: {
+  editorId: string | "create";
+  onSaved: () => void;
+  onClose: () => void;
+}) {
+  const isCreate = editorId === "create";
+  const { data: sourceData, isLoading } = useHandlerSource(isCreate ? null : editorId);
+
+  if (!isCreate && isLoading) return null;
+
+  const initialSource = isCreate
+    ? HANDLER_STARTER_TEMPLATE
+    : (sourceData?.source ?? "");
+
+  return (
+    <HandlerEditor
+      id={isCreate ? undefined : editorId}
+      initialSource={initialSource}
+      sourceKind={isCreate ? undefined : sourceData?.source_kind}
+      onSaved={onSaved}
+      onClose={onClose}
+    />
+  );
+}
+
 /* ── Page ────────────────────────────────────────────────────────── */
 
 export default function ToolsPage() {
@@ -85,12 +143,15 @@ export default function ToolsPage() {
   const { data: mcpServers = [], isLoading: mcpLoading, error: mcpError } = useMcpServers();
   const { data: handlers = [], isLoading: handlersLoading, error: handlersError } = useHandlers();
   const setHandlerAllowlist = useSetHandlerAllowlist();
+  const deleteHandler = useDeleteHandler();
 
   const loading = yamlLoading2 || mcpLoading || handlersLoading;
   const errorMsg = yamlError ? String(yamlError) : mcpError ? String(mcpError) : handlersError ? String(handlersError) : "";
 
   const [actionPending, setActionPending] = useState<string | null>(null);
   const [handlerPendingId, setHandlerPendingId] = useState<string | null>(null);
+  // handler editor: "create" = new handler, string = edit existing id, null = closed
+  const [handlerEditorId, setHandlerEditorId] = useState<string | "create" | null>(null);
 
   // Edit forms (full-page)
   const [editView, setEditView] = useState<EditView | null>(null);
@@ -103,6 +164,7 @@ export default function ToolsPage() {
   const invalidateAll = useCallback(() => {
     qc.invalidateQueries({ queryKey: qk.yamlTools });
     qc.invalidateQueries({ queryKey: qk.mcpServers });
+    qc.invalidateQueries({ queryKey: qk.handlers });
   }, [qc]);
 
   const handleConfirmDelete = async () => {
@@ -535,11 +597,18 @@ parameters:
     );
   };
 
+  const sourceBadgeLabel = (source: HandlerAdminRow["source"]) => {
+    if (source === "override") return t("tools.handler_source_override");
+    if (source === "workspace") return t("tools.handler_source_workspace");
+    return t("tools.handler_source_builtin");
+  };
+
   const renderHandlerCard = (h: HandlerAdminRow) => {
     const label = h.labels?.[lang] ?? h.labels?.en ?? h.id;
     const description = h.descriptions?.[lang] ?? h.descriptions?.en ?? "";
     const isBuiltin = h.tier === "builtin";
     const pending = handlerPendingId === h.id;
+    const isDeleting = deleteHandler.isPending && deleteHandler.variables === h.id;
     return (
       <div key={`handler-${h.id}`}
         className={`flex flex-col gap-3 neu-flat p-5 min-w-0 overflow-hidden ${isBuiltin && !h.enabled ? "opacity-50" : ""}`}>
@@ -554,6 +623,9 @@ parameters:
             <TypeBadge type={isBuiltin ? "INT" : "EXT"} />
             <Badge variant="secondary" className="text-[10px]">
               {h.execution === "async" ? t("tools.handler_async") : t("tools.handler_sync")}
+            </Badge>
+            <Badge variant="outline" className="text-[10px]">
+              {sourceBadgeLabel(h.source)}
             </Badge>
           </div>
         </div>
@@ -589,6 +661,33 @@ parameters:
           ) : (
             <Badge variant="secondary" className="text-[10px]">{t("tools.handler_always_on")}</Badge>
           )}
+          <div className="flex gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={pending || isDeleting}
+              onClick={() => setHandlerEditorId(h.id)}
+              aria-label={t("tools.handler_edit")}
+            >
+              <Pencil className="h-3 w-3" /> {t("tools.handler_edit")}
+            </Button>
+            {h.source !== "builtin" && (
+              <Button
+                variant="outline-destructive"
+                size="sm"
+                disabled={pending || isDeleting}
+                onClick={() => deleteHandler.mutate(h.id)}
+                aria-label={h.source === "override" ? t("tools.handler_reset") : t("tools.handler_delete")}
+              >
+                {h.source === "override" ? (
+                  <RotateCcw className="h-3 w-3" />
+                ) : (
+                  <Trash2 className="h-3 w-3" />
+                )}
+                {h.source === "override" ? t("tools.handler_reset") : t("tools.handler_delete")}
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -670,6 +769,11 @@ parameters:
 
             {/* ── File Handlers ── */}
             <TabsContent value="handlers" className="mt-6">
+              <div className="flex justify-end mb-4">
+                <Button variant="outline" size="sm" onClick={() => setHandlerEditorId("create")}>
+                  <Plus className="h-3.5 w-3.5" /> {t("tools.handler_create")}
+                </Button>
+              </div>
               {handlers.length === 0 ? (
                 <EmptyState
                   icon={FileCog}
@@ -689,6 +793,17 @@ parameters:
           </Tabs>
         )}
       </div>
+
+      {handlerEditorId != null && (
+        <HandlerEditorWrapper
+          editorId={handlerEditorId}
+          onSaved={() => {
+            qc.invalidateQueries({ queryKey: qk.handlers });
+            setHandlerEditorId(null);
+          }}
+          onClose={() => setHandlerEditorId(null)}
+        />
+      )}
 
       <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open) setDeleteConfirm(null); }}>
         <AlertDialogContent>
