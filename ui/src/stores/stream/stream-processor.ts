@@ -22,7 +22,6 @@ import type {
   ConnectionPhase,
   AgentState,
   MessagePart,
-  FileScenarioChipsPart,
 } from "../chat-types";
 import type { StreamSession } from "../stream-session";
 
@@ -348,18 +347,6 @@ export async function processSSEStream(
               type: "file",
               url: event.url,
               mediaType: event.mediaType || "application/octet-stream",
-            });
-            session.scheduleCommit();
-            break;
-          }
-
-          case "file-scenario-chips": {
-            session.buffer.flushText();
-            session.buffer.parts.push({
-              type: "fileScenarioChips",
-              uploadId: event.uploadId,
-              messageId: event.messageId,
-              alternatives: event.alternatives,
             });
             session.scheduleCommit();
             break;
