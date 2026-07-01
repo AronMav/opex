@@ -13,7 +13,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -203,6 +203,9 @@ pub(crate) fn routes() -> Router<AppState> {
             "/api/handlers/allowlist",
             get(api_get_allowlist).put(api_set_allowlist),
         )
+        // Literal "/validate" beats the "/{id}" capture in axum 0.8 — same
+        // precedence rule as "/allowlist" above. No write: validate-only proxy.
+        .route("/api/handlers/validate", post(api_validate_handler))
         .route("/api/handlers/{id}/source", get(api_get_handler_source))
         .route(
             "/api/handlers/{id}",
@@ -211,6 +214,62 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
+
+/// `POST /api/handlers/validate` — proxy to toolgate's exec-free validation
+/// endpoint. Returns the full verdict JSON (`{ok, descriptor, errors}`) so the
+/// UI can read `descriptor` to populate the editor form on mount / "Sync from
+/// code". Never writes anything. Fail-soft on transport error: returns
+/// `{ok:false, descriptor:null, errors:[…]}` with 200 so the UI can render the
+/// error inline instead of seeing a 404/500.
+async fn api_validate_handler(
+    State(config): State<ConfigServices>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let source = match body.get("source").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "missing or non-string 'source' field" })),
+            )
+                .into_response();
+        }
+    };
+    if source.len() > MAX_HANDLER_BYTES {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "source too large" })),
+        )
+            .into_response();
+    }
+    let toolgate_url = config
+        .config
+        .toolgate_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:9011".to_string());
+    let url = format!(
+        "{}/handlers/validate",
+        toolgate_url.trim_end_matches('/')
+    );
+    // Forward the whole body (preserves optional `id` field if the caller sent it).
+    match handlers_http().post(&url).json(&body).send().await {
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Ok(verdict) => Json(verdict).into_response(),
+            Err(e) => Json(json!({
+                "ok": false,
+                "descriptor": null,
+                "errors": [{ "field": "toolgate", "message": e.to_string() }]
+            }))
+            .into_response(),
+        },
+        Err(e) => Json(json!({
+            "ok": false,
+            "descriptor": null,
+            "errors": [{ "field": "toolgate", "message": e.to_string() }]
+        }))
+        .into_response(),
+    }
+}
 
 /// `GET /api/handlers` → `{ handlers: [HandlerAdminRow...] }`. Lists ALL
 /// registered manifests (no upload needed), each annotated with `enabled`.
