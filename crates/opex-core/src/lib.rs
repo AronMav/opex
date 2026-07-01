@@ -96,11 +96,6 @@ pub mod agent {
         #[path = "dispatch.rs"]
         pub mod dispatch;
 
-        // Task 7: video summary builder (pure leaf module with serde only).
-        // Inline tests use opex_types only — safe to expose from lib facade.
-        #[path = "video_summary.rs"]
-        pub mod video_summary;
-
         // Task 9.7: pure owner-gate predicate for FSE callback security tests.
         // Leaf function (anyhow only) — safe to expose from the lib facade.
         // `owner_gate.rs` is a standalone leaf with only `anyhow` as a dep.

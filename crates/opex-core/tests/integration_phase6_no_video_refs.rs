@@ -107,3 +107,27 @@ fn dispatch_has_no_summarize_video_or_enqueue_plumbing() {
         "the orphaned ScenarioOutcome::video_accepted constructor must be removed (R15)"
     );
 }
+
+/// The in-core async-video modules must be gone from the file_scenario tree, the
+/// mod facade must not declare them, and lib.rs must not mount video_summary.
+#[test]
+fn video_modules_are_deleted() {
+    let mod_rs = include_str!("../src/agent/file_scenario/mod.rs");
+    assert!(
+        !mod_rs.contains("pub mod video_summary") && !mod_rs.contains("pub mod video_worker"),
+        "file_scenario/mod.rs still declares video_summary / video_worker"
+    );
+    let lib_rs = include_str!("../src/lib.rs");
+    assert!(
+        !lib_rs.contains("video_summary") && !lib_rs.contains("video_worker"),
+        "lib.rs still mounts the deleted video_summary/video_worker module"
+    );
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/agent/file_scenario");
+    assert!(!dir.join("video_summary.rs").exists(), "video_summary.rs must be deleted");
+    assert!(!dir.join("video_worker.rs").exists(), "video_worker.rs must be deleted");
+    // Kept shell must survive.
+    assert!(dir.join("dispatch.rs").exists(), "dispatch.rs must be kept (R11)");
+    assert!(dir.join("dispatch_seam.rs").exists(), "dispatch_seam.rs must be kept (R11)");
+    assert!(dir.join("owner_gate.rs").exists(), "owner_gate.rs must be kept");
+}
