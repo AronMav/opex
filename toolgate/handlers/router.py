@@ -25,10 +25,11 @@ import os
 import sys
 import tempfile
 
-from fastapi import APIRouter, File, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Body, File, Form, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from handlers.context import HandlerFile, build_context
+from handlers.validate import validate_source
 
 # Absolute path to runner.py — used to spawn the out-of-process runner via
 # `sys.executable -m handlers.runner` (portable across dev/prod venvs).
@@ -72,6 +73,17 @@ async def list_handlers(request: Request, response: Response):
         return Response(status_code=304, headers={"ETag": etag})
     response.headers["ETag"] = etag
     return {"handlers": await _manifests_with_provider(request), "etag": etag}
+
+
+@router.post("/handlers/validate")
+async def validate_handler(payload: dict = Body(...)):
+    source = payload.get("source")
+    if not isinstance(source, str):
+        return JSONResponse(status_code=400, content={"error": "missing 'source'"})
+    expected_id = payload.get("id")
+    if expected_id is not None and not isinstance(expected_id, str):
+        expected_id = None
+    return validate_source(source, expected_id)
 
 
 @router.get("/handlers/{handler_id}")
