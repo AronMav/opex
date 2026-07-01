@@ -28,7 +28,7 @@
 - Create `toolgate/handlers/validate.py` — exec-free `validate_source(source, expected_id?) -> dict`.
 - Modify `toolgate/handlers/loader.py` — builtins retained separately; workspace shadows builtin (override); reset resurfaces builtin; manifest `source` + id-based `tier`.
 - Modify `toolgate/handlers/router.py` — add `POST /handlers/validate`.
-- Tests: `toolgate/tests/test_handler_validate.py`, extend `toolgate/tests/test_handler_loader.py` (or the existing loader test file).
+- Tests: `toolgate/tests/test_handler_validate.py` + `toolgate/tests/test_handler_validate_route.py` + `toolgate/tests/test_handler_loader_override.py` (new); **rewrite two failing cases** in the existing `toolgate/tests/test_handlers_loader.py` (note the plural `handlers`).
 
 **core:**
 - Modify `crates/opex-core/src/agent/handler_registry.rs` — `HandlerManifest.source` field.
@@ -40,6 +40,7 @@
 - Modify `ui/src/lib/queries.ts` — `useHandlerSource`, `useCreateHandler`, `useUpdateHandler`, `useDeleteHandler`.
 - Create `ui/src/app/(authenticated)/tools/HandlerEditor.tsx` — CodeMirror + descriptor form + validation errors.
 - Create `ui/src/app/(authenticated)/tools/handler-descriptor.ts` — pure `renderDescriptorBlock(fields, source)` + a fixture round-trip test.
+- Add dependency `@codemirror/lang-python` (`ui/package.json` + `ui/package-lock.json`) — the repo currently ships only `@codemirror/lang-json` + `@codemirror/lang-markdown`; the editor needs the Python language mode (installed in Task U2).
 - Modify `ui/src/app/(authenticated)/tools/page.tsx` — Edit/Create/Delete/Reset actions, badges, dialog.
 - Modify `ui/src/i18n/locales/{en,ru}.json` — `tools.handler_*` keys.
 
@@ -368,12 +369,20 @@ In `toolgate/handlers/loader.py`, change `HandlerRegistry` so builtins are retai
 
 (The module docstring at the top of `loader.py` should drop the "reject a builtin id" wording — reword to "a workspace file with a builtin id overrides it".)
 
-- [ ] **Step 4: Run — expect PASS.** `cd toolgate && python -m pytest tests/test_handler_loader_override.py tests/test_handler_loader.py -q` (run the pre-existing loader test too; if a pre-existing test asserts the OLD reject-builtin behavior, update it to the override behavior and note it in the commit).
+- [ ] **Step 4: Rewrite the two pre-existing loader tests that assert the OLD reject-builtin behavior**
 
-- [ ] **Step 5: Commit**
+The existing `toolgate/tests/test_handlers_loader.py` (note the plural `handlers`) has TWO cases that hard-assert the OLD "workspace cannot shadow a builtin" semantics and WILL now fail — rewrite them for the override model:
+- `test_workspace_cannot_shadow_builtin_id` (~line 130): currently asserts a workspace file with a builtin id is rejected (`reg.get('<builtin_id>').tier == 'builtin'`). Rewrite to assert the workspace file now OVERRIDES: `reg.get(id).descriptor` is the workspace version (its label/run body), while the MANIFEST for that id reports `tier == 'builtin'` AND `source == 'override'`. (Note: `LoadedHandler.tier` from `get()` is `'workspace'` for an override — it is the manifest that derives `tier` from the builtin id. Assert on the manifest for tier/source, on `get()` for which body is effective.)
+- `test_reload_file_workspace_builtin_collision_rejected` (~line 212): currently asserts `reload_file` of a builtin-id workspace file is rejected (builtin wins). Rewrite to assert `reload_file` installs the override (effective handler = the workspace version; manifest `source == 'override'`), and add that `remove_file` then resets to the pristine builtin (manifest `source == 'builtin'`).
+
+Rename/retitle the two tests to reflect override semantics; note the behavior change in the commit message.
+
+- [ ] **Step 5: Run — expect PASS.** `cd toolgate && python -m pytest tests/test_handler_loader_override.py tests/test_handlers_loader.py -q`
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add toolgate/handlers/loader.py toolgate/tests/test_handler_loader_override.py
+git add toolgate/handlers/loader.py toolgate/tests/test_handler_loader_override.py toolgate/tests/test_handlers_loader.py
 git commit -m "feat(toolgate): workspace file overrides same-id builtin (shadow + reset); manifest source field"
 ```
 
@@ -390,28 +399,41 @@ git commit -m "feat(toolgate): workspace file overrides same-id builtin (shadow 
 
 - [ ] **Step 1: Write the failing test**
 
-Create `toolgate/tests/test_handler_validate_route.py` (mirror the existing router test's app-construction pattern in `toolgate/tests/` — use the same TestClient/app fixture the repo already uses for `/handlers` route tests):
+Create `toolgate/tests/test_handler_validate_route.py`. The existing router tests (`toolgate/tests/test_handlers_router.py`) do NOT expose a `client` pytest fixture — they build the app locally via a `_build_client(tmp_path)` helper. `/handlers/validate` needs no registered handlers, so build a minimal app + `TestClient` inline (no fixture):
 
 ```python
-# Use the same FastAPI app/TestClient fixture pattern as the existing
-# toolgate router tests (e.g. tests/test_handlers_router.py).
-def test_validate_route_ok(client):
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from handlers.router import router as handlers_router
+
+
+def _client() -> TestClient:
+    app = FastAPI()
+    app.include_router(handlers_router)  # /handlers/validate needs no app.state
+    return TestClient(app)
+
+
+def test_validate_route_ok():
     src = ('# <handler>\n#   <id>my_ocr</id>\n#   <label lang="en">OCR</label>\n'
            '#   <match><mime>image/*</mime></match>\n#   <execution>sync</execution>\n'
            '# </handler>\nasync def run(ctx, file, params):\n    return None\n')
-    r = client.post("/handlers/validate", json={"source": src, "id": "my_ocr"})
+    r = _client().post("/handlers/validate", json={"source": src, "id": "my_ocr"})
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is True
     assert body["descriptor"]["id"] == "my_ocr"
 
-def test_validate_route_reports_errors(client):
-    r = client.post("/handlers/validate", json={"source": "x = (", "id": "bad"})
+
+def test_validate_route_reports_errors():
+    r = _client().post("/handlers/validate", json={"source": "x = (", "id": "bad"})
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is False
     assert body["errors"]
 ```
+
+> If `TestClient(app)` on a router with the other `/handlers` routes requires `app.state.handlers`/`app.state.registry` at import/registration time (it should not — state is read inside handlers, not at include), fall back to the exact `_build_client(tmp_path)` helper from `test_handlers_router.py`.
 
 - [ ] **Step 2: Run — expect FAIL** (404 no route).
 
@@ -473,7 +495,7 @@ Update the test builder `mf(...)` (line ~210) and the `manifest_deserializes_fro
 
 - [ ] **Step 2: Add `source` to `HandlerAdminRow`**
 
-In `handlers_admin.rs`, add `pub source: String,` to `HandlerAdminRow` (after `tier`), set it in `from_manifest` (`source: m.source.clone(),`), and add `source: String::new()` to the two in-test `HandlerManifest { ... }` literals + the `manifest(...)` test builder.
+In `handlers_admin.rs`, add `pub source: String,` to `HandlerAdminRow` (after `tier`), set it in `from_manifest` (`source: m.source.clone(),`), and add `source: String::new()` to the `manifest(...)` test builder (~line 207) AND the one inline `HandlerManifest { ... }` literal in the `#[sqlx::test]` (~line 255). (There is exactly one inline literal there — the `manifest()` builder covers the other tests.)
 
 - [ ] **Step 3: Compile + focused tests**
 
@@ -514,7 +536,11 @@ fn workspace_handler_path(id: &str) -> PathBuf {
     Path::new(crate::config::WORKSPACE_DIR).join("file_handlers").join(format!("{id}.py"))
 }
 
-/// Pristine builtin source path (read-only): `toolgate/handlers/builtin/{id}.py`.
+/// Pristine builtin source path (READ-ONLY): `toolgate/handlers/builtin/{id}.py`.
+/// Relative like `WORKSPACE_DIR` — resolves against the core process CWD (the
+/// deploy root `~/opex`, where `~/opex/toolgate/` lives). If CWD ever differs,
+/// the builtin-source GET degrades to a graceful 404 (empty editor start) —
+/// never a write path (builtin source is never written).
 fn builtin_handler_path(id: &str) -> PathBuf {
     Path::new("toolgate").join("handlers").join("builtin").join(format!("{id}.py"))
 }
@@ -612,7 +638,7 @@ In `crates/opex-core/src/db/audit.rs` `event_types` module, add:
     pub const HANDLER_DELETED: &str = "handler_deleted";
 ```
 
-(If `audit.rs` has an `all()`/test that enumerates consts, add these there too — mirror how the existing consts are listed.)
+Also add all three to `all_constants()` (`audit.rs` ~line 137-166) so the `all_constants_unique`/`all_constants_non_empty` tests keep covering them (mirror how the existing consts are listed — this is not enforced by an exhaustiveness check, but keeps the taxonomy consistent). `audit_spawn`'s real signature is `(db: PgPool, agent_id: String, event_type: &'static str, actor: Option<String>, details: Value)` — the new consts are `&'static str`, so the C3/C4 calls match.
 
 - [ ] **Step 2: Add a pooled client + the toolgate-validate helper**
 
@@ -888,7 +914,9 @@ export function useUpdateHandler() {
 export function useDeleteHandler() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => apiDelete<{ id: string }>(`/api/handlers/${id}`),
+    // NB: apiDelete(path): Promise<void> — it is NOT generic. Do NOT write
+    // apiDelete<T>(...) (TS2558). The mutation only invalidates on success.
+    mutationFn: (id: string) => apiDelete(`/api/handlers/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.handlers }),
     onError: (e: Error) => toast.error(e.message),
   })
@@ -1002,30 +1030,48 @@ export function spliceDescriptor(source: string, f: DescriptorFields): string {
 
 Run: `cd ui && npx vitest run "src/app/(authenticated)/tools/__tests__/handler-descriptor.test.ts"` → PASS.
 
-- [ ] **Step 3: Build the `HandlerEditor` component**
+- [ ] **Step 3: Install the Python CodeMirror mode**
 
-Create `HandlerEditor.tsx` — a dialog/sheet holding: a descriptor form (id read-only on edit; labels ru/en, icon, mime globs, max_size_mb, execution select, order, enabled switch), a **CodeMirror (python)** editor for the full `.py`, a **Save** button, and an inline errors area. On save it POSTs (create) or PUTs (edit) the CURRENT source; on a 400 it parses `{errors:[{field,message}]}` and shows them inline in red (block-on-error), on success it calls `onSaved()` (which invalidates the handlers query). Form changes call `spliceDescriptor(source, fields)` to keep the source in sync; a "Sync from code" action calls the validate endpoint and, on `ok`, repopulates the form from the returned `descriptor`. Ground it in the existing CodeMirror usage (search `@uiw/react-codemirror` / `python()` in the repo — the `/workspace` editor and YAML-tools editor use CodeMirror; mirror their imports + theme). Save calls the endpoints directly (not the throwing hooks) to render structured errors:
+The repo has NO `@codemirror/lang-python` (only `lang-json` + `lang-markdown`; the existing `ui/src/components/workspace/code-editor.tsx` uses `@uiw/react-codemirror` with `json()`/`markdown()` only). Install it:
+
+Run: `cd ui && npm install @codemirror/lang-python`
+Expected: `package.json` + `package-lock.json` updated; commit them with this task.
+
+- [ ] **Step 4: Build the `HandlerEditor` component**
+
+Create `HandlerEditor.tsx` — a dialog/sheet holding: a descriptor form (id read-only on edit; labels ru/en, icon, mime globs, max_size_mb, execution select, order, enabled switch), a **CodeMirror** editor for the full `.py`, a **Save** button, and an inline errors area. Ground the CodeMirror wrapper in `ui/src/components/workspace/code-editor.tsx` (same `@uiw/react-codemirror` component + theme it uses), but pass the Python extension: `import { python } from "@codemirror/lang-python"; ... extensions={[python()]}`.
+
+Behavior: form changes call `spliceDescriptor(source, fields)` (from `handler-descriptor.ts`) to keep the `.py` source in sync (the source is the single source of truth); a "Sync from code" action POSTs the current source to `/api/handlers/validate` and, on `ok`, repopulates the form from the returned `descriptor`. **Save** calls the endpoints DIRECTLY (not the throwing hooks) so it can render structured `errors[]` inline in red (block-on-error); on success it calls `onSaved()` (the tab invalidates `qk.handlers`). Build the auth header inline from `getToken()` (imported from `@/lib/api` — there is NO `authJsonHeaders` helper):
 
 ```tsx
-// on save (create):
-const res = await fetch("/api/handlers", { method: "POST", headers: authJsonHeaders(), body: JSON.stringify({ id, source }) });
-if (!res.ok) { setErrors(((await res.json()).errors) ?? [{ field: "", message: `HTTP ${res.status}` }]); return; }
-// edit: PUT `/api/handlers/${id}` with { source }
+import { getToken } from "@/lib/api";
+
+const headers = { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` };
+// create:
+const res = await fetch("/api/handlers", { method: "POST", headers, body: JSON.stringify({ id, source }) });
+// edit: fetch(`/api/handlers/${id}`, { method: "PUT", headers, body: JSON.stringify({ source }) });
+if (!res.ok) {
+  const body = await res.json().catch(() => ({}));
+  setErrors(body.errors ?? [{ field: "", message: body.error ?? `HTTP ${res.status}` }]);
+  return;
+}
+onSaved();
 ```
 
-Use the repo's auth-header helper (the same one `apiGet` uses — `getToken()` from `@/lib/api`). Keep the component focused; if it grows past ~250 lines, split the form into a child `DescriptorForm.tsx`.
+Keep the component focused; if it grows past ~250 lines, split the form into a child `DescriptorForm.tsx`.
 
-- [ ] **Step 4: Verify build**
+- [ ] **Step 5: Verify build**
 
 Run: `cd ui && npm run build` → clean (component compiles; wired into the tab in U3).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add "ui/src/app/(authenticated)/tools/handler-descriptor.ts" \
         "ui/src/app/(authenticated)/tools/HandlerEditor.tsx" \
-        "ui/src/app/(authenticated)/tools/__tests__/handler-descriptor.test.ts"
-git commit -m "feat(ui): HandlerEditor (CodeMirror + descriptor form) + descriptor-block render util"
+        "ui/src/app/(authenticated)/tools/__tests__/handler-descriptor.test.ts" \
+        ui/package.json ui/package-lock.json
+git commit -m "feat(ui): HandlerEditor (CodeMirror python + descriptor form) + descriptor-block render util + lang-python dep"
 ```
 
 ---
