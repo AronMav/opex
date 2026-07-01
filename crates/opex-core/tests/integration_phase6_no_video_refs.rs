@@ -131,3 +131,23 @@ fn video_modules_are_deleted() {
     assert!(dir.join("dispatch_seam.rs").exists(), "dispatch_seam.rs must be kept (R11)");
     assert!(dir.join("owner_gate.rs").exists(), "owner_gate.rs must be kept");
 }
+
+/// opex-db must no longer expose the video_jobs module, and the deprecation
+/// migration must be non-destructive (no DROP TABLE).
+#[test]
+fn video_jobs_module_removed_and_migration_non_destructive() {
+    let dblib = include_str!("../../opex-db/src/lib.rs");
+    assert!(
+        !dblib.contains("pub mod video_jobs"),
+        "opex-db lib still declares video_jobs"
+    );
+    let mig = include_str!("../../../migrations/068_video_jobs_deprecate.sql");
+    assert!(
+        !mig.to_uppercase().contains("DROP TABLE"),
+        "068 must NOT drop video_jobs (history-preserving deprecation only)"
+    );
+    assert!(
+        mig.to_lowercase().contains("video_jobs"),
+        "068 should reference video_jobs in its deprecation note"
+    );
+}
