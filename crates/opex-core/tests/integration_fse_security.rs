@@ -151,7 +151,6 @@ async fn dispatch_fails_closed_on_forged_binding() {
         language: "en",
         http_client: &client,
         timeout: Duration::from_secs(5),
-        enqueue: None,
     })
     .await;
 
