@@ -99,6 +99,57 @@ class ResultBuilder:
         return HandlerResult(status="too_large", reason=reason)
 
 
+class _LlmClient:
+    """Thin helper for calling the core raw-LLM endpoint `POST /api/llm/complete`.
+
+    Uses the RAW httpx.AsyncClient (NOT the SSRF-guarded ctx.http) because the
+    core URL is a trusted loopback endpoint, exactly like ctx.progress does.
+    Constructed by build_context and exposed as ctx.llm.
+    """
+
+    def __init__(
+        self,
+        core_url: str | None,
+        auth_token: str | None,
+        http: httpx.AsyncClient,
+    ):
+        self._core_url = core_url
+        self._auth_token = auth_token
+        self._http = http
+
+    async def complete(
+        self,
+        messages: list[dict],
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> str:
+        """POST `{core_url}/api/llm/complete` and return the `text` field.
+
+        Raises RuntimeError if core_url is unset (sync/in-process context with
+        no job runner) or if the response is non-2xx.
+        """
+        if not self._core_url:
+            raise RuntimeError(
+                "ctx.llm.complete requires core_url to be set; "
+                "this context was built without a job runner"
+            )
+        url = f"{self._core_url.rstrip('/')}/api/llm/complete"
+        headers: dict[str, str] = {}
+        if self._auth_token:
+            headers["Authorization"] = f"Bearer {self._auth_token}"
+        body: dict = {"messages": messages}
+        if provider is not None:
+            body["provider"] = provider
+        if model is not None:
+            body["model"] = model
+        resp = await self._http.post(url, json=body, headers=headers, timeout=120.0)
+        if resp.status_code < 200 or resp.status_code >= 300:
+            raise RuntimeError(
+                f"LLM complete failed: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        return resp.json()["text"]
+
+
 class SsrfHttpClient:
     """SSRF-safe facade over the shared httpx.AsyncClient (R5/R12). Every
     .get/.post validates the URL via the same guard download_limited uses, so a
@@ -228,6 +279,8 @@ class HandlerContext:
     http_client_raw: httpx.AsyncClient
     result: ResultBuilder
     log: logging.Logger
+    # LLM helper for calling core's /api/llm/complete endpoint
+    llm: _LlmClient
     _job_id: str | None = None
     _core_url: str | None = None
     _auth_token: str | None = None
@@ -273,6 +326,7 @@ def build_context(
         http_client_raw=http_client,
         result=ResultBuilder(),
         log=log,
+        llm=_LlmClient(core_url, auth_token, http_client),
         _job_id=job_id,
         _core_url=core_url,
         _auth_token=auth_token,
