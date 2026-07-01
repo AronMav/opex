@@ -4,6 +4,8 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { useLanguageStore } from "@/stores/language-store";
+import { queryClient } from "@/lib/query-client";
+import { qk } from "@/lib/queries";
 import type { FileActionButton, FileActionsResponse } from "@/types/api";
 import { Loader2, Mic, Image as ImageIcon, FileText, Save, Video, Wand2 } from "lucide-react";
 
@@ -46,7 +48,7 @@ export function FileActionButtons({ uploadId, mime, agent, sessionId }: FileActi
     }
     let cancelled = false;
     const session = sessionId ?? "";
-    const qs = `agent=${encodeURIComponent(agent)}&session=${encodeURIComponent(session)}`;
+    const qs = `agent=${encodeURIComponent(agent)}&session=${encodeURIComponent(session)}&lang=${encodeURIComponent(locale)}`;
     apiGet<FileActionsResponse>(`/api/files/${encodeURIComponent(uploadId)}/actions?${qs}`)
       .then((resp) => {
         if (!cancelled) setButtons(resp.buttons ?? []);
@@ -67,12 +69,22 @@ export function FileActionButtons({ uploadId, mime, agent, sessionId }: FileActi
       runningRef.current = true;
       setRunning(btn.id);
       try {
-        await apiPost(`/api/files/${encodeURIComponent(uploadId)}/run`, {
-          handler_id: btn.id,
-          params: btn.params,
-          session_id: sessionId,
-          agent,
-        });
+        const result = await apiPost<Record<string, unknown>>(
+          `/api/files/${encodeURIComponent(uploadId)}/run`,
+          {
+            handler_id: btn.id,
+            params: {},
+            session_id: sessionId,
+            agent,
+            lang: locale,
+          },
+        );
+        // Async ack has `accepted: true` + `job_id`; sync result has a `status` field.
+        // For sync runs (200), invalidate immediately so the persisted result appears.
+        const isAsync = result && result["accepted"] === true && "job_id" in result;
+        if (!isAsync && sessionId) {
+          queryClient.invalidateQueries({ queryKey: qk.sessionMessages(sessionId) });
+        }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "run failed");
       } finally {
@@ -80,7 +92,7 @@ export function FileActionButtons({ uploadId, mime, agent, sessionId }: FileActi
         setRunning(null);
       }
     },
-    [uploadId, sessionId, agent],
+    [uploadId, sessionId, agent, locale],
   );
 
   if (buttons.length === 0) return null;

@@ -312,15 +312,15 @@ export default function ChatPage() {
     }
   }, []));
 
-  useWsSubscription("video_progress", useCallback((data: {
-    session_id: string; phase: string; text: string;
+  useWsSubscription("file_job_progress", useCallback((data: {
+    job_id: string; handler_id: string; session_id: string; phase: string; pct: number; status: string;
   }) => {
     const store = useChatStore.getState();
-    if (data.phase === "done" || data.phase === "failed") {
+    if (data.status === "done" || data.status === "failed") {
       store.clearVideoProgress(data.session_id);
       queryClient.invalidateQueries({ queryKey: qk.sessionMessages(data.session_id) });
     } else {
-      store.setVideoProgress(data.session_id, data.phase, data.text);
+      store.setVideoProgress(data.session_id, data.phase, data.phase);
     }
   }, []));
 

@@ -21,6 +21,17 @@ vi.mock("@/lib/api", () => ({
   apiPost: (...a: unknown[]) => apiPost(...a),
 }));
 
+const mockInvalidateQueries = vi.fn();
+vi.mock("@/lib/query-client", () => ({
+  queryClient: { invalidateQueries: (...a: unknown[]) => mockInvalidateQueries(...a) },
+}));
+
+vi.mock("@/lib/queries", () => ({
+  qk: {
+    sessionMessages: (id: string) => ["sessions", id, "messages"],
+  },
+}));
+
 import { FileActionButtons } from "../FileActionButtons";
 
 const UPLOAD_ID = "11111111-1111-1111-1111-111111111111";
@@ -38,11 +49,11 @@ describe("FileActionButtons", () => {
     apiPost.mockResolvedValue({});
   });
 
-  it("fetches actions for the upload + agent + session on mount", async () => {
+  it("fetches actions with agent + session + lang query params on mount", async () => {
     render(<FileActionButtons {...PROPS} />);
     await waitFor(() =>
       expect(apiGet).toHaveBeenCalledWith(
-        `/api/files/${UPLOAD_ID}/actions?agent=main&session=sess-1`,
+        `/api/files/${UPLOAD_ID}/actions?agent=main&session=sess-1&lang=ru`,
       ),
     );
   });
@@ -60,18 +71,42 @@ describe("FileActionButtons", () => {
     expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("click POSTs run with handler_id + params + session_id + agent", async () => {
+  it("click POSTs run with handler_id, empty params, session_id, agent, lang", async () => {
     render(<FileActionButtons {...PROPS} />);
     const btn = await screen.findByRole("button", { name: "Транскрибировать" });
     fireEvent.click(btn);
     await waitFor(() =>
       expect(apiPost).toHaveBeenCalledWith(`/api/files/${UPLOAD_ID}/run`, {
         handler_id: "transcribe",
-        params: { language: "ru" },
+        params: {},
         session_id: "sess-1",
         agent: "main",
+        lang: "ru",
       }),
     );
+  });
+
+  it("invalidates session messages on sync result (no accepted:true)", async () => {
+    // Sync response: has status field, no accepted:true
+    apiPost.mockResolvedValue({ status: "ok" });
+    render(<FileActionButtons {...PROPS} />);
+    const btn = await screen.findByRole("button", { name: "Транскрибировать" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(mockInvalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["sessions", "sess-1", "messages"],
+    }));
+  });
+
+  it("does NOT invalidate session messages on async ack (accepted:true + job_id)", async () => {
+    // Async response: accepted:true + job_id — rely on WS terminal event for refresh
+    apiPost.mockResolvedValue({ accepted: true, job_id: "abc-123" });
+    render(<FileActionButtons {...PROPS} />);
+    const btn = await screen.findByRole("button", { name: "Транскрибировать" });
+    fireEvent.click(btn);
+    await waitFor(() => expect(apiPost).toHaveBeenCalled());
+    // Give a tick for the async path
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mockInvalidateQueries).not.toHaveBeenCalled();
   });
 
   it("shows a spinner on the clicked button while running", async () => {
