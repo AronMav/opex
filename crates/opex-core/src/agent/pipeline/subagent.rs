@@ -235,13 +235,24 @@ pub async fn enrich_message_text(
     }
     enrich_with_attachments(&mut enriched, attachments);
 
-    // Enqueue a `url` video-summarization job for each YouTube link detected
-    // in the original (pre-PII-redacted) user text so the job stores the real URL.
+    // Enqueue a `summarize_video` handler job for each video link detected in the
+    // original (pre-PII-redacted) user text so the job stores the real URL.
     // A successful enqueue marks `video_accepted` so the caller short-circuits the
     // LLM loop — the agent must NOT also try to fetch/transcribe the YouTube link.
     let mut video_accepted = false;
+    let params = serde_json::json!({ "language": agent_language });
     for link in detect_video_links(user_text) {
-        match opex_db::video_jobs::enqueue_video_job(db, session_id, agent_name, "url", &link, None).await {
+        match opex_db::handler_jobs::insert_handler_job(
+            db,
+            None,
+            Some(link.as_str()),
+            "summarize_video",
+            agent_name,
+            session_id,
+            &params,
+        )
+        .await
+        {
             Ok(_) => {
                 enriched.push_str("\n\n🎬 Видео по ссылке принято, готовлю сводку.");
                 video_accepted = true;
@@ -1021,8 +1032,8 @@ mod tests {
         );
     }
 
-    /// A YouTube link in the user text enqueues a video job and marks the
-    /// EnrichResult `video_accepted=true` so the pipeline short-circuits the LLM loop.
+    /// A YouTube link in the user text enqueues a handler job (summarize_video) and
+    /// marks the EnrichResult `video_accepted=true` so the pipeline short-circuits the LLM loop.
     #[sqlx::test(migrations = "../../migrations")]
     async fn enrich_youtube_link_sets_video_accepted(pool: sqlx::PgPool) {
         let client = reqwest::Client::new();
@@ -1044,13 +1055,21 @@ mod tests {
             result.video_accepted,
             "YouTube link enqueue must set video_accepted=true"
         );
-        // Exactly one video_jobs row was enqueued for this session.
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM video_jobs WHERE session_id=$1")
-            .bind(session_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(count, 1, "one video job enqueued for the YouTube link");
+        // Exactly one handler_jobs row was enqueued for this session with the expected fields.
+        let row: (i64, Option<String>, String) = sqlx::query_as(
+            "SELECT COUNT(*), MIN(source_ref), MIN(handler_id) \
+             FROM handler_jobs WHERE session_id=$1"
+        )
+        .bind(session_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, 1, "one handler job enqueued for the YouTube link");
+        assert!(
+            row.1.as_deref().unwrap_or("").contains("youtube.com"),
+            "source_ref must be the YouTube URL, got: {:?}", row.1
+        );
+        assert_eq!(row.2, "summarize_video", "handler_id must be 'summarize_video'");
     }
 
     /// A plain-text message with no video link / no attachments leaves
