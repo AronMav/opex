@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from handlers.loader import HandlerRegistry  # noqa: E402
 from handlers.context import build_context, HandlerFile  # noqa: E402
+from registry import ProviderRegistry  # noqa: E402
 
 log = logging.getLogger("toolgate.runner")
 
@@ -72,6 +73,12 @@ async def run_job(spec: dict) -> None:
         headers["X-Job-Token"] = callback_token
     temp_path = spec.get("temp_path")
 
+    # ProviderRegistry._refresh() reads OPEX_AUTH_TOKEN + CORE_API_URL from the
+    # environment. The subprocess normally inherits toolgate's env, but seed the
+    # token from the spec too so capability resolution works even if it doesn't.
+    if auth:
+        os.environ["OPEX_AUTH_TOKEN"] = auth
+
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=120.0)
@@ -103,8 +110,18 @@ async def run_job(spec: dict) -> None:
                 except Exception as exc:  # progress is best-effort
                     log.warning("progress post failed: %s", exc)
 
+            # The HandlerRegistry above only resolves WHICH handler to run. The
+            # ctx capabilities (ctx.stt / ctx.vision / ctx.tts / …) resolve
+            # ACTIVE PROVIDERS via a ProviderRegistry — build_context wires each
+            # _CapabilityWrapper to call registry.aget_active(cap). Passing the
+            # HandlerRegistry here raised `'HandlerRegistry' object has no
+            # attribute 'aget_active'` and broke every async handler (e.g.
+            # summarize_video's ctx.stt.transcribe). Build a real ProviderRegistry.
+            provider_registry = ProviderRegistry()
+            await provider_registry.aload()
+
             ctx = build_context(
-                registry, http,
+                provider_registry, http,
                 job_id=job_id,
                 core_url=core_url,
                 auth_token=auth,
