@@ -44,6 +44,8 @@ import type {
   CreateFileScenarioInput,
   UpdateFileScenarioInput,
   FileScenarioAllowlistRow,
+  HandlerAdminRow,
+  HandlerAllowlistRow,
 } from "@/types/api"
 
 // ── Query Keys ──────────────────────────────────────────────────────────────
@@ -92,6 +94,8 @@ export const qk = {
   fileScenarios: ["file-scenarios"] as const,
   fileScenarioAllowlist: ["file-scenarios", "allowlist"] as const,
   checkpoints: (name: string) => ["agents", name, "checkpoints"] as const,
+  handlers: ["handlers"] as const,
+  handlerAllowlist: ["handlers", "allowlist"] as const,
 }
 
 // ── Query Hooks ─────────────────────────────────────────────────────────────
@@ -781,6 +785,43 @@ export function useRestoreCheckpoint() {
   return useMutation<RestoreReportDto, Error, { agent: string; n: number; file?: string }>({
     mutationFn: ({ agent, n, file }) => restoreCheckpoint(agent, n, file),
     onSuccess: (_r, { agent }) => qc.invalidateQueries({ queryKey: qk.checkpoints(agent) }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+// ── File Handlers ────────────────────────────────────────────────────────────
+
+export function useHandlers() {
+  return useQuery({
+    queryKey: qk.handlers,
+    queryFn: () => apiGet<{ handlers: HandlerAdminRow[] }>("/api/handlers"),
+    select: (d) => d.handlers,
+    staleTime: 30_000,
+  })
+}
+
+// Standalone allowlist-view API (the 5 members + enabled). The tab card reads
+// `handlers[].enabled` directly (server-merged), so this hook is NOT wired into
+// the card — it is exposed for API parity with the backend route and a possible
+// future allowlist-only view. Safe to leave unused.
+export function useHandlerAllowlist() {
+  return useQuery({
+    queryKey: qk.handlerAllowlist,
+    queryFn: () => apiGet<{ allowlist: HandlerAllowlistRow[] }>("/api/handlers/allowlist"),
+    select: (d) => d.allowlist,
+    staleTime: 30_000,
+  })
+}
+
+export function useSetHandlerAllowlist() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { action_ref: string; enabled: boolean }) =>
+      apiPut<{ action_ref: string; enabled: boolean }>("/api/handlers/allowlist", data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.handlerAllowlist })
+      qc.invalidateQueries({ queryKey: qk.handlers }) // handlers carry the merged `enabled`
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 }

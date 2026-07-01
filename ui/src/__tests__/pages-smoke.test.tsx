@@ -34,7 +34,7 @@ vi.mock("lucide-react", () => {
     CircleCheckIcon: Icon, CircleIcon: Icon, Clock: Icon, Copy: Icon,
     CornerDownRight: Icon, Cpu: Icon, Database: Icon, DollarSign: Icon,
     Download: Icon, Edit3: Icon, ExternalLink: Icon, Eye: Icon,
-    FileCode: Icon, FileCode2: Icon, FilePlus: Icon, FileText: Icon,
+    FileCode: Icon, FileCode2: Icon, FileCog: Icon, FilePlus: Icon, FileText: Icon,
     Folder: Icon, FolderMinus: Icon, FolderPlus: Icon, FolderTree: Icon, Gamepad2: Icon, Gauge: Icon,
     GitBranch: Icon, Globe: Icon, Hammer: Icon, Hash: Icon, HeartPulse: Icon,
     History: Icon, Image: Icon, ImageIcon: Icon, InfoIcon: Icon,
@@ -281,6 +281,8 @@ vi.mock("@/lib/queries", () => ({
     mediaDrivers: ["media-drivers"],
     oauthAccounts: ["oauth", "accounts"],
     oauthBindings: (a: string) => ["oauth", "bindings", a],
+    handlers: ["handlers"],
+    handlerAllowlist: ["handlers", "allowlist"],
   },
   // Query hooks
   useAgents: () => ({ ...emptyQuery, data: [] }),
@@ -314,6 +316,8 @@ vi.mock("@/lib/queries", () => ({
   useCuratorRuns: () => ({ ...emptyQuery, data: [] }),
   useCuratorConfig: () => ({ ...emptyQuery, data: null }),
   useCuratorDecisions: () => ({ ...emptyQuery, data: [] }),
+  useHandlers: () => ({ ...emptyQuery, data: [] }),
+  useHandlerAllowlist: () => ({ ...emptyQuery, data: [] }),
   // Mutation hooks
   useUpsertSecret: () => ({ ...emptyMutation }),
   useDeleteSecret: () => ({ ...emptyMutation }),
@@ -333,6 +337,7 @@ vi.mock("@/lib/queries", () => ({
   useUpdateProvider: () => ({ ...emptyMutation }),
   useDeleteProvider: () => ({ ...emptyMutation }),
   useSetProviderActive: () => ({ ...emptyMutation }),
+  useSetHandlerAllowlist: () => ({ ...emptyMutation }),
 }));
 
 // ── Mock: @tanstack/react-query ────────────────────────────────────────────

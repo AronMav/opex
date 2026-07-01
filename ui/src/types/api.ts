@@ -535,3 +535,28 @@ export interface FileActionButton {
 export interface FileActionsResponse {
   buttons: FileActionButton[];
 }
+
+// ── File Handlers admin (Tools tab) ────────────────────────────────────────────
+// Source: crates/opex-core/src/gateway/handlers/handlers_admin.rs
+// GET /api/handlers → { handlers: HandlerAdminRow[] }
+
+export interface HandlerAdminRow {
+  id: string;
+  labels: Record<string, string>;        // { ru, en }
+  descriptions: Record<string, string>;  // { ru, en }
+  icon: string;
+  match: { mime?: string[]; max_size_mb?: number };
+  capability?: string | null;
+  provider?: string | null;
+  execution: "sync" | "async";
+  output: string;
+  order: number;
+  tier: "builtin" | "workspace";
+  enabled: boolean;
+}
+
+/** One entry from GET /api/handlers/allowlist — the 5 FSE_DEFAULT_ALLOWLIST members. */
+export interface HandlerAllowlistRow {
+  action_ref: string;
+  enabled: boolean;
+}
