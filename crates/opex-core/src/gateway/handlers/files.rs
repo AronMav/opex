@@ -38,8 +38,7 @@ use opex_db::handler_jobs;
 
 // ── Process-wide HTTP client ──────────────────────────────────────────────────
 
-/// Process-wide pooled client for loopback downloads and toolgate calls.
-/// Consistent with the `RUN_HTTP_CLIENT` pattern in `file_scenarios/run.rs`.
+/// Process-wide pooled reqwest client for loopback downloads and toolgate calls.
 static FILES_HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
 
 fn files_http_client() -> &'static reqwest::Client {
