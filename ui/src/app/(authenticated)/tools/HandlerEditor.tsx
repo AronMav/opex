@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Field } from "@/components/ui/field";
 import { getToken } from "@/lib/api";
-import { spliceDescriptor, renderDescriptorBlock, DescriptorFields } from "./handler-descriptor";
+import { spliceDescriptor, DescriptorFields, ParamDescriptor } from "./handler-descriptor";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -58,6 +58,9 @@ function defaultFields(id?: string): DescriptorFields {
     execution: "sync",
     order: 100,
     enabled: true,
+    capability: null,
+    output: "text",
+    params: [],
   };
 }
 
@@ -72,6 +75,11 @@ function parseDescriptorFromApi(desc: Record<string, unknown>): DescriptorFields
     execution: (desc.execution as "sync" | "async") ?? "sync",
     order: (desc.order as number) ?? 100,
     enabled: (desc.enabled as boolean) ?? true,
+    // Passthrough fields — not form-editable in v1 but must round-trip so
+    // editing a builtin's label doesn't strip <capability>/<output>/<params>.
+    capability: (desc.capability as string | null | undefined) ?? null,
+    output: (desc.output as string | null | undefined) ?? "text",
+    params: (desc.params as ParamDescriptor[] | undefined) ?? [],
   };
 }
 
