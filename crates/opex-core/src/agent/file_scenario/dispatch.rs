@@ -9,15 +9,6 @@
 use crate::agent::file_scenario::outcome::{status_from_http, ScenarioOutcome};
 use crate::agent::url_tools::uploads_local_url;
 
-/// Context the async `summarize_video` built-in needs to enqueue a durable job.
-/// Other built-ins ignore it (they pass `None`).
-pub struct EnqueueCtx<'a> {
-    pub db: &'a sqlx::PgPool,
-    pub session_id: uuid::Uuid,
-    pub agent_name: &'a str,
-    pub source_type: &'a str, // "file" | "url"
-}
-
 /// Everything one built-in handler needs. Borrowed (no ownership) — the
 /// dispatcher is called synchronously pre-LLM. `timeout` is the core-enforced
 /// per-execution ceiling that maps to `ScenarioStatus::Timeout`.
@@ -29,7 +20,6 @@ pub struct DispatchInput<'a> {
     pub language: &'a str,
     pub http_client: &'a reqwest::Client,
     pub timeout: std::time::Duration,
-    pub enqueue: Option<EnqueueCtx<'a>>,
 }
 
 /// Resolve `action_ref` against the in-core table and run the matching built-in,
@@ -51,7 +41,6 @@ pub async fn dispatch_action(input: DispatchInput<'_>) -> ScenarioOutcome {
         BuiltinAction::Transcribe => run_transcribe(&input).await,
         BuiltinAction::Describe => run_describe(&input).await,
         BuiltinAction::ExtractDocument => run_extract_document(&input).await,
-        BuiltinAction::SummarizeVideo => run_summarize_video(&input).await,
     }
 }
 
@@ -236,69 +225,15 @@ async fn run_extract_document(input: &DispatchInput<'_>) -> ScenarioOutcome {
     }
 }
 
-/// Async built-in: enqueue a durable video_jobs row and return an instant ack.
-/// The heavy pipeline runs out-of-band in the in-core video worker.
-///
-/// Dedup: if an active (pending/processing) job for the same `source_ref` already
-/// exists in this session within a 2-minute window, we skip enqueue and return a
-/// duplicate-ack instead — preventing double-jobs from mobile client reloads.
-async fn run_summarize_video(input: &DispatchInput<'_>) -> ScenarioOutcome {
-    let ctx = match &input.enqueue {
-        Some(c) => c,
-        None => {
-            return ScenarioOutcome::unsupported(
-                "summarize_video requires enqueue context (session/agent)".into(),
-            )
-        }
-    };
-    let source_ref = &input.attachment.url;
-
-    // Dedup check: return early if a live job for this URL already exists.
-    match opex_db::video_jobs::find_recent_active_video_job(ctx.db, ctx.session_id, source_ref)
-        .await
-    {
-        Ok(Some(_)) => {
-            // A live job already exists for this URL — short-circuit the agent
-            // loop just like a fresh enqueue (the worker will deliver the summary).
-            return ScenarioOutcome::video_accepted(
-                "🎬 это видео уже в обработке — пришлю конспект, когда будет готов.".into(),
-                vec![source_ref.clone()],
-            );
-        }
-        Ok(None) => {}
-        Err(e) => {
-            // Non-fatal: log and fall through to enqueue normally rather than blocking.
-            tracing::warn!(error = %e, "dedup check for video job failed; proceeding with enqueue");
-        }
-    }
-
-    match opex_db::video_jobs::enqueue_video_job(
-        ctx.db,
-        ctx.session_id,
-        ctx.agent_name,
-        ctx.source_type,
-        source_ref,
-        input.attachment.file_name.as_deref(),
-    )
-    .await
-    {
-        Ok(_id) => ScenarioOutcome::video_accepted(
-            "🎬 видео принято, готовлю сводку — пришлю, когда будет готова.".into(),
-            vec![source_ref.clone()],
-        ),
-        Err(e) => ScenarioOutcome::failed(format!("could not enqueue video job: {e}")),
-    }
-}
-
 /// The built-in deterministic action names that the dispatch table resolves.
-/// 1:1 with [`crate::agent::file_scenario::outcome::FSE_DEFAULT_ALLOWLIST`].
+/// `summarize_video` is now a Python async handler (Phase 5/6) and is NOT an
+/// in-core dispatch builtin — it is intentionally absent from this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinAction {
     Transcribe,
     Describe,
     ExtractDocument,
     Save,
-    SummarizeVideo,
 }
 
 /// Fail-closed resolution of an `action_ref` to a built-in. Returns `None` for
@@ -310,7 +245,6 @@ pub fn resolve(action_ref: &str) -> Option<BuiltinAction> {
         "describe" => Some(BuiltinAction::Describe),
         "extract_document" => Some(BuiltinAction::ExtractDocument),
         "save" => Some(BuiltinAction::Save),
-        "summarize_video" => Some(BuiltinAction::SummarizeVideo),
         _ => None,
     }
 }
@@ -342,7 +276,6 @@ mod tests {
             language: "ru",
             http_client: client,
             timeout: Duration::from_secs(10),
-            enqueue: None,
         }
     }
 
@@ -454,189 +387,35 @@ mod tests {
         assert_eq!(out.status, ScenarioStatus::Timeout);
     }
 
+    /// The in-core dispatch table covers exactly the 4 sync builtins.
+    /// `summarize_video` is now a Python async handler (Phase 5/6), not an
+    /// in-core dispatch builtin, so it is excluded here.
     #[test]
-    fn every_allowlist_member_resolves() {
+    fn every_in_core_allowlist_member_resolves() {
+        // `summarize_video` is now a Python async handler (Phase 5/6), not an
+        // in-core dispatch builtin, so it is excluded here. The other 4 const
+        // members remain in-core deterministic builtins.
         for name in crate::agent::file_scenario::outcome::FSE_DEFAULT_ALLOWLIST {
-            assert!(resolve(name).is_some(), "allowlist member {name} must resolve to a builtin");
+            if *name == "summarize_video" {
+                continue;
+            }
+            assert!(resolve(name).is_some(), "in-core allowlist member {name} must resolve");
         }
-    }
-
-    #[test]
-    fn resolve_summarize_video() {
-        assert_eq!(resolve("summarize_video"), Some(BuiltinAction::SummarizeVideo));
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn summarize_video_enqueues_and_acks(pool: sqlx::PgPool) {
-        use opex_types::{MediaAttachment, MediaType};
-        let sid = uuid::Uuid::new_v4();
-        let att = MediaAttachment {
-            url: "https://h/api/uploads/v1?sig=x".into(),
-            media_type: MediaType::Video,
-            file_name: Some("clip.mp4".into()),
-            mime_type: Some("video/mp4".into()),
-            file_size: None,
-        };
-        let client = reqwest::Client::new();
-        let input = DispatchInput {
-            action_ref: "summarize_video",
-            attachment: &att,
-            toolgate_url: "http://localhost:9011",
-            gateway_listen: "0.0.0.0:18789",
-            language: "ru",
-            http_client: &client,
-            timeout: std::time::Duration::from_secs(60),
-            enqueue: Some(EnqueueCtx {
-                db: &pool,
-                session_id: sid,
-                agent_name: "Atlas",
-                source_type: "file",
-            }),
-        };
-        let out = dispatch_action(input).await;
-        assert_eq!(out.status, ScenarioStatus::Ok);
-        assert!(out.summary_text.contains("видео"), "ack mentions video: {}", out.summary_text);
         assert!(
-            out.video_accepted,
-            "successful summarize_video enqueue must set video_accepted=true (drives LLM-loop short-circuit)"
+            resolve("summarize_video").is_none(),
+            "summarize_video must NOT resolve to an in-core builtin — Python owns it"
         );
-
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM video_jobs WHERE session_id=$1")
-            .bind(sid).fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 1, "one video_jobs row enqueued");
     }
 
-    /// Constructor invariants: only the async-video ack carries `video_accepted=true`.
-    /// Synchronous scenario outcomes (ok/save/failed/transcribe-style) leave it false.
+    /// The `video_accepted` wire field (R9) defaults false on every surviving
+    /// constructor — no in-core path sets it true anymore (video is Python now).
     #[test]
-    fn video_accepted_flag_only_on_video_ack_constructor() {
-        assert!(
-            ScenarioOutcome::video_accepted("ack".into(), vec![]).video_accepted,
-            "video_accepted constructor must set the flag"
-        );
+    fn surviving_constructors_leave_video_accepted_false() {
         assert!(!ScenarioOutcome::ok("transcript".into(), vec![]).video_accepted);
         assert!(!ScenarioOutcome::save("saved".into(), vec![]).video_accepted);
         assert!(!ScenarioOutcome::failed("boom".into()).video_accepted);
         assert!(!ScenarioOutcome::unsupported("nope".into()).video_accepted);
         assert!(!ScenarioOutcome::timeout().video_accepted);
-    }
-
-    /// Dedup ack (live job already exists) must ALSO short-circuit the agent loop:
-    /// the worker already owns the summary, so the agent must not re-process.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn summarize_video_dedup_ack_sets_video_accepted(pool: sqlx::PgPool) {
-        use opex_types::{MediaAttachment, MediaType};
-        let sid = uuid::Uuid::new_v4();
-        let att = MediaAttachment {
-            url: "https://h/api/uploads/dedup-flag?sig=z".into(),
-            media_type: MediaType::Video,
-            file_name: Some("clip.mp4".into()),
-            mime_type: Some("video/mp4".into()),
-            file_size: None,
-        };
-        let client = reqwest::Client::new();
-        let mk = || DispatchInput {
-            action_ref: "summarize_video",
-            attachment: &att,
-            toolgate_url: "http://localhost:9011",
-            gateway_listen: "0.0.0.0:18789",
-            language: "ru",
-            http_client: &client,
-            timeout: std::time::Duration::from_secs(60),
-            enqueue: Some(EnqueueCtx { db: &pool, session_id: sid, agent_name: "Atlas", source_type: "file" }),
-        };
-        let out1 = dispatch_action(mk()).await;
-        assert!(out1.video_accepted, "first enqueue ack sets video_accepted");
-        let out2 = dispatch_action(mk()).await;
-        assert!(out2.summary_text.contains("уже в обработке"), "second call deduped");
-        assert!(out2.video_accepted, "dedup ack must also short-circuit the agent loop");
-    }
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn summarize_video_persists_source_title(pool: sqlx::PgPool) {
-        use opex_types::{MediaAttachment, MediaType};
-        let sid = uuid::Uuid::new_v4();
-        let att = MediaAttachment {
-            url: "https://h/api/uploads/v1?sig=x".into(),
-            media_type: MediaType::Video,
-            file_name: Some("Лекция.mp4".into()),
-            mime_type: Some("video/mp4".into()),
-            file_size: None,
-        };
-        let client = reqwest::Client::new();
-        let input = DispatchInput {
-            action_ref: "summarize_video",
-            attachment: &att,
-            toolgate_url: "http://localhost:9011",
-            gateway_listen: "0.0.0.0:18789",
-            language: "ru",
-            http_client: &client,
-            timeout: std::time::Duration::from_secs(60),
-            enqueue: Some(EnqueueCtx { db: &pool, session_id: sid, agent_name: "Atlas", source_type: "file" }),
-        };
-        let _ = dispatch_action(input).await;
-        let title: Option<String> = sqlx::query_scalar("SELECT source_title FROM video_jobs WHERE session_id=$1")
-            .bind(sid).fetch_one(&pool).await.unwrap();
-        assert_eq!(title.as_deref(), Some("Лекция.mp4"));
-    }
-
-    /// Second dispatch of the same attachment URL within 2 minutes must return the
-    /// dedup ack WITHOUT inserting a second row in video_jobs.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn summarize_video_dedup_skips_second_enqueue(pool: sqlx::PgPool) {
-        use opex_types::{MediaAttachment, MediaType};
-        let sid = uuid::Uuid::new_v4();
-        let att = MediaAttachment {
-            url: "https://h/api/uploads/dup-clip?sig=y".into(),
-            media_type: MediaType::Video,
-            file_name: Some("dup.mp4".into()),
-            mime_type: Some("video/mp4".into()),
-            file_size: None,
-        };
-        let client = reqwest::Client::new();
-
-        // First call: enqueues normally.
-        let out1 = dispatch_action(DispatchInput {
-            action_ref: "summarize_video",
-            attachment: &att,
-            toolgate_url: "http://localhost:9011",
-            gateway_listen: "0.0.0.0:18789",
-            language: "ru",
-            http_client: &client,
-            timeout: std::time::Duration::from_secs(60),
-            enqueue: Some(EnqueueCtx { db: &pool, session_id: sid, agent_name: "Atlas", source_type: "file" }),
-        })
-        .await;
-        assert_eq!(out1.status, ScenarioStatus::Ok);
-        assert!(out1.summary_text.contains("принято"), "first ack: {}", out1.summary_text);
-
-        // Second call (same session, same URL, job still pending): must dedup.
-        let out2 = dispatch_action(DispatchInput {
-            action_ref: "summarize_video",
-            attachment: &att,
-            toolgate_url: "http://localhost:9011",
-            gateway_listen: "0.0.0.0:18789",
-            language: "ru",
-            http_client: &client,
-            timeout: std::time::Duration::from_secs(60),
-            enqueue: Some(EnqueueCtx { db: &pool, session_id: sid, agent_name: "Atlas", source_type: "file" }),
-        })
-        .await;
-        assert_eq!(out2.status, ScenarioStatus::Ok);
-        assert!(
-            out2.summary_text.contains("уже в обработке"),
-            "dedup ack expected, got: {}",
-            out2.summary_text
-        );
-
-        // Exactly one row in video_jobs.
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM video_jobs WHERE session_id=$1")
-                .bind(sid)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(count, 1, "dedup must prevent second row from being inserted");
     }
 
     #[tokio::test]

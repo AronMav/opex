@@ -50,13 +50,6 @@ impl ScenarioOutcome {
         Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false, post_action: None }
     }
 
-    /// Async-video acceptance ack: a `video_jobs` row was enqueued and `summary_text`
-    /// is the user-facing "video accepted, preparing summary" message. Marks
-    /// `video_accepted = true` so the pipeline short-circuits the LLM loop.
-    pub fn video_accepted(summary_text: String, artifact_urls: Vec<String>) -> Self {
-        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: true, post_action: None }
-    }
-
     /// The rowless universal fallback: nothing processed, file persisted.
     /// Same shape as `ok` so downstream rendering treats it uniformly.
     pub fn save(summary_text: String, artifact_urls: Vec<String>) -> Self {

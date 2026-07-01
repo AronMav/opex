@@ -57,3 +57,53 @@ fn main_has_no_video_worker_or_recovery() {
         "main.rs still has the dead shutdown_video token alias"
     );
 }
+
+/// The closed in-core dispatch builtin set must no longer contain SummarizeVideo
+/// (video moved to the Python handler tier), and the EnqueueCtx plumbing must be
+/// fully removed (R15 — clean, no dead_code attrs). dispatch.rs / dispatch_seam.rs
+/// themselves are KEPT — only the video arm + enqueue plumbing is cut.
+#[test]
+fn dispatch_has_no_summarize_video_or_enqueue_plumbing() {
+    let dispatch = include_str!("../src/agent/file_scenario/dispatch.rs");
+    assert!(
+        !dispatch.contains("SummarizeVideo"),
+        "dispatch.rs still declares the SummarizeVideo builtin arm"
+    );
+    assert!(
+        !dispatch.contains("run_summarize_video"),
+        "dispatch.rs still defines run_summarize_video"
+    );
+    assert!(
+        !dispatch.contains("EnqueueCtx"),
+        "dispatch.rs still declares the EnqueueCtx plumbing (must be removed cleanly per R15)"
+    );
+    // The kept sync arms must survive the cull.
+    assert!(dispatch.contains("BuiltinAction::Transcribe"), "Transcribe arm kept");
+    assert!(dispatch.contains("BuiltinAction::Save"), "Save arm kept");
+
+    let seam = include_str!("../src/agent/file_scenario/dispatch_seam.rs");
+    assert!(
+        !seam.contains("video_jobs"),
+        "dispatch_seam.rs still references the deprecated video_jobs table"
+    );
+    assert!(
+        !seam.contains("EnqueueCtx"),
+        "dispatch_seam.rs still threads EnqueueCtx (must be removed cleanly per R15)"
+    );
+    // The kept sync seam must survive.
+    assert!(
+        seam.contains("PendingAlternative"),
+        "dispatch_seam.rs must keep PendingAlternative (legacy chips path, R2)"
+    );
+
+    // The wire field stays (R9) but its only-caller constructor is gone (R15).
+    let outcome = include_str!("../src/agent/file_scenario/outcome.rs");
+    assert!(
+        outcome.contains("pub video_accepted"),
+        "ScenarioOutcome.video_accepted wire field must be kept (R9)"
+    );
+    assert!(
+        !outcome.contains("pub fn video_accepted"),
+        "the orphaned ScenarioOutcome::video_accepted constructor must be removed (R15)"
+    );
+}

@@ -89,7 +89,6 @@ async fn run_builtin(
     toolgate_url: &str,
     agent_language: &str,
     attachment: &MediaAttachment,
-    enqueue: Option<crate::agent::file_scenario::dispatch::EnqueueCtx<'_>>,
 ) -> ScenarioOutcome {
     dispatch_action(DispatchInput {
         action_ref,
@@ -99,7 +98,6 @@ async fn run_builtin(
         language: agent_language,
         http_client,
         timeout: BUILTIN_TIMEOUT,
-        enqueue,
     })
     .await
 }
@@ -128,8 +126,10 @@ pub async fn dispatch_attachments(
     toolgate_url: &str,
     agent_language: &str,
     db: &sqlx::PgPool,
-    session_id: uuid::Uuid,
-    agent_name: &str,
+    // _session_id / _agent_name retained for call-site signature stability; the only consumer
+    // (video enqueue plumbing) was removed in Phase 6.
+    _session_id: uuid::Uuid,
+    _agent_name: &str,
     _enriched: &mut String,
     attachments: &[MediaAttachment],
 ) -> (Vec<ScenarioOutcome>, Vec<PendingAlternative>) {
@@ -186,15 +186,6 @@ pub async fn dispatch_attachments(
                     );
                     "save"
                 };
-                // Build enqueue context once per attachment; pass Some(enq) to the
-                // default-binding run path so summarize_video can enqueue.
-                // Save-fallback arms (0-binding and no-default branches) pass None.
-                let enq = crate::agent::file_scenario::dispatch::EnqueueCtx {
-                    db,
-                    session_id,
-                    agent_name,
-                    source_type: "file",
-                };
                 let outcome = run_builtin(
                     action_to_run,
                     http_client,
@@ -202,7 +193,6 @@ pub async fn dispatch_attachments(
                     toolgate_url,
                     agent_language,
                     att,
-                    Some(enq),
                 )
                 .await;
 
@@ -262,7 +252,6 @@ pub async fn dispatch_attachments(
                     toolgate_url,
                     agent_language,
                     att,
-                    None,
                 )
                 .await;
                 outcomes.push(outcome);
@@ -277,7 +266,6 @@ pub async fn dispatch_attachments(
                     toolgate_url,
                     agent_language,
                     att,
-                    None,
                 )
                 .await;
                 outcomes.push(outcome);
@@ -1473,42 +1461,4 @@ mod tests {
         );
     }
 
-    // ── Task 6: video/* default enqueues a job (not a sync toolgate call) ────
-
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn video_default_enqueues_job_not_sync_call(pool: sqlx::PgPool) {
-        use crate::db::file_scenarios::create;
-        // Seed a video/* default summarize_video binding.
-        create(&pool, "video/*", "tool", "summarize_video", "Сводка видео", true, 100, true, "test")
-            .await.unwrap();
-
-        // Serve MP4 magic bytes so sniff → video/mp4.
-        let server = MockServer::start().await;
-        let mp4: Vec<u8> = b"\x00\x00\x00\x18ftypmp42fakevideo".to_vec();
-        Mock::given(method("GET")).and(path_regex(r"^/api/uploads/.*"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(mp4))
-            .mount(&server).await;
-        let port = server.address().port();
-        let gateway_listen = format!("127.0.0.1:{port}");
-        let sid = uuid::Uuid::new_v4();
-        let upload_url = format!("{}/api/uploads/{}?sig=x&exp=1", server.uri(), uuid::Uuid::new_v4());
-        let video_att = MediaAttachment {
-            url: upload_url.clone(), media_type: MediaType::Video,
-            file_name: Some("clip.mp4".into()), mime_type: Some("video/mp4".into()), file_size: None,
-        };
-
-        let client = reqwest::Client::new();
-        let mut enriched = String::new();
-        let (outcomes, _pending) = dispatch_attachments(
-            &client, &gateway_listen, "http://localhost:9011", "ru",
-            &pool, sid, "Atlas", &mut enriched, &[video_att],
-        ).await;
-
-        assert_eq!(outcomes.len(), 1);
-        assert_eq!(outcomes[0].status, crate::agent::file_scenario::outcome::ScenarioStatus::Ok);
-        assert!(outcomes[0].summary_text.contains("видео"));
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM video_jobs WHERE session_id=$1")
-            .bind(sid).fetch_one(&pool).await.unwrap();
-        assert_eq!(count, 1, "video default enqueued a job");
-    }
 }
