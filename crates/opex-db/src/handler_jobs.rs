@@ -96,33 +96,45 @@ pub async fn update_handler_job_progress(
     Ok(())
 }
 
+/// Atomically transition `id` from `'processing'` to `'done'`.
+/// Returns `true` if the row was actually updated (i.e. it was still
+/// `'processing'`); returns `false` if the row was already terminal —
+/// callers use this to skip duplicate side-effects on replayed callbacks.
 pub async fn mark_handler_job_done(
     db: &PgPool,
     id: Uuid,
     result: &serde_json::Value,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        "UPDATE handler_jobs SET status='done', result=$2, updated_at=now() WHERE id=$1",
+) -> anyhow::Result<bool> {
+    let rows = sqlx::query(
+        "UPDATE handler_jobs SET status='done', result=$2, updated_at=now() \
+         WHERE id=$1 AND status='processing'",
     )
     .bind(id)
     .bind(result)
     .execute(db)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(rows > 0)
 }
 
-pub async fn mark_handler_job_failed(db: &PgPool, id: Uuid, error: &str) -> anyhow::Result<()> {
+/// Atomically transition `id` from `'processing'` to `'failed'`.
+/// Returns `true` if the row was actually updated (i.e. it was still
+/// `'processing'`); returns `false` if the row was already terminal —
+/// callers use this to skip duplicate side-effects on replayed callbacks.
+pub async fn mark_handler_job_failed(db: &PgPool, id: Uuid, error: &str) -> anyhow::Result<bool> {
     // Store the error string under result.reason so the wire shape stays uniform
     // with ScenarioOutcome ({status, reason}); HandlerJob::error() reads it back.
     let result = serde_json::json!({ "status": "failed", "reason": error });
-    sqlx::query(
-        "UPDATE handler_jobs SET status='failed', result=$2, updated_at=now() WHERE id=$1",
+    let rows = sqlx::query(
+        "UPDATE handler_jobs SET status='failed', result=$2, updated_at=now() \
+         WHERE id=$1 AND status='processing'",
     )
     .bind(id)
     .bind(result)
     .execute(db)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(rows > 0)
 }
 
 /// Reset rows stuck in 'processing' (crash recovery). Jobs attempted 3+ times
@@ -229,16 +241,30 @@ mod tests {
         assert_eq!(row.phase.as_deref(), Some("digest"));
         assert_eq!(row.pct, Some(42));
 
-        mark_handler_job_done(
+        let transitioned = mark_handler_job_done(
             &pool,
             id,
             &serde_json::json!({"status": "ok", "summary_text": "x"}),
         )
         .await
         .unwrap();
+        assert!(transitioned, "first mark_done must return true");
         let row = get_handler_job(&pool, id).await.unwrap().unwrap();
         assert_eq!(row.status, "done");
         assert_eq!(row.result.as_ref().unwrap()["status"], "ok");
+
+        // Idempotency: second call on an already-done row returns false.
+        let again = mark_handler_job_done(
+            &pool,
+            id,
+            &serde_json::json!({"status": "ok", "summary_text": "duplicate"}),
+        )
+        .await
+        .unwrap();
+        assert!(!again, "replayed mark_done must return false — row is already terminal");
+        // The stored result must NOT have been overwritten.
+        let row2 = get_handler_job(&pool, id).await.unwrap().unwrap();
+        assert_eq!(row2.result.as_ref().unwrap()["summary_text"], "x", "stored result must be unchanged after replayed callback");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
@@ -257,10 +283,17 @@ mod tests {
         .unwrap();
         claim_next_handler_job(&pool).await.unwrap().unwrap();
 
-        mark_handler_job_failed(&pool, id, "boom").await.unwrap();
+        let transitioned = mark_handler_job_failed(&pool, id, "boom").await.unwrap();
+        assert!(transitioned, "first mark_failed must return true");
         let row = get_handler_job(&pool, id).await.unwrap().unwrap();
         assert_eq!(row.status, "failed");
         assert_eq!(row.error(), Some("boom"));
+
+        // Idempotency: second call on an already-failed row returns false.
+        let again = mark_handler_job_failed(&pool, id, "second call").await.unwrap();
+        assert!(!again, "replayed mark_failed must return false — row is already terminal");
+        let row2 = get_handler_job(&pool, id).await.unwrap().unwrap();
+        assert_eq!(row2.error(), Some("boom"), "stored error must be unchanged after replayed callback");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

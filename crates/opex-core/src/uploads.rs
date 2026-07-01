@@ -77,6 +77,12 @@ pub fn derive_upload_key(master_key: &[u8; 32]) -> [u8; 32] {
 /// TTL for upload URLs re-signed during the historical migration — 50 years.
 pub const HISTORICAL_URL_TTL_SECS: u64 = 1_576_800_000;
 
+/// TTL for per-job callback tokens minted by the file-handler worker.
+/// Sized for long async jobs (6-hour+ video transcription + summarisation),
+/// with generous headroom. Decoupled from `uploads.signed_url_ttl_secs` so
+/// adjusting the upload URL cache window doesn't shorten callback validity.
+pub const JOB_CALLBACK_TTL_SECS: u64 = 24 * 3600;
+
 /// Per-namespace HMAC payload: `"{ns}:{path}:{exp}"`. The namespace prefix
 /// prevents a sig minted for one namespace from verifying on another.
 fn ns_payload(ns: &'static str, path: &str, exp: u64) -> Vec<u8> {

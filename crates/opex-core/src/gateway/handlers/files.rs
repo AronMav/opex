@@ -245,11 +245,10 @@ async fn get_file_actions(
 
 /// `POST /api/files/{upload_id}/run`
 ///
-/// Sync path (the only Phase-3 path for sync handlers):
+/// Sync path (the only path for sync handlers):
 /// 1. Owner-gate (R3).
 /// 2. Server-side tiered gate re-check (button trust not assumed).
-/// 3. Async-path stub: 202 Accepted (Phase 5 amends this branch to enqueue a
-///    `handler_jobs` row per R13).
+/// 3. Async-handler branch: enqueue onto `handler_jobs` (R13), return 202 Accepted.
 /// 4. Mint a LOOPBACK signed URL; core downloads the bytes in Rust (R12).
 ///    Toolgate never sees the URL — its SSRF guard would reject it.
 /// 5. POST multipart/form-data to `{toolgate_url}/handlers/{id}/run`.
@@ -287,7 +286,7 @@ async fn run_file_handler(
             .into_response();
     }
 
-    // ── 3. Async-handler stub (Phase 5 amends this branch) ───────────────────
+    // ── 3. Async-handler branch: enqueue onto handler_jobs (R13) ─────────────
     let is_async = manifests
         .iter()
         .find(|m| m.id == req.handler_id)
@@ -565,20 +564,35 @@ async fn job_complete(
     let result_json = serde_json::to_value(&outcome).unwrap_or_else(|_| serde_json::json!({}));
 
     if is_ok {
-        // FIX 3: log mark_done errors instead of swallowing. Side effects
-        // (deliver + post_action) still run even when the bookkeeping row fails.
-        if let Err(e) = handler_jobs::mark_handler_job_done(db, job_id, &result_json).await {
-            tracing::error!(error = %e, %job_id, "job_complete: mark_handler_job_done failed");
+        // Atomic transition: only proceed with side effects if the row moved
+        // from 'processing' → 'done'. A false return means the job is already
+        // terminal (e.g. replayed callback) — skip deliver to avoid duplicates.
+        let transitioned = match handler_jobs::mark_handler_job_done(db, job_id, &result_json).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(error = %e, %job_id, "job_complete: mark_handler_job_done failed");
+                false
+            }
+        };
+        if transitioned {
+            deliver_async_outcome(&state, &job, &outcome).await;
+        } else {
+            tracing::info!(%job_id, "job_complete: already terminal — skipping duplicate deliver");
+            return StatusCode::NO_CONTENT;
         }
-        // FIX 3: pass in-hand `outcome` to deliver_async_outcome; it no longer
-        // re-reads from the DB, so post_action is not silently skipped when
-        // mark_handler_job_done failed.
-        deliver_async_outcome(&state, &job, &outcome).await;
     } else {
         let reason = outcome.reason.clone().unwrap_or_else(|| "handler failed".to_string());
-        // FIX 3: log mark_failed errors instead of swallowing.
-        if let Err(e) = handler_jobs::mark_handler_job_failed(db, job_id, &reason).await {
-            tracing::error!(error = %e, %job_id, "job_complete: mark_handler_job_failed failed");
+        // Atomic transition: skip the terminal WS event if already terminal.
+        let transitioned = match handler_jobs::mark_handler_job_failed(db, job_id, &reason).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(error = %e, %job_id, "job_complete: mark_handler_job_failed failed");
+                false
+            }
+        };
+        if !transitioned {
+            tracing::info!(%job_id, "job_complete: already terminal — skipping duplicate failed event");
+            return StatusCode::NO_CONTENT;
         }
     }
 
@@ -595,8 +609,12 @@ async fn job_complete(
 }
 
 /// Persist the async outcome as a file-derived assistant message (R4/R8:
-/// provenance-wrapped content, source='file_handler', no explicit status) and
-/// run the generic post-completion action (MCP/Obsidian vault write).
+/// provenance-wrapped content, source='file_handler', no explicit status),
+/// run the generic post-completion action (MCP/Obsidian vault write), and
+/// emit the terminal `file_job_progress` WS event so the UI reacts without reload.
+/// Called from `job_complete` only when the `handler_jobs` row actually
+/// transitioned from `'processing'` → `'done'` (guarded by `file_handler_worker`
+/// / `handler_jobs` idempotency — no duplicate deliver on replayed callbacks).
 async fn deliver_async_outcome(
     state: &AppState,
     job: &handler_jobs::HandlerJob,
@@ -612,7 +630,7 @@ async fn deliver_async_outcome(
     );
 
     // 2. Persist (R8: omit status → table default 'complete'; source='file_handler'
-    //    — column added by migration 066; mirrors video_worker deliver() + new tag).
+    //    — column added by migration 066; mirrors file_handler_worker / handler_jobs).
     if let Err(e) = sqlx::query(
         "INSERT INTO messages (session_id, agent_id, role, content, is_mirror, source) \
          VALUES ($1, $2, 'assistant', $3, true, 'file_handler')",
@@ -629,14 +647,6 @@ async fn deliver_async_outcome(
     // 3. Generic post-action: the handler may request an MCP vault write via a
     //    `post_action` object in the result JSON.
     run_post_action(state, job, outcome).await;
-
-    // 4. Live push so open tabs render without a reload (mirrors video deliver()).
-    let ev = serde_json::json!({
-        "type": "video_summary_ready",
-        "session_id": job.session_id.to_string(),
-        "text": outcome.summary_text,
-    });
-    let _ = state.channels.ui_event_tx.send(ev.to_string());
 }
 
 /// Run the optional `post_action` carried in the outcome JSON. v1 supports the

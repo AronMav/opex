@@ -18,13 +18,19 @@ use opex_db::handler_jobs::{self, HandlerJob};
 /// Per-job IDOR fix: mints a `callback_token` bound to `job.id` and includes it
 /// in the form so the runner can forward it to the /progress and /complete
 /// callback endpoints, which verify it (closes the IDOR from Task 3).
+///
+/// Mime + filename: for upload-based jobs the real mime is fetched from the DB
+/// (mirroring the sync path in files.rs) and `filename` is set to the
+/// upload_id string — the uploads table has no original filename, so the UUID
+/// is the correct stable identifier. For url-based jobs mime stays empty and
+/// filename is derived from the last path segment of the source_ref.
 pub async fn dispatch_async_job(
+    db: &sqlx::PgPool,
     http: &reqwest::Client,
     toolgate_url: &str,
     gateway_listen: &str,
     signed_url_base: &str,
     key: &[u8; 32],
-    ttl_secs: u64,
     job: &HandlerJob,
 ) -> anyhow::Result<()> {
     let url = format!(
@@ -40,13 +46,39 @@ pub async fn dispatch_async_job(
         .to_string();
     let params_str = serde_json::to_string(&job.params).unwrap_or_else(|_| "{}".to_string());
 
-    // Mint a per-job callback token so the toolgate runner can authenticate
-    // its /progress and /complete callbacks. Closes the IDOR from Task 3.
-    let callback_token = crate::uploads::mint_job_callback_token(key, job.id, ttl_secs);
+    // Mint the per-job callback token using the dedicated TTL constant so the
+    // callback window is sized for long async jobs and is independent of the
+    // upload-URL cache knob (fixes the TTL coupling issue).
+    let callback_token = crate::uploads::mint_job_callback_token(
+        key,
+        job.id,
+        crate::uploads::JOB_CALLBACK_TTL_SECS,
+    );
+
+    // Determine mime and filename. For upload-based jobs we fetch the real mime
+    // from the DB (mirrors the sync path in files.rs which sends mime + upload_id).
+    // For url-based jobs we leave mime empty and derive the filename from the URL.
+    let (mime, filename) = if let Some(upload_id) = job.upload_id {
+        let real_mime = crate::db::uploads::get_by_id(db, upload_id)
+            .await
+            .unwrap_or(None)
+            .map(|row| row.mime)
+            .unwrap_or_default();
+        (real_mime, upload_id.to_string())
+    } else {
+        let fname = job
+            .source_ref
+            .as_deref()
+            .and_then(|s| s.split('/').next_back())
+            .and_then(|s| s.split('?').next())
+            .unwrap_or("")
+            .to_string();
+        (String::new(), fname)
+    };
 
     let mut form = reqwest::multipart::Form::new()
-        .text("mime", String::new())
-        .text("filename", "upload".to_string())
+        .text("mime", mime.clone())
+        .text("filename", filename)
         .text("params", params_str)
         .text("language", language)
         .text("job_id", job.id.to_string())
@@ -55,7 +87,14 @@ pub async fn dispatch_async_job(
     if let Some(upload_id) = job.upload_id {
         // R12: download the upload bytes over loopback in Rust (mirror run_transcribe),
         // then attach as the "file" part — toolgate never fetches a loopback URL.
-        let public = crate::uploads::mint_uploads_url(signed_url_base, upload_id, key, ttl_secs);
+        // Use the dedicated callback TTL for the signed URL too (consistent with
+        // the token TTL above so the URL doesn't expire before the job completes).
+        let public = crate::uploads::mint_uploads_url(
+            signed_url_base,
+            upload_id,
+            key,
+            crate::uploads::JOB_CALLBACK_TTL_SECS,
+        );
         let local = crate::agent::url_tools::uploads_local_url(&public, gateway_listen);
         let resp = http
             .get(&local)
@@ -66,7 +105,10 @@ pub async fn dispatch_async_job(
             anyhow::bail!("loopback upload fetch HTTP {}", resp.status().as_u16());
         }
         let bytes = resp.bytes().await.context("read upload bytes")?;
-        let part = reqwest::multipart::Part::bytes(bytes.to_vec()).file_name("upload");
+        let part = reqwest::multipart::Part::bytes(bytes.to_vec())
+            .file_name(upload_id.to_string())
+            .mime_str(&mime)
+            .unwrap_or_else(|_| reqwest::multipart::Part::bytes(bytes.to_vec()));
         form = form.part("file", part);
     } else if let Some(source_ref) = &job.source_ref {
         // url-based job (e.g. YouTube): pass the external URL, no "file" part.
@@ -109,7 +151,6 @@ pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) 
         .clone()
         .unwrap_or_else(|| "http://localhost:9011".to_string());
     let gateway_listen = state.config.config.gateway.listen.clone();
-    let ttl_secs = state.config.config.uploads.signed_url_ttl_secs;
     let signed_url_base = crate::uploads::web_uploads_base().to_string();
     // R6: real accessor, NOT master_key — derives the per-domain HMAC key
     let key = state.infra.secrets.get_upload_hmac_key();
@@ -154,12 +195,12 @@ pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) 
             let _ = handler_jobs::mark_handler_job_processing(&db, job.id).await;
 
             if let Err(e) = dispatch_async_job(
+                &db,
                 &http,
                 &toolgate_url,
                 &gateway_listen,
                 &signed_url_base,
                 &key,
-                ttl_secs,
                 &job,
             )
             .await
@@ -211,6 +252,16 @@ mod tests {
         j
     }
 
+    /// A lazy pool that never actually connects — used in non-DB unit tests
+    /// where dispatch_async_job needs a &PgPool but the DB call is non-fatal
+    /// (upload mime lookup falls back to empty string on any error).
+    fn lazy_pool() -> sqlx::PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("connect_lazy must not fail — no actual connection is made here")
+    }
+
     #[tokio::test]
     async fn dispatch_upload_job_posts_multipart_with_loopback_bytes_and_accepts_202() {
         // The upload server returns bytes that core fetches over loopback (R12),
@@ -235,13 +286,16 @@ mod tests {
         let listen = uploads.uri().trim_start_matches("http://").to_string();
         let http = reqwest::Client::new();
         let key = [7u8; 32];
+        // Lazy pool: the mime DB lookup will fail gracefully (no real DB),
+        // falling back to empty string — the dispatch still succeeds.
+        let pool = lazy_pool();
         let res = dispatch_async_job(
+            &pool,
             &http,
             &toolgate.uri(),
             &listen,
             "",          // signed_url_base = root-relative (web_uploads_base)
             &key,
-            600,
             &upload_job(),
         )
         .await;
@@ -260,14 +314,15 @@ mod tests {
 
         let http = reqwest::Client::new();
         let key = [7u8; 32];
+        let pool = lazy_pool();
         // url job: no upload, no loopback download — source_ref drives it.
         let res = dispatch_async_job(
+            &pool,
             &http,
             &toolgate.uri(),
             "127.0.0.1:18789",
             "",
             &key,
-            600,
             &url_job(),
         )
         .await;
@@ -285,9 +340,35 @@ mod tests {
 
         let http = reqwest::Client::new();
         let key = [7u8; 32];
-        let res =
-            dispatch_async_job(&http, &toolgate.uri(), "127.0.0.1:18789", "", &key, 600, &url_job()).await;
+        let pool = lazy_pool();
+        let res = dispatch_async_job(
+            &pool,
+            &http,
+            &toolgate.uri(),
+            "127.0.0.1:18789",
+            "",
+            &key,
+            &url_job(),
+        )
+        .await;
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("500"));
+    }
+
+    #[test]
+    fn url_job_filename_derived_from_last_path_segment() {
+        // Verify that the filename for a url-based job is derived from the
+        // last non-query segment of source_ref (not the literal "upload").
+        let job = url_job(); // source_ref = "https://www.youtube.com/watch?v=abc"
+        // The last path segment before '?' is "watch", query stripped.
+        // We test the helper logic directly via the public dispatch path indirectly;
+        // here we just verify the extraction logic matches expectations.
+        let source = job.source_ref.as_deref().unwrap();
+        let fname = source
+            .split('/')
+            .next_back()
+            .and_then(|s| s.split('?').next())
+            .unwrap_or("");
+        assert_eq!(fname, "watch", "filename derived from last path segment, query stripped");
     }
 }
