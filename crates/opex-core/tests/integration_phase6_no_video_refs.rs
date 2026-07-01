@@ -9,22 +9,27 @@
 //! transcribe/describe/extract/save arms, `file_scenarios/run.rs`) is KEPT and
 //! deliberately NOT asserted-against here (R2).
 
-/// `subagent.rs` (the enrich seam) must no longer enqueue legacy video jobs from
-/// detected YouTube/Yandex links — that path is gone (Python owns video now).
+/// `subagent.rs` (the enrich seam) must no longer enqueue via the legacy `video_jobs`
+/// queue — that path is gone (Python handler_jobs queue owns video summarization now,
+/// R13). The URL-detection helpers (`detect_video_links` / `is_supported_video_host`)
+/// and the `handler_jobs` enqueue are LEGITIMATELY KEPT for the "paste a YouTube
+/// link → auto-summarize" auto-trigger (Phase 5 Task 6d, R13).
 #[test]
 fn subagent_has_no_legacy_video_enqueue() {
     let src = include_str!("../src/agent/pipeline/subagent.rs");
+    // Legacy path must be gone.
     assert!(
         !src.contains("video_jobs::enqueue_video_job"),
-        "subagent.rs still enqueues legacy video_jobs"
+        "subagent.rs still enqueues via the legacy video_jobs queue"
+    );
+    // The new-queue auto-trigger must be present (R13 preservation).
+    assert!(
+        src.contains("handler_jobs::insert_handler_job"),
+        "subagent.rs must enqueue via the new handler_jobs queue (R13 auto-trigger)"
     );
     assert!(
-        !src.contains("detect_video_links"),
-        "subagent.rs still has the dead detect_video_links helper"
-    );
-    assert!(
-        !src.contains("is_supported_video_host"),
-        "subagent.rs still has the dead is_supported_video_host helper"
+        src.contains("detect_video_links"),
+        "subagent.rs must keep detect_video_links for the URL auto-trigger (R13)"
     );
     // The legacy sync attachment dispatch (chips/Telegram, R2) must survive.
     assert!(

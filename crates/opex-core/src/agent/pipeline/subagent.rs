@@ -235,11 +235,31 @@ pub async fn enrich_message_text(
     }
     enrich_with_attachments(&mut enriched, attachments);
 
-    // Phase 6: the in-core YouTube/Yandex video-URL enqueue was removed. Video is
-    // now a Python `summarize_video` async handler driven by the universal
-    // `handler_jobs` queue (Phase 5). This enrich seam keeps only the legacy sync
-    // attachment dispatch (transcribe/describe/extract/save) that still powers the
-    // post-send chips + Telegram path (R2).
+    // Enqueue a `summarize_video` handler job for each video link detected in the
+    // original (pre-PII-redacted) user text so the job stores the real URL.
+    // A successful enqueue marks `video_accepted` so the caller short-circuits the
+    // LLM loop — the agent must NOT also try to fetch/transcribe the YouTube link.
+    let mut video_accepted = false;
+    let params = serde_json::json!({ "language": agent_language });
+    for link in detect_video_links(user_text) {
+        match opex_db::handler_jobs::insert_handler_job(
+            db,
+            None,
+            Some(link.as_str()),
+            "summarize_video",
+            agent_name,
+            session_id,
+            &params,
+        )
+        .await
+        {
+            Ok(_) => {
+                enriched.push_str("\n\n🎬 Видео по ссылке принято, готовлю сводку.");
+                video_accepted = true;
+            }
+            Err(e) => tracing::warn!(error = %e, link = %link, "video url enqueue failed"),
+        }
+    }
 
     // FSE dispatch replaces the old inline auto_transcribe_audio/auto_describe_images
     // calls: sniff each attachment, look up bindings, run the built-in via the
@@ -263,12 +283,52 @@ pub async fn enrich_message_text(
         &outcomes,
     );
 
-    // Phase 6: no in-core dispatch arm sets `video_accepted` anymore (video is a
-    // Python async handler), so it is always false from this seam — the LLM loop
-    // is never short-circuited here. The field is retained on the wire type (R9).
-    let video_accepted = false;
+    // Async-video acceptance: a YouTube-link enqueue above OR a `summarize_video`
+    // attachment outcome (video file) marks this turn for the LLM-loop short-circuit.
+    let video_accepted = video_accepted || outcomes.iter().any(|o| o.video_accepted);
 
     EnrichResult { text: enriched, outcomes, pending_alternatives, video_accepted }
+}
+
+/// v1 video-URL allowlist: YouTube only (SSRF surface — see spec §9).
+///
+/// True for hosts we accept as downloadable video links: YouTube and Yandex Disk
+/// public-share links (both handled by yt-dlp extractors). YouTube allows the
+/// exact label or any dot-prefixed subdomain; Yandex Disk hosts are matched
+/// EXACTLY (no suffix/prefix rule) so `disk.yandex.evil.com` cannot sneak through.
+fn is_supported_video_host(host: &str) -> bool {
+    // YouTube
+    host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtu.be"
+        || host.ends_with(".youtu.be")
+        // Yandex Disk public-share links (yt-dlp `YandexDisk` extractor) — exact hosts only.
+        || host == "yadi.sk"
+        || host == "disk.yandex.ru"
+        || host == "disk.yandex.com"
+        || host == "disk.yandex.kz"
+        || host == "disk.yandex.by"
+        || host == "disk.yandex.uz"
+        || host == "disk.360.yandex.ru"
+}
+
+/// Filters `extract_urls(text)` keeping only supported video hosts (YouTube,
+/// Yandex Disk). The host is parsed with a real URL parser so that userinfo
+/// (`youtube.com@evil.com`), case, trailing dot, ports and byte-suffix attacks
+/// (`notayoutube.com`, `disk.yandex.evil.com`) are all rejected.
+fn detect_video_links(text: &str) -> Vec<String> {
+    extract_urls(text)
+        .into_iter()
+        .filter(|u| {
+            let Ok(parsed) = url::Url::parse(u) else { return false };
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return false;
+            }
+            let Some(h) = parsed.host_str() else { return false };
+            let host = h.trim_end_matches('.').to_ascii_lowercase();
+            is_supported_video_host(&host)
+        })
+        .collect()
 }
 
 /// Fetch a URL and return text content (tool handler).
@@ -877,6 +937,45 @@ mod tests {
         }
     }
 
+    // ── detect_video_links ──────────────────────────────────────────────────
+
+    #[test]
+    fn detect_video_links_youtube_only() {
+        let text = "смотри https://www.youtube.com/watch?v=abc123 и https://example.com/x.mp4";
+        let links = detect_video_links(text);
+        assert_eq!(links.len(), 1);
+        assert!(links[0].contains("youtube.com/watch?v=abc123"));
+
+        assert!(detect_video_links("https://youtu.be/xyz").len() == 1, "youtu.be allowed");
+        assert!(detect_video_links("нет ссылок тут").is_empty());
+
+        // Byte-suffix attack rejection: these hosts end with "youtube.com" as bytes,
+        // but lack domain-label boundary (no leading dot), so they are not YouTube domains.
+        assert!(detect_video_links("https://notayoutube.com/watch").is_empty(), "byte-suffix attack rejected");
+        assert!(detect_video_links("https://fakeyoutube.com/x").is_empty(), "byte-suffix attack rejected");
+
+        // URL-parser hardening: userinfo confusion, case-insensitivity, scheme.
+        assert!(detect_video_links("https://youtube.com@evil.com/x").is_empty(), "userinfo confusion rejected");
+        assert!(detect_video_links("https://YOUTUBE.com/watch?v=z").len() == 1, "uppercase host accepted");
+        assert!(detect_video_links("ftp://youtube.com/x").is_empty(), "non-http scheme rejected");
+    }
+
+    #[test]
+    fn detect_video_links_accepts_yandex_disk() {
+        // Public Yandex Disk share links (yt-dlp YandexDisk extractor).
+        assert_eq!(detect_video_links("видео: https://disk.yandex.ru/i/abc123").len(), 1, "disk.yandex.ru");
+        assert_eq!(detect_video_links("https://yadi.sk/i/xyz789").len(), 1, "yadi.sk short link");
+        assert_eq!(detect_video_links("https://disk.yandex.com/d/folderId").len(), 1, "disk.yandex.com");
+        assert_eq!(detect_video_links("https://disk.360.yandex.ru/i/q").len(), 1, "yandex 360");
+        assert_eq!(detect_video_links("https://DISK.Yandex.RU/i/A").len(), 1, "case-insensitive");
+
+        // Security: exact-host match → suffix/userinfo confusion rejected.
+        assert!(detect_video_links("https://disk.yandex.evil.com/i/x").is_empty(), "suffix attack rejected");
+        assert!(detect_video_links("https://disk.yandex.ru@evil.com/x").is_empty(), "userinfo confusion rejected");
+        assert!(detect_video_links("https://notyadi.sk/i/x").is_empty(), "byte-suffix attack rejected");
+        assert!(detect_video_links("ftp://disk.yandex.ru/i/x").is_empty(), "non-http scheme rejected");
+    }
+
     // ── enrich_message_text → EnrichResult ──────────────────────────────────
 
     /// No binding seeded → save path → no dangling signed URL in `.text`.
@@ -933,6 +1032,46 @@ mod tests {
         );
     }
 
+
+    /// A YouTube link in the user text enqueues a handler job (summarize_video) and
+    /// marks the EnrichResult `video_accepted=true` so the pipeline short-circuits the LLM loop.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn enrich_youtube_link_sets_video_accepted(pool: sqlx::PgPool) {
+        let client = reqwest::Client::new();
+        let session_id = uuid::Uuid::new_v4();
+        let result = enrich_message_text(
+            &client,
+            "127.0.0.1:18789",
+            "http://localhost:9011", // unreachable toolgate is irrelevant: the link path enqueues directly
+            "ru",
+            &pool,
+            session_id,
+            "TestAgent",
+            "сделай конспект https://www.youtube.com/watch?v=abc123",
+            &[],
+        )
+        .await;
+
+        assert!(
+            result.video_accepted,
+            "YouTube link enqueue must set video_accepted=true"
+        );
+        // Exactly one handler_jobs row was enqueued for this session with the expected fields.
+        let row: (i64, Option<String>, String) = sqlx::query_as(
+            "SELECT COUNT(*), MIN(source_ref), MIN(handler_id) \
+             FROM handler_jobs WHERE session_id=$1"
+        )
+        .bind(session_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, 1, "one handler job enqueued for the YouTube link");
+        assert!(
+            row.1.as_deref().unwrap_or("").contains("youtube.com"),
+            "source_ref must be the YouTube URL, got: {:?}", row.1
+        );
+        assert_eq!(row.2, "summarize_video", "handler_id must be 'summarize_video'");
+    }
 
     /// A plain-text message with no video link / no attachments leaves
     /// `video_accepted=false` — the agent loop runs normally.
