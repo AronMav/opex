@@ -127,7 +127,7 @@ def test_syntax_error_file_skipped_not_crash(tmp_path):
     assert reg.get("broken") is None
 
 
-def test_workspace_cannot_shadow_builtin_id(tmp_path):
+def test_workspace_overrides_builtin_id(tmp_path):
     builtin = tmp_path / "builtin"
     builtin.mkdir()
     _write(builtin, "echo.py", GOOD)
@@ -138,8 +138,15 @@ def test_workspace_cannot_shadow_builtin_id(tmp_path):
     _write(fh, "shadow.py", DUP_BUILTIN)
     reg = HandlerRegistry()
     reg.load_all(str(builtin), str(ws))
-    # builtin wins; the workspace clash is rejected (still builtin tier)
-    assert reg.get("echo").tier == "builtin"
+    # workspace override is effective: get() returns the workspace version
+    lh = reg.get("echo")
+    assert lh is not None
+    assert lh.tier == "workspace", "get() tier reflects the effective handler (workspace)"
+    assert lh.descriptor.labels.get("en") == "Shadow", "workspace body is active"
+    # manifest derives tier from builtin-id membership and reports source=override
+    m = {x["id"]: x for x in reg.manifests()}
+    assert m["echo"]["tier"] == "builtin", "manifest tier stays builtin for gating"
+    assert m["echo"]["source"] == "override"
 
 
 def test_manifests_and_etag(tmp_path):
@@ -209,8 +216,8 @@ def test_reload_file_id_renamed_evicts_old_registers_new(tmp_path):
     assert lh.descriptor.labels["en"] == "Renamed Handler"
 
 
-def test_reload_file_workspace_builtin_collision_rejected(tmp_path):
-    """reload_file of a workspace file whose id collides with a builtin is rejected."""
+def test_reload_file_workspace_overrides_builtin(tmp_path):
+    """reload_file of a workspace file whose id matches a builtin installs an override."""
     builtin_dir = tmp_path / "builtin"
     builtin_dir.mkdir()
     _write(builtin_dir, "echo.py", GOOD)
@@ -222,14 +229,27 @@ def test_reload_file_workspace_builtin_collision_rejected(tmp_path):
 
     reg = HandlerRegistry()
     reg.load_all(str(builtin_dir), str(ws))
-    # builtin loaded; workspace collision was rejected at load_all time
-    assert reg.get("echo").tier == "builtin"
+    # override installed at load_all time: workspace body is effective
+    lh = reg.get("echo")
+    assert lh.tier == "workspace"
+    assert lh.descriptor.labels.get("en") == "Workspace Echo"
 
-    # Hot-reload should also reject workspace colliding with builtin
+    # Hot-reload installs the override again (idempotent)
     reg.reload_file(str(p))
-    assert reg.get("echo").tier == "builtin"
-    # The workspace file must not have displaced the builtin
-    assert reg.get("echo").descriptor.labels.get("en") != "Workspace Echo"
+    lh = reg.get("echo")
+    assert lh.tier == "workspace"
+    assert lh.descriptor.labels.get("en") == "Workspace Echo"
+    m = {x["id"]: x for x in reg.manifests()}
+    assert m["echo"]["source"] == "override"
+
+    # remove_file resets to pristine builtin
+    import os
+    os.remove(str(p))
+    reg.remove_file(str(p))
+    lh = reg.get("echo")
+    assert lh.tier == "builtin"
+    m = {x["id"]: x for x in reg.manifests()}
+    assert m["echo"]["source"] == "builtin"
 
 
 def test_remove_file_evicts_workspace_handler(tmp_path):

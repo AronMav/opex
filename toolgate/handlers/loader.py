@@ -1,8 +1,8 @@
 """Scans builtin + workspace handler files, parses their XML descriptor,
 imports the module, and captures `run`. Every per-file load is wrapped in
 try/except so a bad workspace file is skipped+logged, never aborting the scan.
-Builtin ids are reserved: a workspace file reusing one is rejected (builtin
-wins)."""
+A workspace file whose id matches a builtin OVERRIDES (shadows) the builtin;
+deleting the override resurfaces the pristine builtin (reset-to-default)."""
 
 from __future__ import annotations
 
@@ -49,8 +49,10 @@ def _import_run(path: str):
 class HandlerRegistry:
     def __init__(self) -> None:
         self._handlers: dict[str, LoadedHandler] = {}
+        # Pristine builtins kept separately so an override can be reverted
+        # (reset-to-default) by resurfacing the builtin.
+        self._builtins: dict[str, LoadedHandler] = {}
         # Maps normalized absolute path → workspace handler id registered from it.
-        # Builtin handlers are never tracked here (they are never hot-reloaded).
         self._path_to_id: dict[str, str] = {}
 
     @staticmethod
@@ -60,9 +62,11 @@ class HandlerRegistry:
 
     def load_all(self, builtin_dir: str, workspace_dir: str | None) -> None:
         self._handlers = {}
+        self._builtins = {}
         self._path_to_id = {}
-        # Builtin tier FIRST — its ids become reserved.
+        # Builtin tier FIRST — retained in _builtins AND seeded as effective.
         self._scan_dir(builtin_dir, "builtin")
+        self._builtins = dict(self._handlers)
         if workspace_dir:
             ws = os.path.join(workspace_dir, "file_handlers")
             self._scan_dir(ws, "workspace")
@@ -79,13 +83,17 @@ class HandlerRegistry:
         try:
             source = _read_source(path)
             descriptor = parse_descriptor(source, tier)
-            if descriptor.id in self._handlers:
-                existing = self._handlers[descriptor.id]
-                log.warning(
-                    "handler id %r in %s clashes with existing %s handler - rejected",
-                    descriptor.id, path, existing.tier,
-                )
-                return
+            if tier == "workspace":
+                # Collision rules: a workspace id matching a BUILTIN id is an
+                # allowed OVERRIDE (shadows the builtin). A workspace id matching
+                # another WORKSPACE handler from a different path is rejected.
+                existing = self._handlers.get(descriptor.id)
+                if existing is not None and existing.tier == "workspace":
+                    log.warning(
+                        "handler id %r in %s clashes with existing workspace handler - rejected",
+                        descriptor.id, path,
+                    )
+                    return
             run = _import_run(path)
             self._handlers[descriptor.id] = LoadedHandler(descriptor, run, tier)
             if tier == "workspace":
@@ -106,8 +114,9 @@ class HandlerRegistry:
 
         - Evicts any previously-registered workspace handler from this path
           first, so same-id edits and id-renames both work correctly.
-        - A workspace id that collides with a builtin is still rejected (builtin
-          wins).
+        - A workspace id matching a builtin id is now an OVERRIDE (shadows the
+          builtin). If the old id was an override of a builtin, resurfaces the
+          builtin before loading the new version.
         - A parse/import error after eviction leaves NO entry for the path —
           the stale version is not retained; a broken file disappears from the
           registry rather than serving stale data.
@@ -117,24 +126,29 @@ class HandlerRegistry:
         if not os.path.isfile(path):
             return
         norm = self._norm(path)
-        # Evict any previously registered workspace handler from this path.
         old_id = self._path_to_id.pop(norm, None)
-        if old_id is not None and old_id in self._handlers:
-            if self._handlers[old_id].tier == "workspace":
-                del self._handlers[old_id]
-                log.debug("evicted stale workspace handler %r (reload)", old_id)
+        if old_id is not None and old_id in self._handlers and self._handlers[old_id].tier == "workspace":
+            del self._handlers[old_id]
+            # If this was an override of a builtin, resurface the builtin.
+            if old_id in self._builtins:
+                self._handlers[old_id] = self._builtins[old_id]
         self._load_one(path, "workspace")
 
     def remove_file(self, path: str) -> None:
         """Evict the workspace handler registered from *path* (DELETE events).
 
         No-op if the path was not previously registered as a workspace handler.
+        Override removed → resurfaces the pristine builtin (reset-to-default).
         """
         norm = self._norm(path)
         old_id = self._path_to_id.pop(norm, None)
-        if old_id is not None and old_id in self._handlers:
-            if self._handlers[old_id].tier == "workspace":
-                del self._handlers[old_id]
+        if old_id is not None and old_id in self._handlers and self._handlers[old_id].tier == "workspace":
+            del self._handlers[old_id]
+            # Override removed → resurface the pristine builtin (reset-to-default).
+            if old_id in self._builtins:
+                self._handlers[old_id] = self._builtins[old_id]
+                log.info("reset handler %r to builtin default (override removed)", old_id)
+            else:
                 log.info("removed workspace handler %r (file deleted)", old_id)
 
     def manifests(self) -> list[dict]:
@@ -144,6 +158,10 @@ class HandlerRegistry:
 
     def _manifest(self, h: LoadedHandler) -> dict:
         d = h.descriptor
+        is_builtin_id = d.id in self._builtins
+        overridden = is_builtin_id and h.tier == "workspace"
+        source = "override" if overridden else ("builtin" if is_builtin_id else "workspace")
+        tier = "builtin" if is_builtin_id else "workspace"
         return {
             "id": d.id,
             "labels": d.labels,
@@ -156,7 +174,8 @@ class HandlerRegistry:
             "output": d.output,
             "params": d.params,
             "order": d.order,
-            "tier": h.tier,
+            "tier": tier,
+            "source": source,
         }
 
     def etag(self) -> str:
