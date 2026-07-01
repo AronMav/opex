@@ -81,26 +81,25 @@ type EditView =
 
 /* ── HandlerEditor wrapper (resolves source before opening editor) ── */
 
-const HANDLER_STARTER_TEMPLATE = `"""
-<handler>
-  id: my_handler
-  labels:
-    en: My Handler
-  descriptions:
-    en: Describe what this handler does
-  icon: file
-  match:
-    mime:
-      - application/octet-stream
-  execution: sync
-  order: 100
-  enabled: true
-</handler>
-"""
+const HANDLER_STARTER_TEMPLATE = `# <handler>
+#   <id>my_handler</id>
+#   <label lang="en">My Handler</label>
+#   <label lang="ru">Мой обработчик</label>
+#   <description lang="en">Describe what this handler does</description>
+#   <icon>file</icon>
+#   <match>
+#     <mime>application/octet-stream</mime>
+#   </match>
+#   <execution>sync</execution>
+#   <output>text</output>
+#   <order>100</order>
+#   <enabled>true</enabled>
+# </handler>
+"""My custom file handler."""
+
 
 async def run(ctx, file, params):
-    text = await file.read_text()
-    return ctx.result(text)
+    return ctx.result.text(f"received {len(file.bytes)} bytes")
 `;
 
 function HandlerEditorWrapper({

@@ -26,4 +26,44 @@ describe("descriptor block", () => {
     expect(out).toContain("async def run(): pass");
     expect(out).not.toContain("<id>old</id>");
   });
+
+  it("round-trips capability, output, and params without data loss", () => {
+    const fields = {
+      ...FIELDS,
+      capability: "vision",
+      output: "file",
+      params: [
+        { name: "max_chars", type: "int", default: "8000", required: false },
+        { name: "lang", type: "string", default: null, required: true },
+      ],
+    };
+    const block = renderDescriptorBlock(fields);
+    expect(block).toContain("#   <capability>vision</capability>");
+    expect(block).toContain("#   <output>file</output>");
+    expect(block).toContain("#   <params>");
+    expect(block).toContain('#     <param name="max_chars" type="int" default="8000" required="false"/>');
+    expect(block).toContain('#     <param name="lang" type="string" required="true"/>');
+    expect(block).toContain("#   </params>");
+  });
+
+  it("spliceDescriptor replaces a block that uses #<handler> with no space after #", () => {
+    // descriptor.py uses `#\s*<handler>` — no-space variant must also be replaced,
+    // not duplicated.
+    const src = "#<handler>\n#   <id>old</id>\n#</handler>\nasync def run(): pass\n";
+    const out = spliceDescriptor(src, FIELDS);
+    expect(out).toContain("<id>my_ocr</id>");
+    expect(out).not.toContain("<id>old</id>");
+    // Only one handler block in the result.
+    expect((out.match(/# <handler>/g) ?? []).length).toBe(1);
+  });
+
+  it("omits capability block when capability is null/undefined", () => {
+    const block = renderDescriptorBlock({ ...FIELDS, capability: null });
+    expect(block).not.toContain("<capability>");
+  });
+
+  it("omits params block when params array is empty", () => {
+    const block = renderDescriptorBlock({ ...FIELDS, params: [] });
+    expect(block).not.toContain("<params>");
+  });
 });

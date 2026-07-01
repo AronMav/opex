@@ -1,3 +1,10 @@
+export interface ParamDescriptor {
+  name: string;
+  type?: string;
+  default?: string | null;
+  required?: boolean;
+}
+
 export interface DescriptorFields {
   id: string;
   labels: Record<string, string>;
@@ -8,6 +15,11 @@ export interface DescriptorFields {
   execution: "sync" | "async";
   order: number;
   enabled: boolean;
+  /** Passthrough — not form-editable in v1, but must round-trip so editing a
+   *  builtin's label doesn't silently strip <capability>/<output>/<params>. */
+  capability?: string | null;
+  output?: string | null;
+  params?: ParamDescriptor[];
 }
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -22,16 +34,32 @@ export function renderDescriptorBlock(f: DescriptorFields): string {
   for (const m of f.mime) L.push(`#     <mime>${esc(m)}</mime>`);
   if (f.max_size_mb != null) L.push(`#     <max_size_mb>${f.max_size_mb}</max_size_mb>`);
   L.push("#   </match>");
+  if (f.capability) L.push(`#   <capability>${esc(f.capability)}</capability>`);
   L.push(`#   <execution>${f.execution}</execution>`);
+  L.push(`#   <output>${esc(f.output ?? "text")}</output>`);
+  if (f.params && f.params.length > 0) {
+    L.push("#   <params>");
+    for (const p of f.params) {
+      let line = `#     <param name="${esc(p.name)}"`;
+      if (p.type) line += ` type="${esc(p.type)}"`;
+      if (p.default != null) line += ` default="${esc(p.default)}"`;
+      line += ` required="${p.required === true ? "true" : "false"}"`;
+      line += "/>";
+      L.push(line);
+    }
+    L.push("#   </params>");
+  }
   L.push(`#   <order>${f.order}</order>`);
   L.push(`#   <enabled>${f.enabled}</enabled>`);
   L.push("# </handler>");
   return L.join("\n");
 }
 
-/** Replace an existing leading descriptor block (or prepend one) in `source`. */
+/** Replace an existing leading descriptor block (or prepend one) in `source`.
+ *  Tolerates `#<handler>` with zero or more spaces after `#` (matches
+ *  descriptor.py's `_BLOCK_RE = re.compile(r"#\s*<handler>...")`). */
 export function spliceDescriptor(source: string, f: DescriptorFields): string {
   const block = renderDescriptorBlock(f);
-  const re = /# <handler>[\s\S]*?# <\/handler>/;
+  const re = /#\s*<handler>[\s\S]*?#\s*<\/handler>/;
   return re.test(source) ? source.replace(re, block) : `${block}\n${source}`;
 }
