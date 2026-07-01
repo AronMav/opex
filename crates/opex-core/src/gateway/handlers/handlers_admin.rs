@@ -25,7 +25,47 @@ use crate::agent::fse::{
 };
 use crate::agent::handler_registry::{HandlerManifest, HandlerRegistry};
 use crate::gateway::AppState;
-use crate::gateway::clusters::InfraServices;
+use crate::gateway::clusters::{ConfigServices, InfraServices};
+
+// ── Toolgate validation client ────────────────────────────────────────────────
+
+const MAX_HANDLER_BYTES: usize = 256 * 1024;
+
+static HANDLERS_HTTP: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+fn handlers_http() -> &'static reqwest::Client {
+    HANDLERS_HTTP.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// Ask toolgate to validate a handler source (exec-free). Returns `Ok(())` on
+/// `ok: true`, `Err(errors_json)` on `ok: false`, `Err(...)` on transport
+/// failure. Fail-closed: a validation we cannot run must NOT write the file.
+async fn toolgate_validate(
+    toolgate_url: &str,
+    id: &str,
+    source: &str,
+) -> Result<(), serde_json::Value> {
+    let url = format!("{}/handlers/validate", toolgate_url.trim_end_matches('/'));
+    let resp = handlers_http()
+        .post(&url)
+        .json(&json!({ "source": source, "id": id }))
+        .send()
+        .await
+        .map_err(|e| json!({ "errors": [{ "field": "toolgate", "message": e.to_string() }] }))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| json!({ "errors": [{ "field": "toolgate", "message": e.to_string() }] }))?;
+    if body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(body)
+    }
+}
 
 // ── Response / request types ───────────────────────────────────────────────────
 
@@ -82,6 +122,19 @@ pub(crate) struct SetAllowlistBody {
     pub enabled: bool,
 }
 
+/// Body for `POST /api/handlers` — create a new workspace handler.
+#[derive(Debug, Deserialize)]
+pub(crate) struct CreateHandlerBody {
+    pub id: String,
+    pub source: String,
+}
+
+/// Body for `PUT /api/handlers/{id}` — edit/overwrite a handler.
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateHandlerBody {
+    pub source: String,
+}
+
 /// `id` must be `^[a-z0-9_-]+$` — no path separators (traversal-safe).
 fn valid_handler_id(id: &str) -> bool {
     !id.is_empty()
@@ -121,16 +174,37 @@ fn is_allowlist_member(name: &str) -> bool {
     FSE_DEFAULT_ALLOWLIST.contains(&name)
 }
 
+fn too_big(src: &str) -> bool {
+    src.len() > MAX_HANDLER_BYTES
+}
+
+/// Write `source` to `path` and trigger a best-effort registry refresh.
+/// toolgate hot-reloads via watchfiles independently; the refresh keeps
+/// the in-process cache warm for the immediate GET after create/edit.
+async fn write_and_refresh(
+    handlers: &HandlerRegistry,
+    path: &std::path::Path,
+    source: &str,
+) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await?;
+    }
+    tokio::fs::write(path, source).await?;
+    handlers.refresh().await;
+    Ok(())
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/handlers", get(api_list_handlers))
+        .route("/api/handlers", get(api_list_handlers).post(api_create_handler))
         .route(
             "/api/handlers/allowlist",
             get(api_get_allowlist).put(api_set_allowlist),
         )
         .route("/api/handlers/{id}/source", get(api_get_handler_source))
+        .route("/api/handlers/{id}", axum::routing::put(api_update_handler))
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -267,6 +341,119 @@ async fn api_get_handler_source(
         .into_response()
 }
 
+/// `POST /api/handlers` — create a NEW workspace handler.
+/// Rejects a builtin id (use PUT to create an override) or an existing
+/// workspace file. Validates via toolgate before writing — fail-closed.
+async fn api_create_handler(
+    State(infra): State<InfraServices>,
+    State(config): State<ConfigServices>,
+    State(handlers): State<HandlerRegistry>,
+    Json(body): Json<CreateHandlerBody>,
+) -> impl IntoResponse {
+    if !valid_handler_id(&body.id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid handler id" })),
+        )
+            .into_response();
+    }
+    if too_big(&body.source) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "source too large" })),
+        )
+            .into_response();
+    }
+    if is_builtin_id(&body.id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "id is a builtin; edit it via PUT to create an override" })),
+        )
+            .into_response();
+    }
+    let path = workspace_handler_path(&body.id);
+    if path.exists() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "handler already exists" })),
+        )
+            .into_response();
+    }
+    let toolgate_url = config
+        .config
+        .toolgate_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:9011".to_string());
+    if let Err(errs) = toolgate_validate(&toolgate_url, &body.id, &body.source).await {
+        return (StatusCode::BAD_REQUEST, Json(errs)).into_response();
+    }
+    if let Err(e) = write_and_refresh(&handlers, &path, &body.source).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    crate::db::audit::audit_spawn(
+        infra.db.clone(),
+        String::new(),
+        crate::db::audit::event_types::HANDLER_CREATED,
+        Some("ui".into()),
+        json!({ "id": body.id }),
+    );
+    (StatusCode::CREATED, Json(json!({ "id": body.id }))).into_response()
+}
+
+/// `PUT /api/handlers/{id}` — edit a handler. Builtin id → writes/updates the
+/// workspace override; workspace id → overwrites its file. Validates via
+/// toolgate before writing — fail-closed.
+async fn api_update_handler(
+    State(infra): State<InfraServices>,
+    State(config): State<ConfigServices>,
+    State(handlers): State<HandlerRegistry>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<UpdateHandlerBody>,
+) -> impl IntoResponse {
+    if !valid_handler_id(&id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid handler id" })),
+        )
+            .into_response();
+    }
+    if too_big(&body.source) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "source too large" })),
+        )
+            .into_response();
+    }
+    let toolgate_url = config
+        .config
+        .toolgate_url
+        .clone()
+        .unwrap_or_else(|| "http://localhost:9011".to_string());
+    if let Err(errs) = toolgate_validate(&toolgate_url, &id, &body.source).await {
+        return (StatusCode::BAD_REQUEST, Json(errs)).into_response();
+    }
+    let path = workspace_handler_path(&id);
+    if let Err(e) = write_and_refresh(&handlers, &path, &body.source).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    crate::db::audit::audit_spawn(
+        infra.db.clone(),
+        String::new(),
+        crate::db::audit::event_types::HANDLER_UPDATED,
+        Some("ui".into()),
+        json!({ "id": id }),
+    );
+    (StatusCode::OK, Json(json!({ "id": id }))).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +506,18 @@ mod tests {
     fn non_member_is_rejected_by_membership_guard() {
         assert!(!is_allowlist_member("code_exec"));
         assert!(is_allowlist_member("transcribe"));
+    }
+
+    #[test]
+    fn create_guards() {
+        assert!(is_builtin_id("transcribe"));
+        assert!(!is_builtin_id("my_ocr"));
+        assert!(too_big(&"x".repeat(MAX_HANDLER_BYTES + 1)));
+        assert!(!too_big("small"));
+        assert_eq!(
+            workspace_handler_path("my_ocr"),
+            std::path::Path::new("workspace/file_handlers/my_ocr.py")
+        );
     }
 
     #[sqlx::test(migrations = "../../migrations")]

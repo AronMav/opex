@@ -42,6 +42,10 @@ pub mod event_types {
     // FSE_BINDING_CREATED; no fse_ prefix because it represents an agent-authored action,
     // not an operator-authorization event).
     pub const FILE_SCENARIO_CREATED: &str = "file_scenario_created";
+    // File Handler Hub — workspace handler authoring events
+    pub const HANDLER_CREATED: &str = "handler_created";
+    pub const HANDLER_UPDATED: &str = "handler_updated";
+    pub const HANDLER_DELETED: &str = "handler_deleted";
 }
 
 /// Fire-and-forget audit log helper. Spawns a background task.
@@ -162,6 +166,9 @@ mod tests {
             event_types::FSE_ALLOWLIST_AMENDED,
             event_types::FSE_AUTO_RUN,
             event_types::FILE_SCENARIO_CREATED,
+            event_types::HANDLER_CREATED,
+            event_types::HANDLER_UPDATED,
+            event_types::HANDLER_DELETED,
         ]
     }
 
