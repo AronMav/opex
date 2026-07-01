@@ -908,10 +908,12 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn messages_source_column_exists_after_066(pool: sqlx::PgPool) {
         // Migration 066 must apply: inserting with source='file_handler' succeeds
-        // and the column defaults NULL otherwise.
+        // and the column defaults NULL otherwise. session_id is left NULL to avoid
+        // the messages_session_id_fkey constraint (this test only exercises the new
+        // `source` column, not the session relation).
         sqlx::query(
             r#"INSERT INTO messages (session_id, agent_id, role, content, source)
-               VALUES (gen_random_uuid(), 'Atlas', 'assistant', 'x', 'file_handler')"#,
+               VALUES (NULL, 'Atlas', 'assistant', 'x', 'file_handler')"#,
         )
         .execute(&pool)
         .await
