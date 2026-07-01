@@ -175,19 +175,6 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     expect(parsed.mediaType).toBe("image/png");
   });
 
-  test("file-scenario-chips fixture has messageId, uploadId, alternatives[]", () => {
-    const raw = readFileSync(join(FIXTURES, "file-scenario-chips.json"), "utf-8");
-    const parsed = JSON.parse(raw) as SseEvent;
-    if (parsed.type !== "file-scenario-chips") throw new Error("unreachable");
-    expect(typeof parsed.messageId).toBe("string");
-    expect(typeof parsed.uploadId).toBe("string");
-    expect(Array.isArray(parsed.alternatives)).toBe(true);
-    expect(parsed.alternatives.length).toBeGreaterThan(0);
-    expect(typeof parsed.alternatives[0].scenarioId).toBe("string");
-    expect(typeof parsed.alternatives[0].label).toBe("string");
-    expect(typeof parsed.alternatives[0].executor).toBe("string");
-  });
-
   test("tool-input-delta fixture has toolCallId + inputTextDelta", () => {
     const raw = readFileSync(join(FIXTURES, "tool-input-delta.json"), "utf-8");
     const parsed = JSON.parse(raw) as SseEvent;
@@ -210,7 +197,7 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
     expect(parsed.errorText).toBe("Provider timeout");
   });
 
-  test("all 27 fixtures present and round-trip cleanly", () => {
+  test("all 26 fixtures present and round-trip cleanly", () => {
     const expected = new Set([
       "data-session-id.json",
       "start.json",
@@ -223,7 +210,6 @@ describe("S6.5 Rust → TS round-trip via SSE fixtures", () => {
       "tool-input-available.json",
       "tool-output-available.json",
       "file.json",
-      "file-scenario-chips.json",
       "rich-card-table.json",
       "rich-card-metric.json",
       "rich-card-metric-up.json",
