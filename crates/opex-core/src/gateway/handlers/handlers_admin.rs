@@ -44,6 +44,7 @@ pub(crate) struct HandlerAdminRow {
     pub output: String,
     pub order: i32,
     pub tier: String,
+    pub source: String,
     pub enabled: bool,
 }
 
@@ -66,6 +67,7 @@ impl HandlerAdminRow {
             output: m.output.clone(),
             order: m.order,
             tier: m.tier.clone(),
+            source: m.source.clone(),
             enabled,
         }
     }
@@ -218,6 +220,7 @@ mod tests {
             params: serde_json::Value::Null,
             order: 0,
             tier: tier.to_string(),
+            source: String::new(),
         }
     }
 
@@ -265,6 +268,7 @@ mod tests {
             params: serde_json::Value::Null,
             order: 0,
             tier: "builtin".to_string(),
+            source: String::new(),
         };
         let row = HandlerAdminRow::from_manifest(&m, &get_enabled_allowlist(&pool).await);
         assert!(!row.enabled, "describe is not in the enabled set → disabled");
