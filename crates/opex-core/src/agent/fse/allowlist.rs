@@ -62,7 +62,7 @@ pub fn is_allowed_for_autorun(action_ref: &str, enabled_allowlist: &[String]) ->
 /// never admit `code_exec` / raw-URL / a YAML tool.
 ///
 /// An empty slice is accepted and means all auto-run is operator-disabled.
-#[allow(dead_code)] // Phase 5+: called by PUT /api/file-scenarios/allowlist HTTP handler
+// Live via set_enabled_allowlist (PUT /api/handlers/allowlist) + the shared allowlist surface.
 pub fn validate_allowlist_toggle(members: &[String]) -> Result<(), AllowlistError> {
     for m in members {
         if !is_constant_member(m) {
