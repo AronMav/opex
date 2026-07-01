@@ -14,7 +14,15 @@ pub mod allowlist_store;
 pub use allowlist::{
     AllowlistError, FSE_DEFAULT_ALLOWLIST, is_allowed_for_autorun, validate_allowlist_toggle,
 };
-pub use allowlist_store::{get_enabled_allowlist, set_enabled_allowlist};
+pub use allowlist_store::{
+    get_enabled_allowlist, get_enabled_allowlist_strict, set_enabled_allowlist_checked,
+};
+// set_enabled_allowlist is pub in allowlist_store and tested there directly;
+// it is intentionally NOT re-exported from the module root because the PUT
+// handler now uses set_enabled_allowlist_checked (strict, propagates errors)
+// and no other call-site in the crate uses the lenient variant via fse::.
+#[allow(unused_imports)]
+pub use allowlist_store::set_enabled_allowlist;
 
 #[cfg(test)]
 mod reexport_tests {

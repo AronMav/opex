@@ -18,7 +18,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::agent::fse::{
-    get_enabled_allowlist, is_allowed_for_autorun, set_enabled_allowlist, FSE_DEFAULT_ALLOWLIST,
+    get_enabled_allowlist, get_enabled_allowlist_strict, is_allowed_for_autorun,
+    set_enabled_allowlist_checked, FSE_DEFAULT_ALLOWLIST,
 };
 use crate::agent::handler_registry::{HandlerManifest, HandlerRegistry};
 use crate::gateway::AppState;
@@ -131,8 +132,9 @@ async fn api_get_allowlist(State(infra): State<InfraServices>) -> impl IntoRespo
 }
 
 /// `PUT /api/handlers/allowlist` body `{action_ref, enabled}` → toggle one
-/// builtin member via `set_enabled_allowlist` (const-validated). Non-member →
-/// 400. Audits `FSE_ALLOWLIST_AMENDED` on success (preserves the legacy trail).
+/// builtin member. Non-member → 400. DB read error before mutation → 500
+/// (fail-CLOSED: we never let a transient SELECT error silently re-enable all
+/// builtins). Audit fires only inside the confirmed-write `Ok` arm.
 async fn api_set_allowlist(
     State(infra): State<InfraServices>,
     Json(body): Json<SetAllowlistBody>,
@@ -151,7 +153,20 @@ async fn api_set_allowlist(
             .into_response();
     }
 
-    let mut current = get_enabled_allowlist(&infra.db).await;
+    // Strict read — propagate DB errors instead of silently defaulting to the
+    // full constant (which would re-enable previously-disabled builtins).
+    let mut current = match get_enabled_allowlist_strict(&infra.db).await {
+        Ok(list) => list,
+        Err(e) => {
+            tracing::error!(error = %e, "api_set_allowlist: failed to read current allowlist");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "failed to read allowlist state; try again" })),
+            )
+                .into_response();
+        }
+    };
+
     if body.enabled {
         if !current.iter().any(|m| m == &body.action_ref) {
             current.push(body.action_ref.clone());
@@ -160,7 +175,8 @@ async fn api_set_allowlist(
         current.retain(|m| m != &body.action_ref);
     }
 
-    match set_enabled_allowlist(&infra.db, &current).await {
+    // Checked write — validation + upsert, both errors surfaced as 500.
+    match set_enabled_allowlist_checked(&infra.db, current).await {
         Ok(()) => {
             crate::db::audit::audit_spawn(
                 infra.db.clone(),

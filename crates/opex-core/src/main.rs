@@ -726,7 +726,10 @@ async fn main() -> Result<()> {
         ),
         handlers: crate::agent::handler_registry::HandlerRegistry::new(
             toolgate_url_for_handlers,
-            reqwest::Client::new(),
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         ),
     };
 
