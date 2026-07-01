@@ -338,6 +338,10 @@ vi.mock("@/lib/queries", () => ({
   useDeleteProvider: () => ({ ...emptyMutation }),
   useSetProviderActive: () => ({ ...emptyMutation }),
   useSetHandlerAllowlist: () => ({ ...emptyMutation }),
+  useHandlerSource: () => ({ ...emptyQuery, data: null }),
+  useCreateHandler: () => ({ ...emptyMutation }),
+  useUpdateHandler: () => ({ ...emptyMutation }),
+  useDeleteHandler: () => ({ ...emptyMutation, variables: null }),
 }));
 
 // ── Mock: @tanstack/react-query ────────────────────────────────────────────
