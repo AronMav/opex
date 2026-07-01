@@ -32,6 +32,10 @@ pub async fn get_enabled_allowlist(db: &PgPool) -> Vec<String> {
 /// from the constant — exactly as `providers.rs:570` rejects a non-member
 /// capability. Persistence is best-effort upsert; a DB failure is surfaced
 /// as a logged warning but the validation gate is the security boundary.
+///
+/// Kept for backward compatibility and test coverage; the PUT handler now
+/// uses [`set_enabled_allowlist_checked`] (strict, propagates errors).
+#[allow(dead_code)]
 pub async fn set_enabled_allowlist(
     db: &PgPool,
     members: &[String],
@@ -42,6 +46,42 @@ pub async fn set_enabled_allowlist(
     {
         tracing::warn!(error = %e, "failed to persist fse allowlist toggle");
     }
+    Ok(())
+}
+
+/// Strict reader for the PUT path: distinguishes "flag unset" from "DB error".
+///
+/// * `Ok(None)` → flag not yet written, returns the full `FSE_DEFAULT_ALLOWLIST`.
+/// * `Ok(Some(v))` → persisted list, filtered through the constant (stale entries
+///   silently dropped for defense-in-depth).
+/// * `Err(e)` → SQL failure — propagated so the caller can return 500 BEFORE
+///   mutating anything (fixes the fail-open RMW bug in `api_set_allowlist`).
+pub async fn get_enabled_allowlist_strict(db: &PgPool) -> anyhow::Result<Vec<String>> {
+    let raw: Option<serde_json::Value> =
+        opex_db::sys_flags::try_get(db, ALLOWLIST_FLAG_KEY).await?;
+    let stored: Option<Vec<String>> = raw.and_then(|v| serde_json::from_value(v).ok());
+    Ok(match stored {
+        Some(list) => list
+            .into_iter()
+            .filter(|m| FSE_DEFAULT_ALLOWLIST.contains(&m.as_str()))
+            .collect(),
+        None => FSE_DEFAULT_ALLOWLIST.iter().map(|s| s.to_string()).collect(),
+    })
+}
+
+/// Checked writer for the PUT path: validates then persists, propagating errors.
+///
+/// Unlike `set_enabled_allowlist` (best-effort, swallows the upsert error),
+/// this variant returns `Err` on both validation failure and DB failure.
+/// The audit call in `api_set_allowlist` therefore only fires inside the `Ok`
+/// arm — ensuring the audit trail matches the actual committed state.
+pub async fn set_enabled_allowlist_checked(
+    db: &PgPool,
+    members: Vec<String>,
+) -> anyhow::Result<()> {
+    validate_allowlist_toggle(&members)
+        .map_err(|e| anyhow::anyhow!("allowlist validation failed: {e}"))?;
+    opex_db::sys_flags::upsert(db, ALLOWLIST_FLAG_KEY, serde_json::json!(members)).await?;
     Ok(())
 }
 

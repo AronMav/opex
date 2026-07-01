@@ -823,4 +823,17 @@ mod tests {
             "slash-command path must emit Finish with finish_reason=command"
         );
     }
+
+    #[test]
+    fn video_accepted_short_circuit_is_present() {
+        let src = source();
+        assert!(
+            src.contains(r#"finish_reason: "video_accepted""#),
+            "video short-circuit must emit Finish with finish_reason=video_accepted"
+        );
+        assert!(
+            src.contains("if video_accepted"),
+            "video short-circuit must guard on the video_accepted flag"
+        );
+    }
 }
