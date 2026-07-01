@@ -90,6 +90,7 @@ export default function ToolsPage() {
   const errorMsg = yamlError ? String(yamlError) : mcpError ? String(mcpError) : handlersError ? String(handlersError) : "";
 
   const [actionPending, setActionPending] = useState<string | null>(null);
+  const [handlerPendingId, setHandlerPendingId] = useState<string | null>(null);
 
   // Edit forms (full-page)
   const [editView, setEditView] = useState<EditView | null>(null);
@@ -538,7 +539,7 @@ parameters:
     const label = h.labels?.[lang] ?? h.labels?.en ?? h.id;
     const description = h.descriptions?.[lang] ?? h.descriptions?.en ?? "";
     const isBuiltin = h.tier === "builtin";
-    const pending = setHandlerAllowlist.isPending;
+    const pending = handlerPendingId === h.id;
     return (
       <div key={`handler-${h.id}`}
         className={`flex flex-col gap-3 neu-flat p-5 min-w-0 overflow-hidden ${isBuiltin && !h.enabled ? "opacity-50" : ""}`}>
@@ -577,7 +578,13 @@ parameters:
               aria-label={h.id}
               checked={h.enabled}
               disabled={pending}
-              onCheckedChange={(v) => setHandlerAllowlist.mutate({ action_ref: h.id, enabled: v })}
+              onCheckedChange={(v) => {
+                setHandlerPendingId(h.id);
+                setHandlerAllowlist.mutate(
+                  { action_ref: h.id, enabled: v },
+                  { onSettled: () => setHandlerPendingId(null) },
+                );
+              }}
             />
           ) : (
             <Badge variant="secondary" className="text-[10px]">{t("tools.handler_always_on")}</Badge>
