@@ -457,6 +457,15 @@ export function createTelegramDriver(
       return;
     }
 
+    // Legacy FSE `fse:<uuid>:<action>` choice buttons were retired with the File
+    // Handler Hub. Inline keyboards still visible in old chats must NOT be
+    // forwarded to Core — the handler is gone, so the tap would otherwise reach
+    // the LLM as a literal "fse:..." user turn. Answer the spinner and drop it.
+    if (/^fse:/.test(data)) {
+      await ctx.answerCallbackQuery({ text: strings.actionUnavailable }).catch(() => { });
+      return;
+    }
+
     // Non-approval callbacks — access check required before forwarding.
     const { allowed, isOwner } = await bridge.checkAccess(userId);
     if (!allowed && !isOwner) {
