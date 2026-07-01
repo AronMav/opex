@@ -26,7 +26,7 @@ pub struct ScenarioOutcome {
     pub artifact_urls: Vec<String>,
     pub reason: Option<String>,
     /// `true` ONLY when this outcome is the async-video acceptance ack
-    /// (`summarize_video` successfully enqueued a durable `video_jobs` row).
+    /// (`summarize_video` successfully enqueued a durable `handler_jobs` row).
     /// Drives the pipeline short-circuit: when set, the LLM agent loop is
     /// skipped and the ack is persisted directly as the assistant reply so the
     /// agent does not redundantly try to process the YouTube link itself.
