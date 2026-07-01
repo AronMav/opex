@@ -495,6 +495,13 @@ export interface HandlerAdminRow {
   order: number;
   tier: "builtin" | "workspace";
   enabled: boolean;
+  source: "builtin" | "override" | "workspace";
+}
+
+export interface HandlerSourceDto {
+  id: string;
+  source: string;
+  source_kind: "builtin" | "override" | "workspace";
 }
 
 /** One entry from GET /api/handlers/allowlist — the 5 FSE_DEFAULT_ALLOWLIST members. */

@@ -42,6 +42,7 @@ import type {
   SkillCuratorDecisions,
   HandlerAdminRow,
   HandlerAllowlistRow,
+  HandlerSourceDto,
 } from "@/types/api"
 
 // ── Query Keys ──────────────────────────────────────────────────────────────
@@ -767,5 +768,44 @@ export function useSetHandlerAllowlist() {
       qc.invalidateQueries({ queryKey: qk.handlerAllowlist })
       qc.invalidateQueries({ queryKey: qk.handlers }) // handlers carry the merged `enabled`
     },
+  })
+}
+
+export function useHandlerSource(id: string | null) {
+  return useQuery({
+    queryKey: ["handlers", "source", id],
+    queryFn: () => apiGet<HandlerSourceDto>(`/api/handlers/${id}/source`),
+    enabled: !!id,
+  })
+}
+
+export function useCreateHandler() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { id: string; source: string }) =>
+      apiPost<{ id: string }>("/api/handlers", data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.handlers }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useUpdateHandler() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { id: string; source: string }) =>
+      apiPut<{ id: string }>(`/api/handlers/${data.id}`, { source: data.source }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.handlers }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+}
+
+export function useDeleteHandler() {
+  const qc = useQueryClient()
+  return useMutation({
+    // NB: apiDelete(path): Promise<void> — it is NOT generic. Do NOT write
+    // apiDelete<T>(...) (TS2558). The mutation only invalidates on success.
+    mutationFn: (id: string) => apiDelete(`/api/handlers/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.handlers }),
+    onError: (e: Error) => toast.error(e.message),
   })
 }
