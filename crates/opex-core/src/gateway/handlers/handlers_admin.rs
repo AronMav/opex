@@ -204,7 +204,10 @@ pub(crate) fn routes() -> Router<AppState> {
             get(api_get_allowlist).put(api_set_allowlist),
         )
         .route("/api/handlers/{id}/source", get(api_get_handler_source))
-        .route("/api/handlers/{id}", axum::routing::put(api_update_handler))
+        .route(
+            "/api/handlers/{id}",
+            axum::routing::put(api_update_handler).delete(api_delete_handler),
+        )
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -452,6 +455,34 @@ async fn api_update_handler(
         json!({ "id": id }),
     );
     (StatusCode::OK, Json(json!({ "id": id }))).into_response()
+}
+
+/// `DELETE /api/handlers/{id}` — delete a workspace handler, or RESET a builtin
+/// (delete its override → the pristine builtin resurfaces). Pristine builtin → 400.
+async fn api_delete_handler(
+    State(infra): State<InfraServices>,
+    State(handlers): State<HandlerRegistry>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    if !valid_handler_id(&id) {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid handler id" }))).into_response();
+    }
+    let path = workspace_handler_path(&id);
+    if !path.exists() {
+        // No workspace file: a pristine builtin cannot be deleted; anything else is 404.
+        let code = if is_builtin_id(&id) { StatusCode::BAD_REQUEST } else { StatusCode::NOT_FOUND };
+        let msg = if is_builtin_id(&id) { "builtin handlers cannot be deleted (already at default)" } else { "handler not found" };
+        return (code, Json(json!({ "error": msg }))).into_response();
+    }
+    if let Err(e) = tokio::fs::remove_file(&path).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response();
+    }
+    handlers.refresh().await;
+    crate::db::audit::audit_spawn(infra.db.clone(), String::new(),
+        crate::db::audit::event_types::HANDLER_DELETED, Some("ui".into()),
+        json!({ "id": id, "reset": is_builtin_id(&id) }));
+    let reset = is_builtin_id(&id);
+    (StatusCode::OK, Json(json!({ "id": id, "reset": reset }))).into_response()
 }
 
 #[cfg(test)]
