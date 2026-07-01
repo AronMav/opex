@@ -10,9 +10,6 @@ pub mod dispatch_seam;
 pub mod outcome;
 pub mod rewrite;
 pub mod sniff;
-pub mod video_summary;
-pub mod video_worker;
-
 // `ScenarioOutcome` and `ScenarioStatus` are used directly via sub-module paths
 // in Phase 3 code; the remaining re-exports (`resolve`, `BuiltinAction`,
 // `dispatch_attachments`, `ScenarioChoice`, `FSE_DEFAULT_ALLOWLIST`) become
