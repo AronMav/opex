@@ -36,14 +36,11 @@ pub mod trace_propagation;
 // pure re-export so callers using `crate::agent::engine::StreamEvent`
 // (the binary path) keep working through the lib too.
 //
-// `agent::file_scenario::{dispatch, outcome, rewrite}` and `agent::url_tools`
-// are exposed for the FSE Phase 9.4 regression integration tests
-// (`tests/integration_fse_regression.rs`). All mounted modules are near-leaf:
+// `agent::file_scenario::outcome` and `agent::url_tools` are exposed for the
+// surviving FSE integration coverage. All mounted modules are near-leaf:
 // - `fse/allowlist.rs` — pure data + serde + fmt (no crate::* deps)
 // - `url_tools.rs`    — opex_types only (leaf)
 // - `outcome.rs`      — serde + fse::allowlist (both in this lib tree)
-// - `rewrite.rs`      — outcome + opex_types (leaf)
-// - `dispatch.rs`     — outcome + url_tools + trace_propagation (all in lib)
 pub mod agent {
     #[path = "stream_event.rs"]
     pub mod stream_event;
@@ -55,19 +52,15 @@ pub mod agent {
     #[path = "path_guard.rs"]
     pub mod path_guard;
 
-    // FSE Phase 9.4: expose the FSE dispatch + rewrite leaves for the
-    // `integration_fse_regression.rs` regression guard tests. Only the
-    // near-leaf modules that have no cascading `crate::*` deps beyond what
-    // is already in this lib facade are mounted here.
+    // `url_tools.rs` is a near-leaf (opex_types only) exposed to integration
+    // tests. `enrich_with_attachments` and `extract_urls` are `pub(crate)` and
+    // used by the binary only, so the dead_code lint fires in the lib context
+    // (they appear unreachable from this lib tree). Suppress it: they are not
+    // dead in the binary crate.
     //
     // NOTE: `#[path]` inside `pub mod agent { }` resolves relative to
     // `src/agent/` (the implicit directory for the `agent` inline module),
     // matching Rust's normal module file search rules.
-    //
-    // `enrich_with_attachments` and `extract_urls` are `pub(crate)` and used
-    // by the binary only; `dispatch.rs` only calls `uploads_local_url`. The
-    // dead_code lint fires in the lib context (they appear unreachable from
-    // this lib tree). Suppress it: they are not dead in the binary crate.
     #[path = "url_tools.rs"]
     #[allow(dead_code)]
     pub mod url_tools;
@@ -80,28 +73,10 @@ pub mod agent {
     }
 
     pub mod file_scenario {
-        // `ScenarioOutcome` and `ScenarioStatus` re-exported at this level so
-        // `rewrite.rs` can import `crate::agent::file_scenario::{ScenarioOutcome,
-        // ScenarioStatus}` and resolve correctly in the lib context.
-        // Paths resolve relative to `src/agent/file_scenario/`.
+        // Surviving toolgate wire type parsed by `gateway/handlers/files.rs`.
         #[path = "outcome.rs"]
         pub mod outcome;
         pub use outcome::{ScenarioOutcome, ScenarioStatus};
-
-        #[path = "rewrite.rs"]
-        pub mod rewrite;
-
-        // `dispatch.rs` uses: trace_propagation (in lib), url_tools (in lib),
-        // outcome (in lib). No additional cascading deps.
-        #[path = "dispatch.rs"]
-        pub mod dispatch;
-
-        // Task 9.7: pure owner-gate predicate for FSE callback security tests.
-        // Leaf function (anyhow only) — safe to expose from the lib facade.
-        // `owner_gate.rs` is a standalone leaf with only `anyhow` as a dep.
-        #[path = "owner_gate.rs"]
-        pub mod owner_gate;
-        pub use owner_gate::assert_fse_owner;
     }
 }
 
