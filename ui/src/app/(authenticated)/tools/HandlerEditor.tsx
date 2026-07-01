@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Field } from "@/components/ui/field";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { getToken } from "@/lib/api";
 import { spliceDescriptor, DescriptorFields, ParamDescriptor } from "./handler-descriptor";
 
@@ -251,103 +252,110 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-1 min-h-0 overflow-hidden">
-          {/* ── Descriptor form (left panel) ── */}
-          <div className="w-72 shrink-0 border-r flex flex-col gap-4 p-4 overflow-y-auto">
-            <Field label="Handler ID">
-              <Input
-                value={fields.id}
-                readOnly={isEdit}
-                disabled={isEdit}
-                placeholder="my_handler"
-                onChange={(e) => updateField("id", e.target.value)}
-              />
-            </Field>
+        <Tabs defaultValue="settings" className="flex-1 min-h-0 overflow-hidden px-6 pt-1">
+          <TabsList className="shrink-0">
+            <TabsTrigger value="settings">Settings</TabsTrigger>
+            <TabsTrigger value="code">Code</TabsTrigger>
+          </TabsList>
 
-            <Field label="Label (en)">
-              <Input
-                value={fields.labels.en ?? ""}
-                placeholder="English label"
-                onChange={(e) => updateField("labels", { ...fields.labels, en: e.target.value })}
-              />
-            </Field>
+          {/* ── Descriptor form ── */}
+          <TabsContent value="settings" className="min-h-0 overflow-y-auto pr-1 pb-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Handler ID">
+                <Input
+                  value={fields.id}
+                  readOnly={isEdit}
+                  disabled={isEdit}
+                  placeholder="my_handler"
+                  onChange={(e) => updateField("id", e.target.value)}
+                />
+              </Field>
 
-            <Field label="Label (ru)">
-              <Input
-                value={fields.labels.ru ?? ""}
-                placeholder="Метка"
-                onChange={(e) => updateField("labels", { ...fields.labels, ru: e.target.value })}
-              />
-            </Field>
+              <Field label="Icon">
+                <Input
+                  value={fields.icon}
+                  placeholder="file"
+                  onChange={(e) => updateField("icon", e.target.value)}
+                />
+              </Field>
 
-            <Field label="Description (en)">
-              <Input
-                value={fields.descriptions.en ?? ""}
-                placeholder="English description"
-                onChange={(e) => updateField("descriptions", { ...fields.descriptions, en: e.target.value })}
-              />
-            </Field>
+              <Field label="Label (en)">
+                <Input
+                  value={fields.labels.en ?? ""}
+                  placeholder="English label"
+                  onChange={(e) => updateField("labels", { ...fields.labels, en: e.target.value })}
+                />
+              </Field>
 
-            <Field label="Icon">
-              <Input
-                value={fields.icon}
-                placeholder="file"
-                onChange={(e) => updateField("icon", e.target.value)}
-              />
-            </Field>
+              <Field label="Label (ru)">
+                <Input
+                  value={fields.labels.ru ?? ""}
+                  placeholder="Метка"
+                  onChange={(e) => updateField("labels", { ...fields.labels, ru: e.target.value })}
+                />
+              </Field>
 
-            <Field label="MIME globs (comma-separated)">
-              <Input
-                value={mimeStr}
-                placeholder="image/*, application/pdf"
-                onChange={(e) => handleMimeChange(e.target.value)}
-              />
-            </Field>
+              <Field label="Description (en)">
+                <Input
+                  value={fields.descriptions.en ?? ""}
+                  placeholder="English description"
+                  onChange={(e) => updateField("descriptions", { ...fields.descriptions, en: e.target.value })}
+                />
+              </Field>
 
-            <Field label="Max size (MB, blank = unlimited)">
-              <Input
-                type="number"
-                value={fields.max_size_mb ?? ""}
-                placeholder="unlimited"
-                onChange={(e) => {
-                  const v = e.target.value.trim();
-                  updateField("max_size_mb", v === "" ? null : Number(v));
-                }}
-              />
-            </Field>
+              <Field label="MIME globs (comma-separated)">
+                <Input
+                  value={mimeStr}
+                  placeholder="image/*, application/pdf"
+                  onChange={(e) => handleMimeChange(e.target.value)}
+                />
+              </Field>
 
-            <Field label="Execution">
-              <Select
-                value={fields.execution}
-                onValueChange={(v) => updateField("execution", v as "sync" | "async")}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="sync">sync</SelectItem>
-                  <SelectItem value="async">async</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
+              <Field label="Max size (MB, blank = unlimited)">
+                <Input
+                  type="number"
+                  value={fields.max_size_mb ?? ""}
+                  placeholder="unlimited"
+                  onChange={(e) => {
+                    const v = e.target.value.trim();
+                    updateField("max_size_mb", v === "" ? null : Number(v));
+                  }}
+                />
+              </Field>
 
-            <Field label="Order">
-              <Input
-                type="number"
-                value={fields.order}
-                onChange={(e) => updateField("order", Number(e.target.value))}
-              />
-            </Field>
+              <Field label="Execution">
+                <Select
+                  value={fields.execution}
+                  onValueChange={(v) => updateField("execution", v as "sync" | "async")}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sync">sync</SelectItem>
+                    <SelectItem value="async">async</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
 
-            <div className="flex items-center gap-3">
-              <Switch
-                id="handler-enabled"
-                checked={fields.enabled}
-                onCheckedChange={(v) => updateField("enabled", v)}
-              />
-              <label htmlFor="handler-enabled" className="text-sm font-medium cursor-pointer">
-                Enabled
-              </label>
+              <Field label="Order">
+                <Input
+                  type="number"
+                  value={fields.order}
+                  onChange={(e) => updateField("order", Number(e.target.value))}
+                />
+              </Field>
+
+              <div className="flex items-center gap-3 self-end pb-2">
+                <Switch
+                  id="handler-enabled"
+                  checked={fields.enabled}
+                  onCheckedChange={(v) => updateField("enabled", v)}
+                />
+                <label htmlFor="handler-enabled" className="text-sm font-medium cursor-pointer">
+                  Enabled
+                </label>
+              </div>
             </div>
 
             <Button
@@ -355,24 +363,24 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
               size="sm"
               onClick={syncFromCode}
               disabled={syncing}
-              className="mt-2"
+              className="mt-4"
             >
               {syncing ? "Syncing…" : "Sync from code"}
             </Button>
-          </div>
+          </TabsContent>
 
-          {/* ── Python editor (right panel) ── */}
-          <div className="flex-1 min-h-0 flex flex-col p-4 gap-2">
+          {/* ── Python editor ── */}
+          <TabsContent value="code" className="min-h-0 flex flex-col gap-2 pb-2">
             <p className="text-xs text-muted-foreground shrink-0">
-              The descriptor block at the top is kept in sync with the form. Edit the <code>async def run(ctx, file, params)</code> body below it.
+              The descriptor block at the top is kept in sync with the Settings tab. Edit the <code>async def run(ctx, file, params)</code> body below it.
             </p>
             <PythonEditor
               value={source}
               onChange={setSource}
               onSave={handleSave}
             />
-          </div>
-        </div>
+          </TabsContent>
+        </Tabs>
 
         {/* ── Errors + footer ── */}
         <div className="shrink-0 px-6 pb-5 pt-3 border-t space-y-2">
