@@ -1,5 +1,7 @@
 """Unit tests for handlers.context — HandlerContext, ResultBuilder, HandlerFile, SsrfHttpClient."""
+import json
 import pytest
+import httpx
 
 from handlers.context import (
     build_context,
@@ -8,6 +10,7 @@ from handlers.context import (
     HandlerResult,
     ResultBuilder,
     SsrfHttpClient,
+    _LlmClient,
 )
 
 
@@ -131,3 +134,101 @@ def test_handler_file_fields_with_source_url():
 def test_handler_file_source_url_defaults_none():
     f = HandlerFile(bytes=b"X", mime="text/plain", filename="a.txt", size=1)
     assert f.source_url is None
+
+
+# ── _LlmClient / ctx.llm tests ───────────────────────────────────────────────
+
+class _FakeRegistry2:
+    async def aget_active(self, capability):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_ctx_llm_complete_posts_correct_json_and_returns_text():
+    """ctx.llm.complete POSTs to {core_url}/api/llm/complete with Bearer auth
+    and the right JSON body; returns the 'text' field from the response."""
+    core_url = "http://127.0.0.1:18789"
+    auth_token = "test-token-abc"
+    captured = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["auth"] = request.headers.get("authorization")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"text": "LLM result"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
+        ctx = build_context(_FakeRegistry2(), client, core_url=core_url, auth_token=auth_token)
+        result = await ctx.llm.complete(
+            [{"role": "user", "content": "hello"}],
+            provider="anthropic",
+            model="claude-3-haiku",
+        )
+
+    assert result == "LLM result"
+    assert captured["method"] == "POST"
+    assert captured["url"] == f"{core_url}/api/llm/complete"
+    assert captured["auth"] == f"Bearer {auth_token}"
+    body = captured["body"]
+    assert body["messages"] == [{"role": "user", "content": "hello"}]
+    assert body["provider"] == "anthropic"
+    assert body["model"] == "claude-3-haiku"
+
+
+@pytest.mark.asyncio
+async def test_ctx_llm_complete_omits_none_provider_and_model():
+    """When provider and model are None they should not appear in the request body."""
+    def _handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert "provider" not in body
+        assert "model" not in body
+        return httpx.Response(200, json={"text": "ok"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
+        ctx = build_context(
+            _FakeRegistry2(), client,
+            core_url="http://127.0.0.1:18789",
+            auth_token="tok",
+        )
+        result = await ctx.llm.complete([{"role": "user", "content": "hi"}])
+
+    assert result == "ok"
+
+
+@pytest.mark.asyncio
+async def test_ctx_llm_complete_raises_on_non_2xx():
+    """A non-2xx HTTP response from /api/llm/complete raises a RuntimeError."""
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, json={"error": "server error"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(_handler)) as client:
+        ctx = build_context(
+            _FakeRegistry2(), client,
+            core_url="http://127.0.0.1:18789",
+            auth_token="tok",
+        )
+        with pytest.raises(RuntimeError, match="500"):
+            await ctx.llm.complete([{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_ctx_llm_raises_without_core_url():
+    """ctx.llm.complete raises a clear error when core_url is not set (sync context)."""
+    async with httpx.AsyncClient() as client:
+        ctx = build_context(_FakeRegistry2(), client)  # no core_url/auth_token
+        with pytest.raises(RuntimeError, match="core_url"):
+            await ctx.llm.complete([{"role": "user", "content": "x"}])
+
+
+def test_ctx_llm_is_llm_client_instance():
+    """ctx.llm is an _LlmClient (allows isinstance checks in handlers)."""
+    import httpx as _httpx
+
+    async def _run():
+        async with _httpx.AsyncClient() as client:
+            ctx = build_context(_FakeRegistry2(), client, core_url="http://x", auth_token="t")
+            assert isinstance(ctx.llm, _LlmClient)
+
+    import asyncio
+    asyncio.run(_run())
