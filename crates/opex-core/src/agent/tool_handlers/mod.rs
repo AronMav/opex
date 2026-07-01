@@ -10,7 +10,6 @@ mod secrets_tool;
 mod session;
 mod tool_use;
 mod todo;
-mod file_scenario;
 pub(crate) mod clarify;
 
 use workspace::*;
@@ -25,7 +24,6 @@ use secrets_tool::*;
 use session::*;
 use tool_use::*;
 use todo::*;
-use file_scenario::*;
 use clarify::ClarifyHandler;
 
 use crate::agent::tool_registry::SystemToolRegistry;
@@ -65,29 +63,7 @@ impl SystemToolRegistry {
         r.register("rich_card",        RichCardHandler);
         r.register("process",          ProcessHandler);
         r.register("tool_use",         ToolUseHandler);
-        r.register("file_scenario",    FileScenarioHandler);
         r.register("clarify",          ClarifyHandler);
         r
-    }
-}
-
-#[cfg(test)]
-mod registry_tests {
-    use super::SystemToolRegistry;
-
-    #[test]
-    fn file_scenario_handler_is_registered() {
-        let r = SystemToolRegistry::build();
-        // dispatch returns None only when the name is unknown; a known handler
-        // returns Some(_). We assert registration without invoking DB work by
-        // checking the handler map via a known-unknown contrast.
-        assert!(
-            r.is_registered("file_scenario"),
-            "file_scenario must be registered in SystemToolRegistry::build()"
-        );
-        assert!(
-            !r.is_registered("definitely_not_a_tool"),
-            "control: unknown tool must not be registered"
-        );
     }
 }
