@@ -34,6 +34,7 @@ pub(crate) mod uploads_serve;
 pub(crate) mod workspace_files;
 pub(crate) mod file_scenarios;
 pub(crate) mod files;
+pub(crate) mod handlers_admin;
 pub(crate) mod clarify;
 pub(crate) mod llm;
 
