@@ -164,6 +164,78 @@ async def test_runner_reads_tempfile_then_posts_progress_and_complete(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_runner_builds_ctx_with_provider_registry_not_handler_registry(monkeypatch, tmp_path):
+    """Regression: the out-of-process runner must build ctx with a ProviderRegistry
+    (has `aget_active`), NOT the HandlerRegistry (handler loader). Passing the
+    handler registry raised `'HandlerRegistry' object has no attribute
+    'aget_active'` and broke every async handler's ctx.stt/ctx.vision/etc — e.g.
+    summarize_video failed at the transcribe phase."""
+    captured: dict = {}
+
+    class FakeAsyncClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None, headers=None, **k):
+            return httpx.Response(200, request=httpx.Request("POST", url))
+    monkeypatch.setattr(runner_mod.httpx, "AsyncClient", FakeAsyncClient)
+
+    class FakeProviderRegistry:
+        async def aload(self): pass
+        async def aget_active(self, cap): return None
+    monkeypatch.setattr(runner_mod, "ProviderRegistry", FakeProviderRegistry)
+
+    class FakeLoaded:
+        class descriptor:
+            execution = "async"
+
+        @staticmethod
+        async def run(ctx, file, params):
+            class _R:
+                def to_dict(self):
+                    return {"status": "ok", "summary_text": "x",
+                            "artifact_urls": [], "reason": None}
+            return _R()
+
+    class FakeHandlerReg:
+        def load_all(self, **k): pass
+        def get(self, _id): return FakeLoaded()
+    monkeypatch.setattr(runner_mod, "_load_registry", lambda http: FakeHandlerReg())
+
+    def fake_build_context(registry, http, **k):
+        captured["registry"] = registry
+
+        class FakeCtx:
+            async def progress(self, *a): pass
+        return FakeCtx()
+    monkeypatch.setattr(runner_mod, "build_context", fake_build_context)
+
+    temp = tmp_path / "u.bin"
+    temp.write_bytes(b"D")
+    spec = {
+        "handler_id": "summarize_video",
+        "temp_path": str(temp),
+        "source_url": None,
+        "mime": "video/mp4",
+        "filename": "v.mp4",
+        "params": {},
+        "language": "ru",
+        "job_id": "job-reg",
+        "core_url": "http://127.0.0.1:18789",
+        "auth_token": "tok",
+    }
+    await runner_mod.run_job(spec)
+
+    reg = captured.get("registry")
+    assert reg is not None, "build_context was not called"
+    assert hasattr(reg, "aget_active"), (
+        "ctx must be built with a ProviderRegistry (aget_active), got "
+        f"{type(reg).__name__}"
+    )
+    assert isinstance(reg, FakeProviderRegistry)
+
+
+@pytest.mark.asyncio
 async def test_run_handler_includes_callback_token_in_spec(monkeypatch, tmp_path):
     """FIX 5 (router side): when run_handler receives a callback_token multipart
     field, it must include it in the spec JSON passed to the runner subprocess.
