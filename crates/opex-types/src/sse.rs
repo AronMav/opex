@@ -114,18 +114,6 @@ pub enum SseEvent {
         #[serde(rename = "mediaType")]
         media_type: String,
     },
-    /// File Scenario Engine post-hoc alternatives (web). A chip click calls
-    /// POST /api/file-scenarios/run — NOT a resumed stream. message_id ties
-    /// the chips to the assistant message they were attached to.
-    FileScenarioChips {
-        #[serde(rename = "messageId")]
-        #[cfg_attr(feature = "ts-gen", ts(type = "string"))]
-        message_id: MessageId,
-        #[serde(rename = "uploadId")]
-        #[cfg_attr(feature = "ts-gen", ts(type = "string"))]
-        upload_id: uuid::Uuid,
-        alternatives: Vec<ScenarioChoice>,
-    },
     /// Rich-card payload. Newtype variant — discriminator `cardType` lives
     /// at top level alongside `type`.
     RichCard(RichCardData),
@@ -285,18 +273,6 @@ pub struct UsagePayload {
     pub cache_creation_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_tokens: Option<u32>,
-}
-
-/// A single alternative scenario the user may pick after the default binding ran.
-/// Carried by `StreamEvent::FileScenarioChips` / `SseEvent::FileScenarioChips`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts-gen", derive(ts_rs::TS))]
-#[serde(rename_all = "camelCase")]
-pub struct ScenarioChoice {
-    #[cfg_attr(feature = "ts-gen", ts(type = "string"))]
-    pub scenario_id: uuid::Uuid,
-    pub label: String,
-    pub executor: String,
 }
 
 impl SseEvent {
