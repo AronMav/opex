@@ -3,7 +3,7 @@
 import { useCallback, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut, apiDelete } from "@/lib/api";
-import { useYamlTools, useMcpServers, qk } from "@/lib/queries";
+import { useYamlTools, useMcpServers, useHandlers, useSetHandlerAllowlist, qk } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,7 +22,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import {
-  Activity, FileCode2, CheckCircle2,
+  Activity, FileCode2, CheckCircle2, FileCog,
   RefreshCw, Plus, Pencil, Trash2, RotateCcw,
   ArrowLeft, Save, Square, Play,
   ExternalLink,
@@ -33,7 +33,9 @@ import {
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import type { McpEntry, YamlToolEntry } from "@/types/api";
+import { Switch } from "@/components/ui/switch";
+import { useLanguageStore } from "@/stores/language-store";
+import type { McpEntry, YamlToolEntry, HandlerAdminRow } from "@/types/api";
 import { Field, Row, TypeBadge, StatusBadge } from "./ToolHelpers";
 
 /* ── MCP Form helpers ───────────────────────────────────────────── */
@@ -78,11 +80,14 @@ export default function ToolsPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
 
+  const lang = useLanguageStore((s) => s.locale);
   const { data: yamlTools = [], isLoading: yamlLoading2, error: yamlError } = useYamlTools();
   const { data: mcpServers = [], isLoading: mcpLoading, error: mcpError } = useMcpServers();
+  const { data: handlers = [], isLoading: handlersLoading, error: handlersError } = useHandlers();
+  const setHandlerAllowlist = useSetHandlerAllowlist();
 
-  const loading = yamlLoading2 || mcpLoading;
-  const errorMsg = yamlError ? String(yamlError) : mcpError ? String(mcpError) : "";
+  const loading = yamlLoading2 || mcpLoading || handlersLoading;
+  const errorMsg = yamlError ? String(yamlError) : mcpError ? String(mcpError) : handlersError ? String(handlersError) : "";
 
   const [actionPending, setActionPending] = useState<string | null>(null);
 
@@ -529,6 +534,59 @@ parameters:
     );
   };
 
+  const renderHandlerCard = (h: HandlerAdminRow) => {
+    const label = h.labels?.[lang] ?? h.labels?.en ?? h.id;
+    const description = h.descriptions?.[lang] ?? h.descriptions?.en ?? "";
+    const isBuiltin = h.tier === "builtin";
+    const pending = setHandlerAllowlist.isPending;
+    return (
+      <div key={`handler-${h.id}`}
+        className={`flex flex-col gap-3 neu-flat p-5 min-w-0 overflow-hidden ${isBuiltin && !h.enabled ? "opacity-50" : ""}`}>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-accent/50 border-border">
+              <FileCog className="h-4 w-4 text-foreground/70" />
+            </div>
+            <span className="font-mono text-sm font-bold text-foreground break-words leading-snug min-w-0" title={h.id}>{label}</span>
+          </div>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            <TypeBadge type={isBuiltin ? "INT" : "EXT"} />
+            <Badge variant="secondary" className="text-[10px]">
+              {h.execution === "async" ? t("tools.handler_async") : t("tools.handler_sync")}
+            </Badge>
+          </div>
+        </div>
+        {description && (
+          <p className="text-xs text-muted-foreground line-clamp-2">{description}</p>
+        )}
+        <div className="space-y-1.5 mt-auto text-xs">
+          <Row label={t("tools.handler_tier")} value={isBuiltin ? t("tools.handler_builtin") : t("tools.handler_workspace")} />
+          {h.match?.mime?.length ? (
+            <div className="flex flex-col gap-0.5 bg-muted/20 rounded px-2.5 py-1.5 border border-border/50 overflow-hidden">
+              <span className="text-muted-foreground">{t("tools.handler_mime")}</span>
+              <span className="font-mono text-primary/70 truncate" title={h.match.mime.join(", ")}>{h.match.mime.join(", ")}</span>
+            </div>
+          ) : null}
+          {h.provider && (
+            <Row label={t("tools.handler_provider")} value={h.provider} />
+          )}
+        </div>
+        <div className="flex items-center justify-between pt-1">
+          {isBuiltin ? (
+            <Switch
+              aria-label={h.id}
+              checked={h.enabled}
+              disabled={pending}
+              onCheckedChange={(v) => setHandlerAllowlist.mutate({ action_ref: h.id, enabled: v })}
+            />
+          ) : (
+            <Badge variant="secondary" className="text-[10px]">{t("tools.handler_always_on")}</Badge>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   /* ── Tabbed view ─────────────────────────────────────────────────── */
 
   return (
@@ -574,6 +632,11 @@ parameters:
                 {t("tools.mcp_servers")}
                 <Badge variant="secondary" className="ml-1.5 text-[10px]">{mcpServers.length}</Badge>
               </TabsTrigger>
+              <TabsTrigger value="handlers">
+                <FileCog className="h-3.5 w-3.5" />
+                {t("tools.file_handlers")}
+                <Badge variant="secondary" className="ml-1.5 text-[10px]">{handlers.length}</Badge>
+              </TabsTrigger>
             </TabsList>
 
             {/* ── External API tools (YAML) ── */}
@@ -594,6 +657,25 @@ parameters:
               ) : (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
                   {mcpServers.map((s) => renderMcpCard(s))}
+                </div>
+              )}
+            </TabsContent>
+
+            {/* ── File Handlers ── */}
+            <TabsContent value="handlers" className="mt-6">
+              {handlers.length === 0 ? (
+                <EmptyState
+                  icon={FileCog}
+                  text={t("tools.no_handlers")}
+                  hint={
+                    <a href="/workspace/" className="mt-3 text-xs text-primary hover:underline">
+                      {t("tools.add_handler")}
+                    </a>
+                  }
+                />
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                  {handlers.map((h) => renderHandlerCard(h))}
                 </div>
               )}
             </TabsContent>
