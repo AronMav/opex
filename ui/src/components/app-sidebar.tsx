@@ -26,7 +26,7 @@ import {
   MessageSquare, Bot, FileText, Clock, Brain,
   Wrench, Folder, Key, Shield, Settings, LogOut, BookOpen,
   Radio, Zap, Webhook, Link2,
-  Archive, Monitor, FileCog,
+  Archive, Monitor,
   type LucideProps,
 } from "lucide-react";
 import type { TranslationKey } from "@/i18n/types";
@@ -74,7 +74,6 @@ const NAV: NavGroup[] = [
     labelKey: "nav.system",
     items: [
       { labelKey: "nav.providers", href: "/providers/", icon: Zap },
-      { labelKey: "nav.file_scenarios", href: "/file-scenarios/", icon: FileCog },
       { labelKey: "nav.secrets", href: "/secrets/", icon: Key },
       { labelKey: "nav.config", href: "/config/", icon: Settings },
       { labelKey: "nav.channels", href: "/channels/", icon: Radio },
