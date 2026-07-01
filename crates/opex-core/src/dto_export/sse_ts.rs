@@ -13,7 +13,7 @@
 use opex_types::approvals::ApprovalAction;
 #[allow(unused_imports)]
 use opex_types::sse::{
-    DataSessionIdPayload, MetricCard, MetricTrend, RichCardData, ScenarioChoice, SseEvent,
+    DataSessionIdPayload, MetricCard, MetricTrend, RichCardData, SseEvent,
     SyncStatus, TableCard, UsagePayload,
 };
 
@@ -26,4 +26,3 @@ crate::register_ts_dto!(MetricTrend,          dest = "ui-sse");
 crate::register_ts_dto!(SyncStatus,           dest = "ui-sse");
 crate::register_ts_dto!(UsagePayload,         dest = "ui-sse");
 crate::register_ts_dto!(ApprovalAction,       dest = "ui-sse");
-crate::register_ts_dto!(ScenarioChoice,       dest = "ui-sse");

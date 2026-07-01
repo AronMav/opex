@@ -8,7 +8,7 @@
 use opex_types::approvals::ApprovalAction;
 use opex_types::ids::{ApprovalId, MessageId, ParallelBatchId, ToolCallId};
 use opex_types::sse::{
-    DataSessionIdPayload, MetricCard, MetricTrend, RichCardData, ScenarioChoice, SseEvent,
+    DataSessionIdPayload, MetricCard, MetricTrend, RichCardData, SseEvent,
     SyncStatus, TableCard, UsagePayload,
 };
 use std::path::PathBuf;
@@ -297,33 +297,4 @@ fn sse_rich_card_metric_trend_flat_fixture() {
         trend: Some(MetricTrend::Flat),
     }));
     write_fixture("rich-card-metric-flat", &ev);
-}
-
-#[test]
-fn sse_file_scenario_chips_fixture() {
-    use opex_types::ids::MessageId;
-    let ev = SseEvent::FileScenarioChips {
-        message_id: MessageId::from(Uuid::nil()),
-        upload_id: Uuid::nil(),
-        alternatives: vec![
-            ScenarioChoice {
-                scenario_id: Uuid::nil(),
-                label: "Transcribe".to_string(),
-                executor: "tool".to_string(),
-            },
-            ScenarioChoice {
-                scenario_id: Uuid::nil(),
-                label: "Summarize (skill)".to_string(),
-                executor: "skill".to_string(),
-            },
-        ],
-    };
-    // Lock the camelCase wire shape before writing the fixture.
-    let json = serde_json::to_string(&ev).unwrap();
-    assert!(json.contains(r#""type":"file-scenario-chips""#));
-    assert!(json.contains(r#""messageId":"00000000-0000-0000-0000-000000000000""#));
-    assert!(json.contains(r#""uploadId":"00000000-0000-0000-0000-000000000000""#));
-    assert!(json.contains(r#""scenarioId":"00000000-0000-0000-0000-000000000000""#));
-    assert!(json.contains(r#""executor":"tool""#));
-    write_fixture("file-scenario-chips", &ev);
 }

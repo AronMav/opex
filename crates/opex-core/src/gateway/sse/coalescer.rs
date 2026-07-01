@@ -34,7 +34,6 @@ fn event_type_label(ev: &StreamEvent) -> &'static str {
         StreamEvent::Error(_) => "error",
         StreamEvent::Reconnecting { .. } => "reconnecting",
         StreamEvent::Usage { .. } => "usage",
-        StreamEvent::FileScenarioChips { .. } => "file-scenario-chips",
     }
 }
 
