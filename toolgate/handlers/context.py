@@ -54,16 +54,24 @@ class HandlerResult:
     summary_text: str = ""
     artifact_urls: list[str] = field(default_factory=list)
     reason: str | None = None
+    # Optional side-channel payload consumed by the file-scenario runner after
+    # the job completes (e.g. write an Obsidian note). NOT part of the 4-key
+    # ScenarioOutcome wire sent to core — included only when set so the runner
+    # can act on it and the core /complete payload stays clean.
+    post_action: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         # R9: emit EXACTLY these 4 keys. Core's ScenarioOutcome has a 5th field
         # (video_accepted) with serde default false; it deserializes this fine.
-        return {
+        d: dict[str, Any] = {
             "status": self.status,
             "summary_text": self.summary_text,
             "artifact_urls": list(self.artifact_urls),
             "reason": self.reason,
         }
+        if self.post_action is not None:
+            d["post_action"] = self.post_action
+        return d
 
 
 class ResultBuilder:
