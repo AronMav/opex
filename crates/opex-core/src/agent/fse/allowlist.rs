@@ -20,9 +20,6 @@ pub const FSE_DEFAULT_ALLOWLIST: &[&str] = &["transcribe", "describe", "extract_
 #[allow(dead_code)] // Phase 5+: returned by validators, matched in HTTP handlers
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AllowlistError {
-    /// `executor=tool` + `is_default=true` whose `action_ref` is not an
-    /// enabled member of `FSE_DEFAULT_ALLOWLIST`. Maps to HTTP 400.
-    NotAllowlisted(String),
     /// An allowlist-toggle amend referenced a name absent from the constant.
     /// Maps to HTTP 400.
     UnknownMember(String),
@@ -31,11 +28,6 @@ pub enum AllowlistError {
 impl fmt::Display for AllowlistError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AllowlistError::NotAllowlisted(a) => write!(
-                f,
-                "action '{a}' is not an allowlisted 0-click default; allowed: {}",
-                FSE_DEFAULT_ALLOWLIST.join(", ")
-            ),
             AllowlistError::UnknownMember(a) => write!(
                 f,
                 "'{a}' is not a member of FSE_DEFAULT_ALLOWLIST; allowed: {}",
@@ -52,34 +44,6 @@ impl std::error::Error for AllowlistError {}
 #[allow(dead_code)] // private helper; used by the three pub validators below
 fn is_constant_member(name: &str) -> bool {
     FSE_DEFAULT_ALLOWLIST.contains(&name)
-}
-
-/// Caller-independent write-time validator. Called by EVERY write path
-/// (HTTP `POST/PUT /api/file-scenarios`, `PUT .../{id}/default`, and the
-/// agent `file_scenario` tool). Only `executor=tool` + `is_default=true`
-/// rows are gated; `executor=skill` and non-default rows are never gated by
-/// the allowlist (they still pass `needs_approval`/deny/SSRF downstream).
-///
-/// `enabled_allowlist` is the operator-editable subset of the constant
-/// (from `get_enabled_allowlist`). A default binding is accepted only if its
-/// `action_ref` is BOTH a constant member AND currently enabled.
-#[allow(dead_code)] // Phase 5+: called by POST/PUT /api/file-scenarios HTTP handlers
-pub fn validate_binding_write(
-    executor: &str,
-    action_ref: &str,
-    is_default: bool,
-    enabled_allowlist: &[String],
-) -> Result<(), AllowlistError> {
-    if executor != "tool" || !is_default {
-        return Ok(());
-    }
-    if is_constant_member(action_ref)
-        && enabled_allowlist.iter().any(|m| m == action_ref)
-    {
-        Ok(())
-    } else {
-        Err(AllowlistError::NotAllowlisted(action_ref.to_string()))
-    }
 }
 
 /// Dispatch-time re-check, run before ANY 0-click auto-run (design §4.6:
@@ -119,32 +83,6 @@ mod tests {
     #[test]
     fn constant_holds_exactly_the_five_builtins() {
         assert_eq!(FSE_DEFAULT_ALLOWLIST, &["transcribe", "describe", "extract_document", "save", "summarize_video"]);
-    }
-
-    #[test]
-    fn rejects_default_tool_outside_constant() {
-        let err = validate_binding_write("tool", "code_exec", true, &full()).unwrap_err();
-        assert!(matches!(err, AllowlistError::NotAllowlisted(ref a) if a == "code_exec"));
-    }
-
-    #[test]
-    fn accepts_default_tool_in_constant() {
-        assert!(validate_binding_write("tool", "transcribe", true, &full()).is_ok());
-    }
-
-    #[test]
-    fn rejects_member_disabled_in_toggle() {
-        // "describe" is a constant member but operator disabled it → still rejected as a 0-click default.
-        let enabled = vec!["transcribe".to_string(), "extract_document".to_string(), "save".to_string()];
-        let err = validate_binding_write("tool", "describe", true, &enabled).unwrap_err();
-        assert!(matches!(err, AllowlistError::NotAllowlisted(_)));
-    }
-
-    #[test]
-    fn ignores_skill_executor_and_non_default() {
-        // executor=skill is never allowlist-gated; is_default=false tool is also fine.
-        assert!(validate_binding_write("skill", "my_recipe", true, &full()).is_ok());
-        assert!(validate_binding_write("tool", "code_exec", false, &full()).is_ok());
     }
 
     #[test]

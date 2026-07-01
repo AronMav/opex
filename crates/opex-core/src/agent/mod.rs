@@ -41,7 +41,7 @@ pub mod agent_config;
 pub mod pipeline;
 pub mod compressor;
 pub mod dispatcher;
-pub mod fse;  // allowlist validators + AllowlistError (SoT for Phase 5+ binding writes); file_scenario = dispatch/outcome/sniff/rewrite/seam
+pub mod fse;  // allowlist constant + toggle validators + toggle storage (shared with File Handler Hub)
 pub mod handler_registry;
 // Phase 3 Task 3: provenance wrapper for file-derived message content.
 // Pure leaf module (no crate::* deps) — wraps body in <file_output> delimiter

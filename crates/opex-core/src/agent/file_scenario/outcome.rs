@@ -44,34 +44,26 @@ pub struct ScenarioOutcome {
 }
 
 impl ScenarioOutcome {
-    /// Successful tool/toolgate result. `summary_text` is surfaced to the LLM;
-    /// produced artifacts (signed URLs) go in `artifact_urls`.
+    /// Failure envelope. The sole production constructor still used after the
+    /// legacy-FSE teardown — `gateway/handlers/files.rs` builds it when the
+    /// upload read / toolgate call fails.
+    pub fn failed(reason: String) -> Self {
+        Self { status: ScenarioStatus::Failed, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
+    }
+}
+
+// The `ok`/`timeout` constructors are test-only: after the legacy-FSE teardown
+// (2026-07-01) production code only *deserialises* `ScenarioOutcome` (aside from
+// `failed` above) and reads its fields — it never constructs the ok/timeout
+// shapes. Kept (gated to test builds) as the wire-shape contract guard.
+#[cfg(test)]
+impl ScenarioOutcome {
     pub fn ok(summary_text: String, artifact_urls: Vec<String>) -> Self {
         Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false, post_action: None }
     }
 
-    /// The rowless universal fallback: nothing processed, file persisted.
-    /// Same shape as `ok` so downstream rendering treats it uniformly.
-    pub fn save(summary_text: String, artifact_urls: Vec<String>) -> Self {
-        Self { status: ScenarioStatus::Ok, summary_text, artifact_urls, reason: None, video_accepted: false, post_action: None }
-    }
-
-    pub fn failed(reason: String) -> Self {
-        Self { status: ScenarioStatus::Failed, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
-    }
-
-    /// Fail-closed backstop: an `executor=tool` action_ref not in the dispatch table.
-    pub fn unsupported(reason: String) -> Self {
-        Self { status: ScenarioStatus::Unsupported, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
-    }
-
     pub fn timeout() -> Self {
         Self { status: ScenarioStatus::Timeout, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some("per-execution timeout".to_string()), video_accepted: false, post_action: None }
-    }
-
-    #[allow(dead_code)] // Phase 6: used when HTTP 413 from toolgate is surfaced as a UI chip message
-    pub fn too_large(reason: String) -> Self {
-        Self { status: ScenarioStatus::TooLarge, summary_text: String::new(), artifact_urls: Vec::new(), reason: Some(reason), video_accepted: false, post_action: None }
     }
 }
 
@@ -82,8 +74,9 @@ pub use crate::agent::fse::allowlist::FSE_DEFAULT_ALLOWLIST;
 
 /// Map a toolgate/HTTP status code to a [`ScenarioStatus`]. 2xx => `Ok`;
 /// 413 (payload too large) => `TooLarge`; 504 (gateway timeout) => `Timeout`;
-/// every other non-2xx => `Failed`. (The Rust-side per-execution timeout maps
-/// to `Timeout` separately in the dispatcher's `Err(_)` arm.)
+/// every other non-2xx => `Failed`. Test-only after the legacy-FSE teardown:
+/// kept as the status-mapping contract guard for the surviving toolgate type.
+#[cfg(test)]
 pub fn status_from_http(code: u16) -> ScenarioStatus {
     match code {
         200..=299 => ScenarioStatus::Ok,

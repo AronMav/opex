@@ -316,16 +316,6 @@ async fn main() -> Result<()> {
         .await?;
     tracing::info!("migrations complete");
 
-    // FSE: seed the default file_scenarios bindings (audio→transcribe,
-    // image→describe, document→extract_document). Idempotent, ON CONFLICT-safe
-    // — runs every boot, no-op once present. Best-effort: a failure here must
-    // not block startup (the dispatcher fail-closes to `save` without rows).
-    match crate::agent::fse::seed_default_file_scenarios(&db_pool).await {
-        Ok(0) => {}
-        Ok(n) => tracing::info!(rows = n, "FSE default bindings seeded"),
-        Err(e) => tracing::warn!(error = %e, "FSE default-binding seed failed (non-fatal)"),
-    }
-
     // Startup cleanup: repair sessions interrupted by previous crash (batched)
     cleanup_interrupted_sessions(&db_pool).await;
 
