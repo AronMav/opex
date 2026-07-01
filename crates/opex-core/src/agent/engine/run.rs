@@ -93,7 +93,6 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
-            pending_alternatives: _,
             video_accepted,
             video_ack_text,
         } = boot;
@@ -122,7 +121,6 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
-            pending_alternatives: vec![],
             video_accepted: false,
             video_ack_text: String::new(),
         };
@@ -368,7 +366,6 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
-            pending_alternatives: _,
             video_accepted,
             video_ack_text,
         } = boot;
@@ -388,7 +385,6 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
-            pending_alternatives: vec![],
             video_accepted: false,
             video_ack_text: String::new(),
         };
@@ -525,7 +521,6 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
-            pending_alternatives: _,
             video_accepted,
             video_ack_text,
         } = boot;
@@ -545,7 +540,6 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
-            pending_alternatives: vec![],
             video_accepted: false,
             video_ack_text: String::new(),
         };
@@ -721,7 +715,6 @@ impl AgentEngine {
             channel,
             compressor,
             claude_md_content,
-            pending_alternatives: _,
             // Cron/goal RPC turns run the LLM loop unconditionally — the async-video
             // short-circuit is a live-user-turn affordance only.
             video_accepted: _,
@@ -765,7 +758,6 @@ impl AgentEngine {
             channel,
             compressor: crate::agent::compressor::Compressor::new(0), // placeholder; real compressor passed separately
             claude_md_content,
-            pending_alternatives: vec![],
             video_accepted: false,
             video_ack_text: String::new(),
         };

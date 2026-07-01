@@ -180,26 +180,21 @@ pub async fn fetch_url_content(
     ))
 }
 
-/// Result of `enrich_message_text`: the enriched LLM text plus the deterministic
-/// per-attachment dispatch outcomes and any post-hoc alternatives (chip/button
-/// emission is Phase 6 — this only carries them out of the sink-less hook).
+/// Result of `enrich_message_text`: the enriched LLM text plus the async-video
+/// short-circuit flag. (The legacy FSE per-attachment dispatch outcomes and
+/// post-hoc chip alternatives were removed with the FSE sync-dispatch retirement.)
 pub struct EnrichResult {
     pub text: String,
-    pub outcomes: Vec<crate::agent::file_scenario::ScenarioOutcome>,
-    pub pending_alternatives: Vec<crate::agent::file_scenario::PendingAlternative>,
-    /// `true` when this message was an async-video acceptance (a YouTube link
-    /// was enqueued and/or a `summarize_video` outcome carried `video_accepted`).
-    /// The pipeline uses this to SHORT-CIRCUIT the LLM agent loop: the ack text
-    /// is the whole reply, so the agent never tries to (slowly, misleadingly)
-    /// fetch/transcribe the YouTube link itself. Only the async-video path sets
-    /// this — synchronous scenarios (transcribe/describe/extract) leave it false
-    /// because their result must be handed to the agent for a real answer.
+    /// `true` when this message was an async-video acceptance (a YouTube/Yandex
+    /// Disk link was enqueued as a `summarize_video` handler job). The pipeline
+    /// uses this to SHORT-CIRCUIT the LLM agent loop: the ack text is the whole
+    /// reply, so the agent never tries to fetch/transcribe the link itself.
     pub video_accepted: bool,
 }
 
-/// Enrich user text: auto-fetch URLs (max 2), add attachment hints, then run the
-/// File Scenario Engine dispatch (sniff → bindings → built-in) and rewrite the
-/// enriched text per the outcome contract (§4.4). Returns an `EnrichResult`.
+/// Enrich user text: auto-fetch URLs (max 2), add attachment hints, and enqueue a
+/// `summarize_video` handler job for any detected video link. Returns an
+/// `EnrichResult` carrying the enriched LLM text + the async-video short-circuit flag.
 #[allow(clippy::too_many_arguments)]
 pub async fn enrich_message_text(
     http_client: &reqwest::Client,
@@ -261,33 +256,7 @@ pub async fn enrich_message_text(
         }
     }
 
-    // FSE dispatch replaces the old inline auto_transcribe_audio/auto_describe_images
-    // calls: sniff each attachment, look up bindings, run the built-in via the
-    // in-core dispatch table, then deterministically rewrite the enriched text.
-    let (outcomes, pending_alternatives) =
-        crate::agent::file_scenario::dispatch_seam::dispatch_attachments(
-            http_client,
-            gateway_listen,
-            toolgate_url,
-            agent_language,
-            db,
-            session_id,
-            agent_name,
-            &mut enriched,
-            attachments,
-        )
-        .await;
-    crate::agent::file_scenario::rewrite::rewrite_enriched_text(
-        &mut enriched,
-        attachments,
-        &outcomes,
-    );
-
-    // Async-video acceptance: a YouTube-link enqueue above OR a `summarize_video`
-    // attachment outcome (video file) marks this turn for the LLM-loop short-circuit.
-    let video_accepted = video_accepted || outcomes.iter().any(|o| o.video_accepted);
-
-    EnrichResult { text: enriched, outcomes, pending_alternatives, video_accepted }
+    EnrichResult { text: enriched, video_accepted }
 }
 
 /// v1 video-URL allowlist: YouTube only (SSRF surface — see spec §9).
@@ -977,61 +946,6 @@ mod tests {
     }
 
     // ── enrich_message_text → EnrichResult ──────────────────────────────────
-
-    /// No binding seeded → save path → no dangling signed URL in `.text`.
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn enrich_returns_enrichresult_and_strips_url_on_save(pool: sqlx::PgPool) {
-        use wiremock::matchers::{method, path_regex};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path_regex(r"^/api/uploads/.*"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"%PDF-1.4 fake".to_vec()))
-            .mount(&server)
-            .await;
-        let gateway_listen = format!("127.0.0.1:{}", server.address().port());
-        let upload_url = format!(
-            "{}/api/uploads/00000000-0000-0000-0000-000000000009?sig=x&exp=1",
-            server.uri()
-        );
-
-        let att = opex_types::MediaAttachment {
-            url: upload_url.clone(),
-            media_type: opex_types::MediaType::Document,
-            file_name: Some("r.pdf".into()),
-            mime_type: None,
-            file_size: None,
-        };
-        let client = reqwest::Client::new();
-        let result = enrich_message_text(
-            &client,
-            &gateway_listen,
-            "http://localhost:9011", // unreachable toolgate → built-in extract fails or save runs
-            "ru",
-            &pool,
-            uuid::Uuid::new_v4(),
-            "TestAgent",
-            "see attached",
-            &[att],
-        )
-        .await;
-
-        // New return type: an EnrichResult with one outcome.
-        assert_eq!(result.outcomes.len(), 1, "one outcome per attachment");
-        // No dangling signed/localhost URL survives in the LLM text on the save/non-image path.
-        assert!(
-            !result.text.contains(&upload_url),
-            "no dangling URL must survive: {}",
-            result.text
-        );
-        // Synchronous (document save) scenario MUST NOT short-circuit the agent loop.
-        assert!(
-            !result.video_accepted,
-            "synchronous document scenario must leave video_accepted=false"
-        );
-    }
-
 
     /// A YouTube link in the user text enqueues a handler job (summarize_video) and
     /// marks the EnrichResult `video_accepted=true` so the pipeline short-circuits the LLM loop.

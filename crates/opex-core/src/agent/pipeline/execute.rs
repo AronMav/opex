@@ -121,7 +121,6 @@ pub async fn execute<S: EventSink>(
         // cloned into each CallOptions site below so the value lives long enough
         // for both the main-loop call and the two forced-final-call paths.
         claude_md_content,
-        pending_alternatives: _,
         // Short-circuit handled upstream in the run.rs adapters before execute()
         // is ever reached, so these are inert here.
         video_accepted: _,
