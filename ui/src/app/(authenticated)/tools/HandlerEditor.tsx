@@ -134,12 +134,31 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
 
   // ── Keep source in sync when form fields change ──────────────────────────
   function updateField<K extends keyof DescriptorFields>(key: K, value: DescriptorFields[K]) {
-    setFields((prev) => {
-      const next = { ...prev, [key]: value };
-      setSource((src) => spliceDescriptor(src, next));
-      return next;
-    });
+    const next = { ...fields, [key]: value };
+    setFields(next);
+    setSource((src) => spliceDescriptor(src, next));
   }
+
+  // ── Populate form from initialSource on mount (edit mode) ────────────────
+  useEffect(() => {
+    if (!initialSource) return;
+    const headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${getToken()}`,
+    };
+    fetch("/api/handlers/validate", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ source: initialSource }),
+    })
+      .then((res) => res.ok ? res.json() : Promise.reject(res.status))
+      .then((body: Record<string, unknown>) => {
+        const desc = (body.descriptor ?? body) as Record<string, unknown>;
+        setFields(parseDescriptorFromApi(desc));
+      })
+      .catch(() => { /* leave form at defaults; raw code is still editable */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Sync form from code via /api/handlers/validate ───────────────────────
   async function syncFromCode() {
