@@ -47,6 +47,8 @@ pub struct HandlerManifest {
     pub order: i32,
     #[serde(default)]
     pub tier: String,
+    #[serde(default)]
+    pub source: String,
 }
 
 /// A composer button derived from a manifest for a concrete file.
@@ -227,6 +229,7 @@ mod tests {
             params: serde_json::json!([]),
             order,
             tier: tier.to_string(),
+            source: String::new(),
         }
     }
 
