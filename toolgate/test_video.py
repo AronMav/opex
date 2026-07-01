@@ -233,6 +233,44 @@ async def test_download_video_rejects_non_http_scheme():
                 await download_video(bad, d)
 
 
+@pytest.mark.asyncio
+async def test_download_video_ssrf_guard_called_before_ytdlp(monkeypatch):
+    """SSRF guard (validate_url_ssrf) must be called before yt-dlp for blocked hosts.
+
+    Verifies two things:
+    1. validate_url_ssrf is invoked (tracked via call_log).
+    2. yt-dlp (_run) is never reached when validate_url_ssrf raises.
+    """
+    import video_helpers as vh
+    import helpers as helpers_mod
+
+    call_log: list[str] = []
+
+    def fake_validate_ssrf(url: str) -> None:
+        call_log.append(f"validate:{url}")
+        from fastapi import HTTPException
+        raise HTTPException(400, f"blocked: URL targets internal service ({url})")
+
+    async def fake_run(*args):
+        call_log.append("ytdlp")
+        return 0, b"", b""
+
+    monkeypatch.setattr(helpers_mod, "validate_url_ssrf", fake_validate_ssrf)
+    monkeypatch.setattr(vh, "validate_url_ssrf", fake_validate_ssrf)
+    monkeypatch.setattr(vh, "_run", fake_run)
+
+    with tempfile.TemporaryDirectory() as d:
+        with pytest.raises(Exception):  # HTTPException or wrapped error
+            await download_video("http://127.0.0.1/evil", d)
+
+    # Guard must have been invoked.
+    assert any("validate:" in entry for entry in call_log), \
+        "validate_url_ssrf was not called"
+    # yt-dlp must NOT have been called.
+    assert "ytdlp" not in call_log, \
+        "yt-dlp (_run) was called despite SSRF guard rejecting the URL"
+
+
 # ── SSRF loopback guard for video_url ───────────────────────────────────────
 
 @pytest.mark.asyncio

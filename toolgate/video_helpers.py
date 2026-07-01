@@ -7,6 +7,8 @@ import os
 import sys
 import tempfile
 
+from helpers import validate_url_ssrf
+
 
 async def _run(*args: str) -> tuple[int, bytes, bytes]:
     proc = await asyncio.create_subprocess_exec(
@@ -252,9 +254,16 @@ async def download_video(url: str, dest_dir: str) -> str:
 
     Security: only http/https URLs are accepted (rejects `file:`, `-`-prefixed
     flag-smuggling, etc.), and `--` terminates option parsing so the URL can
-    never be read as a yt-dlp flag."""
+    never be read as a yt-dlp flag.  validate_url_ssrf is called before yt-dlp
+    so SSRF protection holds regardless of which caller reaches this function."""
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ValueError("download_video: only http/https URLs are allowed")
+    # SSRF guard: block private/loopback/CGNAT targets before yt-dlp runs.
+    # yt-dlp follows redirects internally, so a pre-flight DNS check here is a
+    # best-effort defence-in-depth layer; the authoritative SSRF block is still
+    # the host allowlist enforced by the caller (Core subagent.rs). This mirrors
+    # how download_limited calls validate_url_ssrf before issuing the httpx request.
+    validate_url_ssrf(url)
     out_tmpl = os.path.join(dest_dir, "dl.%(ext)s")
     # Invoke yt-dlp via the venv interpreter (`python -m yt_dlp`), not a bare
     # `yt-dlp` on PATH: toolgate's PATH does not include the venv's bin/, so a
