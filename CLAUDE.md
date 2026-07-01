@@ -193,6 +193,59 @@ lock icon in the Skills UI.
 
 **MCP tools:** external MCP servers run as Docker containers (on-demand via bollard).
 
+### File Handler Hub (toolgate handlers + core orchestration)
+
+File processing (transcribe / describe / extract_document / save / summarize_video /
+custom handlers) lives in **toolgate** as self-describing Python handlers
+(`toolgate/handlers/builtin/*.py` + `workspace/file_handlers/*.py`, hot-reloaded
+via watchfiles). Each handler = an XML descriptor comment + `async def run(ctx, file, params)`.
+
+- **Discovery:** core `agent/handler_registry.rs` (`HandlerRegistry` in `AppState`)
+  does a conditional GET of toolgate `GET /handlers` (ETag, ~30s, fail-soft).
+- **Matching:** pure-Rust `match_buttons(mime, size, enabled_allowlist, lang)` —
+  builtin-tier handlers gated by the GLOBAL `fse.allowlist` (the 5 const ids in
+  `FSE_DEFAULT_ALLOWLIST`); workspace-tier allowed by default (trusted-author v1).
+- **Run (bytes, never loopback URL):** `gateway/handlers/files.rs` —
+  `GET /api/files/{id}/actions` (buttons), `POST /api/files/{id}/run`. Core
+  downloads the upload bytes via a loopback signed URL (`mint_uploads_url` +
+  `uploads_local_url`) and POSTs **multipart** ("file" + mime/filename/params/
+  language) to toolgate `/handlers/{id}/run`; toolgate NEVER fetches the loopback
+  URL (mirrors the existing `dispatch.rs` run_transcribe, R12). Sync → inline
+  outcome; async → `handler_jobs` row.
+- **Async queue:** universal `handler_jobs` table (m067, carries upload_id OR
+  source_ref for url-based jobs) + `agent/file_handler_worker.rs`
+  (`spawn_file_handler_worker`, 5s poll, stale recovery). The out-of-process
+  Python runner reads bytes from a tempfile (no network fetch), posts progress →
+  `POST /api/files/jobs/{id}/progress` (WS `file_job_progress`) and the final
+  `ScenarioOutcome` → `POST /api/files/jobs/{id}/complete`.
+- **Provenance:** `agent/provenance.rs::wrap_file_output` wraps the persisted
+  message content (`messages.source='file_handler'`, m066) with
+  `<file_output trust="untrusted">` at INSERT time, before it reaches the LLM.
+
+**ctx API** available to all handlers: `stt`, `vision`, `tts`, `imagegen`,
+`search`, `embed`, `http`, `result`, `progress`, `llm` (raw-LLM via
+`POST /api/llm/complete`). Per-job callback auth uses HMAC `X-Job-Token`.
+
+**Coexisting legacy path (KEPT, not migrated — see Phase 6/R2):** the in-core
+`agent/file_scenario/{dispatch,dispatch_seam,outcome,rewrite,sniff,owner_gate}.rs`
+shell + `agent/fse/allowlist*` + `gateway/handlers/file_scenarios/run.rs`
+(`run_scenario_and_persist`) + the `file_scenarios` table (m060/m061) + the
+skill-binding **agent tool** (`agent/tool_handlers/file_scenario.rs`) still power
+the post-send "file-scenario-chips" SSE affordance and the Telegram `fse:` callback.
+Migrating those onto the HandlerRegistry is a future follow-up.
+
+**Removed in Phase 6:** the in-core async **video** pipeline
+(`agent/file_scenario/video_summary.rs`, `video_worker.rs`), the `SummarizeVideo`
+dispatch arm + its `EnqueueCtx` plumbing (struct + `DispatchInput.enqueue` field +
+`run_builtin` param + seam construction) + the `ScenarioOutcome::video_accepted`
+constructor, and the `opex_db::video_jobs` module. Video is now the Python
+`summarize_video` async handler on the `handler_jobs` queue. The `video_jobs`
+table is deprecated, not dropped (m068, history-preserving). The
+`ScenarioOutcome.video_accepted` serde wire field is retained (defaults false).
+
+**Deferred:** untrusted-agent handler isolation (workspace-tier handlers run in-process
+as trusted v1); frame/vision descriptions in the video digest.
+
 ### Channels (`src/channels/` + `channels/` TypeScript)
 
 In-process channel adapter: `InProcessChannelManager` manages channel lifecycle. TypeScript code in `channels/` runs as a managed child process (NOT Docker). Communication via internal WebSocket loopback.
