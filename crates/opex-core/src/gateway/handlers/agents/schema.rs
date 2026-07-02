@@ -280,6 +280,7 @@ pub(crate) fn build_agent_config(name: String, p: AgentCreatePayload) -> AgentCo
                 log_all_tool_calls: h.log_all_tool_calls.unwrap_or(false),
                 block_tools: h.block_tools.unwrap_or_default(),
                 webhooks: h.webhooks.unwrap_or_default(),
+                ..Default::default()
             }),
             daily_budget_tokens: p.daily_budget_tokens.unwrap_or(0),
             // Default 3 matches the `#[serde(default)]` on AgentSettings.

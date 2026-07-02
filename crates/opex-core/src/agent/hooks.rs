@@ -24,6 +24,12 @@ pub enum HookAction {
 
 pub type HookHandler = Box<dyn Fn(&HookEvent) -> HookAction + Send + Sync>;
 
+/// True when the cumulative decision-webhook chain has spent its budget.
+/// A `budget_ms` of 0 disables the limit.
+fn webhook_chain_exceeded(elapsed: std::time::Duration, budget_ms: u64) -> bool {
+    budget_ms != 0 && (elapsed.as_millis() as u64) >= budget_ms
+}
+
 /// Compiled webhook entry: config + pre-compiled tool_matcher regex.
 pub(crate) struct CompiledWebhook {
     pub cfg: crate::config::WebhookConfig,
@@ -37,6 +43,8 @@ pub struct HookRegistry {
     /// Plain client (no SSRF resolver) for allow_internal decision hooks.
     http_client_internal: Option<reqwest::Client>,
     webhooks: Vec<CompiledWebhook>,
+    total_webhook_timeout_ms: u64,
+    on_chain_timeout: crate::config::FailureMode,
 }
 
 impl HookRegistry {
@@ -46,6 +54,8 @@ impl HookRegistry {
             http_client: None,
             http_client_internal: None,
             webhooks: Vec::new(),
+            total_webhook_timeout_ms: 10_000,
+            on_chain_timeout: crate::config::FailureMode::Open,
         }
     }
 
@@ -112,12 +122,20 @@ impl HookRegistry {
         }).collect();
     }
 
+    /// Set the cumulative decision-webhook chain budget. `total = None` → 10 s default;
+    /// `Some(0)` → disabled.
+    pub fn set_webhook_chain_budget(&mut self, total: Option<u64>, on_chain: crate::config::FailureMode) {
+        self.total_webhook_timeout_ms = total.unwrap_or(10_000);
+        self.on_chain_timeout = on_chain;
+    }
+
     /// Run decision-webhooks sequentially for `event`. `extra` carries event-specific
     /// data: `{"tool_input": <args>}` (BeforeToolCall), `{"result": <str>}`
     /// (AfterToolResult), `{"message": <str>}` (BeforeMessage). Webhooks matching
     /// the event (and tool_matcher) run in order: first Block short-circuits;
     /// ModifyArgs / TransformResult / InjectContext chain across hooks.
     pub async fn fire_decision(&self, event: &HookEvent, extra: serde_json::Value) -> HookDecision {
+        let chain_start = std::time::Instant::now();
         let ev_name = event_name(event);
         let tool = event_tool_name(event);
 
@@ -145,6 +163,16 @@ impl HookRegistry {
                 self.http_client.as_ref()
             };
             let Some(client) = client else { continue; };
+
+            if webhook_chain_exceeded(chain_start.elapsed(), self.total_webhook_timeout_ms) {
+                tracing::warn!(budget_ms = self.total_webhook_timeout_ms, "decision webhook chain budget exceeded");
+                match self.on_chain_timeout {
+                    crate::config::FailureMode::Open => break, // fall through to the accumulation tail
+                    crate::config::FailureMode::Closed => {
+                        return HookDecision::Block("webhook chain budget exceeded".into());
+                    }
+                }
+            }
 
             // Build request body: event fields + current extra.
             let agent_val = match event {
@@ -823,5 +851,26 @@ block_tools = []
             HookDecision::ModifyArgs(v) => assert_eq!(v["x"], 3, "chain must deliver final x=3"),
             o => panic!("expected ModifyArgs, got {o:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod chain_budget_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn budget_not_exceeded_below_limit() {
+        assert!(!webhook_chain_exceeded(Duration::from_millis(9_000), 10_000));
+    }
+    #[test]
+    fn budget_exceeded_at_or_above_limit() {
+        assert!(webhook_chain_exceeded(Duration::from_millis(10_000), 10_000));
+        assert!(webhook_chain_exceeded(Duration::from_millis(12_500), 10_000));
+    }
+    #[test]
+    fn zero_budget_means_no_limit() {
+        // 0 disables the chain budget entirely
+        assert!(!webhook_chain_exceeded(Duration::from_secs(3_600), 0));
     }
 }

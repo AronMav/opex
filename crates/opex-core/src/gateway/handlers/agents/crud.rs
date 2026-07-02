@@ -1334,12 +1334,14 @@ mod tests {
             log_all_tool_calls: true,
             block_tools: vec![],
             webhooks: vec![],
+            ..Default::default()
         }));
         // existing: has one webhook on disk
         let existing = make_agent_config_with_hooks(Some(HooksConfig {
             log_all_tool_calls: false,
             block_tools: vec![],
             webhooks: vec![webhook.clone()],
+            ..Default::default()
         }));
 
         // payload omitted webhooks → must preserve from disk
@@ -1355,6 +1357,7 @@ mod tests {
             log_all_tool_calls: true,
             block_tools: vec![],
             webhooks: vec![],
+            ..Default::default()
         }));
         preserve_hooks_webhooks(&mut new2, &existing, true);
         assert_eq!(

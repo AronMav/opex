@@ -148,6 +148,7 @@ pub async fn start_agent_from_config(
                 // outer 10s connect+pool timeout is a backstop.
                 let client = crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(10));
                 registry.set_webhooks(client, hc.webhooks.clone());
+                registry.set_webhook_chain_budget(hc.total_webhook_timeout_ms, hc.on_chain_timeout);
             }
         }
         Arc::new(registry)
