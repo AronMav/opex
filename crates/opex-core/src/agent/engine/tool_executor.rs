@@ -121,13 +121,6 @@ impl AgentEngine {
             }
         };
 
-        // Per-session dispatcher state — pulled from the engine's
-        // `session_tool_state` map by session id, when wired. None when the
-        // engine was built outside of `AgentCore` (test helpers, openai_compat
-        // synthetic Uuid::nil).
-        let session_tool_state = self.cfg().session_tool_state.as_ref().and_then(|m| {
-            m.get(&session_id).map(|r| r.value().clone())
-        });
         // Runtime deny-gate uses BOTH:
         //   1. the agent's own tool_policy.deny (passed as `policy`), and
         //   2. `extra_deny`, the parent's SUBAGENT_DENIED_TOOLS when this
@@ -153,7 +146,6 @@ impl AgentEngine {
             persist_ctx,
             policy,
             extra_deny,
-            session_tool_state,
             self.mcp().as_deref(),
             parallel_batch_id,
         )

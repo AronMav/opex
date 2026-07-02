@@ -203,8 +203,6 @@ pub async fn execute_tool_calls_partitioned(
     // so tool_use(action=call, name=X) cannot reach a tool blocked at the
     // delegation layer. Non-subagent callers pass &[].
     extra_deny: &[String],
-    // Kept for future per-session tool state access (e.g. describe cache reads).
-    _session_tool_state: Option<Arc<crate::agent::dispatcher::SessionToolState>>,
     mcp: Option<&crate::mcp::McpRegistry>,
     parallel_batch_id: Option<ParallelBatchId>,
 ) -> BatchOutcome {
@@ -1150,7 +1148,6 @@ mod sequential_enrichment_tests {
             &[], // extra_deny: no subagent isolation in this test
             None,
             None,
-            None,
         )
         .await;
 
@@ -1214,7 +1211,6 @@ mod sequential_enrichment_tests {
             None, // persist_ctx = None — subagent/openai_compat path
             None,
             &[], // extra_deny: empty in this test
-            None,
             None,
             None,
         )
