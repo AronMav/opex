@@ -42,6 +42,9 @@ export function createStreamingRenderer(store: StoreAccess) {
   // AbortController now lives inside StreamSession.signal (Task 3.6).
 
   const _reconnectTimers = new Map<string, ReturnType<typeof setTimeout> | null>();
+  // Set by dispose(): stops the visibilitychange handler and blocks any new
+  // debounce timers from being scheduled after teardown.
+  let _disposed = false;
 
   function getReconnectTimer(agent: string): ReturnType<typeof setTimeout> | null {
     return _reconnectTimers.get(agent) ?? null;
@@ -76,6 +79,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   const uiStateSaveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
   function saveUiState(agent: string) {
     clearTimeout(uiStateSaveTimers[agent]);
+    if (_disposed) return; // torn down — don't schedule an orphan timer
     uiStateSaveTimers[agent] = setTimeout(() => {
       const st = store.get().agents[agent];
       if (!st?.activeSessionId) return;
@@ -510,6 +514,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   // believes it is in an active phase and force a soft reconnect when its
   // last observed SSE event is older than VISIBILITY_STALE_MS.
   function handleVisibilityChange() {
+    if (_disposed) return;
     if (typeof document === "undefined") return;
     if (document.visibilityState !== "visible") return;
     const now = Date.now();
@@ -563,6 +568,28 @@ export function createStreamingRenderer(store: StoreAccess) {
     delete uiStateSaveTimers[agent];
   }
 
+  /**
+   * Full teardown of the renderer: removes the document visibilitychange
+   * listener (the one process-wide side effect) and clears every pending
+   * debounce/reconnect timer. Idempotent. After dispose, the visibility
+   * handler and the debounced UI-state saver are inert. The live store owns
+   * one renderer for the page lifetime, so this is mainly for HMR / tests /
+   * any future re-instantiation, none of which should leak a stale listener.
+   */
+  function dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    }
+    _visibilityListenerAttached = false;
+    for (const t of Object.values(uiStateSaveTimers)) clearTimeout(t);
+    for (const k of Object.keys(uiStateSaveTimers)) delete uiStateSaveTimers[k];
+    for (const t of _reconnectTimers.values()) if (t) clearTimeout(t);
+    _reconnectTimers.clear();
+    _lastEventTime.clear();
+  }
+
   // ── Public API ─────────────────────────────────────────────────────────
 
   return {
@@ -571,6 +598,7 @@ export function createStreamingRenderer(store: StoreAccess) {
     abortActiveStream,
     abortLocalOnly,
     cleanupAgent,
+    dispose,
     getReconnectTimer,
     setReconnectTimer,
     /** Register callback for session ID events (called with agent, sessionId). */
