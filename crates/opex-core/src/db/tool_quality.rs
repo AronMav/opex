@@ -12,12 +12,17 @@ use tokio::sync::RwLock;
 // PenaltyCache
 // ---------------------------------------------------------------------------
 
+/// Nested penalty map: `agent_name → (tool_name → penalty)`.
+type PenaltyMap = HashMap<String, HashMap<String, f32>>;
+
 /// In-memory cache of tool penalty scores, refreshed from DB every 30 seconds.
 /// Shared across all agents via Arc<PenaltyCache>.
+///
+/// The cached map is nested per-agent: `agent_name → (tool_name → penalty)`.
 pub struct PenaltyCache {
     db: PgPool,
     /// (map, `last_refreshed_at`)
-    cache: RwLock<(HashMap<String, f32>, Instant)>,
+    cache: RwLock<(PenaltyMap, Instant)>,
 }
 
 impl PenaltyCache {
@@ -33,13 +38,14 @@ impl PenaltyCache {
         }
     }
 
-    /// Returns a snapshot of penalty scores for all tracked tools.
+    /// Returns a snapshot of penalty scores for the given agent's tools.
     /// Transparently refreshes from the DB when the cached data is older than 30 s.
-    pub async fn get_penalties(&self) -> HashMap<String, f32> {
+    /// An agent with no tracked tools yields an empty submap.
+    pub async fn get_penalties(&self, agent_name: &str) -> HashMap<String, f32> {
         {
             let guard = self.cache.read().await;
             if guard.1.elapsed() < Duration::from_secs(30) {
-                return guard.0.clone();
+                return guard.0.get(agent_name).cloned().unwrap_or_default();
             }
         }
 
@@ -48,8 +54,13 @@ impl PenaltyCache {
         // Double-checked locking: another task may have refreshed while we waited.
         if guard.1.elapsed() >= Duration::from_secs(30) {
             match get_all_penalties(&self.db).await {
-                Ok(map) => {
-                    guard.0 = map;
+                Ok(rows) => {
+                    // Group (agent, tool) rows by agent into the nested map.
+                    let mut nested = PenaltyMap::new();
+                    for ((agent, tool), penalty) in rows {
+                        nested.entry(agent).or_default().insert(tool, penalty);
+                    }
+                    guard.0 = nested;
                     guard.1 = Instant::now();
                 }
                 Err(e) => {
@@ -57,7 +68,7 @@ impl PenaltyCache {
                 }
             }
         }
-        guard.0.clone()
+        guard.0.get(agent_name).cloned().unwrap_or_default()
     }
 }
 
@@ -72,6 +83,7 @@ impl PenaltyCache {
 /// * Recalculates `penalty_score` from the recent window (floor: 0.2).
 pub async fn record_tool_result(
     db: &PgPool,
+    agent_name: &str,
     tool_name: &str,
     success: bool,
     duration_ms: i32,
@@ -84,9 +96,12 @@ pub async fn record_tool_result(
         "ts": chrono::Utc::now().to_rfc3339(),
     });
 
+    // Bind order: $1=agent_name, $2=tool_name, $3=success, $4=duration_ms,
+    // $5=call_entry (jsonb), $6=error. Penalty is scoped per (agent_name, tool_name).
     sqlx::query(
         r"
         INSERT INTO tool_quality (
+            agent_name,
             tool_name,
             total_calls,
             success_calls,
@@ -99,27 +114,28 @@ pub async fn record_tool_result(
             updated_at
         ) VALUES (
             $1,
+            $2,
             1,
-            CASE WHEN $2 THEN 1 ELSE 0 END,
-            CASE WHEN $2 THEN 0 ELSE 1 END,
-            $3,
-            jsonb_build_array($4::jsonb),
-            CASE WHEN $2 THEN 1.0 ELSE 0.2 END,
-            $5,
+            CASE WHEN $3 THEN 1 ELSE 0 END,
+            CASE WHEN $3 THEN 0 ELSE 1 END,
+            $4,
+            jsonb_build_array($5::jsonb),
+            CASE WHEN $3 THEN 1.0 ELSE 0.2 END,
+            $6,
             NOW(),
             NOW()
         )
-        ON CONFLICT (tool_name) DO UPDATE SET
+        ON CONFLICT (agent_name, tool_name) DO UPDATE SET
             total_calls      = tool_quality.total_calls + 1,
-            success_calls    = tool_quality.success_calls + CASE WHEN $2 THEN 1 ELSE 0 END,
-            fail_calls       = tool_quality.fail_calls   + CASE WHEN $2 THEN 0 ELSE 1 END,
-            total_latency_ms = tool_quality.total_latency_ms + $3,
+            success_calls    = tool_quality.success_calls + CASE WHEN $3 THEN 1 ELSE 0 END,
+            fail_calls       = tool_quality.fail_calls   + CASE WHEN $3 THEN 0 ELSE 1 END,
+            total_latency_ms = tool_quality.total_latency_ms + $4,
             recent_calls     = (
                 SELECT jsonb_agg(elem ORDER BY ordinality)
                 FROM (
                     SELECT elem, ordinality
                     FROM jsonb_array_elements(
-                        tool_quality.recent_calls || jsonb_build_array($4::jsonb)
+                        tool_quality.recent_calls || jsonb_build_array($5::jsonb)
                     ) WITH ORDINALITY AS t(elem, ordinality)
                     ORDER BY ordinality DESC
                     LIMIT 20
@@ -135,18 +151,19 @@ pub async fn record_tool_result(
                     FROM (
                         SELECT elem
                         FROM jsonb_array_elements(
-                            tool_quality.recent_calls || jsonb_build_array($4::jsonb)
+                            tool_quality.recent_calls || jsonb_build_array($5::jsonb)
                         ) WITH ORDINALITY AS t(elem, ordinality)
                         ORDER BY ordinality DESC
                         LIMIT 20
                     ) window_sub
                 )
             ),
-            last_error       = CASE WHEN $2 THEN tool_quality.last_error ELSE $5 END,
+            last_error       = CASE WHEN $3 THEN tool_quality.last_error ELSE $6 END,
             last_call_at     = NOW(),
             updated_at       = NOW()
         ",
     )
+    .bind(agent_name)
     .bind(tool_name)
     .bind(success)
     .bind(i64::from(duration_ms))
@@ -162,12 +179,15 @@ pub async fn record_tool_result(
 // get_all_penalties  (private)
 // ---------------------------------------------------------------------------
 
-async fn get_all_penalties(db: &PgPool) -> Result<HashMap<String, f32>> {
-    let rows: Vec<(String, f32)> =
-        sqlx::query_as("SELECT tool_name, penalty_score FROM tool_quality")
+async fn get_all_penalties(db: &PgPool) -> Result<HashMap<(String, String), f32>> {
+    let rows: Vec<(String, String, f32)> =
+        sqlx::query_as("SELECT agent_name, tool_name, penalty_score FROM tool_quality")
             .fetch_all(db)
             .await?;
-    Ok(rows.into_iter().collect())
+    Ok(rows
+        .into_iter()
+        .map(|(agent, tool, penalty)| ((agent, tool), penalty))
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -177,9 +197,9 @@ async fn get_all_penalties(db: &PgPool) -> Result<HashMap<String, f32>> {
 /// Returns tools whose `penalty_score` is below 0.8.
 /// Used by `GET /api/doctor` to surface degraded tools.
 pub async fn get_degraded_tools(db: &PgPool) -> Result<Vec<serde_json::Value>> {
-    let rows = sqlx::query_as::<_, (String, f32, i64, i64, Option<String>)>(
+    let rows = sqlx::query_as::<_, (String, String, f32, i64, i64, Option<String>)>(
         r"
-        SELECT tool_name, penalty_score, total_calls, fail_calls, last_error
+        SELECT agent_name, tool_name, penalty_score, total_calls, fail_calls, last_error
         FROM tool_quality
         WHERE penalty_score < 0.8
         ORDER BY penalty_score ASC
@@ -190,8 +210,9 @@ pub async fn get_degraded_tools(db: &PgPool) -> Result<Vec<serde_json::Value>> {
 
     let result = rows
         .into_iter()
-        .map(|(name, penalty, total, fail, last_error)| {
+        .map(|(agent, name, penalty, total, fail, last_error)| {
             json!({
+                "agent_name": agent,
                 "tool_name": name,
                 "penalty_score": penalty,
                 "total_calls": total,
@@ -202,4 +223,43 @@ pub async fn get_degraded_tools(db: &PgPool) -> Result<Vec<serde_json::Value>> {
         .collect();
 
     Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn penalty_is_scoped_per_agent(pool: sqlx::PgPool) {
+        // Tool "T" fails repeatedly under agent A, succeeds under agent B.
+        for _ in 0..5 {
+            record_tool_result(&pool, "A", "T", false, 10, Some("boom")).await.unwrap();
+        }
+        for _ in 0..5 {
+            record_tool_result(&pool, "B", "T", true, 10, None).await.unwrap();
+        }
+
+        let all = get_all_penalties(&pool).await.unwrap();
+        assert!(all[&("A".to_string(), "T".to_string())] < 0.8, "A's T is penalized");
+        assert!(
+            (all[&("B".to_string(), "T".to_string())] - 1.0).abs() < f32::EPSILON,
+            "B's T is clean"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn penalty_cache_returns_per_agent_submap(pool: sqlx::PgPool) {
+        for _ in 0..5 {
+            record_tool_result(&pool, "A", "T", false, 10, Some("x")).await.unwrap();
+        }
+        let cache = PenaltyCache::new(pool.clone());
+        let a = cache.get_penalties("A").await;
+        let b = cache.get_penalties("B").await;
+        assert!(a.get("T").copied().unwrap_or(1.0) < 0.8, "A sees its penalty");
+        assert!(!b.contains_key("T"), "B (unseen) gets an empty submap");
+    }
 }

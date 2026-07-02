@@ -20,6 +20,7 @@ pub enum AuditEvent {
         error: Option<String>,
     },
     ToolQuality {
+        agent_name: String,
         tool_name: String,
         success: bool,
         duration_ms: i32,
@@ -78,6 +79,7 @@ impl AuditQueue {
                         }
                     }
                     AuditEvent::ToolQuality {
+                        agent_name,
                         tool_name,
                         success,
                         duration_ms,
@@ -85,6 +87,7 @@ impl AuditQueue {
                     } => {
                         if let Err(e) = crate::db::tool_quality::record_tool_result(
                             &db,
+                            &agent_name,
                             &tool_name,
                             success,
                             duration_ms,
