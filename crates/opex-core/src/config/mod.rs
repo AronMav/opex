@@ -997,6 +997,14 @@ pub struct HooksConfig {
     /// External HTTP webhooks fired on matching HookEvents.
     #[serde(default)]
     pub webhooks: Vec<WebhookConfig>,
+    /// Total wall-clock budget across the whole decision-webhook chain per tool call
+    /// (ms). None → 10 000 ms default. Some(0) → no chain budget. Individual hooks
+    /// keep their own `timeout_ms`.
+    #[serde(default)]
+    pub total_webhook_timeout_ms: Option<u64>,
+    /// What to do when the chain budget is exceeded. Default: Open (tool proceeds).
+    #[serde(default)]
+    pub on_chain_timeout: FailureMode,
 }
 
 /// Webhook firing mode: fire-and-forget vs. blocking decision gate.
