@@ -61,6 +61,10 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
   // (React `state` is still "idle" for ~100ms, so the state check alone lets a
   // second call through and orphans the first MediaStream — mic stays live).
   const startingRef = useRef(false);
+  // Abort an in-flight transcribe request + skip trailing setState when the
+  // composer unmounts mid-finalize (navigating away while transcribing).
+  const mountedRef = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
   // Latest onAutoResult / vadConfig without re-binding callbacks (read at start()).
   const onAutoResultRef = useRef(opts.onAutoResult);
   const vadConfigRef = useRef(opts.vadConfig);
@@ -103,6 +107,8 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
   // Cleanup on unmount.
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
+      abortRef.current?.abort();
       clearTimers();
       teardownAudio();
       stopTracks();
@@ -134,6 +140,9 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
       recorder.stop();
     });
 
+    // Unmounted while waiting for the recorder to flush — stop here.
+    if (!mountedRef.current) return "";
+
     // VAD detected only silence — don't waste an STT call.
     if (skipEmpty) {
       setState("idle");
@@ -152,6 +161,8 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
     }
 
     setState("transcribing");
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const ext = mimeTypeRef.current.includes("mp4") ? "mp4" : "webm";
       const formData = new FormData();
@@ -161,6 +172,7 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
         method: "POST",
         headers: { Authorization: `Bearer ${assertToken()}` },
         body: formData,
+        signal: controller.signal,
       });
       if (!resp.ok) {
         const err = await resp.text().catch(() => resp.statusText);
@@ -168,10 +180,13 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
       }
       const data = await resp.json();
       const text: string = data.text ?? "";
+      if (!mountedRef.current) return text;
       setState("idle");
       setElapsed(0);
       return text;
     } catch (err) {
+      // Aborted because the component unmounted mid-transcribe — swallow silently.
+      if (controller.signal.aborted) return "";
       // VAD auto-stop can clip a recording into something the STT server rejects;
       // a toast per cycle would spam hands-free. Only alert in manual (non-VAD) mode.
       if (!vad) {
@@ -181,6 +196,8 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
       setState("idle");
       setElapsed(0);
       return "";
+    } finally {
+      abortRef.current = null;
     }
   }, [vad, clearTimers, teardownAudio, stopTracks, t]);
 
