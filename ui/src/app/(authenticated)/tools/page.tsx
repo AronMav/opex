@@ -14,6 +14,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { IconTile } from "@/components/ui/icon-tile";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -22,7 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ScrollableTabsList } from "@/components/ui/scrollable-tabs-list";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import {
@@ -353,7 +356,8 @@ parameters:
             </div>
           </div>
 
-          <form onSubmit={saveMcp} className="neu-flat p-6 space-y-5">
+          <form onSubmit={saveMcp}>
+            <Card className="p-6 space-y-5">
             <Field label={t("tools.mcp_field_name")} hint={t("tools.mcp_hint_name")}>
               <Input type="text" required disabled={!isNew} value={mcpForm.name}
                 onChange={(e) => setMcpForm((f) => ({ ...f, name: e.target.value }))}
@@ -408,6 +412,7 @@ parameters:
                 <Save className="h-4 w-4" /> {formBusy ? t("common.saving") : isNew ? t("common.create") : t("common.save")}
               </Button>
             </div>
+            </Card>
           </form>
         </div>
       </div>
@@ -438,10 +443,9 @@ parameters:
           {yamlLoading ? (
             <Skeleton className="h-96 rounded-xl border border-border bg-muted/20" />
           ) : (
-            <form onSubmit={saveYaml} className="neu-flat p-6 space-y-5">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-foreground">{t("tools.yaml_config")}</label>
-                <span className="text-[11px] text-muted-foreground">{t("tools.yaml_edit_hint")}</span>
+            <form onSubmit={saveYaml}>
+              <Card className="p-6 space-y-5">
+              <Field label={t("tools.yaml_config")} hint={t("tools.yaml_edit_hint")}>
                 <Textarea
                   value={yamlContent}
                   onChange={(e) => setYamlContent(e.target.value)}
@@ -449,7 +453,7 @@ parameters:
                   spellCheck={false}
                   className="font-mono leading-relaxed resize-y"
                 />
-              </div>
+              </Field>
               <div className="flex justify-end gap-3 pt-3 border-t border-border/50">
                 <Button type="button" variant="ghost" size="sm" onClick={cancelEdit}>
                   {t("common.cancel")}
@@ -458,6 +462,7 @@ parameters:
                   <Save className="h-4 w-4" /> {formBusy ? t("common.saving") : isNewYaml ? t("common.create") : t("common.save")}
                 </Button>
               </div>
+              </Card>
             </form>
           )}
         </div>
@@ -470,21 +475,16 @@ parameters:
   const renderYamlCard = (tool: YamlToolEntry, idx: number) => {
     const pending = actionPending === tool.name;
     return (
-      <div key={`yaml-${tool.name}-${idx}`}
-        className={`flex flex-col gap-3 neu-flat p-5 min-w-0 overflow-hidden ${tool.status === "disabled" ? "opacity-50" : ""}`}>
+      <Card key={`yaml-${tool.name}-${idx}`}
+        className={`flex flex-col gap-3 p-5 min-w-0 overflow-hidden ${tool.status === "disabled" ? "opacity-50" : ""}`}>
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-3 min-w-0">
-            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${
-              tool.status === "verified" ? "bg-success/10 border-success/20"
-              : tool.status === "draft" ? "bg-warning/10 border-warning/20"
-              : "bg-muted/30 border-border"
-            }`}>
-              <FileCode2 className={`h-4 w-4 ${
-                tool.status === "verified" ? "text-success"
-                : tool.status === "draft" ? "text-warning"
-                : "text-muted-foreground"
-              }`} />
-            </div>
+            <IconTile
+              tone={tool.status === "verified" ? "success" : tool.status === "draft" ? "warning" : "muted"}
+              size="sm"
+            >
+              <FileCode2 />
+            </IconTile>
             <span className="font-mono text-sm font-bold text-foreground break-words leading-snug min-w-0" title={tool.name}>{tool.name}</span>
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">
@@ -527,7 +527,7 @@ parameters:
             <Trash2 className="h-3 w-3" />
           </Button>
         </div>
-      </div>
+      </Card>
     );
   };
 
@@ -538,15 +538,13 @@ parameters:
     const pending = actionPending === s.name || actionPending === "reload:" + s.name || actionPending === "toggle:" + s.name;
 
     return (
-      <div key={`mcp-${s.name}`}
-        className={`flex flex-col gap-3 neu-flat p-5 min-w-0 overflow-hidden ${!s.enabled ? "opacity-50" : ""}`}>
+      <Card key={`mcp-${s.name}`}
+        className={`flex flex-col gap-3 p-5 min-w-0 overflow-hidden ${!s.enabled ? "opacity-50" : ""}`}>
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-3 min-w-0">
-            <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${
-              s.enabled ? "bg-accent/50 border-border" : "bg-muted/30 border-border"
-            }`}>
-              <Activity className={`h-4 w-4 ${s.enabled ? "text-foreground/70" : "text-muted-foreground/40"}`} />
-            </div>
+            <IconTile tone="muted" size="sm">
+              <Activity />
+            </IconTile>
             <span className="font-mono text-sm font-bold text-foreground break-words leading-snug min-w-0" title={s.name}>{s.name}</span>
           </div>
         </div>
@@ -592,7 +590,7 @@ parameters:
             <Trash2 className="h-3 w-3" />
           </Button>
         </div>
-      </div>
+      </Card>
     );
   };
 
@@ -609,21 +607,21 @@ parameters:
     const pending = handlerPendingId === h.id;
     const isDeleting = deleteHandler.isPending && deleteHandler.variables === h.id;
     return (
-      <div key={`handler-${h.id}`}
-        className={`flex flex-col gap-3 neu-flat p-5 min-w-0 overflow-hidden ${isBuiltin && !h.enabled ? "opacity-50" : ""}`}>
+      <Card key={`handler-${h.id}`}
+        className={`flex flex-col gap-3 p-5 min-w-0 overflow-hidden ${isBuiltin && !h.enabled ? "opacity-50" : ""}`}>
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-accent/50 border-border">
-              <FileCog className="h-4 w-4 text-foreground/70" />
-            </div>
+            <IconTile tone="muted" size="sm">
+              <FileCog />
+            </IconTile>
             <span className="font-mono text-sm font-bold text-foreground break-words leading-snug min-w-0" title={h.id}>{label}</span>
           </div>
           <div className="flex flex-col items-end gap-1 shrink-0">
             <TypeBadge type={isBuiltin ? "INT" : "EXT"} />
-            <Badge variant="secondary" className="text-[10px]">
+            <Badge variant="secondary" size="xs">
               {h.execution === "async" ? t("tools.handler_async") : t("tools.handler_sync")}
             </Badge>
-            <Badge variant="outline" className="text-[10px]">
+            <Badge variant="outline" size="xs">
               {sourceBadgeLabel(h.source)}
             </Badge>
           </div>
@@ -658,7 +656,7 @@ parameters:
               }}
             />
           ) : (
-            <Badge variant="secondary" className="text-[10px]">{t("tools.handler_always_on")}</Badge>
+            <Badge variant="secondary" size="xs">{t("tools.handler_always_on")}</Badge>
           )}
           <div className="flex gap-1.5">
             <Button
@@ -688,7 +686,7 @@ parameters:
             )}
           </div>
         </div>
-      </div>
+      </Card>
     );
   };
 
@@ -729,23 +727,23 @@ parameters:
           </div>
         ) : (
           <Tabs defaultValue="external" className="mt-2">
-            <TabsList>
+            <ScrollableTabsList>
               <TabsTrigger value="external">
                 <ExternalLink className="h-3.5 w-3.5" />
                 {t("tools.external_apis")}
-                <Badge variant="secondary" className="ml-1.5 text-[10px]">{yamlTools.length}</Badge>
+                <Badge variant="secondary" size="xs" className="ml-1.5">{yamlTools.length}</Badge>
               </TabsTrigger>
               <TabsTrigger value="mcp">
                 <Activity className="h-3.5 w-3.5" />
                 {t("tools.mcp_servers")}
-                <Badge variant="secondary" className="ml-1.5 text-[10px]">{mcpServers.length}</Badge>
+                <Badge variant="secondary" size="xs" className="ml-1.5">{mcpServers.length}</Badge>
               </TabsTrigger>
               <TabsTrigger value="handlers">
                 <FileCog className="h-3.5 w-3.5" />
                 {t("tools.file_handlers")}
-                <Badge variant="secondary" className="ml-1.5 text-[10px]">{handlers.length}</Badge>
+                <Badge variant="secondary" size="xs" className="ml-1.5">{handlers.length}</Badge>
               </TabsTrigger>
-            </TabsList>
+            </ScrollableTabsList>
 
             {/* ── External API tools (YAML) ── */}
             <TabsContent value="external" className="mt-6">

@@ -48,6 +48,7 @@ const eslintConfig = defineConfig([
       "src/app/setup/**/*.{ts,tsx}",
       "src/app/error.tsx",
       "src/app/(authenticated)/error.tsx",
+      "src/app/(authenticated)/tools/**/*.{ts,tsx}",
     ],
     plugins: { local: { rules: { "no-raw-design-values": noRawDesignValues } } },
     rules: { "local/no-raw-design-values": "error" },
