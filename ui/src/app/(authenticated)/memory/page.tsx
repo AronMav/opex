@@ -3,19 +3,24 @@
 import { useEffect, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPatch, apiDelete } from "@/lib/api";
-import { copyText } from "@/lib/clipboard";
 import { useMemoryStats, qk } from "@/lib/queries";
 import { useTranslation } from "@/hooks/use-translation";
-import { Input } from "@/components/ui/input";
+import { formatDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { IconTile } from "@/components/ui/icon-tile";
+import { SearchInput } from "@/components/ui/search-input";
+import { Pagination } from "@/components/ui/pagination";
+import { Separator } from "@/components/ui/separator";
+import { CopyableCode } from "@/components/ui/copyable-code";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Markdown } from "@/components/ui/markdown";
-import { Brain, Search, Trash2, Pin, PinOff, ChevronLeft, ChevronRight, ExternalLink, ArrowLeft, Copy, Check, X, MessageSquare, FileText } from "lucide-react";
+import { Brain, Trash2, Pin, PinOff, ExternalLink, ArrowLeft, MessageSquare, FileText } from "lucide-react";
 import { useSearchParams, useRouter } from "next/navigation";
 import type { MemoryDocument } from "@/types/api";
 
@@ -25,7 +30,6 @@ function DocumentFullView({ id, onBack }: { id: string; onBack: () => void }) {
   const { t } = useTranslation();
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -34,14 +38,6 @@ function DocumentFullView({ id, onBack }: { id: string; onBack: () => void }) {
       .catch((err) => setError(err.message || t("memory.doc_load_error")))
       .finally(() => setLoading(false));
   }, [id, t]);
-
-  const handleCopy = () => {
-    if (content) {
-      copyText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
 
   if (loading) {
     return (
@@ -58,12 +54,9 @@ function DocumentFullView({ id, onBack }: { id: string; onBack: () => void }) {
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeft className="h-4 w-4 mr-2" /> {t("common.back")}
         </Button>
-        <Button variant="outline" size="sm" onClick={handleCopy} className="text-xs">
-          {copied ? <Check className="h-3 w-3 mr-1.5" /> : <Copy className="h-3 w-3 mr-1.5" />}
-          {copied ? t("common.copied") : t("common.copy")}
-        </Button>
+        {content && <CopyableCode value={content} display={t("common.copy")} className="max-w-xs" />}
       </div>
-      {error && <p className="text-destructive text-center py-4">{error}</p>}
+      {error && <ErrorBanner error={error} className="mb-4 shrink-0" />}
       <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-li:my-0.5 prose-pre:my-3">
           <Markdown>{content || ""}</Markdown>
@@ -85,19 +78,13 @@ export default function MemoryPage() {
 
   const [chunks, setChunks] = useState<MemoryDocument[]>([]);
   const [total, setTotal] = useState(0);
-  const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState(query);
+  const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const limit = 20;
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(query), 300);
-    return () => clearTimeout(timer);
-  }, [query]);
 
   const fetchChunks = useCallback(async () => {
     setLoading(true);
@@ -107,7 +94,7 @@ export default function MemoryPage() {
         limit: limit.toString(),
         offset: offset.toString(),
       });
-      if (debouncedQuery) params.append("query", debouncedQuery);
+      if (search) params.append("query", search);
 
       const res = await apiGet<{ documents: MemoryDocument[]; total: number }>(`/api/memory/documents?${params.toString()}`);
       setChunks(res.documents);
@@ -117,7 +104,7 @@ export default function MemoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [offset, debouncedQuery, t]);
+  }, [offset, search, t]);
 
   useEffect(() => {
     fetchChunks();
@@ -146,13 +133,16 @@ export default function MemoryPage() {
     }
   };
 
+  const page = Math.floor(offset / limit) + 1;
+  const pageCount = Math.max(1, Math.ceil(total / limit));
+
   const next = () => setOffset(offset + limit);
   const prev = () => setOffset(Math.max(0, offset - limit));
 
   // Reset pagination on filter change
   useEffect(() => {
     setOffset(0);
-  }, [debouncedQuery]);
+  }, [search]);
 
   // Full document view mode
   if (docId) {
@@ -164,59 +154,46 @@ export default function MemoryPage() {
       <PageHeader
         title={t("memory.title")}
         description={t("memory.subtitle")}
-        className="shrink-0"
-        actions={
-          stats && (
-            <div className="flex items-center gap-4 px-4 py-2 bg-muted/30 rounded-xl border border-border/50">
-              <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground">{t("memory.documents")}</span>
-                <span className="font-mono text-sm font-bold text-foreground">{stats.total.toLocaleString()}</span>
-              </div>
-              <div className="w-[1px] h-8 bg-border/50" />
-              <div className="flex flex-col">
-                <span className="text-xs text-muted-foreground">{t("memory.pinned")}</span>
-                <span className="font-mono text-sm font-bold text-foreground">{stats.pinned.toLocaleString()}</span>
-              </div>
-              {stats.embed_dim && (
-                <>
-                  <div className="w-[1px] h-8 bg-border/50" />
-                  <div className="flex flex-col">
-                    <span className="text-xs text-muted-foreground">{t("memory.embed_dim")}</span>
-                    <span className="font-mono text-sm font-bold text-foreground">{stats.embed_dim.toLocaleString()}</span>
-                  </div>
-                </>
-              )}
-            </div>
-          )
-        }
+        className="mb-4 shrink-0"
       />
+
+      {stats && (
+        <div className="mb-6 flex items-center gap-4 shrink-0">
+          <div className="flex flex-col">
+            <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("memory.documents")}</span>
+            <span className="font-mono text-sm font-bold text-foreground tabular-nums">{stats.total.toLocaleString()}</span>
+          </div>
+          <Separator orientation="vertical" className="h-8" />
+          <div className="flex flex-col">
+            <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("memory.pinned")}</span>
+            <span className="font-mono text-sm font-bold text-foreground tabular-nums">{stats.pinned.toLocaleString()}</span>
+          </div>
+          {stats.embed_dim && (
+            <>
+              <Separator orientation="vertical" className="h-8" />
+              <div className="flex flex-col">
+                <span className="text-2xs uppercase tracking-wider text-muted-foreground">{t("memory.embed_dim")}</span>
+                <span className="font-mono text-sm font-bold text-foreground tabular-nums">{stats.embed_dim.toLocaleString()}</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {error && <ErrorBanner error={error} className="mb-4 shrink-0" />}
 
       <div className="flex flex-col flex-1 min-h-0">
-          {/* Search + Create */}
-          <div className="mb-6 flex gap-2 shrink-0">
-            <div className="relative flex-1 min-w-0">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/70" />
-              <Input
-                placeholder={t("memory.search_placeholder")}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="pl-9 bg-card border-border/50"
-              />
-              {query && (
-                <button
-                  onClick={() => setQuery("")}
-                  aria-label={t("common.clear")}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 h-6 w-6 flex items-center justify-center text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
+          {/* Search */}
+          <div className="mb-6 shrink-0">
+            <SearchInput
+              value={search}
+              onChange={setSearch}
+              placeholder={t("memory.search_placeholder")}
+              debounceMs={300}
+            />
           </div>
 
-          {/* Table View */}
+          {/* Document list */}
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 -mr-1 custom-scrollbar">
             {loading && chunks.length === 0 ? (
               <div className="space-y-3">
@@ -228,76 +205,70 @@ export default function MemoryPage() {
               <EmptyState icon={Brain} text={t("memory.nothing_found")} height="h-64" />
             ) : (
               <div className="grid gap-3">
-                {chunks.map((doc) => (
-                  <div
-                    key={doc.id}
-                    className="group relative flex flex-col p-4 neu-card neu-hover transition-all duration-200"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-1">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            {doc.source?.startsWith("auto:session") || doc.source?.startsWith("Session:") ? (
-                              <MessageSquare className="h-3.5 w-3.5 text-primary/60 shrink-0" />
-                            ) : (
-                              <FileText className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
+                {chunks.map((doc) => {
+                  const isSession = doc.source?.startsWith("auto:session") || doc.source?.startsWith("Session:");
+                  return (
+                    <Card key={doc.id} interactive className="group relative flex flex-col p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <IconTile tone={isSession ? "primary" : "muted"} size="sm">
+                                {isSession ? <MessageSquare /> : <FileText />}
+                              </IconTile>
+                              <h3 className="font-semibold text-sm truncate text-foreground group-hover:text-primary transition-colors">
+                                {doc.source?.replace("auto:session:", "Session: ") || t("memory.untitled")}
+                              </h3>
+                            </div>
+                            {doc.pinned && (
+                              <Badge variant="outline-primary" size="sm" className="shrink-0">
+                                <Pin className="h-3 w-3" />
+                              </Badge>
                             )}
-                            <h3 className="font-semibold text-sm truncate text-foreground group-hover:text-primary transition-colors">
-                              {doc.source?.replace("auto:session:", "Session: ") || t("memory.untitled")}
-                            </h3>
                           </div>
-                          {doc.pinned && (
-                            <Badge variant="secondary" className="h-5 px-1.5 bg-primary/10 text-primary border-none shrink-0">
-                              <Pin className="h-3 w-3" />
-                            </Badge>
-                          )}
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <span className="text-2xs uppercase tracking-wider font-bold text-muted-foreground-subtle">
+                              ID: {doc.id.split("-")[0]}
+                            </span>
+                            <span className="text-2xs text-muted-foreground-subtle">
+                              {doc.created_at ? formatDate(doc.created_at, locale) : ""}
+                            </span>
+                            {doc.scope === "shared" && (
+                              <Badge variant="secondary" size="sm">
+                                shared
+                              </Badge>
+                            )}
+                          </div>
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                          <span className="text-[10px] uppercase tracking-wider font-bold text-muted-foreground/60">
-                            ID: {doc.id.split("-")[0]}
-                          </span>
-                          <span className="text-[10px] text-muted-foreground/60">
-                            {doc.created_at ? new Date(doc.created_at).toLocaleDateString(locale === "en" ? "en-US" : "ru-RU") : ""}
-                          </span>
-                          {doc.scope === "shared" && (
-                            <Badge variant="secondary" className="h-4 text-[9px] px-1 py-0 bg-primary/10 text-primary border-none">
-                              shared
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
 
-                      <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
-                        <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => router.push(`/memory?doc=${doc.id}`)}>
-                          <ExternalLink className="h-3 w-3 mr-1.5" /> {t("memory.show_full_document")}
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => togglePin(doc)} className="h-7 w-7 p-0">
-                          {doc.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(doc.id)} className="h-7 text-xs px-2 text-destructive hover:bg-destructive/10">
-                          <Trash2 className="h-3 w-3 mr-1.5" /> {t("common.delete")}
-                        </Button>
+                        <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => router.push(`/memory?doc=${doc.id}`)}>
+                            <ExternalLink className="h-3 w-3 mr-1.5" /> {t("memory.show_full_document")}
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => togglePin(doc)} className="h-7 w-7 p-0">
+                            {doc.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(doc.id)} className="h-7 text-xs px-2 text-destructive hover:bg-destructive/10">
+                            <Trash2 className="h-3 w-3 mr-1.5" /> {t("common.delete")}
+                          </Button>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                ))}
+                    </Card>
+                  );
+                })}
               </div>
             )}
           </div>
 
           {/* Pagination */}
           {chunks.length > 0 && (
-            <div className="mt-6 flex items-center justify-center gap-3 shrink-0">
-              <Button variant="outline" size="sm" onClick={prev} disabled={offset === 0 || loading} className="text-xs w-24">
-                <ChevronLeft className="h-3.5 w-3.5 mr-1" /> {t("common.back")}
-              </Button>
-              <span className="text-xs text-muted-foreground tabular-nums">
-                {Math.floor(offset / limit) + 1} / {Math.max(1, Math.ceil(total / limit))}
-              </span>
-              <Button variant="outline" size="sm" onClick={next} disabled={offset + limit >= total || loading} className="text-xs w-24">
-                {t("common.forward")} <ChevronRight className="h-3.5 w-3.5 ml-1" />
-              </Button>
-            </div>
+            <Pagination
+              className="mt-6 shrink-0"
+              page={page}
+              total={pageCount}
+              onPrev={prev}
+              onNext={next}
+            />
           )}
         </div>
 
