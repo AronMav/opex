@@ -17,6 +17,9 @@ import { Button } from "@/components/ui/button";
 import { CircularLoader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { StatusDot } from "@/components/ui/status-dot";
 import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
@@ -193,7 +196,7 @@ export default function CronPage() {
         ) : (
           <div className="grid gap-4 md:gap-6">
             {jobs.map((j) => (
-              <div key={j.id} className={`group relative flex flex-col md:flex-row md:flex-wrap md:items-stretch gap-4 neu-card p-5 transition-all duration-300 ${
+              <Card key={j.id} className={`group relative flex flex-col md:flex-row md:flex-wrap md:items-stretch gap-4 p-5 transition-all duration-300 ${
                 j.enabled
                   ? "hover:shadow-lg"
                   : "opacity-70 hover:opacity-100"
@@ -202,19 +205,19 @@ export default function CronPage() {
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-3 flex-wrap">
                       <h3 className="font-mono text-base font-bold text-foreground truncate min-w-0">{j.name}</h3>
-                      <Badge variant="outline" className="text-xs border-primary/40 text-primary bg-primary/5">
+                      <Badge variant="outline-primary">
                         {j.agent}
                       </Badge>
-                      <Badge variant={j.enabled ? "default" : "secondary"} className={`text-xs ${j.enabled ? 'bg-success/20 text-success border-success/30' : 'bg-muted text-muted-foreground'}`}>
+                      <StatusBadge status={j.enabled ? "active" : "paused"}>
                         {j.enabled ? t("cron.active") : t("cron.paused")}
-                      </Badge>
+                      </StatusBadge>
                       {j.silent && (
-                        <Badge variant="outline" className="text-[9px] bg-muted/50 text-muted-foreground border-border">
+                        <Badge variant="secondary" size="xs">
                           {t("cron.silent")}
                         </Badge>
                       )}
                       {j.run_once && (
-                        <Badge variant="outline" className="text-[9px] bg-primary/5 text-primary border-primary/30">
+                        <Badge variant="outline-primary" size="xs">
                           {t("tasks.once")}
                         </Badge>
                       )}
@@ -222,12 +225,12 @@ export default function CronPage() {
                     <div className="flex items-center gap-2 mt-1">
                       <Clock className="h-3.5 w-3.5 text-muted-foreground/60" />
                       <span className="font-mono text-xs text-muted-foreground font-bold tracking-wider">{j.cron}</span>
-                      <span className="font-mono text-xs text-muted-foreground/70 uppercase tracking-wide bg-muted/50 px-2 py-0.5 rounded border border-border/50 max-w-[140px] truncate">
+                      <span className="font-mono text-xs text-muted-foreground/70 uppercase tracking-wide bg-muted/50 px-2 py-0.5 rounded border border-border/50 max-w-36 truncate">
                         {j.timezone}
                       </span>
                     </div>
                   </div>
-                  <div className="mt-4 rounded-lg neu-inset p-3">
+                  <div className="mt-4 rounded-lg bg-muted/30 border border-border/40 p-3">
                     <p className="font-mono text-sm leading-relaxed text-foreground/80 line-clamp-2 break-words">
                       {j.task}
                     </p>
@@ -237,22 +240,20 @@ export default function CronPage() {
                 <div className="flex flex-col gap-2 border-t border-border/50 pt-4 md:border-t-0 md:pt-0 md:border-l md:pl-4 shrink-0 md:w-36">
                   <div className="grid grid-cols-2 md:grid-cols-1 gap-2">
                     <Button
-                      variant={j.enabled ? "outline" : "default"}
+                      variant={j.enabled ? "outline-warning" : "default"}
                       size="sm"
                       onClick={() => toggleEnabled(j)}
                       disabled={mutating}
-                      className={`text-xs font-medium ${
-                        j.enabled ? "border-warning/50 text-warning hover:bg-warning/10" : "bg-primary text-primary-foreground"
-                      }`}
+                      className="text-xs font-medium"
                     >
                       {j.enabled ? <><PowerOff className="h-3 w-3 mr-1.5" /> {t("cron.pause")}</> : <><Power className="h-3 w-3 mr-1.5" /> {t("cron.enable")}</>}
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="outline-success"
                       size="sm"
                       onClick={() => runNow(j.id)}
                       disabled={mutating || !j.enabled}
-                      className="text-xs font-medium border-success/30 text-success hover:bg-success/10"
+                      className="text-xs font-medium"
                     >
                       <Play className="h-3 w-3 mr-1.5" /> {t("cron.run_now")}
                     </Button>
@@ -304,17 +305,14 @@ export default function CronPage() {
                             ? Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000)
                             : null;
                           return (
-                            <div key={r.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border/30">
-                              <Badge
-                                variant="outline"
-                                className={`text-[10px] shrink-0 mt-0.5 ${
-                                  r.status === "success" ? "border-success/50 text-success bg-success/10" :
-                                  r.status === "error" ? "border-destructive/50 text-destructive bg-destructive/10" :
-                                  "border-warning/50 text-warning bg-warning/10"
-                                }`}
+                            <div key={r.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border/40">
+                              <StatusBadge
+                                status={r.status === "success" ? "success" : r.status === "error" ? "error" : "pending"}
+                                size="sm"
+                                className="shrink-0 mt-0.5"
                               >
                                 {r.status}
-                              </Badge>
+                              </StatusBadge>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                   <span>{new Date(r.started_at).toLocaleString()}</span>
@@ -334,20 +332,19 @@ export default function CronPage() {
                     )}
                   </div>
                 )}
-              </div>
+              </Card>
             ))}
           </div>
         )}
 
       <Dialog open={formOpen} onOpenChange={(open) => { setFormOpen(open); if (!open) { setToolPolicyAllow(""); setToolPolicyDeny(""); } }}>
-        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-xl max-h-[90dvh] overflow-hidden p-0">
-          <DialogHeader className="p-6 border-b border-border/50">
+        <DialogContent size="xl">
+          <DialogHeader className="border-b border-border/50 pb-4">
             <DialogTitle className="text-base font-bold text-foreground">
               {editId ? t("cron.editing_task") : t("cron.new_task_dialog")}
             </DialogTitle>
           </DialogHeader>
-          <div className="max-h-[60dvh] sm:max-h-[70dvh] overflow-y-auto overscroll-contain">
-          <div className="p-6 space-y-5">
+          <div className="space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label={t("cron.field_name")}>
                 <Input placeholder="daily_report" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="font-mono text-sm h-11" />
@@ -369,7 +366,7 @@ export default function CronPage() {
             <div className="flex items-center justify-between pt-2">
               <div className="space-y-0.5">
                 <label className="text-sm font-medium text-muted-foreground">{t("tasks.run_once")}</label>
-                <p className="text-[11px] text-muted-foreground/50">{t("tasks.run_once_description")}</p>
+                <p className="text-2xs text-muted-foreground/50">{t("tasks.run_once_description")}</p>
               </div>
               <Switch
                 checked={form.run_once ?? false}
@@ -416,7 +413,7 @@ export default function CronPage() {
                 placeholder={t("cron.task_placeholder")}
                 value={form.task}
                 onChange={(e) => setForm({ ...form, task: e.target.value })}
-                className="font-mono text-sm min-h-[120px] resize-y"
+                className="font-mono text-sm min-h-32 resize-y"
               />
             </Field>
 
@@ -424,7 +421,7 @@ export default function CronPage() {
             <div className="flex items-center justify-between pt-2">
               <div className="space-y-0.5">
                 <label className="text-sm font-medium text-muted-foreground">{t("cron.field_silent")}</label>
-                <p className="text-[11px] text-muted-foreground/50">{t("cron.silent_hint")}</p>
+                <p className="text-2xs text-muted-foreground/50">{t("cron.silent_hint")}</p>
               </div>
               <Switch
                 checked={form.silent}
@@ -452,9 +449,9 @@ export default function CronPage() {
                     {agentChannels.map((ch) => (
                       <SelectItem key={ch.id} value={ch.channel_type}>
                         <span className="flex items-center gap-2">
-                          <span className={`h-1.5 w-1.5 rounded-full ${ch.status === "running" ? "bg-success" : "bg-muted-foreground/40"}`} />
+                          <StatusDot status={ch.status === "running" ? "success" : "muted"} className="h-1.5 w-1.5" />
                           {ch.display_name}
-                          <span className="text-[10px] text-muted-foreground/50 font-mono">{ch.channel_type}</span>
+                          <span className="text-3xs text-muted-foreground/50 font-mono">{ch.channel_type}</span>
                         </span>
                       </SelectItem>
                     ))}
@@ -502,8 +499,7 @@ export default function CronPage() {
               </CollapsibleContent>
             </Collapsible>
           </div>
-          </div>
-          <DialogFooter className="p-6 border-t border-border/50 gap-3">
+          <DialogFooter className="border-t border-border/50 pt-4 gap-3">
             <Button variant="ghost" onClick={() => setFormOpen(false)}>{t("common.cancel")}</Button>
             <Button onClick={saveJob} disabled={mutating || !form.name.trim() || (!form.run_once && (!form.cron.trim() || !isValidCron(form.cron))) || (form.run_once && !form.run_at)}>
               {editId ? t("common.save") : t("common.create")}
