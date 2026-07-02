@@ -33,6 +33,7 @@ const eslintConfig = defineConfig([
     files: [
       "src/app/(authenticated)/webhooks/**/*.{ts,tsx}",
       "src/app/(authenticated)/secrets/**/*.{ts,tsx}",
+      "src/app/(authenticated)/backups/**/*.{ts,tsx}",
     ],
     plugins: { local: { rules: { "no-raw-design-values": noRawDesignValues } } },
     rules: { "local/no-raw-design-values": "error" },

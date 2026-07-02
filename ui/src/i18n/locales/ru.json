@@ -984,6 +984,8 @@
   "backups.download": "Скачать",
   "backups.restore": "Восстановить",
   "backups.restoring": "Восстановление...",
+  "backups.restore_success": "Бэкап восстановлен",
+  "backups.large_warning": "Большой бэкап ({{size}}). Восстановление может занять время.",
   "backups.restore_title": "Восстановить из бэкапа?",
   "backups.restore_description": "Это ДЕСТРУКТИВНАЯ операция. Текущая база данных будет заменена данными из бэкапа {{filename}}. Это действие необратимо.",
   "backups.delete_title": "Удалить бэкап?",
