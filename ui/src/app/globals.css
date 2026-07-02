@@ -11,6 +11,9 @@
   --font-mono: var(--font-mono);
   --font-display: var(--font-display);
 
+  --text-2xs: 0.6875rem; /* 11px — replaces text-[11px] */
+  --text-3xs: 0.625rem;  /* 10px — replaces text-[10px] */
+
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -68,6 +71,28 @@
 
 :root {
   --radius: 0.75rem;
+
+  /* Layout dimensions */
+  --sidebar-w: 280px;   /* chat session sidebar */
+  --toolbar-h: 3.5rem;  /* 56px — chat/workspace toolbars (was h-14) */
+  --explorer-w: 240px;  /* workspace file tree */
+  --auth-w: 400px;      /* login/setup card */
+
+  /* Semantic z-index scale (single source of truth for stacking) */
+  --z-dropdown: 40;
+  --z-sticky: 30;
+  --z-overlay: 45;
+  --z-modal: 50;
+  --z-popover: 55;
+  --z-toast: 60;
+
+  /* Elevation scale (light) */
+  --elevation-1: 0 1px 2px 0 rgb(0 0 0 / 0.04);
+  --elevation-2: 0 1px 4px 0 rgb(0 0 0 / 0.06);
+  --elevation-3: 0 4px 12px 0 rgb(0 0 0 / 0.08);
+  --elevation-4: 0 8px 24px 0 rgb(0 0 0 / 0.12);
+
+  --tap-target: 44px; /* WCAG 2.5.5 minimum touch target */
 
   /* Animation timing tokens */
   --chat-duration-fast: 150ms;
@@ -168,6 +193,12 @@
 
   --neu-shadow-light: #2a3347;
   --neu-shadow-dark: #141c2a;
+
+  /* Elevation scale (dark) */
+  --elevation-1: 0 1px 2px 0 rgb(0 0 0 / 0.20);
+  --elevation-2: 0 1px 4px 0 rgb(0 0 0 / 0.28);
+  --elevation-3: 0 4px 12px 0 rgb(0 0 0 / 0.36);
+  --elevation-4: 0 8px 24px 0 rgb(0 0 0 / 0.48);
 }
 
 @layer base {
@@ -204,6 +235,16 @@
   &::-webkit-scrollbar {
     display: none; /* Chromium / WebKit */
   }
+}
+
+@utility shadow-elev-1 { box-shadow: var(--elevation-1); }
+@utility shadow-elev-2 { box-shadow: var(--elevation-2); }
+@utility shadow-elev-3 { box-shadow: var(--elevation-3); }
+@utility shadow-elev-4 { box-shadow: var(--elevation-4); }
+
+@utility tap-target {
+  min-height: var(--tap-target);
+  min-width: var(--tap-target);
 }
 
 /* --- Card Utility Classes --- */
