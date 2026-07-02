@@ -29,7 +29,7 @@ export function BranchNavigator({ parentMessageId, siblings, currentIndex }: Bra
       >
         <ChevronLeft className="h-3 w-3" />
       </Button>
-      <span className="tabular-nums min-w-[2rem] text-center">
+      <span className="tabular-nums min-w-8 text-center">
         {currentIndex + 1}/{siblings.length}
       </span>
       <Button

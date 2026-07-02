@@ -659,7 +659,7 @@ export function ChatComposer() {
             <div key={att.id} className="flex flex-col">
               <div data-upload-id={att.uploadId} className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground">
                 <Paperclip className="h-3 w-3" />
-                <span className="truncate max-w-[200px]">{att.name}</span>
+                <span className="truncate max-w-50">{att.name}</span>
                 <button
                   type="button"
                   aria-label={t("chat.remove_attachment")}
@@ -703,7 +703,7 @@ export function ChatComposer() {
                 ? t("chat.continue_dialog")
                 : t("chat.message_placeholder")
             }
-            className="min-h-[44px] max-h-[120px] md:max-h-[240px] resize-none bg-transparent px-4 py-3 text-[15px] text-foreground outline-none placeholder:text-muted-foreground/35"
+            className="min-h-11 max-h-30 md:max-h-60 resize-none bg-transparent px-4 py-3 text-message text-foreground outline-none placeholder:text-muted-foreground/35"
             onKeyDown={handleKeyDown}
           />
           {resolvedMention && (
@@ -865,7 +865,7 @@ export function ChatComposer() {
                 </div>
               )}
               {agents.length > 1 && (
-                <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/50 bg-muted/30 px-2 py-0.5 rounded">
+                <span className="font-mono text-3xs font-semibold uppercase tracking-wider text-muted-foreground/50 bg-muted/30 px-2 py-0.5 rounded">
                   {currentAgent}
                 </span>
               )}

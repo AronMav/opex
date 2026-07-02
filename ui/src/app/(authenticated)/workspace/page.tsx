@@ -390,7 +390,7 @@ export default function WorkspacePage() {
                 <FolderTree className="h-5 w-5" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="p-0 w-[75vw] md:w-[280px] border-r border-border bg-sidebar">
+            <SheetContent side="left" className="p-0 w-[75vw] md:w-70 border-r border-border bg-sidebar">
               {/* Mobile instance — independent ref/state */}
               <WorkspaceFileTree {...fileTreeProps} />
             </SheetContent>
@@ -448,7 +448,7 @@ export default function WorkspacePage() {
 
       <div className="flex min-h-0 flex-1 relative">
         {/* Desktop Sidebar — independent instance */}
-        <div className="hidden md:flex flex-col w-[240px] shrink-0 border-r border-border">
+        <div className="hidden md:flex flex-col w-60 shrink-0 border-r border-border">
           <WorkspaceFileTree {...fileTreeProps} />
         </div>
 

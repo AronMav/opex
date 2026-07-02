@@ -32,7 +32,7 @@ export function ModelDropdown({ agent }: { agent: string }) {
         useChatStore.getState().setModelOverride(agent, val === defaultModel ? null : val);
       }}
     >
-      <SelectTrigger className="h-6 border-0 bg-transparent text-[10px] font-mono uppercase tracking-wide text-muted-foreground hover:text-foreground px-1 gap-1 w-auto max-w-[130px]">
+      <SelectTrigger className="h-6 border-0 bg-transparent text-3xs font-mono uppercase tracking-wide text-muted-foreground hover:text-foreground px-1 gap-1 w-auto max-w-32">
         <SelectValue>{shortModel}</SelectValue>
       </SelectTrigger>
       <SelectContent className="border-border text-xs">
