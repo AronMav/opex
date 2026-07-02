@@ -709,6 +709,9 @@ parameters:
               <Button variant="outline" size="sm" onClick={startCreateMcp}>
                 <Plus className="h-3.5 w-3.5" /> {t("tools.add_mcp")}
               </Button>
+              <Button variant="outline" size="sm" onClick={() => setHandlerEditorId("create")}>
+                <Plus className="h-3.5 w-3.5" /> {t("tools.handler_create")}
+              </Button>
               <Button variant="outline" size="sm" onClick={invalidateAll} disabled={loading} aria-label={t("common.refresh")}>
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               </Button>
@@ -768,11 +771,6 @@ parameters:
 
             {/* ── File Handlers ── */}
             <TabsContent value="handlers" className="mt-6">
-              <div className="flex justify-end mb-4">
-                <Button variant="outline" size="sm" onClick={() => setHandlerEditorId("create")}>
-                  <Plus className="h-3.5 w-3.5" /> {t("tools.handler_create")}
-                </Button>
-              </div>
               {handlers.length === 0 ? (
                 <EmptyState
                   icon={FileCog}
