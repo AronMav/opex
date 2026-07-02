@@ -54,6 +54,14 @@ export const TextPart = memo(function TextPart({ text, highlightRanges, isActive
     (s) => s.agents[s.currentAgent]?.connectionPhase === "streaming"
   );
 
+  // Hooks must run before any early return: toggling highlightRanges on/off
+  // (search ↔ clear-search) otherwise changes the hook count between renders
+  // and React crashes with "Rendered {more,fewer} hooks than expected".
+  // When isStreaming is false (the highlight/search context) useSmoothedText
+  // returns the text immediately with no timer, so this is side-effect-free.
+  const cleaned = cleanContent(text);
+  const smoothed = useSmoothedText(cleaned, isStreaming);
+
   // When highlight ranges are provided, render plain text with inline marks.
   // Skip cleanContent + markdown rendering to avoid losing character offsets.
   if (highlightRanges && highlightRanges.length > 0) {
@@ -64,8 +72,6 @@ export const TextPart = memo(function TextPart({ text, highlightRanges, isActive
     );
   }
 
-  const cleaned = cleanContent(text);
-  const smoothed = useSmoothedText(cleaned, isStreaming);
   if (!smoothed) return null;
   return (
     <MessageContent
