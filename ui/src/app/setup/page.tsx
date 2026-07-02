@@ -15,8 +15,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Alert } from "@/components/ui/alert";
+import { Stepper } from "@/components/ui/stepper";
+import { AuthShell, AuthBrand } from "@/components/ui/auth-shell";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import {
-  Bot,
   Key,
   User,
   MessageSquare,
@@ -392,45 +396,22 @@ export default function SetupPage() {
   const hasWarn = allChecks.some((c) => c.check.status === "warn");
 
   return (
-    <div className="flex h-dvh overflow-y-auto items-start justify-center bg-background p-4 py-8">
-      <div className="w-full max-w-lg">
-        {/* Logo */}
-        <div className="flex items-center justify-center gap-3 mb-8">
-          <Bot className="h-8 w-8 text-primary" />
-          <span className="font-display text-2xl font-bold tracking-wide">OPEX</span>
-        </div>
+    <AuthShell className="max-w-lg">
+      {/* Logo */}
+      <AuthBrand orientation="horizontal" className="mb-8" />
 
-        {/* Step indicators */}
-        <div className="flex items-center justify-center gap-2 mb-8">
-          {STEPS.map((s, i) => {
-            const Icon = s.icon;
-            const done = i < currentIdx;
-            const active = i === currentIdx;
-            return (
-              <div key={s.key} className="flex items-center gap-2">
-                {i > 0 && <div className={`h-px w-8 ${done ? "bg-primary" : "bg-border"}`} />}
-                <div
-                  className={`flex h-9 w-9 items-center justify-center rounded-full border-2 transition-all ${done ? "border-primary bg-primary text-primary-foreground" :
-                      active ? "border-primary bg-primary/10 text-primary" :
-                        "border-border text-muted-foreground"
-                    }`}
-                >
-                  {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      {/* Step indicators */}
+      <Stepper steps={STEPS} currentIndex={currentIdx} className="mb-8" />
 
-        {/* Card */}
-        <div className="neu-card p-6">
-          <h2 className="text-lg font-bold mb-1">{t(STEPS[currentIdx].labelKey)}</h2>
+      {/* Card */}
+      <Card className="p-6">
+        <h2 className="text-lg font-bold mb-1">{t(STEPS[currentIdx].labelKey)}</h2>
 
-          {error && (
-            <div className="mt-3 rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
-              {error}
-            </div>
-          )}
+        {error && (
+          <Alert variant="destructive" className="mt-3">
+            {error}
+          </Alert>
+        )}
 
           {/* ── Step 0: Requirements ──────────────────────────────── */}
           {step === "requirements" && (
@@ -474,19 +455,13 @@ export default function SetupPage() {
 
                   {/* Summary banner */}
                   {!hasError && !hasWarn && (
-                    <div className="rounded-lg bg-success/10 border border-success/20 p-3 text-sm text-success">
-                      {t("setup.requirements_pass")}
-                    </div>
+                    <Alert variant="success">{t("setup.requirements_pass")}</Alert>
                   )}
                   {!hasError && hasWarn && (
-                    <div className="rounded-lg bg-warning/10 border border-warning/20 p-3 text-sm text-warning">
-                      {t("setup.requirements_warn")}
-                    </div>
+                    <Alert variant="warning">{t("setup.requirements_warn")}</Alert>
                   )}
                   {hasError && (
-                    <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-3 text-sm text-destructive">
-                      {t("setup.requirements_fail")}
-                    </div>
+                    <Alert variant="destructive">{t("setup.requirements_fail")}</Alert>
                   )}
 
                   {/* CLI Tools detection */}
@@ -581,9 +556,9 @@ export default function SetupPage() {
                           <span className="flex items-center gap-2">
                             {pt.name || pt.id}
                             {detectedClis.includes(pt.id) && (
-                              <span className="text-[10px] font-semibold px-1.5 py-0 rounded bg-success/10 text-success border border-success/20">
+                              <Badge variant="outline-success" size="xs">
                                 {t("setup.cli_detected")}
-                              </span>
+                              </Badge>
                             )}
                           </span>
                         </SelectItem>
@@ -617,7 +592,7 @@ export default function SetupPage() {
               {/* Base URL */}
               {providerType && (
                 <div className="space-y-2">
-                  <label htmlFor={baseUrlId} className="text-sm font-medium text-muted-foreground">{t("setup.base_url")} <span className="text-xs text-muted-foreground/60">({t("common.optional")})</span></label>
+                  <label htmlFor={baseUrlId} className="text-sm font-medium text-muted-foreground">{t("setup.base_url")} <span className="text-xs text-muted-foreground-subtle">({t("common.optional")})</span></label>
                   <Input
                     id={baseUrlId}
                     value={baseUrl}
@@ -693,7 +668,7 @@ export default function SetupPage() {
                           key={m}
                           type="button"
                           onClick={() => setDefaultModel(m)}
-                          className="rounded-md border border-border bg-muted/50 px-2 py-0.5 font-mono text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                          className="rounded-md border border-border bg-muted/50 px-2 py-0.5 font-mono text-2xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                         >
                           {m}
                         </button>
@@ -839,8 +814,7 @@ export default function SetupPage() {
               </div>
             </div>
           )}
-        </div>
-      </div>
-    </div>
+      </Card>
+    </AuthShell>
   );
 }
