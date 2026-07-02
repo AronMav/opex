@@ -365,6 +365,8 @@ export default function WebhooksPage() {
         onConfirm={regenerateSecret}
         title={t("webhooks.regenerate_confirm_title")}
         description={t("webhooks.regenerate_confirm_description", { name: regenTarget?.name ?? "" })}
+        variant="warning"
+        confirmLabel={t("webhooks.regenerate_secret")}
       />
 
       {/* Secret reveal dialog */}
