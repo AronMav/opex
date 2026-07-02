@@ -8,15 +8,18 @@ function SegmentedControl<T extends string>({
   onChange,
   options,
   className,
+  ariaLabel,
 }: {
   value: T
   onChange: (v: T) => void
   options: ReadonlyArray<{ value: T; label: React.ReactNode }>
   className?: string
+  ariaLabel?: string
 }) {
   return (
     <div
       role="radiogroup"
+      aria-label={ariaLabel}
       className={cn("inline-flex gap-0.5 rounded-md border border-border bg-muted/40 p-0.5", className)}
     >
       {options.map((o) => {
