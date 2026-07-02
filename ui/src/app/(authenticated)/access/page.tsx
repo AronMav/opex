@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { IconTile } from "@/components/ui/icon-tile";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { formatDate } from "@/lib/format";
 import { useTranslation } from "@/hooks/use-translation";
@@ -216,38 +219,38 @@ export default function AccessPage() {
             const isSaving = savingAgents.has(agent);
 
             return (
-              <div key={agent} className="rounded-xl border border-border/60 bg-card/50 overflow-hidden">
+              <Card key={agent} className="overflow-hidden p-0">
                 {/* Compact header row */}
                 <button
                   className="w-full flex items-center gap-3 p-4 hover:bg-muted/30 transition-colors text-left"
                   onClick={() => toggleExpand(agent)}
                 >
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 border border-primary/20 shrink-0">
-                    <ShieldCheck className="h-4 w-4 text-primary" />
-                  </div>
+                  <IconTile tone="primary" size="sm">
+                    <ShieldCheck className="h-4 w-4" />
+                  </IconTile>
                   <span className="font-mono text-sm font-bold tracking-tight text-foreground truncate flex-1 min-w-0">{agent}</span>
 
                   {/* Status pills */}
                   <div className="flex items-center gap-2 shrink-0">
                     {agentPending.length > 0 && (
-                      <Badge variant="outline" className="text-[10px] border-warning/50 text-warning bg-warning/5 px-1.5 py-0">
+                      <Badge variant="outline-warning" size="xs">
                         {agentPending.length} {t("access.pending")}
                       </Badge>
                     )}
                     {settings.enabled ? (
                       <Badge
                         variant={settings.mode === "restricted" ? "outline-warning" : "outline-success"}
-                        className="text-[10px] px-1.5 py-0"
+                        size="xs"
                       >
                         {settings.mode === "restricted" ? t("access.restricted") : t("access.open")}
                       </Badge>
                     ) : (
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 text-muted-foreground">
+                      <Badge variant="secondary" size="xs">
                         {t("access.disabled")}
                       </Badge>
                     )}
-                    <span className="text-[11px] text-muted-foreground/50 font-mono">{t("access.users_count", { count: agentUsers.length })}</span>
-                    <ChevronDown className={`h-4 w-4 text-muted-foreground/40 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                    <span className="text-2xs text-muted-foreground-subtle font-mono">{t("access.users_count", { count: agentUsers.length })}</span>
+                    <ChevronDown className={`h-4 w-4 text-muted-foreground-subtle transition-transform ${isExpanded ? "rotate-180" : ""}`} />
                   </div>
                 </button>
 
@@ -266,27 +269,15 @@ export default function AccessPage() {
                       </div>
                       {settings.enabled && (
                         <>
-                          <div
-                            role="radiogroup"
-                            aria-label={t("access.mode_label")}
-                            className="flex gap-0.5 p-0.5 bg-muted/40 rounded-md border border-border self-start sm:self-auto"
-                          >
-                            {["open", "restricted"].map((mode) => (
-                              <button
-                                key={mode}
-                                role="radio"
-                                aria-checked={settings.mode === mode}
-                                className={`px-2.5 py-1 text-[11px] font-medium rounded transition-all ${
-                                  settings.mode === mode
-                                    ? "bg-primary text-primary-foreground shadow-sm"
-                                    : "text-muted-foreground hover:text-foreground"
-                                }`}
-                                onClick={() => updAccessSettings(agent, { mode })}
-                              >
-                                {mode === "restricted" ? t("access.restricted") : t("access.open")}
-                              </button>
-                            ))}
-                          </div>
+                          <SegmentedControl<string>
+                            value={settings.mode}
+                            onChange={(mode) => updAccessSettings(agent, { mode })}
+                            options={[
+                              { value: "open", label: t("access.open") },
+                              { value: "restricted", label: t("access.restricted") },
+                            ]}
+                            className="self-start sm:self-auto"
+                          />
                           <Input
                             value={settings.owner_id}
                             placeholder="owner_id"
@@ -311,14 +302,14 @@ export default function AccessPage() {
                           <div key={p.code} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="font-semibold text-xs truncate">{p.display_name || t("access.unknown_user")}</span>
-                              <Badge variant="outline" className="font-mono text-[10px] px-1 py-0 bg-background shrink-0">{p.code}</Badge>
-                              <span className="font-mono text-[10px] text-muted-foreground/50 truncate hidden sm:inline">{p.channel_user_id}</span>
+                              <Badge variant="outline" size="xs" className="font-mono bg-background shrink-0">{p.code}</Badge>
+                              <span className="font-mono text-3xs text-muted-foreground-subtle truncate hidden sm:inline">{p.channel_user_id}</span>
                             </div>
                             <div className="flex gap-1.5 shrink-0 self-end sm:self-auto">
-                              <Button size="sm" onClick={() => approve(agent, p.code)} className="h-6 px-2 text-[10px] bg-success text-success-foreground hover:bg-success/90">
+                              <Button variant="success" size="sm" onClick={() => approve(agent, p.code)} className="tap-target">
                                 {t("access.approve")}
                               </Button>
-                              <Button variant="outline" size="sm" onClick={() => reject(agent, p.code)} className="h-6 px-2 text-[10px] border-destructive/40 text-destructive hover:bg-destructive/10">
+                              <Button variant="outline-destructive" size="sm" onClick={() => reject(agent, p.code)} className="tap-target">
                                 {t("access.reject")}
                               </Button>
                             </div>
@@ -332,7 +323,7 @@ export default function AccessPage() {
                       <div className="flex items-center gap-2">
                         <UserCheck className="h-3.5 w-3.5 text-primary" />
                         <span className="text-xs font-semibold text-foreground/70">{t("access.authorized_users")}</span>
-                        <span className="text-[10px] text-muted-foreground/40 font-mono">{agentUsers.length}</span>
+                        <span className="text-3xs text-muted-foreground-subtle font-mono">{agentUsers.length}</span>
                       </div>
                       {agentUsers.length === 0 ? (
                         <div className="flex h-12 items-center justify-center rounded-lg border border-dashed border-border/50 bg-muted/5">
@@ -344,16 +335,16 @@ export default function AccessPage() {
                             <div key={u.channel_user_id} className="group flex items-center gap-2.5 rounded-lg border border-border/50 bg-card/30 px-3 py-2 transition-colors hover:bg-card/60">
                               <div className="flex flex-col min-w-0 flex-1">
                                 <span className="font-semibold text-xs truncate">{u.display_name || "—"}</span>
-                                <span className="font-mono text-[10px] text-muted-foreground/50 truncate">{u.channel_user_id}</span>
+                                <span className="font-mono text-3xs text-muted-foreground-subtle truncate">{u.channel_user_id}</span>
                               </div>
-                              <span className="text-[9px] text-muted-foreground/30 font-mono hidden sm:block shrink-0">
+                              <span className="text-3xs text-muted-foreground-subtle font-mono hidden sm:block shrink-0">
                                 {t("access.granted_at", { date: formatDate(u.approved_at, locale) })}
                               </span>
                               <Button
                                 variant="ghost"
                                 size="icon"
                                 aria-label={t("access.revoke")}
-                                className="h-6 w-6 text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-70 group-hover:opacity-100 transition-opacity shrink-0"
+                                className="tap-target text-muted-foreground hover:text-destructive hover:bg-destructive/10 opacity-70 group-hover:opacity-100 transition-opacity shrink-0"
                                 onClick={() => setRemoveTarget({ agent, userId: u.channel_user_id, name: u.display_name || u.channel_user_id })}
                               >
                                 <UserX className="h-3.5 w-3.5" />
@@ -365,7 +356,7 @@ export default function AccessPage() {
                     </div>
                   </div>
                 )}
-              </div>
+              </Card>
             );
           })}
         </div>

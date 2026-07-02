@@ -43,6 +43,7 @@ const eslintConfig = defineConfig([
       "src/app/(authenticated)/config/**/*.{ts,tsx}",
       "src/app/(authenticated)/skills/**/*.{ts,tsx}",
       "src/app/(authenticated)/memory/**/*.{ts,tsx}",
+      "src/app/(authenticated)/access/**/*.{ts,tsx}",
     ],
     plugins: { local: { rules: { "no-raw-design-values": noRawDesignValues } } },
     rules: { "local/no-raw-design-values": "error" },
