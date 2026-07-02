@@ -629,7 +629,7 @@ export default function AgentsPage() {
                 <Button
                   variant="outline"
                   onClick={() => openEdit(a.name)}
-                  className={`tap-target md:min-h-0 md:min-w-0 md:h-8 border-primary/20 bg-primary/5 text-primary hover:bg-primary/20 font-mono text-2xs uppercase tracking-wider ${a.base ? "col-span-2" : ""}`}
+                  className={`tap-target md:min-h-0 md:min-w-0 md:h-8 font-mono text-2xs uppercase tracking-wider ${a.base ? "col-span-2" : ""}`}
                 >
                   <Settings className="h-3.5 w-3.5 mr-1" /> {t("agents.configure")}
                 </Button>
