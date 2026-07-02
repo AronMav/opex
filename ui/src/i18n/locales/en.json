@@ -762,6 +762,8 @@
   "secrets.reveal": "Reveal value",
   "secrets.reveal_title": "Secret Value",
   "secrets.value_required": "Value is required",
+  "secrets.hides_in": "hides in {{n}}s",
+  "secrets.value_copied": "Value copied",
   "webhooks.title": "Webhooks",
   "webhooks.subtitle": "Manage incoming webhook endpoints",
   "webhooks.new_webhook": "New webhook",
