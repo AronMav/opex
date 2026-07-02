@@ -327,7 +327,7 @@ export default function AccessPage() {
                       </div>
                       {agentUsers.length === 0 ? (
                         <div className="flex h-12 items-center justify-center rounded-lg border border-dashed border-border/50 bg-muted/5">
-                          <span className="text-xs text-muted-foreground/40">{t("access.no_authorized_users")}</span>
+                          <span className="text-xs text-muted-foreground-subtle">{t("access.no_authorized_users")}</span>
                         </div>
                       ) : (
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
