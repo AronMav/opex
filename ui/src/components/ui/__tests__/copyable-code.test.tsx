@@ -2,7 +2,7 @@ import { test, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
-const copyText = vi.fn(() => Promise.resolve());
+const copyText = vi.fn().mockResolvedValue(undefined);
 vi.mock("@/lib/clipboard", () => ({ copyText: (t: string) => copyText(t) }));
 
 import { CopyableCode } from "../copyable-code";
