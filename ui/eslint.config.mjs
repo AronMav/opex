@@ -30,7 +30,10 @@ const eslintConfig = defineConfig([
   // Design-system guard — enforced ONLY on migrated pages. Add globs here as
   // each page batch lands; goal is `src/app/**` once migration completes.
   {
-    files: ["src/app/(authenticated)/webhooks/**/*.{ts,tsx}"],
+    files: [
+      "src/app/(authenticated)/webhooks/**/*.{ts,tsx}",
+      "src/app/(authenticated)/secrets/**/*.{ts,tsx}",
+    ],
     plugins: { local: { rules: { "no-raw-design-values": noRawDesignValues } } },
     rules: { "local/no-raw-design-values": "error" },
   },

@@ -762,6 +762,8 @@
   "secrets.reveal": "Показать значение",
   "secrets.reveal_title": "Значение секрета",
   "secrets.value_required": "Значение обязательно",
+  "secrets.hides_in": "скроется через {{n}}с",
+  "secrets.value_copied": "Значение скопировано",
   "webhooks.title": "Вебхуки",
   "webhooks.subtitle": "Управление входящими webhook-эндпоинтами",
   "webhooks.new_webhook": "Новый вебхук",

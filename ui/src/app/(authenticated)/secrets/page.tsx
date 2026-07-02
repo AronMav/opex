@@ -13,6 +13,11 @@ import { Field } from "@/components/ui/field";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { IconTile } from "@/components/ui/icon-tile";
+import { DataRow } from "@/components/ui/data-row";
+import { CopyableCode } from "@/components/ui/copyable-code";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   Dialog,
@@ -30,6 +35,9 @@ import {
 } from "@/components/ui/select";
 import { KeyRound, Plus, RefreshCw, Trash2, Edit3, Eye } from "lucide-react";
 import { toast } from "sonner";
+
+// Auto-hide duration for the revealed secret value.
+const REVEAL_TTL_SECONDS = 30;
 
 // ── Form helpers (extracted for testability) ────────────────────────────────
 
@@ -90,6 +98,7 @@ export default function SecretsPage() {
   const [editDesc, setEditDesc] = useState("");
   const [editScope, setEditScope] = useState("");
   const [revealedSecret, setRevealedSecret] = useState<{ name: string; value: string } | null>(null);
+  const [revealCountdown, setRevealCountdown] = useState(REVEAL_TTL_SECONDS);
 
   const mutating = upsertSecret.isPending || deleteSecret.isPending;
   const actionError =
@@ -135,10 +144,21 @@ export default function SecretsPage() {
     }
   }, [deleteTarget, deleteTargetScope, deleteSecret, t]);
 
+  // Visible countdown → auto-hide the revealed value. Reset on each reveal;
+  // clears the interval on hide/unmount.
   useEffect(() => {
     if (!revealedSecret) return;
-    const timer = setTimeout(() => setRevealedSecret(null), 30_000);
-    return () => clearTimeout(timer);
+    setRevealCountdown(REVEAL_TTL_SECONDS);
+    const tick = setInterval(() => {
+      setRevealCountdown((n) => {
+        if (n <= 1) {
+          setRevealedSecret(null);
+          return 0;
+        }
+        return n - 1;
+      });
+    }, 1000);
+    return () => clearInterval(tick);
   }, [revealedSecret]);
 
   const revealSecret = useCallback(async (name: string, scope: string) => {
@@ -165,7 +185,7 @@ export default function SecretsPage() {
 
         {(error || actionError) && <ErrorBanner error={error ? `${error}` : actionError} />}
 
-        <div className="mb-8 neu-card p-4 md:p-6">
+        <Card interactive={false} className="mb-8 p-4 md:p-6">
           <div className="mb-4 flex items-center gap-2">
             <Plus className="h-4 w-4 text-primary" />
             <span className="text-sm font-semibold text-foreground">{t("secrets.add_secret")}</span>
@@ -210,7 +230,7 @@ export default function SecretsPage() {
               {t("common.add")}
             </Button>
           </div>
-        </div>
+        </Card>
 
         {isLoading ? (
           <div className="space-y-3">
@@ -223,72 +243,67 @@ export default function SecretsPage() {
         ) : (
           <div className="space-y-3 pb-8">
             {secrets.map((s) => (
-              <div
+              <DataRow
                 key={s.name}
-                className="group relative flex flex-col md:flex-row md:items-center gap-4 neu-flat p-4 transition-all hover:border-primary/20"
+                leading={
+                  <IconTile>
+                    <KeyRound />
+                  </IconTile>
+                }
+                title={
+                  <span className="group-hover:text-primary transition-colors">{s.name}</span>
+                }
+                subtitle={t("secrets.updated_at", { date: formatDate(s.updated_at, locale) })}
+                actions={
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="icon-lg"
+                      className="w-full md:w-auto text-muted-foreground hover:text-warning hover:bg-warning/10"
+                      onClick={() => revealSecret(s.name, s.scope || "")}
+                      disabled={isLoading || mutating}
+                      title={t("secrets.reveal")}
+                      aria-label={t("common.reveal")}
+                    >
+                      <Eye className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-lg"
+                      className="w-full md:w-auto text-muted-foreground hover:text-primary hover:bg-primary/10"
+                      onClick={() => { setEditTarget(s.name); setEditValue(""); setEditDesc(s.description || ""); setEditScope(s.scope || ""); setEditValidation(""); }}
+                      disabled={isLoading || mutating}
+                      aria-label={t("common.edit")}
+                    >
+                      <Edit3 className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-lg"
+                      className="w-full md:w-auto text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                      onClick={() => { setDeleteTarget(s.name); setDeleteTargetScope(s.scope || ""); }}
+                      disabled={isLoading || mutating}
+                      aria-label={t("common.delete")}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </>
+                }
               >
-                <div className="flex items-center gap-3 md:min-w-[240px]">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
-                    <KeyRound className="h-5 w-5 text-primary" />
-                  </div>
-                  <div className="flex flex-col min-w-0">
-                    <span className="break-all font-mono text-sm font-bold text-foreground group-hover:text-primary transition-colors">
-                      {s.name}
-                    </span>
-                    <span className="font-mono text-xs text-muted-foreground/40 tabular-nums">
-                      {t("secrets.updated_at", { date: formatDate(s.updated_at, locale) })}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex flex-1 flex-wrap items-center gap-3">
-                  <Badge variant={s.has_value ? "default" : "secondary"} className={`text-xs ${s.has_value ? 'bg-success/20 text-success border-success/30' : 'bg-muted text-muted-foreground border-border'}`}>
+                <div className="flex flex-wrap items-center gap-3">
+                  <StatusBadge status={s.has_value ? "active" : "empty"}>
                     {s.has_value ? t("secrets.active") : t("secrets.empty")}
-                  </Badge>
+                  </StatusBadge>
                   {s.scope && (
-                    <Badge variant="outline" className="text-[10px] font-mono border-primary/40 text-primary bg-primary/5">
+                    <Badge variant="outline-primary" size="xs" className="font-mono">
                       {s.scope}
                     </Badge>
                   )}
-                  <span className="flex-1 min-w-0 sm:min-w-[150px] text-sm text-muted-foreground leading-relaxed">
+                  <span className="flex-1 min-w-0 text-sm text-muted-foreground leading-relaxed">
                     {s.description || <span className="italic opacity-30">{t("secrets.description_not_set")}</span>}
                   </span>
                 </div>
-
-                <div className="grid grid-cols-3 md:flex md:items-center md:justify-end gap-2 border-t border-border/50 pt-3 md:border-0 md:pt-0 shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="icon-lg"
-                    className="w-full md:w-auto text-muted-foreground hover:text-warning hover:bg-warning/10"
-                    onClick={() => revealSecret(s.name, s.scope || "")}
-                    disabled={isLoading || mutating}
-                    title={t("secrets.reveal")}
-                    aria-label={t("common.reveal")}
-                  >
-                    <Eye className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-lg"
-                    className="w-full md:w-auto text-muted-foreground hover:text-primary hover:bg-primary/10"
-                    onClick={() => { setEditTarget(s.name); setEditValue(""); setEditDesc(s.description || ""); setEditScope(s.scope || ""); setEditValidation(""); }}
-                    disabled={isLoading || mutating}
-                    aria-label={t("common.edit")}
-                  >
-                    <Edit3 className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-lg"
-                    className="w-full md:w-auto text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                    onClick={() => { setDeleteTarget(s.name); setDeleteTargetScope(s.scope || ""); }}
-                    disabled={isLoading || mutating}
-                    aria-label={t("common.delete")}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
+              </DataRow>
             ))}
           </div>
         )}
@@ -302,10 +317,10 @@ export default function SecretsPage() {
       />
 
       <Dialog open={!!editTarget} onOpenChange={(o) => { if (!o) setEditTarget(null); }}>
-        <DialogContent className="rounded-xl border-border bg-card max-w-[95vw] sm:max-w-md max-h-[90dvh] overflow-y-auto">
+        <DialogContent size="md">
           <DialogHeader>
-            <DialogTitle className="text-base font-bold text-foreground">{t("secrets.edit_title")}</DialogTitle>
-            <p className="text-sm text-muted-foreground mt-1">{editTarget}</p>
+            <DialogTitle>{t("secrets.edit_title")}</DialogTitle>
+            <p className="text-sm text-muted-foreground">{editTarget}</p>
           </DialogHeader>
           <div className="space-y-3 py-4">
             <Field label={t("secrets.new_value_placeholder")}>
@@ -348,15 +363,21 @@ export default function SecretsPage() {
 
       {/* Reveal secret dialog */}
       <Dialog open={!!revealedSecret} onOpenChange={(o) => { if (!o) setRevealedSecret(null); }}>
-        <DialogContent className="rounded-xl border-border bg-card max-w-[95vw] sm:max-w-md max-h-[90dvh] overflow-y-auto overscroll-contain">
+        <DialogContent size="md">
           <DialogHeader>
-            <DialogTitle className="text-base font-bold text-foreground">{t("secrets.reveal_title")}</DialogTitle>
-            <p className="text-sm text-muted-foreground mt-1">{revealedSecret?.name}</p>
+            <DialogTitle>{t("secrets.reveal_title")}</DialogTitle>
+            <p className="text-sm text-muted-foreground">{revealedSecret?.name}</p>
           </DialogHeader>
-          <div className="py-4">
-            <div className="flex items-center gap-2 rounded-lg bg-muted/30 border border-border/50 px-3 py-3">
-              <code className="flex-1 text-xs font-mono text-foreground break-all select-all">{revealedSecret?.value}</code>
-            </div>
+          <div className="space-y-2 py-4">
+            {revealedSecret && (
+              <CopyableCode
+                value={revealedSecret.value}
+                onCopied={() => toast.success(t("secrets.value_copied"))}
+              />
+            )}
+            <p className="text-xs text-muted-foreground-subtle tabular-nums">
+              {t("secrets.hides_in", { n: revealCountdown })}
+            </p>
           </div>
           <DialogFooter>
             <Button onClick={() => setRevealedSecret(null)}>{t("common.close")}</Button>
