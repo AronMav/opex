@@ -6,6 +6,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { apiGet, apiPost } from "@/lib/api";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
+import { pageHasOwnHeader } from "@/lib/nav";
 import { useWsStore } from "@/stores/ws-store";
 import { useChatStore } from "@/stores/chat-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
@@ -139,7 +140,7 @@ export default function AuthenticatedLayout({
       <AppSidebar />
       <SidebarInset className="flex flex-col h-[100dvh] min-h-0 bg-transparent relative">
         {/* Unified Mobile Header — hidden on chat and workspace (they have their own headers) */}
-        {pathname !== "/chat" && pathname !== "/workspace" && (
+        {!pageHasOwnHeader(pathname) && (
         <div className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-border bg-background px-3 md:hidden">
           <div className="flex items-center gap-2">
             <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform" />
