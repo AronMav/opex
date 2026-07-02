@@ -705,6 +705,8 @@
   "watchdog.event_resource": "Resource Warning",
   "watchdog.restart_service": "Restart",
   "watchdog.restart_failed": "Restart failed: {{error}}",
+  "watchdog.restart_confirm_title": "Restart?",
+  "watchdog.restart_confirm_body": "Restart \"{{name}}\"? It will be briefly unavailable while it comes back up.",
   "watchdog.alerting.title": "Alerting",
   "watchdog.alerting.description": "Configure which channels receive alerts and which events trigger them.",
   "watchdog.alerting.channels": "Channels",

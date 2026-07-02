@@ -39,6 +39,7 @@ const eslintConfig = defineConfig([
       "src/app/(authenticated)/tasks/**/*.{ts,tsx}",
       "src/app/(authenticated)/providers/**/*.{ts,tsx}",
       "src/app/(authenticated)/agents/**/*.{ts,tsx}",
+      "src/app/(authenticated)/monitor/**/*.{ts,tsx}",
     ],
     plugins: { local: { rules: { "no-raw-design-values": noRawDesignValues } } },
     rules: { "local/no-raw-design-values": "error" },
