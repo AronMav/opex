@@ -7,10 +7,13 @@ import type { TranslationKey } from "@/i18n/types";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { Card } from "@/components/ui/card";
+import { SectionHeader } from "@/components/ui/section-header";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { CronSchedulePicker } from "@/components/ui/cron-schedule-picker";
 import { Field } from "@/components/ui/field";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,6 +21,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useAgents } from "@/lib/queries";
+import type { LucideIcon } from "lucide-react";
 import { Settings, Gauge, Box, GitBranch, Keyboard, RotateCcw, Save, Timer, Wrench, Bell } from "lucide-react";
 import { CircularLoader } from "@/components/ui/loader";
 import { toast } from "sonner";
@@ -69,6 +73,7 @@ export default function ConfigPage() {
   const [error, setError] = useState("");
 
   const [restarting, setRestarting] = useState(false);
+  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
   const [subagentsToggling, setSubagentsToggling] = useState(false);
   const [editPublicUrl, setEditPublicUrl] = useState("");
   const [editMaxReqPerMin, setEditMaxReqPerMin] = useState("");
@@ -290,7 +295,7 @@ export default function ConfigPage() {
           actions={
             <Button
               variant="destructive"
-              onClick={restartCore}
+              onClick={() => setRestartConfirmOpen(true)}
               disabled={restarting}
               className="w-full md:w-auto shrink-0"
             >
@@ -298,6 +303,16 @@ export default function ConfigPage() {
               {t("config.restart_core")}
             </Button>
           }
+        />
+
+        <ConfirmDialog
+          open={restartConfirmOpen}
+          onClose={() => setRestartConfirmOpen(false)}
+          onConfirm={() => { setRestartConfirmOpen(false); restartCore(); }}
+          variant="destructive"
+          title={t("config.restart_confirm_title")}
+          description={t("config.restart_confirm_description")}
+          confirmLabel={t("config.restart_confirm_action")}
         />
 
         {error && <ErrorBanner error={error} />}
@@ -326,24 +341,23 @@ export default function ConfigPage() {
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4">
                 {subagents && (
-                  <div className="neu-flat p-4 md:p-5">
-                    <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
-                      <GitBranch className="h-4 w-4 text-primary" />
-                      <h3 className="text-sm font-semibold text-foreground">{t("config.subagents")}</h3>
-                      <div className="ml-auto flex items-center gap-2">
-                        <Badge
-                          variant={subagents.enabled ? "default" : "secondary"}
-                          className={`text-xs ${subagents.enabled ? "bg-success/20 text-success border-success/30" : "bg-muted text-muted-foreground border-border"}`}
-                        >
-                          {subagents.enabled ? t("config.subagents_enabled") : t("config.subagents_disabled")}
-                        </Badge>
-                        <Switch
-                          checked={subagents.enabled}
-                          onCheckedChange={(v) => toggleSubagents(v)}
-                          disabled={subagentsToggling}
-                        />
-                      </div>
-                    </div>
+                  <Card className="p-4 md:p-5">
+                    <SectionHeader
+                      icon={GitBranch}
+                      title={t("config.subagents")}
+                      actions={
+                        <>
+                          <StatusBadge status={subagents.enabled ? "enabled" : "disabled"}>
+                            {subagents.enabled ? t("config.subagents_enabled") : t("config.subagents_disabled")}
+                          </StatusBadge>
+                          <Switch
+                            checked={subagents.enabled}
+                            onCheckedChange={(v) => toggleSubagents(v)}
+                            disabled={subagentsToggling}
+                          />
+                        </>
+                      }
+                    />
                     <div className="space-y-1.5">
                       {Object.entries(subagents).filter(([k]) => k !== "enabled").map(([key, val]) => (
                         <div
@@ -357,74 +371,62 @@ export default function ConfigPage() {
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </Card>
                 )}
-                <div className="neu-flat p-4 md:p-5">
-                    <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
-                      <Gauge className="h-4 w-4 text-primary" />
-                      <h3 className="text-sm font-semibold text-foreground">{t("config.editable_fields")}</h3>
-                    </div>
+                <Card className="p-4 md:p-5">
+                    <SectionHeader icon={Gauge} title={t("config.editable_fields")} />
                     <div className="space-y-4">
-                      <div className="space-y-1.5">
-                        <label htmlFor="cfg-public-url" className="font-mono text-xs text-muted-foreground">public_url</label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Input
-                              id="cfg-public-url"
-                              value={editPublicUrl}
-                              onChange={(e) => setEditPublicUrl(e.target.value)}
-                              placeholder="https://example.com"
-                              className="font-mono text-sm h-9"
-                            />
-                          </TooltipTrigger>
-                          {(() => { const d = getFieldDescription(schema, ["gateway", "public_url"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
-                        </Tooltip>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label htmlFor="cfg-max-req-per-min" className="font-mono text-xs text-muted-foreground">max_requests_per_minute</label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Input
-                              id="cfg-max-req-per-min"
-                              type="number"
-                              min={1}
-                              value={editMaxReqPerMin}
-                              onChange={(e) => setEditMaxReqPerMin(e.target.value)}
-                              placeholder="60"
-                              className="font-mono text-sm h-9"
-                            />
-                          </TooltipTrigger>
-                          {(() => { const d = getFieldDescription(schema, ["limits", "max_requests_per_minute"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
-                        </Tooltip>
-                      </div>
-                      <div className="space-y-1.5">
-                        <label htmlFor="cfg-max-tool-concurrency" className="font-mono text-xs text-muted-foreground">max_tool_concurrency</label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Input
-                              id="cfg-max-tool-concurrency"
-                              type="number"
-                              min={1}
-                              value={editMaxToolConcurrency}
-                              onChange={(e) => setEditMaxToolConcurrency(e.target.value)}
-                              placeholder="4"
-                              className="font-mono text-sm h-9"
-                            />
-                          </TooltipTrigger>
-                          {(() => { const d = getFieldDescription(schema, ["limits", "max_tool_concurrency"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
-                        </Tooltip>
-                      </div>
+                      <Field
+                        label="public_url"
+                        labelClassName="font-mono text-xs"
+                        hint={getFieldDescription(schema, ["gateway", "public_url"])}
+                      >
+                        <Input
+                          value={editPublicUrl}
+                          onChange={(e) => setEditPublicUrl(e.target.value)}
+                          placeholder="https://example.com"
+                          className="font-mono text-sm h-9"
+                        />
+                      </Field>
+                      <Field
+                        label="max_requests_per_minute"
+                        labelClassName="font-mono text-xs"
+                        hint={getFieldDescription(schema, ["limits", "max_requests_per_minute"])}
+                      >
+                        <Input
+                          type="number"
+                          min={1}
+                          value={editMaxReqPerMin}
+                          onChange={(e) => setEditMaxReqPerMin(e.target.value)}
+                          placeholder="60"
+                          className="font-mono text-sm h-9"
+                        />
+                      </Field>
+                      <Field
+                        label="max_tool_concurrency"
+                        labelClassName="font-mono text-xs"
+                        hint={getFieldDescription(schema, ["limits", "max_tool_concurrency"])}
+                      >
+                        <Input
+                          type="number"
+                          min={1}
+                          value={editMaxToolConcurrency}
+                          onChange={(e) => setEditMaxToolConcurrency(e.target.value)}
+                          placeholder="4"
+                          className="font-mono text-sm h-9"
+                        />
+                      </Field>
                       <Field
                         label="embed_dimensions"
                         labelClassName="font-mono text-xs"
                         hint={
                           <>
-                            <p className="text-xs text-muted-foreground/60">
+                            <span className="block text-xs text-muted-foreground-subtle">
                               {t("config.embed_dimensions_description")}
-                            </p>
-                            <p className="text-[11px] text-muted-foreground/40 leading-relaxed">
+                            </span>
+                            <span className="block text-2xs text-muted-foreground-subtle leading-relaxed">
                               {t("config.embed_dimensions_hint")}
-                            </p>
+                            </span>
                           </>
                         }
                       >
@@ -448,79 +450,73 @@ export default function ConfigPage() {
                         {t("common.save")}
                       </Button>
                     </div>
-                  </div>
-                <div className="neu-flat p-4 md:p-5">
-                  <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
-                    <Timer className="h-4 w-4 text-primary" />
-                    <h3 className="text-sm font-semibold text-foreground">{t("config.agent_tool.title")}</h3>
-                  </div>
+                  </Card>
+                <Card className="p-4 md:p-5">
+                  <SectionHeader icon={Timer} title={t("config.agent_tool.title")} />
                   <div className="space-y-4">
-                    <p className="text-xs text-muted-foreground/70 leading-relaxed">
+                    <p className="text-xs text-muted-foreground-subtle leading-relaxed">
                       {t("config.agent_tool.description")}
                     </p>
-                    <div className="space-y-1.5">
-                      <label htmlFor="cfg-agent-tool-wait-idle" className="font-mono text-xs text-muted-foreground">message_wait_for_idle_secs</label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Input
-                            id="cfg-agent-tool-wait-idle"
-                            type="number"
-                            min={1}
-                            max={3600}
-                            value={editAgentToolWaitForIdle}
-                            onChange={(e) => setEditAgentToolWaitForIdle(e.target.value)}
-                            placeholder="60"
-                            className="font-mono text-sm h-9"
-                          />
-                        </TooltipTrigger>
-                        {(() => { const d = getFieldDescription(schema, ["agent_tool", "message_wait_for_idle_secs"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
-                      </Tooltip>
-                      <p className="text-xs text-muted-foreground/60">
-                        {t("config.agent_tool.message_wait_for_idle")}
-                      </p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="cfg-agent-tool-result" className="font-mono text-xs text-muted-foreground">message_result_secs</label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Input
-                            id="cfg-agent-tool-result"
-                            type="number"
-                            min={1}
-                            max={3600}
-                            value={editAgentToolResult}
-                            onChange={(e) => setEditAgentToolResult(e.target.value)}
-                            placeholder="300"
-                            className="font-mono text-sm h-9"
-                          />
-                        </TooltipTrigger>
-                        {(() => { const d = getFieldDescription(schema, ["agent_tool", "message_result_secs"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
-                      </Tooltip>
-                      <p className="text-xs text-muted-foreground/60">
-                        {t("config.agent_tool.message_result")}
-                      </p>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="cfg-agent-tool-safety" className="font-mono text-xs text-muted-foreground">safety_timeout_secs</label>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Input
-                            id="cfg-agent-tool-safety"
-                            type="number"
-                            min={1}
-                            max={3600}
-                            value={editAgentToolSafety}
-                            onChange={(e) => setEditAgentToolSafety(e.target.value)}
-                            placeholder="600"
-                            className="font-mono text-sm h-9"
-                          />
-                        </TooltipTrigger>
-                        {(() => { const d = getFieldDescription(schema, ["agent_tool", "safety_timeout_secs"]); return d ? <TooltipContent>{d}</TooltipContent> : null; })()}
-                      </Tooltip>
-                      <p className="text-xs text-muted-foreground/60">
-                        {t("config.agent_tool.safety_timeout")}
-                      </p>
-                    </div>
+                    <Field
+                      label="message_wait_for_idle_secs"
+                      labelClassName="font-mono text-xs"
+                      hint={
+                        <>
+                          <span className="block">{t("config.agent_tool.message_wait_for_idle")}</span>
+                          {(() => { const d = getFieldDescription(schema, ["agent_tool", "message_wait_for_idle_secs"]); return d ? <span className="block text-muted-foreground-subtle">{d}</span> : null; })()}
+                        </>
+                      }
+                    >
+                      <Input
+                        type="number"
+                        min={1}
+                        max={3600}
+                        value={editAgentToolWaitForIdle}
+                        onChange={(e) => setEditAgentToolWaitForIdle(e.target.value)}
+                        placeholder="60"
+                        className="font-mono text-sm h-9"
+                      />
+                    </Field>
+                    <Field
+                      label="message_result_secs"
+                      labelClassName="font-mono text-xs"
+                      hint={
+                        <>
+                          <span className="block">{t("config.agent_tool.message_result")}</span>
+                          {(() => { const d = getFieldDescription(schema, ["agent_tool", "message_result_secs"]); return d ? <span className="block text-muted-foreground-subtle">{d}</span> : null; })()}
+                        </>
+                      }
+                    >
+                      <Input
+                        type="number"
+                        min={1}
+                        max={3600}
+                        value={editAgentToolResult}
+                        onChange={(e) => setEditAgentToolResult(e.target.value)}
+                        placeholder="300"
+                        className="font-mono text-sm h-9"
+                      />
+                    </Field>
+                    <Field
+                      label="safety_timeout_secs"
+                      labelClassName="font-mono text-xs"
+                      hint={
+                        <>
+                          <span className="block">{t("config.agent_tool.safety_timeout")}</span>
+                          {(() => { const d = getFieldDescription(schema, ["agent_tool", "safety_timeout_secs"]); return d ? <span className="block text-muted-foreground-subtle">{d}</span> : null; })()}
+                        </>
+                      }
+                    >
+                      <Input
+                        type="number"
+                        min={1}
+                        max={3600}
+                        value={editAgentToolSafety}
+                        onChange={(e) => setEditAgentToolSafety(e.target.value)}
+                        placeholder="600"
+                        className="font-mono text-sm h-9"
+                      />
+                    </Field>
                     <Button
                       size="sm"
                       onClick={saveAgentToolFields}
@@ -531,16 +527,20 @@ export default function ConfigPage() {
                       {t("common.save")}
                     </Button>
                   </div>
-                </div>
-                <div className="neu-flat p-4 md:p-5">
-                  <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
-                    <Wrench className="h-4 w-4 text-primary" />
-                    <h3 className="text-sm font-semibold text-foreground">{t("config.section_curator")}</h3>
-                    <div className="ml-auto flex items-center gap-2">
-                      <span className="text-xs text-muted-foreground">{curatorEnabled ? t("common.enabled") : t("common.disabled")}</span>
-                      <Switch checked={curatorEnabled} onCheckedChange={setCuratorEnabled} />
-                    </div>
-                  </div>
+                </Card>
+                <Card className="p-4 md:p-5">
+                  <SectionHeader
+                    icon={Wrench}
+                    title={t("config.section_curator")}
+                    actions={
+                      <>
+                        <StatusBadge status={curatorEnabled ? "enabled" : "disabled"}>
+                          {curatorEnabled ? t("common.enabled") : t("common.disabled")}
+                        </StatusBadge>
+                        <Switch checked={curatorEnabled} onCheckedChange={setCuratorEnabled} />
+                      </>
+                    }
+                  />
                   <div className="space-y-3">
                     <Field label="cron" labelClassName="font-mono text-xs">
                       <CronSchedulePicker
@@ -577,18 +577,15 @@ export default function ConfigPage() {
                       {t("common.save")}
                     </Button>
                   </div>
-                </div>
+                </Card>
 
-                <div className="neu-flat p-4 md:p-5">
-                  <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
-                    <Bell className="h-4 w-4 text-primary" />
-                    <h3 className="text-sm font-semibold text-foreground">{t("config.section_alerting")}</h3>
-                  </div>
+                <Card className="p-4 md:p-5">
+                  <SectionHeader icon={Bell} title={t("config.section_alerting")} />
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("config.section_channels")}</p>
                       {alertChannels.length === 0 ? (
-                        <p className="text-xs text-muted-foreground italic">{t("config.no_channels")}</p>
+                        <p className="text-xs text-muted-foreground-subtle italic">{t("config.no_channels")}</p>
                       ) : (
                         <div className="flex flex-col gap-1.5">
                           {alertChannels.map((ch) => {
@@ -598,9 +595,9 @@ export default function ConfigPage() {
                                 onClick={() => toggleAlertChannel(ch.id)}
                                 className="w-full justify-start text-xs h-auto py-2">
                                 <span className="font-medium">{ch.agent_name}</span>
-                                <span className="opacity-70"> / {ch.channel_type}</span>
+                                <span className="text-muted-foreground"> / {ch.channel_type}</span>
                                 {ch.display_name !== ch.channel_type && (
-                                  <span className="opacity-50"> ({ch.display_name})</span>
+                                  <span className="text-muted-foreground-subtle"> ({ch.display_name})</span>
                                 )}
                               </Button>
                             );
@@ -628,14 +625,11 @@ export default function ConfigPage() {
                       {t("common.save")}
                     </Button>
                   </div>
-                </div>
+                </Card>
 
                 {Object.keys(topLevel).length > 0 && (
-                  <div className="neu-flat p-4 md:p-5">
-                    <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
-                      <Settings className="h-4 w-4 text-foreground/70" />
-                      <h3 className="text-sm font-semibold text-foreground">{t("config.section_general")}</h3>
-                    </div>
+                  <Card className="p-4 md:p-5">
+                    <SectionHeader icon={Settings} title={t("config.section_general")} />
                     <div className="space-y-1.5">
                       {Object.entries(topLevel).map(([key, val]) => (
                         <div
@@ -649,22 +643,19 @@ export default function ConfigPage() {
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </Card>
                 )}
 
                 {Object.entries(sections).map(([section, values]) => {
-                  const sectionIcons: Record<string, React.ReactNode> = {
-                    limits: <Gauge className="h-4 w-4 text-primary" />,
-                    sandbox: <Box className="h-4 w-4 text-primary" />,
-                    subagents: <GitBranch className="h-4 w-4 text-primary" />,
-                    typing: <Keyboard className="h-4 w-4 text-primary" />,
+                  const sectionIcons: Record<string, LucideIcon> = {
+                    limits: Gauge,
+                    sandbox: Box,
+                    subagents: GitBranch,
+                    typing: Keyboard,
                   };
                   return (
-                  <div key={section} className="neu-flat p-4 md:p-5">
-                    <div className="mb-4 flex items-center gap-2 border-b border-border/50 pb-3">
-                      {sectionIcons[section] ?? <Settings className="h-4 w-4 text-primary" />}
-                      <h3 className="text-sm font-semibold text-foreground">{section}</h3>
-                    </div>
+                  <Card key={section} className="p-4 md:p-5">
+                    <SectionHeader icon={sectionIcons[section] ?? Settings} title={section} />
                     <div className="space-y-1.5">
                       {Object.entries(values).map(([key, val]) => (
                         <div
@@ -672,13 +663,13 @@ export default function ConfigPage() {
                           className="flex items-start justify-between gap-2 border-b border-border/20 py-1.5 last:border-0"
                         >
                           <span className="font-mono text-xs text-muted-foreground pt-0.5 truncate">{key}</span>
-                          <div className="shrink-0 max-w-[60%] flex justify-end overflow-x-auto scrollbar-none">
+                          <div className="flex shrink-0 max-w-xs justify-end overflow-x-auto scrollbar-none">
                             {renderValue(val, t)}
                           </div>
                         </div>
                       ))}
                     </div>
-                  </div>
+                  </Card>
                   ); })}
               </div>
             </div>
@@ -690,13 +681,13 @@ export default function ConfigPage() {
 
 function renderValue(val: unknown, t: (key: TranslationKey, values?: Record<string, string | number>) => string): React.ReactNode {
   if (val === null || val === undefined) {
-    return <span className="text-sm text-muted-foreground/60 italic">{t("config.value_null")}</span>;
+    return <span className="text-sm text-muted-foreground-subtle italic">{t("config.value_null")}</span>;
   }
   if (typeof val === "boolean") {
     return (
-      <Badge variant={val ? "default" : "secondary"} className={`text-xs ${val ? 'bg-success/20 text-success border-success/30' : 'bg-muted text-muted-foreground border-border'}`}>
+      <StatusBadge status={val ? "enabled" : "disabled"}>
         {val ? t("config.value_on") : t("config.value_off")}
-      </Badge>
+      </StatusBadge>
     );
   }
   if (typeof val === "number") {
@@ -714,7 +705,7 @@ function renderValue(val: unknown, t: (key: TranslationKey, values?: Record<stri
     return (
       <div className="flex flex-wrap sm:justify-end gap-1.5 max-w-full">
         {val.map((v, i) => (
-          <Badge key={i} variant="outline" className="font-mono text-xs border-primary/20 text-foreground/80 bg-primary/5 whitespace-normal break-all leading-relaxed">
+          <Badge key={i} variant="outline-primary" className="font-mono text-xs whitespace-normal break-all leading-relaxed">
             {String(v)}
           </Badge>
         ))}
