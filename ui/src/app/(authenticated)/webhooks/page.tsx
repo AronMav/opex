@@ -9,7 +9,6 @@ import {
   useAgents,
 } from "@/lib/queries";
 import { apiPost } from "@/lib/api";
-import { copyText } from "@/lib/clipboard";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "@/hooks/use-translation";
 import { formatDate } from "@/lib/format";
@@ -22,6 +21,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { IconTile } from "@/components/ui/icon-tile";
+import { DataRow } from "@/components/ui/data-row";
+import { CopyableCode } from "@/components/ui/copyable-code";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
@@ -39,7 +42,7 @@ import {
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { toast } from "sonner";
-import { Copy, Plus, Trash2, Edit3, Webhook, Check, RefreshCw } from "lucide-react";
+import { Plus, Trash2, Edit3, Webhook, RefreshCw } from "lucide-react";
 import type { WebhookEntry } from "@/types/api";
 
 const emptyForm = { name: "", agent: "", prompt_prefix: "", webhook_type: "generic" as "generic" | "github", event_filter: "" };
@@ -58,19 +61,11 @@ export default function WebhooksPage() {
   const [deleteTarget, setDeleteTarget] = useState<WebhookEntry | null>(null);
   const [actionError, setActionError] = useState("");
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [regenTarget, setRegenTarget] = useState<WebhookEntry | null>(null);
 
   const queryClient = useQueryClient();
 
   const mutating = createWebhook.isPending || updateWebhook.isPending || deleteWebhook.isPending;
-
-  const doCopy = (text: string, label: string) => {
-    copyText(text).then(() => {
-      setCopiedField(label);
-      toast.success(t("webhooks.url_copied"));
-      setTimeout(() => setCopiedField(null), 2000);
-    });
-  };
 
   const webhookUrl = (name: string) =>
     typeof window !== "undefined" ? `${window.location.origin}/webhook/${name}` : `/webhook/${name}`;
@@ -122,18 +117,20 @@ export default function WebhooksPage() {
     }
   }, [editId, form, eventFilterPayload, updateWebhook, createWebhook]);
 
-  const regenerateSecret = useCallback(async (webhookId: string) => {
+  const regenerateSecret = useCallback(async () => {
+    if (!regenTarget) return;
     setActionError("");
     try {
-      const result = await apiPost<{ secret: string }>(`/api/webhooks/${webhookId}/regenerate-secret`);
+      const result = await apiPost<{ secret: string }>(`/api/webhooks/${regenTarget.id}/regenerate-secret`);
       queryClient.invalidateQueries({ queryKey: ["webhooks"] });
+      setRegenTarget(null);
       if (result?.secret) {
         setCreatedSecret(result.secret);
       }
     } catch (e) {
       setActionError(`${e}`);
     }
-  }, [queryClient]);
+  }, [regenTarget, queryClient]);
 
   const toggleEnabled = useCallback(async (w: WebhookEntry) => {
     setActionError("");
@@ -186,129 +183,104 @@ export default function WebhooksPage() {
       ) : (
         <div className="space-y-3 pb-8">
           {webhooks.map((w) => (
-            <div
+            <DataRow
               key={w.id}
-              className={`group relative flex flex-col md:flex-row md:items-center gap-4 neu-flat p-4 transition-all hover:border-primary/20 ${
-                !w.enabled ? "opacity-60 hover:opacity-100" : ""
-              }`}
+              muted={!w.enabled}
+              leading={
+                <IconTile>
+                  <Webhook />
+                </IconTile>
+              }
+              title={
+                <span className="group-hover:text-primary transition-colors">{w.name}</span>
+              }
+              subtitle={t("webhooks.created_at", { date: formatDate(w.created_at, locale) })}
+              actions={
+                <>
+                  <Switch
+                    checked={w.enabled}
+                    onCheckedChange={() => toggleEnabled(w)}
+                    disabled={mutating}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setRegenTarget(w)}
+                    disabled={mutating}
+                    className="text-muted-foreground hover:text-warning hover:bg-warning/10"
+                    title={t("webhooks.regenerate_secret")}
+                    aria-label={t("common.regenerate_secret")}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => openEdit(w)}
+                    disabled={mutating}
+                    className="text-muted-foreground hover:text-primary hover:bg-primary/10"
+                    aria-label={t("common.edit")}
+                  >
+                    <Edit3 className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setDeleteTarget(w)}
+                    disabled={mutating}
+                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                    aria-label={t("common.delete")}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </>
+              }
             >
-              {/* Left: icon + name + badges */}
-              <div className="flex items-center gap-3 md:min-w-[220px]">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
-                  <Webhook className="h-5 w-5 text-primary" />
-                </div>
-                <div className="flex flex-col min-w-0">
-                  <span className="font-mono text-sm font-bold text-foreground group-hover:text-primary transition-colors truncate">
-                    {w.name}
-                  </span>
-                  <span className="font-mono text-xs text-muted-foreground/40 tabular-nums">
-                    {t("webhooks.created_at", { date: formatDate(w.created_at, locale) })}
-                  </span>
-                </div>
-              </div>
-
-              {/* Center: badges + url + stats */}
-              <div className="flex flex-1 flex-col gap-2 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  {w.agent_id && (
-                    <Badge variant="outline" className="text-xs border-primary/40 text-primary bg-primary/5">
-                      {w.agent_id}
-                    </Badge>
-                  )}
-                  <Badge variant="outline" className="text-[10px] font-mono">
-                    {w.webhook_type === "github" ? t("webhooks.type_github") : t("webhooks.type_generic")}
+              <div className="flex items-center gap-2 flex-wrap">
+                {w.agent_id && (
+                  <Badge variant="outline-primary">
+                    {w.agent_id}
                   </Badge>
-                  <Badge
-                    variant={w.enabled ? "default" : "secondary"}
-                    className={`text-xs ${w.enabled ? "bg-success/20 text-success border-success/30" : "bg-muted text-muted-foreground border-border"}`}
-                  >
-                    {w.enabled ? t("common.enabled") : t("common.disabled")}
-                  </Badge>
-                  {w.event_filter && w.event_filter.length > 0 && w.event_filter.map((ev) => (
-                    <Badge key={ev} variant="outline" className="text-[10px] font-mono">
-                      {ev}
-                    </Badge>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2">
-                  <code className="font-mono text-[11px] text-muted-foreground/60 bg-muted/30 px-2 py-0.5 rounded border border-border/40 truncate max-w-full">
-                    {webhookUrl(w.name)}
-                  </code>
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors cursor-pointer"
-                    onClick={() => doCopy(webhookUrl(w.name), `url-${w.id}`)}
-                  >
-                    {copiedField === `url-${w.id}` ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
-                  </button>
-                </div>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground/50">
-                  <span>{t("webhooks.trigger_count", { count: w.trigger_count })}</span>
-                  <span>
-                    {w.last_triggered_at
-                      ? `${t("webhooks.last_triggered")}: ${formatDate(w.last_triggered_at, locale)}`
-                      : t("webhooks.never_triggered")}
-                  </span>
-                </div>
-                {w.prompt_prefix && (
-                  <p className="font-mono text-xs text-foreground/50 line-clamp-1 break-words">{w.prompt_prefix}</p>
                 )}
+                <Badge variant="outline" size="xs" className="font-mono">
+                  {w.webhook_type === "github" ? t("webhooks.type_github") : t("webhooks.type_generic")}
+                </Badge>
+                <StatusBadge status={w.enabled ? "enabled" : "disabled"}>
+                  {w.enabled ? t("common.enabled") : t("common.disabled")}
+                </StatusBadge>
+                {w.event_filter?.map((ev) => (
+                  <Badge key={ev} variant="outline" size="xs" className="font-mono">
+                    {ev}
+                  </Badge>
+                ))}
               </div>
-
-              {/* Right: actions */}
-              <div className="flex items-center gap-2 border-t border-border/50 pt-3 md:border-0 md:pt-0 shrink-0">
-                <Switch
-                  checked={w.enabled}
-                  onCheckedChange={() => toggleEnabled(w)}
-                  disabled={mutating}
-                  className="data-[state=checked]:bg-primary"
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => regenerateSecret(w.id)}
-                  disabled={mutating}
-                  className="text-muted-foreground hover:text-warning hover:bg-warning/10"
-                  title={t("webhooks.regenerate_secret")}
-                  aria-label={t("common.regenerate_secret")}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => openEdit(w)}
-                  disabled={mutating}
-                  className="text-muted-foreground hover:text-primary hover:bg-primary/10"
-                  aria-label={t("common.edit")}
-                >
-                  <Edit3 className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setDeleteTarget(w)}
-                  disabled={mutating}
-                  className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                  aria-label={t("common.delete")}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+              <CopyableCode
+                value={webhookUrl(w.name)}
+                onCopied={() => toast.success(t("webhooks.url_copied"))}
+              />
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground-subtle">
+                <span>{t("webhooks.trigger_count", { count: w.trigger_count })}</span>
+                <span>
+                  {w.last_triggered_at
+                    ? `${t("webhooks.last_triggered")}: ${formatDate(w.last_triggered_at, locale)}`
+                    : t("webhooks.never_triggered")}
+                </span>
               </div>
-            </div>
+              {w.prompt_prefix && (
+                <p className="font-mono text-xs text-foreground/50 line-clamp-1 break-words">{w.prompt_prefix}</p>
+              )}
+            </DataRow>
           ))}
         </div>
       )}
 
       {/* Create / Edit dialog */}
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
-        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-xl max-h-[90dvh] overflow-y-auto">
-          <DialogHeader className="p-6 border-b border-border/50">
-            <DialogTitle className="text-base font-bold text-foreground">
-              {editId ? t("webhooks.editing") : t("webhooks.new_dialog")}
-            </DialogTitle>
+        <DialogContent size="xl">
+          <DialogHeader className="border-b border-border/50 pb-4">
+            <DialogTitle>{editId ? t("webhooks.editing") : t("webhooks.new_dialog")}</DialogTitle>
           </DialogHeader>
-          <div className="p-6 space-y-5">
+          <div className="space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label={t("webhooks.field_name")}>
                 <Input
@@ -355,22 +327,9 @@ export default function WebhooksPage() {
             {form.name.trim() && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-muted-foreground ml-1">{t("webhooks.endpoint_url")}</label>
-                <div className="flex items-center gap-2 rounded-lg bg-muted/30 border border-border/50 px-3 py-2">
-                  <code className="flex-1 text-xs font-mono text-primary/80 break-all select-all">
-                    {webhookUrl(form.name.trim())}
-                  </code>
-                  <button
-                    type="button"
-                    className="inline-flex items-center text-muted-foreground hover:text-primary transition-colors cursor-pointer"
-                    onClick={() => doCopy(webhookUrl(form.name.trim()), "form-url")}
-                  >
-                    {copiedField === "form-url" ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-                  </button>
-                </div>
-                <p className="text-[11px] text-muted-foreground/60 ml-1">
-                  {form.webhook_type === "github"
-                    ? t("webhooks.hint_github")
-                    : t("webhooks.hint_generic")}
+                <CopyableCode value={webhookUrl(form.name.trim())} onCopied={() => toast.success(t("webhooks.url_copied"))} />
+                <p className="text-xs text-muted-foreground-subtle ml-1">
+                  {form.webhook_type === "github" ? t("webhooks.hint_github") : t("webhooks.hint_generic")}
                 </p>
               </div>
             )}
@@ -379,16 +338,13 @@ export default function WebhooksPage() {
                 placeholder={t("webhooks.prompt_prefix_placeholder")}
                 value={form.prompt_prefix}
                 onChange={(e) => setForm({ ...form, prompt_prefix: e.target.value })}
-                className="font-mono text-sm min-h-[100px] resize-y"
+                className="font-mono text-sm min-h-24 resize-y"
               />
             </Field>
           </div>
-          <DialogFooter className="p-6 border-t border-border/50 gap-3">
+          <DialogFooter className="border-t border-border/50 pt-4">
             <Button variant="ghost" onClick={() => setFormOpen(false)}>{t("common.cancel")}</Button>
-            <Button
-              onClick={saveWebhook}
-              disabled={mutating || !form.name.trim() || !form.agent}
-            >
+            <Button onClick={saveWebhook} disabled={mutating || !form.name.trim() || !form.agent}>
               {editId ? t("common.save") : t("common.create")}
             </Button>
           </DialogFooter>
@@ -403,28 +359,25 @@ export default function WebhooksPage() {
         description={t("webhooks.delete_description", { name: deleteTarget?.name ?? "" })}
       />
 
+      <ConfirmDialog
+        open={!!regenTarget}
+        onClose={() => setRegenTarget(null)}
+        onConfirm={regenerateSecret}
+        title={t("webhooks.regenerate_confirm_title")}
+        description={t("webhooks.regenerate_confirm_description", { name: regenTarget?.name ?? "" })}
+      />
+
       {/* Secret reveal dialog */}
       <Dialog open={!!createdSecret} onOpenChange={(o) => { if (!o) setCreatedSecret(null); }}>
-        <DialogContent className="border-border rounded-xl max-w-[95vw] sm:max-w-lg max-h-[90dvh] overflow-y-auto overscroll-contain">
-          <DialogHeader className="p-6 border-b border-border/50">
-            <DialogTitle className="text-base font-bold text-foreground">
-              {t("webhooks.secret_created_title")}
-            </DialogTitle>
+        <DialogContent size="lg">
+          <DialogHeader className="border-b border-border/50 pb-4">
+            <DialogTitle>{t("webhooks.secret_created_title")}</DialogTitle>
           </DialogHeader>
-          <div className="p-6 space-y-4">
+          <div className="space-y-4">
             <p className="text-sm text-muted-foreground">{t("webhooks.secret_created_warning")}</p>
-            <div className="flex items-center gap-2 rounded-lg bg-muted/30 border border-border/50 px-3 py-3">
-              <code className="flex-1 text-xs font-mono text-foreground break-all select-all">{createdSecret}</code>
-              <button
-                type="button"
-                className="inline-flex items-center text-muted-foreground hover:text-primary transition-colors cursor-pointer"
-                onClick={() => { if (createdSecret) { doCopy(createdSecret, "secret"); } }}
-              >
-                {copiedField === "secret" ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-              </button>
-            </div>
+            {createdSecret && <CopyableCode value={createdSecret} onCopied={() => toast.success(t("webhooks.url_copied"))} />}
           </div>
-          <DialogFooter className="p-6 border-t border-border/50">
+          <DialogFooter className="border-t border-border/50 pt-4">
             <Button onClick={() => setCreatedSecret(null)}>{t("common.close")}</Button>
           </DialogFooter>
         </DialogContent>

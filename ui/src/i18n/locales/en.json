@@ -789,6 +789,8 @@
   "webhooks.field_event_filter": "Event Filter (comma-separated)",
   "webhooks.event_filter_hint": "Leave empty to receive all events",
   "webhooks.regenerate_secret": "Regenerate secret",
+  "webhooks.regenerate_confirm_title": "Regenerate webhook secret?",
+  "webhooks.regenerate_confirm_description": "The current secret for \"{{name}}\" stops working immediately. Any integration using it must be updated.",
   "config.title": "Config",
   "config.subtitle": "Runtime parameters",
   "config.restart_core": "Restart core",
