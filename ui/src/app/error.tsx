@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
+import { ErrorState } from "@/components/ui/error-state";
 import { useTranslation } from "@/hooks/use-translation";
 
 export default function RootError({
@@ -12,11 +13,14 @@ export default function RootError({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center gap-4 p-8">
-      <p className="font-mono text-sm text-destructive">{error.message}</p>
-      <Button onClick={reset} variant="outline" size="sm">
-        {t("error.retry")}
-      </Button>
-    </div>
+    <ErrorState
+      className="min-h-dvh"
+      message={error.message}
+      action={
+        <Button onClick={reset} variant="outline" size="sm">
+          {t("error.retry")}
+        </Button>
+      }
+    />
   );
 }
