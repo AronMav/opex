@@ -58,7 +58,7 @@ export const TextPart = memo(function TextPart({ text, highlightRanges, isActive
   // Skip cleanContent + markdown rendering to avoid losing character offsets.
   if (highlightRanges && highlightRanges.length > 0) {
     return (
-      <p className="leading-relaxed text-foreground text-[15px] whitespace-pre-wrap">
+      <p className="leading-relaxed text-foreground text-message whitespace-pre-wrap">
         <HighlightedText text={text} ranges={highlightRanges} isActive={isActive} />
       </p>
     );
@@ -72,7 +72,7 @@ export const TextPart = memo(function TextPart({ text, highlightRanges, isActive
       markdown
       isStreaming={isStreaming}
       className="prose prose-sm dark:prose-invert max-w-none bg-transparent p-0 overflow-x-auto
-        [&_p]:leading-relaxed [&_p]:text-foreground [&_p]:text-[15px]
+        [&_p]:leading-relaxed [&_p]:text-foreground [&_p]:text-message
         [&_pre]:my-4 [&_pre]:border [&_pre]:border-border [&_pre]:bg-muted/50 [&_pre]:shadow-inner [&_pre]:rounded-lg
         [&_table]:block [&_table]:overflow-x-auto [&_table]:w-full
         [&_a]:text-primary [&_a]:font-bold [&_a]:no-underline hover:[&_a]:underline

@@ -119,7 +119,7 @@ export function ContextBar({
                 <HistoryIcon className="size-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-[11px]">
+            <TooltipContent side="bottom" className="text-2xs">
               История чекпойнтов
             </TooltipContent>
           </Tooltip>
@@ -132,7 +132,7 @@ export function ContextBar({
 
               {/* Model badge */}
               {model && (
-                <span className="rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 font-mono text-[11px] text-muted-foreground/60 whitespace-nowrap">
+                <span className="rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 font-mono text-2xs text-muted-foreground/60 whitespace-nowrap">
                   {shortModel(model)}
                 </span>
               )}
@@ -140,10 +140,10 @@ export function ContextBar({
               {/* Token count + progress bar */}
               {hasUsage && (
                 <>
-                  <span className={`text-[11px] tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground/40" : "text-muted-foreground/60"}`}>
+                  <span className={`text-2xs tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground/40" : "text-muted-foreground/60"}`}>
                     {formatK(tokens!)} / {formatK(limit!)}
                   </span>
-                  <div className="relative h-[4px] w-14 rounded-full bg-muted/30 overflow-hidden">
+                  <div className="relative h-1 w-14 rounded-full bg-muted/30 overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all duration-700 ${barColor} ${isGenerating ? "opacity-50" : ""}`}
                       style={{ width: `${pct}%` }}
@@ -153,7 +153,7 @@ export function ContextBar({
                     )}
                   </div>
                   {ratio > 0.95 && !isGenerating && (
-                    <span className="text-[10px] text-destructive font-medium whitespace-nowrap">
+                    <span className="text-3xs text-destructive font-medium whitespace-nowrap">
                       {t("chat.context_almost_full")}
                     </span>
                   )}
@@ -166,7 +166,7 @@ export function ContextBar({
           {tooltipLines.length > 0 && (
             <TooltipContent
               side="bottom"
-              className="bg-popover/95 border border-border/60 text-popover-foreground backdrop-blur-sm text-[11px] font-mono max-w-[240px] whitespace-pre-line shadow-lg"
+              className="bg-popover/95 border border-border/60 text-popover-foreground backdrop-blur-sm text-2xs font-mono max-w-60 whitespace-pre-line shadow-lg"
             >
               {tooltipLines.join("\n")}
             </TooltipContent>

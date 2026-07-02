@@ -88,7 +88,7 @@ function ScrollToBottomButton({
         <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-primary animate-pulse" />
       )}
       {badge && (
-        <span className="absolute -bottom-1 -right-1 min-w-[18px] h-[18px] rounded-full bg-primary text-primary-foreground text-[10px] font-bold flex items-center justify-center px-1 leading-none">
+        <span className="absolute -bottom-1 -right-1 min-w-5 h-5 rounded-full bg-primary text-primary-foreground text-3xs font-bold flex items-center justify-center px-1 leading-none">
           {badge}
         </span>
       )}

@@ -170,13 +170,13 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
         />
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="message-header flex items-center justify-between min-h-[18px]">
+        <div className="message-header flex items-center justify-between min-h-5">
           <div className="flex items-center gap-2">
             <span className={`text-xs font-semibold uppercase tracking-wider ${isAgentSender ? "text-muted-foreground/70" : "text-primary"}`}>
               {isAgentSender ? senderAgentName : t("chat.you")}
             </span>
             {message.createdAt && (
-              <span className="text-[10px] font-mono tabular-nums text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
+              <span className="text-3xs font-mono tabular-nums text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
                 {formatMessageTime(message.createdAt, locale)}
               </span>
             )}
@@ -280,18 +280,18 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         {!continuesPrevious && (
-          <div className="message-header flex items-center justify-between min-h-[18px]">
+          <div className="message-header flex items-center justify-between min-h-5">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 truncate max-w-[120px]">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 truncate max-w-30">
                 {agentName || t("chat.assistant")}
               </span>
               {message.createdAt && (
-                <span className="text-[10px] font-mono tabular-nums text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-3xs font-mono tabular-nums text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
                   {formatMessageTime(message.createdAt, locale)}
                 </span>
               )}
               {message.isMirror && (
-                <span className="text-[10px] text-cron ml-1">↩ cron</span>
+                <span className="text-3xs text-cron ml-1">↩ cron</span>
               )}
             </div>
             <MessageActions message={message} showReload />

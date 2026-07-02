@@ -479,7 +479,7 @@ export default function ChatPage() {
   // Agent selector component (reused in desktop header and mobile)
   const agentSelector = (
     <Select value={currentAgent} onValueChange={switchAgent} aria-label={t("chat.switch_agent")}>
-      <SelectTrigger size="sm" className="w-auto min-w-[5rem] sm:min-w-[7rem] max-w-[7rem] md:max-w-[10rem] text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
+      <SelectTrigger size="sm" className="w-auto min-w-20 sm:min-w-28 max-w-28 md:max-w-40 text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="border-border">
@@ -632,12 +632,12 @@ export default function ChatPage() {
                             {s.channel}
                           </span>
                           {(activeSessionIds.includes(s.id) || s.run_status === "running") ? (
-                            <span className="ml-1.5 rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wider bg-success/15 text-success flex items-center gap-1 shrink-0">
+                            <span className="ml-1.5 rounded px-1.5 py-0.5 font-mono text-3xs uppercase tracking-wider bg-success/15 text-success flex items-center gap-1 shrink-0">
                               <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
                               {t("chat.status_running")}
                             </span>
                           ) : (s.run_status === "interrupted" || s.run_status === "timeout" || s.run_status === "failed") ? (
-                            <span className="ml-1 rounded px-1 py-0.5 font-mono text-[10px] uppercase tracking-wider bg-destructive/15 text-destructive/80 shrink-0">
+                            <span className="ml-1 rounded px-1 py-0.5 font-mono text-3xs uppercase tracking-wider bg-destructive/15 text-destructive/80 shrink-0">
                               {s.run_status === "interrupted" ? t("chat.status_interrupted") : s.run_status === "timeout" ? t("chat.status_timeout") : t("chat.status_failed")}
                             </span>
                           ) : null}
@@ -699,7 +699,7 @@ export default function ChatPage() {
                         </>
                       )}
                       {activeSessionId === s.id && (
-                        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-[2px] rounded-full bg-primary" />
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-0.5 rounded-full bg-primary" />
                       )}
                     </button>
                     <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 md:opacity-0 md:group-hover:opacity-100 transition-opacity duration-150">
@@ -743,7 +743,7 @@ export default function ChatPage() {
     <ChatRuntimeProvider key={currentAgent}>
     <div className="flex h-full flex-col lg:flex-row bg-background overflow-hidden">
       {/* Desktop sidebar — visible only at lg+ */}
-      <aside className="hidden w-[280px] shrink-0 flex-col border-r border-border lg:flex" aria-label={t("chat.session_list")}>
+      <aside className="hidden w-70 shrink-0 flex-col border-r border-border lg:flex" aria-label={t("chat.session_list")}>
         {sessionList}
       </aside>
 
@@ -768,7 +768,7 @@ export default function ChatPage() {
           {streamError && (
             <div className="ml-auto flex items-center gap-1 text-destructive/60 shrink-0">
               <div className="h-2 w-2 rounded-full bg-destructive/60 animate-pulse" />
-              <span className="text-[10px] font-mono uppercase tracking-wider">{t("chat.error")}</span>
+              <span className="text-3xs font-mono uppercase tracking-wider">{t("chat.error")}</span>
             </div>
           )}
         </div>
