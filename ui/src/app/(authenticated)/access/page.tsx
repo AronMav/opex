@@ -276,6 +276,7 @@ export default function AccessPage() {
                               { value: "open", label: t("access.open") },
                               { value: "restricted", label: t("access.restricted") },
                             ]}
+                            ariaLabel={t("access.mode_label")}
                             className="self-start sm:self-auto"
                           />
                           <Input
