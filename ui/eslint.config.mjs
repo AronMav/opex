@@ -35,6 +35,7 @@ const eslintConfig = defineConfig([
       "src/app/(authenticated)/secrets/**/*.{ts,tsx}",
       "src/app/(authenticated)/backups/**/*.{ts,tsx}",
       "src/app/(authenticated)/channels/**/*.{ts,tsx}",
+      "src/app/(authenticated)/integrations/**/*.{ts,tsx}",
     ],
     plugins: { local: { rules: { "no-raw-design-values": noRawDesignValues } } },
     rules: { "local/no-raw-design-values": "error" },
