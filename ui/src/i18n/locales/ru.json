@@ -789,6 +789,8 @@
   "webhooks.field_event_filter": "Фильтр событий (через запятую)",
   "webhooks.event_filter_hint": "Оставьте пустым для получения всех событий",
   "webhooks.regenerate_secret": "Пересоздать секрет",
+  "webhooks.regenerate_confirm_title": "Перегенерировать секрет вебхука?",
+  "webhooks.regenerate_confirm_description": "Текущий секрет «{{name}}» перестанет работать сразу. Все интеграции с ним нужно обновить.",
   "config.title": "Конфиг",
   "config.subtitle": "Параметры времени выполнения",
   "config.restart_core": "Перезапустить ядро",
