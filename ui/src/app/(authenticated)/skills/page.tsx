@@ -11,7 +11,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
+import { SectionHeader } from "@/components/ui/section-header";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { Card } from "@/components/ui/card";
+import { IconTile } from "@/components/ui/icon-tile";
+import { Chip } from "@/components/ui/chip";
+import { SearchInput } from "@/components/ui/search-input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
@@ -57,24 +63,10 @@ type StateFilter = "all" | "active" | "stale" | "archived";
 
 function StateBadge({ state }: { state: SkillEntry["state"] }) {
   const { t } = useTranslation();
-  if (state === "active") {
-    return (
-      <Badge variant="success" className="text-[10px] px-1.5 py-0 shrink-0">
-        {t("skills.state_active")}
-      </Badge>
-    );
-  }
-  if (state === "stale") {
-    return (
-      <Badge variant="warning" className="text-[10px] px-1.5 py-0 shrink-0">
-        {t("skills.state_stale")}
-      </Badge>
-    );
-  }
   return (
-    <Badge className="text-[10px] px-1.5 py-0 bg-muted text-muted-foreground border-border/60 shrink-0">
-      {t("skills.state_archived")}
-    </Badge>
+    <StatusBadge status={state} size="sm">
+      {t(`skills.state_${state}`)}
+    </StatusBadge>
   );
 }
 
@@ -88,8 +80,9 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
     return (
       <Badge
         variant="warning"
+        size="sm"
         title={decision.reason ?? ""}
-        className="text-[10px] px-1.5 py-0 shrink-0 cursor-help"
+        className="cursor-help"
       >
         {t("skills.curator_rejected")}
       </Badge>
@@ -102,8 +95,10 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
       : "";
     return (
       <Badge
+        variant="secondary"
+        size="sm"
         title={decision.reason ?? ""}
-        className="text-[10px] px-1.5 py-0 bg-muted text-muted-foreground border-border/50 shrink-0 cursor-help"
+        className="cursor-help"
       >
         {t("skills.curator_fixed")} · {date}
       </Badge>
@@ -118,7 +113,7 @@ function CuratorDecisionBadge({ decision }: { decision: CuratorDecision | undefi
 function PinBadge() {
   const { t } = useTranslation();
   return (
-    <Badge variant="default" className="text-[10px] px-1.5 py-0 shrink-0">
+    <Badge variant="default" size="sm">
       {t("skills.badge_pinned")}
     </Badge>
   );
@@ -175,14 +170,14 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
               {versions.map((v) => {
                 const isExpanded = expandedId === v.id;
                 return (
-                  <div key={v.id} className="rounded-lg border border-border/60 bg-card/50 overflow-hidden">
+                  <Card key={v.id} className="overflow-hidden">
                     {/* Header row — click to expand */}
                     <button
                       className="w-full text-left p-3 hover:bg-muted/40 transition-colors"
                       onClick={() => setExpandedId(isExpanded ? null : v.id)}
                     >
                       <div className="flex items-center gap-2 flex-wrap">
-                        <Badge variant="secondary" className="font-mono text-[10px] px-1.5 py-0 shrink-0">
+                        <Badge variant="secondary" size="sm" className="font-mono">
                           gen {v.generation}
                         </Badge>
                         {v.evolution_type && (
@@ -205,7 +200,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                     {isExpanded && (
                       <div className="border-t border-border/40">
                         <div className="flex items-center justify-between px-3 py-2 bg-muted/20">
-                          <span className="text-[10px] font-mono text-muted-foreground/60 truncate">
+                          <span className="text-3xs font-mono text-muted-foreground-subtle truncate">
                             {v.content_hash}
                           </span>
                           <Button
@@ -219,12 +214,12 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                             {t("skills.restore")}
                           </Button>
                         </div>
-                        <pre className="p-3 text-[11px] font-mono text-foreground/80 overflow-x-auto max-h-80 overflow-y-auto bg-muted/10 whitespace-pre-wrap break-words">
+                        <pre className="p-3 text-2xs font-mono text-foreground/80 overflow-x-auto max-h-80 overflow-y-auto bg-muted/10 whitespace-pre-wrap break-words">
                           {v.content}
                         </pre>
                       </div>
                     )}
-                  </div>
+                  </Card>
                 );
               })}
             </div>
@@ -237,13 +232,14 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
               </h3>
               <div className="space-y-1.5">
                 {curatorHistory.map((d) => (
-                  <div
+                  <Card
                     key={d.id}
-                    className="flex items-start gap-2 rounded-md border border-border/40 bg-card/30 px-3 py-2"
+                    className="flex items-start gap-2 px-3 py-2"
                   >
                     <Badge
                       variant={d.action === "reject" ? "warning" : "secondary"}
-                      className="text-[10px] px-1.5 py-0 shrink-0 mt-0.5"
+                      size="sm"
+                      className="mt-0.5"
                     >
                       {d.action}
                     </Badge>
@@ -251,11 +247,11 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                       {d.reason && (
                         <p className="text-xs text-foreground/70 truncate">{d.reason}</p>
                       )}
-                      <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                      <p className="text-3xs text-muted-foreground-subtle mt-0.5">
                         {relativeTime(d.decided_at, locale)}
                       </p>
                     </div>
-                  </div>
+                  </Card>
                 ))}
               </div>
             </div>
@@ -312,7 +308,7 @@ function CuratorWidget() {
   };
 
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
+    <Card className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4">
       <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 text-sm min-w-0">
         <span className="font-medium shrink-0">{t("skills.curator_label")}</span>
         <span className="text-muted-foreground text-xs truncate">
@@ -323,7 +319,7 @@ function CuratorWidget() {
         <RefreshCw className={`h-3 w-3 ${running ? "animate-spin" : ""}`} />
         {t("skills.curator_run_now")}
       </Button>
-    </div>
+    </Card>
   );
 }
 
@@ -353,6 +349,14 @@ export default function SkillsPage() {
     ? allSkills
     : allSkills.filter((s) => s.state === stateFilter)
   ).filter((s) => !skillSearch || s.name.toLowerCase().includes(skillSearch.toLowerCase()));
+
+  // A filter/search is active — an empty result here is "no matches", not onboarding.
+  const isFiltered = stateFilter !== "all" || skillSearch.trim() !== "";
+
+  const resetFilters = () => {
+    setStateFilter("all");
+    setSkillSearch("");
+  };
 
   const handleDelete = async (skillName: string) => {
     setDeletePending(skillName);
@@ -465,17 +469,14 @@ export default function SkillsPage() {
               <ArrowLeft className="h-3.5 w-3.5" />
               {t("common.back")}
             </Button>
-            <div>
-              <h2 className="font-display text-lg font-bold tracking-tight text-foreground">
-                {editingKey ? t("skills.editing", { name: form.name }) : t("skills.new_skill_title")}
-              </h2>
-              <span className="text-sm text-muted-foreground">
-                {editingKey ? t("skills.editing_subtitle") : t("skills.new_skill_subtitle")}
-              </span>
-            </div>
+            <SectionHeader
+              className="mb-0 flex-1"
+              title={editingKey ? t("skills.editing", { name: form.name }) : t("skills.new_skill_title")}
+              description={editingKey ? t("skills.editing_subtitle") : t("skills.new_skill_subtitle")}
+            />
           </div>
 
-          <div className="neu-flat p-6 space-y-5">
+          <Card className="p-6 space-y-5">
             <Field label={`${t("skills.field_name")} *`} labelClassName="text-xs">
               <Input
                 type="text"
@@ -535,7 +536,7 @@ export default function SkillsPage() {
                 className="resize-y font-mono"
               />
             </Field>
-          </div>
+          </Card>
 
           <div className="mt-4 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2 sm:gap-3">
             <Button variant="ghost" onClick={() => setShowForm(false)} className="w-full sm:w-auto">
@@ -597,7 +598,7 @@ export default function SkillsPage() {
           >
             {f.label}
             {f.value !== "all" && (
-              <span className="ml-1.5 text-[10px] tabular-nums text-muted-foreground">
+              <span className="ml-1.5 text-3xs tabular-nums text-muted-foreground">
                 {allSkills.filter((s) => s.state === f.value).length}
               </span>
             )}
@@ -606,16 +607,11 @@ export default function SkillsPage() {
       </div>
 
       {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
-        <Input
-          type="text"
-          value={skillSearch}
-          onChange={(e) => setSkillSearch(e.target.value)}
-          placeholder={t("chat.search_sessions")}
-          className="w-full h-9 pl-8 pr-3"
-        />
-      </div>
+      <SearchInput
+        value={skillSearch}
+        onChange={setSkillSearch}
+        placeholder={t("skills.search_placeholder")}
+      />
 
       {/* Curator widget */}
       <CuratorWidget />
@@ -628,9 +624,19 @@ export default function SkillsPage() {
             <Skeleton key={i} className="h-32 rounded-xl border border-border bg-muted/20" />
           ))}
         </div>
+      ) : skills.length === 0 && isFiltered ? (
+        <EmptyState
+          icon={Search}
+          text={t("skills.no_matches")}
+          hint={
+            <Button variant="link" onClick={resetFilters} className="p-0 h-auto mt-1">
+              {t("skills.reset_filters")}
+            </Button>
+          }
+        />
       ) : skills.length === 0 ? (
         <EmptyState icon={BookOpen} text={t("skills.no_skills")} hint={
-          <p className="text-xs text-muted-foreground/60 mt-1">
+          <p className="text-xs text-muted-foreground-subtle mt-1">
             {t("skills.no_skills_hint_prefix")}<span className="font-mono">skill(action=&quot;create&quot;)</span>{t("skills.no_skills_hint_middle")}
             <Button variant="link" onClick={openNew} className="p-0 h-auto">{t("skills.no_skills_hint_link")}</Button>
           </p>
@@ -643,12 +649,12 @@ export default function SkillsPage() {
             const isArchived = skill.state === "archived";
 
             return (
-              <div key={skill.name} className={`rounded-xl border border-border/60 bg-card/50 p-5 space-y-4 ${isArchived ? "opacity-60" : ""}`}>
+              <Card key={skill.name} className={`p-5 space-y-4 ${isArchived ? "opacity-60" : ""}`}>
                 {/* Header */}
                 <div className="flex items-start gap-3">
-                  <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-primary/10 border border-primary/20 shrink-0">
-                    <BookOpen className="h-4 w-4 text-primary" />
-                  </div>
+                  <IconTile tone="primary" size="md">
+                    <BookOpen />
+                  </IconTile>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-sm font-semibold text-foreground truncate">
@@ -658,7 +664,7 @@ export default function SkillsPage() {
                       <CuratorDecisionBadge decision={curatorDecisions?.[skill.name]} />
                       {skill.pinned && <PinBadge />}
                       {skill.priority > 0 && (
-                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-mono shrink-0">
+                        <Badge variant="secondary" size="sm" className="font-mono">
                           p:{skill.priority}
                         </Badge>
                       )}
@@ -678,10 +684,10 @@ export default function SkillsPage() {
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {skill.triggers.map((tr) => (
-                        <span key={tr} className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-muted/30 px-2 py-0.5 text-xs text-foreground/80">
-                          <Tag className="h-2.5 w-2.5 text-muted-foreground" />
+                        <Chip key={tr} tone="default">
+                          <Tag className="text-muted-foreground" />
                           {tr}
-                        </span>
+                        </Chip>
                       ))}
                     </div>
                   </div>
@@ -696,9 +702,9 @@ export default function SkillsPage() {
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {skill.tools_required.map((tr) => (
-                        <span key={tr} className="inline-flex items-center rounded-md border border-primary/20 bg-primary/5 px-2 py-0.5 text-xs font-mono text-primary/80">
+                        <Chip key={tr} tone="primary" className="font-mono">
                           {tr}
-                        </span>
+                        </Chip>
                       ))}
                     </div>
                   </div>
@@ -707,12 +713,12 @@ export default function SkillsPage() {
                 {/* Footer: instructions size + actions */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-border/30">
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <FileText className="h-3 w-3 text-muted-foreground/50 shrink-0" />
-                    <span className="text-xs text-muted-foreground/60 truncate">
+                    <FileText className="h-3 w-3 text-muted-foreground-subtle shrink-0" />
+                    <span className="text-xs text-muted-foreground-subtle truncate">
                       {t("skills.instructions_size")} {t("skills.instructions_chars", { count: skill.instructions_len.toLocaleString() })}
                     </span>
                     {skill.last_used_at && (
-                      <span className="text-xs text-muted-foreground/50 shrink-0">
+                      <span className="text-xs text-muted-foreground-subtle shrink-0">
                         &middot; used {relativeTime(skill.last_used_at, locale)}
                       </span>
                     )}
@@ -774,7 +780,7 @@ export default function SkillsPage() {
                     </Button>
                   </div>
                 </div>
-              </div>
+              </Card>
             );
           })}
         </div>
