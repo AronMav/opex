@@ -100,7 +100,7 @@ function RoutingRuleRow({
                   <span className="flex items-center gap-2">
                     <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                     <span>{conn.name}</span>
-                    <span className="text-muted-foreground/60 text-[10px]">{conn.default_model}</span>
+                    <span className="text-muted-foreground/60 text-2xs">{conn.default_model}</span>
                   </span>
                 </SelectItem>
               ))}
@@ -203,7 +203,7 @@ export function RoutingRulesEditor({
         <Button
           size="sm"
           variant="outline"
-          className="h-7 px-2 text-xs border-primary/20 bg-primary/5 text-primary hover:bg-primary/20"
+          className="h-7 px-2 text-xs"
           onClick={() =>
             onChange([
               ...routing,

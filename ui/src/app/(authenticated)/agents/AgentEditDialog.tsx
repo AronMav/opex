@@ -246,7 +246,7 @@ export function AgentEditDialog({
             <div className={`col-start-1 row-start-1 space-y-3 transition-none ${activeTab === "general" ? "" : "opacity-0 pointer-events-none select-none"}`}>
                 <div className="flex flex-wrap items-end gap-3 mb-3">
                   <div className="shrink-0">
-                    <div className="h-[18px]" />
+                    <div className="h-4" />
                     <button
                       type="button"
                       className="relative group"
@@ -353,7 +353,7 @@ export function AgentEditDialog({
                             <span className="flex items-center gap-2">
                               <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                               <span>{conn.name}</span>
-                              <span className="text-muted-foreground/60 text-[10px]">{conn.default_model}</span>
+                              <span className="text-muted-foreground/60 text-2xs">{conn.default_model}</span>
                             </span>
                           </SelectItem>
                         ))}
@@ -427,7 +427,7 @@ export function AgentEditDialog({
                             <span className="flex items-center gap-2">
                               <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                               <span>{conn.name}</span>
-                              <span className="text-muted-foreground/60 text-[10px]">{conn.default_model}</span>
+                              <span className="text-muted-foreground/60 text-2xs">{conn.default_model}</span>
                             </span>
                           </SelectItem>
                         ))}
@@ -450,7 +450,7 @@ export function AgentEditDialog({
                               <span className="flex items-center gap-2">
                                 <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                 <span>{p.name}</span>
-                                {voice && <span className="text-muted-foreground/60 text-[10px]">voice: {voice}</span>}
+                                {voice && <span className="text-muted-foreground/60 text-2xs">voice: {voice}</span>}
                               </span>
                             </SelectItem>
                           );
@@ -514,7 +514,7 @@ export function AgentEditDialog({
                                 upd({ approvalCategories: next });
                               }} className="rounded border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                               <span className="font-mono">{cat}</span>
-                              <span className="text-muted-foreground/60 text-[10px]">
+                              <span className="text-muted-foreground/60 text-2xs">
                                 {cat === "system" ? "(shell, code, git)" : cat === "destructive" ? "(write, delete, edit)" : "(all other tools)"}
                               </span>
                             </label>
@@ -536,7 +536,7 @@ export function AgentEditDialog({
                   onToggle={(v) => upd({ toolDispatcherEnabled: v })}
                 >
                   <div className="space-y-2">
-                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    <p className="text-2xs text-muted-foreground leading-relaxed">
                       {t("agents.tool_dispatcher_hint")}
                       {editingBase && (
                         <>
@@ -548,7 +548,7 @@ export function AgentEditDialog({
                     </p>
                     <div className="space-y-2">
                       <label className="text-xs font-medium text-muted-foreground ml-1">{t("agents.tool_dispatcher_core_extra")}</label>
-                      <p className="text-[10px] text-muted-foreground -mt-1 mb-1 leading-snug">
+                      <p className="text-2xs text-muted-foreground -mt-1 mb-1 leading-snug">
                         {t("agents.tool_dispatcher_core_extra_hint")}
                       </p>
                       <TagInput
@@ -713,9 +713,9 @@ export function AgentEditDialog({
                             <div className={`h-2 w-2 rounded-full shrink-0 ${ch.status === "running" ? "bg-success" : ch.status === "error" ? "bg-destructive" : "bg-muted-foreground/40"}`} />
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-semibold truncate text-foreground">{ch.display_name}</p>
-                              <p className="text-[10px] text-muted-foreground font-mono uppercase">{ch.channel_type}</p>
+                              <p className="text-2xs text-muted-foreground font-mono uppercase">{ch.channel_type}</p>
                             </div>
-                            <span className="text-[10px] font-mono text-muted-foreground/40">{ch.id.slice(0, 8)}</span>
+                            <span className="text-2xs font-mono text-muted-foreground/40">{ch.id.slice(0, 8)}</span>
                           </div>
                         ))}
                       </div>
@@ -843,18 +843,18 @@ export function DeleteChannelDialog({
 
   return (
     <AlertDialog open={!!deleteChannelId} onOpenChange={(o) => { if (!o) onOpenChange(false); }}>
-      <AlertDialogContent className="border-border shadow-2xl rounded-xl">
+      <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className="text-base font-bold text-destructive">{t("agents.delete_channel_title")}</AlertDialogTitle>
-          <AlertDialogDescription className="text-sm text-muted-foreground mt-2">
+          <AlertDialogTitle className="text-destructive">{t("agents.delete_channel_title")}</AlertDialogTitle>
+          <AlertDialogDescription>
             {t("agents.delete_channel_description")}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter className="mt-6">
-          <AlertDialogCancel className="border-border hover:bg-muted">{t("common.cancel")}</AlertDialogCancel>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
           <AlertDialogAction
+            variant="destructive"
             onClick={() => deleteChannelId && onConfirm(deleteChannelId)}
-            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
             {t("common.delete")}
           </AlertDialogAction>
@@ -981,9 +981,9 @@ function TagInput({
       {values.map((v) => (
         <span
           key={v}
-          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 pl-2 pr-1 py-0.5 font-mono text-[11px]"
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 pl-2 pr-1 py-0.5 font-mono text-2xs"
         >
-          <span className="truncate max-w-[160px]">{v}</span>
+          <span className="truncate max-w-40">{v}</span>
           <button
             type="button"
             onClick={() => onChange(values.filter((x) => x !== v))}
@@ -1010,7 +1010,7 @@ function TagInput({
           }
         }}
         onBlur={() => commit(draft)}
-        className="flex-1 min-w-[120px] bg-transparent outline-none text-xs font-mono placeholder:text-muted-foreground"
+        className="flex-1 min-w-30 bg-transparent outline-none text-xs font-mono placeholder:text-muted-foreground"
       />
       {suggestions && suggestions.length > 0 && (
         <datalist id={datalistId}>

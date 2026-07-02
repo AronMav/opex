@@ -6,9 +6,13 @@ import { useTranslation } from "@/hooks/use-translation";
 import type { TranslationKey } from "@/i18n/types";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
-import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { IconTile } from "@/components/ui/icon-tile";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { StatusDot } from "@/components/ui/status-dot";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,7 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { AgentInfo, AgentDetail, ChannelRow, SecretInfo, Provider } from "@/types/api";
-import { Settings, LogOut, Bot, Search, Plus } from "lucide-react";
+import { Settings, LogOut, Bot, Plus } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -548,16 +552,12 @@ export default function AgentsPage() {
         description={t("agents.subtitle")}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <div className="relative flex-1 md:w-48">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
-              <Input
-                type="text"
-                value={agentSearch}
-                onChange={(e) => setAgentSearch(e.target.value)}
-                placeholder={t("chat.search_sessions")}
-                className="w-full h-9 pl-8 pr-3"
-              />
-            </div>
+            <SearchInput
+              value={agentSearch}
+              onChange={setAgentSearch}
+              placeholder={t("agents.search_placeholder")}
+              className="flex-1 md:w-48"
+            />
             <Button size="lg" onClick={openCreate} className="w-full md:w-auto gap-2">
               <Plus className="h-4 w-4" />
               {t("agents.new_agent")}
@@ -579,10 +579,10 @@ export default function AgentsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {agents.filter((a) => !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase())).map((a) => (
-            <div key={a.name} className="group neu-card neu-hover p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col">
+            <Card key={a.name} interactive className="group p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col">
               <div className="flex items-start gap-3 mb-4 min-w-0">
                 <div className="relative shrink-0">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-primary/20 bg-muted/50 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
+                  <IconTile tone="muted" size="lg" className="border-primary/20 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
                     {a.icon_url ? (
                       <>
                         {/* eslint-disable-next-line @next/next/no-img-element -- agent icons are tiny avatars from arbitrary sources (uploads, data URIs, external); next/Image's optimisation pipeline adds no value at this size */}
@@ -593,23 +593,16 @@ export default function AgentsPage() {
                         {a.name.charAt(0).toUpperCase()}
                       </span>
                     )}
-                  </div>
+                  </IconTile>
                   <div className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${a.is_running ? "bg-success" : "bg-muted-foreground/50"}`} />
                 </div>
                 <div className="flex flex-col gap-0.5 min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
                     <h3 className="font-mono text-sm font-bold tracking-tight text-foreground truncate">{a.name}</h3>
-                    {a.is_running ? (
-                      <div className="flex items-center gap-1 shrink-0 rounded-full border border-success/30 bg-success/10 px-2 py-0.5">
-                        <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
-                        <span className="text-[10px] font-semibold text-success">{t("agents.active")}</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1 shrink-0 rounded-full border border-border bg-muted/40 px-2 py-0.5">
-                        <div className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" />
-                        <span className="text-[10px] font-semibold text-muted-foreground/80">{t("agents.inactive")}</span>
-                      </div>
-                    )}
+                    <StatusBadge status={a.is_running ? "running" : "inactive"} size="sm" className="gap-1">
+                      <StatusDot status={a.is_running ? "success" : "muted"} pulse={a.is_running} className="h-1.5 w-1.5" />
+                      {a.is_running ? t("agents.active") : t("agents.inactive")}
+                    </StatusBadge>
                   </div>
                   <span className="text-xs text-muted-foreground truncate">{a.model}</span>
                 </div>
@@ -624,7 +617,7 @@ export default function AgentsPage() {
 
                 {a.has_heartbeat && (
                   <div className="flex flex-col gap-1 border-b border-border/50 py-2">
-                    <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground/80">{t("agents.schedule")}</span>
+                    <span className="font-mono text-2xs uppercase tracking-widest text-muted-foreground/80">{t("agents.schedule")}</span>
                     <span className="font-mono text-xs font-bold text-primary tabular-nums truncate">
                       {a.heartbeat_cron ? describeCron(a.heartbeat_cron, t) : "\u2014"}{" · "}{a.heartbeat_timezone || "UTC"}
                     </span>
@@ -636,7 +629,7 @@ export default function AgentsPage() {
                 <Button
                   variant="outline"
                   onClick={() => openEdit(a.name)}
-                  className={`h-8 border-primary/20 bg-primary/5 text-primary hover:bg-primary/20 font-mono text-[10px] uppercase tracking-wider ${a.base ? "col-span-2" : ""}`}
+                  className={`tap-target md:min-h-0 md:min-w-0 md:h-8 border-primary/20 bg-primary/5 text-primary hover:bg-primary/20 font-mono text-2xs uppercase tracking-wider ${a.base ? "col-span-2" : ""}`}
                 >
                   <Settings className="h-3.5 w-3.5 mr-1" /> {t("agents.configure")}
                 </Button>
@@ -645,7 +638,7 @@ export default function AgentsPage() {
                     variant="outline-destructive"
                     onClick={() => setDeleteTarget(a.name)}
                     disabled={saving}
-                    className="h-8 font-mono text-[10px] uppercase tracking-wider"
+                    className="tap-target md:min-h-0 md:min-w-0 md:h-8 font-mono text-2xs uppercase tracking-wider"
                     aria-label={t("agents.delete_agent_aria", { name: a.name })}
                   >
                     {saving ? <Loader variant="circular" size="sm" /> : <LogOut className="h-3.5 w-3.5 rotate-90 mr-1" />}
@@ -653,7 +646,7 @@ export default function AgentsPage() {
                   </Button>
                 )}
               </div>
-            </div>
+            </Card>
           ))}
         </div>
       )}
@@ -707,19 +700,16 @@ export default function AgentsPage() {
           if (!o) setDeleteTarget(null);
         }}
       >
-        <AlertDialogContent className="border-border shadow-2xl rounded-xl">
+        <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-base font-bold text-destructive">{t("agents.delete_agent_title", { name: deleteTarget ?? "" })}</AlertDialogTitle>
-            <AlertDialogDescription className="text-sm text-muted-foreground mt-2">
+            <AlertDialogTitle className="text-destructive">{t("agents.delete_agent_title", { name: deleteTarget ?? "" })}</AlertDialogTitle>
+            <AlertDialogDescription>
               {t("agents.delete_agent_description")}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="mt-6">
-            <AlertDialogCancel className="border-border hover:bg-muted">{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={doDelete}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={doDelete}>
               {t("common.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>

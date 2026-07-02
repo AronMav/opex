@@ -331,6 +331,7 @@
   "agents.title": "Agents",
   "agents.subtitle": "Manage agent configurations",
   "agents.new_agent": "New agent",
+  "agents.search_placeholder": "Search agents...",
   "agents.no_active_agents": "No active agents",
   "agents.active": "Active",
   "agents.inactive": "Inactive",
