@@ -705,6 +705,8 @@
   "watchdog.event_resource": "Предупреждение о ресурсах",
   "watchdog.restart_service": "Перезапустить сервис",
   "watchdog.restart_failed": "Ошибка перезапуска: {{error}}",
+  "watchdog.restart_confirm_title": "Перезапустить?",
+  "watchdog.restart_confirm_body": "Перезапустить «{{name}}»? Он будет ненадолго недоступен, пока поднимается.",
   "watchdog.alerting.title": "Оповещения",
   "watchdog.alerting.description": "Настройте каналы для оповещений и события, которые их запускают.",
   "watchdog.alerting.channels": "Каналы",

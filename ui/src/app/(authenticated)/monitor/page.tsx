@@ -18,7 +18,14 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CircularLoader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Card } from "@/components/ui/card";
+import { StatCard } from "@/components/ui/stat-card";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { SectionHeader } from "@/components/ui/section-header";
+import { ScrollableTabsList } from "@/components/ui/scrollable-tabs-list";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { Tabs, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -27,11 +34,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Activity, Clock, Brain, Bot, User, Wrench, Zap, RefreshCw, Calendar, Database,
+  Activity, Clock, Brain, Bot, User, Wrench, Zap, RefreshCw, RotateCcw, Calendar, Database,
   CheckCircle2, XCircle, HeartPulse, AlertTriangle, Stethoscope,
   BarChart3, Cpu, ArrowUpRight, ArrowDownRight, DollarSign,
   ShieldCheck, Check, X, ChevronRight, ScrollText, Sparkles,
-  type LucideProps,
 } from "lucide-react";
 import type { StatusInfo, StatsInfo, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry, CuratorRun } from "@/types/api";
 import type { LogEntry } from "@/types/api";
@@ -73,12 +79,6 @@ interface DoctorResponse {
   checks: Record<string, CheckResult>;
 }
 
-const STATUS_VARIANT: Record<CheckStatus, "default" | "secondary" | "destructive"> = {
-  ok: "default",
-  warn: "secondary",
-  error: "destructive",
-};
-
 const STATUS_LABEL: Record<CheckStatus, string> = {
   ok: "OK",
   warn: "WARN",
@@ -99,49 +99,41 @@ function FixHintButton({ hint }: { hint: string }) {
   const router = useRouter();
   const route = getFixRoute(hint);
 
-  if (route) {
-    return (
-      <div className="ml-[76px] mt-1 flex items-center gap-2">
-        <span className="text-xs text-amber-600 dark:text-amber-400">{hint}</span>
+  return (
+    <div className="mt-1 flex items-center gap-2">
+      <span className="text-xs text-warning">{hint}</span>
+      {route && (
         <Button
           variant="outline"
-          size="sm"
-          className="h-6 text-xs px-2"
+          size="xs"
           onClick={() => router.push(route)}
         >
           {t("doctor.fix")}
         </Button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="ml-[76px] mt-1">
-      <span className="text-xs text-amber-600 dark:text-amber-400">{hint}</span>
+      )}
     </div>
   );
 }
 
 function CheckRow({ name, result }: { name: string; result: CheckResult }) {
-  const variant = STATUS_VARIANT[result.status] ?? "secondary";
   const label = STATUS_LABEL[result.status] ?? result.status.toUpperCase();
   const displayName = name.replace(/_/g, " ");
 
   return (
-    <div className="flex flex-col gap-1 py-2 border-b last:border-0">
-      <div className="flex items-center gap-3">
-        <Badge variant={variant} className="w-16 justify-center text-xs shrink-0">
-          {label}
-        </Badge>
-        <span className="font-medium text-sm capitalize">{displayName}</span>
-        {result.latency_ms !== undefined && (
-          <span className="ml-auto text-xs text-muted-foreground">{result.latency_ms}ms</span>
-        )}
+    <div className="flex flex-col gap-1 border-b py-2 last:border-0 md:flex-row md:items-start md:gap-3">
+      <StatusBadge status={result.status} size="sm" className="w-16 shrink-0 justify-center">
+        {label}
+      </StatusBadge>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium capitalize">{displayName}</span>
+          {result.latency_ms !== undefined && (
+            <span className="ml-auto text-xs text-muted-foreground">{result.latency_ms}ms</span>
+          )}
+        </div>
+        <p className="text-sm text-muted-foreground">{result.message}</p>
+        {result.fix_hint && <FixHintButton hint={result.fix_hint} />}
       </div>
-      <p className="text-sm text-muted-foreground ml-[76px]">{result.message}</p>
-      {result.fix_hint && (
-        <FixHintButton hint={result.fix_hint} />
-      )}
     </div>
   );
 }
@@ -154,8 +146,8 @@ function CheckSection({
   checks: { name: string; result: CheckResult }[];
 }) {
   return (
-    <div className="neu-card">
-      <div className="px-4 py-3 border-b border-border">
+    <Card>
+      <div className="border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
       </div>
       <div className="px-4">
@@ -163,7 +155,7 @@ function CheckSection({
           <CheckRow key={name} name={name} result={result} />
         ))}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -204,32 +196,6 @@ interface WatchdogStatus {
   containers?: ContainerInfo[];
 }
 
-// ── MetricCard ──────────────────────────────────────────────────────────────
-
-function MetricCard({ label, value, subValue, dot, valueClass, icon }: {
-  label: string; value: string; subValue?: string;
-  dot?: "success" | "error"; valueClass?: string; icon?: React.FC<LucideProps>;
-}) {
-  const Icon = icon;
-  return (
-    <div className="group neu-card neu-hover p-5 transition-all duration-300">
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            {Icon && <Icon className="text-primary/60 group-hover:text-primary transition-colors" size={16} />}
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground group-hover:text-foreground transition-colors">{label}</span>
-          </div>
-          {dot && <div className={`h-2 w-2 rounded-full ${dot === "success" ? "bg-success" : "bg-destructive"}`} />}
-        </div>
-        <div className="flex flex-col gap-1">
-          <span className={`font-mono text-xl font-bold tracking-tight ${valueClass || "text-foreground"}`}>{value}</span>
-          {subValue && <span className="text-xs text-muted-foreground truncate">{subValue}</span>}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Statistics helpers ──────────────────────────────────────────────────────
 
 const PERIOD_OPTIONS: { value: string; labelKey: TranslationKey }[] = [
@@ -239,11 +205,12 @@ const PERIOD_OPTIONS: { value: string; labelKey: TranslationKey }[] = [
   { value: "90", labelKey: "usage.period_90d" },
 ];
 
-const METRIC_COLORS = {
-  messages: "text-blue-500",
-  tokens: "text-emerald-500",
-  cost: "text-amber-500",
-  sessions: "text-purple-500",
+// StatCard accent = chart-token number (1 blue, 2 green, 3 amber, 5 purple).
+const METRIC_ACCENT = {
+  messages: 1,
+  tokens: 2,
+  cost: 3,
+  sessions: 5,
 } as const;
 
 function formatTokens(n: number): string {
@@ -267,7 +234,7 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
   const maxTokens = Math.max(1, ...entries.map(([, v]) => v.input + v.output));
 
   return (
-    <div className="mb-8 rounded-xl border border-border bg-card/80">
+    <Card className="mb-8">
       <div className="flex items-center gap-3 px-4 sm:px-5 py-4 border-b border-border/50 bg-muted/20 rounded-t-xl">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
           <Calendar className="h-4 w-4 text-primary" />
@@ -275,13 +242,13 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
         <div>
           <h3 className="text-sm font-bold tracking-tight">{t("usage.tokens_by_day")}</h3>
           <span className="text-xs text-muted-foreground">
-            <span className="inline-block w-2 h-2 rounded-sm bg-blue-500 mr-1" />{t("usage.input_legend")}
-            <span className="inline-block w-2 h-2 rounded-sm bg-emerald-500 ml-3 mr-1" />{t("usage.output_legend")}
+            <span className="inline-block w-2 h-2 rounded-sm bg-chart-1 mr-1" />{t("usage.input_legend")}
+            <span className="inline-block w-2 h-2 rounded-sm bg-chart-2 ml-3 mr-1" />{t("usage.output_legend")}
           </span>
         </div>
       </div>
       <div className="px-4 sm:px-5 py-4">
-        <div className="flex items-end gap-[2px] sm:gap-1" style={{ height: 160 }}>
+        <div className="flex h-40 items-end gap-0.5 sm:gap-1">
           {entries.map(([date, val], idx) => {
             const total = val.input + val.output;
             const pct = (total / maxTokens) * 100;
@@ -298,8 +265,8 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
                   <div className="rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg whitespace-nowrap">
                     <div className="font-bold mb-1">{date}</div>
-                    <div className="text-blue-500">{formatTokens(val.input)} {t("usage.input_abbr")}</div>
-                    <div className="text-emerald-500">{formatTokens(val.output)} {t("usage.output_abbr")}</div>
+                    <div className="text-chart-1">{formatTokens(val.input)} {t("usage.input_abbr")}</div>
+                    <div className="text-chart-2">{formatTokens(val.output)} {t("usage.output_abbr")}</div>
                     <div className="text-muted-foreground">{t("usage.calls", { count: val.calls })}</div>
                   </div>
                 </div>
@@ -308,12 +275,12 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
                   style={{ height: `${Math.max(pct, 2)}%` }}
                 >
                   <div className="h-full flex flex-col">
-                    <div className="bg-blue-500" style={{ flex: inputPct }} />
-                    <div className="bg-emerald-500" style={{ flex: 100 - inputPct }} />
+                    <div className="bg-chart-1" style={{ flex: inputPct }} />
+                    <div className="bg-chart-2" style={{ flex: 100 - inputPct }} />
                   </div>
                 </div>
                 {showLabel ? (
-                  <div className="text-[10px] text-muted-foreground/60 text-center mt-1 truncate">
+                  <div className="text-3xs text-muted-foreground/60 text-center mt-1 truncate">
                     {shortDate}
                   </div>
                 ) : (
@@ -324,41 +291,7 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
           })}
         </div>
       </div>
-    </div>
-  );
-});
-
-const SummaryCard = memo(function SummaryCard({
-  icon: Icon,
-  label,
-  value,
-  sub,
-  accent,
-  borderAccent,
-  gradientFrom,
-}: {
-  icon: React.FC<{ className?: string }>;
-  label: string;
-  value: string;
-  sub: string;
-  accent: string;
-  borderAccent?: string;
-  gradientFrom?: string;
-}) {
-  return (
-    <div className={`group relative rounded-xl border bg-gradient-to-br ${gradientFrom ?? ""} to-card/80 p-4 transition-all hover:shadow-sm overflow-hidden ${borderAccent ? `${borderAccent} hover:border-opacity-60` : "border-border hover:border-primary/20"}`}>
-      <div className="absolute -right-3 -top-3 opacity-[0.04] group-hover:opacity-[0.08] transition-opacity">
-        <Icon className="h-20 w-20" />
-      </div>
-      <div className="relative">
-        <div className="flex items-center gap-2 mb-2">
-          <Icon className={`h-4 w-4 ${accent}`} />
-          <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{label}</span>
-        </div>
-        <div className="text-2xl font-display font-bold tracking-tight">{value}</div>
-        <div className="text-xs text-muted-foreground/60 mt-1">{sub}</div>
-      </div>
-    </div>
+    </Card>
   );
 });
 
@@ -440,6 +373,10 @@ function MonitorPageInner() {
   const [restarting, setRestarting] = useState<string | null>(null);
   const [refreshInterval, setRefreshInterval] = useState(60000);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
+  // Restart confirmation gate (Этап 2): { kind, id, label }
+  const [restartConfirm, setRestartConfirm] = useState<
+    { kind: "service" | "container"; id: string; label: string } | null
+  >(null);
 
   const restartContainer = async (dockerName: string) => {
     setRestarting(dockerName);
@@ -451,6 +388,14 @@ function MonitorPageInner() {
     setRestarting(name);
     try { await apiPost(`/api/watchdog/restart/${name}`); } catch (e) { setWdError(t("watchdog.restart_failed", { error: String(e) })); }
     setTimeout(() => { setRestarting(null); fetchWdData(); }, 5000);
+  };
+
+  const confirmRestart = () => {
+    if (!restartConfirm) return;
+    const { kind, id } = restartConfirm;
+    setRestartConfirm(null);
+    if (kind === "service") restartService(id);
+    else restartContainer(id);
   };
 
 
@@ -637,8 +582,8 @@ function MonitorPageInner() {
   return (
     <div className="flex h-full flex-col">
       <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0 min-w-0">
-        <div className="border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0 min-w-0 overflow-x-auto scrollbar-none">
-          <TabsList className="h-9">
+        <div className="border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0 min-w-0">
+          <ScrollableTabsList className="h-9">
             <TabsTrigger value="watchdog" className="text-xs">{t("monitor.tab_watchdog")}</TabsTrigger>
             <TabsTrigger value="doctor" className="text-xs">{t("monitor.tab_doctor")}</TabsTrigger>
             <TabsTrigger value="logs" className="text-xs">{t("monitor.tab_logs")}</TabsTrigger>
@@ -647,7 +592,7 @@ function MonitorPageInner() {
             <TabsTrigger value="approvals" className="text-xs">{t("monitor.tab_approvals")}</TabsTrigger>
             <TabsTrigger value="failures" className="text-xs">{t("monitor.tab_failures")}</TabsTrigger>
             <TabsTrigger value="curator" className="text-xs">{t("monitor.tab_curator")}</TabsTrigger>
-          </TabsList>
+          </ScrollableTabsList>
         </div>
 
         {/* Watchdog tab */}
@@ -659,75 +604,83 @@ function MonitorPageInner() {
           <div className="p-4 md:p-6 lg:p-8 space-y-8">
             {/* Watchdog section */}
             <div>
-              <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex flex-col gap-1">
-                  <h2 className="font-display text-lg font-bold tracking-tight flex items-center gap-2">
-                    <HeartPulse className="h-5 w-5 text-primary" />
-                    {t("watchdog.title")}
-                  </h2>
-                  <span className="text-sm text-muted-foreground">{t("watchdog.subtitle")}</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-3">
-                  {lastFetch && (
-                    <span className="text-[10px] text-muted-foreground tabular-nums">
-                      {lastFetch.toLocaleTimeString()}
-                    </span>
-                  )}
-                  <Select value={String(refreshInterval)} onValueChange={(v) => setRefreshInterval(Number(v))}>
-                    <SelectTrigger className="h-8 w-[80px] text-xs bg-card/50 border-border">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="5000" className="text-xs">5s</SelectItem>
-                      <SelectItem value="15000" className="text-xs">15s</SelectItem>
-                      <SelectItem value="30000" className="text-xs">30s</SelectItem>
-                      <SelectItem value="60000" className="text-xs">60s</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {res && (
-                    <div className="flex flex-wrap items-center gap-4 bg-muted/20 px-4 py-2 rounded-lg border border-border">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-muted-foreground">{t("watchdog.resource.disk")}</span>
-                        <span className={`font-mono text-sm font-bold ${res.disk_critical ? "text-destructive" : res.disk_warning ? "text-warning" : "text-foreground"}`}>{res.disk_free_gb.toFixed(0)}GB</span>
+              <SectionHeader
+                icon={HeartPulse}
+                title={t("watchdog.title")}
+                description={t("watchdog.subtitle")}
+                actions={
+                  <div className="flex flex-wrap items-center gap-3">
+                    {lastFetch && (
+                      <span className="text-3xs text-muted-foreground tabular-nums">
+                        {lastFetch.toLocaleTimeString()}
+                      </span>
+                    )}
+                    <Select value={String(refreshInterval)} onValueChange={(v) => setRefreshInterval(Number(v))}>
+                      <SelectTrigger className="h-8 w-20 text-xs bg-card/50 border-border">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="5000" className="text-xs">5s</SelectItem>
+                        <SelectItem value="15000" className="text-xs">15s</SelectItem>
+                        <SelectItem value="30000" className="text-xs">30s</SelectItem>
+                        <SelectItem value="60000" className="text-xs">60s</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {res && (
+                      <div className="flex flex-wrap items-center gap-4 bg-muted/20 px-4 py-2 rounded-lg border border-border">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-3xs text-muted-foreground">{t("watchdog.resource.disk")}</span>
+                          <span className={`font-mono text-sm font-bold ${res.disk_critical ? "text-destructive" : res.disk_warning ? "text-warning" : "text-foreground"}`}>{res.disk_free_gb.toFixed(0)}GB</span>
+                        </div>
+                        <div className="w-px h-4 bg-border/50" />
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-3xs text-muted-foreground">{t("watchdog.resource.ram")}</span>
+                          <span className={`font-mono text-sm font-bold ${res.ram_critical ? "text-destructive" : res.ram_warning ? "text-warning" : "text-foreground"}`}>{res.ram_used_percent.toFixed(0)}%</span>
+                        </div>
+                        {res.cpu_load_percent != null && (
+                          <>
+                            <div className="w-px h-4 bg-border/50" />
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-3xs text-muted-foreground">{t("watchdog.resource.cpu")}</span>
+                              <span className={`font-mono text-sm font-bold ${res.cpu_load_percent > 90 ? "text-destructive" : res.cpu_load_percent > 70 ? "text-warning" : "text-foreground"}`}>{res.cpu_load_percent.toFixed(0)}%</span>
+                            </div>
+                          </>
+                        )}
                       </div>
-                      <div className="w-px h-4 bg-border/50" />
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] text-muted-foreground">{t("watchdog.resource.ram")}</span>
-                        <span className={`font-mono text-sm font-bold ${res.ram_critical ? "text-destructive" : res.ram_warning ? "text-warning" : "text-foreground"}`}>{res.ram_used_percent.toFixed(0)}%</span>
-                      </div>
-                      {res.cpu_load_percent != null && (
-                        <>
-                          <div className="w-px h-4 bg-border/50" />
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-[10px] text-muted-foreground">{t("watchdog.resource.cpu")}</span>
-                            <span className={`font-mono text-sm font-bold ${res.cpu_load_percent > 90 ? "text-destructive" : res.cpu_load_percent > 70 ? "text-warning" : "text-foreground"}`}>{res.cpu_load_percent.toFixed(0)}%</span>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
+                    )}
+                  </div>
+                }
+              />
 
               {wdError && <ErrorBanner error={wdError} />}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-5 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                <MetricCard
-                  label={t("dashboard.status")}
-                  value={wdChecks.length > 0 ? (allHealthy && (!watchdog?.containers || watchdog.containers.every(c => c.healthy)) ? "OK" : "ISSUES") : (s?.status?.toUpperCase() || "...")}
-                  dot={wdChecks.length > 0 ? (allHealthy && (!watchdog?.containers || watchdog.containers.every(c => c.healthy)) ? "success" : "error") : (s?.status === "ok" ? "success" : "error")}
-                  subValue={s?.version}
-                  icon={Activity}
-                />
-                <MetricCard label={t("dashboard.uptime")} value={s ? formatDuration(s.uptime_seconds) : "..."} subValue={t("dashboard.uptime_sub")} icon={Clock} />
-                <MetricCard label={t("dashboard.memory")} value={s?.memory_chunks?.toLocaleString() ?? "..."} subValue={t("dashboard.memory_sub")} icon={Brain} />
-                <MetricCard label={t("dashboard.agents")} value={String(s?.agents?.length ?? "0")} subValue={s?.agents?.join(", ") || t("dashboard.agents_none")} icon={Bot} />
-                <MetricCard label={t("dashboard.sessions")} value={String(s?.active_sessions ?? "0")} subValue={t("dashboard.sessions_sub")} icon={User} />
-                <MetricCard label={t("dashboard.tools")} value={String(s?.tools_registered ?? "0")} subValue={t("dashboard.tools_sub")} icon={Wrench} />
-                <MetricCard label={t("dashboard.messages_today")} value={String(st?.messages_today ?? "0")} subValue={t("dashboard.total_messages", { value: st?.total_messages.toLocaleString() ?? "0" })} icon={Zap} />
-                <MetricCard label={t("dashboard.sessions_today")} value={String(st?.sessions_today ?? "0")} subValue={t("dashboard.total_sessions", { value: st?.total_sessions.toLocaleString() ?? "0" })} icon={RefreshCw} />
-                <MetricCard label={t("dashboard.scheduled_jobs")} value={String(s?.scheduled_jobs ?? "0")} subValue={t("dashboard.scheduled_sub")} icon={Calendar} />
-              </div>
+              {(() => {
+                const wdOk = wdChecks.length > 0
+                  ? (allHealthy && (!watchdog?.containers || watchdog.containers.every(c => c.healthy)))
+                  : (s?.status === "ok");
+                const statusValue = wdChecks.length > 0
+                  ? (wdOk ? "OK" : "ISSUES")
+                  : (s?.status?.toUpperCase() || "...");
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-5 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                    <StatCard
+                      label={t("dashboard.status")}
+                      value={<span className={wdOk ? undefined : "text-destructive"}>{statusValue}</span>}
+                      sub={s?.version}
+                      icon={Activity}
+                      accent={wdOk ? 2 : undefined}
+                    />
+                    <StatCard label={t("dashboard.uptime")} value={s ? formatDuration(s.uptime_seconds) : "..."} sub={t("dashboard.uptime_sub")} icon={Clock} />
+                    <StatCard label={t("dashboard.memory")} value={s?.memory_chunks?.toLocaleString() ?? "..."} sub={t("dashboard.memory_sub")} icon={Brain} />
+                    <StatCard label={t("dashboard.agents")} value={String(s?.agents?.length ?? "0")} sub={s?.agents?.join(", ") || t("dashboard.agents_none")} icon={Bot} />
+                    <StatCard label={t("dashboard.sessions")} value={String(s?.active_sessions ?? "0")} sub={t("dashboard.sessions_sub")} icon={User} />
+                    <StatCard label={t("dashboard.tools")} value={String(s?.tools_registered ?? "0")} sub={t("dashboard.tools_sub")} icon={Wrench} />
+                    <StatCard label={t("dashboard.messages_today")} value={String(st?.messages_today ?? "0")} sub={t("dashboard.total_messages", { value: st?.total_messages.toLocaleString() ?? "0" })} icon={Zap} />
+                    <StatCard label={t("dashboard.sessions_today")} value={String(st?.sessions_today ?? "0")} sub={t("dashboard.total_sessions", { value: st?.total_sessions.toLocaleString() ?? "0" })} icon={RefreshCw} />
+                    <StatCard label={t("dashboard.scheduled_jobs")} value={String(s?.scheduled_jobs ?? "0")} sub={t("dashboard.scheduled_sub")} icon={Calendar} />
+                  </div>
+                );
+              })()}
 
 
               {wdChecks.length > 0 && (
@@ -735,16 +688,16 @@ function MonitorPageInner() {
                   <div className="flex items-center gap-3 mb-4">
                     <HeartPulse size={16} className="text-primary/60" />
                     <span className="text-sm font-semibold text-foreground">{t("watchdog.services")}</span>
-                    <Badge variant="outline" className="text-[10px] font-mono">
+                    <Badge variant="outline" size="sm" className="font-mono">
                       {wdChecks.filter(([,v]) => v.ok).length}/{wdChecks.length}
                     </Badge>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                     {wdChecks.map(([name, svc]) => (
-                      <div
+                      <Card
                         key={name}
-                        className={`neu-card p-3 flex flex-col gap-1.5 ${
-                          svc.flapping ? "border-l-[3px] border-l-warning" : !svc.ok ? "border-l-[3px] border-l-destructive" : ""
+                        className={`p-3 flex flex-col gap-1.5 ${
+                          svc.flapping ? "border-l-2 border-l-warning" : !svc.ok ? "border-l-2 border-l-destructive" : ""
                         }`}
                       >
                         <div className="flex items-center justify-between">
@@ -752,14 +705,14 @@ function MonitorPageInner() {
                           <div className="flex items-center gap-1">
                             {svc.can_restart && (
                               <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => restartService(name)}
+                                variant="outline"
+                                size="icon-sm"
+                                onClick={() => setRestartConfirm({ kind: "service", id: name, label: name })}
                                 disabled={restarting === name}
                                 aria-label={t("watchdog.restart_service")}
-                                className="min-h-[44px] min-w-[44px]"
+                                className="tap-target"
                               >
-                                <RefreshCw className={`h-3 w-3 text-muted-foreground ${restarting === name ? "animate-spin" : ""}`} />
+                                <RotateCcw className={`h-3 w-3 text-muted-foreground ${restarting === name ? "animate-spin" : ""}`} />
                               </Button>
                             )}
                             {svc.ok ? (
@@ -773,15 +726,15 @@ function MonitorPageInner() {
                         </div>
                         <span className="font-mono text-xs text-foreground/60">{svc.latency_ms}ms</span>
                         {svc.error && (
-                          <span className="text-[10px] text-destructive truncate" title={svc.error}>{svc.error}</span>
+                          <span className="text-3xs text-destructive truncate" title={svc.error}>{svc.error}</span>
                         )}
                         {svc.flapping && (
-                          <Badge variant="outline" className="text-[10px] w-fit border-warning/30 text-warning">{t("watchdog.flapping")}</Badge>
+                          <Badge variant="outline-warning" size="sm" className="w-fit">{t("watchdog.flapping")}</Badge>
                         )}
                         {svc.last_restart && (
-                          <Badge variant="outline" className="text-[10px] w-fit border-warning/30 text-warning">{t("watchdog.restarted")}</Badge>
+                          <Badge variant="outline-warning" size="sm" className="w-fit">{t("watchdog.restarted")}</Badge>
                         )}
-                      </div>
+                      </Card>
                     ))}
                   </div>
                 </div>
@@ -797,29 +750,29 @@ function MonitorPageInner() {
                         <div className="flex items-center gap-3 mb-3">
                           <Database size={16} className="text-primary/60" />
                           <span className="text-sm font-semibold text-foreground">{t("watchdog.infrastructure")}</span>
-                          <Badge variant="outline" className="text-[10px] font-mono">
+                          <Badge variant="outline" size="sm" className="font-mono">
                             {infra.filter(c => c.healthy).length}/{infra.length}
                           </Badge>
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                           {infra.map((c) => (
-                            <div key={c.name} className={`neu-card px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-[3px] border-l-destructive bg-destructive/5" : ""}`}>
+                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/5" : ""}`}>
                               <span className={`h-2 w-2 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
                               <div className="min-w-0 flex-1">
                                 <span className="text-xs font-semibold text-foreground block">{c.name}</span>
-                                <span className={`text-[10px] block ${c.healthy ? "text-muted-foreground" : "text-destructive"}`}>{c.status}</span>
+                                <span className={`text-3xs block ${c.healthy ? "text-muted-foreground" : "text-destructive"}`}>{c.status}</span>
                               </div>
                               <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => restartContainer(c.docker_name)}
+                                variant="outline"
+                                size="icon-sm"
+                                onClick={() => setRestartConfirm({ kind: "container", id: c.docker_name, label: c.name })}
                                 disabled={restarting === c.docker_name}
                                 aria-label={t("watchdog.restart_service")}
-                                className="min-h-[44px] min-w-[44px] shrink-0"
+                                className="tap-target shrink-0"
                               >
-                                <RefreshCw className={`h-3 w-3 text-muted-foreground ${restarting === c.docker_name ? "animate-spin" : ""}`} />
+                                <RotateCcw className={`h-3 w-3 text-muted-foreground ${restarting === c.docker_name ? "animate-spin" : ""}`} />
                               </Button>
-                            </div>
+                            </Card>
                           ))}
                         </div>
                       </div>
@@ -829,29 +782,29 @@ function MonitorPageInner() {
                         <div className="flex items-center gap-3 mb-3">
                           <Bot size={16} className="text-primary/60" />
                           <span className="text-sm font-semibold text-foreground">{t("watchdog.agents")}</span>
-                          <Badge variant="outline" className="text-[10px] font-mono">
+                          <Badge variant="outline" size="sm" className="font-mono">
                             {agents.filter(c => c.healthy).length}/{agents.length}
                           </Badge>
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                           {agents.map((c) => (
-                            <div key={c.name} className={`neu-card px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-[3px] border-l-destructive bg-destructive/5" : ""}`}>
+                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/5" : ""}`}>
                               <span className={`h-2 w-2 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
                               <div className="min-w-0 flex-1">
                                 <span className="text-xs font-semibold text-foreground block">{c.name}</span>
-                                <span className={`text-[10px] block ${c.healthy ? "text-muted-foreground" : "text-destructive"}`}>{c.status}</span>
+                                <span className={`text-3xs block ${c.healthy ? "text-muted-foreground" : "text-destructive"}`}>{c.status}</span>
                               </div>
                               <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => restartContainer(c.docker_name)}
+                                variant="outline"
+                                size="icon-sm"
+                                onClick={() => setRestartConfirm({ kind: "container", id: c.docker_name, label: c.name })}
                                 disabled={restarting === c.docker_name}
                                 aria-label={t("watchdog.restart_service")}
-                                className="min-h-[44px] min-w-[44px] shrink-0"
+                                className="tap-target shrink-0"
                               >
-                                <RefreshCw className={`h-3 w-3 text-muted-foreground ${restarting === c.docker_name ? "animate-spin" : ""}`} />
+                                <RotateCcw className={`h-3 w-3 text-muted-foreground ${restarting === c.docker_name ? "animate-spin" : ""}`} />
                               </Button>
-                            </div>
+                            </Card>
                           ))}
                         </div>
                       </div>
@@ -871,24 +824,22 @@ function MonitorPageInner() {
         >
           <div className="p-4 md:p-6 lg:p-8 space-y-8">
             <div>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <Stethoscope className="text-primary" size={20} />
-                  <div>
-                    <h2 className="font-display text-lg font-bold tracking-tight">{t("doctor.title")}</h2>
-                    <p className="text-sm text-muted-foreground">{t("doctor.subtitle")}</p>
-                  </div>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => doctorRefetch()}
-                  disabled={doctorFetching}
-                >
-                  <RefreshCw size={14} className={doctorFetching ? "animate-spin mr-2" : "mr-2"} />
-                  {t("common.refresh")}
-                </Button>
-              </div>
+              <SectionHeader
+                icon={Stethoscope}
+                title={t("doctor.title")}
+                description={t("doctor.subtitle")}
+                actions={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => doctorRefetch()}
+                    disabled={doctorFetching}
+                  >
+                    <RefreshCw size={14} className={doctorFetching ? "animate-spin mr-2" : "mr-2"} />
+                    {t("common.refresh")}
+                  </Button>
+                }
+              />
 
               {doctorData && (
                 <div
@@ -903,7 +854,11 @@ function MonitorPageInner() {
               )}
 
               {doctorLoading && (
-                <p className="text-muted-foreground text-sm">{t("doctor.loading")}</p>
+                <div className="space-y-4">
+                  {[1, 2, 3].map((i) => (
+                    <Skeleton key={i} className="h-24 rounded-xl" />
+                  ))}
+                </div>
               )}
 
               {doctorError && (
@@ -952,7 +907,7 @@ function MonitorPageInner() {
 
               <div className="flex flex-wrap items-center gap-2 md:gap-3 flex-1">
                 <Select value={logLevel} onValueChange={setLogLevel}>
-                  <SelectTrigger className="h-9 min-w-[80px] sm:min-w-[110px] border-border bg-card/50 font-mono text-sm rounded-lg">
+                  <SelectTrigger className="h-9 min-w-20 sm:min-w-28 border-border bg-card/50 font-mono text-sm rounded-lg">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="border-border rounded-lg">
@@ -1078,7 +1033,7 @@ function MonitorPageInner() {
 
               <div className="flex flex-wrap items-center gap-2 md:gap-3 flex-1">
                 <Select value={auditAgent} onValueChange={(v) => { setAuditAgent(v); setAuditOffset(0); }}>
-                  <SelectTrigger className="h-9 min-w-[90px] sm:min-w-[120px] border-border bg-card/50 text-sm rounded-lg">
+                  <SelectTrigger className="h-9 min-w-24 sm:min-w-32 border-border bg-card/50 text-sm rounded-lg">
                     <SelectValue placeholder={t("audit.agent_placeholder")} />
                   </SelectTrigger>
                   <SelectContent className="border-border rounded-lg">
@@ -1090,7 +1045,7 @@ function MonitorPageInner() {
                 </Select>
 
                 <Select value={auditEventType} onValueChange={(v) => { setAuditEventType(v); setAuditOffset(0); }}>
-                  <SelectTrigger className="h-9 min-w-[100px] sm:min-w-[150px] border-border bg-card/50 text-sm rounded-lg">
+                  <SelectTrigger className="h-9 min-w-24 sm:min-w-36 border-border bg-card/50 text-sm rounded-lg">
                     <SelectValue placeholder={t("audit.event_type_placeholder")} />
                   </SelectTrigger>
                   <SelectContent className="border-border rounded-lg">
@@ -1139,16 +1094,16 @@ function MonitorPageInner() {
                     >
                       <button
                         type="button"
-                        className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                        className="flex w-full flex-col gap-1 px-4 py-3 text-left md:flex-row md:flex-wrap md:items-center md:gap-3"
                         onClick={() => setExpandedId(expandedId === e.id ? null : e.id)}
                       >
-                        <span className="shrink-0 w-20 font-mono text-xs tabular-nums text-muted-foreground/70">
+                        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/70 md:w-20">
                           {new Date(e.created_at).toLocaleTimeString(locale === "en" ? "en-US" : "ru-RU", { hour12: false })}
                         </span>
-                        <span className="shrink-0 w-20 font-mono text-xs text-muted-foreground truncate" title={e.agent_id}>
+                        <span className="shrink-0 font-mono text-xs text-muted-foreground truncate md:w-20" title={e.agent_id}>
                           {e.agent_id}
                         </span>
-                        <span className={`shrink-0 rounded-md px-2 py-0.5 text-xs font-medium ${EVENT_COLORS[e.event_type] || "bg-muted text-muted-foreground"}`}>
+                        <span className={`w-fit shrink-0 rounded-md px-2 py-0.5 text-xs font-medium ${EVENT_COLORS[e.event_type] || "bg-muted text-muted-foreground"}`}>
                           {e.event_type}
                         </span>
                         {e.actor && (
@@ -1156,10 +1111,10 @@ function MonitorPageInner() {
                             {t("audit.from", { actor: e.actor })}
                           </span>
                         )}
-                        <span className="ml-auto text-xs text-muted-foreground/40">
+                        <span className="text-xs text-muted-foreground/40 md:ml-auto">
                           {new Date(e.created_at).toLocaleDateString(locale === "en" ? "en-US" : "ru-RU")}
                         </span>
-                        <ChevronRight className="text-muted-foreground/40 transition-transform h-3 w-3" style={{ transform: expandedId === e.id ? "rotate(90deg)" : "rotate(0)" }} />
+                        <ChevronRight className="hidden text-muted-foreground/40 transition-transform h-3 w-3 md:block" style={{ transform: expandedId === e.id ? "rotate(90deg)" : "rotate(0)" }} />
                       </button>
 
                       {expandedId === e.id && (
@@ -1211,41 +1166,42 @@ function MonitorPageInner() {
             {statsIsLoading ? (
               <div className="space-y-6">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="h-32 rounded-xl border border-border bg-muted/20 animate-pulse" />
+                  <Skeleton key={i} className="h-32 rounded-xl" />
                 ))}
               </div>
             ) : (
               <>
-                <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="flex flex-col gap-1">
-                    <h2 className="font-display text-lg font-bold tracking-tight">{t("usage.title")}</h2>
-                    <span className="text-sm text-muted-foreground">{t("usage.subtitle")}</span>
-                  </div>
-                  <Select value={statsDays} onValueChange={setStatsDays}>
-                    <SelectTrigger className="w-full sm:w-44 h-9 bg-card/50 border-border text-sm">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="border-border">
-                      {PERIOD_OPTIONS.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>{t(o.labelKey)}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <SectionHeader
+                  icon={BarChart3}
+                  title={t("usage.title")}
+                  description={t("usage.subtitle")}
+                  actions={
+                    <Select value={statsDays} onValueChange={setStatsDays}>
+                      <SelectTrigger className="w-full sm:w-44 h-9 bg-card/50 border-border text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="border-border">
+                        {PERIOD_OPTIONS.map((o) => (
+                          <SelectItem key={o.value} value={o.value}>{t(o.labelKey)}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  }
+                />
 
                 {statsError && <ErrorBanner error={statsError} />}
 
                 {totalTokens > 0 && (
-                  <div className="mb-5 rounded-xl border border-amber-500/20 bg-gradient-to-r from-amber-500/5 via-card/80 to-amber-500/5 p-5 flex items-center justify-between gap-4 overflow-hidden relative">
-                    <div className="absolute -right-6 -top-6 opacity-[0.04]">
-                      <Zap className="h-32 w-32 text-amber-500" />
+                  <Card className="mb-5 border-chart-3/20 p-5 flex items-center justify-between gap-4 overflow-hidden relative">
+                    <div className="absolute -right-6 -top-6 opacity-5">
+                      <Zap className="h-32 w-32 text-chart-3" />
                     </div>
                     <div className="relative">
                       <div className="flex items-center gap-2 mb-1">
-                        <Zap className="h-4 w-4 text-amber-500" />
+                        <Zap className="h-4 w-4 text-chart-3" />
                         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{t("usage.total_tokens_summary")}</span>
                       </div>
-                      <div className="text-4xl font-display font-bold tracking-tight text-amber-500">
+                      <div className="text-4xl font-display font-bold tracking-tight text-chart-3">
                         {formatTokens(totalTokens)}
                       </div>
                       <div className="text-xs text-muted-foreground/60 mt-1">
@@ -1255,58 +1211,50 @@ function MonitorPageInner() {
                     <div className="relative flex flex-col items-end gap-1 shrink-0">
                       <div className="text-right">
                         <div className="text-xs text-muted-foreground/60">{t("usage.input_short")}</div>
-                        <div className="text-sm font-mono font-bold text-blue-500">{formatTokens(totalInput)}</div>
+                        <div className="text-sm font-mono font-bold text-chart-1">{formatTokens(totalInput)}</div>
                       </div>
                       <div className="text-right">
                         <div className="text-xs text-muted-foreground/60">{t("usage.output_short")}</div>
-                        <div className="text-sm font-mono font-bold text-emerald-500">{formatTokens(totalOutput)}</div>
+                        <div className="text-sm font-mono font-bold text-chart-2">{formatTokens(totalOutput)}</div>
                       </div>
                       {totalCost > 0 && (
                         <div className="text-right">
                           <div className="text-xs text-muted-foreground/60">{t("usage.estimated_cost")}</div>
-                          <div className="text-sm font-mono font-bold text-purple-500">${totalCost.toFixed(4)}</div>
+                          <div className="text-sm font-mono font-bold text-chart-5">${totalCost.toFixed(4)}</div>
                         </div>
                       )}
                     </div>
-                  </div>
+                  </Card>
                 )}
 
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-8">
-                  <SummaryCard
+                  <StatCard
                     icon={Zap}
                     label={t("usage.total_tokens")}
                     value={formatTokens(totalTokens)}
                     sub={t("usage.period_days", { days: usageData?.days ?? 0 })}
-                    accent={METRIC_COLORS.cost}
-                    borderAccent="border-amber-500/30"
-                    gradientFrom="from-amber-500/5"
+                    accent={METRIC_ACCENT.cost}
                   />
-                  <SummaryCard
+                  <StatCard
                     icon={ArrowUpRight}
                     label={t("usage.input_tokens")}
                     value={formatTokens(totalInput)}
                     sub={t("usage.pct_of_total", { pct: ((totalInput / Math.max(totalTokens, 1)) * 100).toFixed(0) })}
-                    accent={METRIC_COLORS.messages}
-                    borderAccent="border-blue-500/30"
-                    gradientFrom="from-blue-500/5"
+                    accent={METRIC_ACCENT.messages}
                   />
-                  <SummaryCard
+                  <StatCard
                     icon={ArrowDownRight}
                     label={t("usage.output_tokens")}
                     value={formatTokens(totalOutput)}
                     sub={t("usage.pct_of_total", { pct: ((totalOutput / Math.max(totalTokens, 1)) * 100).toFixed(0) })}
-                    accent={METRIC_COLORS.tokens}
-                    borderAccent="border-emerald-500/30"
-                    gradientFrom="from-emerald-500/5"
+                    accent={METRIC_ACCENT.tokens}
                   />
-                  <SummaryCard
+                  <StatCard
                     icon={DollarSign}
                     label={t("usage.estimated_cost")}
                     value={totalCost > 0 ? `$${totalCost.toFixed(4)}` : "$0"}
                     sub={t("usage.api_calls", { count: totalCalls.toLocaleString() })}
-                    accent={METRIC_COLORS.sessions}
-                    borderAccent="border-purple-500/30"
-                    gradientFrom="from-purple-500/5"
+                    accent={METRIC_ACCENT.sessions}
                   />
                 </div>
 
@@ -1326,7 +1274,7 @@ function MonitorPageInner() {
                       const agentCalls = rows.reduce((s, r) => s + r.call_count, 0);
 
                       return (
-                        <div key={agent} className="rounded-xl border border-border bg-card/80 overflow-hidden">
+                        <Card key={agent} className="overflow-hidden">
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-5 py-4 border-b border-border/50 bg-muted/20">
                             <div className="flex items-center gap-3">
                               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
@@ -1342,11 +1290,11 @@ function MonitorPageInner() {
                             <div className="flex gap-4 sm:gap-6 text-right sm:ml-0">
                               <div>
                                 <div className="text-xs text-muted-foreground">{t("usage.input_short")}</div>
-                                <div className="text-sm font-mono font-bold text-blue-500">{formatTokens(agentInput)}</div>
+                                <div className="text-sm font-mono font-bold text-chart-1">{formatTokens(agentInput)}</div>
                               </div>
                               <div>
                                 <div className="text-xs text-muted-foreground">{t("usage.output_short")}</div>
-                                <div className="text-sm font-mono font-bold text-emerald-500">{formatTokens(agentOutput)}</div>
+                                <div className="text-sm font-mono font-bold text-chart-2">{formatTokens(agentOutput)}</div>
                               </div>
                               <div>
                                 <div className="text-xs text-muted-foreground">{t("usage.total_short")}</div>
@@ -1355,58 +1303,57 @@ function MonitorPageInner() {
                             </div>
                           </div>
 
-                          <div className="divide-y divide-border/30">
-                            {rows.map((row, rowIdx) => {
-                              const rowTotal = row.total_input + row.total_output;
-                              const pct = (rowTotal / maxTotal) * 100;
+                          <Table>
+                            <TableBody>
+                              {rows.map((row) => {
+                                const rowTotal = row.total_input + row.total_output;
+                                const pct = (rowTotal / maxTotal) * 100;
 
-                              return (
-                                <div
-                                  key={`${row.agent_id}-${row.provider}-${row.model}`}
-                                  className={`relative px-4 sm:px-5 py-3 group hover:bg-muted/20 transition-colors ${
-                                    rowIdx % 2 === 1 ? "bg-muted/[0.04]" : ""
-                                  }`}
-                                >
-                                  <div
-                                    className="absolute inset-y-0 left-0 bg-primary/[0.04] transition-all duration-500"
-                                    style={{ width: `${pct}%` }}
-                                  />
-                                  <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-3">
-                                    <div className="flex items-center gap-3 flex-wrap">
-                                      <span className="inline-flex h-6 items-center rounded-md bg-muted/60 px-2 text-xs font-mono font-medium text-muted-foreground">
-                                        {row.provider}
-                                      </span>
-                                      {row.model && (
-                                        <span className="inline-flex h-6 items-center rounded-md bg-primary/10 px-2 text-xs font-mono font-medium text-primary/80">
-                                          {row.model}
-                                        </span>
-                                      )}
-                                      <span className="text-xs text-muted-foreground/60">
-                                        {t("usage.calls", { count: row.call_count.toLocaleString() })}
-                                      </span>
-                                    </div>
-                                    <div className="flex gap-3 sm:gap-5 text-right ml-0 sm:ml-auto">
-                                      <span className="text-xs font-mono tabular-nums text-blue-500/80">
-                                        {formatTokens(row.total_input)} {t("usage.input_abbr")}
-                                      </span>
-                                      <span className="text-xs font-mono tabular-nums text-emerald-500/80">
-                                        {formatTokens(row.total_output)} {t("usage.output_abbr")}
-                                      </span>
-                                      <span className="text-xs font-mono font-bold tabular-nums">
-                                        {formatTokens(rowTotal)}
-                                      </span>
-                                      {row.estimated_cost != null && (
-                                        <span className="text-xs font-mono tabular-nums text-purple-500/80">
-                                          ${row.estimated_cost.toFixed(4)}
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
+                                return (
+                                  <TableRow key={`${row.agent_id}-${row.provider}-${row.model}`} className="relative">
+                                    <TableCell className="relative px-4 py-3 sm:px-5">
+                                      <div
+                                        className="absolute inset-y-0 left-0 bg-primary/5 transition-all duration-500"
+                                        style={{ width: `${pct}%` }}
+                                      />
+                                      <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-3">
+                                        <div className="flex items-center gap-3 flex-wrap">
+                                          <span className="inline-flex h-6 items-center rounded-md bg-muted/60 px-2 text-xs font-mono font-medium text-muted-foreground">
+                                            {row.provider}
+                                          </span>
+                                          {row.model && (
+                                            <span className="inline-flex h-6 items-center rounded-md bg-primary/10 px-2 text-xs font-mono font-medium text-primary/80">
+                                              {row.model}
+                                            </span>
+                                          )}
+                                          <span className="text-xs text-muted-foreground/60">
+                                            {t("usage.calls", { count: row.call_count.toLocaleString() })}
+                                          </span>
+                                        </div>
+                                        <div className="flex gap-3 sm:gap-5 text-right ml-0 sm:ml-auto">
+                                          <span className="text-xs font-mono tabular-nums text-chart-1/80">
+                                            {formatTokens(row.total_input)} {t("usage.input_abbr")}
+                                          </span>
+                                          <span className="text-xs font-mono tabular-nums text-chart-2/80">
+                                            {formatTokens(row.total_output)} {t("usage.output_abbr")}
+                                          </span>
+                                          <span className="text-xs font-mono font-bold tabular-nums">
+                                            {formatTokens(rowTotal)}
+                                          </span>
+                                          {row.estimated_cost != null && (
+                                            <span className="text-xs font-mono tabular-nums text-chart-5/80">
+                                              ${row.estimated_cost.toFixed(4)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </Card>
                       );
                     })}
                   </div>
@@ -1423,22 +1370,17 @@ function MonitorPageInner() {
           className={activeTab !== "approvals" ? "hidden" : "flex-1 overflow-y-auto"}
         >
           <div className="p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-            <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="font-display text-lg font-bold tracking-tight text-foreground">
-                  {t("approvals.title")}
-                </h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {t("approvals.subtitle")}
-                </p>
-              </div>
-              <div className="flex gap-2">
+            <SectionHeader
+              icon={ShieldCheck}
+              title={t("approvals.title")}
+              description={t("approvals.subtitle")}
+              actions={
                 <Button variant="outline" size="sm" onClick={() => approvalsRefetch()} disabled={approvalsLoading}>
                   <RefreshCw className={`mr-2 h-4 w-4 ${approvalsLoading ? "animate-spin" : ""}`} />
                   {t("common.refresh")}
                 </Button>
-              </div>
-            </div>
+              }
+            />
 
             {approvalsErrorMessage && <ErrorBanner error={approvalsErrorMessage} />}
 
@@ -1447,27 +1389,22 @@ function MonitorPageInner() {
             ) : (
               <div className="grid gap-4 md:gap-6">
                 {pending.map((a) => (
-                  <div
+                  <Card
                     key={a.id}
-                    className="group relative flex flex-col gap-4 neu-card p-5 transition-all duration-300 hover:shadow-lg"
+                    interactive
+                    className="group relative flex flex-col gap-4 p-5 hover:shadow-lg"
                   >
                     <div className="flex flex-col gap-3 min-w-0">
                       <div className="flex items-center gap-3 flex-wrap">
                         <h3 className="font-mono text-base font-bold text-foreground truncate">
                           {a.tool}
                         </h3>
-                        <Badge
-                          variant="outline"
-                          className="text-xs border-primary/40 text-primary bg-primary/5"
-                        >
+                        <Badge variant="outline-primary">
                           {a.agent_id}
                         </Badge>
-                        <Badge
-                          variant="secondary"
-                          className="text-xs bg-warning/20 text-warning border-warning/30"
-                        >
+                        <StatusBadge status="pending">
                           {t("approvals.status_pending")}
-                        </Badge>
+                        </StatusBadge>
                         <span className="ml-auto text-xs text-muted-foreground/60 font-mono tabular-nums">
                           {relativeTime(a.created_at, locale)}
                         </span>
@@ -1484,27 +1421,27 @@ function MonitorPageInner() {
 
                     <div className="grid grid-cols-2 md:flex md:items-center md:justify-end gap-2 border-t border-border/50 pt-3">
                       <Button
-                        variant="outline"
+                        variant="outline-success"
                         size="sm"
                         onClick={() => handleResolve(a.id, "approved")}
                         disabled={processingIds.has(a.id)}
-                        className="text-xs font-medium border-success/50 text-success hover:bg-success/10"
+                        className="text-xs font-medium"
                       >
                         <Check className="h-3 w-3 mr-2" />
                         {t("approvals.approve")}
                       </Button>
                       <Button
-                        variant="outline"
+                        variant="outline-destructive"
                         size="sm"
                         onClick={() => handleResolve(a.id, "rejected")}
                         disabled={processingIds.has(a.id)}
-                        className="text-xs font-medium border-destructive/50 text-destructive hover:bg-destructive/10"
+                        className="text-xs font-medium"
                       >
                         <X className="h-3 w-3 mr-2" />
                         {t("approvals.reject")}
                       </Button>
                     </div>
-                  </div>
+                  </Card>
                 ))}
               </div>
             )}
@@ -1518,95 +1455,90 @@ function MonitorPageInner() {
           className={activeTab !== "failures" ? "hidden" : "flex-1 overflow-y-auto"}
         >
           <div className="p-4 md:p-6 lg:p-8 selection:bg-primary/20">
-            <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="font-display text-lg font-bold tracking-tight text-foreground flex items-center gap-2">
-                  <AlertTriangle className="h-5 w-5 text-warning" />
-                  {t("monitor.failures.title")}
-                </h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {t("monitor.failures.subtitle", { total: String(failuresTotal) })}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Select value={failuresAgent} onValueChange={setFailuresAgent}>
-                  <SelectTrigger className="h-8 w-[180px] text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="_all" className="text-xs">{t("monitor.failures.agent_all")}</SelectItem>
-                    {auditAgents.map((a) => (
-                      <SelectItem key={a} value={a} className="text-xs">{a}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => failuresRefetch()}
-                  disabled={failuresLoading}
-                >
-                  <RefreshCw className={`mr-2 h-4 w-4 ${failuresLoading ? "animate-spin" : ""}`} />
-                  {t("common.refresh")}
-                </Button>
-              </div>
-            </div>
+            <SectionHeader
+              icon={AlertTriangle}
+              title={t("monitor.failures.title")}
+              description={t("monitor.failures.subtitle", { total: String(failuresTotal) })}
+              actions={
+                <div className="flex items-center gap-2">
+                  <Select value={failuresAgent} onValueChange={setFailuresAgent}>
+                    <SelectTrigger className="h-8 w-44 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_all" className="text-xs">{t("monitor.failures.agent_all")}</SelectItem>
+                      {auditAgents.map((a) => (
+                        <SelectItem key={a} value={a} className="text-xs">{a}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => failuresRefetch()}
+                    disabled={failuresLoading}
+                  >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${failuresLoading ? "animate-spin" : ""}`} />
+                    {t("common.refresh")}
+                  </Button>
+                </div>
+              }
+            />
 
             {failures.length === 0 ? (
               <EmptyState icon={CheckCircle2} text={t("monitor.failures.empty")} />
             ) : (
-              <div className="rounded-lg border border-border bg-card overflow-x-auto">
-                <table className="w-full text-sm min-w-[700px]">
-                  <thead className="bg-muted/30 text-xs text-muted-foreground">
-                    <tr>
-                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_time")}</th>
-                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_agent")}</th>
-                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_kind")}</th>
-                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_error")}</th>
-                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_tool")}</th>
-                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_provider")}</th>
-                      <th className="text-right px-3 py-2 font-medium">{t("monitor.failures.col_iter")}</th>
-                      <th className="text-right px-3 py-2 font-medium">{t("monitor.failures.col_dur")}</th>
-                      <th className="text-left px-3 py-2 font-medium">{t("monitor.failures.col_session")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+              <Card className="overflow-hidden">
+                <Table style={{ minWidth: 700 }}>
+                  <TableHeader className="bg-muted/30">
+                    <TableRow>
+                      <TableHead>{t("monitor.failures.col_time")}</TableHead>
+                      <TableHead>{t("monitor.failures.col_agent")}</TableHead>
+                      <TableHead>{t("monitor.failures.col_kind")}</TableHead>
+                      <TableHead>{t("monitor.failures.col_error")}</TableHead>
+                      <TableHead>{t("monitor.failures.col_tool")}</TableHead>
+                      <TableHead>{t("monitor.failures.col_provider")}</TableHead>
+                      <TableHead className="text-right">{t("monitor.failures.col_iter")}</TableHead>
+                      <TableHead className="text-right">{t("monitor.failures.col_dur")}</TableHead>
+                      <TableHead>{t("monitor.failures.col_session")}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
                     {failures.map((f) => {
                       const expanded = failuresExpandedId === f.id;
                       return (
                         <Fragment key={f.id}>
-                          <tr
-                            className="border-t border-border/50 hover:bg-muted/20 cursor-pointer"
+                          <TableRow
+                            className="cursor-pointer"
                             onClick={() => setFailuresExpandedId(expanded ? null : f.id)}
                           >
-                            <td className="px-3 py-2 whitespace-nowrap font-mono text-xs text-muted-foreground tabular-nums">
+                            <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground tabular-nums">
                               {relativeTime(f.failed_at, locale)}
-                            </td>
-                            <td className="px-3 py-2 font-mono text-xs">{f.agent_id}</td>
-                            <td className="px-3 py-2">
-                              <Badge variant="outline" className={`text-[10px] ${failureKindClass(f.failure_kind)}`}>
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">{f.agent_id}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline" size="sm" className={failureKindClass(f.failure_kind)}>
                                 {f.failure_kind}
                               </Badge>
-                            </td>
-                            <td className="px-3 py-2 max-w-md">
+                            </TableCell>
+                            <TableCell className="max-w-md">
                               <span className="line-clamp-2 text-xs">{f.error_message}</span>
-                            </td>
-                            <td className="px-3 py-2 font-mono text-xs">{f.last_tool_name ?? "—"}</td>
-                            <td className="px-3 py-2 font-mono text-xs">
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">{f.last_tool_name ?? "—"}</TableCell>
+                            <TableCell className="font-mono text-xs">
                               {f.llm_provider ?? "—"}
                               {f.llm_model ? <span className="text-muted-foreground">/{f.llm_model}</span> : null}
-                            </td>
-                            <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs tabular-nums">
                               {f.iteration_count ?? "—"}
-                            </td>
-                            <td className="px-3 py-2 text-right font-mono text-xs tabular-nums">
+                            </TableCell>
+                            <TableCell className="text-right font-mono text-xs tabular-nums">
                               {f.duration_secs != null ? formatDuration(f.duration_secs * 1000) : "—"}
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell>
                               <Button
                                 variant="ghost"
-                                size="sm"
-                                className="h-6 px-2 text-xs"
+                                size="xs"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   router.push(`/chat/?s=${f.session_id}`);
@@ -1614,11 +1546,11 @@ function MonitorPageInner() {
                               >
                                 {t("monitor.failures.open_session")}
                               </Button>
-                            </td>
-                          </tr>
+                            </TableCell>
+                          </TableRow>
                           {expanded && (
-                            <tr className="bg-muted/10">
-                              <td colSpan={9} className="px-3 py-3">
+                            <TableRow className="bg-muted/10 hover:bg-muted/10">
+                              <TableCell colSpan={9} className="px-3 py-3">
                                 <div className="grid gap-3 md:grid-cols-2">
                                   <div>
                                     <p className="text-xs font-medium text-muted-foreground mb-1">
@@ -1649,15 +1581,15 @@ function MonitorPageInner() {
                                     </div>
                                   )}
                                 </div>
-                              </td>
-                            </tr>
+                              </TableCell>
+                            </TableRow>
                           )}
                         </Fragment>
                       );
                     })}
-                  </tbody>
-                </table>
-              </div>
+                  </TableBody>
+                </Table>
+              </Card>
             )}
           </div>
         </TabsContent>
@@ -1671,6 +1603,16 @@ function MonitorPageInner() {
           <CuratorTab />
         </TabsContent>
       </Tabs>
+
+      <ConfirmDialog
+        open={restartConfirm !== null}
+        onClose={() => setRestartConfirm(null)}
+        onConfirm={confirmRestart}
+        title={t("watchdog.restart_confirm_title")}
+        description={t("watchdog.restart_confirm_body", { name: restartConfirm?.label ?? "" })}
+        confirmLabel={t("watchdog.restart_service")}
+        variant="warning"
+      />
     </div>
   );
 }
@@ -1706,82 +1648,89 @@ function CuratorTab() {
   }
 
   return (
-    <div className="space-y-1 overflow-x-auto scrollbar-none">
-      <div className="min-w-[400px]">
-      {/* Header row */}
-      <div className="grid grid-cols-[minmax(120px,2fr)_80px_60px_60px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium text-muted-foreground uppercase tracking-wide border-b border-border/50">
-        <span>{t("monitor.curator.col_time")}</span>
-        <span>{t("monitor.curator.col_trigger")}</span>
-        <span>{t("monitor.curator.col_status")}</span>
-        <span className="text-right">{t("monitor.curator.col_phase1")}</span>
-        <span className="text-right">{t("monitor.curator.col_phase2")}</span>
-      </div>
-      {runs.map((run) => {
-        const isExpanded = expandedId === run.id;
-        const isSkipped = !!run.skipped_reason;
-        const isError = !!run.error;
-        const statusColor = isError
-          ? "text-destructive"
-          : isSkipped
-          ? "text-muted-foreground"
-          : "text-success";
-        const statusLabel = isError
-          ? t("monitor.curator.status_error")
-          : isSkipped
-          ? t("monitor.curator.status_skipped")
-          : t("monitor.curator.status_ok");
-        const triggerLabel = run.triggered_by === "manual"
-          ? t("monitor.curator.trigger_manual")
-          : t("monitor.curator.trigger_scheduled");
+    <Card className="overflow-hidden">
+      <Table style={{ minWidth: 400 }}>
+        <TableHeader className="bg-muted/30">
+          <TableRow>
+            <TableHead>{t("monitor.curator.col_time")}</TableHead>
+            <TableHead>{t("monitor.curator.col_trigger")}</TableHead>
+            <TableHead>{t("monitor.curator.col_status")}</TableHead>
+            <TableHead className="text-right">{t("monitor.curator.col_phase1")}</TableHead>
+            <TableHead className="text-right">{t("monitor.curator.col_phase2")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {runs.map((run) => {
+            const isExpanded = expandedId === run.id;
+            const isSkipped = !!run.skipped_reason;
+            const isError = !!run.error;
+            const statusColor = isError
+              ? "text-destructive"
+              : isSkipped
+              ? "text-muted-foreground"
+              : "text-success";
+            const statusLabel = isError
+              ? t("monitor.curator.status_error")
+              : isSkipped
+              ? t("monitor.curator.status_skipped")
+              : t("monitor.curator.status_ok");
+            const triggerLabel = run.triggered_by === "manual"
+              ? t("monitor.curator.trigger_manual")
+              : t("monitor.curator.trigger_scheduled");
 
-        return (
-          <div key={run.id} className="rounded-lg border border-border/50 overflow-hidden">
-            <button
-              className="w-full grid grid-cols-[minmax(120px,2fr)_80px_60px_60px_60px] gap-2 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors items-center"
-              onClick={() => setExpandedId(isExpanded ? null : run.id)}
-            >
-              <span className="text-xs text-muted-foreground font-mono truncate">
-                {relativeTime(run.started_at, locale)}
-              </span>
-              <Badge
-                variant={run.triggered_by === "manual" ? "secondary" : "outline"}
-                className="text-[10px] px-1.5 py-0 h-5 w-full justify-center"
-              >
-                {triggerLabel}
-              </Badge>
-              <span className={`text-xs font-medium ${statusColor}`}>{statusLabel}</span>
-              <span className="text-xs tabular-nums text-right">{run.phase1_transitions ?? "-"}</span>
-              <span className="text-xs tabular-nums text-right">{run.phase2_repairs ?? "-"}</span>
-            </button>
-            {isExpanded && (
-              <div className="px-3 pb-3 pt-1 border-t border-border/30 bg-muted/10 space-y-2">
-                {run.skipped_reason && (
-                  <p className="text-xs text-muted-foreground">
-                    <span className="font-medium">{t("monitor.curator.skipped")}</span> {run.skipped_reason}
-                  </p>
+            return (
+              <Fragment key={run.id}>
+                <TableRow
+                  className="cursor-pointer"
+                  onClick={() => setExpandedId(isExpanded ? null : run.id)}
+                >
+                  <TableCell className="text-xs text-muted-foreground font-mono truncate">
+                    {relativeTime(run.started_at, locale)}
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={run.triggered_by === "manual" ? "secondary" : "outline"}
+                      size="sm"
+                    >
+                      {triggerLabel}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className={`text-xs font-medium ${statusColor}`}>{statusLabel}</TableCell>
+                  <TableCell className="text-xs tabular-nums text-right">{run.phase1_transitions ?? "-"}</TableCell>
+                  <TableCell className="text-xs tabular-nums text-right">{run.phase2_repairs ?? "-"}</TableCell>
+                </TableRow>
+                {isExpanded && (
+                  <TableRow className="bg-muted/10 hover:bg-muted/10">
+                    <TableCell colSpan={5} className="space-y-2 px-3 py-3">
+                      {run.skipped_reason && (
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-medium">{t("monitor.curator.skipped")}</span> {run.skipped_reason}
+                        </p>
+                      )}
+                      {run.error && (
+                        <p className="text-xs text-destructive">
+                          <span className="font-medium">{t("monitor.curator.error")}</span> {run.error}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                        <span>{t("monitor.curator.phase1_label")} <span className="font-medium text-foreground">{run.phase1_transitions}</span> {t("monitor.curator.transitions")}</span>
+                        <span>{t("monitor.curator.phase2_label")} <span className="font-medium text-foreground">{run.phase2_repairs}</span> {t("monitor.curator.repairs")}</span>
+                        <span>{t("monitor.curator.phase3_label")} <span className="font-medium text-foreground">{run.phase3_commands}</span> {t("monitor.curator.llm_commands")}</span>
+                      </div>
+                      {run.report_md && (
+                        <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-background/60 p-3 rounded border border-border/50 max-h-64 overflow-y-auto">
+                          {run.report_md}
+                        </pre>
+                      )}
+                    </TableCell>
+                  </TableRow>
                 )}
-                {run.error && (
-                  <p className="text-xs text-destructive">
-                    <span className="font-medium">{t("monitor.curator.error")}</span> {run.error}
-                  </p>
-                )}
-                <div className="flex gap-4 text-xs text-muted-foreground">
-                  <span>{t("monitor.curator.phase1_label")} <span className="font-medium text-foreground">{run.phase1_transitions}</span> {t("monitor.curator.transitions")}</span>
-                  <span>{t("monitor.curator.phase2_label")} <span className="font-medium text-foreground">{run.phase2_repairs}</span> {t("monitor.curator.repairs")}</span>
-                  <span>{t("monitor.curator.phase3_label")} <span className="font-medium text-foreground">{run.phase3_commands}</span> {t("monitor.curator.llm_commands")}</span>
-                </div>
-                {run.report_md && (
-                  <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-background/60 p-3 rounded border border-border/50 max-h-64 overflow-y-auto">
-                    {run.report_md}
-                  </pre>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      </div>
-    </div>
+              </Fragment>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </Card>
   );
 }
 
