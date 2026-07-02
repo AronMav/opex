@@ -227,6 +227,10 @@ impl crate::agent::pipeline::parallel::ToolExecutor for AgentEngine {
             self.cfg().app_config.agent_tool.safety_timeout_secs,
         )
     }
+
+    fn semantic_cache_config(&self, tool: &str) -> Option<crate::config::SemanticCacheToolConfig> {
+        self.cfg().app_config.semantic_cache.for_tool(tool)
+    }
 }
 
 // ── pipeline::llm_call::Compactor impl (from engine_provider.rs) ─────────────
