@@ -375,7 +375,7 @@ export default function SecretsPage() {
                 onCopied={() => toast.success(t("secrets.value_copied"))}
               />
             )}
-            <p className="text-xs text-muted-foreground-subtle tabular-nums">
+            <p role="status" aria-live="polite" className="text-xs text-muted-foreground-subtle tabular-nums">
               {t("secrets.hides_in", { n: revealCountdown })}
             </p>
           </div>

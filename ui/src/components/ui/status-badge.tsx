@@ -27,6 +27,7 @@ const STATUS_VARIANT: Record<string, BadgeVariant> = {
   disabled: "secondary",
   paused: "secondary",
   archived: "secondary",
+  empty: "secondary",
 }
 
 function StatusBadge({
