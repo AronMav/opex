@@ -10,8 +10,12 @@ import { PageHeader } from "@/components/ui/page-header";
 import { useAuthStore } from "@/stores/auth-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
 import type { ChannelRow } from "@/types/api";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { IconTile } from "@/components/ui/icon-tile";
+import { DataRow } from "@/components/ui/data-row";
+import { SectionHeader } from "@/components/ui/section-header";
 import { CircularLoader } from "@/components/ui/loader";
 import { Input } from "@/components/ui/input";
 import {
@@ -260,6 +264,15 @@ export default function ChannelsPage() {
     return acc;
   }, {});
 
+  // Save validity: agent + display name + every required config field.
+  // When editing, password fields may be left blank (kept from vault), so only
+  // require them on create. Mirrors the inline-validity pattern in tasks/page.
+  const requiredFields = (CHANNEL_CONFIG_FIELDS[formType] || []).filter((f) => f.required);
+  const configValid = requiredFields.every(
+    (f) => (editingChannel && f.type === "password") || (formConfig[f.key] || "").trim(),
+  );
+  const formValid = !!formAgent && !!formName.trim() && configValid;
+
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
         <PageHeader
@@ -286,87 +299,64 @@ export default function ChannelsPage() {
         ) : (
           <div className="space-y-6">
             {Object.entries(grouped).map(([agentName, agentChannels]) => (
-              <div key={agentName} className="neu-flat p-5 md:p-6">
-                <div className="flex items-center gap-2 mb-4 pb-3 border-b border-border/50">
-                  <Bot className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-semibold text-foreground">{agentName}</span>
-                  <Badge variant="outline" className="text-[10px] ml-auto">
-                    {agentChannels.length}
-                  </Badge>
-                </div>
+              <Card key={agentName} interactive={false} className="p-5 md:p-6">
+                <SectionHeader icon={Bot} title={agentName} count={agentChannels.length} />
                 <div className="space-y-3">
                   {agentChannels.map((ch) => {
                     const online = isOnline(ch);
+                    const status = online ? "online" : ch.status === "error" ? "error" : "offline";
+                    const ChannelIcon = CHANNEL_ICONS[ch.channel_type] || Radio;
                     return (
-                      <div
+                      <DataRow
                         key={ch.id}
-                        className="flex items-center gap-3 rounded-lg border border-border/50 p-3 hover:bg-muted/30 transition-colors overflow-hidden"
+                        interactive
+                        leading={
+                          <IconTile tone="muted">
+                            <ChannelIcon />
+                          </IconTile>
+                        }
+                        title={
+                          <span className="group-hover:text-primary transition-colors">{ch.display_name}</span>
+                        }
+                        subtitle={`${ch.channel_type} · ${ch.id.slice(0, 8)}`}
+                        actions={
+                          <>
+                            <Button size="icon-sm" variant="ghost" onClick={() => openEdit(ch)} aria-label={t("common.edit")}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="icon-sm" variant="ghost" onClick={() => handleRestart(ch)} aria-label={t("channels.restart")}>
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="icon-sm" variant="ghost" className="text-destructive hover:bg-destructive/10" onClick={() => setDeleteTarget(ch)} aria-label={t("common.delete")}>
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        }
                       >
-                        {(() => {
-                          const Icon = CHANNEL_ICONS[ch.channel_type] || Radio;
-                          return <Icon className="h-5 w-5 text-muted-foreground/70 shrink-0" />;
-                        })()}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-foreground truncate">
-                              {ch.display_name}
-                            </span>
-                            <Badge
-                              variant="outline"
-                              className={`text-[9px] ${
-                                online
-                                  ? "bg-success/15 text-success border-success/30"
-                                  : ch.status === "error"
-                                    ? "bg-destructive/15 text-destructive border-destructive/30"
-                                    : "bg-muted text-muted-foreground border-border"
-                              }`}
-                            >
-                              {online ? (
-                                <><Wifi className="h-2.5 w-2.5 mr-1" />{t("channels.online")}</>
-                              ) : ch.status === "error" ? (
-                                t("channels.status_error")
-                              ) : (
-                                <><WifiOff className="h-2.5 w-2.5 mr-1" />{t("channels.offline")}</>
-                              )}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-[10px] font-mono text-muted-foreground/50">
-                              {ch.channel_type}
-                            </span>
-                            <span className="text-[10px] font-mono text-muted-foreground/30">
-                              {ch.id.slice(0, 8)}
-                            </span>
-                            {ch.error_msg && (
-                              <span className="text-[10px] text-destructive truncate max-w-xs">
-                                {ch.error_msg}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <Button size="icon-sm" variant="ghost" onClick={() => openEdit(ch)} aria-label={t("common.edit")}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button size="icon-sm" variant="ghost" onClick={() => handleRestart(ch)} aria-label={t("channels.restart")}>
-                            <RotateCcw className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button size="icon-sm" variant="ghost" className="text-destructive hover:bg-destructive/10" onClick={() => setDeleteTarget(ch)} aria-label={t("common.delete")}>
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </div>
+                        <StatusBadge status={status} size="sm">
+                          {online ? (
+                            <><Wifi className="h-2.5 w-2.5" />{t("channels.online")}</>
+                          ) : ch.status === "error" ? (
+                            t("channels.status_error")
+                          ) : (
+                            <><WifiOff className="h-2.5 w-2.5" />{t("channels.offline")}</>
+                          )}
+                        </StatusBadge>
+                        {ch.error_msg && (
+                          <span className="text-2xs text-destructive truncate">{ch.error_msg}</span>
+                        )}
+                      </DataRow>
                     );
                   })}
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
         )}
 
         {/* Create/Edit Dialog */}
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogContent className="rounded-xl border-border bg-card max-w-[95vw] sm:max-w-lg max-h-[90dvh] overflow-y-auto">
+          <DialogContent size="lg">
             <DialogHeader>
               <DialogTitle>
                 {editingChannel ? t("channels.edit") : t("channels.create")}
@@ -447,7 +437,7 @@ export default function ChannelsPage() {
               <Button variant="ghost" onClick={() => setDialogOpen(false)}>
                 {t("common.cancel")}
               </Button>
-              <Button onClick={handleSave} disabled={saving || !formName.trim()}>
+              <Button onClick={handleSave} disabled={saving || !formValid}>
                 {saving && <CircularLoader size="sm" className="h-3.5 w-3.5 mr-1.5" />}
                 {t("common.save")}
               </Button>
