@@ -104,10 +104,25 @@ impl LoopDetector {
         self.record_result(tool_name, success)
     }
 
-    /// Replay a timeline event into the detector (warm-up after crash/resume).
-    /// Unlike `record_execution`, this only tracks error streaks — no hash tracking
-    /// since the timeline doesn't store full args.
-    pub fn record_result_from_timeline(&mut self, tool_name: &str, success: bool) {
+    /// Replay a timeline event: restore hash-repeat state (when the row carries an
+    /// `args_hash`) AND the error streak. Mirrors `record_execution`'s
+    /// consecutive/`last_hash`/`recent` logic so a loop in progress before a crash
+    /// keeps the SAME consecutive count after warm-up.
+    fn replay_from_timeline(&mut self, tool_name: &str, args_hash: Option<u64>, success: bool) {
+        if let Some(hash) = args_hash {
+            if self.last_hash == Some(hash) {
+                self.consecutive += 1;
+            } else {
+                self.consecutive = 1;
+                self.last_hash = Some(hash);
+            }
+            if self.recent.len() >= 64 {
+                self.recent.pop_front();
+                self.recent_names.pop_front();
+            }
+            self.recent.push_back(hash);
+            self.recent_names.push_back(tool_name.to_string());
+        }
         let _ = self.record_result(tool_name, success);
     }
 
@@ -132,13 +147,20 @@ impl LoopDetector {
 
     /// Reconstruct detector state from timeline tool_end events after crash/resume (BUG-026).
     ///
-    /// Replays error-streak (consecutive_errors + last_error_tool) from timeline history.
-    /// Hash-based consecutive detection (consecutive/last_hash) is NOT restored —
-    /// the timeline does not store args.
+    /// Replays the error-streak (consecutive_errors + last_error_tool) AND — when
+    /// the row carries an `args_hash` — the hash-repeat state (consecutive/last_hash/
+    /// recent), so a loop in progress before the crash keeps the SAME consecutive
+    /// count. The persisted hash is keyed on `loop_detector_key` (see `parallel.rs`),
+    /// matching the live `check_limits`. Legacy events lacking `args_hash` fall back
+    /// to error-streak only (no panic).
     pub fn warm_up_from_timeline(config: &ToolLoopConfig, events: &[opex_db::session_timeline::TimelineToolEvent]) -> Self {
         let mut detector = Self::new(config);
         for e in events {
-            detector.record_result_from_timeline(&e.tool_name, e.success);
+            let hash = e
+                .args_hash
+                .as_deref()
+                .and_then(|h| u64::from_str_radix(h, 16).ok());
+            detector.replay_from_timeline(&e.tool_name, hash, e.success);
         }
         detector
     }
@@ -230,8 +252,8 @@ mod tests {
     fn warm_up_from_timeline_restores_error_streak() {
         let cfg = config(3); // error_break_threshold = 3
         let events = vec![
-            TimelineToolEvent { tool_name: "fs".to_string(), success: false },
-            TimelineToolEvent { tool_name: "fs".to_string(), success: false },
+            TimelineToolEvent { tool_name: "fs".to_string(), success: false, args_hash: None },
+            TimelineToolEvent { tool_name: "fs".to_string(), success: false, args_hash: None },
         ];
         let mut detector = LoopDetector::warm_up_from_timeline(&cfg, &events);
         let status = detector.record_result("fs", false);
@@ -239,6 +261,38 @@ mod tests {
             matches!(status, LoopStatus::Break(_)),
             "error streak should be restored from timeline — 2 prior failures + 1 new = trip at threshold 3"
         );
+    }
+
+    #[test]
+    fn warm_up_from_timeline_restores_hash_repeat_detection() {
+        let cfg = config(3); // break_threshold = 3
+        let args = serde_json::json!({"q": "x"});
+        // Live path keys on loop_detector_key; here the direct tool name == its key.
+        let h = format!("{:x}", LoopDetector::hash_call_raw("web_search", &args));
+        // Three identical successful calls already happened before the crash.
+        let events = vec![
+            TimelineToolEvent { tool_name: "web_search".into(), success: true, args_hash: Some(h.clone()) },
+            TimelineToolEvent { tool_name: "web_search".into(), success: true, args_hash: Some(h.clone()) },
+            TimelineToolEvent { tool_name: "web_search".into(), success: true, args_hash: Some(h.clone()) },
+        ];
+        let detector = LoopDetector::warm_up_from_timeline(&cfg, &events);
+        // The next identical call must break NOW (consecutive already 3 >= threshold).
+        assert!(
+            matches!(detector.check_limits("web_search", &args), LoopStatus::Break(_)),
+            "hash-repeat detection must survive warm-up (today it does NOT)"
+        );
+    }
+
+    #[test]
+    fn warm_up_tolerates_legacy_events_without_args_hash() {
+        let cfg = config(3);
+        let events = vec![
+            TimelineToolEvent { tool_name: "fs".into(), success: false, args_hash: None },
+            TimelineToolEvent { tool_name: "fs".into(), success: false, args_hash: None },
+        ];
+        let mut detector = LoopDetector::warm_up_from_timeline(&cfg, &events);
+        // Error streak still restored (2 + 1 = trip at 3); no panic on missing hash.
+        assert!(matches!(detector.record_result("fs", false), LoopStatus::Break(_)));
     }
 
     #[test]
@@ -256,9 +310,9 @@ mod tests {
     fn warm_up_from_timeline_success_resets_streak() {
         let cfg = config(3);
         let events = vec![
-            TimelineToolEvent { tool_name: "tool".to_string(), success: false },
-            TimelineToolEvent { tool_name: "tool".to_string(), success: false },
-            TimelineToolEvent { tool_name: "tool".to_string(), success: true }, // success resets
+            TimelineToolEvent { tool_name: "tool".to_string(), success: false, args_hash: None },
+            TimelineToolEvent { tool_name: "tool".to_string(), success: false, args_hash: None },
+            TimelineToolEvent { tool_name: "tool".to_string(), success: true, args_hash: None }, // success resets
         ];
         let mut detector = LoopDetector::warm_up_from_timeline(&cfg, &events);
         // After a success reset, two more failures should not trip

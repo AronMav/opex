@@ -136,16 +136,20 @@ pub async fn prune_old_events_batched(
 pub struct TimelineToolEvent {
     pub tool_name: String,
     pub success: bool,
+    /// Hex of the loop hash (over `loop_detector_key` + args); None for legacy
+    /// `tool_end` rows that predate the hash being persisted.
+    pub args_hash: Option<String>,
 }
 
 /// Load tool_end events for a session to replay into LoopDetector (BUG-026).
-/// The timeline payload for tool_end events contains: {"tool_call_id": "...", "tool_name": "...", "success": true/false}
+/// The timeline payload for tool_end events contains: {"tool_call_id": "...", "tool_name": "...", "success": true/false, "args_hash": "..."}
 pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<TimelineToolEvent>> {
-    let rows = sqlx::query_as::<_, (String, Option<bool>)>(
+    let rows = sqlx::query_as::<_, (String, Option<bool>, Option<String>)>(
         r#"
         SELECT
             payload->>'tool_name' AS tool_name,
-            (payload->>'success')::bool AS success
+            (payload->>'success')::bool AS success,
+            payload->>'args_hash' AS args_hash
         FROM session_timeline
         WHERE session_id = $1
           AND event_type = 'tool_end'
@@ -159,9 +163,10 @@ pub async fn load_tool_events(db: &PgPool, session_id: Uuid) -> Result<Vec<Timel
 
     Ok(rows
         .into_iter()
-        .map(|(name, success)| TimelineToolEvent {
+        .map(|(name, success, args_hash)| TimelineToolEvent {
             tool_name: name,
             success: success.unwrap_or(true),
+            args_hash,
         })
         .collect())
 }

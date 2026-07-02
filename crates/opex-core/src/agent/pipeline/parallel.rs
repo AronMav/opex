@@ -328,11 +328,17 @@ pub async fn execute_tool_calls_partitioned(
     let default_timeout = Duration::from_secs(120);
     let agent_safety_timeout = executor.agent_safety_timeout();
 
+    // NOTE: `args_hash` MUST hash `loop_detector_key(tc)` (NOT `tc.name`) so the
+    // persisted+replayed hash matches the LIVE detector, which keys on
+    // `loop_detector_key` (e.g. `"tool_use:{action}"` on the dispatcher path).
+    // Hashing `tc.name` here would produce `hash("tool_use")` while the live
+    // `check_limits` compares `hash("tool_use:search")` — never matching, silently
+    // defeating LoopDetector warm-up across restart for the common `tool_use` loop.
     let start_payload = |tc: &ToolCall| -> Value {
         serde_json::json!({
             "tool_call_id": tc.id,
             "tool_name": tc.name,
-            "args_hash": format!("{:x}", LoopDetector::hash_call_raw(&tc.name, &tc.arguments))
+            "args_hash": format!("{:x}", LoopDetector::hash_call_raw(&loop_detector_key(tc), &tc.arguments))
         })
     };
     let end_payload = |tc: &ToolCall, res: &str| -> Value {
@@ -341,7 +347,8 @@ pub async fn execute_tool_calls_partitioned(
         serde_json::json!({
             "tool_call_id": tc.id,
             "tool_name": tc.name,
-            "success": success
+            "success": success,
+            "args_hash": format!("{:x}", LoopDetector::hash_call_raw(&loop_detector_key(tc), &tc.arguments))
         })
     };
 
