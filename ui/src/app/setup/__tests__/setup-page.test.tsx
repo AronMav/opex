@@ -19,8 +19,8 @@ const apiGet = vi.fn(async (path: string) => {
     return { wan: null, tailscale: null, lan: [], mdns: null };
   return {};
 });
-const apiPost = vi.fn(async () => ({}));
-const apiDelete = vi.fn(async () => undefined);
+const apiPost = vi.fn().mockResolvedValue({});
+const apiDelete = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@/lib/api", () => ({
   apiGet: (path: string) => apiGet(path),

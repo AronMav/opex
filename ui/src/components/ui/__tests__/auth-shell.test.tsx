@@ -9,13 +9,13 @@ test("AuthShell renders its children", () => {
 })
 
 test("glow defaults off (no decorative glow div)", () => {
-  const { container } = render(<AuthShell data-testid="shell" />)
+  const { container } = render(<AuthShell><span /></AuthShell>)
   const glow = container.querySelector('[aria-hidden="true"]')
   expect(glow).not.toBeInTheDocument()
 })
 
 test("glow prop renders the aria-hidden decorative layer", () => {
-  const { container } = render(<AuthShell glow data-testid="shell" />)
+  const { container } = render(<AuthShell glow><span /></AuthShell>)
   const glow = container.querySelector('[aria-hidden="true"]')
   expect(glow).toBeInTheDocument()
   expect(glow).toHaveAttribute("aria-hidden", "true")

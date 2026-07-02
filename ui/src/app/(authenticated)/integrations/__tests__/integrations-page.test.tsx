@@ -27,9 +27,9 @@ const accounts = [
   },
 ];
 
-const apiPost = vi.fn(() => Promise.resolve({}));
-const apiDelete = vi.fn(() => Promise.resolve({}));
-const apiGet = vi.fn(() => Promise.resolve({ triggers: [], repos: [] }));
+const apiPost = vi.fn().mockResolvedValue({});
+const apiDelete = vi.fn().mockResolvedValue({});
+const apiGet = vi.fn().mockResolvedValue({ triggers: [], repos: [] });
 
 vi.mock("@/lib/api", () => ({
   apiGet: (...a: unknown[]) => apiGet(...a),
