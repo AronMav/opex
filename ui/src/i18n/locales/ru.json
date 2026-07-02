@@ -331,6 +331,7 @@
   "agents.title": "Агенты",
   "agents.subtitle": "Управление конфигурациями агентов",
   "agents.new_agent": "Новый агент",
+  "agents.search_placeholder": "Поиск агентов...",
   "agents.no_active_agents": "Нет активных агентов",
   "agents.active": "Активен",
   "agents.inactive": "Неактивен",
