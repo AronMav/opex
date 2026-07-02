@@ -1,6 +1,9 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const noRawDesignValues = require("./eslint-rules/no-raw-design-values.js");
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -23,6 +26,13 @@ const eslintConfig = defineConfig([
       "react-hooks/preserve-manual-memoization": "off",
       "react-hooks/refs": "off",
     },
+  },
+  // Design-system guard — enforced ONLY on migrated pages. Add globs here as
+  // each page batch lands; goal is `src/app/**` once migration completes.
+  {
+    files: ["src/app/(authenticated)/webhooks/**/*.{ts,tsx}"],
+    plugins: { local: { rules: { "no-raw-design-values": noRawDesignValues } } },
+    rules: { "local/no-raw-design-values": "error" },
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([
