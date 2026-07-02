@@ -67,6 +67,9 @@ pub struct AppConfig {
     /// across all agents via `Arc<ToolExecutionContext>`.
     #[serde(default)]
     pub tools_cache: ToolCacheConfig,
+    /// Per-tool overrides for the semantic SEARCH cache (`[semantic_cache]`).
+    #[serde(default)]
+    pub semantic_cache: SemanticCacheConfig,
     /// Agent web-fetch guardrails (domain blocklist).
     #[serde(default)]
     pub security: SecurityConfig,
@@ -79,6 +82,39 @@ pub struct AppConfig {
     /// Video-summarisation tunables (`[video]` section).
     #[serde(default)]
     pub video: VideoConfig,
+}
+
+// ── SemanticCacheConfig ───────────────────────────────────────────────────────
+
+// NOTE: AppConfig derives JsonSchema, so every nested config type MUST derive it too,
+// and a `#[serde(flatten)]` map needs `#[schemars(skip)]` (mirrors `AppConfig.mcp`).
+
+/// Per-tool override for the semantic SEARCH cache (distinct from the YAML-tool
+/// response cache `ToolCacheConfig`/`tools_cache`). TOML: `[semantic_cache]`.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
+pub struct SemanticCacheToolConfig {
+    pub ttl_secs: u64,
+    pub threshold: f32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+pub struct SemanticCacheConfig {
+    /// tool_name → override. Missing built-in tools fall back to the 3600/0.95 default.
+    #[serde(flatten)]
+    #[schemars(skip)]
+    pub tools: HashMap<String, SemanticCacheToolConfig>,
+}
+
+impl SemanticCacheConfig {
+    /// The four built-in cacheable search tools; used when a tool has no explicit override.
+    fn builtin_default(tool: &str) -> Option<SemanticCacheToolConfig> {
+        matches!(tool, "searxng_search" | "brave_search" | "browser_render" | "web_search")
+            .then_some(SemanticCacheToolConfig { ttl_secs: 3600, threshold: 0.95 })
+    }
+    /// Resolve a tool's cache config: explicit override wins, else built-in default, else None.
+    pub fn for_tool(&self, tool: &str) -> Option<SemanticCacheToolConfig> {
+        self.tools.get(tool).copied().or_else(|| Self::builtin_default(tool))
+    }
 }
 
 // ── SecurityConfig ────────────────────────────────────────────────────────────
@@ -3297,5 +3333,34 @@ digest_provider = "my-provider"
         assert_eq!(cfg.video.digest_provider.as_deref(), Some("my-provider"));
         assert!(cfg.video.digest_model.is_none());
         assert_eq!(cfg.video.vault_name.as_deref(), Some("zettelkasten"));
+    }
+}
+
+#[cfg(test)]
+mod semantic_cache_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_cover_the_four_builtin_tools() {
+        let cfg = SemanticCacheConfig::default();
+        let s = cfg.for_tool("searxng_search").expect("searxng is cacheable by default");
+        assert_eq!(s.ttl_secs, 3600);
+        assert!((s.threshold - 0.95).abs() < f32::EPSILON);
+        assert!(cfg.for_tool("web_search").is_some());
+    }
+
+    #[test]
+    fn override_replaces_default_ttl() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("web_search".to_string(), SemanticCacheToolConfig { ttl_secs: 300, threshold: 0.9 });
+        let cfg = SemanticCacheConfig { tools: map };
+        assert_eq!(cfg.for_tool("web_search").unwrap().ttl_secs, 300);
+        // built-in tools NOT in the override map still resolve to defaults
+        assert_eq!(cfg.for_tool("searxng_search").unwrap().ttl_secs, 3600);
+    }
+
+    #[test]
+    fn unknown_tool_is_not_cacheable() {
+        assert!(SemanticCacheConfig::default().for_tool("workspace_read").is_none());
     }
 }

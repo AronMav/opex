@@ -81,6 +81,11 @@ pub trait ToolExecutor: Send + Sync {
     fn agent_safety_timeout(&self) -> Duration {
         Duration::from_secs(600)
     }
+
+    /// Per-tool semantic-cache config (None = tool is not cacheable). Default: not cacheable.
+    fn semantic_cache_config(&self, _tool: &str) -> Option<crate::config::SemanticCacheToolConfig> {
+        None
+    }
 }
 
 // ── Helper predicates ────────────────────────────────────────────────────────
@@ -114,13 +119,6 @@ fn is_system_tool_parallel_safe(name: &str) -> bool {
             | "canvas"
             | "rich_card"
             | "agent"
-    )
-}
-
-fn is_tool_cacheable(name: &str) -> bool {
-    matches!(
-        name,
-        "searxng_search" | "brave_search" | "browser_render" | "web_search"
     )
 }
 
@@ -282,16 +280,20 @@ pub async fn execute_tool_calls_partitioned(
 
     // 2. Semantic cache check
     for (i, tc) in tool_calls.iter().enumerate() {
-        if is_tool_cacheable(&tc.name) && embedder.is_available() {
+        if executor.semantic_cache_config(&tc.name).is_some() && embedder.is_available() {
             let query_text = tc
                 .arguments
                 .get("query")
                 .or_else(|| tc.arguments.get("url"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            let threshold = executor
+                .semantic_cache_config(&tc.name)
+                .map(|c| c.threshold)
+                .unwrap_or(0.95);
             if !query_text.is_empty()
                 && let Ok(Some(cached_res)) =
-                    SemanticCache::check(db, embedder, &tc.name, query_text, 0.95).await
+                    SemanticCache::check(db, embedder, &tc.name, query_text, threshold).await
             {
                 tracing::info!(tool = %tc.name, query = %query_text, "semantic cache hit");
                 results[i] = Some(cached_res);
@@ -469,7 +471,7 @@ pub async fn execute_tool_calls_partitioned(
             }
 
             // Store in semantic cache if successful
-            if is_tool_cacheable(&tool_calls[i].name)
+            if executor.semantic_cache_config(&tool_calls[i].name).is_some()
                 && !result.starts_with("Error:")
                 && !result.starts_with("tool error:")
             {
@@ -480,13 +482,17 @@ pub async fn execute_tool_calls_partitioned(
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if !query_text.is_empty() {
+                    let ttl_secs = executor
+                        .semantic_cache_config(&tool_calls[i].name)
+                        .map(|c| c.ttl_secs as i64)
+                        .unwrap_or(3600);
                     let _ = SemanticCache::store(
                         db,
                         embedder,
                         &tool_calls[i].name,
                         query_text,
                         &result,
-                        3600,
+                        ttl_secs,
                     )
                     .await;
                 }
@@ -609,7 +615,7 @@ pub async fn execute_tool_calls_partitioned(
         }
 
         // Store in semantic cache if successful
-        if is_tool_cacheable(&tool_calls[i].name)
+        if executor.semantic_cache_config(&tool_calls[i].name).is_some()
             && !res.starts_with("Error:")
             && !res.starts_with("tool error:")
         {
@@ -620,13 +626,17 @@ pub async fn execute_tool_calls_partitioned(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if !query_text.is_empty() {
+                let ttl_secs = executor
+                    .semantic_cache_config(&tool_calls[i].name)
+                    .map(|c| c.ttl_secs as i64)
+                    .unwrap_or(3600);
                 let _ = SemanticCache::store(
                     db,
                     embedder,
                     &tool_calls[i].name,
                     query_text,
                     &res,
-                    3600,
+                    ttl_secs,
                 )
                 .await;
             }
