@@ -15,12 +15,16 @@ class FakeMediaRecorder {
     return true;
   }
   state = "recording";
-  ondataavailable: ((e: unknown) => void) | null = null;
+  ondataavailable: ((e: { data: Blob }) => void) | null = null;
   onstop: (() => void) | null = null;
   constructor() {
     FakeMediaRecorder.instances++;
   }
-  start() {}
+  start() {
+    // Emit one chunk > 1KB so finalize() proceeds past the "clipped capture" skip
+    // and actually reaches the transcribe fetch.
+    this.ondataavailable?.({ data: new Blob(["x".repeat(2000)]) });
+  }
   stop() {
     this.state = "inactive";
     this.onstop?.();
@@ -40,10 +44,8 @@ beforeEach(() => {
     configurable: true,
     value: { getUserMedia },
   });
-  Object.defineProperty(window, "isSecureContext", {
-    configurable: true,
-    value: true,
-  });
+  // No isSecureContext stub needed: jsdom's default location is http://localhost,
+  // and the hook only blocks getUserMedia when hostname !== "localhost".
 });
 
 // Regression: in continuous/hands-free mode the re-arm effect and a user mic-tap
@@ -66,4 +68,40 @@ test("concurrent start() during the getUserMedia await creates only one recorder
   expect(getUserMedia).toHaveBeenCalledTimes(1);
   expect(FakeMediaRecorder.instances).toBe(1);
   expect(result.current.state).toBe("recording");
+});
+
+// Regression: unmounting the composer while a transcribe request is in flight
+// must abort that request (don't leave the STT call running against a dead view).
+test("unmounting mid-transcribe aborts the in-flight transcribe request", async () => {
+  const fakeStream = { getTracks: () => [] };
+  let fetchSignal: AbortSignal | undefined;
+  const fetchMock = vi.fn((_url: string, opts: { signal?: AbortSignal }) => {
+    fetchSignal = opts.signal;
+    return new Promise<Response>(() => {}); // stays in-flight forever
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const { result, unmount } = renderHook(() => useVoiceRecorder());
+
+  await act(async () => {
+    result.current.start();
+    resolveGum(fakeStream);
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(result.current.state).toBe("recording");
+
+  // stop() → finalize() → reaches the (never-resolving) transcribe fetch.
+  await act(async () => {
+    void result.current.stop();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchSignal?.aborted).toBe(false);
+
+  // Navigate away mid-transcribe.
+  unmount();
+  expect(fetchSignal?.aborted).toBe(true);
 });
