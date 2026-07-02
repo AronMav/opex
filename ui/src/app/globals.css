@@ -44,6 +44,9 @@
 
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-muted-foreground-subtle: var(--muted-foreground-subtle);
 
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
@@ -118,8 +121,11 @@
   --border: rgba(0, 0, 0, 0.12);
   --input: rgba(0, 0, 0, 0.10);
   --ring: #4a7cff;
-  --success: #22c55e;
-  --warning: #f59e0b;
+  --success: #166534;
+  --warning: #854d0e;
+  --success-foreground: #ffffff;
+  --warning-foreground: #ffffff;
+  --muted-foreground-subtle: #5e6675;
 
   --chart-1: #4a7cff;
   --chart-2: #22c55e;
@@ -154,7 +160,10 @@
   --popover: #2a3347;
   --popover-foreground: #dde2ea;
   --primary: #6b9eff;
-  --primary-foreground: #ffffff;
+  --primary-foreground: #1c2130;
+  --success-foreground: #0d1117;
+  --warning-foreground: #0d1117;
+  --muted-foreground-subtle: #9aa4b2;
   --secondary: #2d3548;
   --secondary-foreground: #dde2ea;
   --muted: #242c3e;
