@@ -6,15 +6,17 @@ import { GenerativeUISlot } from "@/components/ui/card-registry";
 
 // ── Avatar colors & hashing ──────────────────────────────────────────────────
 
+// Agent avatar palette maps onto the theme-aware chart tokens (chart-1..8),
+// which already resolve per light/dark — no dark: overrides needed.
 export const AGENT_COLORS = [
-  "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/25",
-  "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/25",
-  "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/25",
-  "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/25",
-  "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/25",
-  "bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/25",
-  "bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/25",
-  "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border-indigo-500/25",
+  "bg-chart-1/15 text-chart-1 border-chart-1/25",
+  "bg-chart-5/15 text-chart-5 border-chart-5/25",
+  "bg-chart-2/15 text-chart-2 border-chart-2/25",
+  "bg-chart-3/15 text-chart-3 border-chart-3/25",
+  "bg-chart-4/15 text-chart-4 border-chart-4/25",
+  "bg-chart-6/15 text-chart-6 border-chart-6/25",
+  "bg-chart-7/15 text-chart-7 border-chart-7/25",
+  "bg-chart-8/15 text-chart-8 border-chart-8/25",
 ];
 
 export function hashAgentName(name: string): number {
