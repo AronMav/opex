@@ -8,9 +8,14 @@ import { useTranslation } from "@/hooks/use-translation";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
+import { Field } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
+import { IconTile } from "@/components/ui/icon-tile";
+import { DataRow } from "@/components/ui/data-row";
+import { SectionHeader } from "@/components/ui/section-header";
 import { CronSchedulePicker } from "@/components/ui/cron-schedule-picker";
 import type { CronPreset } from "@/lib/cron";
 import { Archive, Download, RefreshCw, Plus, RotateCcw, Trash2, Settings2 } from "lucide-react";
@@ -108,11 +113,8 @@ function BackupSettings() {
   const hasChanges = cron5to6(editCron) !== config.cron || Number(editRetention) !== config.retention_days;
 
   return (
-    <div className="neu-flat p-4 space-y-4">
-      <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-        <Settings2 className="h-4 w-4" />
-        {t("backups.settings")}
-      </div>
+    <Card interactive={false} className="p-4">
+      <SectionHeader icon={Settings2} title={t("backups.settings")} className="mb-4" />
 
       <div className="flex items-center justify-between">
         <div>
@@ -127,18 +129,16 @@ function BackupSettings() {
       </div>
 
       {config.enabled && (
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <span className="text-sm font-medium text-muted-foreground ml-1">{t("backups.cron_schedule")}</span>
+        <div className="mt-4 space-y-4">
+          <Field label={t("backups.cron_schedule")}>
             <CronSchedulePicker
               value={editCron}
               onChange={setEditCron}
               showTimezone={false}
               presets={BACKUP_PRESETS}
             />
-          </div>
-          <div className="space-y-1.5 max-w-[200px]">
-            <span className="text-sm font-medium text-muted-foreground ml-1">{t("backups.retention")}</span>
+          </Field>
+          <Field label={t("backups.retention")} hint={t("backups.retention_hint")} className="max-w-56">
             <Input
               type="number"
               value={editRetention}
@@ -148,8 +148,7 @@ function BackupSettings() {
               className="font-mono text-sm"
               disabled={saving}
             />
-            <p className="text-xs text-muted-foreground ml-1">{t("backups.retention_hint")}</p>
-          </div>
+          </Field>
           {hasChanges && (
             <Button size="sm" onClick={saveSettings} disabled={saving} className="w-full sm:w-auto">
               {t("common.save")}
@@ -157,7 +156,7 @@ function BackupSettings() {
           )}
         </div>
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -170,7 +169,8 @@ export default function BackupsPage() {
 
   const [restoreTarget, setRestoreTarget] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [restoring, setRestoring] = useState(false);
+  // Scoped to the acting row so only that backup shows "Restoring…".
+  const [restoringFile, setRestoringFile] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState("");
 
@@ -204,20 +204,21 @@ export default function BackupsPage() {
 
   const handleRestore = async () => {
     if (!restoreTarget) return;
-    setRestoring(true);
+    const target = restoreTarget;
+    setRestoringFile(target);
     setActionError("");
     try {
       // Note: The restore API only accepts blob body (no server-side filename endpoint).
       // This means the backup is downloaded to browser memory then re-uploaded.
       // For large backups this may be slow or fail on low-memory devices.
-      const targetBackup = backups.find((b) => b.filename === restoreTarget);
+      const targetBackup = backups.find((b) => b.filename === target);
       const SIZE_WARN_THRESHOLD = 50 * 1024 * 1024; // 50MB
       if (targetBackup && targetBackup.size_bytes > SIZE_WARN_THRESHOLD) {
-        toast.warning(`Large backup (${formatBytes(targetBackup.size_bytes)}). Restore may take a while.`);
+        toast.warning(t("backups.large_warning", { size: formatBytes(targetBackup.size_bytes) }));
       }
 
       const token = getToken();
-      const resp = await fetch(`/api/backup/${encodeURIComponent(restoreTarget)}`, {
+      const resp = await fetch(`/api/backup/${encodeURIComponent(target)}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           "X-Confirm-Download": "yes-i-am-sure",
@@ -238,11 +239,12 @@ export default function BackupsPage() {
         const text = await restoreResp.text().catch(() => "");
         throw new Error(text || `HTTP ${restoreResp.status}`);
       }
+      toast.success(t("backups.restore_success"));
       refetch();
     } catch (e) {
       setActionError(String(e));
     } finally {
-      setRestoring(false);
+      setRestoringFile(null);
       setRestoreTarget(null);
     }
   };
@@ -263,7 +265,7 @@ export default function BackupsPage() {
     }
   };
 
-  const mutating = createBackup.isPending || restoring || deleting;
+  const mutating = createBackup.isPending || restoringFile !== null || deleting;
   const combinedError =
     (error ? `${error}` : "") ||
     (createBackup.error ? `${createBackup.error}` : "") ||
@@ -312,68 +314,62 @@ export default function BackupsPage() {
           <EmptyState icon={Archive} text={t("backups.empty")} height="h-40" className="mt-6" />
         ) : (
           <div className="mt-6 space-y-3 pb-8">
-            {backups.map((b) => (
-              <div
-                key={b.filename}
-                className="group relative flex flex-col md:flex-row md:items-center gap-4 neu-flat p-4 transition-all hover:border-primary/20"
-              >
-                <div className="flex items-center gap-3 md:min-w-[300px]">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
-                    <Archive className="h-5 w-5 text-primary" />
-                  </div>
-                  <div className="flex flex-col min-w-0">
-                    <span className="break-all font-mono text-sm font-bold text-foreground group-hover:text-primary transition-colors">
-                      {b.filename}
-                    </span>
-                    <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                      {b.created_at ? formatDate(b.created_at, locale) : "—"}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex flex-1 items-center gap-3">
+            {backups.map((b) => {
+              const restoring = restoringFile === b.filename;
+              return (
+                <DataRow
+                  key={b.filename}
+                  interactive
+                  leading={
+                    <IconTile>
+                      <Archive />
+                    </IconTile>
+                  }
+                  title={
+                    <span className="break-all group-hover:text-primary transition-colors">{b.filename}</span>
+                  }
+                  subtitle={b.created_at ? formatDate(b.created_at, locale) : "—"}
+                  actions={
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDownload(b.filename)}
+                        disabled={mutating}
+                        title={t("backups.download")}
+                      >
+                        <Download className="h-4 w-4 md:mr-2" />
+                        <span className="hidden md:inline">{t("backups.download")}</span>
+                      </Button>
+                      <Button
+                        variant="outline-warning"
+                        size="sm"
+                        onClick={() => setRestoreTarget(b.filename)}
+                        disabled={mutating}
+                        title={restoring ? t("backups.restoring") : t("backups.restore")}
+                      >
+                        <RotateCcw className={`h-4 w-4 md:mr-2 ${restoring ? "animate-spin" : ""}`} />
+                        <span className="hidden md:inline">{restoring ? t("backups.restoring") : t("backups.restore")}</span>
+                      </Button>
+                      <Button
+                        variant="outline-destructive"
+                        size="sm"
+                        onClick={() => setDeleteTarget(b.filename)}
+                        disabled={mutating}
+                        title={t("common.delete")}
+                      >
+                        <Trash2 className="h-4 w-4 md:mr-2" />
+                        <span className="hidden md:inline">{t("common.delete")}</span>
+                      </Button>
+                    </>
+                  }
+                >
                   <span className="font-mono text-sm text-muted-foreground tabular-nums">
                     {formatBytes(b.size_bytes)}
                   </span>
-                </div>
-
-                <div className="grid grid-cols-3 md:flex md:items-center md:justify-end gap-2 border-t border-border/50 pt-3 md:border-0 md:pt-0 shrink-0">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground hover:text-primary hover:bg-primary/10"
-                    onClick={() => handleDownload(b.filename)}
-                    disabled={mutating}
-                    title={t("backups.download")}
-                  >
-                    <Download className="h-4 w-4 md:mr-2" />
-                    <span className="hidden md:inline">{t("backups.download")}</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                    onClick={() => setRestoreTarget(b.filename)}
-                    disabled={mutating}
-                    title={restoring ? t("backups.restoring") : t("backups.restore")}
-                  >
-                    <RotateCcw className="h-4 w-4 md:mr-2" />
-                    <span className="hidden md:inline">{restoring ? t("backups.restoring") : t("backups.restore")}</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                    onClick={() => setDeleteTarget(b.filename)}
-                    disabled={mutating}
-                    title={t("common.delete")}
-                  >
-                    <Trash2 className="h-4 w-4 md:mr-2" />
-                    <span className="hidden md:inline">{t("common.delete")}</span>
-                  </Button>
-                </div>
-              </div>
-            ))}
+                </DataRow>
+              );
+            })}
           </div>
         )}
 
@@ -383,6 +379,8 @@ export default function BackupsPage() {
         onConfirm={handleRestore}
         title={t("backups.restore_title")}
         description={t("backups.restore_description", { filename: restoreTarget ?? "" })}
+        variant="warning"
+        confirmLabel={t("backups.restore")}
       />
       <ConfirmDialog
         open={!!deleteTarget}

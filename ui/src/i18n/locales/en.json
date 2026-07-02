@@ -984,6 +984,8 @@
   "backups.download": "Download",
   "backups.restore": "Restore",
   "backups.restoring": "Restoring...",
+  "backups.restore_success": "Backup restored",
+  "backups.large_warning": "Large backup ({{size}}). Restore may take a while.",
   "backups.restore_title": "Restore from backup?",
   "backups.restore_description": "This is a DESTRUCTIVE operation. The current database will be replaced with data from backup {{filename}}. This action is irreversible.",
   "backups.delete_title": "Delete backup?",
