@@ -4,7 +4,7 @@
 
 **Goal:** Ship the five §13 recommendations of the tool-execution report as isolated, tested backend units.
 
-**Architecture:** `crates/opex-core` (Rust). Six tasks in ascending-risk order (R1→R5→R4→R3→R2). Exactly one DB migration (R2); R3 rides the existing JSONB timeline payload. Each task is an independent TDD cycle behind its own reviewer gate.
+**Architecture:** `crates/opex-core` (Rust). Five tasks in ascending-risk order (R1→R5→R4→R3→R2). Exactly one DB migration (R2); R3 rides the existing JSONB timeline payload. Each task is an independent TDD cycle that leaves the crate compiling and green, behind its own reviewer gate.
 
 **Tech Stack:** Rust 2024, tokio, sqlx (Postgres 17 + pgvector), serde, `#[sqlx::test]` for DB tests. rustls-tls only (never add OpenSSL).
 
@@ -29,18 +29,18 @@
 | `crates/opex-core/src/agent/tool_loop.rs` | LoopDetector hash-replay warm-up | 4 |
 | `crates/opex-db/src/session_timeline.rs` | `TimelineToolEvent.args_hash` + reader | 4 |
 | `migrations/070_tool_quality_per_agent.sql` | per-(agent,tool) penalty schema | 5 |
-| `crates/opex-core/src/db/tool_quality.rs` | `record_tool_result`/`PenaltyCache`/`get_*` per-agent | 5,6 |
+| `crates/opex-core/src/db/tool_quality.rs` | `record_tool_result`/`PenaltyCache`/`get_*` per-agent | 5 |
 | `crates/opex-core/src/db/audit_queue.rs` | `AuditEvent::ToolQuality { agent_name }` | 5 |
 | `crates/opex-core/src/agent/engine_dispatch.rs` | passes `agent_name` into the event | 5 |
-| `crates/opex-core/src/agent/engine/context_builder.rs` | `tool_penalties()` passes agent name | 6 |
-| `crates/opex-core/src/gateway/handlers/monitoring/doctor.rs` | degraded-tools payload gains `agent_name` | 6 |
+| `crates/opex-core/src/agent/engine/context_builder.rs` | `tool_penalties()` passes agent name | 5 |
+| `crates/opex-core/src/gateway/handlers/monitoring/doctor.rs` | degraded-tools payload gains `agent_name` | 5 |
 
 ---
 
 ### Task 1: R1 — remove the dead `_session_tool_state` parameter
 
 **Files:**
-- Modify: `crates/opex-core/src/agent/pipeline/parallel.rs:186-210` (drop the param from `execute_tool_calls_partitioned`)
+- Modify: `crates/opex-core/src/agent/pipeline/parallel.rs:186-210` (drop the param) + `:1135,:1201` (drop the `None` arg in two in-file test calls)
 - Modify: `crates/opex-core/src/agent/engine/tool_executor.rs:128-130,156` (drop the lookup + the argument)
 
 **Interfaces:**
@@ -50,7 +50,10 @@
 - [ ] **Step 1: Prove the param is dead — the compiler is the test.** Confirm no reads:
 
 Run: `grep -n "_session_tool_state" crates/opex-core/src/agent/pipeline/parallel.rs`
-Expected: exactly ONE line — the param declaration at ~:207 (no uses in the body).
+Expected: exactly ONE line — the param declaration at ~:207 (no uses in the body). NOTE: the param is
+ALSO passed positionally (as a `None`) at THREE call sites — `engine/tool_executor.rs:156` (production)
+and the two in-file tests `parallel.rs:1135` and `:1201` (`sequential_enrichment_tests`, the `None` two
+args before `mcp`). All three lose one `None`/arg.
 
 - [ ] **Step 2: Remove the parameter from the signature.** In `parallel.rs`, delete the line:
 
@@ -58,7 +61,7 @@ Expected: exactly ONE line — the param declaration at ~:207 (no uses in the bo
     _session_tool_state: Option<Arc<crate::agent::dispatcher::SessionToolState>>,
 ```
 
-- [ ] **Step 3: Remove the lookup + argument at the only call site.** In `engine/tool_executor.rs`, delete the retrieval block (~:128-130) that reads `self.cfg().session_tool_state` into a local, and delete the corresponding argument in the `execute_tool_calls_partitioned(...)` call (~:156). Leave `self.cfg().session_tool_state` itself and its other consumers intact.
+- [ ] **Step 3: Remove the lookup + argument at ALL THREE call sites.** (a) In `engine/tool_executor.rs`, delete the retrieval block (~:128-130) that reads `self.cfg().session_tool_state` into a local, and delete the corresponding argument in the `execute_tool_calls_partitioned(...)` call (~:156). (b) In `parallel.rs`, delete the matching `None` argument from the two test calls at `:1135` and `:1201` (the `None` immediately before the `mcp` arg). Leave `self.cfg().session_tool_state` itself and its other consumers intact.
 
 - [ ] **Step 4: Verify it compiles (a broken caller would fail here).**
 
@@ -132,18 +135,23 @@ Expected: FAIL to compile — `SemanticCacheConfig` / `SemanticCacheToolConfig` 
 - [ ] **Step 3: Implement the config types + resolution.** Add to `config/mod.rs`:
 
 ```rust
+// NOTE: AppConfig derives JsonSchema, so every nested config type MUST derive it too,
+// and a `#[serde(flatten)]` map needs `#[schemars(skip)]` (mirrors `AppConfig.mcp` at
+// config/mod.rs:24). Import `schemars::JsonSchema` (already used across this file).
+
 /// Per-tool override for the semantic SEARCH cache (distinct from the YAML-tool
 /// response cache `ToolCacheConfig`/`tools_cache`). TOML: `[semantic_cache]`.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 pub struct SemanticCacheToolConfig {
     pub ttl_secs: u64,
     pub threshold: f32,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub struct SemanticCacheConfig {
     /// tool_name → override. Missing built-in tools fall back to the 3600/0.95 default.
     #[serde(flatten)]
+    #[schemars(skip)]
     pub tools: std::collections::HashMap<String, SemanticCacheToolConfig>,
 }
 
@@ -212,14 +220,14 @@ git commit -m "feat(config): per-tool TTL/threshold for the semantic search cach
 ### Task 3: R4 — total time budget for the decision-webhook chain
 
 **Files:**
-- Modify: `crates/opex-core/src/config/mod.rs:954-964` (`HooksConfig` + `default_webhook_chain_timeout_ms`)
-- Modify: `crates/opex-core/src/agent/hooks.rs:33-40` (registry fields), `:79-113` (`set_webhooks`), `:120-206` (`fire_decision`)
-- Modify: `crates/opex-core/src/gateway/handlers/agents/lifecycle.rs:150` (`set_webhooks` call)
+- Modify: `crates/opex-core/src/config/mod.rs:954-964` (`HooksConfig` — two `Option`/enum fields, NO default fn)
+- Modify: `crates/opex-core/src/agent/hooks.rs:33-40` (registry fields + `new()`), NEW method `set_webhook_chain_budget`, `:120-206` (`fire_decision`)
+- Modify: `crates/opex-core/src/gateway/handlers/agents/lifecycle.rs:150` (call the new budget setter — `set_webhooks` signature UNCHANGED)
 - Test: `crates/opex-core/src/agent/hooks.rs` (`#[cfg(test)]`)
 
 **Interfaces:**
 - Consumes: `crate::config::FailureMode` (existing enum, `Open` default / `Closed`).
-- Produces: `HooksConfig.total_webhook_timeout_ms: u64` + `HooksConfig.on_chain_timeout: FailureMode`; `HookRegistry::set_webhooks(client, webhooks, total_webhook_timeout_ms, on_chain_timeout)`; a pure helper `fn webhook_chain_exceeded(elapsed: std::time::Duration, budget_ms: u64) -> bool`.
+- Produces: `HooksConfig.total_webhook_timeout_ms: Option<u64>` (None = use 10 s default) + `HooksConfig.on_chain_timeout: FailureMode`; `HookRegistry::set_webhook_chain_budget(&mut self, total: Option<u64>, on_chain: FailureMode)` (NEW method — does NOT touch `set_webhooks`, so none of its 14 in-file test callers break); a pure helper `fn webhook_chain_exceeded(elapsed: std::time::Duration, budget_ms: u64) -> bool`.
 
 - [ ] **Step 1: Write the failing budget-helper test.** Add to `hooks.rs` tests:
 
@@ -266,50 +274,40 @@ fn webhook_chain_exceeded(elapsed: std::time::Duration, budget_ms: u64) -> bool 
 Run: `cargo test -p opex-core chain_budget_tests 2>&1 | tail -6`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Add config fields.** In `config/mod.rs` `HooksConfig` (after `webhooks`):
+- [ ] **Step 5: Add config fields (Option — so derived `Default` and serde-default AGREE).** In `config/mod.rs` `HooksConfig` (after `webhooks`). `HooksConfig` derives `Default`; using `Option<u64>` (not `u64` + a `#[serde(default=…)]` fn) makes `HooksConfig::default()` and a TOML-absent key BOTH resolve to `None` → the 10 s default is applied uniformly at read time (avoids the "derive-Default = 0, serde-default = 10 000" split):
 
 ```rust
     /// Total wall-clock budget across the whole decision-webhook chain per tool call
-    /// (ms). 0 = no chain budget. Individual hooks keep their own `timeout_ms`.
-    #[serde(default = "default_webhook_chain_timeout_ms")]
-    pub total_webhook_timeout_ms: u64,
+    /// (ms). None → 10 000 ms default. Some(0) → no chain budget. Individual hooks
+    /// keep their own `timeout_ms`.
+    #[serde(default)]
+    pub total_webhook_timeout_ms: Option<u64>,
     /// What to do when the chain budget is exceeded. Default: Open (tool proceeds).
     #[serde(default)]
     pub on_chain_timeout: FailureMode,
 ```
 
-And the default fn (next to `default_hook_timeout_ms`):
+(No `default_webhook_chain_timeout_ms` fn — the 10 000 default lives in the setter, Step 6.)
 
-```rust
-fn default_webhook_chain_timeout_ms() -> u64 {
-    10_000
-}
-```
-
-- [ ] **Step 6: Thread the budget into `HookRegistry`.** In `hooks.rs`, add fields to the struct:
+- [ ] **Step 6: Thread the budget into `HookRegistry` via a NEW setter (do NOT change `set_webhooks`).** `set_webhooks` has 14 in-file test callers (`hooks.rs:501-813`); changing its signature would break all of them. Instead add fields + a dedicated setter. Add to the struct (`hooks.rs:33-40`):
 
 ```rust
     total_webhook_timeout_ms: u64,
     on_chain_timeout: crate::config::FailureMode,
 ```
 
-Initialize them in `HookRegistry::new()` (`0` and `FailureMode::Open`). Extend `set_webhooks` signature + body:
+Initialize them in `HookRegistry::new()` (`10_000` and `FailureMode::Open`). Add the setter (leave `set_webhooks` untouched):
 
 ```rust
-    pub fn set_webhooks(
-        &mut self,
-        client: reqwest::Client,
-        webhooks: Vec<crate::config::WebhookConfig>,
-        total_webhook_timeout_ms: u64,
-        on_chain_timeout: crate::config::FailureMode,
-    ) {
-        self.total_webhook_timeout_ms = total_webhook_timeout_ms;
-        self.on_chain_timeout = on_chain_timeout;
-        // ... existing body unchanged ...
+    /// Set the cumulative decision-webhook chain budget. `total = None` → 10 s default;
+    /// `Some(0)` → disabled.
+    pub fn set_webhook_chain_budget(&mut self, total: Option<u64>, on_chain: crate::config::FailureMode) {
+        self.total_webhook_timeout_ms = total.unwrap_or(10_000);
+        self.on_chain_timeout = on_chain;
     }
 ```
 
-Update the production call site `gateway/handlers/agents/lifecycle.rs:150` to pass `hc.total_webhook_timeout_ms, hc.on_chain_timeout` (where `hc` is the agent's `HooksConfig`).
+At the production wiring `gateway/handlers/agents/lifecycle.rs:150` (right after the existing `set_webhooks(...)` call), add: `registry.set_webhook_chain_budget(hc.total_webhook_timeout_ms, hc.on_chain_timeout);` (where `hc` is the agent's `HooksConfig`, already in scope).
 
 - [ ] **Step 7: Enforce the budget in `fire_decision`.** In `hooks.rs:120`, stamp the start before the loop and check before each POST:
 
@@ -339,7 +337,7 @@ Update the production call site `gateway/handlers/agents/lifecycle.rs:150` to pa
 - [ ] **Step 8: Compile + tests.**
 
 Run: `cargo check -p opex-core --all-targets && cargo test -p opex-core chain_budget_tests 2>&1 | tail -6`
-Expected: compiles; PASS. (Absent config → `total_webhook_timeout_ms` defaults 10_000; `set_webhooks` callers pass it; existing hook behavior otherwise unchanged.)
+Expected: compiles (the 14 in-file `set_webhooks` test callers are UNTOUCHED — signature unchanged); PASS. Absent config → `total_webhook_timeout_ms` = None → 10 000 ms via the setter; existing hook behavior otherwise unchanged.
 
 - [ ] **Step 9: Commit.**
 
@@ -508,18 +506,22 @@ git commit -m "fix(agent): LoopDetector warm-up restores hash-repeat detection a
 
 ---
 
-### Task 5: R2a — per-(agent,tool) penalty schema + record path
+### Task 5: R2 — penalty scoped per-(agent, tool)  *(ONE task, ONE commit)*
+
+> **Why one task:** the `get_all_penalties` return-type change (record path) and the `PenaltyCache` field-type change (read path) are INSEPARABLE — splitting them leaves the crate not compiling between commits. So migration + record + audit + cache + consumer + doctor all land in a single commit at the end.
 
 **Files:**
 - Create: `migrations/070_tool_quality_per_agent.sql`
-- Modify: `crates/opex-core/src/db/tool_quality.rs:73-159` (`record_tool_result` gains `agent_name`)
-- Modify: `crates/opex-core/src/db/audit_queue.rs:22-27` (event variant) + `:80-96` (worker arm)
-- Modify: `crates/opex-core/src/agent/engine_dispatch.rs:84-91` (pass agent name)
+- Modify: `crates/opex-core/src/db/tool_quality.rs` — `record_tool_result` (`:73`) gains `agent_name`; `get_all_penalties` (`:165`) → `HashMap<(String,String),f32>`; `PenaltyCache` (`:15-61`) nested map + `get_penalties(agent)`; `get_degraded_tools` (`:179`) + agent_name
+- Modify: `crates/opex-core/src/db/audit_queue.rs:22-27` (variant) + `:80-96` (worker arm)
+- Modify: `crates/opex-core/src/agent/engine_dispatch.rs:86` (pass agent name)
+- Modify: `crates/opex-core/src/agent/engine/context_builder.rs:394` (`tool_penalties` passes agent)
+- Modify: `crates/opex-core/src/gateway/handlers/monitoring/doctor.rs:471` (payload `agent_name`)
 - Test: `crates/opex-core/src/db/tool_quality.rs` (`#[sqlx::test]`)
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `tool_quality` PK `(agent_name, tool_name)`; `record_tool_result(db, agent_name, tool_name, success, duration_ms, error)`; `AuditEvent::ToolQuality { agent_name, tool_name, success, duration_ms, error }`.
+- Produces: `tool_quality` PK `(agent_name, tool_name)`; `record_tool_result(db, agent_name, tool_name, success, duration_ms, error)`; `AuditEvent::ToolQuality { agent_name, tool_name, success, duration_ms, error }`; `get_all_penalties(db) -> HashMap<(String,String),f32>`; `PenaltyCache::get_penalties(&self, agent_name: &str) -> HashMap<String,f32>`.
 
 - [ ] **Step 1: Write the migration.** Create `migrations/070_tool_quality_per_agent.sql`:
 
@@ -532,7 +534,7 @@ ALTER TABLE tool_quality DROP CONSTRAINT tool_quality_pkey;
 ALTER TABLE tool_quality ADD PRIMARY KEY (agent_name, tool_name);
 ```
 
-- [ ] **Step 2: Write the failing per-agent DB test.** Add to `tool_quality.rs`:
+- [ ] **Step 2: Write BOTH failing DB tests** (record path + cache read path — they land together). Add to `tool_quality.rs`:
 
 ```rust
     #[sqlx::test(migrations = "../../migrations")]
@@ -544,6 +546,16 @@ ALTER TABLE tool_quality ADD PRIMARY KEY (agent_name, tool_name);
         let all = get_all_penalties(&pool).await.unwrap();
         assert!(all[&("A".to_string(), "T".to_string())] < 0.8, "A's T is penalized");
         assert!((all[&("B".to_string(), "T".to_string())] - 1.0).abs() < f32::EPSILON, "B's T is clean");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn penalty_cache_returns_per_agent_submap(pool: sqlx::PgPool) {
+        for _ in 0..5 { record_tool_result(&pool, "A", "T", false, 10, Some("x")).await.unwrap(); }
+        let cache = PenaltyCache::new(pool.clone());
+        let a = cache.get_penalties("A").await;
+        let b = cache.get_penalties("B").await;
+        assert!(a.get("T").copied().unwrap_or(1.0) < 0.8, "A sees its penalty");
+        assert!(b.get("T").is_none(), "B (unseen) gets an empty submap");
     }
 ```
 
@@ -567,7 +579,7 @@ pub async fn record_tool_result(
     // ON CONFLICT (agent_name, tool_name) DO UPDATE SET ...  (bind $1=agent_name, $2=tool_name, shift the rest)
 ```
 
-Update the `INSERT INTO tool_quality (agent_name, tool_name, ...)` column list, the `VALUES ($1, $2, ...)` (agent_name first), and `ON CONFLICT (agent_name, tool_name)`. Change `get_all_penalties` to return `HashMap<(String, String), f32>` selecting `agent_name, tool_name, penalty_score`.
+Update the `INSERT INTO tool_quality (agent_name, tool_name, ...)` column list, the `VALUES ($1, $2, ...)` (agent_name first), and `ON CONFLICT (agent_name, tool_name)`. NOTE: agent_name as `$1` shifts EVERY existing placeholder — `tool_name→$2, success→$3, duration→$4, call_entry→$5, error→$6` — with `$2` used 7×, `$3` 2×, `$4` 4×, `$5` 2× in the current UPSERT (`:87-156`), and `.bind(agent_name)` prepended to the bind chain. Regenerate the whole statement rather than patching individual `$n`. Change `get_all_penalties` to return `HashMap<(String, String), f32>` selecting `agent_name, tool_name, penalty_score`.
 
 - [ ] **Step 5: Thread `agent_name` through the audit event.** In `db/audit_queue.rs`, add to the `ToolQuality` variant (`:22-27`):
 
@@ -579,61 +591,16 @@ In the worker match-arm (`:80-96`) forward it: `record_tool_result(db, &agent_na
 
 In `engine_dispatch.rs:84-91`, add `agent_name: self.cfg().agent.name.clone()` to the emitted `AuditEvent::ToolQuality { ... }`.
 
-- [ ] **Step 6: Run the DB test to green.**
-
-Run: `make test-db 2>&1 | grep -A3 penalty_is_scoped_per_agent | tail -6`
-Expected: PASS.
-
-- [ ] **Step 7: Commit.**
-
-```bash
-git add migrations/070_tool_quality_per_agent.sql crates/opex-core/src/db/tool_quality.rs crates/opex-core/src/db/audit_queue.rs crates/opex-core/src/agent/engine_dispatch.rs
-git commit -m "feat(db): scope tool_quality penalty per (agent, tool) — migration 070 + record path"
-```
-
----
-
-### Task 6: R2b — per-agent PenaltyCache + consumer + doctor
-
-**Files:**
-- Modify: `crates/opex-core/src/db/tool_quality.rs:15-61` (`PenaltyCache` nested), `:179-205` (`get_degraded_tools`)
-- Modify: `crates/opex-core/src/agent/engine/context_builder.rs:394` (`tool_penalties` passes agent)
-- Modify: `crates/opex-core/src/gateway/handlers/monitoring/doctor.rs:471` (payload `agent_name`)
-- Test: `crates/opex-core/src/db/tool_quality.rs` (`#[sqlx::test]`)
-
-**Interfaces:**
-- Consumes: `record_tool_result` (Task 5); `get_all_penalties() -> HashMap<(String,String), f32>` (Task 5).
-- Produces: `PenaltyCache::get_penalties(&self, agent_name: &str) -> HashMap<String, f32>` (that agent's tool→penalty submap).
-
-- [ ] **Step 1: Write the failing cache test.** Add to `tool_quality.rs`:
-
-```rust
-    #[sqlx::test(migrations = "../../migrations")]
-    async fn penalty_cache_returns_per_agent_submap(pool: sqlx::PgPool) {
-        for _ in 0..5 { record_tool_result(&pool, "A", "T", false, 10, Some("x")).await.unwrap(); }
-        let cache = PenaltyCache::new(pool.clone());
-        let a = cache.get_penalties("A").await;
-        let b = cache.get_penalties("B").await;
-        assert!(a.get("T").copied().unwrap_or(1.0) < 0.8, "A sees its penalty");
-        assert!(b.get("T").is_none(), "B (unseen) gets an empty submap");
-    }
-```
-
-- [ ] **Step 2: Run to confirm failure.**
-
-Run: `make test-db 2>&1 | grep -A3 penalty_cache_returns_per_agent | tail -6`
-Expected: FAIL to compile — `get_penalties` takes no arg / cache map shape.
-
-- [ ] **Step 3: Make `PenaltyCache` per-agent.** In `tool_quality.rs`, change the cached type to `HashMap<String /*agent*/, HashMap<String /*tool*/, f32>>`, fill it in the refresh from `get_all_penalties()` (group the `(agent,tool)` rows by agent), and change the accessor:
+- [ ] **Step 6: Make `PenaltyCache` per-agent (SAME task — lands in the one commit, so the crate stays green).** In `tool_quality.rs`, change the cached map (field at `:20`) to `HashMap<String /*agent*/, HashMap<String /*tool*/, f32>>`, rebuild it in the 30 s refresh by grouping `get_all_penalties()`'s `(agent, tool)` rows by agent, and change the accessor:
 
 ```rust
     pub async fn get_penalties(&self, agent_name: &str) -> HashMap<String, f32> {
-        // ...30s-refresh logic unchanged, then:
+        // ...30 s-refresh logic unchanged; cached map is now agent → (tool → penalty)...
         guard.0.get(agent_name).cloned().unwrap_or_default()
     }
 ```
 
-- [ ] **Step 4: Update the single consumer.** In `engine/context_builder.rs`, `tool_penalties()` (call at `:394`) passes the agent name:
+- [ ] **Step 7: Update the single consumer.** In `engine/context_builder.rs`, `tool_penalties()` (call at `:394`) passes the agent name:
 
 ```rust
     self.tex().penalty_cache.get_penalties(&self.cfg().agent.name).await
@@ -641,7 +608,7 @@ Expected: FAIL to compile — `get_penalties` takes no arg / cache map shape.
 
 (Return type stays `HashMap<String, f32>` — downstream at `context_builder.rs:541` is unaffected.)
 
-- [ ] **Step 5: Update `get_degraded_tools` + doctor payload (global, agent as a column).** In `tool_quality.rs:179`, add `agent_name` to the SELECT and the returned JSON:
+- [ ] **Step 8: Update `get_degraded_tools` + doctor payload (GLOBAL endpoint; agent as a COLUMN, not a filter).** In `tool_quality.rs:179`, add `agent_name` to the SELECT + the returned JSON:
 
 ```rust
     // SELECT agent_name, tool_name, penalty_score, total_calls, fail_calls, last_error
@@ -649,23 +616,23 @@ Expected: FAIL to compile — `get_penalties` takes no arg / cache map shape.
     json!({ "agent_name": agent, "tool_name": name, "penalty_score": penalty, "total_calls": total, "fail_calls": fail, "last_error": last_error })
 ```
 
-`doctor.rs:471` calls `get_degraded_tools(&db)` unchanged (no per-agent filter — the payload now carries `agent_name` per row).
+`doctor.rs:471` calls `get_degraded_tools(&db)` unchanged — the payload now carries `agent_name` per row (additive API change).
 
-- [ ] **Step 6: Run the cache test + full DB suite to green.**
+- [ ] **Step 9: Run BOTH DB tests to green.**
 
-Run: `make test-db 2>&1 | tail -6`
-Expected: PASS (both R2 tests + no regressions).
+Run: `make test-db 2>&1 | tail -8`
+Expected: PASS — `penalty_is_scoped_per_agent` AND `penalty_cache_returns_per_agent_submap`, no regressions. (The crate compiles because the record path AND cache path changed together in this one task.)
 
-- [ ] **Step 7: Full gate.**
+- [ ] **Step 10: Full gate.**
 
 Run: `make check && make lint && make test-db 2>&1 | tail -4`
 Expected: check clean, clippy 0 warnings, all tests PASS.
 
-- [ ] **Step 8: Commit.**
+- [ ] **Step 11: Commit (single — migration + record + audit + cache + consumer + doctor together).**
 
 ```bash
-git add crates/opex-core/src/db/tool_quality.rs crates/opex-core/src/agent/engine/context_builder.rs crates/opex-core/src/gateway/handlers/monitoring/doctor.rs
-git commit -m "feat(db): per-agent PenaltyCache + degraded-tools reporting; wire tool_penalties consumer"
+git add migrations/070_tool_quality_per_agent.sql crates/opex-core/src/db/tool_quality.rs crates/opex-core/src/db/audit_queue.rs crates/opex-core/src/agent/engine_dispatch.rs crates/opex-core/src/agent/engine/context_builder.rs crates/opex-core/src/gateway/handlers/monitoring/doctor.rs
+git commit -m "feat(db): scope tool_quality penalty per (agent, tool) — migration 070 + record + cache + consumer + doctor"
 ```
 
 ---
