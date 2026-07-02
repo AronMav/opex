@@ -150,7 +150,7 @@ export default function MemoryPage() {
   }
 
   return (
-    <div className="flex flex-col h-full p-4 md:p-6 lg:p-8 max-w-6xl mx-auto w-full overflow-hidden">
+    <div className="flex flex-col h-full p-4 md:p-6 lg:p-8 w-full overflow-hidden">
       <PageHeader
         title={t("memory.title")}
         description={t("memory.subtitle")}
