@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
 import { useTranslation } from "@/hooks/use-translation";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Bot, Eye, EyeOff } from "lucide-react";
+import { AuthShell, AuthBrand } from "@/components/ui/auth-shell";
+import { Alert } from "@/components/ui/alert";
+import { Card } from "@/components/ui/card";
+import { Eye, EyeOff } from "lucide-react";
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -38,72 +41,50 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative flex h-dvh w-full items-center justify-center overflow-hidden bg-background selection:bg-primary/30">
-      <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[600px] bg-primary/5 rounded-full blur-[120px] opacity-50" />
-      </div>
+    <AuthShell glow className="max-w-sm">
+      <AuthBrand orientation="vertical" subtitle={t("login.control_panel")} className="mb-10" />
 
-      <div className="relative z-10 w-full max-w-[400px] px-6">
-        <div className="mb-10 flex flex-col items-center gap-3">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-card border border-border neu-card">
-            <Bot className="h-7 w-7 text-primary" />
-          </div>
-          <div className="flex flex-col items-center">
-            <h1 className="font-display text-2xl font-bold tracking-wide text-foreground">
-              OPEX
-            </h1>
-            <span className="text-sm text-muted-foreground mt-1">
-              {t("login.control_panel")}
-            </span>
-          </div>
+      <Card className="p-8">
+        <div className="mb-6">
+          <span className="text-sm font-semibold text-foreground">{t("login.sign_in")}</span>
         </div>
 
-        <div className="neu-card p-8">
-          <div className="mb-6">
-            <span className="text-sm font-semibold text-foreground">{t("login.sign_in")}</span>
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="space-y-2">
-              <div className="relative">
-                <Input
-                  type={showToken ? "text" : "password"}
-                  placeholder={t("login.enter_token")}
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  autoFocus
-                  disabled={loading}
-                  className="h-12 border-border bg-background font-mono text-sm placeholder:text-muted-foreground/50 focus:border-primary/40 rounded-xl neu-inset pr-12"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => setShowToken((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  aria-label={t("login.show_token")}
-                >
-                  {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </Button>
-              </div>
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div className="space-y-2">
+            <div className="relative">
+              <Input
+                type={showToken ? "text" : "password"}
+                placeholder={t("login.enter_token")}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                autoFocus
+                disabled={loading}
+                className="h-12 border-border bg-background font-mono text-sm placeholder:text-muted-foreground-subtle focus:border-primary/40 rounded-xl neu-inset pr-12"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => setShowToken((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label={t("login.show_token")}
+              >
+                {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </Button>
             </div>
+          </div>
 
-            {error && (
-              <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3">
-                <p className="text-sm text-destructive">{error}</p>
-              </div>
-            )}
+          {error && <Alert variant="destructive">{error}</Alert>}
 
-            <Button
-              type="submit"
-              className="w-full h-12 font-semibold text-sm rounded-xl transition-all duration-200 active:scale-[0.98]"
-              disabled={loading || !token.trim()}
-            >
-              {loading ? t("login.checking") : t("login.submit")}
-            </Button>
-          </form>
-        </div>
-      </div>
-    </div>
+          <Button
+            type="submit"
+            className="w-full h-12 font-semibold text-sm rounded-xl transition-all duration-200 active:scale-[0.98]"
+            disabled={loading || !token.trim()}
+          >
+            {loading ? t("login.checking") : t("login.submit")}
+          </Button>
+        </form>
+      </Card>
+    </AuthShell>
   );
 }
