@@ -75,6 +75,8 @@
 :root {
   --radius: 0.75rem;
 
+  /* Foundation token scales — seeded here; consumers land in later UI-migration
+     batches (B1–B5). Intentionally unreferenced until pages adopt them. */
   /* Layout dimensions */
   --sidebar-w: 280px;   /* chat session sidebar */
   --toolbar-h: 3.5rem;  /* 56px — chat/workspace toolbars (was h-14) */
