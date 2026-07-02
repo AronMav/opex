@@ -18,6 +18,8 @@ import { Card } from "@/components/ui/card";
 import { IconTile } from "@/components/ui/icon-tile";
 import { Chip } from "@/components/ui/chip";
 import { SearchInput } from "@/components/ui/search-input";
+import { Tabs, TabsTrigger } from "@/components/ui/tabs";
+import { ScrollableTabsList } from "@/components/ui/scrollable-tabs-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
@@ -587,24 +589,20 @@ export default function SkillsPage() {
       />
 
       {/* State filter */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {STATE_FILTERS.map((f) => (
-          <Button
-            key={f.value}
-            variant={stateFilter === f.value ? "secondary" : "ghost"}
-            size="sm"
-            className="h-7 text-xs"
-            onClick={() => setStateFilter(f.value)}
-          >
-            {f.label}
-            {f.value !== "all" && (
-              <span className="ml-1.5 text-3xs tabular-nums text-muted-foreground">
-                {allSkills.filter((s) => s.state === f.value).length}
-              </span>
-            )}
-          </Button>
-        ))}
-      </div>
+      <Tabs value={stateFilter} onValueChange={(v) => setStateFilter(v as StateFilter)}>
+        <ScrollableTabsList className="h-9">
+          {STATE_FILTERS.map((f) => (
+            <TabsTrigger key={f.value} value={f.value} className="text-xs">
+              {f.label}
+              {f.value !== "all" && (
+                <span className="ml-1.5 text-3xs tabular-nums text-muted-foreground">
+                  {allSkills.filter((s) => s.state === f.value).length}
+                </span>
+              )}
+            </TabsTrigger>
+          ))}
+        </ScrollableTabsList>
+      </Tabs>
 
       {/* Search */}
       <SearchInput
@@ -642,7 +640,7 @@ export default function SkillsPage() {
           </p>
         } />
       ) : (
-        <div className="space-y-3 max-w-4xl mx-auto w-full">
+        <div className="space-y-3">
           {skills.map((skill) => {
             const isPending = deletePending === skill.name;
             const isArchivePending = archivePending === skill.name;
