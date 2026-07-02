@@ -57,6 +57,10 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
   const sampleTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const vadRef = useRef<VadDetector | null>(null);
   const finishingRef = useRef(false);
+  // Synchronous guard against a concurrent start() during the getUserMedia await
+  // (React `state` is still "idle" for ~100ms, so the state check alone lets a
+  // second call through and orphans the first MediaStream — mic stays live).
+  const startingRef = useRef(false);
   // Latest onAutoResult / vadConfig without re-binding callbacks (read at start()).
   const onAutoResultRef = useRef(opts.onAutoResult);
   const vadConfigRef = useRef(opts.vadConfig);
@@ -181,91 +185,97 @@ export function useVoiceRecorder(opts: UseVoiceRecorderOptions = {}): UseVoiceRe
   }, [vad, clearTimers, teardownAudio, stopTracks, t]);
 
   const start = useCallback(async () => {
-    if (state !== "idle") return;
-
-    // Secure context required by getUserMedia in most browsers.
-    if (typeof window !== "undefined" && !window.isSecureContext && window.location.hostname !== "localhost") {
-      const { toast } = await import("sonner");
-      toast.error(t("chat.voice_requires_https"));
-      return;
-    }
-
-    let stream: MediaStream;
+    if (state !== "idle" || startingRef.current) return;
+    startingRef.current = true;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      const { toast } = await import("sonner");
-      toast.error(t("chat.voice_no_permission"));
-      return;
-    }
-
-    streamRef.current = stream;
-    chunksRef.current = [];
-    finishingRef.current = false;
-
-    const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-    mimeTypeRef.current = mime;
-
-    const recorder = new MediaRecorder(stream, { mimeType: mime });
-    recorderRef.current = recorder;
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunksRef.current.push(e.data);
-    };
-    recorder.start(250); // collect chunks every 250ms
-    setState("recording");
-    setElapsed(0);
-    setLevel(0);
-
-    // ── VAD: analyser + sampling loop ───────────────────────────────────────
-    if (vad) {
-      try {
-        const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-        const ctx = new Ctx();
-        audioCtxRef.current = ctx;
-        const source = ctx.createMediaStreamSource(stream);
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 2048;
-        source.connect(analyser);
-        analyserRef.current = analyser;
-        vadRef.current = createVadDetector(vadConfigRef.current);
-
-        const buf = new Float32Array(analyser.fftSize);
-        sampleTimerRef.current = setInterval(() => {
-          const an = analyserRef.current;
-          const det = vadRef.current;
-          if (!an) return;
-          an.getFloatTimeDomainData(buf);
-          let sum = 0;
-          for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-          const rms = Math.sqrt(sum / buf.length);
-          setLevel((prev) => prev * 0.6 + rms * 0.4);
-          if (det) {
-            const evt = det.push(rms, performance.now());
-            if (evt === "silence-stop") {
-              void finalize().then((text) => onAutoResultRef.current?.(text));
-            }
-          }
-        }, SAMPLE_INTERVAL_MS);
-      } catch {
-        // Web Audio unavailable — fall back to manual stop only.
-        teardownAudio();
-      }
-    }
-
-    // Elapsed counter.
-    elapsedTimerRef.current = setInterval(() => {
-      setElapsed((s) => s + 1);
-    }, 1000);
-
-    // Hard cap at 5 min — actually finalize (previous code only toasted).
-    autoStopTimerRef.current = setTimeout(() => {
-      void (async () => {
+      // Secure context required by getUserMedia in most browsers.
+      if (typeof window !== "undefined" && !window.isSecureContext && window.location.hostname !== "localhost") {
         const { toast } = await import("sonner");
-        toast.info(t("chat.voice_auto_stopped"));
-        const text = await finalize();
-        if (vad) onAutoResultRef.current?.(text);
-      })();
-    }, MAX_RECORDING_SECS * 1000);
+        toast.error(t("chat.voice_requires_https"));
+        return;
+      }
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch {
+        const { toast } = await import("sonner");
+        toast.error(t("chat.voice_no_permission"));
+        return;
+      }
+
+      streamRef.current = stream;
+      chunksRef.current = [];
+      finishingRef.current = false;
+
+      const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+      mimeTypeRef.current = mime;
+
+      const recorder = new MediaRecorder(stream, { mimeType: mime });
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.start(250); // collect chunks every 250ms
+      setState("recording");
+      setElapsed(0);
+      setLevel(0);
+
+      // ── VAD: analyser + sampling loop ───────────────────────────────────────
+      if (vad) {
+        try {
+          const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+          const ctx = new Ctx();
+          audioCtxRef.current = ctx;
+          const source = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 2048;
+          source.connect(analyser);
+          analyserRef.current = analyser;
+          vadRef.current = createVadDetector(vadConfigRef.current);
+
+          const buf = new Float32Array(analyser.fftSize);
+          sampleTimerRef.current = setInterval(() => {
+            const an = analyserRef.current;
+            const det = vadRef.current;
+            if (!an) return;
+            an.getFloatTimeDomainData(buf);
+            let sum = 0;
+            for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+            const rms = Math.sqrt(sum / buf.length);
+            setLevel((prev) => prev * 0.6 + rms * 0.4);
+            if (det) {
+              const evt = det.push(rms, performance.now());
+              if (evt === "silence-stop") {
+                void finalize().then((text) => onAutoResultRef.current?.(text));
+              }
+            }
+          }, SAMPLE_INTERVAL_MS);
+        } catch {
+          // Web Audio unavailable — fall back to manual stop only.
+          teardownAudio();
+        }
+      }
+
+      // Elapsed counter.
+      elapsedTimerRef.current = setInterval(() => {
+        setElapsed((s) => s + 1);
+      }, 1000);
+
+      // Hard cap at 5 min — actually finalize (previous code only toasted).
+      autoStopTimerRef.current = setTimeout(() => {
+        void (async () => {
+          const { toast } = await import("sonner");
+          toast.info(t("chat.voice_auto_stopped"));
+          const text = await finalize();
+          if (vad) onAutoResultRef.current?.(text);
+        })();
+      }, MAX_RECORDING_SECS * 1000);
+    } finally {
+      // Setup after getUserMedia is synchronous, so by here `state` is committing
+      // to "recording" (or we hit an early return) — releasing the guard is safe.
+      startingRef.current = false;
+    }
   }, [state, vad, t, finalize, teardownAudio]);
 
   const stop = useCallback(async (): Promise<string> => {
