@@ -84,6 +84,7 @@ impl AgentEngine {
             // Record tool quality (non-system tools only)
             if !super::all_system_tool_names().contains(&name) {
                 self.cfg().audit_queue.send(crate::db::audit_queue::AuditEvent::ToolQuality {
+                    agent_name: self.cfg().agent.name.clone(),
                     tool_name: name.to_string(),
                     success: !is_error,
                     duration_ms,

@@ -391,7 +391,7 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
     }
 
     async fn tool_penalties(&self) -> std::collections::HashMap<String, f32> {
-        self.tex().penalty_cache.get_penalties().await
+        self.tex().penalty_cache.get_penalties(&self.cfg().agent.name).await
     }
 
     fn filter_tools_by_policy(&self, tools: Vec<opex_types::ToolDefinition>) -> Vec<opex_types::ToolDefinition> {
