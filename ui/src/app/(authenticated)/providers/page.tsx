@@ -9,7 +9,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ScrollableTabsList } from "@/components/ui/scrollable-tabs-list";
+import { SectionHeader } from "@/components/ui/section-header";
 import { Plus, RefreshCw, Zap } from "lucide-react";
 import { toast } from "sonner";
 import type { Provider, CreateProviderInput, ProviderOptions } from "@/types/api";
@@ -312,17 +314,15 @@ export default function ProvidersPage() {
         }
         return (
           <Tabs defaultValue={visibleCategories[0]} className="min-w-0">
-            <div className="min-w-0 max-w-full overflow-x-auto scrollbar-none">
-              <TabsList className="h-9 w-max">
-                {visibleCategories.map((cap) => (
-                  <TabsTrigger key={cap} value={cap}>
-                    {CATEGORY_ICONS[cap]}
-                    {capLabel(cap)}
-                    <Badge variant="secondary" className="ml-1.5 text-[10px]">{providersForCapability(cap).length}</Badge>
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </div>
+            <ScrollableTabsList className="h-9">
+              {visibleCategories.map((cap) => (
+                <TabsTrigger key={cap} value={cap}>
+                  {CATEGORY_ICONS[cap]}
+                  {capLabel(cap)}
+                  <Badge variant="secondary" size="sm" className="ml-1.5">{providersForCapability(cap).length}</Badge>
+                </TabsTrigger>
+              ))}
+            </ScrollableTabsList>
 
             {visibleCategories.map((cap) => {
               const capProviders = providersForCapability(cap);
@@ -357,14 +357,12 @@ export default function ProvidersPage() {
                     <div className="space-y-6">
                       {/* Active — draggable */}
                       <div>
-                        <p className="text-xs font-medium text-muted-foreground mb-2">
-                          {t("providers.active_heading")}
-                          {activeList.length > 1 && (
-                            <span className="text-muted-foreground/50"> · {t("providers.drag_hint")}</span>
-                          )}
-                        </p>
+                        <SectionHeader
+                          title={t("providers.active_heading")}
+                          description={activeList.length > 1 ? t("providers.drag_hint") : undefined}
+                        />
                         {activeList.length === 0 ? (
-                          <p className="text-xs text-muted-foreground/50 italic">{t("providers.none")}</p>
+                          <p className="text-xs text-muted-foreground-subtle italic">{t("providers.none")}</p>
                         ) : (
                           <ProviderSortableGroup
                             cap={cap}
@@ -381,9 +379,7 @@ export default function ProvidersPage() {
                       {/* Inactive */}
                       {inactiveList.length > 0 && (
                         <div>
-                          <p className="text-xs font-medium text-muted-foreground mb-2">
-                            {t("providers.inactive_heading")}
-                          </p>
+                          <SectionHeader title={t("providers.inactive_heading")} />
                           <div className="space-y-2">
                             {inactiveList.map((p) => (
                               <ProviderRow

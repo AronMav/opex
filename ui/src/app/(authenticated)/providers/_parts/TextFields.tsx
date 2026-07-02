@@ -123,7 +123,7 @@ export function TextFields({
         />
       </Field>
       {isEditing && editing?.api_key && (
-        <p className="text-[11px] text-muted-foreground/60 font-mono">
+        <p className="text-2xs text-muted-foreground/60 font-mono">
           {t("providers.field_api_key_current", { key: editing.api_key })}
         </p>
       )}
@@ -171,10 +171,10 @@ export function TextFields({
           </div>
         )}
         {selectedType?.supports_model_listing === false && (
-          <p className="text-[11px] text-warning">{t("providers.no_model_discovery")}</p>
+          <p className="text-2xs text-warning">{t("providers.no_model_discovery")}</p>
         )}
         {!isEditing && selectedType?.requires_api_key !== false && selectedType?.supports_model_listing && (
-          <p className="text-[11px] text-muted-foreground/60">{t("providers.save_first_to_discover")}</p>
+          <p className="text-2xs text-muted-foreground/60">{t("providers.save_first_to_discover")}</p>
         )}
       </div>
 
@@ -250,7 +250,7 @@ export function TextFields({
                 <>
                   <p className="font-medium">{t("providers.test_cli_success", { ms: String(testResult.response_time_ms ?? 0) })}</p>
                   {testResult.cli_version && (
-                    <p className="font-mono text-[11px] opacity-70">
+                    <p className="font-mono text-2xs opacity-70">
                       {testResult.cli_version} — {testResult.cli_path}
                     </p>
                   )}
@@ -264,7 +264,7 @@ export function TextFields({
                         ? t("providers.test_cli_no_auth")
                         : t("providers.test_cli_failed")}
                   </p>
-                  {testResult.error && <p className="font-mono text-[11px] opacity-70">{testResult.error}</p>}
+                  {testResult.error && <p className="font-mono text-2xs opacity-70">{testResult.error}</p>}
                 </>
               )}
             </div>
