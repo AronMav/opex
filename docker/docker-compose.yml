@@ -40,6 +40,7 @@ services:
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
+      - browser_profiles:/profiles
     healthcheck:
       test: [ "CMD-SHELL", "curl -sf http://localhost:9020/health || exit 1" ]
       interval: 30s
@@ -304,3 +305,4 @@ networks:
 volumes:
   pgdata:
   silero-models:
+  browser_profiles:
