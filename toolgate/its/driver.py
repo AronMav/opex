@@ -52,8 +52,19 @@ class BrowserDriver:
 
     async def content(self) -> dict:
         sid = await self.ensure_session()
-        return await self._call({"action": "content", "session_id": sid})
+        # Full page HTML via evaluate: the browser-renderer 'content' action
+        # truncates HTML at 50 KB, which drops ITS search results (the results
+        # container sits ~60 KB into the DOM). evaluate returns its value
+        # uncapped.
+        r = await self._call({
+            "action": "evaluate",
+            "session_id": sid,
+            "js": "({html: document.documentElement.outerHTML, url: location.href})",
+        })
+        data = r.get("result") or {}
+        return {"html": data.get("html", ""), "text": "", "url": data.get("url", "")}
 
     async def current_url(self) -> str:
-        r = await self.content()
-        return r.get("url", "")
+        sid = await self.ensure_session()
+        r = await self._call({"action": "evaluate", "session_id": sid, "js": "location.href"})
+        return r.get("result", "") or ""
