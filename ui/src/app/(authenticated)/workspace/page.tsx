@@ -9,6 +9,16 @@ import { WorkspaceFileTree } from "@/components/workspace/workspace-file-tree";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -163,7 +173,9 @@ export default function WorkspacePage() {
     guardNav(() => { loadFile(name); });
   }, [guardNav, loadFile]);
 
-  const saveFile = async () => {
+  // Returns true on success so callers (e.g. "Save & continue") can gate
+  // follow-up navigation on a clean save.
+  const saveFile = async (): Promise<boolean> => {
     try {
       await apiPut(`/api/workspace/${encodeWorkspacePath(selectedFile)}`, { content });
       setOriginal(content);
@@ -171,8 +183,10 @@ export default function WorkspacePage() {
       // Fix 5: cancel any prior flash timer before scheduling a new one
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaved(false), 2000);
+      return true;
     } catch (e) {
       setError(`${e}`);
+      return false;
     }
   };
 
@@ -466,7 +480,13 @@ export default function WorkspacePage() {
                   <span className="font-mono text-sm font-bold text-foreground truncate">
                     {selectedFileName}
                   </span>
-                  {!(fileData && isBinaryFile(fileData)) && isDirty && <span className="text-xs text-primary font-medium">{t("workspace.modified")}</span>}
+                  {!(fileData && isBinaryFile(fileData)) && (
+                    isDirty
+                      ? <span className="text-xs text-primary font-medium">{t("workspace.modified")}</span>
+                      : saved
+                        ? <span className="text-xs text-success font-medium">{t("workspace.saved")}</span>
+                        : null
+                  )}
                 </div>
                 {!(fileData && isBinaryFile(fileData)) && (
                   <Button
@@ -538,21 +558,46 @@ export default function WorkspacePage() {
         confirmLabel={t("workspace.delete_recursive_action")}
       />
 
-      {/* Unsaved-changes guard dialog */}
-      <ConfirmDialog
-        open={!!pendingNav}
-        onClose={() => setPendingNav(null)}
-        onConfirm={() => {
-          const nav = pendingNav;
-          setPendingNav(null);
-          setContent(original); // discard edits so the follow-up load starts clean
-          nav?.();
-        }}
-        title={t("workspace.unsaved_title")}
-        description={t("workspace.unsaved_description")}
-        confirmLabel={t("workspace.unsaved_discard")}
-        variant="destructive"
-      />
+      {/* Unsaved-changes guard dialog — Save & continue / Discard / Cancel */}
+      <AlertDialog open={!!pendingNav} onOpenChange={(o) => { if (!o) setPendingNav(null); }}>
+        <AlertDialogContent className="border-border rounded-xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-base font-bold">
+              {t("workspace.unsaved_title")}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-sm text-muted-foreground mt-2">
+              {t("workspace.unsaved_description")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="mt-4">
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const nav = pendingNav;
+                setPendingNav(null);
+                setContent(original); // discard edits so the follow-up load starts clean
+                nav?.();
+              }}
+            >
+              {t("workspace.unsaved_discard")}
+            </AlertDialogAction>
+            <AlertDialogAction
+              onClick={async (e) => {
+                // Save first; only proceed with navigation if the save succeeded.
+                e.preventDefault();
+                const nav = pendingNav;
+                const ok = await saveFile();
+                if (!ok) return; // keep the dialog open so the user sees the error
+                setPendingNav(null);
+                nav?.();
+              }}
+            >
+              {t("workspace.unsaved_save")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
