@@ -29,5 +29,5 @@ parameters:
 body_template: |
   {"action": "{{action}}"{{#if query}}, "query": "{{query}}"{{/if}}{{#if db}}, "db": "{{db}}"{{/if}}{{#if ref}}, "ref": "{{ref}}"{{/if}}}
 
-status: draft
+status: verified
 tags: [1c, its, docs, search]
