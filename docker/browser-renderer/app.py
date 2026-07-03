@@ -11,9 +11,12 @@ from pydantic import BaseModel, Field
 from playwright.async_api import async_playwright, Browser, Page
 
 from automation_actions import dispatch_action
+from profiles import ProfileManager
+from stealth import STEALTH_INIT_JS, stealth_context_kwargs
 
 browser: Browser | None = None
 pw_instance = None
+profile_manager: ProfileManager | None = None
 
 # ── Session management ────────────────────────────────────────────────────────
 sessions: dict[str, Page] = {}
@@ -77,6 +80,20 @@ async def lifespan(app: FastAPI):
         headless=True,
         args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
     )
+
+    global profile_manager
+    async def _persistent_factory(user_data_dir: str):
+        ctx = await pw_instance.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=True,
+            args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+                  "--disable-blink-features=AutomationControlled"],
+            **stealth_context_kwargs(),
+        )
+        await ctx.add_init_script(STEALTH_INIT_JS)
+        return ctx
+    profile_manager = ProfileManager(factory=_persistent_factory)
+
     cleanup = asyncio.create_task(session_cleanup_task())
     yield
     cleanup.cancel()
@@ -87,6 +104,8 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
     sessions.clear()
+    if profile_manager:
+        await profile_manager.close_all()
     await browser.close()
     await pw_instance.stop()
 
@@ -227,6 +246,7 @@ class AutomationRequest(BaseModel):
     to_selector: str | None = None
     accept: bool | None = None
     prompt_text: str | None = None
+    profile: str | None = None
 
 
 @app.post("/automation")
@@ -237,15 +257,18 @@ async def automation(req: AutomationRequest):
     # ── create_session ────────────────────────────────────────────────────
     if action == "create_session":
         sid = str(uuid.uuid4())[:8]
-        page = await browser.new_page(
-            viewport=DEFAULT_VIEWPORT,
-            user_agent=DEFAULT_USER_AGENT,
-        )
+        if req.profile:
+            ctx = await profile_manager.get_context(req.profile)
+            page = await ctx.new_page()
+        else:
+            page = await browser.new_page(
+                viewport=DEFAULT_VIEWPORT, user_agent=DEFAULT_USER_AGENT,
+            )
         sessions[sid] = page
         page.on("dialog", _make_dialog_handler(sid))
         session_dialog[sid] = {"accept": True, "prompt_text": None, "last": None}
         touch_session(sid)
-        return {"session_id": sid, "status": "created"}
+        return {"session_id": sid, "status": "created", "profile": req.profile}
 
     # All other actions require session_id
     if not req.session_id:

@@ -1,12 +1,18 @@
+import importlib.util
 import sys
 import types
 from types import SimpleNamespace
 
 import pytest
 
-# Stub playwright so importing app-side modules never needs a real browser.
-sys.modules.setdefault("playwright", types.ModuleType("playwright"))
-sys.modules.setdefault("playwright.async_api", types.ModuleType("playwright.async_api"))
+# Stub playwright so importing app-side modules never needs a real browser —
+# but only when playwright isn't actually installed. Clobbering a real
+# `playwright.async_api` module in sys.modules here would break other test
+# files in the same pytest session that need the genuine API (e.g. app.py's
+# `from playwright.async_api import async_playwright, Browser, Page`).
+if importlib.util.find_spec("playwright") is None:
+    sys.modules.setdefault("playwright", types.ModuleType("playwright"))
+    sys.modules.setdefault("playwright.async_api", types.ModuleType("playwright.async_api"))
 
 from automation_actions import dispatch_action  # noqa: E402
 
