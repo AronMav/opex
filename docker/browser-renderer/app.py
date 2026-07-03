@@ -269,6 +269,20 @@ async def automation(req: AutomationRequest):
         sid = str(uuid.uuid4())[:8]
         if req.profile:
             ctx = await profile_manager.get_context(req.profile)
+            # New owner takes over the profile: close pages left by previous
+            # clients (e.g. toolgate restarts). Persistent pages are exempt
+            # from the idle TTL, so without this they accumulate until the
+            # container mem_limit and page loads start timing out.
+            for stale in list(ctx.pages):
+                try:
+                    await stale.close()
+                except Exception:
+                    pass
+            for dead_sid in [s for s, p in sessions.items() if p.is_closed()]:
+                sessions.pop(dead_sid, None)
+                session_last_used.pop(dead_sid, None)
+                session_dialog.pop(dead_sid, None)
+                persistent_sessions.discard(dead_sid)
             page = await ctx.new_page()
             persistent_sessions.add(sid)
         else:

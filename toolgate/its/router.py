@@ -3,6 +3,7 @@
 import asyncio
 import logging
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -19,6 +20,10 @@ router = APIRouter(tags=["its"])
 _lock = asyncio.Lock()
 _cache = TTLCache()
 _OP_TIMEOUT_S = 90.0
+# Один ItsFlows (и одна browser-session) на процесс: страницы persistent-профиля
+# в renderer не имеют idle-TTL, поэтому «новый драйвер на каждый запрос» копит
+# вечные вкладки Chromium до mem_limit контейнера → goto-таймауты.
+_flows: ItsFlows | None = None
 
 
 class SearchReq(BaseModel):
@@ -34,7 +39,31 @@ async def build_flows(http) -> ItsFlows:
     return ItsFlows(BrowserDriver(http), SITE_ITS)
 
 
+async def _get_flows(http) -> ItsFlows:
+    global _flows
+    if _flows is None:
+        _flows = await build_flows(http)
+    return _flows
+
+
+def _is_stale_session(e: Exception) -> bool:
+    """Сессия в renderer умерла: рестарт контейнера (404 Session not found)
+    или вкладку закрыли под нами (500 …has been closed)."""
+    if not isinstance(e, httpx.HTTPStatusError):
+        return False
+    code = e.response.status_code
+    body = e.response.text or ""
+    return (code == 404 and "Session" in body) or (code == 500 and "has been closed" in body)
+
+
+async def _attempt(http, creds, coro_factory):
+    flows = await _get_flows(http)
+    await asyncio.wait_for(flows.ensure_logged_in(creds), timeout=_OP_TIMEOUT_S)
+    return await asyncio.wait_for(coro_factory(flows), timeout=_OP_TIMEOUT_S)
+
+
 async def _run(http, coro_factory):
+    global _flows
     creds = await get_credentials(http)
     if not creds:
         return JSONResponse(status_code=502,
@@ -42,9 +71,14 @@ async def _run(http, coro_factory):
                                      "message": "ITS_CREDENTIALS не заданы в vault"})
     async with _lock:
         try:
-            flows = await build_flows(http)
-            await asyncio.wait_for(flows.ensure_logged_in(creds), timeout=_OP_TIMEOUT_S)
-            return await asyncio.wait_for(coro_factory(flows), timeout=_OP_TIMEOUT_S)
+            try:
+                return await _attempt(http, creds, coro_factory)
+            except Exception as e:
+                if not _is_stale_session(e):
+                    raise
+                log.info("its: renderer session умерла (%s) — пересоздаю", e)
+                _flows = None
+                return await _attempt(http, creds, coro_factory)
         except ItsBusy as e:
             return JSONResponse(status_code=409, content={"error": "its_busy", "message": str(e)})
         except ItsLoginFailed as e:
