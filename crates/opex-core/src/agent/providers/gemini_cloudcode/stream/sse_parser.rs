@@ -109,7 +109,7 @@ pub fn parse_sse_events(raw: &str) -> Vec<GeminiStreamEvent> {
                     Err(e) => {
                         tracing::debug!(
                             error = %e,
-                            data = %&data[..data.len().min(200)],
+                            data = %&data[..data.floor_char_boundary(200)],
                             "gemini-cloudcode: failed to parse SSE event, skipping"
                         );
                     }
