@@ -77,7 +77,7 @@ pub(super) async fn run_converter(
     macro_rules! send_and_buffer {
         ($json_str:expr) => {{
             let s: &str = &$json_str;
-            tracing::debug!(target: "SSE-OUT", agent = %agent_name, sid = ?session_id_str, event = %&s[..s.len().min(180)], "emit");
+            tracing::debug!(target: "SSE-OUT", agent = %agent_name, sid = ?session_id_str, event = %&s[..s.floor_char_boundary(180)], "emit");
             let seq: u64 = if let Some(ref sid) = session_id_str {
                 registry.push_event(sid, &$json_str).await
             } else {

@@ -28,49 +28,82 @@ fn is_token_char_or_separator(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '=' | ':' | '"' | ' ')
 }
 
+/// Case-insensitive (ASCII) substring search returning a byte offset that is
+/// always a valid char boundary in `haystack`, starting from `from`.
+///
+/// Unlike `haystack.to_lowercase().find(needle)`, it never threads an offset
+/// from a case-folded copy back into the original: lowercasing can change byte
+/// length (e.g. `İ`→`i̇`, `ﬀ`→`ff`), so a `lower` offset can land mid-codepoint
+/// in the original and panic when sliced. `needle` is expected to be ASCII (all
+/// redaction keywords and `@mention` prefixes are); non-ASCII bytes are matched
+/// exactly.
+pub(crate) fn ascii_ci_find(haystack: &str, needle: &str, from: usize) -> Option<usize> {
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    if nb.is_empty() {
+        return Some(from);
+    }
+    let mut i = from;
+    while i + nb.len() <= hb.len() {
+        if haystack.is_char_boundary(i)
+            && hb[i..i + nb.len()]
+                .iter()
+                .zip(nb)
+                .all(|(h, n)| h.eq_ignore_ascii_case(n))
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Replace the value portion following `keyword` (case-insensitive) with `[REDACTED]`.
 /// The value is the contiguous run of characters satisfying `is_value` that follows
 /// the keyword and any optional leading non-alphanumeric separator chars.
+///
+/// All offsets index `input` directly (via [`ascii_ci_find`]) and separators are
+/// measured with `len_utf8`, so multi-byte bodies never split a codepoint.
 fn redact_pattern_after_keyword(
     input: &str,
     keyword: &str,
     is_value: fn(char) -> bool,
 ) -> String {
-    let lower = input.to_lowercase();
     let mut result = String::with_capacity(input.len());
-    let mut pos = 0usize;
+    let mut pos = 0usize; // byte offset in `input`, always a char boundary
 
     while pos < input.len() {
-        if let Some(rel) = lower[pos..].find(keyword) {
-            let kw_start = pos + rel;
-            let kw_end = kw_start + keyword.len();
-            result.push_str(&input[pos..kw_end]);
-
-            // Skip separators (=, :, ", space) between keyword and value
-            let rest = &input[kw_end..];
-            let skip = rest.chars().take_while(|&c| !c.is_ascii_alphanumeric()).count();
-            let value_start = kw_end + skip;
-
-            // Find end of value (run of token chars)
-            let value_end = value_start
-                + input[value_start..]
-                    .chars()
-                    .take_while(|&c| is_value(c) && c.is_ascii_alphanumeric())
-                    .map(|c| c.len_utf8())
-                    .sum::<usize>();
-
-            if value_end > value_start {
-                // push separators then redacted value
-                result.push_str(&input[kw_end..value_start]);
-                result.push_str("[REDACTED]");
-                pos = value_end;
-            } else {
-                // Nothing to redact — advance past keyword
-                pos = kw_end;
-            }
-        } else {
+        let Some(kw_start) = ascii_ci_find(input, keyword, pos) else {
             result.push_str(&input[pos..]);
             break;
+        };
+        let kw_end = kw_start + keyword.len(); // keyword is ASCII → char boundary
+        result.push_str(&input[pos..kw_end]);
+
+        // Skip separators (=, :, ", space) between keyword and value. Sum
+        // len_utf8 (not char count) so the offset stays byte-correct.
+        let rest = &input[kw_end..];
+        let skip: usize = rest
+            .chars()
+            .take_while(|&c| !c.is_ascii_alphanumeric())
+            .map(|c| c.len_utf8())
+            .sum();
+        let value_start = kw_end + skip;
+
+        // Find end of value (run of token chars).
+        let value_end = value_start
+            + input[value_start..]
+                .chars()
+                .take_while(|&c| is_value(c) && c.is_ascii_alphanumeric())
+                .map(|c| c.len_utf8())
+                .sum::<usize>();
+
+        if value_end > value_start {
+            result.push_str(&input[kw_end..value_start]);
+            result.push_str("[REDACTED]");
+            pos = value_end;
+        } else {
+            pos = kw_end; // nothing to redact — advance past keyword
         }
     }
     result
@@ -91,8 +124,9 @@ fn redact_pattern_after_keyword(
 /// `yaml_tools` updated to `crate::redact::redact_secrets`.
 pub(crate) fn redact_secrets(body: &str) -> String {
     // Truncate first (cheaper than running regex on a multi-MB string).
+    // floor to a char boundary so a multi-byte body can't split a codepoint.
     let truncated = if body.len() > ERROR_BODY_MAX_CHARS {
-        &body[..ERROR_BODY_MAX_CHARS]
+        &body[..body.floor_char_boundary(ERROR_BODY_MAX_CHARS)]
     } else {
         body
     };
@@ -252,5 +286,32 @@ mod tests {
         let s = "api_key=secret123&other=val";
         let out = redact_secrets(s);
         assert!(!out.contains("secret123"), "api_key value must be redacted: {out}");
+    }
+
+    #[test]
+    fn redact_secrets_multibyte_body_truncates_without_panic() {
+        // Byte 200 lands mid-'я' (1 ASCII byte shifts the 2-byte run to odd
+        // offsets); the old `&body[..200]` panicked here.
+        let long = format!("a{}", "я".repeat(300)); // 601 bytes
+        let out = redact_secrets(&long); // must not panic
+        assert!(out.chars().count() <= ERROR_BODY_MAX_CHARS);
+    }
+
+    #[test]
+    fn redact_secrets_multibyte_prefix_redacts_correctly() {
+        // 'İ' lowercases to a 3-byte "i̇", so the old to_lowercase()-offset
+        // approach diverged from the original's byte layout before the keyword.
+        let input = "İ api_key=secret123";
+        let out = redact_secrets(input);
+        assert!(!out.contains("secret123"), "value must be redacted: {out}");
+        assert!(out.starts_with("İ api_key"), "prefix preserved: {out}");
+    }
+
+    #[test]
+    fn ascii_ci_find_matches_case_insensitively_at_boundaries() {
+        assert_eq!(super::ascii_ci_find("xxTOKENyy", "token", 0), Some(2));
+        // 'Ы' is 2 bytes; the keyword after it is found at the correct offset.
+        assert_eq!(super::ascii_ci_find("Ыtoken", "token", 0), Some(2));
+        assert_eq!(super::ascii_ci_find("no match", "token", 0), None);
     }
 }

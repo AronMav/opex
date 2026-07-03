@@ -177,7 +177,9 @@ async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> S
             }
             // Truncate to prevent LLM context overflow
             if result.len() > 16000 {
-                result.truncate(16000);
+                // floor to a char boundary — a raw truncate(16000) panics when
+                // byte 16000 lands mid-codepoint (Cyrillic/CJK/emoji output).
+                result.truncate(result.floor_char_boundary(16000));
                 result.push_str("\n... (truncated)");
             }
             result

@@ -1436,7 +1436,7 @@ mod tests {
         assert!(
             text.contains("UPDATING") || text.contains(prev),
             "iterative update must reference previous summary; got: {}",
-            &text[..100.min(text.len())]
+            &text[..text.floor_char_boundary(100)]
         );
     }
 

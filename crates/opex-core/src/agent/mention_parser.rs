@@ -53,9 +53,10 @@ pub fn parse_first_mention(text: &str, known_agents: &[String]) -> Option<String
 /// Case-insensitive replacement.
 pub fn strip_mention(text: &str, agent_name: &str) -> String {
     let pattern = format!("@{agent_name}");
-    let lower_text = text.to_lowercase();
-    let lower_pattern = pattern.to_lowercase();
-    match lower_text.find(&lower_pattern) {
+    // Search the original `text` case-insensitively so offsets index it
+    // directly. `text.to_lowercase()` can change byte length and split a
+    // codepoint when the resulting offset is sliced back into `text`.
+    match crate::redact::ascii_ci_find(text, &pattern, 0) {
         Some(pos) => {
             let end = pos + pattern.len();
             // Also strip trailing punctuation/whitespace after the mention (e.g. "@Agent, " → "")
@@ -129,6 +130,14 @@ mod tests {
     #[test]
     fn strip_mention_case_insensitive() {
         assert_eq!(strip_mention("@alpha check portfolio", "Alpha"), "check portfolio");
+    }
+
+    #[test]
+    fn strip_mention_multibyte_text_no_panic() {
+        // Cyrillic before/after the mention: offsets must index the original
+        // text, not a to_lowercase() copy (which could split a codepoint).
+        assert_eq!(strip_mention("привет @Alpha как дела", "Alpha"), "привет как дела");
+        assert_eq!(strip_mention("@Alpha, привет", "Alpha"), "привет");
     }
 
     #[test]

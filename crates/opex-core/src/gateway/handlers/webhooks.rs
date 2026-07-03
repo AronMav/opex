@@ -532,8 +532,11 @@ pub(crate) async fn api_regenerate_webhook_secret(
 
 fn webhook_to_dto(wh: &WebhookRow) -> WebhookEntryDto {
     let masked_secret = wh.secret.as_ref().map(|s| {
-        if s.len() > 4 {
-            format!("{}...{}", "*".repeat(s.len() - 4), &s[s.len() - 4..])
+        if s.chars().count() > 4 {
+            // Show the last 4 chars; slice on a char boundary so a multibyte
+            // secret tail can't panic ("byte index is not a char boundary").
+            let cut = s.floor_char_boundary(s.len().saturating_sub(4));
+            format!("{}...{}", "*".repeat(cut), &s[cut..])
         } else {
             "*".repeat(s.len())
         }
