@@ -32,6 +32,8 @@ def parse_search_results(html: str, cfg: dict) -> list[dict]:
         s = node.select_one(cfg["snippet"])
         link = node.select_one(cfg["link"])
         ref = (link.get("href") if link else "") or ""
+        if not ref:
+            continue  # skip non-result blocks (filters/headers with no link)
         m = re.search(r"/db/([^/#?]+)", ref)
         rows.append({
             "title": (t.get_text(strip=True) if t else ""),

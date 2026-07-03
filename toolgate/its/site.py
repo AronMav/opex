@@ -37,8 +37,13 @@ SITE_ITS = {
         "content_selector": "#l_content",
         "strip_selectors": [
             "nav", "header", "footer", ".toc",
-            "#l_search", "#l_extended_search", "#l_classifier",
-            "#w_metadata_section", "script", "style",
+            # #l_toc is the справочник navigation tree (~600 links) rendered
+            # inside the content column — strip it or it drowns the article.
+            "#l_toc", "#l_search", "#l_extended_search", "#l_classifier",
+            "#w_metadata_section", "#w_metadata_findintoc",
+            "#w_metadata_findinclassifier", "#w_metadata_toc_button",
+            "#toc_button_hide", "#toc_button_show",
+            "script", "style",
         ],
         "wait_selector": "#l_content",
     },
