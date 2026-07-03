@@ -161,7 +161,12 @@ export default function ToolsPage() {
   const [yamlContent, setYamlContent] = useState("");
   const [yamlLoading, setYamlLoading] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ kind: "mcp" | "yaml"; name: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<
+    | { kind: "mcp"; name: string }
+    | { kind: "yaml"; name: string }
+    | { kind: "handler"; id: string; name: string; isReset: boolean }
+    | null
+  >(null);
 
   const invalidateAll = useCallback(() => {
     qc.invalidateQueries({ queryKey: qk.yamlTools });
@@ -170,11 +175,12 @@ export default function ToolsPage() {
   }, [qc]);
 
   const handleConfirmDelete = async () => {
-    if (!deleteConfirm) return;
-    const { kind, name } = deleteConfirm;
+    const target = deleteConfirm;
+    if (!target) return;
     setDeleteConfirm(null);
-    if (kind === "mcp") await deleteMcp(name);
-    else await deleteYamlTool(name);
+    if (target.kind === "mcp") await deleteMcp(target.name);
+    else if (target.kind === "yaml") await deleteYamlTool(target.name);
+    else deleteHandler.mutate(target.id);
   };
 
   /* ── MCP CRUD ─────────────────────────────────────────────────── */
@@ -673,7 +679,7 @@ parameters:
                 variant="outline-destructive"
                 size="sm"
                 disabled={pending || isDeleting}
-                onClick={() => deleteHandler.mutate(h.id)}
+                onClick={() => setDeleteConfirm({ kind: "handler", id: h.id, name: label, isReset: h.source === "override" })}
                 aria-label={h.source === "override" ? t("tools.handler_reset") : t("tools.handler_delete")}
               >
                 {h.source === "override" ? (
@@ -803,14 +809,33 @@ parameters:
       <AlertDialog open={!!deleteConfirm} onOpenChange={(open) => { if (!open) setDeleteConfirm(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t("tools.delete_confirm_title", { kind: deleteConfirm?.kind === "mcp" ? "MCP" : "YAML", name: deleteConfirm?.name ?? "" })}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("tools.delete_confirm_description")}
-            </AlertDialogDescription>
+            {deleteConfirm?.kind === "handler" ? (
+              <>
+                <AlertDialogTitle>
+                  {deleteConfirm.isReset
+                    ? t("tools.handler_reset_confirm_title", { name: deleteConfirm.name })
+                    : t("tools.handler_delete_confirm_title", { name: deleteConfirm.name })}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {deleteConfirm.isReset
+                    ? t("tools.handler_reset_confirm_description")
+                    : t("tools.handler_delete_confirm_description")}
+                </AlertDialogDescription>
+              </>
+            ) : (
+              <>
+                <AlertDialogTitle>{t("tools.delete_confirm_title", { kind: deleteConfirm?.kind === "mcp" ? "MCP" : "YAML", name: deleteConfirm?.name ?? "" })}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {t("tools.delete_confirm_description")}
+                </AlertDialogDescription>
+              </>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={handleConfirmDelete}>{t("common.delete")}</AlertDialogAction>
+            <AlertDialogAction variant="destructive" onClick={handleConfirmDelete}>
+              {deleteConfirm?.kind === "handler" && deleteConfirm.isReset ? t("tools.handler_reset") : t("common.delete")}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

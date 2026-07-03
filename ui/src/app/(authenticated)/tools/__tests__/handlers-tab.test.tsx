@@ -1,7 +1,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import "@testing-library/jest-dom/vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 
 // Mock Radix-based Tabs so fireEvent.click activates panels in jsdom
 // (Radix Tabs relies on pointer events that don't fire with fireEvent.click).
@@ -122,13 +122,28 @@ describe("File Handlers tab", () => {
     expect(deleteButtons.length).toBe(1);
   });
 
-  it("clicking Delete on the workspace card calls deleteHandler.mutate with its id", async () => {
+  it("clicking Delete on the workspace card opens a confirm dialog without mutating yet", async () => {
     render(<ToolsPage />);
     fireEvent.click(screen.getByRole("tab", { name: /File Handlers|Обработчики/i }));
     expect(await screen.findByText("My Handler")).toBeInTheDocument();
 
     const deleteButton = screen.getByRole("button", { name: /Delete|Удалить/i });
     fireEvent.click(deleteButton);
+    // Destructive action must be gated behind a confirm dialog — no immediate mutate.
+    expect(deleteMutate).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("confirming the dialog calls deleteHandler.mutate with the handler id", async () => {
+    render(<ToolsPage />);
+    fireEvent.click(screen.getByRole("tab", { name: /File Handlers|Обработчики/i }));
+    expect(await screen.findByText("My Handler")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Delete|Удалить/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    // The dialog's own destructive action button (not the row's Delete trigger).
+    const confirmButton = within(dialog).getByRole("button", { name: /Delete|Удалить/i });
+    fireEvent.click(confirmButton);
     expect(deleteMutate).toHaveBeenCalledWith("my_handler");
   });
 });

@@ -24,7 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import type { AgentInfo, AgentDetail, ChannelRow, SecretInfo, Provider } from "@/types/api";
-import { Settings, LogOut, Bot, Plus } from "lucide-react";
+import { Settings, LogOut, Bot, Plus, Search } from "lucide-react";
 import { Loader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -545,6 +545,12 @@ export default function AgentsPage() {
 
   const upd = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
 
+  const filteredAgents = agents.filter(
+    (a) => !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase()),
+  );
+  // A search filter is active — an empty result here is "no matches", not onboarding.
+  const isFiltered = agentSearch.trim() !== "";
+
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
       <PageHeader
@@ -574,11 +580,23 @@ export default function AgentsPage() {
             <Skeleton key={i} className="h-64 rounded-xl" />
           ))}
         </div>
+      ) : filteredAgents.length === 0 && isFiltered ? (
+        <EmptyState
+          icon={Search}
+          text={t("agents.no_matches")}
+          height="h-64"
+          className="rounded-2xl"
+          hint={
+            <Button variant="link" onClick={() => setAgentSearch("")} className="p-0 h-auto mt-1">
+              {t("agents.reset_filters")}
+            </Button>
+          }
+        />
       ) : agents.length === 0 ? (
         <EmptyState icon={Bot} text={t("agents.no_active_agents")} height="h-64" className="rounded-2xl" />
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-          {agents.filter((a) => !agentSearch || a.name.toLowerCase().includes(agentSearch.toLowerCase())).map((a) => (
+          {filteredAgents.map((a) => (
             <Card key={a.name} interactive className="group p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col">
               <div className="flex items-start gap-3 mb-4 min-w-0">
                 <div className="relative shrink-0">
