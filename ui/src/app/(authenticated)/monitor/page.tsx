@@ -741,29 +741,29 @@ function MonitorPageInner() {
                           svc.flapping ? "border-l-2 border-l-warning" : !svc.ok ? "border-l-2 border-l-destructive" : ""
                         }`}
                       >
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-semibold text-muted-foreground">{name}</span>
-                          <div className="flex items-center gap-1">
-                            {svc.can_restart && (
-                              <Button
-                                variant="outline"
-                                size="icon-sm"
-                                onClick={() => setRestartConfirm({ kind: "service", id: name, label: name })}
-                                disabled={restarting === name}
-                                aria-label={t("watchdog.restart_service")}
-                                className="tap-target"
-                              >
-                                <RotateCcw className={`h-3 w-3 text-muted-foreground ${restarting === name ? "animate-spin" : ""}`} />
-                              </Button>
-                            )}
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
                             {svc.ok ? (
-                              <CheckCircle2 size={14} className="text-success" />
+                              <CheckCircle2 size={14} className="text-success shrink-0" />
                             ) : svc.flapping ? (
-                              <AlertTriangle size={14} className="text-warning" />
+                              <AlertTriangle size={14} className="text-warning shrink-0" />
                             ) : (
-                              <XCircle size={14} className="text-destructive" />
+                              <XCircle size={14} className="text-destructive shrink-0" />
                             )}
+                            <span className="text-xs font-semibold text-muted-foreground truncate">{name}</span>
                           </div>
+                          {svc.can_restart && (
+                            <Button
+                              variant="outline"
+                              size="icon-sm"
+                              onClick={() => setRestartConfirm({ kind: "service", id: name, label: name })}
+                              disabled={restarting === name}
+                              aria-label={t("watchdog.restart_service")}
+                              className="tap-target"
+                            >
+                              <RotateCcw className={`h-3 w-3 text-muted-foreground ${restarting === name ? "animate-spin" : ""}`} />
+                            </Button>
+                          )}
                         </div>
                         <span className="font-mono text-xs text-foreground/60">{svc.latency_ms}ms</span>
                         {svc.error && (
