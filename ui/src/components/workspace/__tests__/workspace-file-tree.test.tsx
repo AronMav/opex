@@ -28,6 +28,9 @@ vi.mock("lucide-react", () => {
   return {
     Folder: Icon,
     FileCode: Icon,
+    FileText: Icon,
+    FileJson: Icon,
+    Image: Icon,
     FilePlus: Icon,
     FolderPlus: Icon,
     CornerDownRight: Icon,
