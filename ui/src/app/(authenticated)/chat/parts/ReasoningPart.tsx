@@ -20,7 +20,7 @@ export function ReasoningPart({ text, streaming = false }: { text: string; strea
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className="group rounded-xl border border-primary/30 bg-primary/10 p-3 text-sm text-muted-foreground/70 dark:text-muted-foreground/70"
+      className="group rounded-xl border border-primary/30 bg-primary/10 p-3 text-sm text-muted-foreground-subtle"
     >
       <CollapsibleTrigger asChild>
         <button

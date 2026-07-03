@@ -172,7 +172,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="message-header flex items-center justify-between min-h-5">
           <div className="flex items-center gap-2">
-            <span className={`text-xs font-semibold uppercase tracking-wider ${isAgentSender ? "text-muted-foreground/70" : "text-primary"}`}>
+            <span className={`text-xs font-semibold uppercase tracking-wider ${isAgentSender ? "text-muted-foreground-subtle" : "text-primary"}`}>
               {isAgentSender ? senderAgentName : t("chat.you")}
             </span>
             {message.createdAt && (
@@ -285,7 +285,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
         {!continuesPrevious && (
           <div className="message-header flex items-center justify-between min-h-5">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 truncate max-w-30">
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground-subtle truncate max-w-30">
                 {agentName || t("chat.assistant")}
               </span>
               {message.createdAt && (

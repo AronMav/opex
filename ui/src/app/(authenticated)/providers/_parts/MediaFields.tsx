@@ -125,7 +125,7 @@ export function MediaFields({
         <div className="space-y-1.5">
           <label htmlFor={voiceId} className="text-xs font-medium text-muted-foreground">
             {t("providers.field_voice")}{" "}
-            <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>
+            <span className="text-muted-foreground-subtle font-normal">({t("providers.optional")})</span>
           </label>
           {ttsVoices.length > 0 ? (
             <Select
@@ -149,7 +149,7 @@ export function MediaFields({
                     <span className="flex flex-col">
                       <span>{v.name || v.id}</span>
                       {(v.language || v.description) && (
-                        <span className="text-muted-foreground/60 text-3xs">
+                        <span className="text-muted-foreground-subtle text-3xs">
                           {[v.language, v.description].filter(Boolean).join(" · ")}
                         </span>
                       )}
@@ -172,7 +172,7 @@ export function MediaFields({
               className="font-mono text-sm"
             />
           )}
-          <p className="text-2xs text-muted-foreground/60">{t("providers.field_voice_hint")}</p>
+          <p className="text-2xs text-muted-foreground-subtle">{t("providers.field_voice_hint")}</p>
         </div>
       )}
 
@@ -180,7 +180,7 @@ export function MediaFields({
       <div className="space-y-1.5">
         <label htmlFor={mediaKeyId} className="text-xs font-medium text-muted-foreground">
           {t("providers.field_api_key")}{" "}
-          <span className="text-muted-foreground/50 font-normal">({t("providers.optional")})</span>
+          <span className="text-muted-foreground-subtle font-normal">({t("providers.optional")})</span>
         </label>
         <Input
           id={mediaKeyId}
@@ -191,11 +191,11 @@ export function MediaFields({
           className="font-mono text-sm"
         />
         {isEditing && editing?.api_key && (
-          <p className="text-2xs text-muted-foreground/60 font-mono">
+          <p className="text-2xs text-muted-foreground-subtle font-mono">
             {t("providers.field_api_key_current", { key: editing.api_key })}
           </p>
         )}
-        <p className="text-2xs text-muted-foreground/60">{t("providers.field_api_key_vault_hint")}</p>
+        <p className="text-2xs text-muted-foreground-subtle">{t("providers.field_api_key_vault_hint")}</p>
       </div>
 
       {/* Notes */}

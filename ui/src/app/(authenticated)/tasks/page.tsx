@@ -297,7 +297,7 @@ export default function CronPage() {
                         <CircularLoader size="sm" />
                       </div>
                     ) : runs.length === 0 ? (
-                      <p className="text-xs text-muted-foreground/60 text-center py-4">{t("cron.no_runs")}</p>
+                      <p className="text-xs text-muted-foreground-subtle text-center py-4">{t("cron.no_runs")}</p>
                     ) : (
                       <div className="space-y-2">
                         {runs.map((r) => {
@@ -366,7 +366,7 @@ export default function CronPage() {
             <div className="flex items-center justify-between pt-2">
               <div className="space-y-0.5">
                 <label className="text-sm font-medium text-muted-foreground">{t("tasks.run_once")}</label>
-                <p className="text-2xs text-muted-foreground/50">{t("tasks.run_once_description")}</p>
+                <p className="text-2xs text-muted-foreground-subtle">{t("tasks.run_once_description")}</p>
               </div>
               <Switch
                 checked={form.run_once ?? false}
@@ -421,7 +421,7 @@ export default function CronPage() {
             <div className="flex items-center justify-between pt-2">
               <div className="space-y-0.5">
                 <label className="text-sm font-medium text-muted-foreground">{t("cron.field_silent")}</label>
-                <p className="text-2xs text-muted-foreground/50">{t("cron.silent_hint")}</p>
+                <p className="text-2xs text-muted-foreground-subtle">{t("cron.silent_hint")}</p>
               </div>
               <Switch
                 checked={form.silent}

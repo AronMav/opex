@@ -635,7 +635,7 @@ export default function AgentsPage() {
 
                 {a.has_heartbeat && (
                   <div className="flex flex-col gap-1 border-b border-border/50 py-2">
-                    <span className="font-mono text-2xs uppercase tracking-widest text-muted-foreground/80">{t("agents.schedule")}</span>
+                    <span className="font-mono text-2xs uppercase tracking-widest text-muted-foreground-subtle">{t("agents.schedule")}</span>
                     <span className="font-mono text-xs font-bold text-primary tabular-nums truncate">
                       {a.heartbeat_cron ? describeCron(a.heartbeat_cron, t) : "\u2014"}{" · "}{a.heartbeat_timezone || "UTC"}
                     </span>

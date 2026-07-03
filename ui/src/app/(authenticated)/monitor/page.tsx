@@ -692,23 +692,27 @@ function MonitorPageInner() {
               {wdError && <ErrorBanner error={wdError} />}
 
               {(() => {
+                const valueSkeleton = <Skeleton className="h-7 w-16" />;
                 const wdOk = wdChecks.length > 0
                   ? (allHealthy && (!watchdog?.containers || watchdog.containers.every(c => c.healthy)))
                   : (s?.status === "ok");
-                const statusValue = wdChecks.length > 0
+                const statusText = wdChecks.length > 0
                   ? (wdOk ? "OK" : "ISSUES")
-                  : (s?.status?.toUpperCase() || "...");
+                  : s?.status?.toUpperCase();
+                const statusValue = statusText
+                  ? <span className={wdOk ? undefined : "text-destructive"}>{statusText}</span>
+                  : valueSkeleton;
                 return (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-5 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                     <StatCard
                       label={t("dashboard.status")}
-                      value={<span className={wdOk ? undefined : "text-destructive"}>{statusValue}</span>}
+                      value={statusValue}
                       sub={s?.version}
                       icon={Activity}
                       accent={wdOk ? 2 : undefined}
                     />
-                    <StatCard label={t("dashboard.uptime")} value={s ? formatDuration(s.uptime_seconds) : "..."} sub={t("dashboard.uptime_sub")} icon={Clock} />
-                    <StatCard label={t("dashboard.memory")} value={s?.memory_chunks?.toLocaleString() ?? "..."} sub={t("dashboard.memory_sub")} icon={Brain} />
+                    <StatCard label={t("dashboard.uptime")} value={s ? formatDuration(s.uptime_seconds) : valueSkeleton} sub={t("dashboard.uptime_sub")} icon={Clock} />
+                    <StatCard label={t("dashboard.memory")} value={s?.memory_chunks?.toLocaleString() ?? valueSkeleton} sub={t("dashboard.memory_sub")} icon={Brain} />
                     <StatCard label={t("dashboard.agents")} value={String(s?.agents?.length ?? "0")} sub={s?.agents?.join(", ") || t("dashboard.agents_none")} icon={Bot} />
                     <StatCard label={t("dashboard.sessions")} value={String(s?.active_sessions ?? "0")} sub={t("dashboard.sessions_sub")} icon={User} />
                     <StatCard label={t("dashboard.tools")} value={String(s?.tools_registered ?? "0")} sub={t("dashboard.tools_sub")} icon={Wrench} />
@@ -1120,7 +1124,7 @@ function MonitorPageInner() {
 
             <div className="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-thin">
               {auditSearch && (
-                <p className="mb-3 text-xs text-muted-foreground/70">
+                <p className="mb-3 text-xs text-muted-foreground-subtle">
                   {t("audit.search_scope_hint")}
                 </p>
               )}
@@ -1142,7 +1146,7 @@ function MonitorPageInner() {
                         className="flex w-full flex-col gap-1 px-4 py-3 text-left md:flex-row md:flex-wrap md:items-center md:gap-3"
                         onClick={() => setExpandedId(expandedId === e.id ? null : e.id)}
                       >
-                        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/70 md:w-20">
+                        <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground-subtle md:w-20">
                           {new Date(e.created_at).toLocaleTimeString(locale === "en" ? "en-US" : "ru-RU", { hour12: false })}
                         </span>
                         <span className="shrink-0 font-mono text-xs text-muted-foreground truncate md:w-20" title={e.agent_id}>
@@ -1152,7 +1156,7 @@ function MonitorPageInner() {
                           {e.event_type}
                         </span>
                         {e.actor && (
-                          <span className="text-xs text-muted-foreground/60 truncate">
+                          <span className="text-xs text-muted-foreground-subtle truncate">
                             {t("audit.from", { actor: e.actor })}
                           </span>
                         )}
@@ -1249,22 +1253,22 @@ function MonitorPageInner() {
                       <div className="text-4xl font-display font-bold tracking-tight text-chart-3">
                         {formatTokens(totalTokens)}
                       </div>
-                      <div className="text-xs text-muted-foreground/60 mt-1">
+                      <div className="text-xs text-muted-foreground-subtle mt-1">
                         {t("usage.period_days", { days: usageData?.days ?? 0 })} &middot; {totalCalls.toLocaleString()} {t("usage.calls_short")}
                       </div>
                     </div>
                     <div className="relative flex flex-col items-end gap-1 shrink-0">
                       <div className="text-right">
-                        <div className="text-xs text-muted-foreground/60">{t("usage.input_short")}</div>
+                        <div className="text-xs text-muted-foreground-subtle">{t("usage.input_short")}</div>
                         <div className="text-sm font-mono font-bold text-chart-1">{formatTokens(totalInput)}</div>
                       </div>
                       <div className="text-right">
-                        <div className="text-xs text-muted-foreground/60">{t("usage.output_short")}</div>
+                        <div className="text-xs text-muted-foreground-subtle">{t("usage.output_short")}</div>
                         <div className="text-sm font-mono font-bold text-chart-2">{formatTokens(totalOutput)}</div>
                       </div>
                       {totalCost > 0 && (
                         <div className="text-right">
-                          <div className="text-xs text-muted-foreground/60">{t("usage.estimated_cost")}</div>
+                          <div className="text-xs text-muted-foreground-subtle">{t("usage.estimated_cost")}</div>
                           <div className="text-sm font-mono font-bold text-chart-5">${totalCost.toFixed(4)}</div>
                         </div>
                       )}
@@ -1371,7 +1375,7 @@ function MonitorPageInner() {
                                               {row.model}
                                             </span>
                                           )}
-                                          <span className="text-xs text-muted-foreground/60">
+                                          <span className="text-xs text-muted-foreground-subtle">
                                             {t("usage.calls", { count: row.call_count.toLocaleString() })}
                                           </span>
                                         </div>
@@ -1450,7 +1454,7 @@ function MonitorPageInner() {
                         <StatusBadge status="pending">
                           {t("approvals.status_pending")}
                         </StatusBadge>
-                        <span className="ml-auto text-xs text-muted-foreground/60 font-mono tabular-nums">
+                        <span className="ml-auto text-xs text-muted-foreground-subtle font-mono tabular-nums">
                           {relativeTime(a.created_at, locale)}
                         </span>
                       </div>
@@ -1687,7 +1691,7 @@ function CuratorTab() {
       <EmptyState
         icon={Sparkles}
         text={t("monitor.curator.empty")}
-        hint={<p className="text-xs text-muted-foreground/60 mt-1">{t("monitor.curator.no_runs")}</p>}
+        hint={<p className="text-xs text-muted-foreground-subtle mt-1">{t("monitor.curator.no_runs")}</p>}
       />
     );
   }
