@@ -36,6 +36,7 @@ pub(crate) mod files;
 pub(crate) mod handlers_admin;
 pub(crate) mod clarify;
 pub(crate) mod llm;
+pub(crate) mod internal_creds;
 
 #[cfg(feature = "gemini-cloudcode")]
 pub(crate) mod google_auth;
