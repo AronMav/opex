@@ -83,7 +83,11 @@ async function extractError(resp: Response): Promise<string> {
   } catch {
     // not JSON
   }
-  return text || `HTTP ${resp.status}`;
+  const trimmed = text.trim();
+  // HTML error pages (dev-server 404s, proxy/gateway errors) are noise in a
+  // banner/toast — collapse them to the status code.
+  if (!trimmed || /^<!doctype\b|^<html\b/i.test(trimmed)) return `HTTP ${resp.status}`;
+  return trimmed.length > 300 ? `${trimmed.slice(0, 300)}…` : trimmed;
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
