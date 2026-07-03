@@ -729,8 +729,6 @@
   "audit.event_type_placeholder": "Тип события",
   "audit.search_placeholder": "Поиск событий...",
   "audit.events_count": "{{count}} событий",
-  "audit.events_count_loaded": "{{count}} из загруженных",
-  "audit.search_scope_hint": "Поиск фильтрует только события на этой странице — листайте назад/вперёд, чтобы искать в остальных.",
   "audit.no_events": "Событий аудита не найдено",
   "audit.from": "от {{actor}}",
   "audit.event_all": "Все события",

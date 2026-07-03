@@ -94,24 +94,38 @@ pub async fn record_event(
     Ok(())
 }
 
-/// Query audit events with optional filters.
+/// Escape LIKE/ILIKE wildcards so a user-typed term matches literally.
+fn escape_like(term: &str) -> String {
+    term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+/// Query audit events with optional filters. `search` does a case-insensitive
+/// substring match across agent, event type, actor and the details JSON.
 pub async fn query_events(
     db: &PgPool,
     agent_id: Option<&str>,
     event_type: Option<&str>,
+    search: Option<&str>,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<AuditEvent>> {
+    let pattern = search.map(|s| format!("%{}%", escape_like(s)));
     let rows = sqlx::query_as::<_, AuditEvent>(
         "SELECT id, agent_id, event_type, actor, details, created_at \
          FROM audit_events \
          WHERE ($1::TEXT IS NULL OR agent_id = $1) \
          AND ($2::TEXT IS NULL OR event_type = $2) \
+         AND ($3::TEXT IS NULL \
+              OR agent_id ILIKE $3 \
+              OR event_type ILIKE $3 \
+              OR COALESCE(actor, '') ILIKE $3 \
+              OR details::text ILIKE $3) \
          ORDER BY created_at DESC \
-         LIMIT $3 OFFSET $4",
+         LIMIT $4 OFFSET $5",
     )
     .bind(agent_id)
     .bind(event_type)
+    .bind(pattern)
     .bind(limit)
     .bind(offset)
     .fetch_all(db)
@@ -131,6 +145,62 @@ pub async fn cleanup_old_events(db: &PgPool, retention_days: u32) -> Result<u64>
     .execute(db)
     .await?;
     Ok(result.rows_affected())
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::*;
+
+    async fn seed(
+        db: &PgPool,
+        agent: &str,
+        event_type: &str,
+        actor: Option<&str>,
+        details: serde_json::Value,
+    ) {
+        record_event(db, agent, event_type, actor, &details)
+            .await
+            .expect("seed audit event");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn search_matches_details_and_event_type_case_insensitively(db: PgPool) {
+        seed(&db, "Manager", "secret_created", Some("ui"), serde_json::json!({"name": "OPENAI_KEY"})).await;
+        seed(&db, "Manager", "agent_updated", Some("ui"), serde_json::json!({"field": "model"})).await;
+
+        let hits = query_events(&db, None, None, Some("openai"), 50, 0).await.unwrap();
+        assert_eq!(hits.len(), 1, "details JSON must be searchable");
+        assert_eq!(hits[0].event_type, "secret_created");
+
+        let hits = query_events(&db, None, None, Some("SECRET"), 50, 0).await.unwrap();
+        assert_eq!(hits.len(), 1, "event_type match must be case-insensitive");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn search_escapes_like_wildcards(db: PgPool) {
+        seed(&db, "A", "config_updated", Some("user_1"), serde_json::json!({})).await;
+        seed(&db, "A", "config_updated", Some("userX1"), serde_json::json!({})).await;
+
+        let hits = query_events(&db, None, None, Some("user_1"), 50, 0).await.unwrap();
+        assert_eq!(hits.len(), 1, "underscore must be literal, not a single-char wildcard");
+        assert_eq!(hits[0].actor.as_deref(), Some("user_1"));
+
+        let hits = query_events(&db, None, None, Some("100%"), 50, 0).await.unwrap();
+        assert!(hits.is_empty(), "percent must be literal, not match-all");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn search_composes_with_agent_filter_and_pagination(db: PgPool) {
+        seed(&db, "Manager", "tool_enabled", None, serde_json::json!({"tool": "search_web"})).await;
+        seed(&db, "Coder", "tool_enabled", None, serde_json::json!({"tool": "search_web"})).await;
+
+        let hits = query_events(&db, Some("Coder"), None, Some("search_web"), 50, 0).await.unwrap();
+        assert_eq!(hits.len(), 1, "search must compose with the agent filter");
+        assert_eq!(hits[0].agent_id, "Coder");
+
+        let hits = query_events(&db, None, None, Some("search_web"), 1, 1).await.unwrap();
+        assert_eq!(hits.len(), 1, "limit/offset must still apply while searching");
+    }
 }
 
 #[cfg(test)]
