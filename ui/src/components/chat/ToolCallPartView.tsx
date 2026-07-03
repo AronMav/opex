@@ -152,14 +152,14 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
 
           {/* file / detail */}
           {detail && (
-            <span className="text-[10px] text-muted-foreground/50 flex-1 min-w-0 truncate">
+            <span className="text-[10px] text-muted-foreground-subtle flex-1 min-w-0 truncate">
               {detail}
             </span>
           )}
 
           {/* elapsed time */}
           {isRunning && elapsed > 0 && (
-            <span className="text-[10px] text-muted-foreground/40 font-mono tabular-nums shrink-0">
+            <span className="text-[10px] text-muted-foreground-subtle font-mono tabular-nums shrink-0">
               {formatElapsed(elapsed)}
             </span>
           )}

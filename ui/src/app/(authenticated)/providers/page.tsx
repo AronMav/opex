@@ -349,7 +349,7 @@ export default function ProvidersPage() {
                   <p className="text-xs text-muted-foreground mb-4">
                     {t(CAP_DESC_KEY[cap] as Parameters<typeof t>[0])}
                     {isCapabilityGroup && cap !== "websearch" && (
-                      <span className="text-muted-foreground/60"> · {t("providers.group_hint")}</span>
+                      <span className="text-muted-foreground-subtle"> · {t("providers.group_hint")}</span>
                     )}
                   </p>
 

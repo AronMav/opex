@@ -74,7 +74,7 @@ function TaskCard({ task }: { task: AgentTask }) {
         )}
         <span className="flex-1 truncate">{task.title}</span>
         {totalCount > 0 && (
-          <span className="shrink-0 text-xs text-muted-foreground/60">
+          <span className="shrink-0 text-xs text-muted-foreground-subtle">
             {doneCount}/{totalCount}
           </span>
         )}

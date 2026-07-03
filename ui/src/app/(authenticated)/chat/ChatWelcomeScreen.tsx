@@ -28,7 +28,7 @@ export function ChatWelcomeScreen() {
       <h2 className="mb-2 font-display text-lg font-bold uppercase tracking-widest text-foreground/80">
         {currentAgent || t("chat.ready")}
       </h2>
-      <p className="max-w-xs font-sans text-sm leading-relaxed text-muted-foreground/60">
+      <p className="max-w-xs font-sans text-sm leading-relaxed text-muted-foreground-subtle">
         {t("chat.write_message_to_start")}
       </p>
       <div className="mt-6 flex flex-wrap gap-2 justify-center max-w-md">

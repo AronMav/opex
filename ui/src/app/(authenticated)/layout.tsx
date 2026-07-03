@@ -148,10 +148,6 @@ export default function AuthenticatedLayout({
               <Bot className="h-4 w-4 text-primary" />
               <span className="font-display text-sm font-black tracking-wide uppercase text-foreground/90">OPEX</span>
             </div>
-
-            <div id="mobile-page-actions" className="flex items-center gap-1">
-              {/* Portal target for page-specific buttons */}
-            </div>
           </div>
 
           <Badge variant={connected ? "outline-success" : "outline-destructive"} className="gap-1.5">

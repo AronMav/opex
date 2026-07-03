@@ -42,7 +42,7 @@ export function Field({ label, hint, error, htmlFor, className, labelClassName, 
           {error}
         </p>
       ) : hint ? (
-        <p id={descId} className="text-xs text-muted-foreground/60 ml-1">
+        <p id={descId} className="text-xs text-muted-foreground-subtle ml-1">
           {hint}
         </p>
       ) : null}

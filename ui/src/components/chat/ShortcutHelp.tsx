@@ -52,7 +52,7 @@ export function ShortcutHelp({ open, onOpenChange }: ShortcutHelpProps) {
         <div className="space-y-4">
           {SHORTCUT_GROUPS.map((group) => (
             <div key={group.titleKey}>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/60 mb-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground-subtle mb-2">
                 {t(group.titleKey)}
               </h4>
               <div className="space-y-1.5">

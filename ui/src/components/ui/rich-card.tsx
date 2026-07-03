@@ -72,7 +72,7 @@ export function MetricCard({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="neu-flat inline-flex flex-col gap-1 px-5 py-4 overflow-hidden min-w-0">
       {title && (
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground-subtle">
           {title}
         </span>
       )}

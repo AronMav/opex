@@ -68,9 +68,6 @@
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
-
-  --color-neu-shadow-light: var(--neu-shadow-light);
-  --color-neu-shadow-dark: var(--neu-shadow-dark);
 }
 
 :root {
@@ -99,11 +96,6 @@
   --elevation-4: 0 8px 24px 0 rgb(0 0 0 / 0.12);
 
   --tap-target: 44px; /* WCAG 2.5.5 minimum touch target */
-
-  /* Animation timing tokens */
-  --chat-duration-fast: 150ms;
-  --chat-duration-normal: 250ms;
-  --chat-duration-slow: 400ms;
 
   --background: #dde3ee;
   --foreground: #1a1f2e;
@@ -150,9 +142,6 @@
   --sidebar-accent-foreground: #1a1f2e;
   --sidebar-border: rgba(0, 0, 0, 0.10);
   --sidebar-ring: #4a7cff;
-
-  --neu-shadow-light: #eef3fc;
-  --neu-shadow-dark: #c8ceda;
 }
 
 .dark {
@@ -202,9 +191,6 @@
   --sidebar-accent-foreground: #dde2ea;
   --sidebar-border: rgba(255, 255, 255, 0.10);
   --sidebar-ring: #6b9eff;
-
-  --neu-shadow-light: #2a3347;
-  --neu-shadow-dark: #141c2a;
 
   /* Elevation scale (dark) */
   --elevation-1: 0 1px 2px 0 rgb(0 0 0 / 0.20);

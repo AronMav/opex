@@ -517,7 +517,7 @@ export default function ChatPage() {
           <span className="text-sm font-display font-semibold text-foreground">
             {t("chat.sessions")}
           </span>
-          <span className="text-xs text-muted-foreground/60">
+          <span className="text-xs text-muted-foreground-subtle">
             {t("chat.sessions_count", { count: sessionsTotal })}
           </span>
         </div>
@@ -581,7 +581,7 @@ export default function ChatPage() {
           </div>
         ) : filteredSessions.length === 0 ? (
           <div className="flex h-32 items-center justify-center rounded-lg border border-dashed border-border px-6 text-center">
-            <p className="text-sm text-muted-foreground/70">
+            <p className="text-sm text-muted-foreground-subtle">
               {sessionFilter ? t("chat.no_sessions_match") : t("chat.no_sessions")}
             </p>
           </div>
@@ -643,7 +643,7 @@ export default function ChatPage() {
                           ) : null}
                         </div>
                         {/* Participant avatars removed — agents are now session-scoped via agent tool */}
-                        <span className="font-mono text-xs tabular-nums text-muted-foreground/70 shrink-0">
+                        <span className="font-mono text-xs tabular-nums text-muted-foreground-subtle shrink-0">
                           {relativeTime(s.last_message_at, locale)}
                         </span>
                       </div>

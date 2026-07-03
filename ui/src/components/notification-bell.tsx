@@ -270,7 +270,7 @@ export function NotificationBell() {
                   )}
                 </div>
                 <MediaNotificationBody notification={n} />
-                <span className="text-[11px] text-muted-foreground/60">
+                <span className="text-[11px] text-muted-foreground-subtle">
                   {new Date(n.created_at).toLocaleString()}
                 </span>
               </button>

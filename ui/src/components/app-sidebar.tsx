@@ -117,7 +117,7 @@ export function AppSidebar() {
         {NAV.map((group, gi) => (
           <SidebarGroup key={gi} className="py-2">
             {group.labelKey && (
-              <SidebarGroupLabel className="px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+              <SidebarGroupLabel className="px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground-subtle">
                 {t(group.labelKey)}
               </SidebarGroupLabel>
             )}
@@ -155,7 +155,7 @@ export function AppSidebar() {
       <SidebarFooter className="border-t border-border bg-muted/30 p-4">
         <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2.5">
           <div className="flex flex-col">
-            <span className="text-xs text-muted-foreground/70">{t("common.version")}</span>
+            <span className="text-xs text-muted-foreground-subtle">{t("common.version")}</span>
             <span className="font-mono text-xs font-bold text-muted-foreground">
               {version || "0.1.0-alpha"}
             </span>

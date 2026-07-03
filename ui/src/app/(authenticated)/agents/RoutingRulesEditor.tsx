@@ -100,7 +100,7 @@ function RoutingRuleRow({
                   <span className="flex items-center gap-2">
                     <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                     <span>{conn.name}</span>
-                    <span className="text-muted-foreground/60 text-2xs">{conn.default_model}</span>
+                    <span className="text-muted-foreground-subtle text-2xs">{conn.default_model}</span>
                   </span>
                 </SelectItem>
               ))}
@@ -215,7 +215,7 @@ export function RoutingRulesEditor({
         </Button>
       </div>
       {routing.length === 0 ? (
-        <p className="text-xs text-muted-foreground/60 py-2">
+        <p className="text-xs text-muted-foreground-subtle py-2">
           {t("agents.no_routing")}
         </p>
       ) : (

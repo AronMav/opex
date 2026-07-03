@@ -353,7 +353,7 @@ export function AgentEditDialog({
                             <span className="flex items-center gap-2">
                               <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                               <span>{conn.name}</span>
-                              <span className="text-muted-foreground/60 text-2xs">{conn.default_model}</span>
+                              <span className="text-muted-foreground-subtle text-2xs">{conn.default_model}</span>
                             </span>
                           </SelectItem>
                         ))}
@@ -427,7 +427,7 @@ export function AgentEditDialog({
                             <span className="flex items-center gap-2">
                               <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                               <span>{conn.name}</span>
-                              <span className="text-muted-foreground/60 text-2xs">{conn.default_model}</span>
+                              <span className="text-muted-foreground-subtle text-2xs">{conn.default_model}</span>
                             </span>
                           </SelectItem>
                         ))}
@@ -450,7 +450,7 @@ export function AgentEditDialog({
                               <span className="flex items-center gap-2">
                                 <Link2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                 <span>{p.name}</span>
-                                {voice && <span className="text-muted-foreground/60 text-2xs">voice: {voice}</span>}
+                                {voice && <span className="text-muted-foreground-subtle text-2xs">voice: {voice}</span>}
                               </span>
                             </SelectItem>
                           );
@@ -514,7 +514,7 @@ export function AgentEditDialog({
                                 upd({ approvalCategories: next });
                               }} className="rounded border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
                               <span className="font-mono">{cat}</span>
-                              <span className="text-muted-foreground/60 text-2xs">
+                              <span className="text-muted-foreground-subtle text-2xs">
                                 {cat === "system" ? "(shell, code, git)" : cat === "destructive" ? "(write, delete, edit)" : "(all other tools)"}
                               </span>
                             </label>
@@ -705,7 +705,7 @@ export function AgentEditDialog({
                       </a>
                     </div>
                     {channels.length === 0 ? (
-                      <p className="text-xs text-muted-foreground/60 py-2">{t("agents.no_channels")}</p>
+                      <p className="text-xs text-muted-foreground-subtle py-2">{t("agents.no_channels")}</p>
                     ) : (
                       <div className="space-y-2">
                         {channels.map((ch) => (

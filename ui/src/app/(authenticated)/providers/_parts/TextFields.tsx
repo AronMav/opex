@@ -123,7 +123,7 @@ export function TextFields({
         />
       </Field>
       {isEditing && editing?.api_key && (
-        <p className="text-2xs text-muted-foreground/60 font-mono">
+        <p className="text-2xs text-muted-foreground-subtle font-mono">
           {t("providers.field_api_key_current", { key: editing.api_key })}
         </p>
       )}
@@ -174,7 +174,7 @@ export function TextFields({
           <p className="text-2xs text-warning">{t("providers.no_model_discovery")}</p>
         )}
         {!isEditing && selectedType?.requires_api_key !== false && selectedType?.supports_model_listing && (
-          <p className="text-2xs text-muted-foreground/60">{t("providers.save_first_to_discover")}</p>
+          <p className="text-2xs text-muted-foreground-subtle">{t("providers.save_first_to_discover")}</p>
         )}
       </div>
 
