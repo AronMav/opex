@@ -74,6 +74,15 @@ class ItsFlows:
         else:                              # путь (b)
             url = rc["full_url_template"].format(base=self._cfg["base_url"], ref=ref)
         await self._d.navigate(url)
+        # ИТС рендерит тело документа в iframe; переходим на его src за чистым
+        # контентом (сама страница-обёртка держит лишь заголовок + оглавление).
+        frame_sel = rc.get("doc_frame_selector")
+        if frame_sel:
+            src = await self._d.get_attribute(frame_sel, "src")
+            if src:
+                frame_url = src if src.startswith("http") else self._cfg["base_url"] + src
+                await self._d.navigate(frame_url)
+                url = frame_url
         if rc.get("wait_selector"):
             try:
                 await self._d.wait(rc["wait_selector"], timeout=15)

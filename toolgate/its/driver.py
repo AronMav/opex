@@ -68,3 +68,11 @@ class BrowserDriver:
         sid = await self.ensure_session()
         r = await self._call({"action": "evaluate", "session_id": sid, "js": "location.href"})
         return r.get("result", "") or ""
+
+    async def get_attribute(self, selector: str, attr: str) -> str | None:
+        sid = await self.ensure_session()
+        # selector/attr come from trusted site config; repr() safely quotes them.
+        js = (f"(function(){{var e=document.querySelector({selector!r});"
+              f"return e?e.getAttribute({attr!r}):null;}})()")
+        r = await self._call({"action": "evaluate", "session_id": sid, "js": js})
+        return r.get("result")
