@@ -21,6 +21,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useCheckpoints, useRestoreCheckpoint } from "@/lib/queries";
 import { diffCheckpoint } from "@/lib/api";
 import { relativeTime } from "@/lib/format";
+import { useTranslation } from "@/hooks/use-translation";
 
 interface CheckpointPanelProps {
   agent: string | null;
@@ -29,6 +30,7 @@ interface CheckpointPanelProps {
 }
 
 export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelProps) {
+  const { t } = useTranslation();
   const { data, isLoading } = useCheckpoints(agent, open);
   const restore = useRestoreCheckpoint();
 
@@ -65,7 +67,7 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
     restore.mutate(
       { agent, n: restoreN },
       {
-        onSuccess: () => toast.success(`Откат к чекпойнту #${restoreN} выполнен`),
+        onSuccess: () => toast.success(t("checkpoints.rollback_done", { n: restoreN })),
       },
     );
   }
@@ -76,19 +78,19 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
   if (isLoading) {
     body = (
       <p className="text-sm text-muted-foreground px-4 py-6 text-center">
-        Загрузка…
+        {t("checkpoints.loading")}
       </p>
     );
   } else if (!data?.enabled) {
     body = (
       <p className="text-sm text-muted-foreground px-4 py-6 text-center">
-        Чекпойнты отключены
+        {t("checkpoints.disabled")}
       </p>
     );
   } else if (data.items.length === 0) {
     body = (
       <p className="text-sm text-muted-foreground px-4 py-6 text-center">
-        Чекпойнтов нет
+        {t("checkpoints.empty")}
       </p>
     );
   } else {
@@ -110,14 +112,14 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
                 className="rounded px-2 py-0.5 text-xs border border-border hover:bg-muted/40 transition-colors"
                 onClick={() => handleDiff(cp.n)}
               >
-                Diff
+                {t("checkpoints.diff")}
               </button>
               <button
                 className="rounded px-2 py-0.5 text-xs border border-destructive/50 text-destructive hover:bg-destructive/10 transition-colors"
                 onClick={() => handleRestoreClick(cp.n)}
                 disabled={restore.isPending}
               >
-                Откатить
+                {t("checkpoints.rollback")}
               </button>
             </div>
           </li>
@@ -131,7 +133,7 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
       <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent side="right" className="flex flex-col p-0 gap-0">
           <SheetHeader className="px-4 pt-5 pb-3 border-b border-border">
-            <SheetTitle>Чекпойнты</SheetTitle>
+            <SheetTitle>{t("checkpoints.title")}</SheetTitle>
           </SheetHeader>
           {body}
         </SheetContent>
@@ -141,10 +143,10 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
       <Dialog open={diffOpen} onOpenChange={setDiffOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Diff чекпойнта #{diffN}</DialogTitle>
+            <DialogTitle>{t("checkpoints.diff_title", { n: diffN ?? "" })}</DialogTitle>
           </DialogHeader>
           {diffText == null ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">Загрузка…</p>
+            <p className="text-sm text-muted-foreground py-4 text-center">{t("checkpoints.loading")}</p>
           ) : (
             <pre className="overflow-auto max-h-[60vh] rounded bg-muted/30 p-3 text-xs font-mono whitespace-pre-wrap">
               {diffText}
@@ -158,9 +160,9 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
         onConfirm={handleRestoreConfirm}
-        title="Откатить чекпойнт"
-        description={`Откатит файлы агента к чекпойнту ${restoreN}`}
-        confirmLabel="Откатить"
+        title={t("checkpoints.rollback_confirm_title")}
+        description={t("checkpoints.rollback_confirm_description", { n: restoreN ?? "" })}
+        confirmLabel={t("checkpoints.rollback")}
         variant="destructive"
       />
     </>

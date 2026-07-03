@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslation } from "@/hooks/use-translation";
 
 export function MentionAutocomplete({ query, agents, onSelect }: {
   query: string;
   agents: string[];
   onSelect: (name: string) => void;
 }) {
+  const { t } = useTranslation();
   const q = query.toLowerCase();
   const filtered = agents.filter(p => p.toLowerCase().startsWith(q));
   const [activeIdx, setActiveIdx] = useState(0);
@@ -18,7 +20,7 @@ export function MentionAutocomplete({ query, agents, onSelect }: {
   return (
     <div
       role="listbox"
-      aria-label="Agent mentions"
+      aria-label={t("chat.mentions_label")}
       className="absolute bottom-full mb-1 left-0 max-h-[50dvh] overflow-y-auto bg-popover border border-border rounded-lg shadow-lg p-1 z-50 w-full max-w-[min(280px,calc(100vw-1.5rem))]"
     >
       {filtered.map((name, i) => (

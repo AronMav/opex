@@ -114,13 +114,13 @@ export function ContextBar({
               <button
                 className="rounded p-0.5 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
                 onClick={() => setCheckpointOpen(true)}
-                aria-label="История чекпойнтов"
+                aria-label={t("checkpoints.history")}
               >
                 <HistoryIcon className="size-3.5" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-2xs">
-              История чекпойнтов
+              {t("checkpoints.history")}
             </TooltipContent>
           </Tooltip>
         )}

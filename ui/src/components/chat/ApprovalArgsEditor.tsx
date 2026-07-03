@@ -57,7 +57,7 @@ export function ApprovalArgsEditor({ initialInput, onSubmit, onCancel }: Approva
   }, [onCancel]);
 
   return (
-    <div ref={containerRef} aria-label="Edit tool arguments">
+    <div ref={containerRef} aria-label={t("chat.edit_tool_args")}>
       <div className="min-h-[120px] max-h-[300px] overflow-hidden rounded border border-border/50">
         <CodeEditor
           value={value}
