@@ -28,24 +28,16 @@ SITE_ITS = {
         "success_marker": "action=logout",
     },
     "read": {
-        # No print view found; SPA-style navigation by the search-result ref
-        # (which already carries a leading slash, e.g. "/db/utovio/content/...").
+        # The ref (e.g. "/db/utovio/content/387/hdoc/...") loads a shell page
+        # that renders the actual article inside an iframe. flows.read hops to
+        # the iframe's src (a clean /db/content/.../src/*.htm page) and extracts
+        # #content from there — the shell page itself only holds header + TOC.
         "print_url_template": None,
         "full_url_template": "{base}{ref}",
-        # Article body column; siblings (#l_classifier/#l_search/metadata) are
-        # stripped. Falls back to <body> if #l_content is absent (extract.py).
-        "content_selector": "#l_content",
-        "strip_selectors": [
-            "nav", "header", "footer", ".toc",
-            # #l_toc is the справочник navigation tree (~600 links) rendered
-            # inside the content column — strip it or it drowns the article.
-            "#l_toc", "#l_search", "#l_extended_search", "#l_classifier",
-            "#w_metadata_section", "#w_metadata_findintoc",
-            "#w_metadata_findinclassifier", "#w_metadata_toc_button",
-            "#toc_button_hide", "#toc_button_show",
-            "script", "style",
-        ],
-        "wait_selector": "#l_content",
+        "doc_frame_selector": "#w_metadata_doc_frame",
+        "content_selector": "#content",
+        "strip_selectors": ["nav", "header", "footer", "script", "style"],
+        "wait_selector": "#content",
     },
     "search": {
         # GET form action from the sidebar search box; redirects to
