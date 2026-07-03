@@ -12,18 +12,6 @@ triggers:
   - git workflow
 tools_required:
   - code_exec
-  - git_status
-  - git_diff
-  - git_diff_staged
-  - git_diff_unstaged
-  - git_commit
-  - git_add
-  - git_reset
-  - git_log
-  - git_branch
-  - git_checkout
-  - git_create_branch
-  - git_show
 priority: 0
 state: active
 ---

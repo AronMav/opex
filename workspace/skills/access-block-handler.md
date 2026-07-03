@@ -26,8 +26,8 @@ When a web search provider returns an access block error (403, 429, rate limit, 
 - Provider is configured but returning errors
 
 ### Step 2: Apply fallback chain
-1. **Retry with different provider** — pass `provider="<name>"` to `search_web` to use an alternative
-2. **Use DuckDuckGo** — `duckduckgo_search` requires no API key, works as instant fallback
+1. **Retry `search_web` once** — provider failover is server-side and automatic (toolgate walks the active-provider priority list; `search_web` has NO provider parameter)
+2. **Use alternate search tools** — `duckduckgo_search` (no API key) or `tavily_search` as an explicit fallback path
 3. **Report to user** — if all providers fail, inform user: "Web search temporarily unavailable. Provider errors: {details}"
 
 ### Step 3: Log the incident
