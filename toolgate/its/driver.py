@@ -1,6 +1,11 @@
 """Generic browser-renderer client bound to the 'its' persistent profile."""
+import os
 
-BROWSER_URL = "http://browser-renderer:9020"
+# toolgate runs as a HOST process (not inside the docker network), so the
+# docker-internal name 'browser-renderer' does not resolve — reach the
+# container through its published loopback port instead. Overridable via env
+# for a containerised toolgate where the service name would resolve.
+BROWSER_URL = os.environ.get("BROWSER_RENDERER_URL", "http://127.0.0.1:9020")
 PROFILE = "its"
 
 
