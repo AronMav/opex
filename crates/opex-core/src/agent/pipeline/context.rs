@@ -85,7 +85,10 @@ pub fn truncate_tool_result(model: &str, result: &str, current_context_chars: us
     if result.len() <= limit {
         return result.to_string();
     }
-    let tail_region = &result[result.len().saturating_sub(1500)..];
+    // Slice on a char boundary — a raw byte offset lands mid-codepoint for
+    // multi-byte text (Cyrillic, CJK, emoji) and panics ("byte index is not a
+    // char boundary"), which killed sessions on large ИТС (Russian) results.
+    let tail_region = &result[result.floor_char_boundary(result.len().saturating_sub(1500))..];
     let tail_has_error = tail_region.contains("error")
         || tail_region.contains("Error")
         || tail_region.contains("failed")
@@ -408,5 +411,21 @@ mod tests {
     #[test]
     fn truncate_preview_ascii_truncation() {
         assert_eq!(truncate_preview("abcdefgh", 5), "ab...");
+    }
+
+    // Regression: truncate_tool_result must not panic when the byte offset
+    // `len - 1500` lands mid-codepoint (multi-byte text like Russian ИТС
+    // results). Byte 2000 below is the 2nd byte of the 2-byte 'я', which the
+    // old raw slice `&result[len-1500..]` sliced through → panic → dead session.
+    #[test]
+    fn truncate_tool_result_no_panic_on_multibyte_boundary() {
+        use super::truncate_tool_result;
+        let result = format!("{}я{}", "a".repeat(1999), "b".repeat(1499));
+        assert_eq!(result.len(), 3500); // 'я' occupies bytes 1999..=2000
+        assert!(!result.is_char_boundary(2000)); // len-1500 is mid-codepoint
+        // Huge context → remaining budget 0 → limit floors to 2000 < 3500,
+        // so the function slices (and must not panic).
+        let out = truncate_tool_result("gpt-4", &result, 100_000_000);
+        assert!(out.contains("truncated"));
     }
 }
