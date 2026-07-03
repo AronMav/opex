@@ -48,7 +48,11 @@ export function ErrorBanner({
   const { t } = useTranslation();
   if (!error) return null;
 
-  const kind = classifyError(error);
+  // Pages pass stringified Error objects (`${error}`) — drop the technical
+  // "Error:" / "TypeError:" prefix, the banner already labels the message.
+  const message = error.replace(/^(?:\s*[A-Za-z]*Error:\s*)+/, "") || error;
+
+  const kind = classifyError(message);
   const isWarning = severity === "warning" || kind === "connection_lost" || kind === "timeout";
 
   const containerClass = isWarning
@@ -84,7 +88,7 @@ export function ErrorBanner({
     >
       <Icon className="h-4 w-4 shrink-0" />
       {label && <span className="shrink-0 font-semibold">{label}</span>}
-      <span className="flex-1 line-clamp-2">{t("common.error_prefix", { error })}</span>
+      <span className="flex-1 line-clamp-2">{t("common.error_prefix", { error: message })}</span>
       {hasMessages && onRetry && (
         <button
           type="button"
