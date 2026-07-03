@@ -219,6 +219,29 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+// Fill every calendar day between the first and last dated entry so zero-usage
+// days appear as gaps-of-zero in the timeline rather than being collapsed out.
+function fillDailyGaps(
+  sorted: [string, { input: number; output: number; calls: number }][],
+): [string, { input: number; output: number; calls: number }][] {
+  if (sorted.length < 2) return sorted;
+  const byDate = new Map(sorted);
+  const first = sorted[0]![0];
+  const last = sorted[sorted.length - 1]![0];
+  const start = new Date(`${first}T00:00:00Z`);
+  const end = new Date(`${last}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return sorted;
+  // Guard against pathological ranges (bad data) — cap at ~2 years of bars.
+  const spanDays = Math.round((end.getTime() - start.getTime()) / 86_400_000);
+  if (spanDays < 0 || spanDays > 732) return sorted;
+  const out: [string, { input: number; output: number; calls: number }][] = [];
+  for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    const key = d.toISOString().slice(0, 10);
+    out.push([key, byDate.get(key) ?? { input: 0, output: 0, calls: 0 }]);
+  }
+  return out;
+}
+
 const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse["daily"] }) {
   const { t } = useTranslation();
   const byDate = new Map<string, { input: number; output: number; calls: number }>();
@@ -230,7 +253,9 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
     byDate.set(d.date, existing);
   }
 
-  const entries = Array.from(byDate.entries()).sort(([a], [b]) => a.localeCompare(b));
+  const entries = fillDailyGaps(
+    Array.from(byDate.entries()).sort(([a], [b]) => a.localeCompare(b)),
+  );
   const maxTokens = Math.max(1, ...entries.map(([, v]) => v.input + v.output));
 
   return (
@@ -248,47 +273,59 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
         </div>
       </div>
       <div className="px-4 sm:px-5 py-4">
-        <div className="flex h-40 items-end gap-0.5 sm:gap-1">
-          {entries.map(([date, val], idx) => {
-            const total = val.input + val.output;
-            const pct = (total / maxTokens) * 100;
-            const inputPct = total > 0 ? (val.input / total) * 100 : 50;
-            const shortDate = date.slice(5);
-            const labelStep = Math.max(1, Math.ceil(entries.length / 10));
-            const showLabel = entries.length <= 14 || idx % labelStep === 0;
+        <div className="flex gap-2">
+          {/* Y-axis: peak / midpoint / zero reference labels */}
+          <div className="flex h-40 w-10 shrink-0 flex-col justify-between py-0 text-right text-3xs tabular-nums text-muted-foreground/50">
+            <span>{formatTokens(maxTokens)}</span>
+            <span>{formatTokens(Math.round(maxTokens / 2))}</span>
+            <span>0</span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex h-40 items-end gap-0.5 border-l border-border/40 pl-1 sm:gap-1">
+              {entries.map(([date, val], idx) => {
+                const total = val.input + val.output;
+                const pct = (total / maxTokens) * 100;
+                const inputPct = total > 0 ? (val.input / total) * 100 : 50;
+                const shortDate = date.slice(5);
+                const labelStep = Math.max(1, Math.ceil(entries.length / 10));
+                const showLabel = entries.length <= 14 || idx % labelStep === 0;
 
-            return (
-              <div
-                key={date}
-                className="group relative flex-1 min-w-0 flex flex-col justify-end h-full"
-              >
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10">
-                  <div className="rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg whitespace-nowrap">
-                    <div className="font-bold mb-1">{date}</div>
-                    <div className="text-chart-1">{formatTokens(val.input)} {t("usage.input_abbr")}</div>
-                    <div className="text-chart-2">{formatTokens(val.output)} {t("usage.output_abbr")}</div>
-                    <div className="text-muted-foreground">{t("usage.calls", { count: val.calls })}</div>
-                  </div>
-                </div>
-                <div
-                  className="w-full rounded-t-sm overflow-hidden transition-all duration-300 group-hover:opacity-80 group-hover:ring-1 group-hover:ring-primary/20"
-                  style={{ height: `${Math.max(pct, 2)}%` }}
-                >
-                  <div className="h-full flex flex-col">
-                    <div className="bg-chart-1" style={{ flex: inputPct }} />
-                    <div className="bg-chart-2" style={{ flex: 100 - inputPct }} />
-                  </div>
-                </div>
-                {showLabel ? (
-                  <div className="text-3xs text-muted-foreground/60 text-center mt-1 truncate">
-                    {shortDate}
-                  </div>
-                ) : (
-                  <div className="h-3" />
-                )}
-              </div>
-            );
-          })}
+                return (
+                  <button
+                    type="button"
+                    key={date}
+                    aria-label={`${date}: ${formatTokens(val.input)} ${t("usage.input_abbr")}, ${formatTokens(val.output)} ${t("usage.output_abbr")}`}
+                    className="group relative flex h-full min-w-0 flex-1 cursor-default flex-col justify-end focus:outline-none"
+                  >
+                    <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-2 hidden -translate-x-1/2 group-hover:block group-focus-visible:block">
+                      <div className="rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg whitespace-nowrap">
+                        <div className="font-bold mb-1">{date}</div>
+                        <div className="text-chart-1">{formatTokens(val.input)} {t("usage.input_abbr")}</div>
+                        <div className="text-chart-2">{formatTokens(val.output)} {t("usage.output_abbr")}</div>
+                        <div className="text-muted-foreground">{t("usage.calls", { count: val.calls })}</div>
+                      </div>
+                    </div>
+                    <div
+                      className="w-full overflow-hidden rounded-t-sm transition-all duration-300 group-hover:opacity-80 group-hover:ring-1 group-hover:ring-primary/20 group-focus-visible:ring-1 group-focus-visible:ring-primary/40"
+                      style={{ height: `${Math.max(pct, total > 0 ? 2 : 1)}%` }}
+                    >
+                      <div className="h-full flex flex-col">
+                        <div className="bg-chart-1" style={{ flex: inputPct }} />
+                        <div className="bg-chart-2" style={{ flex: 100 - inputPct }} />
+                      </div>
+                    </div>
+                    {showLabel ? (
+                      <div className="text-3xs text-muted-foreground/60 text-center mt-1 truncate">
+                        {shortDate}
+                      </div>
+                    ) : (
+                      <div className="h-3" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </Card>
@@ -1060,12 +1097,15 @@ function MonitorPageInner() {
                   value={auditSearch}
                   onChange={(e) => setAuditSearch(e.target.value)}
                   className="h-9 flex-1 md:w-48 md:flex-none border-border bg-card/50 text-sm placeholder:text-muted-foreground/60 rounded-lg focus:ring-primary/20"
+                  title={t("audit.search_scope_hint")}
                 />
               </div>
 
               <div className="flex items-center gap-4 shrink-0">
                 <span className="font-mono text-xs tabular-nums text-muted-foreground hidden md:inline">
-                  {t("audit.events_count", { count: filteredAudit.length })}
+                  {auditSearch
+                    ? t("audit.events_count_loaded", { count: filteredAudit.length })
+                    : t("audit.events_count", { count: filteredAudit.length })}
                 </span>
                 <Button
                   variant="outline"
@@ -1079,6 +1119,11 @@ function MonitorPageInner() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-thin">
+              {auditSearch && (
+                <p className="mb-3 text-xs text-muted-foreground/70">
+                  {t("audit.search_scope_hint")}
+                </p>
+              )}
               {auditLoading && auditEvents.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
                   <CircularLoader size="lg" />

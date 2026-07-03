@@ -13,6 +13,9 @@ import { useTranslation } from "@/hooks/use-translation";
 import {
   Folder,
   FileCode,
+  FileText,
+  FileJson,
+  Image as ImageIcon,
   FilePlus,
   FolderPlus,
   CornerDownRight,
@@ -21,10 +24,30 @@ import {
   Trash2,
   Upload,
   MoreVertical,
+  type LucideIcon,
 } from "lucide-react";
 import type { FileEntry } from "@/types/api";
 
 const CORE_FILES = ["SOUL.md", "IDENTITY.md", "TOOLS.md", "HEARTBEAT.md", "USER.md", "AGENTS.md"];
+
+// Map a filename to a lucide icon by extension so the tree isn't a wall of
+// identical FileCode glyphs. Light switch — no library, just common buckets.
+const CODE_EXTS = new Set([
+  "js", "jsx", "ts", "tsx", "py", "rs", "go", "rb", "java", "c", "h", "cpp",
+  "cs", "sh", "bash", "php", "sql", "css", "scss", "html", "vue", "svelte",
+]);
+const TEXT_EXTS = new Set(["md", "mdx", "txt", "log", "rst", "csv"]);
+const JSON_EXTS = new Set(["json", "jsonc", "yaml", "yml", "toml", "xml", "ini", "env"]);
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif"]);
+
+function fileIcon(name: string): LucideIcon {
+  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
+  if (IMAGE_EXTS.has(ext)) return ImageIcon;
+  if (JSON_EXTS.has(ext)) return FileJson;
+  if (TEXT_EXTS.has(ext)) return FileText;
+  if (CODE_EXTS.has(ext)) return FileCode;
+  return FileText;
+}
 
 export interface WorkspaceFileTreeProps {
   files: FileEntry[];
@@ -165,6 +188,7 @@ export function WorkspaceFileTree({
 
           {files.map((f) => {
             const entryPath = currentPath ? `${currentPath}/${f.name}` : f.name;
+            const FileIcon = fileIcon(f.name);
 
             return (
               <div key={entryPath} role="listitem">
@@ -204,7 +228,7 @@ export function WorkspaceFileTree({
                               : "text-muted-foreground hover:bg-muted/50"
                       }`}
                     >
-                      {f.is_dir ? <Folder className="h-4 w-4 shrink-0" /> : <FileCode className="h-4 w-4 shrink-0" />}
+                      {f.is_dir ? <Folder className="h-4 w-4 shrink-0" /> : <FileIcon className="h-4 w-4 shrink-0" />}
                       <span className="truncate flex-1" title={f.name}>{f.name}</span>
                     </button>
 
