@@ -20,8 +20,9 @@ use tokio::sync::Mutex;
 // ── Config ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // health_url/memory_max/cpu_quota are reserved fields per the
-                    // doc comments; accepted from TOML but not yet enforced at runtime.
+#[allow(dead_code)] // memory_max/cpu_quota are reserved fields per the doc
+                    // comments; accepted from TOML but not enforced with
+                    // direct spawn (Core's systemd unit enforces limits).
 pub struct ManagedProcessConfig {
     /// Service name (e.g. "channels", "toolgate").
     pub name: String,
@@ -35,7 +36,10 @@ pub struct ManagedProcessConfig {
     /// Extra env vars to inject (key = name, value = literal or "${VAR}" reference).
     #[serde(default)]
     pub env_extra: HashMap<String, String>,
-    /// HTTP URL for health-check polling (reserved for future use).
+    /// HTTP URL for health-check polling. When set, the health loop probes it
+    /// every `HEALTH_PROBE_INTERVAL_SECS`; `HEALTH_FAILURE_THRESHOLD`
+    /// consecutive failures kill the process so the monitor loop respawns it.
+    /// Catches hung-but-alive processes that `try_wait()` cannot see.
     pub health_url: Option<String>,
     /// TCP port the service binds; used for port-release wait before respawn.
     pub port: Option<u16>,
@@ -49,15 +53,25 @@ pub struct ManagedProcessConfig {
 
 // ── Runtime state ────────────────────────────────────────────────────────────
 
+/// How often the health loop probes each `health_url`.
+const HEALTH_PROBE_INTERVAL_SECS: u64 = 30;
+/// Consecutive probe failures before the process is killed for restart.
+const HEALTH_FAILURE_THRESHOLD: u32 = 3;
+/// Startup grace: no probes until the process has been up this long
+/// (toolgate needs a few seconds to import its provider stack).
+const HEALTH_GRACE_SECS: u64 = 30;
+
 struct ProcessState {
     child: Option<Child>,
     restart_count: u32,
     last_started: Option<Instant>,
+    /// Consecutive failed health probes (reset on success and on spawn).
+    health_failures: u32,
 }
 
 impl ProcessState {
     fn new() -> Self {
-        Self { child: None, restart_count: 0, last_started: None }
+        Self { child: None, restart_count: 0, last_started: None, health_failures: 0 }
     }
 }
 
@@ -69,6 +83,8 @@ pub struct ProcessManager {
     states: Arc<Mutex<HashMap<String, ProcessState>>>,
     /// Absolute base directory (Core's cwd at startup).
     base_dir: PathBuf,
+    /// Client for `health_url` probes — short timeouts, loopback-only targets.
+    http: reqwest::Client,
 }
 
 impl ProcessManager {
@@ -81,6 +97,11 @@ impl ProcessManager {
             configs,
             states: Arc::new(Mutex::new(states)),
             base_dir,
+            http: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(1))
+                .timeout(Duration::from_secs(3))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
     }
 
@@ -98,6 +119,12 @@ impl ProcessManager {
         // Background monitor: restart on crash
         let mgr = Arc::clone(self);
         tokio::spawn(async move { mgr.monitor_loop().await });
+        // Background health probes: restart on hang (only if any process
+        // actually configures a health_url).
+        if self.configs.iter().any(|c| c.health_url.is_some()) {
+            let mgr = Arc::clone(self);
+            tokio::spawn(async move { mgr.health_loop().await });
+        }
     }
 
     /// Restart a named process: kill → wait for port release → respawn.
@@ -228,6 +255,7 @@ impl ProcessManager {
         let state = states.entry(name.to_string()).or_insert_with(ProcessState::new);
         state.child = Some(child);
         state.last_started = Some(Instant::now());
+        state.health_failures = 0;
 
         tracing::info!(process = %name, working_dir = %working_dir.display(), "managed process spawned");
         Ok(())
@@ -278,6 +306,90 @@ impl ProcessManager {
                         // Reap the process to avoid zombies
                         let _ = child.wait().await;
                     }
+            }
+        }
+    }
+
+    /// Background loop: probe `health_url` of each configured process and
+    /// kill it after `HEALTH_FAILURE_THRESHOLD` consecutive failures — the
+    /// monitor loop then respawns it with the usual backoff. Complements
+    /// `monitor_loop`, which only detects *exited* processes; this catches
+    /// hung-but-alive ones (e.g. a wedged uvicorn event loop).
+    async fn health_loop(self: Arc<Self>) {
+        let mut interval = tokio::time::interval(Duration::from_secs(HEALTH_PROBE_INTERVAL_SECS));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            for cfg in self.configs.iter() {
+                let Some(url) = cfg.health_url.as_deref() else { continue };
+
+                // Probe only a process that is running and past the startup
+                // grace window; a dead child is monitor_loop's business.
+                let eligible = {
+                    let states = self.states.lock().await;
+                    states.get(&cfg.name).is_some_and(|s| {
+                        s.child.is_some()
+                            && s.last_started.is_some_and(|t| {
+                                t.elapsed() >= Duration::from_secs(HEALTH_GRACE_SECS)
+                            })
+                    })
+                };
+                if !eligible {
+                    continue;
+                }
+
+                // HTTP GET outside the lock — a slow probe must not block
+                // status/restart/kill callers.
+                let healthy = match self.http.get(url).send().await {
+                    Ok(resp) => resp.status().is_success(),
+                    Err(_) => false,
+                };
+
+                let should_kill = {
+                    let mut states = self.states.lock().await;
+                    let Some(state) = states.get_mut(&cfg.name) else { continue };
+                    // Exited (or was killed) while we probed — leave it to
+                    // monitor_loop; a stale probe result must not count.
+                    if state.child.is_none() {
+                        continue;
+                    }
+                    if healthy {
+                        if state.health_failures > 0 {
+                            tracing::info!(process = %cfg.name, "health probe recovered");
+                        }
+                        state.health_failures = 0;
+                        false
+                    } else {
+                        state.health_failures += 1;
+                        tracing::warn!(
+                            process = %cfg.name,
+                            url = %url,
+                            failures = state.health_failures,
+                            threshold = HEALTH_FAILURE_THRESHOLD,
+                            "health probe failed"
+                        );
+                        if state.health_failures >= HEALTH_FAILURE_THRESHOLD {
+                            state.health_failures = 0;
+                            // Count toward the restart backoff / circuit breaker.
+                            state.restart_count += 1;
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                };
+
+                if should_kill {
+                    tracing::error!(
+                        process = %cfg.name,
+                        "health probes exhausted — killing hung process for restart"
+                    );
+                    // kill() takes the states lock itself; monitor_loop sees
+                    // child == None on its next tick and respawns with backoff.
+                    if let Err(e) = self.kill(&cfg.name).await {
+                        tracing::warn!(process = %cfg.name, error = %e, "health-kill failed");
+                    }
+                }
             }
         }
     }

@@ -155,7 +155,15 @@ pub fn spawn_file_handler_worker(state: &AppState, shutdown: CancellationToken) 
     // R6: real accessor, NOT master_key — derives the per-domain HMAC key
     let key = state.infra.secrets.get_upload_hmac_key();
     // The worker owns its own reqwest::Client — pooled, reused across polls.
-    let http = reqwest::Client::new();
+    // Explicit timeouts: a hung toolgate must fail the dispatch (job → failed,
+    // recoverable via stale-job recovery) instead of wedging this loop forever.
+    // 120 s covers the loopback download of a 50 MB upload plus the multipart
+    // POST; toolgate answers 202 as soon as the runner is spawned.
+    let http = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
 
     tokio::spawn(async move {
         // Crash recovery: reset rows stuck in 'processing' from a previous run.

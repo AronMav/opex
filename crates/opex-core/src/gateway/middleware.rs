@@ -290,10 +290,128 @@ pub(crate) async fn auth_middleware(
     StatusCode::UNAUTHORIZED.into_response()
 }
 
+/// Sanitize 500 response bodies: log the original detail server-side and
+/// replace the client-visible body with a generic JSON error.
+///
+/// Internal error strings routinely carry SQL fragments, filesystem paths
+/// and upstream URLs (`ApiError::Internal(e.to_string())` and the ~100 raw
+/// `(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())` handler sites) —
+/// none of that belongs in an HTTP response. One choke point here beats
+/// sweeping every call site.
+///
+/// Scope is exactly `500 Internal Server Error`: 503s carry intentional
+/// structured bodies (e.g. toolgate `{"degraded": true}`) and stay intact.
+/// Response headers are preserved (only content-type/length are rewritten),
+/// so CORS / security / trace headers added by outer layers are unaffected.
+pub(crate) async fn sanitize_internal_error_middleware(
+    req: Request<Body>,
+    next: Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let response = next.run(req).await;
+    if response.status() != StatusCode::INTERNAL_SERVER_ERROR {
+        return response;
+    }
+    let (mut parts, body) = response.into_parts();
+    // 64 KiB cap: 500 bodies are short error strings; an oversized body is
+    // dropped rather than buffered in full.
+    let detail = match axum::body::to_bytes(body, 64 * 1024).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(_) => "<unreadable 500 body>".to_owned(),
+    };
+    tracing::error!(method = %method, path = %path, detail = %detail, "internal error response sanitized");
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    parts.headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    let body = Body::from(r#"{"error":"internal server error"}"#);
+    axum::response::Response::from_parts(parts, body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::http::Request;
+
+    // ── sanitize_internal_error_middleware tests ────────────────────────
+    mod sanitize_500 {
+        use super::super::sanitize_internal_error_middleware;
+        use axum::Router;
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use axum::response::IntoResponse;
+        use axum::routing::get;
+        use tower::ServiceExt;
+
+        fn app() -> Router {
+            Router::new()
+                .route(
+                    "/boom",
+                    get(|| async {
+                        let mut resp = (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "db error: relation \"secret_table\" does not exist at /home/op/x.rs",
+                        )
+                            .into_response();
+                        resp.headers_mut()
+                            .insert("x-custom", "kept".parse().unwrap());
+                        resp
+                    }),
+                )
+                .route(
+                    "/degraded",
+                    get(|| async {
+                        (StatusCode::SERVICE_UNAVAILABLE, r#"{"degraded":true}"#).into_response()
+                    }),
+                )
+                .route("/ok", get(|| async { "fine" }))
+                .layer(axum::middleware::from_fn(sanitize_internal_error_middleware))
+        }
+
+        async fn body_string(resp: axum::response::Response) -> String {
+            let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+                .await
+                .expect("body");
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+
+        #[tokio::test]
+        async fn replaces_500_body_with_generic_json() {
+            let resp = app()
+                .oneshot(Request::get("/boom").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(
+                resp.headers().get("content-type").unwrap(),
+                "application/json"
+            );
+            // Non-content headers survive the rewrite (CORS/trace analogue).
+            assert_eq!(resp.headers().get("x-custom").unwrap(), "kept");
+            let body = body_string(resp).await;
+            assert_eq!(body, r#"{"error":"internal server error"}"#);
+            assert!(!body.contains("secret_table"));
+        }
+
+        #[tokio::test]
+        async fn leaves_non_500_responses_intact() {
+            let resp = app()
+                .oneshot(Request::get("/ok").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            assert_eq!(body_string(resp).await, "fine");
+
+            let resp = app()
+                .oneshot(Request::get("/degraded").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(body_string(resp).await, r#"{"degraded":true}"#);
+        }
+    }
 
     // ── is_loopback tests ───────────────────────────────────────────────
     #[test]
