@@ -729,8 +729,6 @@
   "audit.event_type_placeholder": "Event type",
   "audit.search_placeholder": "Search events...",
   "audit.events_count": "{{count}} events",
-  "audit.events_count_loaded": "{{count}} of loaded",
-  "audit.search_scope_hint": "Search filters only the events loaded on this page — page back/forward to search other rows.",
   "audit.no_events": "No audit events found",
   "audit.from": "from {{actor}}",
   "audit.event_all": "All events",

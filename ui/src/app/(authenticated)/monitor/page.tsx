@@ -10,9 +10,11 @@ import { useTranslation } from "@/hooks/use-translation";
 import { useWsStore } from "@/stores/ws-store";
 import { useWsSubscription } from "@/hooks/use-ws-subscription";
 import { useUsage, useDailyUsage, useApprovals, useResolveApproval, useAudit, useSessionFailures, useCuratorRuns } from "@/lib/queries";
+import { buildAuditParams } from "./audit-params";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import { Switch } from "@/components/ui/switch";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -566,15 +568,16 @@ function MonitorPageInner() {
   const [auditAgents, setAuditAgents] = useState<string[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const auditParams: Record<string, string> = {
-    limit: String(AUDIT_PAGE_SIZE),
-    offset: String(auditOffset),
-  };
-  if (auditAgent !== "_all") auditParams.agent = auditAgent;
-  if (auditEventType !== "_all") auditParams.event_type = auditEventType;
+  const auditParams = buildAuditParams({
+    pageSize: AUDIT_PAGE_SIZE,
+    offset: auditOffset,
+    agent: auditAgent,
+    eventType: auditEventType,
+    search: auditSearch,
+  });
 
   const { data: auditEvents = [], isFetching: auditLoading, refetch: auditRefetch } = useAudit(auditParams);
-  const auditHasMore = !auditSearch && auditEvents.length >= AUDIT_PAGE_SIZE;
+  const auditHasMore = auditEvents.length >= AUDIT_PAGE_SIZE;
 
   const loadAuditAgents = useCallback(async () => {
     try {
@@ -588,18 +591,6 @@ function MonitorPageInner() {
   useWsSubscription("audit_event", useCallback(() => {
     if (auditOffset === 0) auditRefetch();
   }, [auditOffset, auditRefetch]));
-
-  const filteredAudit = auditSearch
-    ? auditEvents.filter((e: AuditEvent) => {
-        const s = auditSearch.toLowerCase();
-        return (
-          e.event_type.toLowerCase().includes(s) ||
-          e.agent_id.toLowerCase().includes(s) ||
-          (e.actor && e.actor.toLowerCase().includes(s)) ||
-          JSON.stringify(e.details).toLowerCase().includes(s)
-        );
-      })
-    : auditEvents;
 
   // ── Failures state ────────────────────────────────────────────────────────
 
@@ -1096,20 +1087,18 @@ function MonitorPageInner() {
                   </SelectContent>
                 </Select>
 
-                <Input
+                <SearchInput
                   placeholder={t("audit.search_placeholder")}
                   value={auditSearch}
-                  onChange={(e) => setAuditSearch(e.target.value)}
-                  className="h-9 flex-1 md:w-48 md:flex-none border-border bg-card/50 text-sm placeholder:text-muted-foreground/60 rounded-lg focus:ring-primary/20"
-                  title={t("audit.search_scope_hint")}
+                  onChange={(v) => { setAuditSearch(v); setAuditOffset(0); }}
+                  debounceMs={350}
+                  className="flex-1 md:w-56 md:flex-none"
                 />
               </div>
 
               <div className="flex items-center gap-4 shrink-0">
                 <span className="font-mono text-xs tabular-nums text-muted-foreground hidden md:inline">
-                  {auditSearch
-                    ? t("audit.events_count_loaded", { count: filteredAudit.length })
-                    : t("audit.events_count", { count: filteredAudit.length })}
+                  {t("audit.events_count", { count: auditEvents.length })}
                 </span>
                 <Button
                   variant="outline"
@@ -1123,20 +1112,15 @@ function MonitorPageInner() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 md:p-6 scrollbar-thin">
-              {auditSearch && (
-                <p className="mb-3 text-xs text-muted-foreground-subtle">
-                  {t("audit.search_scope_hint")}
-                </p>
-              )}
               {auditLoading && auditEvents.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
                   <CircularLoader size="lg" />
                 </div>
-              ) : filteredAudit.length === 0 ? (
+              ) : auditEvents.length === 0 ? (
                 <EmptyState icon={ScrollText} text={t("audit.no_events")} />
               ) : (
                 <div className="flex flex-col gap-2">
-                  {filteredAudit.map((e: AuditEvent) => (
+                  {auditEvents.map((e: AuditEvent) => (
                     <div
                       key={e.id}
                       className="group rounded-lg border border-border/50 bg-card/30 transition-colors hover:bg-card/60"
@@ -1190,7 +1174,7 @@ function MonitorPageInner() {
                   {t("common.back")}
                 </Button>
                 <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                  {auditOffset + 1}–{auditOffset + filteredAudit.length}
+                  {auditOffset + 1}–{auditOffset + auditEvents.length}
                 </span>
                 <Button
                   variant="outline"
