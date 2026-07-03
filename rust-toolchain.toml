@@ -10,3 +10,8 @@
 [toolchain]
 channel = "1.96.0"
 components = ["clippy", "rustfmt"]
+# Cross-compile std for the release targets (release.sh --all / zigbuild).
+# Without this the pinned toolchain materializes host-only and the Release
+# workflow dies with E0463 "can't find crate for core" — the dtolnay action
+# adds targets to *stable*, but the build resolves to *this* toolchain.
+targets = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
