@@ -31,7 +31,7 @@ pub mod clusters;
 pub(crate) mod handlers;
 pub use error::ApiError;
 pub use state::*;
-use middleware::{AuthRateLimiter, auth_middleware, RequestRateLimiter, request_rate_limit_middleware, csp_report_rate_limit_middleware, webhook_rate_limit_middleware};
+use middleware::{AuthRateLimiter, auth_middleware, RequestRateLimiter, request_rate_limit_middleware, csp_report_rate_limit_middleware, webhook_rate_limit_middleware, sanitize_internal_error_middleware};
 // Re-export for use by main.rs
 pub use handlers::agents::start_agent_from_config;
 pub use handlers::email_triggers::renew_expiring_gmail_watches;
@@ -128,7 +128,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(handlers::clarify::routes())        // /api/clarify/{id}
         .merge(handlers::files::routes())           // /api/files/{upload_id}/actions + /run
         .merge(handlers::handlers_admin::routes())  // /api/handlers, /api/handlers/allowlist (File Handlers tab)
-        .merge(handlers::llm::routes());            // /api/llm/complete (raw LLM, auth-required)
+        .merge(handlers::llm::routes())              // /api/llm/complete (raw LLM, auth-required)
+        .merge(handlers::internal_creds::routes());  // /api/internal/its-credentials (ITS 1C login, auth-required)
 
     #[cfg(feature = "gemini-cloudcode")]
     let app = app.merge(handlers::google_auth::routes()); // /api/auth/google/*
@@ -189,6 +190,13 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             webhook_rate_limit_middleware(req, next, webhook_limiter.clone())
         }))
     };
+
+    // 500-body sanitizer: the client gets a generic JSON error; the original
+    // detail (SQL, paths, upstream URLs) goes to the log with method+path.
+    // Added here so it wraps every API route registered above while staying
+    // inside the CORS / security-header layers (their headers are applied on
+    // the way out and survive the body rewrite).
+    let app = app.layer(axum_mw::from_fn(sanitize_internal_error_middleware));
 
     // Background sweeper tasks: every 60s evict expired rate-limiter entries.
     // Each sweeper owns its own Arc::clone — dropping the router releases it.
