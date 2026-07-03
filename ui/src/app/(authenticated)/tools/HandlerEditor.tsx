@@ -25,6 +25,7 @@ import {
 import { Field } from "@/components/ui/field";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { getToken } from "@/lib/api";
+import { useTranslation } from "@/hooks/use-translation";
 import { spliceDescriptor, DescriptorFields, ParamDescriptor } from "./handler-descriptor";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -133,6 +134,7 @@ function PythonEditor({
 // ── HandlerEditor ─────────────────────────────────────────────────────────
 
 export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose }: HandlerEditorProps) {
+  const { t } = useTranslation();
   const isEdit = Boolean(id);
 
   const [source, setSource] = useState(initialSource);
@@ -242,8 +244,10 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
   }
 
   const title = isEdit
-    ? `Edit handler: ${id}${sourceKind ? ` (${sourceKind})` : ""}`
-    : "New handler";
+    ? sourceKind
+      ? t("tools.handler_edit_title_kind", { id: id ?? "", kind: sourceKind })
+      : t("tools.handler_edit_title", { id: id ?? "" })
+    : t("tools.handler_new_title");
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -254,14 +258,14 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
 
         <Tabs defaultValue="settings" className="flex-1 min-h-0 overflow-hidden px-6 pt-1">
           <TabsList className="shrink-0">
-            <TabsTrigger value="settings">Settings</TabsTrigger>
-            <TabsTrigger value="code">Code</TabsTrigger>
+            <TabsTrigger value="settings">{t("tools.handler_tab_settings")}</TabsTrigger>
+            <TabsTrigger value="code">{t("tools.handler_tab_code")}</TabsTrigger>
           </TabsList>
 
           {/* ── Descriptor form ── */}
           <TabsContent value="settings" className="min-h-0 overflow-y-auto pr-1 pb-2">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Handler ID">
+              <Field label={t("tools.handler_field_id")}>
                 <Input
                   value={fields.id}
                   readOnly={isEdit}
@@ -271,7 +275,7 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
                 />
               </Field>
 
-              <Field label="Icon">
+              <Field label={t("tools.handler_field_icon")}>
                 <Input
                   value={fields.icon}
                   placeholder="file"
@@ -279,31 +283,31 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
                 />
               </Field>
 
-              <Field label="Label (en)">
+              <Field label={t("tools.handler_field_label_en")}>
                 <Input
                   value={fields.labels.en ?? ""}
-                  placeholder="English label"
+                  placeholder={t("tools.handler_field_label_en_ph")}
                   onChange={(e) => updateField("labels", { ...fields.labels, en: e.target.value })}
                 />
               </Field>
 
-              <Field label="Label (ru)">
+              <Field label={t("tools.handler_field_label_ru")}>
                 <Input
                   value={fields.labels.ru ?? ""}
-                  placeholder="Метка"
+                  placeholder={t("tools.handler_field_label_ru_ph")}
                   onChange={(e) => updateField("labels", { ...fields.labels, ru: e.target.value })}
                 />
               </Field>
 
-              <Field label="Description (en)">
+              <Field label={t("tools.handler_field_desc_en")}>
                 <Input
                   value={fields.descriptions.en ?? ""}
-                  placeholder="English description"
+                  placeholder={t("tools.handler_field_desc_en_ph")}
                   onChange={(e) => updateField("descriptions", { ...fields.descriptions, en: e.target.value })}
                 />
               </Field>
 
-              <Field label="MIME globs (comma-separated)">
+              <Field label={t("tools.handler_field_mime")}>
                 <Input
                   value={mimeStr}
                   placeholder="image/*, application/pdf"
@@ -311,11 +315,11 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
                 />
               </Field>
 
-              <Field label="Max size (MB, blank = unlimited)">
+              <Field label={t("tools.handler_field_max_size")}>
                 <Input
                   type="number"
                   value={fields.max_size_mb ?? ""}
-                  placeholder="unlimited"
+                  placeholder={t("tools.handler_field_max_size_ph")}
                   onChange={(e) => {
                     const v = e.target.value.trim();
                     updateField("max_size_mb", v === "" ? null : Number(v));
@@ -323,7 +327,7 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
                 />
               </Field>
 
-              <Field label="Execution">
+              <Field label={t("tools.handler_field_execution")}>
                 <Select
                   value={fields.execution}
                   onValueChange={(v) => updateField("execution", v as "sync" | "async")}
@@ -332,13 +336,13 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="sync">sync</SelectItem>
-                    <SelectItem value="async">async</SelectItem>
+                    <SelectItem value="sync">{t("tools.handler_sync")}</SelectItem>
+                    <SelectItem value="async">{t("tools.handler_async")}</SelectItem>
                   </SelectContent>
                 </Select>
               </Field>
 
-              <Field label="Order">
+              <Field label={t("tools.handler_field_order")}>
                 <Input
                   type="number"
                   value={fields.order}
@@ -353,7 +357,7 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
                   onCheckedChange={(v) => updateField("enabled", v)}
                 />
                 <label htmlFor="handler-enabled" className="text-sm font-medium cursor-pointer">
-                  Enabled
+                  {t("tools.handler_field_enabled")}
                 </label>
               </div>
             </div>
@@ -365,14 +369,14 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
               disabled={syncing}
               className="mt-4"
             >
-              {syncing ? "Syncing…" : "Sync from code"}
+              {syncing ? t("tools.handler_syncing") : t("tools.handler_sync_from_code")}
             </Button>
           </TabsContent>
 
           {/* ── Python editor ── */}
           <TabsContent value="code" className="min-h-0 flex flex-col gap-2 pb-2">
             <p className="text-xs text-muted-foreground shrink-0">
-              The descriptor block at the top is kept in sync with the Settings tab. Edit the <code>async def run(ctx, file, params)</code> body below it.
+              {t("tools.handler_code_hint")}
             </p>
             <PythonEditor
               value={source}
@@ -396,10 +400,10 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
           )}
           <DialogFooter>
             <Button variant="outline" onClick={onClose} disabled={saving}>
-              Cancel
+              {t("tools.handler_cancel")}
             </Button>
             <Button onClick={handleSave} disabled={saving}>
-              {saving ? "Saving…" : isEdit ? "Save" : "Create"}
+              {saving ? t("tools.handler_saving") : isEdit ? t("tools.handler_save") : t("tools.handler_create")}
             </Button>
           </DialogFooter>
         </div>

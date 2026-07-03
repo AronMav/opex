@@ -637,7 +637,7 @@ export function ChatComposer() {
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/50 bg-primary/5 backdrop-blur-sm pointer-events-none">
               <div className="flex flex-col items-center gap-1 text-primary/70">
                 <Paperclip className="h-6 w-6" />
-                <span className="text-sm font-medium">Drop file to attach</span>
+                <span className="text-sm font-medium">{t("chat.drop_to_attach")}</span>
               </div>
             </div>
           )}

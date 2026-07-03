@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { X, ZoomIn, ZoomOut, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/hooks/use-translation";
 
 interface ImageLightboxProps {
   src: string;
@@ -11,6 +12,7 @@ interface ImageLightboxProps {
 }
 
 export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [zoom, setZoom] = useState(1);
 
@@ -59,7 +61,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
         type="button"
         onClick={handleOpen}
         className="cursor-zoom-in"
-        aria-label="Open image"
+        aria-label={t("chat.lightbox_open")}
       >
         <img src={src} alt={alt} className={cn("max-w-[min(28rem,100%)] rounded-xl border border-border", className)} loading="lazy" />
       </button>
@@ -70,7 +72,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
           onClick={handleClose}
           role="dialog"
           aria-modal="true"
-          aria-label="Image viewer"
+          aria-label={t("chat.lightbox_viewer")}
         >
           {/* Toolbar */}
           <div
@@ -81,7 +83,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
               type="button"
               onClick={handleZoomOut}
               className="rounded-lg bg-white/10 p-2 text-white hover:bg-white/20 transition-colors"
-              aria-label="Zoom out"
+              aria-label={t("chat.lightbox_zoom_out")}
             >
               <ZoomOut className="h-4 w-4" />
             </button>
@@ -92,7 +94,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
               type="button"
               onClick={handleZoomIn}
               className="rounded-lg bg-white/10 p-2 text-white hover:bg-white/20 transition-colors"
-              aria-label="Zoom in"
+              aria-label={t("chat.lightbox_zoom_in")}
             >
               <ZoomIn className="h-4 w-4" />
             </button>
@@ -100,7 +102,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
               href={src}
               download
               className="rounded-lg bg-white/10 p-2 text-white hover:bg-white/20 transition-colors"
-              aria-label="Download image"
+              aria-label={t("chat.lightbox_download")}
             >
               <Download className="h-4 w-4" />
             </a>
@@ -108,7 +110,7 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
               type="button"
               onClick={handleClose}
               className="rounded-lg bg-white/10 p-2 text-white hover:bg-white/20 transition-colors"
-              aria-label="Close"
+              aria-label={t("common.close")}
             >
               <X className="h-4 w-4" />
             </button>
