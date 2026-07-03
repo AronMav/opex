@@ -23,8 +23,12 @@ class ItsFlows:
         self._last_login_at = -1e9
 
     async def _is_logged_out(self) -> bool:
-        url = await self._d.current_url()
-        return self._cfg["logged_out"]["url_contains"] in url
+        # its.1c.ru never redirects anonymous hits to a login form — it just
+        # drops the logout link from the header. Detect by page content: the
+        # logged-in marker present == authenticated.
+        page = await self._d.content()
+        blob = (page.get("html") or "") + (page.get("text") or "")
+        return self._cfg["logged_out"]["logged_in_marker"] not in blob
 
     async def ensure_logged_in(self, creds: dict) -> None:
         await self._d.navigate(self._cfg["auth_probe_url"])
@@ -34,14 +38,19 @@ class ItsFlows:
         if self._now() - self._last_login_at < self._cfg["relogin_cooldown_s"]:
             raise ItsBusy("ИТС-сессия занята (вероятно, используется человеком); попробуйте позже")
         lc = self._cfg["login"]
-        await self._d.fill(lc["login_selector"], creds["login"])
+        # Multi-step SSO: its.1c.ru/user/auth → portal button → login.1c.ru form.
+        await self._d.navigate(lc["auth_page"])
+        await self._d.click(lc["portal_selector"])
+        await self._d.wait(lc["username_selector"], timeout=15)
+        await self._d.fill(lc["username_selector"], creds["login"])
         await self._d.fill(lc["password_selector"], creds["password"])
         await self._d.click(lc["submit_selector"])
         self._last_login_at = self._now()
-        await asyncio.sleep(1.0)  # человеческий темп + время редиректа
-        url = await self._d.current_url()
-        if lc["success_url_contains"] not in url:
-            raise ItsLoginFailed(f"после логина остались на {url}")
+        await asyncio.sleep(2.0)  # человеческий темп + редирект обратно на its.1c.ru
+        # Проверяем маркер логина на реальной странице (URL не редиректит).
+        await self._d.navigate(self._cfg["auth_probe_url"])
+        if await self._is_logged_out():
+            raise ItsLoginFailed("после логина остались разлогинены (креды/капча/2FA?)")
 
     async def search(self, query: str, db: str | None = None) -> list[dict]:
         sc = self._cfg["search"]
