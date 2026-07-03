@@ -74,21 +74,20 @@ class ItsFlows:
         else:                              # путь (b)
             url = rc["full_url_template"].format(base=self._cfg["base_url"], ref=ref)
         await self._d.navigate(url)
-        # ИТС рендерит тело документа в iframe; переходим на его src за чистым
-        # контентом (сама страница-обёртка держит лишь заголовок + оглавление).
+        # ИТС рендерит тело документа в same-origin iframe (его src редиректит
+        # обратно на страницу-обёртку), поэтому читаем contentDocument на месте.
         frame_sel = rc.get("doc_frame_selector")
         if frame_sel:
-            src = await self._d.get_attribute(frame_sel, "src")
-            if src:
-                frame_url = src if src.startswith("http") else self._cfg["base_url"] + src
-                await self._d.navigate(frame_url)
-                url = frame_url
-        if rc.get("wait_selector"):
-            try:
-                await self._d.wait(rc["wait_selector"], timeout=15)
-            except Exception:
-                pass
-        page = await self._d.content()
+            page = await self._d.frame_content(frame_sel, rc.get("content_selector", "body"))
+            if not page.get("html"):
+                page = await self._d.content()  # запасной путь, если iframe не отдал
+        else:
+            if rc.get("wait_selector"):
+                try:
+                    await self._d.wait(rc["wait_selector"], timeout=15)
+                except Exception:
+                    pass
+            page = await self._d.content()
         out = extract_content(page["html"], rc["content_selector"], rc["strip_selectors"])
         out["url"] = page.get("url", url)
         return out

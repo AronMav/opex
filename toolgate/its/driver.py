@@ -69,10 +69,27 @@ class BrowserDriver:
         r = await self._call({"action": "evaluate", "session_id": sid, "js": "location.href"})
         return r.get("result", "") or ""
 
-    async def get_attribute(self, selector: str, attr: str) -> str | None:
+    async def frame_content(self, frame_selector: str, ready_selector: str = "body") -> dict:
+        """Return the outerHTML of a same-origin iframe's document, polling up
+        to ~15s until `ready_selector` inside it has text. ИТС renders the
+        article body in an iframe whose src just redirects back to the shell
+        page, so we read its contentDocument in place. selector args come from
+        trusted site config; repr() safely quotes them."""
         sid = await self.ensure_session()
-        # selector/attr come from trusted site config; repr() safely quotes them.
-        js = (f"(function(){{var e=document.querySelector({selector!r});"
-              f"return e?e.getAttribute({attr!r}):null;}})()")
-        r = await self._call({"action": "evaluate", "session_id": sid, "js": js})
-        return r.get("result")
+        js = (
+            "(async () => {"
+            f"  const f = document.querySelector({frame_selector!r});"
+            "  for (let i = 0; i < 30; i++) {"
+            "    const d = f && f.contentDocument;"
+            f"    const c = d && d.querySelector({ready_selector!r});"
+            "    if (c && c.innerText.trim().length > 0)"
+            "      return {html: d.documentElement.outerHTML, url: d.location.href};"
+            "    await new Promise(r => setTimeout(r, 500));"
+            "  }"
+            "  const d = f && f.contentDocument;"
+            "  return d ? {html: d.documentElement.outerHTML, url: d.location.href} : null;"
+            "})()"
+        )
+        r = await self._call({"action": "evaluate", "session_id": sid, "js": js}, timeout=30)
+        data = r.get("result") or {}
+        return {"html": data.get("html", ""), "text": "", "url": data.get("url", "")}
