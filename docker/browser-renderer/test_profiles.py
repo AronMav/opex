@@ -42,3 +42,20 @@ async def test_close_all():
     c = await pm.get_context("its")
     await pm.close_all()
     assert c.closed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_name", ["../x", "a/b", "/etc/passwd", ""])
+async def test_get_context_rejects_invalid_profile_names(bad_name):
+    async def factory(udd): return FakeCtx(udd)
+    pm = ProfileManager(factory=factory, root="/tmp/profiles")
+    with pytest.raises(ValueError):
+        await pm.get_context(bad_name)
+
+
+@pytest.mark.asyncio
+async def test_get_context_accepts_valid_profile_name():
+    async def factory(udd): return FakeCtx(udd)
+    pm = ProfileManager(factory=factory, root="/tmp/profiles")
+    ctx = await pm.get_context("its")
+    assert ctx.user_data_dir == "/tmp/profiles/its"

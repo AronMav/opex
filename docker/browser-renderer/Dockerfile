@@ -7,6 +7,8 @@ RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 COPY app.py .
 COPY automation_actions.py .
+COPY profiles.py .
+COPY stealth.py .
 
 EXPOSE 9020
 

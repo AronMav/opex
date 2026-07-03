@@ -22,8 +22,21 @@ profile_manager: ProfileManager | None = None
 sessions: dict[str, Page] = {}
 session_last_used: dict[str, float] = {}
 session_dialog: dict[str, dict] = {}
+# Sids backed by a named persistent profile (see ProfileManager). These are
+# exempt from the ephemeral idle TTL — a profile-backed page must survive
+# gaps between workflow steps (e.g. assisted-login pauses).
+persistent_sessions: set[str] = set()
 SESSION_TTL = 300  # 5 minutes idle timeout
 CLEANUP_INTERVAL = 30  # seconds
+
+
+def _expired_sids(now: float) -> list[str]:
+    """Pure(ish) helper: which sids are idle past SESSION_TTL, excluding
+    profile-backed (persistent) sessions which never expire on idle."""
+    return [
+        sid for sid, last in session_last_used.items()
+        if sid not in persistent_sessions and now - last > SESSION_TTL
+    ]
 
 
 async def session_cleanup_task():
@@ -31,10 +44,7 @@ async def session_cleanup_task():
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL)
         now = time.time()
-        expired = [
-            sid for sid, last in session_last_used.items()
-            if now - last > SESSION_TTL
-        ]
+        expired = _expired_sids(now)
         for sid in expired:
             page = sessions.pop(sid, None)
             session_last_used.pop(sid, None)
@@ -260,6 +270,7 @@ async def automation(req: AutomationRequest):
         if req.profile:
             ctx = await profile_manager.get_context(req.profile)
             page = await ctx.new_page()
+            persistent_sessions.add(sid)
         else:
             page = await browser.new_page(
                 viewport=DEFAULT_VIEWPORT, user_agent=DEFAULT_USER_AGENT,
@@ -281,6 +292,7 @@ async def automation(req: AutomationRequest):
         sessions.pop(req.session_id, None)
         session_last_used.pop(req.session_id, None)
         session_dialog.pop(req.session_id, None)
+        persistent_sessions.discard(req.session_id)
         await page.close()
         return {"status": "closed", "session_id": req.session_id}
 
