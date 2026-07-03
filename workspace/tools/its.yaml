@@ -1,0 +1,33 @@
+name: its
+description: "Поиск и чтение документации 1С на its.1c.ru (платный ИТС). action=search: найти по запросу, возвращает список {title,snippet,ref}. action=read: прочитать страницу/закладку по ref (из результатов поиска или полный URL), возвращает markdown. Единая залогиненная сессия, вежливый темп."
+endpoint: "http://localhost:9011/its/{action}"
+method: POST
+
+parameters:
+  action:
+    type: string
+    required: true
+    location: path
+    description: "search — поиск; read — чтение"
+    enum: [search, read]
+  query:
+    type: string
+    required: false
+    location: body
+    description: "Поисковый запрос (для action=search)"
+  db:
+    type: string
+    required: false
+    location: body
+    description: "Ограничить поиск базой (напр. v854doc), опционально"
+  ref:
+    type: string
+    required: false
+    location: body
+    description: "Ссылка/закладка для чтения (для action=read), напр. db/v854doc#bookmark:adm:TI000001410"
+
+body_template: |
+  {"action": "{{action}}"{{#if query}}, "query": "{{query}}"{{/if}}{{#if db}}, "db": "{{db}}"{{/if}}{{#if ref}}, "ref": "{{ref}}"{{/if}}}
+
+status: draft
+tags: [1c, its, docs, search]
