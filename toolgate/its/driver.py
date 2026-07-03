@@ -1,4 +1,5 @@
 """Generic browser-renderer client bound to the 'its' persistent profile."""
+import asyncio
 import os
 
 # toolgate runs as a HOST process (not inside the docker network), so the
@@ -19,6 +20,28 @@ class BrowserDriver:
         resp = await self._http.post(f"{self._url}/automation", json=payload, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
+
+    async def _eval(self, js: str, timeout: float = 30.0) -> dict:
+        """evaluate with retry: a client-side redirect firing just after
+        `domcontentloaded` destroys the JS execution context mid-evaluate
+        ('Execution context was destroyed'). That's transient — settle briefly
+        and retry instead of failing the whole ИТС request."""
+        sid = await self.ensure_session()
+        last = ""
+        for _ in range(4):
+            resp = await self._http.post(
+                f"{self._url}/automation",
+                json={"action": "evaluate", "session_id": sid, "js": js},
+                timeout=timeout,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            last = resp.text
+            if resp.status_code == 500 and "context was destroyed" in last:
+                await asyncio.sleep(0.8)
+                continue
+            resp.raise_for_status()
+        raise RuntimeError(f"evaluate failed after retries: {last[:200]}")
 
     async def ensure_session(self) -> str:
         if self._sid:
@@ -51,22 +74,16 @@ class BrowserDriver:
             timeout=timeout + 10)
 
     async def content(self) -> dict:
-        sid = await self.ensure_session()
         # Full page HTML via evaluate: the browser-renderer 'content' action
         # truncates HTML at 50 KB, which drops ITS search results (the results
         # container sits ~60 KB into the DOM). evaluate returns its value
         # uncapped.
-        r = await self._call({
-            "action": "evaluate",
-            "session_id": sid,
-            "js": "({html: document.documentElement.outerHTML, url: location.href})",
-        })
+        r = await self._eval("({html: document.documentElement.outerHTML, url: location.href})")
         data = r.get("result") or {}
         return {"html": data.get("html", ""), "text": "", "url": data.get("url", "")}
 
     async def current_url(self) -> str:
-        sid = await self.ensure_session()
-        r = await self._call({"action": "evaluate", "session_id": sid, "js": "location.href"})
+        r = await self._eval("location.href")
         return r.get("result", "") or ""
 
     async def frame_content(self, frame_selector: str, ready_selector: str = "body") -> dict:
@@ -75,7 +92,6 @@ class BrowserDriver:
         article body in an iframe whose src just redirects back to the shell
         page, so we read its contentDocument in place. selector args come from
         trusted site config; repr() safely quotes them."""
-        sid = await self.ensure_session()
         js = (
             "(async () => {"
             f"  const f = document.querySelector({frame_selector!r});"
@@ -90,6 +106,6 @@ class BrowserDriver:
             "  return d ? {html: d.documentElement.outerHTML, url: d.location.href} : null;"
             "})()"
         )
-        r = await self._call({"action": "evaluate", "session_id": sid, "js": js}, timeout=30)
+        r = await self._eval(js, timeout=30)
         data = r.get("result") or {}
         return {"html": data.get("html", ""), "text": "", "url": data.get("url", "")}
