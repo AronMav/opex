@@ -3,10 +3,17 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "@/hooks/use-translation";
 
-export function MentionAutocomplete({ query, agents, onSelect }: {
+export const MENTION_OPTION_ID_PREFIX = "mention-option-";
+
+export function MentionAutocomplete({ query, agents, onSelect, onClose, onActiveChange }: {
   query: string;
   agents: string[];
   onSelect: (name: string) => void;
+  /** Close the menu (Escape). Optional — omitted in isolated unit tests. */
+  onClose?: () => void;
+  /** Reports the active option's DOM id (or null when closed) so the composer
+   *  textarea can mirror it via aria-activedescendant. */
+  onActiveChange?: (optionId: string | null) => void;
 }) {
   const { t } = useTranslation();
   const q = query.toLowerCase();
@@ -14,6 +21,37 @@ export function MentionAutocomplete({ query, agents, onSelect }: {
   const [activeIdx, setActiveIdx] = useState(0);
 
   useEffect(() => { setActiveIdx(0); }, [query]);
+
+  // Keep the composer's aria-activedescendant in sync; clear it on unmount.
+  useEffect(() => {
+    onActiveChange?.(filtered.length > 0 ? `${MENTION_OPTION_ID_PREFIX}${Math.min(activeIdx, filtered.length - 1)}` : null);
+  }, [activeIdx, filtered.length, onActiveChange]);
+  useEffect(() => () => onActiveChange?.(null), [onActiveChange]);
+
+  // Capture-phase keydown so ArrowDown/ArrowUp/Enter/Tab/Escape drive the menu
+  // instead of the textarea (which would otherwise submit the half-typed "@").
+  // Mirrors SlashMenu's handler.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (filtered.length === 0) return;
+      // stopPropagation (capture, on window) prevents the event from ever
+      // reaching the textarea's React onKeyDown — so selecting a mention with
+      // Enter can never also submit the half-typed "@" (the C2 bug). Unlike the
+      // slash menu, selecting a mention leaves text in the box, so the textarea
+      // submit MUST be blocked here rather than relying on an empty-text no-op.
+      if (e.key === "ArrowDown") { e.preventDefault(); e.stopPropagation(); setActiveIdx(i => (i + 1) % filtered.length); }
+      if (e.key === "ArrowUp")   { e.preventDefault(); e.stopPropagation(); setActiveIdx(i => (i - 1 + filtered.length) % filtered.length); }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        e.stopPropagation();
+        const safeIdx = Math.min(activeIdx, filtered.length - 1);
+        if (filtered[safeIdx]) onSelect(filtered[safeIdx]);
+      }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); onClose?.(); }
+    };
+    window.addEventListener("keydown", handler, { capture: true });
+    return () => window.removeEventListener("keydown", handler, { capture: true });
+  }, [filtered, activeIdx, onSelect, onClose]);
 
   if (filtered.length === 0) return null;
 
@@ -27,6 +65,7 @@ export function MentionAutocomplete({ query, agents, onSelect }: {
         <button
           key={name}
           role="option"
+          id={`${MENTION_OPTION_ID_PREFIX}${i}`}
           aria-selected={i === activeIdx}
           className={`flex items-center gap-2 px-3 py-1.5 text-sm rounded-md hover:bg-muted w-full text-left ${i === activeIdx ? "bg-muted/50" : ""}`}
           onMouseDown={(e) => { e.preventDefault(); onSelect(name); }}

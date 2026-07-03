@@ -58,12 +58,12 @@ function EmptyPartView() {
 
 // ── Part renderer dispatch ──────────────────────────────────────────────────
 
-function renderPart(part: MessagePart, index: number) {
+function renderPart(part: MessagePart, index: number, streaming = false) {
   switch (part.type) {
     case "text":
       return <TextPart key={`text-${index}`} text={part.text} />;
     case "reasoning":
-      return <ReasoningPart key={`reasoning-${index}`} text={part.text} />;
+      return <ReasoningPart key={`reasoning-${index}`} text={part.text} streaming={streaming} />;
     case "tool": {
       return (
         <ToolCallPartView
@@ -100,10 +100,10 @@ function renderPart(part: MessagePart, index: number) {
 
 // ── Parts rendering (no grouping — each part rendered individually) ────────
 
-function renderAllParts(parts: MessagePart[]) {
+function renderAllParts(parts: MessagePart[], streaming = false) {
   return parts
     .filter(p => !(p.type === "text" && p.text.trim().length === 0))
-    .map((part, i) => renderPart(part, i));
+    .map((part, i) => renderPart(part, i, streaming));
 }
 
 // ── User message ────────────────────────────────────────────────────────────
@@ -234,20 +234,23 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
   // non-streaming messages keep stable refs so they get cache hits across re-renders.
   const [animateRef] = useAutoAnimate({ duration: 200 });
 
+  // T16.5: testid for E2E — present on any assistant message that is not
+  // actively text-streaming. Live streaming messages carry status === "streaming"
+  // (see stream-processor.ts); history + finalized messages have status of
+  // undefined / "complete" / "aborted" / "failed". Also gates ReasoningPart's
+  // auto-expand + pulse: streaming messages get a fresh object ref each tick
+  // (cache miss → re-render with streaming=true), the finalized ref caches the
+  // collapsed reasoning view.
+  const isComplete = (message.status as string | undefined) !== "streaming";
+
   let renderedParts: ReactNode[] | undefined;
   if (hasParts) {
     renderedParts = _partsRenderCache.get(message);
     if (!renderedParts) {
-      renderedParts = renderAllParts(message.parts);
+      renderedParts = renderAllParts(message.parts, !isComplete);
       _partsRenderCache.set(message, renderedParts);
     }
   }
-
-  // T16.5: testid for E2E — present on any assistant message that is not
-  // actively text-streaming. Live streaming messages carry status === "streaming"
-  // (see stream-processor.ts); history + finalized messages have status of
-  // undefined / "complete" / "aborted" / "failed".
-  const isComplete = (message.status as string | undefined) !== "streaming";
 
   // Swipe left to regenerate (mobile)
   const { regenerate } = useChatActions();

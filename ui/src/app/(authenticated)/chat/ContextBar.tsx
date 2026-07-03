@@ -27,6 +27,9 @@ interface ContextBarProps {
   reasoningTokens?: number | null;
   /** True while the model is actively generating — values are stale until done. */
   isGenerating?: boolean;
+  /** Slim one-row variant for the mobile header: model badge + token progress +
+   *  checkpoints trigger, no tooltips. */
+  compact?: boolean;
 }
 
 function formatK(n: number): string {
@@ -50,6 +53,7 @@ export function ContextBar({
   cacheCreationTokens,
   reasoningTokens,
   isGenerating = false,
+  compact = false,
 }: ContextBarProps) {
   const { t } = useTranslation();
   const currentAgent = useChatStore((s) => s.currentAgent);
@@ -67,6 +71,47 @@ export function ContextBar({
     ratio > 0.95 ? "bg-destructive" :
     ratio > 0.8  ? "bg-warning"     :
                    "bg-primary/50";
+
+  // ── Compact (mobile header) ────────────────────────────────────────────────
+  // One tight row, no tooltip provider: model badge + token progress + the
+  // checkpoint-history trigger. Kept minimal so it fits the crowded mobile bar.
+  if (compact) {
+    return (
+      <>
+        <CheckpointPanel agent={currentAgent} open={checkpointOpen} onOpenChange={setCheckpointOpen} />
+        <div className="flex items-center gap-1.5 min-w-0 shrink">
+          {model && (
+            <span className="rounded border border-border/40 bg-muted/30 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground/60 whitespace-nowrap truncate max-w-24">
+              {shortModel(model)}
+            </span>
+          )}
+          {hasUsage && (
+            <>
+              <span className={`text-3xs tabular-nums whitespace-nowrap ${isGenerating ? "text-muted-foreground/40" : "text-muted-foreground/60"}`}>
+                {formatK(tokens!)}/{formatK(limit!)}
+              </span>
+              <div className="relative h-1 w-8 rounded-full bg-muted/30 overflow-hidden shrink-0">
+                <div
+                  className={`h-full rounded-full transition-all duration-700 ${barColor} ${isGenerating ? "opacity-50" : ""}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </>
+          )}
+          {currentAgent && (
+            <button
+              type="button"
+              className="rounded p-0.5 text-muted-foreground/50 hover:text-muted-foreground transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => setCheckpointOpen(true)}
+              aria-label={t("checkpoints.history")}
+            >
+              <HistoryIcon className="size-3.5" />
+            </button>
+          )}
+        </div>
+      </>
+    );
+  }
 
   // Tooltip: compact, no redundancy
   const tooltipLines: string[] = [];
