@@ -21,3 +21,5 @@ opentelemetry-instrumentation-fastapi
 opentelemetry-instrumentation-httpx
 yt-dlp
 defusedxml
+markdownify==0.13.1
+beautifulsoup4==4.12.3
