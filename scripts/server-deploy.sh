@@ -81,6 +81,28 @@ for sub in "${SRC_DIR}"/toolgate/*/; do
 done
 echo "  synced toolgate .py incl. subpackages (core restart re-spawns toolgate)"
 
+# Toolgate Python deps: `git pull` updates requirements.txt in SRC, but the
+# runtime venv is built only once (setup.sh) and the .py sync above never
+# touches it. A NEW runtime import (e.g. the its/ router pulling in bs4 +
+# markdownify) crash-loops toolgate on startup until the venv is refreshed.
+# Reinstall only when requirements.txt actually changed — pip install -r is
+# fast when already satisfied, but skipping the no-op keeps deploys quick.
+# Fail-soft: a pip hiccup must not abort the deploy after binaries are swapped.
+echo "==> sync toolgate python deps"
+SRC_REQ="${SRC_DIR}/toolgate/requirements.txt"
+RUN_REQ="${RUN_DIR}/toolgate/requirements.txt"
+VENV_PY="${RUN_DIR}/toolgate/.venv/bin/python"
+if [ -f "$SRC_REQ" ] && ! cmp -s "$SRC_REQ" "$RUN_REQ" 2>/dev/null; then
+  if [ -x "$VENV_PY" ] && "$VENV_PY" -m pip install -q -r "$SRC_REQ"; then
+    cp -f "$SRC_REQ" "$RUN_REQ"
+    echo "  toolgate deps reinstalled (requirements.txt changed)"
+  else
+    echo "  WARNING: toolgate pip install failed — venv stale, toolgate may crash-loop"
+  fi
+else
+  echo "  toolgate deps unchanged"
+fi
+
 # On-demand MCP containers must EXIST (stopped) for core's ContainerManager to
 # start them — `ensure_running` only inspect+start, never create. `up --no-start`
 # is idempotent: creates any missing container from already-built images. If an
