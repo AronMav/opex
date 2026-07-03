@@ -33,12 +33,16 @@ CFG = {  # минимальный SITE_ITS для теста
 }
 
 
+async def _nosleep(_s):
+    pass
+
+
 @pytest.mark.asyncio
 async def test_login_performed_when_logged_out():
-    # 1-я проба контента → разлогинен; после логина → маркер выхода присутствует
-    drv = FakeDriver(content_seq=[_LOGGED_OUT, _LOGGED_IN])
+    # все пробы контента → разлогинен; после логина → маркер выхода присутствует
+    drv = FakeDriver(content_seq=[_LOGGED_OUT] * 4 + [_LOGGED_IN])
     clock = {"t": 0.0}
-    f = ItsFlows(drv, CFG, now_fn=lambda: clock["t"])
+    f = ItsFlows(drv, CFG, now_fn=lambda: clock["t"], sleep_fn=_nosleep)
     await f.ensure_logged_in({"login": "u", "password": "p"})
     assert drv.filled["input[name=username]"] == "u"
     assert drv.filled["input[name=password]"] == "p"
@@ -49,7 +53,19 @@ async def test_login_performed_when_logged_out():
 @pytest.mark.asyncio
 async def test_already_logged_in_skips_login():
     drv = FakeDriver(content_seq=[_LOGGED_IN])
-    f = ItsFlows(drv, CFG, now_fn=lambda: 0.0)
+    f = ItsFlows(drv, CFG, now_fn=lambda: 0.0, sleep_fn=_nosleep)
+    await f.ensure_logged_in({"login": "u", "password": "p"})
+    assert drv.filled == {}   # логин не выполнялся
+    assert drv.clicked == []
+
+
+@pytest.mark.asyncio
+async def test_slow_render_does_not_trigger_relogin():
+    # Регрессия: на холодном браузере шапка с logout-ссылкой дорисовывается JS
+    # после domcontentloaded — первый снимок DOM без маркера ещё не разлогин.
+    # Ложный перелогин при живой сессии кончается ERR_ABORTED на /user/auth.
+    drv = FakeDriver(content_seq=[_LOGGED_OUT, _LOGGED_OUT, _LOGGED_IN])
+    f = ItsFlows(drv, CFG, now_fn=lambda: 0.0, sleep_fn=_nosleep)
     await f.ensure_logged_in({"login": "u", "password": "p"})
     assert drv.filled == {}   # логин не выполнялся
     assert drv.clicked == []
@@ -60,7 +76,7 @@ async def test_relogin_cooldown_raises_busy():
     # разлогинен, но логинились только что (в пределах cooldown) → ItsBusy
     drv = FakeDriver(content_seq=[_LOGGED_OUT])
     clock = {"t": 100.0}
-    f = ItsFlows(drv, CFG, now_fn=lambda: clock["t"])
+    f = ItsFlows(drv, CFG, now_fn=lambda: clock["t"], sleep_fn=_nosleep)
     f._last_login_at = 99.0   # только что логинились
     with pytest.raises(ItsBusy):
         await f.ensure_logged_in({"login": "u", "password": "p"})

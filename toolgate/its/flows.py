@@ -16,19 +16,30 @@ class ItsLoginFailed(Exception):
 
 
 class ItsFlows:
-    def __init__(self, driver, cfg: dict, now_fn=time.monotonic):
+    def __init__(self, driver, cfg: dict, now_fn=time.monotonic, sleep_fn=asyncio.sleep):
         self._d = driver
         self._cfg = cfg
         self._now = now_fn
+        self._sleep = sleep_fn
         self._last_login_at = -1e9
 
     async def _is_logged_out(self) -> bool:
         # its.1c.ru never redirects anonymous hits to a login form — it just
         # drops the logout link from the header. Detect by page content: the
         # logged-in marker present == authenticated.
-        page = await self._d.content()
-        blob = (page.get("html") or "") + (page.get("text") or "")
-        return self._cfg["logged_out"]["logged_in_marker"] not in blob
+        # Шапка с logout-ссылкой дорисовывается JS ПОСЛЕ domcontentloaded, и на
+        # холодном браузере одиночный снимок даёт ложный «разлогинен» (а логин
+        # при живой сессии кончается net::ERR_ABORTED на /user/auth — она сразу
+        # редиректит залогиненного назад). Поэтому поллим маркер до ~3с.
+        marker = self._cfg["logged_out"]["logged_in_marker"]
+        for attempt in range(4):
+            page = await self._d.content()
+            blob = (page.get("html") or "") + (page.get("text") or "")
+            if marker in blob:
+                return False
+            if attempt < 3:
+                await self._sleep(1.0)
+        return True
 
     async def ensure_logged_in(self, creds: dict) -> None:
         await self._d.navigate(self._cfg["auth_probe_url"])
@@ -46,7 +57,7 @@ class ItsFlows:
         await self._d.fill(lc["password_selector"], creds["password"])
         await self._d.click(lc["submit_selector"])
         self._last_login_at = self._now()
-        await asyncio.sleep(2.0)  # человеческий темп + редирект обратно на its.1c.ru
+        await self._sleep(2.0)  # человеческий темп + редирект обратно на its.1c.ru
         # Проверяем маркер логина на реальной странице (URL не редиректит).
         await self._d.navigate(self._cfg["auth_probe_url"])
         if await self._is_logged_out():
