@@ -5,6 +5,8 @@
 /// When `public_url` is configured (e.g. `https://192.168.1.85`), `att.url` contains
 /// that host+scheme. Connecting to it from inside Core fails (TLS cert, CGNAT, etc.).
 /// We always download from `http://localhost:{port}` instead, using just the path component.
+// reviewed: offsets from find("/api/uploads/")/find("/uploads/") (ASCII) — char boundaries
+#[allow(clippy::string_slice)]
 pub(crate) fn uploads_local_url(att_url: &str, gateway_listen: &str) -> String {
     let port = gateway_listen
         .rsplit(':')

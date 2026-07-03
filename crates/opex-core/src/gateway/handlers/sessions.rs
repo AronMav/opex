@@ -888,6 +888,8 @@ pub(crate) async fn api_export_session(
     }
 }
 
+// reviewed: ts[..16] slices ASCII ISO-8601 timestamp, guarded by len() >= 16 — char boundary
+#[allow(clippy::string_slice)]
 fn format_session_as_markdown(data: &serde_json::Value) -> String {
     let mut md = String::new();
     let session = &data["session"];

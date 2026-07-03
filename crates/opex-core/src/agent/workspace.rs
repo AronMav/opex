@@ -215,6 +215,8 @@ fn scan_and_warn(agent_name: &str, file: &str, content: &str) {
 }
 
 /// Append file content to prompt, truncating if over the size limit.
+// reviewed: floor_char_boundary-bounded truncation — char boundary
+#[allow(clippy::string_slice)]
 fn append_with_limit(prompt: &mut String, content: &str, filename: &str) {
     if content.trim().is_empty() {
         return;
@@ -303,6 +305,8 @@ pub async fn load_workspace_prompt(workspace_dir: &str, agent_name: &str) -> Res
 /// Returns `Ok(None)` rather than `Err` for missing files — CLAUDE.md is
 /// optional per agent, and a non-base agent or a base agent without one
 /// is a normal configuration.
+// reviewed: floor_char_boundary-bounded truncation — char boundary
+#[allow(clippy::string_slice)]
 pub async fn load_claude_md(workspace_dir: &str, agent_name: &str) -> Result<Option<String>> {
     let dir = agent_dir(workspace_dir, agent_name);
     let path = dir.join("CLAUDE.md");

@@ -151,6 +151,8 @@ async fn extract_and_save_inner(
 
 /// Update the rolling agent summary — a single pinned chunk that captures
 /// the agent's accumulated knowledge about the user and context.
+// reviewed: offsets from find("<think>")/find("</think>")+8 (ASCII) — char boundaries
+#[allow(clippy::string_slice)]
 async fn update_rolling_summary(
     agent_name: &str,
     provider: &Arc<dyn LlmProvider>,
@@ -260,6 +262,8 @@ async fn update_rolling_summary(
 
 /// Parse the LLM response into ExtractedKnowledge.
 /// Handles markdown fences, <think> blocks, and partial JSON.
+// reviewed: offsets from find("<think>")/+8 and find('{')/rfind('}') (ASCII) — char boundaries
+#[allow(clippy::string_slice)]
 fn parse_extraction(content: &str) -> Result<ExtractedKnowledge> {
     // Strip <think>...</think> blocks
     let mut cleaned = content.to_string();

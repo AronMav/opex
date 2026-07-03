@@ -12,6 +12,8 @@ pub(crate) const MEMORY_CHUNK_MAX_CHARS: usize = 6_000;
 ///
 /// Excalidraw docs are replaced with a short placeholder; other content
 /// is hard-capped at `MEMORY_CHUNK_MAX_CHARS` by Unicode scalar boundary.
+// reviewed: floor_char_boundary-bounded — char boundary
+#[allow(clippy::string_slice)]
 pub(crate) fn truncate_chunk_content(content: &str) -> &str {
     if content.contains("excalidraw-plugin: parsed")
         || content.contains("== EXCALIDRAW VIEW ==")

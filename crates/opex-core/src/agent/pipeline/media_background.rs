@@ -1545,6 +1545,8 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
+    // reviewed: offsets from ASCII FILE_PREFIX const .len() and find('\n') — char boundaries
+    #[allow(clippy::string_slice)]
     async fn deliver_to_channel_happy_path_prepends_file_marker(pool: sqlx::PgPool) {
         // Full happy path: channel send succeeds → save_binary_to_uploads
         // succeeds → prepend_message_content lands a `__file__:{...}\n`

@@ -129,6 +129,8 @@ async fn fetch_via_toolgate_web(
 ///
 /// SSRF + size-limit enforcement for external URLs is toolgate's responsibility
 /// (`validate_url_ssrf` + `download_limited(max_bytes=2 MiB)` in `routers/fetch.py`).
+// reviewed: floor_char_boundary-bounded truncation — char boundary
+#[allow(clippy::string_slice)]
 pub async fn fetch_url_content(
     http_client: &reqwest::Client,
     toolgate_url: &str,
@@ -306,6 +308,8 @@ fn detect_video_links(text: &str) -> Vec<String> {
 /// all non-core-api URLs. Toolgate handles SSRF validation + 2 MiB body cap.
 /// Core API self-calls (`/api/doctor` on loopback at the configured core port)
 /// bypass toolgate and use `http_client` directly.
+// reviewed: floor_char_boundary-bounded truncation — char boundaries
+#[allow(clippy::string_slice)]
 pub async fn handle_web_fetch(
     http_client: &reqwest::Client,
     toolgate_url: &str,

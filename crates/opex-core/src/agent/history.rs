@@ -1387,6 +1387,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // reviewed: floor_char_boundary-bounded slice in assert message — char boundary
+    #[allow(clippy::string_slice)]
     async fn generate_hermes_summary_iterative_update_includes_previous() {
         struct PromptEchoProvider;
 

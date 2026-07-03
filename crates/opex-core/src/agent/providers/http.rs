@@ -160,6 +160,8 @@ impl std::error::Error for SendError {
         retry_attempts = tracing::field::Empty,
     ),
 )]
+// reviewed: preview slice bounded by is_char_boundary walk-back — char boundary
+#[allow(clippy::string_slice)]
 pub async fn send_with_retry(
     client: &reqwest::Client,
     url: &str,

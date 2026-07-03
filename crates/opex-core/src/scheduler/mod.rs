@@ -2222,6 +2222,8 @@ mod tests {
     }
 
     #[test]
+    // reviewed: slice boundary is ASCII-'a' content / suffix split — char boundary
+    #[allow(clippy::string_slice)]
     fn truncate_reply_long() {
         let reply = "a".repeat(4500);
         let (text, needs_save) = truncate_reply_for_channel(&reply);

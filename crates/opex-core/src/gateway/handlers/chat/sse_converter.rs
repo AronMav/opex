@@ -48,6 +48,8 @@ pub(super) struct ConverterCtx {
 }
 
 #[allow(unused_assignments)]
+// reviewed: floor_char_boundary-bounded log preview in send_and_buffer! macro — char boundary
+#[allow(clippy::string_slice)]
 pub(super) async fn run_converter(
     ctx: ConverterCtx,
     mut event_rx: tokio::sync::mpsc::UnboundedReceiver<StreamEvent>,

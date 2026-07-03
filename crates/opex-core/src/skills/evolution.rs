@@ -7,6 +7,8 @@ use opex_types::{Message, MessageRole};
 use crate::db::skill_repairs;
 
 /// Analyze a completed cron/heartbeat execution and evolve skills if needed.
+// reviewed: preview slice bounded by is_char_boundary walk-back — char boundary
+#[allow(clippy::string_slice)]
 pub async fn analyze_and_evolve(
     db: &PgPool,
     provider: &Arc<dyn crate::agent::providers::LlmProvider>,
@@ -149,6 +151,8 @@ pub async fn review_session_for_skills(
     }
 }
 
+// reviewed: all offsets from find()/floor_char_boundary — char boundaries
+#[allow(clippy::string_slice)]
 async fn review_session_inner(
     db: &PgPool,
     provider: &Arc<dyn crate::agent::providers::LlmProvider>,
@@ -394,6 +398,8 @@ mod tests {
     // ── session skill review ──────────────────────────────────────────────────
 
     #[test]
+    // reviewed: floor_char_boundary-bounded ASCII fixture
+    #[allow(clippy::string_slice)]
     fn task_summary_truncates_at_char_boundary() {
         let long = "x".repeat(3000);
         let boundary = long.floor_char_boundary(2000);
@@ -520,6 +526,8 @@ mod tests {
     }
 
     #[test]
+    // reviewed: offset from find() over ASCII fixture — char boundary
+    #[allow(clippy::string_slice)]
     fn assistant_text_strips_json_prefix() {
         let content = "Here is the result.[{\"type\":\"tool_use\"}]";
         let end = content.find("[{").unwrap_or(content.len());

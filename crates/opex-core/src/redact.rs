@@ -64,6 +64,8 @@ pub(crate) fn ascii_ci_find(haystack: &str, needle: &str, from: usize) -> Option
 ///
 /// All offsets index `input` directly (via [`ascii_ci_find`]) and separators are
 /// measured with `len_utf8`, so multi-byte bodies never split a codepoint.
+// reviewed: offsets from ascii_ci_find()/len_utf8 sums — char boundaries
+#[allow(clippy::string_slice)]
 fn redact_pattern_after_keyword(
     input: &str,
     keyword: &str,
@@ -122,6 +124,8 @@ fn redact_pattern_after_keyword(
 ///
 /// MOVED from `tools::yaml_tools::redact_secrets` (D7). Callers in
 /// `yaml_tools` updated to `crate::redact::redact_secrets`.
+// reviewed: floor_char_boundary-bounded truncation — char boundary
+#[allow(clippy::string_slice)]
 pub(crate) fn redact_secrets(body: &str) -> String {
     // Truncate first (cheaper than running regex on a multi-MB string).
     // floor to a char boundary so a multi-byte body can't split a codepoint.

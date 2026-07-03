@@ -292,6 +292,8 @@ pub(crate) struct VisionAnalyzeRequest {
 /// as a proxy that knows how to download its own uploads.
 ///
 /// Auth: loopback-exempt (see `LOOPBACK_EXACT` in middleware.rs).
+// reviewed: offsets from find("/api/uploads/")/find("/uploads/") (ASCII) — char boundaries
+#[allow(clippy::string_slice)]
 pub(crate) async fn api_vision_analyze(
     State(cfg): State<ConfigServices>,
     Json(body): Json<VisionAnalyzeRequest>,

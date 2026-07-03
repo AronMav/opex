@@ -9,6 +9,8 @@ use uuid::Uuid;
 ///
 /// A URL is considered unsigned when it matches the pattern but does NOT
 /// already contain `?sig=` immediately after the extension.
+// reviewed: offset from regex-match .end() — char boundary
+#[allow(clippy::string_slice)]
 pub fn sign_uploads_in_value(val: &mut Value, re: &Regex, key: &[u8; 32]) -> usize {
     match val {
         Value::String(s) => {

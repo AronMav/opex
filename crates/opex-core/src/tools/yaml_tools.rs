@@ -1386,6 +1386,8 @@ impl YamlToolDef {
 }
 
 /// `JSONPath` resolver supporting "$.key", "$.key.nested", "$.arr[0]", "$.arr[*]", "$.arr[-1]", "$.arr[0:3]".
+// reviewed: offsets from find('[') + ASCII bracket — char boundaries
+#[allow(clippy::string_slice)]
 fn apply_jsonpath(value: &serde_json::Value, path: &str) -> Option<serde_json::Value> {
     let path = path.trim_start_matches("$.").trim_start_matches('$');
     if path.is_empty() {
@@ -1440,6 +1442,8 @@ fn apply_jsonpath(value: &serde_json::Value, path: &str) -> Option<serde_json::V
 }
 
 /// Process conditional blocks: {{#if param}}...{{/if}} and {{#unless param}}...{{/unless}}.
+// reviewed: offsets from find() + ASCII marker const .len() — char boundaries
+#[allow(clippy::string_slice)]
 fn process_conditionals(
     template: &str,
     params: &serde_json::Map<String, serde_json::Value>,
@@ -1506,6 +1510,8 @@ fn process_conditionals(
 ///
 /// Called from `execute()` on the `body_template` branch. Extracted as a pure
 /// function for testability.
+// reviewed: offsets from find("${")/find('}') + ASCII marker lengths — char boundaries
+#[allow(clippy::string_slice)]
 pub(crate) async fn render_body_template(
     template: &str,
     params_map: &serde_json::Map<String, serde_json::Value>,
@@ -1559,6 +1565,8 @@ pub(crate) async fn render_body_template(
 }
 
 /// Substitute ${`ENV_VAR`} in a template string, using `EnvResolver` if available.
+// reviewed: offsets from find("${")/find('}') + ASCII marker lengths — char boundaries
+#[allow(clippy::string_slice)]
 async fn resolve_env_template(template: &str, env_resolver: Option<&dyn EnvResolver>) -> String {
     let mut result = template.to_string();
     // Find all ${VAR} patterns and replace
