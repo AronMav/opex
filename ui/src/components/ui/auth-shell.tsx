@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Bot } from "lucide-react"
+import { Nut } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { IconTile } from "@/components/ui/icon-tile"
 
@@ -38,7 +38,7 @@ function AuthBrand({
   if (orientation === "horizontal") {
     return (
       <div className={cn("flex items-center justify-center gap-3", className)}>
-        <Bot className="h-8 w-8 text-primary" />
+        <Nut className="h-8 w-8 text-primary" />
         <span className="font-display text-2xl font-bold tracking-wide">OPEX</span>
       </div>
     )
@@ -46,7 +46,7 @@ function AuthBrand({
   return (
     <div className={cn("flex flex-col items-center gap-3", className)}>
       <IconTile tone="primary" size="lg" className="rounded-2xl">
-        <Bot />
+        <Nut />
       </IconTile>
       <div className="flex flex-col items-center">
         <h1 className="font-display text-2xl font-bold tracking-wide text-foreground">OPEX</h1>

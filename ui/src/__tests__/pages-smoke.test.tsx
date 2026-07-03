@@ -43,7 +43,7 @@ vi.mock("lucide-react", () => {
     Loader2Icon: Icon, LogOut: Icon, LucideProps: Icon,
     Mail: Icon, Maximize2: Icon, Menu: Icon, MessageSquare: Icon,
     MessageSquareShare: Icon, Mic: Icon, Minimize2: Icon, Minus: Icon,
-    Monitor: Icon, Moon: Icon, MoreHorizontal: Icon, Network: Icon,
+    Monitor: Icon, Moon: Icon, MoreHorizontal: Icon, Network: Icon, Nut: Icon,
     OctagonXIcon: Icon, PanelLeftIcon: Icon, PanelRight: Icon,
     Paperclip: Icon, Pencil: Icon, Phone: Icon, Pin: Icon, PinOff: Icon,
     Play: Icon, Plus: Icon, Power: Icon, PowerOff: Icon, Radio: Icon,
