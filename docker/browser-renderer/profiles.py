@@ -2,6 +2,9 @@
 import asyncio
 import os
 import posixpath
+import re
+
+_PROFILE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 class ProfileManager:
@@ -16,6 +19,8 @@ class ProfileManager:
         return self._root
 
     async def get_context(self, profile: str):
+        if not _PROFILE_RE.fullmatch(profile):
+            raise ValueError(f"invalid profile name: {profile!r}")
         existing = self._contexts.get(profile)
         if existing is not None:
             return existing
