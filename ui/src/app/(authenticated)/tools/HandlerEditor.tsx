@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useEffect, useState } from "react";
+import { useTheme } from "next-themes";
 import CodeMirror from "@uiw/react-codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { python } from "@codemirror/lang-python";
@@ -96,6 +97,7 @@ function PythonEditor({
   onChange: (v: string) => void;
   onSave?: () => void;
 }) {
+  const { resolvedTheme } = useTheme();
   const onSaveRef = useRef(onSave);
   useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
 
@@ -114,7 +116,7 @@ function PythonEditor({
       <CodeMirror
         value={value}
         onChange={handleChange}
-        theme={oneDark}
+        theme={resolvedTheme === "dark" ? oneDark : "light"}
         extensions={[python(), saveKeymap]}
         basicSetup={{
           lineNumbers: true,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useEffect, useMemo } from "react";
+import { useTheme } from "next-themes";
 import CodeMirror from "@uiw/react-codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { markdown } from "@codemirror/lang-markdown";
@@ -22,6 +23,7 @@ export interface ObsidianEditorProps {
 }
 
 export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }: ObsidianEditorProps) {
+  const { resolvedTheme } = useTheme();
   const onSaveRef = useRef(onSave);
   useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
 
@@ -104,7 +106,7 @@ export function ObsidianEditor({ value, onChange, onSave, noteDir, onNavigate }:
       <CodeMirror
         value={value}
         onChange={handleChange}
-        theme={oneDark}
+        theme={resolvedTheme === "dark" ? oneDark : "light"}
         extensions={extensions}
         basicSetup={{ lineNumbers: false, foldGutter: false, highlightActiveLine: false }}
         className="h-full [&_.cm-editor]:h-full [&_.cm-scroller]:overflow-auto"

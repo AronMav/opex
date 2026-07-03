@@ -1,11 +1,16 @@
 "use client";
 
 import { useCallback, useRef, useMemo, useEffect } from "react";
+import { useTheme } from "next-themes";
 import CodeMirror from "@uiw/react-codemirror";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { yaml } from "@codemirror/lang-yaml";
+import { StreamLanguage } from "@codemirror/language";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { keymap } from "@codemirror/view";
+import type { Extension } from "@codemirror/state";
 
 interface CodeEditorProps {
   value: string;
@@ -14,15 +19,21 @@ interface CodeEditorProps {
   language?: string;
 }
 
-function getExtension(lang: string | undefined) {
+function getExtension(lang: string | undefined): Extension[] {
   switch (lang) {
     case "json":
-      return json();
+      return [json()];
+    case "yaml":
+    case "yml":
+      return [yaml()];
+    case "toml":
+      return [StreamLanguage.define(toml)];
     case "md":
     case "markdown":
-      return markdown();
+      return [markdown()];
     default:
-      return markdown();
+      // Unknown types render as plain text (no language extension).
+      return [];
   }
 }
 
@@ -46,6 +57,7 @@ function getLangFromFilename(filename: string): string | undefined {
 export { getLangFromFilename };
 
 export function CodeEditor({ value, onChange, onSave, language }: CodeEditorProps) {
+  const { resolvedTheme } = useTheme();
   const handleChange = useCallback(
     (val: string) => {
       onChange(val);
@@ -65,8 +77,8 @@ export function CodeEditor({ value, onChange, onSave, language }: CodeEditorProp
       <CodeMirror
         value={value}
         onChange={handleChange}
-        theme={oneDark}
-        extensions={[getExtension(language), saveKeymap]}
+        theme={resolvedTheme === "dark" ? oneDark : "light"}
+        extensions={[...getExtension(language), saveKeymap]}
         basicSetup={{
           lineNumbers: true,
           foldGutter: true,
