@@ -133,6 +133,7 @@ export function ChatComposer() {
   );
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [activeMentionId, setActiveMentionId] = useState<string | null>(null);
   const [resolvedMention, setResolvedMention] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<AttachmentEntry[]>([]);
   const formRef = useRef<HTMLFormElement | null>(null);
@@ -510,6 +511,15 @@ export function ChatComposer() {
   }, [attachments]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // While the slash- or @-mention menu is open, Enter/Tab belong to the menu
+    // (it selects the active item via its own capture-phase handler). Suppress
+    // the textarea submit so a half-typed "/" or "@" is never sent. Unlike the
+    // slash menu — which clears the textarea on select — the mention menu inserts
+    // "@name " and leaves the text, so without this guard Enter would still send.
+    if (slashQuery !== null || mentionQuery !== null) {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); return; }
+      if (e.key === "Tab") { e.preventDefault(); return; }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       // When streaming: form submit triggers sendMessage → interruptAndSend.
@@ -533,7 +543,11 @@ export function ChatComposer() {
       }
       // If idle: let default newline behavior proceed.
     }
-  }, [attachments]);
+  }, [attachments, slashQuery, mentionQuery]);
+
+  const handleMentionClose = useCallback(() => {
+    setMentionQuery(null);
+  }, []);
 
   // ── Paste and drag-drop file attachment ──────────────────────────────────
 
@@ -653,6 +667,8 @@ export function ChatComposer() {
               query={mentionQuery}
               agents={agents.filter(a => a !== currentAgent)}
               onSelect={handleMentionSelect}
+              onClose={handleMentionClose}
+              onActiveChange={setActiveMentionId}
             />
           )}
           {attachments.length > 0 && attachments.map((att) => (
@@ -698,6 +714,10 @@ export function ChatComposer() {
             enterKeyHint="send"
             autoCorrect="off"
             autoCapitalize="sentences"
+            role={mentionQuery !== null ? "combobox" : undefined}
+            aria-expanded={mentionQuery !== null ? true : undefined}
+            aria-autocomplete={mentionQuery !== null ? "list" : undefined}
+            aria-activedescendant={mentionQuery !== null ? (activeMentionId ?? undefined) : undefined}
             placeholder={
               messageSource.mode === "history"
                 ? t("chat.continue_dialog")
