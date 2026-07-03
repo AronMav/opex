@@ -19,6 +19,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [payloadExpanded, setPayloadExpanded] = useState(false);
 
   const handleApprove = useCallback(async () => {
     setIsSubmitting(true);
@@ -110,7 +111,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
   return (
     <div className="rounded-lg border border-warning/40 bg-card/50 p-4" role="status" aria-label={t("chat.approval_awaiting")}>
       {/* Header row */}
-      <Collapsible>
+      <Collapsible open={payloadExpanded} onOpenChange={setPayloadExpanded}>
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-warning animate-pulse shadow-lg shadow-warning/30 shrink-0" aria-hidden="true" />
           <span className="font-mono text-xs font-semibold tracking-tight text-foreground truncate">
@@ -130,7 +131,20 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
           </CollapsibleTrigger>
         </div>
 
-        {/* Collapsible INPUT section */}
+        {/* Always-visible payload preview — admin must see args before approving, without clicking.
+            Hidden while expanded to avoid showing the same JSON twice. */}
+        {!payloadExpanded && (
+          <div className="mt-2">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary/70">
+              {t("chat.approval_input")}
+            </span>
+            <pre className="bg-muted/40 rounded p-2 text-xs font-mono overflow-x-auto line-clamp-3 mt-1 whitespace-pre-wrap">
+              {inputDisplay}
+            </pre>
+          </div>
+        )}
+
+        {/* Collapsible: full, unclamped INPUT section */}
         <CollapsibleContent>
           <div className="mt-2">
             <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary/70">
