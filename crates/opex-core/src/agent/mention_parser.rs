@@ -4,6 +4,8 @@
 /// Word boundary rule: `@` must be preceded by whitespace, start of string,
 /// or a punctuation character (not alphanumeric or `.`). This prevents
 /// matching inside email addresses like `user@Agent1.com`.
+// reviewed: search_from lands just after ASCII '@' from find() — char boundary
+#[allow(clippy::string_slice)]
 pub fn parse_mentions(text: &str, known_agents: &[String]) -> Vec<String> {
     let mut found = Vec::new();
     let lower_text = text.to_lowercase();
@@ -51,6 +53,8 @@ pub fn parse_first_mention(text: &str, known_agents: &[String]) -> Option<String
 
 /// Strip @`AgentName` mention from text, returning cleaned text.
 /// Case-insensitive replacement.
+// reviewed: offsets from ascii_ci_find() + ASCII pattern .len() — char boundaries
+#[allow(clippy::string_slice)]
 pub fn strip_mention(text: &str, agent_name: &str) -> String {
     let pattern = format!("@{agent_name}");
     // Search the original `text` case-insensitively so offsets index it

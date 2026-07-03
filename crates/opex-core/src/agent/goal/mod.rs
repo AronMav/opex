@@ -14,6 +14,8 @@ pub enum Verdict {
 }
 
 /// Tolerant judge-output parser: strip ``` fences, take the first {...}, read `done`.
+// reviewed: offsets from find('{')/rfind('}') (ASCII) — char boundaries
+#[allow(clippy::string_slice)]
 pub fn parse_judge_verdict(raw: &str) -> Verdict {
     let cleaned = raw.replace("```json", "").replace("```", "");
     let (start, end) = (cleaned.find('{'), cleaned.rfind('}'));

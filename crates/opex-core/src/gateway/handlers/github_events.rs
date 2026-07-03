@@ -162,6 +162,8 @@ fn parse_issues(
     )
 }
 
+// reviewed: floor_char_boundary-bounded body preview — char boundary
+#[allow(clippy::string_slice)]
 fn parse_issue_comment(
     payload: &Value,
     repo: &str,
@@ -219,6 +221,8 @@ fn parse_pr_review(
     )
 }
 
+// reviewed: sha[..7] is ASCII git hex, guarded by len() >= 7 — char boundary
+#[allow(clippy::string_slice)]
 fn parse_ci(
     event_type: &str,
     payload: &Value,

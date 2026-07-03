@@ -106,6 +106,8 @@ impl GoogleProvider {
 
 #[async_trait]
 impl LlmProvider for GoogleProvider {
+    // reviewed: floor_char_boundary-bounded error preview — char boundary
+    #[allow(clippy::string_slice)]
     async fn chat(
         &self,
         messages: &[Message],
@@ -253,6 +255,8 @@ impl LlmProvider for GoogleProvider {
         })
     }
 
+    // reviewed: offsets from find('\n')+1 (ASCII) — char boundaries
+    #[allow(clippy::string_slice)]
     async fn chat_stream(
         &self,
         messages: &[Message],

@@ -686,6 +686,8 @@ fn shares_significant_token(user_text: &str, tool_name: &str, tool_desc: &str) -
 
 /// Strip `<minimax:tool_call>…</minimax:tool_call>` blocks from a string.
 // Called from DefaultContextBuilder::build() via ContextBuilder trait object dispatch.
+// reviewed: offsets from find() + ASCII marker const .len() — char boundaries
+#[allow(clippy::string_slice)]
 fn strip_minimax_xml(s: &str) -> String {
     const OPEN: &str = "<minimax:tool_call>";
     const CLOSE: &str = "</minimax:tool_call>";

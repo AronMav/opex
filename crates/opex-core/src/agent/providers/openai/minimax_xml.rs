@@ -18,6 +18,8 @@
 /// </invoke>
 /// </minimax:tool_call>
 /// ```
+// reviewed: offsets from find() + ASCII marker const .len() — char boundaries
+#[allow(clippy::string_slice)]
 pub(crate) fn extract_minimax_xml_tool_calls(
     content: &str,
 ) -> (String, Vec<opex_types::ToolCall>) {
@@ -57,6 +59,8 @@ pub(crate) fn extract_minimax_xml_tool_calls(
 }
 
 /// Parse `<invoke name="...">...</invoke>` elements and push them into `out`.
+// reviewed: offsets from find() + ASCII marker const .len(); UUID slice is ASCII hex
+#[allow(clippy::string_slice)]
 fn parse_xml_invoke_blocks(block: &str, out: &mut Vec<opex_types::ToolCall>) {
     const INV_OPEN: &str = "<invoke";
     const INV_CLOSE: &str = "</invoke>";
@@ -91,6 +95,8 @@ fn parse_xml_invoke_blocks(block: &str, out: &mut Vec<opex_types::ToolCall>) {
 }
 
 /// Parse `<parameter name="...">VALUE</parameter>` pairs into a JSON map.
+// reviewed: offsets from find() + ASCII marker const .len() — char boundaries
+#[allow(clippy::string_slice)]
 fn parse_xml_parameters(body: &str, out: &mut serde_json::Map<String, serde_json::Value>) {
     const PARAM_OPEN: &str = "<parameter";
     const PARAM_CLOSE: &str = "</parameter>";
@@ -124,6 +130,8 @@ fn parse_xml_parameters(body: &str, out: &mut serde_json::Map<String, serde_json
 }
 
 /// Extract `attr="VALUE"` from an XML tag fragment (everything after the tag name).
+// reviewed: offsets from find() + needle.len() (ASCII) — char boundaries
+#[allow(clippy::string_slice)]
 fn xml_extract_attr(s: &str, attr: &str) -> Option<String> {
     let needle = format!("{attr}=\"");
     let start = s.find(needle.as_str())? + needle.len();

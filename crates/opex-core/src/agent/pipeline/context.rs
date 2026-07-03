@@ -78,6 +78,8 @@ pub fn truncate_preview(s: &str, max: usize) -> String {
 /// Truncate a tool result to fit within remaining context budget.
 /// Preserves head + tail (tail may contain errors/JSON closing).
 /// Budget: 50% of remaining context, floor 2000 chars.
+// reviewed: all slice bounds via floor_char_boundary — char boundaries
+#[allow(clippy::string_slice)]
 pub fn truncate_tool_result(model: &str, result: &str, current_context_chars: usize) -> String {
     let model_max_chars = super::llm_call::default_context_for_model(model) * 4;
     let remaining = model_max_chars.saturating_sub(current_context_chars);

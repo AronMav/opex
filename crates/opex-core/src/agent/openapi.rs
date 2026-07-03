@@ -25,6 +25,8 @@ pub(crate) struct DraftParamYaml {
 }
 
 /// Determine server base URL from `OpenAPI` spec.
+// reviewed: offset from find("://")+3 (ASCII) — char boundary
+#[allow(clippy::string_slice)]
 pub(crate) fn discover_base_url(spec: &serde_json::Value, fallback_url: &str) -> String {
     // OpenAPI 3.x: servers[0].url
     if let Some(url) = spec["servers"][0]["url"].as_str()

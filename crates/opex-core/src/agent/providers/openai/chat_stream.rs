@@ -10,6 +10,8 @@ use super::OpenAiCompatibleProvider;
 use crate::agent::providers::http::SendError;
 
 impl OpenAiCompatibleProvider {
+    // reviewed: offsets from find('\n')+1 (ASCII) — char boundaries
+    #[allow(clippy::string_slice)]
     pub(super) async fn execute_chat_stream(
         &self,
         messages: &[Message],

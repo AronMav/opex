@@ -75,6 +75,8 @@ pub struct SkillDef {
 impl SkillDef {
     /// Parse a Markdown file with YAML frontmatter.
     /// Returns None if the file lacks valid frontmatter or fails to parse.
+    // reviewed: [3..] guarded by starts_with("---") (ASCII); rest from find() — char boundaries
+    #[allow(clippy::string_slice)]
     pub fn parse(content: &str) -> Option<Self> {
         // Frontmatter is delimited by `---` on its own line
         let content = content.trim_start();
@@ -301,6 +303,9 @@ pub async fn write_skill(
 /// Atomically updates `last_used_at` in skill frontmatter.
 /// Skips write if existing value is fresher than `min_age`.
 /// Errors are logged — never panics.
+// reviewed: skill files always begin with ASCII "---\n" (frontmatter contract),
+// so content[3..] is a char boundary; fm_end from find("\n---")+4 (ASCII).
+#[allow(clippy::string_slice)]
 pub async fn update_skill_last_used_if_stale(
     path: &str,
     now_iso: &str,

@@ -557,6 +557,8 @@ pub async fn handle_tool_list(workspace_dir: &str, args: &serde_json::Value) -> 
 
 /// Internal tool: test a YAML tool (including draft) with specific parameters.
 #[allow(clippy::too_many_arguments)]
+// reviewed: floor_char_boundary-bounded response preview — char boundary
+#[allow(clippy::string_slice)]
 pub async fn handle_tool_test(
     workspace_dir: &str,
     db: &sqlx::PgPool,
@@ -1133,6 +1135,8 @@ pub fn apply_text_edits(original: &str, edits: &[serde_json::Value], encoding: &
     }
 
     /// Resolve a `{line, character}` pair to a byte offset in `text`.
+    // reviewed: line_start/next_line_start are \n-split line offsets — char boundaries
+    #[allow(clippy::string_slice)]
     fn resolve_byte(
         text: &str,
         line_starts: &[usize],

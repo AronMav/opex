@@ -530,6 +530,8 @@ pub(crate) async fn api_regenerate_webhook_secret(
 
 // ── Helpers ──
 
+// reviewed: floor_char_boundary-bounded secret-tail slice — char boundary
+#[allow(clippy::string_slice)]
 fn webhook_to_dto(wh: &WebhookRow) -> WebhookEntryDto {
     let masked_secret = wh.secret.as_ref().map(|s| {
         if s.chars().count() > 4 {

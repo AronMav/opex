@@ -10,6 +10,8 @@ use super::response::ChatCompletionResponse;
 use super::OpenAiCompatibleProvider;
 
 impl OpenAiCompatibleProvider {
+    // reviewed: floor_char_boundary-bounded error previews — char boundaries
+    #[allow(clippy::string_slice)]
     pub(super) async fn execute_chat(
         &self,
         messages: &[Message],

@@ -5,6 +5,8 @@ use opex_types::{Message, MessageRole};
 
 /// Remove `<think>...</think>` (and `<thinking>`, `<thought>`, `<antthinking>`) blocks
 /// from LLM response. Uses ASCII case-insensitive search to avoid byte offset mismatches.
+// reviewed: all offsets from ASCII-tag find()/find('>') — char boundaries
+#[allow(clippy::string_slice)]
 pub(crate) fn strip_thinking(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut rest = text;
@@ -54,6 +56,8 @@ impl ThinkingFilter {
     }
 
     /// Process a chunk, return text to emit (may be empty if inside thinking block).
+    // reviewed: offsets from ASCII-tag find()/floor_char_boundary — char boundaries
+    #[allow(clippy::string_slice)]
     pub fn process(&mut self, chunk: &str) -> String {
         self.buffer.push_str(chunk);
         let mut output = String::new();

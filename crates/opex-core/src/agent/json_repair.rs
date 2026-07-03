@@ -33,6 +33,8 @@ fn strip_markdown_fences(s: &str) -> String {
 }
 
 /// Extract the first top-level JSON object from text that may have prefix/suffix.
+// reviewed: start from find('{'), end from char_indices() offset — char boundaries
+#[allow(clippy::string_slice)]
 fn extract_json_object(s: &str) -> String {
     let Some(start) = s.find('{') else { return s.to_string() };
     let mut depth = 0i32;

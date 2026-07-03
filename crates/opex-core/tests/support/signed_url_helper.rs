@@ -56,6 +56,8 @@ pub fn mint_signed_url(base: &str, uuid: &str, ext: &str, key: &[u8; 32], ttl_se
 /// Forgiving: accepts absolute or path-only URLs, as long as they contain
 /// `/uploads/…?sig=…&exp=…`. Does NOT verify the signature — that's the
 /// verifier-under-test's job.
+// reviewed: offset from find(prefix) + ASCII prefix .len() — char boundary
+#[allow(clippy::string_slice)]
 pub fn parse_signed_url(url: &str) -> Result<ParsedSignedUrl, String> {
     let (path_and_query, _) = match url.split_once('#') {
         Some(s) => s,

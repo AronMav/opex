@@ -1382,6 +1382,8 @@ mod etag_tests {
     use sha2::{Digest, Sha256};
 
     #[tokio::test]
+    // reviewed: slice of ASCII quoted-hex SHA256 ETag — char boundary
+    #[allow(clippy::string_slice)]
     async fn etag_format_is_quoted_hex_sha256() {
         // ETag format: "<64-char hex of SHA256>"
         let canonical = b"{\"providers\":{}}";
