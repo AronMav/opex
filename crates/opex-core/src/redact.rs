@@ -6,6 +6,30 @@
 //! dependency on the tools layer.  Two new helpers are added: `redact_oauth_str`
 //! (OAuth-specific keywords) and `redact_token_in_url` (URL query-param
 //! sanitization).  The `yaml_tools` callers now call `crate::redact::redact_secrets`.
+//!
+//! `redact_url_userinfo` and `redact_terminal_output` (T02 triage, Пункты 3+5)
+//! close two additional gaps: bare tokens in URL userinfo
+//! (`scheme://TOKEN@host`, no `?query` involved) and unredacted subprocess /
+//! container-exec stdout (which can trivially contain an `env`/`printenv`
+//! dump of the process environment).
+
+use std::sync::LazyLock;
+use regex::Regex;
+
+/// Matches `scheme://userinfo@host` where `userinfo` is 8+ chars of anything
+/// but whitespace/`@`/`/`. Covers both bare-token (`https://ghp_xxx@host`)
+/// and `user:pass@host` forms. The 8-char floor keeps short conventional
+/// forms like `git@github.com` (no `scheme://`, so unmatched anyway) and
+/// `admin@host` intact — see regression test.
+///
+/// The scheme is matched generically (`[a-z][a-z0-9+.-]*://`, RFC 3986 scheme
+/// grammar) rather than an explicit allowlist — credential-bearing userinfo
+/// isn't scheme-specific (`postgres://`, `mysql://`, `redis://`, `mongodb://`,
+/// `amqp://` connection strings are exactly as sensitive as `https://`/`git://`
+/// and OPEX's own `DATABASE_URL` is a `postgres://user:pass@host` string).
+static URL_USERINFO: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://)([^\s@/]{8,})(@)").unwrap()
+});
 
 // ── Shared constant ───────────────────────────────────────────────────────────
 
@@ -113,6 +137,28 @@ fn redact_pattern_after_keyword(
 
 // ── Public helpers ────────────────────────────────────────────────────────────
 
+/// Apply the keyword-based secret patterns (Bearer / api_key / api-key /
+/// token) to `body` with no truncation. Shared by `redact_secrets` (which
+/// truncates first, for error-body use) and `redact_terminal_output` (which
+/// must NOT truncate — log tails can legitimately be many KB).
+///
+/// Simple state-machine redaction — avoids pulling in the `regex` crate for
+/// this hot-path helper (regex already compiled elsewhere but we keep this
+/// dependency-free for portability).
+fn redact_known_keyword_patterns(body: &str) -> String {
+    let mut result = body.to_string();
+
+    // Redact Bearer tokens: "Bearer <token>"
+    result = redact_pattern_after_keyword(&result, "bearer ", is_token_char);
+    // Redact api_key / api-key variants: keyword then optional [ =:"] then value
+    result = redact_pattern_after_keyword(&result, "api_key", is_token_char_or_separator);
+    result = redact_pattern_after_keyword(&result, "api-key", is_token_char_or_separator);
+    // Redact token variants
+    result = redact_pattern_after_keyword(&result, "token", is_token_char_or_separator);
+
+    result
+}
+
 /// Redact common secret patterns from a string before it is included in error
 /// messages or audit logs.  The redacted string is also truncated to
 /// [`ERROR_BODY_MAX_CHARS`] so that large response bodies don't bloat logs.
@@ -135,20 +181,7 @@ pub(crate) fn redact_secrets(body: &str) -> String {
         body
     };
 
-    // Simple state-machine redaction — avoids pulling in the `regex` crate
-    // for this hot-path helper (regex already compiled elsewhere but we keep
-    // this dependency-free for portability).
-    let mut result = truncated.to_string();
-
-    // Redact Bearer tokens: "Bearer <token>"
-    result = redact_pattern_after_keyword(&result, "bearer ", is_token_char);
-    // Redact api_key / api-key variants: keyword then optional [ =:"] then value
-    result = redact_pattern_after_keyword(&result, "api_key", is_token_char_or_separator);
-    result = redact_pattern_after_keyword(&result, "api-key", is_token_char_or_separator);
-    // Redact token variants
-    result = redact_pattern_after_keyword(&result, "token", is_token_char_or_separator);
-
-    result
+    redact_known_keyword_patterns(truncated)
 }
 
 /// Replace OAuth-specific token values in `s` with `[REDACTED]` before logging.
@@ -170,20 +203,68 @@ pub(crate) fn redact_oauth_str(s: &str) -> String {
     out
 }
 
+/// Redact bare tokens / credentials living in a URL's userinfo component
+/// (`scheme://TOKEN@host/...` or `scheme://user:pass@host/...`).
+///
+/// This is a distinct gap from `redact_token_in_url`: query-string redaction
+/// only looks after `?`, but a userinfo token appears *before* the host and
+/// carries no recognizable keyword (`token=`, `api_key=`, …), so the
+/// keyword-based `redact_secrets`/`redact_oauth_str` never catches it.
+///
+/// 8+ char floor on the userinfo run avoids mangling short conventional
+/// forms (`git@github.com` has no `scheme://` prefix so it's unaffected;
+/// `admin@host` is under the floor and left untouched by design).
+///
+/// T02 triage Пункт 3 (hermes_ref 3483424aa).
+pub(crate) fn redact_url_userinfo(s: &str) -> String {
+    URL_USERINFO
+        .replace_all(s, |caps: &regex::Captures| {
+            format!("{}[REDACTED]{}", &caps[1], &caps[3])
+        })
+        .into_owned()
+}
+
 /// Redact token-bearing query parameters from a URL string.
 ///
 /// Applies `redact_oauth_str` to the query portion only so the host/path are
-/// not mangled.  Non-secret params are preserved unchanged.
+/// not mangled.  Non-secret params are preserved unchanged.  Also runs
+/// `redact_url_userinfo` over the whole string so a bare token/credential
+/// pair in the userinfo component (before the host, before any `?query`) is
+/// covered by the same entry point.
 ///
 /// Used by the `gemini-cloudcode` OAuth subtree (Task 1+).
 #[allow(dead_code)]
 pub(crate) fn redact_token_in_url(url: &str) -> String {
-    if let Some(q_start) = url.find('?') {
-        let (base, query) = url.split_at(q_start);
+    let with_userinfo_redacted = redact_url_userinfo(url);
+    if let Some(q_start) = with_userinfo_redacted.find('?') {
+        let (base, query) = with_userinfo_redacted.split_at(q_start);
         format!("{}{}", base, redact_oauth_str(query))
     } else {
-        url.to_string()
+        with_userinfo_redacted
     }
+}
+
+/// Redact secrets from subprocess/container-exec terminal output before it
+/// reaches the model or an API response.
+///
+/// Background host processes (`process_start`) and container `exec` run
+/// arbitrary commands (including `env`/`printenv`) whose stdout was
+/// previously returned to the model verbatim. Rather than trying to detect
+/// "is this an env-dump command" (fragile — command chaining, aliases,
+/// wrapper scripts all evade a command-name check), this unconditionally
+/// runs the same keyword-based patterns as `redact_secrets` plus
+/// `redact_url_userinfo` over the *entire* output. Safer default: redact
+/// always, not just when a command looks suspicious.
+///
+/// Deliberately does NOT go through `redact_secrets` itself: that helper
+/// truncates to [`ERROR_BODY_MAX_CHARS`] (200 chars), which is correct for
+/// HTTP error bodies but would silently drop most of a multi-line log tail
+/// here. Terminal output keeps its own length; only its secret substrings
+/// are masked.
+///
+/// T02 triage Пункт 5 (hermes_ref c1c179a23, severity P0).
+pub(crate) fn redact_terminal_output(output: &str) -> String {
+    redact_url_userinfo(&redact_known_keyword_patterns(output))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -244,6 +325,71 @@ mod tests {
     fn redact_token_in_url_no_query_unchanged() {
         let url = "https://example.com/path";
         assert_eq!(redact_token_in_url(url), url);
+    }
+
+    // ── redact_url_userinfo ──────────────────────────────────────────────────
+
+    #[test]
+    fn redact_url_userinfo_bare_token() {
+        let url = "https://ghp_aaaaaaaaaaaaaaaaaaaa@github.com/o/r.git";
+        let out = redact_url_userinfo(url);
+        assert!(!out.contains("ghp_aaaaaaaaaaaaaaaaaaaa"), "token must be redacted: {out}");
+        assert!(out.contains("@github.com/o/r.git"), "host/path preserved: {out}");
+    }
+
+    #[test]
+    fn redact_url_userinfo_user_pass() {
+        let url = "postgres://user:secretpass@db:5432/x";
+        let out = redact_url_userinfo(url);
+        assert!(!out.contains("secretpass"), "password must be redacted: {out}");
+        assert!(!out.contains("user:secretpass"), "userinfo must be fully redacted: {out}");
+        assert!(out.contains("@db:5432/x"), "host/port/path preserved: {out}");
+    }
+
+    #[test]
+    fn redact_url_userinfo_short_git_shorthand_untouched() {
+        // No `scheme://` prefix (SSH shorthand) — must not be mangled.
+        let url = "git@github.com:o/r.git";
+        assert_eq!(redact_url_userinfo(url), url, "short git@ shorthand must be left untouched");
+    }
+
+    #[test]
+    fn redact_url_userinfo_via_redact_token_in_url() {
+        // redact_token_in_url is the existing public entry point used by the
+        // OAuth subtree; it must now also cover userinfo, not just query.
+        let url = "https://ghp_aaaaaaaaaaaaaaaaaaaa@github.com/o/r.git?foo=bar";
+        let out = redact_token_in_url(url);
+        assert!(!out.contains("ghp_aaaaaaaaaaaaaaaaaaaa"), "token must be redacted: {out}");
+        assert!(out.contains("@github.com/o/r.git"), "host/path preserved: {out}");
+    }
+
+    // ── redact_terminal_output ───────────────────────────────────────────────
+
+    #[test]
+    fn redact_terminal_output_masks_env_dump_and_bearer() {
+        let output = "MY_TOKEN=abc123opaquevalue\nAuthorization: bearer sk-xxxxxxxxxxxxxxxxxxxxxxxx\nHOME=/home/u";
+        let out = redact_terminal_output(output);
+        assert!(!out.contains("abc123opaquevalue"), "env token value must be redacted: {out}");
+        assert!(!out.contains("sk-xxxxxxxxxxxxxxxxxxxxxxxx"), "bearer token must be redacted: {out}");
+        assert!(out.contains("HOME=/home/u"), "benign env line must be preserved: {out}");
+    }
+
+    #[test]
+    fn redact_terminal_output_does_not_truncate_long_log_tails() {
+        // Regression: redact_secrets truncates to ERROR_BODY_MAX_CHARS (200),
+        // which is wrong for a multi-line log tail. redact_terminal_output
+        // must preserve full length.
+        let long = "line of benign log output\n".repeat(20);
+        assert!(long.len() > ERROR_BODY_MAX_CHARS);
+        let out = redact_terminal_output(&long);
+        assert_eq!(out.len(), long.len(), "terminal output must not be truncated: {out}");
+    }
+
+    #[test]
+    fn redact_terminal_output_redacts_userinfo_url() {
+        let output = "cloning from https://ghp_aaaaaaaaaaaaaaaaaaaa@github.com/o/r.git";
+        let out = redact_terminal_output(output);
+        assert!(!out.contains("ghp_aaaaaaaaaaaaaaaaaaaa"), "URL userinfo token must be redacted: {out}");
     }
 
     // ── redact_secrets (MOVED from yaml_tools) ───────────────────────────────
