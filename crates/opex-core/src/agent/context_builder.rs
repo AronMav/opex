@@ -10,6 +10,40 @@ use uuid::Uuid;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
+/// Estimate-only per-category context-size breakdown (T17 triage — hermes
+/// parity for the `/usage` popover). Every value is a chars/4 heuristic, the
+/// same approximation already used for the aggregate `prompt_approx_tokens`
+/// / `tools_tokens` log fields below — NOT a provider-measured token count.
+/// Categories are additive (sum ≈ total estimated prompt size) but are not
+/// guaranteed to exactly reconcile with the provider's real prompt_tokens.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ContextBreakdown {
+    /// Base workspace prompt + capability/runtime header + MCP schema list
+    /// (the `build_system_prompt(...)` output), before any of the
+    /// request-specific blocks below are appended.
+    pub system_prompt: usize,
+    /// Skill-capture hint + skill-trigger hint + tool-trigger hint blocks
+    /// appended conditionally per-request.
+    pub skills: usize,
+    /// Multi-agent participants block.
+    pub multi_agent: usize,
+    /// Pinned memory chunks (L0 budget) injected into the system prompt.
+    pub memory: usize,
+    /// Session TODO list block.
+    pub todo: usize,
+    /// Serialized tool definitions sent to the provider (builtin + YAML +
+    /// capability + MCP, after policy filtering / dispatcher partitioning).
+    pub tools: usize,
+    /// Conversation history (loaded messages, pre-repair).
+    pub conversation: usize,
+}
+
+impl ContextBreakdown {
+    pub fn total(&self) -> usize {
+        self.system_prompt + self.skills + self.multi_agent + self.memory + self.todo + self.tools + self.conversation
+    }
+}
+
 /// Named return type for context building — replaces the anonymous
 /// `(Uuid, Vec<Message>, Vec<ToolDefinition>)` tuple.
 #[derive(Debug, Clone)]
@@ -26,6 +60,10 @@ pub struct ContextSnapshot {
     /// non-empty file`. Threaded through `BootstrapOutcome` and consumed
     /// at every `CallOptions` site in `pipeline::execute`.
     pub claude_md_content: Option<String>,
+    /// T17 triage: estimate-only per-category context-size breakdown, used by
+    /// `GET /api/agents/{name}/context-breakdown`. Cached on `AgentState` by
+    /// the caller (not persisted) — recomputed on every `build_context` call.
+    pub breakdown: ContextBreakdown,
 }
 
 /// Abstraction over context building so unit tests can inject a `MockContextBuilder`
@@ -237,6 +275,11 @@ impl ContextBuilder for DefaultContextBuilder {
             deps.session_load_messages(session_id, limit).await?
         };
 
+        // T17: conversation-history size estimate (chars/4 heuristic, same as
+        // the system-prompt estimate below) — captured pre-repair, before any
+        // synthetic/orphan-result adjustments below.
+        let conversation_chars: usize = history.iter().map(|row| row.content.len()).sum();
+
         // 3. Build system prompt with MCP tool schemas
         // CACHE-02 / Pitfall 5: only base agents with prompt_cache get
         // CLAUDE.md as a separate breakpoint block. All other paths use the
@@ -305,6 +348,9 @@ impl ContextBuilder for DefaultContextBuilder {
             &runtime,
             extension_catalogue.as_deref(),
         );
+
+        // T17: base prompt size before any request-specific blocks are appended.
+        let base_prompt_len = system_prompt.len();
 
         let msg_lower = user_text.to_lowercase();
 
@@ -417,6 +463,11 @@ impl ContextBuilder for DefaultContextBuilder {
             }
         }
 
+        // T17: everything appended since base_prompt (skill-capture + skill-trigger
+        // + tool-trigger hints) attributed to the "skills" category.
+        let skills_len = system_prompt.len() - base_prompt_len;
+        let pre_multi_agent_len = system_prompt.len();
+
         // 4e. Multi-agent session context
         if let Ok(participants) = deps.session_get_participants(session_id).await
             && participants.len() > 1
@@ -429,6 +480,8 @@ impl ContextBuilder for DefaultContextBuilder {
             // Agent tool usage instructions are in workspace.rs (SOUL.md "Agent Tool" section).
             // Not duplicated here to avoid token waste and inconsistency.
         }
+        let multi_agent_len = system_prompt.len() - pre_multi_agent_len;
+        let pre_memory_len = system_prompt.len();
 
         // L0: pinned memory chunks
         let pinned_budget = deps.pinned_budget_tokens();
@@ -437,12 +490,15 @@ impl ContextBuilder for DefaultContextBuilder {
             system_prompt.push_str(&pinned_text);
         }
         deps.store_pinned_chunk_ids(pinned_ids).await;
+        let memory_len = system_prompt.len() - pre_memory_len;
+        let pre_todo_len = system_prompt.len();
 
         // Session TODO list (persists across turns and context compaction)
         if let Some(todo_block) = deps.session_todo_block(session_id).await {
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&todo_block);
         }
+        let todo_len = system_prompt.len() - pre_todo_len;
 
         tracing::info!(
             agent = %deps.agent_name(),
@@ -607,12 +663,25 @@ impl ContextBuilder for DefaultContextBuilder {
             "context_size"
         );
 
+        // T17: estimate-only per-category breakdown, exposed via
+        // GET /api/agents/{name}/context-breakdown. All values chars/4.
+        let breakdown = ContextBreakdown {
+            system_prompt: base_prompt_len / 4,
+            skills: skills_len / 4,
+            multi_agent: multi_agent_len / 4,
+            memory: memory_len / 4,
+            todo: todo_len / 4,
+            tools: tools_tokens,
+            conversation: conversation_chars / 4,
+        };
+
         Ok(ContextSnapshot {
             session_id,
             messages,
             tools,
             reentry_mode,
             claude_md_content,
+            breakdown,
         })
     }
 }
@@ -664,6 +733,7 @@ pub mod mock {
                 tools: self.tools.clone(),
                 reentry_mode: self.reentry_mode,
                 claude_md_content: None,
+                breakdown: ContextBreakdown::default(),
             })
         }
     }

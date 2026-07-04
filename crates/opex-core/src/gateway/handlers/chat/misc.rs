@@ -1,6 +1,7 @@
 //! Small leaf handlers: `health`, `api_chat_abort`,
-//! `set_model_override`. Grouped here because each is under ~25 lines and
-//! splitting them further produces files dominated by their import blocks.
+//! `set_model_override`, `api_context_breakdown`. Grouped here because each
+//! is under ~25 lines and splitting them further produces files dominated by
+//! their import blocks.
 
 use axum::{
     extract::{Json, Path, Query, State},
@@ -28,7 +29,41 @@ pub(crate) async fn set_model_override(
     };
     engine.set_model_override(body.model.clone());
     let current = engine.current_model();
+
+    // Persist across restarts (T15 triage — the override previously lived
+    // only in the in-memory ModelOverride, lost on every process restart).
+    // Per-agent, not per-session — matches OPEX's existing in-memory semantics.
+    let db = engine.cfg().db.clone();
+    if let Err(e) = crate::db::model_overrides::set(&db, &agent_name, body.model.as_deref()).await {
+        tracing::warn!(agent = %agent_name, error = %e, "failed to persist model override");
+    }
+
     Json(serde_json::json!({"model": current})).into_response()
+}
+
+/// `GET /api/agents/{name}/context-breakdown` — estimate-only per-category
+/// context-size breakdown (T17 triage, hermes parity for the `/usage`
+/// popover). All values are chars/4 heuristics computed during the agent's
+/// last turn (cached on `AgentState`), NOT provider-measured token counts —
+/// mirrors the existing `system_prompt_size`/`context_size` log estimates in
+/// `context_builder.rs`. `null` breakdown means no turn has run for this
+/// agent since the process started.
+pub(crate) async fn api_context_breakdown(
+    State(agents): State<AgentCore>,
+    Path(agent_name): Path<String>,
+) -> impl IntoResponse {
+    let Some(engine) = agents.get_engine(&agent_name).await else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error":"not found"}))).into_response();
+    };
+    let breakdown = engine.state().context_breakdown().await;
+    let total = breakdown.as_ref().map(crate::agent::context_builder::ContextBreakdown::total);
+    Json(serde_json::json!({
+        "ok": true,
+        "estimated": true,
+        "agent": agent_name,
+        "breakdown": breakdown,
+        "total_estimated_tokens": total,
+    })).into_response()
 }
 
 pub(crate) async fn health(
