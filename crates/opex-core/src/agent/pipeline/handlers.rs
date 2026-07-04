@@ -1767,12 +1767,16 @@ mod tests {
     #[tokio::test]
     async fn handle_lsp_rename_no_changes_is_wrapped_in_lsp_output() {
         // Envelope with no `changes`/`documentChanges` → "no file changes"
-        // branch. Must still come back wrapped in <lsp_output>.
+        // branch. `handle_lsp_rename` itself does not wrap — wrapping is the
+        // caller's job (`handle_lsp`, applied uniformly to every branch's
+        // result, see its doc comment above). Apply the same wrap here to
+        // verify the composition the real call path produces.
         let raw = r#"{"positionEncoding":"utf-16","edit":{}}"#;
         let out = handle_lsp_rename(raw, "/workspace", "Agent", true).await;
-        assert!(out.starts_with("<lsp_output file=\"\""), "{out}");
-        assert!(out.contains("no file changes returned"), "{out}");
-        assert!(out.ends_with("</lsp_output>"), "{out}");
+        let wrapped = crate::agent::provenance::wrap_lsp_output("", &out);
+        assert!(wrapped.starts_with("<lsp_output file=\"\""), "{wrapped}");
+        assert!(wrapped.contains("no file changes returned"), "{wrapped}");
+        assert!(wrapped.ends_with("</lsp_output>"), "{wrapped}");
     }
 
     #[tokio::test]
