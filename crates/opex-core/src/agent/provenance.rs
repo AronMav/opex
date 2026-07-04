@@ -145,14 +145,22 @@ const UNTRUSTED_NAME_HINTS: &[&str] = &["web", "browser", "search", "its"];
 /// - System tools: only `web_fetch` / `browser_action` are untrusted; every
 ///   other system tool (workspace_*, memory, agent, code_exec, …) is
 ///   trusted internal and must NOT be wrapped.
-/// - YAML tools: classified by name hint (`web`/`browser`/`search`
+/// - YAML tools: classified by name hint (`web`/`browser`/`search`/`its`
 ///   substring, case-insensitive) — covers `web`, `screenshot_web`,
 ///   `browser`, `duckduckgo_search`, `tavily_search`, `search_ticker`,
-///   `wikipedia_search`, `open_library_search`, `urban_dictionary` (dict
-///   *search*), `email_search`, and the built-in `search_web` capability
-///   tool. Endpoint internality (`is_internal_endpoint`) is a pure
-///   network-transport/SSRF concern and is intentionally NOT consulted here
-///   — see `UNTRUSTED_NAME_HINTS` doc comment.
+///   `wikipedia_search`, `open_library_search`, `email_search`, and the
+///   built-in `search_web` capability tool.
+///
+/// This is a NAME-ONLY classifier and does NOT know a YAML tool's HTTP
+/// endpoint. It under-wraps YAML tools whose name carries no `web`/
+/// `browser`/`search`/`its` hint but whose endpoint is nonetheless an
+/// external/untrusted API (e.g. `urban_dictionary`, which calls
+/// `api.urbandictionary.com` — "dictionary" is not a "search" hint, despite
+/// an earlier version of this doc comment incorrectly claiming otherwise).
+/// Callers that have the YAML tool's endpoint available MUST additionally
+/// consult [`is_untrusted_yaml_tool`], which combines this name-hint with an
+/// endpoint check (`!is_internal_endpoint`) so externally-routed YAML tools
+/// are classified untrusted even without a name hint.
 ///
 /// When in doubt this returns `false` (do not wrap) — the caller should only
 /// invoke this for tools it can positively identify; skipping a wrap is
@@ -164,8 +172,41 @@ pub fn is_untrusted_tool(tool_name: &str, is_mcp: bool) -> bool {
     if UNTRUSTED_SYSTEM_TOOL_NAMES.contains(&tool_name) {
         return true;
     }
+    name_hints_untrusted(tool_name)
+}
+
+/// True if `tool_name` contains one of [`UNTRUSTED_NAME_HINTS`] as a
+/// case-insensitive substring. Split out of [`is_untrusted_tool`] so
+/// [`is_untrusted_yaml_tool`] can OR it with an endpoint check without
+/// duplicating the substring-match logic.
+fn name_hints_untrusted(tool_name: &str) -> bool {
     let lower = tool_name.to_lowercase();
     UNTRUSTED_NAME_HINTS.iter().any(|hint| lower.contains(hint))
+}
+
+/// Classify a YAML HTTP tool as fetching external/untrusted content, using
+/// BOTH its name (see [`is_untrusted_tool`]'s name-hint limitation) and its
+/// configured HTTP `endpoint`.
+///
+/// A YAML tool is untrusted if EITHER:
+/// - its endpoint is NOT an admin-configured internal service
+///   (`!crate::tools::ssrf::is_internal_endpoint(endpoint)`) — the tool
+///   calls some external third-party API (e.g. `urban_dictionary` →
+///   `api.urbandictionary.com`), so its response body is hostile-
+///   controllable content, regardless of what the tool happens to be named; OR
+/// - its name carries one of [`UNTRUSTED_NAME_HINTS`] — covers tools that
+///   proxy through an internal, admin-configured endpoint
+///   (`browser-renderer`, local `toolgate`) but still return externally
+///   sourced content (e.g. `browser`, `screenshot_web`, `its` — its.1c.ru
+///   content fetched via a persistent browser session at `browser-renderer:9020`,
+///   which is internal per `is_internal_endpoint`, yet the page content
+///   itself is untrusted).
+///
+/// Use this instead of [`is_untrusted_tool`] whenever the YAML tool's
+/// endpoint is available to the caller — it closes the under-wrap gap for
+/// externally-routed YAML tools that have no name hint.
+pub fn is_untrusted_yaml_tool(tool_name: &str, endpoint: &str) -> bool {
+    !crate::tools::ssrf::is_internal_endpoint(endpoint) || name_hints_untrusted(tool_name)
 }
 
 #[cfg(test)]
@@ -354,7 +395,6 @@ mod tests {
             "search_ticker",
             "wikipedia_search",
             "open_library_search",
-            "urban_dictionary",
             "email_search",
             "search_web",
         ] {
@@ -367,6 +407,50 @@ mod tests {
         // workspace/tools/its.yaml — fetches external its.1c.ru content
         // through a browser session; must be wrapped like web/browser tools.
         assert!(is_untrusted_tool("its", false));
+    }
+
+    #[test]
+    fn is_untrusted_tool_name_only_misses_urban_dictionary() {
+        // Documents the known name-hint limitation: `urban_dictionary` has no
+        // web/browser/search/its substring, so the plain name-only classifier
+        // does not flag it, even though it calls an external third-party API
+        // (api.urbandictionary.com). Callers with the YAML tool's endpoint
+        // available must use `is_untrusted_yaml_tool` instead, which closes
+        // this gap via the endpoint check.
+        assert!(!is_untrusted_tool("urban_dictionary", false));
+    }
+
+    // ── is_untrusted_yaml_tool (endpoint + name hint) ──────────────────────────
+
+    #[test]
+    fn is_untrusted_yaml_tool_true_for_external_endpoint_without_name_hint() {
+        // urban_dictionary has no web/browser/search/its name hint, but its
+        // endpoint is a third-party external API — must be classified
+        // untrusted via the endpoint check.
+        assert!(is_untrusted_yaml_tool(
+            "urban_dictionary",
+            "https://api.urbandictionary.com/v0/define"
+        ));
+    }
+
+    #[test]
+    fn is_untrusted_yaml_tool_true_for_name_hint_on_internal_endpoint() {
+        // browser/web/its tools proxy through an internal, admin-configured
+        // endpoint but still return externally sourced content — the name
+        // hint must still classify them untrusted even though the endpoint
+        // itself is internal.
+        assert!(is_untrusted_yaml_tool("browser", "http://browser-renderer:9020/screenshot"));
+        assert!(is_untrusted_yaml_tool("its", "http://browser-renderer:9020/its"));
+    }
+
+    #[test]
+    fn is_untrusted_yaml_tool_false_for_internal_endpoint_without_name_hint() {
+        // A YAML tool with neither an external endpoint nor a name hint is
+        // trusted internal content — must not be wrapped.
+        assert!(!is_untrusted_yaml_tool(
+            "some_internal_tool",
+            "http://localhost:9011/do-thing"
+        ));
     }
 
     #[test]

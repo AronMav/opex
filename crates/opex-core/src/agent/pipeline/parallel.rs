@@ -125,7 +125,15 @@ fn is_system_tool_parallel_safe(name: &str) -> bool {
 /// Wrap a completed tool result in the `<untrusted_tool_output>` provenance
 /// delimiter (defense-in-depth against indirect prompt injection from
 /// external content — web pages, browser automation, MCP servers, search
-/// results) when `name` is classified untrusted by
+/// results) when `name` is classified untrusted.
+///
+/// For YAML tools (present in `yaml_tools`), classification uses
+/// [`crate::agent::provenance::is_untrusted_yaml_tool`], which combines the
+/// name-hint check with the tool's configured HTTP endpoint — this closes
+/// the under-wrap gap for YAML tools that call an external third-party API
+/// but whose name carries no `web`/`browser`/`search`/`its` hint (e.g.
+/// `urban_dictionary` → `api.urbandictionary.com`). System/MCP tools (not in
+/// `yaml_tools`) fall back to the name/MCP-only
 /// [`crate::agent::provenance::is_untrusted_tool`].
 ///
 /// Skips the wrap in two cases where the string reaching this point is NOT
@@ -167,6 +175,13 @@ async fn maybe_wrap_untrusted_result(
         .is_some_and(|t| t.channel_action.is_some())
     {
         return result;
+    }
+    if let Some(yaml_tool) = yaml_tools.get(name) {
+        return if crate::agent::provenance::is_untrusted_yaml_tool(name, &yaml_tool.endpoint) {
+            crate::agent::provenance::wrap_untrusted_tool_output(name, &result)
+        } else {
+            result
+        };
     }
     let is_mcp = match mcp {
         Some(reg) => reg.find_mcp_for_tool(name).await.is_some(),
@@ -1235,6 +1250,65 @@ mod tests {
             maybe_wrap_untrusted_result("web", "some article text".to_string(), None, &yaml_tools)
                 .await;
         assert!(out.starts_with("<untrusted_tool_output tool=\"web\""), "{out}");
+    }
+
+    #[tokio::test]
+    async fn wraps_external_endpoint_yaml_tool_with_no_name_hint() {
+        // Regression guard for the under-wrap gap: `urban_dictionary` has no
+        // web/browser/search/its name hint, but its endpoint is a real
+        // external third-party API. `maybe_wrap_untrusted_result` must
+        // consult the YAML tool's endpoint (via
+        // `provenance::is_untrusted_yaml_tool`), not just its name, so this
+        // still gets wrapped.
+        let mut yaml_tools: HashMap<String, crate::tools::yaml_tools::YamlToolDef> =
+            HashMap::new();
+        let urban_dictionary_tool: crate::tools::yaml_tools::YamlToolDef = serde_yaml::from_str(
+            "name: urban_dictionary\n\
+             description: look up slang definitions\n\
+             endpoint: \"https://api.urbandictionary.com/v0/define\"\n\
+             method: GET\n\
+             timeout: 5\n",
+        )
+        .expect("valid yaml");
+        yaml_tools.insert("urban_dictionary".to_string(), urban_dictionary_tool);
+
+        let out = maybe_wrap_untrusted_result(
+            "urban_dictionary",
+            "some slang definition".to_string(),
+            None,
+            &yaml_tools,
+        )
+        .await;
+        assert!(
+            out.starts_with("<untrusted_tool_output tool=\"urban_dictionary\""),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn does_not_wrap_yaml_tool_with_internal_endpoint_and_no_name_hint() {
+        // A YAML tool routed to an admin-configured internal endpoint with no
+        // untrusted name hint stays trusted internal — must not be wrapped.
+        let mut yaml_tools: HashMap<String, crate::tools::yaml_tools::YamlToolDef> =
+            HashMap::new();
+        let internal_tool: crate::tools::yaml_tools::YamlToolDef = serde_yaml::from_str(
+            "name: some_internal_tool\n\
+             description: internal helper\n\
+             endpoint: \"http://localhost:9011/do-thing\"\n\
+             method: POST\n\
+             timeout: 5\n",
+        )
+        .expect("valid yaml");
+        yaml_tools.insert("some_internal_tool".to_string(), internal_tool);
+
+        let out = maybe_wrap_untrusted_result(
+            "some_internal_tool",
+            "internal result".to_string(),
+            None,
+            &yaml_tools,
+        )
+        .await;
+        assert_eq!(out, "internal result", "internal-endpoint tool must pass through unwrapped");
     }
 }
 
