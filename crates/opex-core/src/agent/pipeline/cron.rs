@@ -79,7 +79,13 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
                 .get("timezone")
                 .and_then(|v| v.as_str())
                 .unwrap_or(cfg.default_timezone.as_str());
-            let task = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            let task_raw = args.get("task").and_then(|v| v.as_str()).unwrap_or("");
+            // T10 побочный пункт B (hermes parity): strip invisible/zero-width
+            // Unicode from the stored task prompt so it can't smuggle hidden
+            // prompt-injection payloads past a human reviewing the cron job
+            // list, or past any future text-based scanner.
+            let task_sanitized = crate::redact::strip_invisible_unicode(task_raw);
+            let task = task_sanitized.as_str();
             let announce_to = args.get("announce_to").cloned();
             let autonomous_goal = args.get("autonomous_goal").and_then(|v| v.as_str()).map(String::from);
             let target_agent = if cfg.agent.base {
@@ -194,7 +200,12 @@ pub async fn handle_cron(ctx: &CommandContext<'_>, args: &serde_json::Value) -> 
             let name = args.get("name").and_then(|v| v.as_str()).unwrap_or(&current.name);
             let cron_expr = args.get("cron").and_then(|v| v.as_str()).unwrap_or(&current.cron_expr);
             let timezone = args.get("timezone").and_then(|v| v.as_str()).unwrap_or(&current.timezone);
-            let task = args.get("task").and_then(|v| v.as_str()).unwrap_or(&current.task_message);
+            let task_raw = args.get("task").and_then(|v| v.as_str()).unwrap_or(&current.task_message);
+            // Same invisible-unicode strip as the `add` path — `current.task_message`
+            // is already clean (sanitized on insert/prior update), but a freshly
+            // provided `task` arg needs the same treatment.
+            let task_sanitized = crate::redact::strip_invisible_unicode(task_raw);
+            let task = task_sanitized.as_str();
             let enabled = args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(current.enabled);
             let announce_to = args.get("announce_to").cloned().or(current.announce_to);
             // `autonomous_goal`: a provided string sets it; absent keeps the

@@ -992,6 +992,13 @@ impl Scheduler {
 
                 match engine2.handle_isolated_via_pipeline(&msg).await {
                     Ok(reply) => {
+                        // T10 побочный пункт A (hermes parity): redact-on-output —
+                        // a cron task can invoke a tool that echoes a secret back
+                        // in its result text (e.g. a custom YAML tool printing an
+                        // env var). Run the same terminal-output redaction used
+                        // for process_start/code_exec stdout before this text is
+                        // previewed, saved to disk, or announced to a channel.
+                        let reply = crate::redact::redact_terminal_output(&reply);
                         if let Some(rid) = run_id {
                             let preview = reply.chars().take(500).collect::<String>();
                             match sqlx::query(
@@ -1150,6 +1157,10 @@ impl Scheduler {
                 let exec_result = std::panic::AssertUnwindSafe(async {
                     match engine.handle_isolated_via_pipeline(&msg).await {
                         Ok(reply) => {
+                            // T10 побочный пункт A (hermes parity): redact-on-output
+                            // before this text is previewed/saved/announced — see
+                            // the matching comment on the one-shot path above.
+                            let reply = crate::redact::redact_terminal_output(&reply);
                             // Update last_run_at
                             if let Err(e) = sqlx::query("UPDATE scheduled_jobs SET last_run_at = now() WHERE id = $1")
                                 .bind(db_id)
