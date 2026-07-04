@@ -23,6 +23,7 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/agents/{name}", get(api_get_agent).put(api_update_agent).delete(api_delete_agent))
         .route("/api/agents/{name}/tasks", get(api_agent_tasks))
         .route("/api/agents/{name}/model-override", post(super::chat::set_model_override))
+        .route("/api/agents/{name}/context-breakdown", get(super::chat::api_context_breakdown))
         .route("/api/approvals", get(api_list_approvals))
         .route("/api/approvals/{id}/resolve", post(api_resolve_approval))
         .route("/api/approvals/allowlist", get(api_list_allowlist).post(api_add_to_allowlist))

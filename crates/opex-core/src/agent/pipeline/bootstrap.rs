@@ -119,6 +119,7 @@ pub async fn bootstrap<S: EventSink>(
         tools,
         reentry_mode,
         claude_md_content,
+        breakdown,
     } = engine
         .build_context(
             ctx.msg,
@@ -127,6 +128,10 @@ pub async fn bootstrap<S: EventSink>(
             ctx.force_new_session,
         )
         .await?;
+
+    // T17: cache the estimate-only breakdown for GET /api/agents/{name}/context-breakdown.
+    // Best-effort — never blocks or fails bootstrap.
+    engine.state().set_context_breakdown(breakdown).await;
     // 2. Atomically claim the session as 'running' using mode-aware semantics.
     //    `claim_session_with_retry` retries once with `ExplicitResume` if a
     //    narrow TOCTOU race (status flipped between resolve and claim) caused

@@ -51,6 +51,12 @@ pub struct AgentState {
     pub thinking_level: AtomicU8,
     pub channel_formatting_prompt: tokio::sync::RwLock<Option<String>>,
     pub channel_info_cache: tokio::sync::RwLock<Option<Vec<ChannelInfo>>>,
+    /// T17 triage: last computed estimate-only context breakdown (per
+    /// category system_prompt/tools/conversation/... sizes). Refreshed on
+    /// every `build_context` call in bootstrap; read by
+    /// `GET /api/agents/{name}/context-breakdown`. `None` until the agent's
+    /// first turn since process start.
+    pub context_breakdown: tokio::sync::RwLock<Option<crate::agent::context_builder::ContextBreakdown>>,
     pub processing_tracker: Option<ProcessingTracker>,
     pub channel_router: Option<ChannelActionRouter>,
     pub ui_event_tx: Option<tokio::sync::broadcast::Sender<String>>,
@@ -78,6 +84,7 @@ impl AgentState {
             thinking_level: AtomicU8::new(0),
             channel_formatting_prompt: tokio::sync::RwLock::new(None),
             channel_info_cache: tokio::sync::RwLock::new(None),
+            context_breakdown: tokio::sync::RwLock::new(None),
             processing_tracker,
             channel_router,
             ui_event_tx,
@@ -144,6 +151,18 @@ impl AgentState {
             .unwrap()
             .retain(|(i, _)| *i != id.0);
     }
+
+    /// T17 triage: refresh the cached estimate-only context breakdown.
+    /// Called once per `build_context` in bootstrap; best-effort, never fails.
+    pub async fn set_context_breakdown(&self, breakdown: crate::agent::context_builder::ContextBreakdown) {
+        *self.context_breakdown.write().await = Some(breakdown);
+    }
+
+    /// T17 triage: read the last cached context breakdown, if any turn has
+    /// run since process start.
+    pub async fn context_breakdown(&self) -> Option<crate::agent::context_builder::ContextBreakdown> {
+        self.context_breakdown.read().await.clone()
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +194,7 @@ impl AgentState {
             thinking_level: AtomicU8::new(0),
             channel_formatting_prompt: tokio::sync::RwLock::new(None),
             channel_info_cache: tokio::sync::RwLock::new(None),
+            context_breakdown: tokio::sync::RwLock::new(None),
             processing_tracker: None,
             channel_router: None,
             ui_event_tx: None,
