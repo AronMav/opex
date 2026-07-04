@@ -818,6 +818,18 @@ pub(crate) async fn api_update_agent(
             tx.rollback().await.ok();
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed at table agent_channels: {}", e)}))).into_response();
         }
+        // agent_model_overrides uses agent_name (TEXT PK, no FK) — separate
+        // from the agent_id catalogue, same as agent_channels above.
+        if let Err(e) = sqlx::query("UPDATE agent_model_overrides SET agent_name = $1 WHERE agent_name = $2")
+            .bind(&new_name)
+            .bind(&name)
+            .execute(&mut *tx)
+            .await
+        {
+            tracing::warn!(error = %e, "failed to update agent_model_overrides.agent_name on rename");
+            tx.rollback().await.ok();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("rename failed at table agent_model_overrides: {}", e)}))).into_response();
+        }
         // sessions.participants is a TEXT[] array — replace old name with new
         if let Err(e) = sqlx::query("UPDATE sessions SET participants = array_replace(participants, $2, $1) WHERE $2 = ANY(participants)")
             .bind(&new_name)
@@ -926,6 +938,10 @@ async fn cleanup_agent_data(db: &sqlx::PgPool, agent_name: &str) -> Result<(), s
     let mut tx = db.begin().await?;
     // agent_channels uses agent_name (separate from the agent_id catalogue)
     sqlx::query("DELETE FROM agent_channels WHERE agent_name = $1")
+        .bind(agent_name).execute(&mut *tx).await?;
+    // agent_model_overrides uses agent_name (TEXT PK, no FK to agents) —
+    // must be deleted explicitly, same as agent_channels above.
+    sqlx::query("DELETE FROM agent_model_overrides WHERE agent_name = $1")
         .bind(agent_name).execute(&mut *tx).await?;
     // Per-agent state tables — see TABLES_TO_DELETE_BY_AGENT_ID. This is a
     // strict subset of TABLES_WITH_AGENT_ID_NOT_NULL; compliance / history
@@ -1381,14 +1397,14 @@ mod tests {
             "agent_oauth_bindings", "approval_allowlist", "memory_chunks",
         ];
         // Additional tables updated outside the loop
-        let extra_tables: Vec<&str> = vec!["messages", "agent_channels"];
+        let extra_tables: Vec<&str> = vec!["messages", "agent_channels", "agent_model_overrides"];
 
         let all_tables: Vec<&str> = tables_agent_id.iter()
             .chain(extra_tables.iter())
             .copied()
             .collect();
 
-        assert_eq!(all_tables.len(), 19, "rename should cover exactly 19 tables");
+        assert_eq!(all_tables.len(), 20, "rename should cover exactly 20 tables");
 
         let old_name = "OldAgent";
         let new_name = "NewAgent";
