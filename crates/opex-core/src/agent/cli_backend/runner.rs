@@ -306,6 +306,10 @@ async fn execute_on_host(
         cmd.env_remove(key);
     }
 
+    // Unconditional strip of Core's own secrets, independent of per-preset
+    // clear_env (which may not enumerate them) — see T04 Пункт 4.
+    crate::tools::spawn_env::strip_host_secrets(&mut cmd);
+
     if stdin_input.is_some() {
         cmd.stdin(std::process::Stdio::piped());
     }

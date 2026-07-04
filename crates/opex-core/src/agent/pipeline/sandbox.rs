@@ -149,6 +149,7 @@ async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> S
         for p in packages {
             cmd.arg(p);
         }
+        crate::tools::spawn_env::strip_host_secrets(&mut cmd);
         let _ = cmd.output().await;
     }
 
@@ -163,7 +164,11 @@ async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> S
         }
     };
 
-    match tokio::time::timeout(timeout, Command::new(cmd).args(&args).output()).await {
+    let mut host_cmd = Command::new(cmd);
+    host_cmd.args(&args);
+    crate::tools::spawn_env::strip_host_secrets(&mut host_cmd);
+
+    match tokio::time::timeout(timeout, host_cmd.output()).await {
         Ok(Ok(output)) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
