@@ -1,6 +1,6 @@
 "use client";
 
-import { Bot } from "lucide-react";
+import { WalnutMark } from "@/components/ui/walnut-mark";
 import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
 import { useAuthStore } from "@/stores/auth-store";
@@ -20,7 +20,7 @@ export function ChatWelcomeScreen() {
           {agentIconUrl ? (
             <img src={agentIconUrl} alt={currentAgent} className="h-full w-full object-cover" />
           ) : (
-            <Bot className="h-12 w-12 text-primary/70" />
+            <WalnutMark size={52} className="text-primary/70" />
           )}
         </div>
         <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full border-2 border-card bg-success animate-pulse" />

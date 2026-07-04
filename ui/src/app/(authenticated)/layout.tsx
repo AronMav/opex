@@ -17,7 +17,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { QueryProvider } from "@/providers/query-provider";
 import { CircularLoader } from "@/components/ui/loader";
 import { Badge } from "@/components/ui/badge";
-import { Bot } from "lucide-react";
+import { WalnutMark } from "@/components/ui/walnut-mark";
 
 export default function AuthenticatedLayout({
   children,
@@ -145,7 +145,7 @@ export default function AuthenticatedLayout({
           <div className="flex items-center gap-2">
             <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform" />
             <div className="flex items-center gap-2 pr-2 border-r border-border/20">
-              <Bot className="h-4 w-4 text-primary" />
+              <WalnutMark size={18} className="text-primary" />
               <span className="font-display text-sm font-black tracking-wide uppercase text-foreground/90">OPEX</span>
             </div>
           </div>
