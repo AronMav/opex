@@ -98,7 +98,7 @@ export function AppSidebar() {
       <SidebarHeader className="px-6 py-6">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <WalnutMark className="text-primary" size={24} />
+            <WalnutMark className="text-primary" size={48} />
             <span className="font-display text-base font-bold tracking-wide text-foreground">
               OPEX
             </span>
