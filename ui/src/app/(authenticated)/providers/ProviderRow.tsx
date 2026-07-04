@@ -50,7 +50,7 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
       ref={ref}
       interactive
       style={style}
-      className={`group relative flex flex-col md:flex-row md:items-center gap-3 p-4 ${isActive ? "ring-1 ring-primary/30" : ""} ${isDragging ? "opacity-80 shadow-lg" : ""} ${!isActive && isCapabilityGroup ? "opacity-60" : ""}`}
+      className={`group relative flex flex-col md:flex-row md:items-center gap-3 p-4 min-w-0 overflow-hidden ${isActive ? "ring-1 ring-primary/30" : ""} ${isDragging ? "opacity-80 shadow-lg" : ""} ${!isActive && isCapabilityGroup ? "opacity-60" : ""}`}
     >
       {/* Drag handle — active capability rows only */}
       {draggable && (

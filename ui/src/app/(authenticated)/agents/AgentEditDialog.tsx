@@ -709,7 +709,7 @@ export function AgentEditDialog({
                     ) : (
                       <div className="space-y-2">
                         {channels.map((ch) => (
-                          <div key={ch.id} className="flex items-center gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2.5">
+                          <div key={ch.id} className="flex items-center gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2.5 min-w-0 overflow-hidden">
                             <div className={`h-3 w-3 rounded-full shrink-0 ${ch.status === "running" ? "bg-success" : ch.status === "error" ? "bg-destructive" : "bg-muted-foreground/40"}`} />
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-semibold truncate text-foreground">{ch.display_name}</p>
@@ -1064,7 +1064,7 @@ export function WebhooksEditor({ webhooks, onChange }: WebhooksEditorProps) {
   return (
     <div className="space-y-2 mt-2">
       {webhooks.map((wh, i) => (
-        <div key={i} className="border border-border/50 rounded-lg p-3 space-y-2 bg-muted/10">
+        <div key={i} className="border border-border/50 rounded-lg p-3 space-y-2 bg-muted/10 min-w-0 overflow-hidden">
           {/* URL */}
           <div className="flex items-center gap-2">
             <Input

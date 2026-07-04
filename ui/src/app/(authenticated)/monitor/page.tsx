@@ -728,7 +728,7 @@ function MonitorPageInner() {
                     {wdChecks.map(([name, svc]) => (
                       <Card
                         key={name}
-                        className={`p-3 flex flex-col gap-1.5 ${
+                        className={`p-3 flex flex-col gap-1.5 min-w-0 overflow-hidden ${
                           svc.flapping ? "border-l-2 border-l-warning" : !svc.ok ? "border-l-2 border-l-destructive" : ""
                         }`}
                       >
@@ -1307,7 +1307,7 @@ function MonitorPageInner() {
                       const agentCalls = rows.reduce((s, r) => s + r.call_count, 0);
 
                       return (
-                        <Card key={agent} className="overflow-hidden">
+                        <Card key={agent} className="overflow-hidden min-w-0">
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 sm:px-5 py-4 border-b border-border/50 bg-muted/20">
                             <div className="flex items-center gap-3">
                               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">

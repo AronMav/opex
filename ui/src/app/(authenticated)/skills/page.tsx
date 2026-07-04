@@ -172,7 +172,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
               {versions.map((v) => {
                 const isExpanded = expandedId === v.id;
                 return (
-                  <Card key={v.id} className="overflow-hidden">
+                  <Card key={v.id} className="overflow-hidden min-w-0">
                     {/* Header row — click to expand */}
                     <button
                       className="w-full text-left p-3 hover:bg-muted/30 transition-colors"
