@@ -968,9 +968,13 @@ impl Scheduler {
                 // (hermes parity, T11 pt.3): a one-shot job must fire at most
                 // once. Deleting `scheduled_jobs` here — ahead of the
                 // LLM/tool call below — means a crash mid-side-effect leaves
-                // no row for `load_dynamic_jobs` to (mis-)interpret; the run
-                // history lives on independently in `cron_runs` (job_id is
-                // nullable-safe via the LEFT JOIN in cron.rs history queries).
+                // no row for `load_dynamic_jobs` to (mis-)interpret. The
+                // `cron_runs` row inserted just above survives this DELETE:
+                // `cron_runs.job_id` is nullable with `ON DELETE SET NULL`
+                // (migration 071), so the cascade only clears the FK column
+                // instead of removing the row — run history for one-shot
+                // jobs is preserved, and `cron.rs` history queries already
+                // LEFT JOIN `scheduled_jobs` and tolerate a null job_id.
                 // Trade-off, intentional: this is at-most-once, not
                 // at-least-once — a crash between this DELETE and the side
                 // effect below means the job silently never ran. That is the
@@ -990,7 +994,7 @@ impl Scheduler {
                     Ok(reply) => {
                         if let Some(rid) = run_id {
                             let preview = reply.chars().take(500).collect::<String>();
-                            if let Err(e) = sqlx::query(
+                            match sqlx::query(
                                 "UPDATE cron_runs SET status = 'success', finished_at = now(), \
                                  response_preview = $2 WHERE id = $1",
                             )
@@ -999,15 +1003,21 @@ impl Scheduler {
                             .execute(&db2)
                             .await
                             {
-                                tracing::warn!(agent = %agent_name2, job_id = %db_id, error = %e, "one-shot job: failed to record success");
+                                Ok(res) if res.rows_affected() == 0 => {
+                                    tracing::warn!(agent = %agent_name2, job_id = %db_id, run_id = %rid, "one-shot job: success UPDATE matched 0 cron_runs rows (history lost)");
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    tracing::warn!(agent = %agent_name2, job_id = %db_id, error = %e, "one-shot job: failed to record success");
+                                }
                             }
                         }
                         tracing::info!(agent = %agent_name2, job_id = %db_id, "one-shot job completed");
                         broadcast_session_event(&ui_tx, &agent_name2, "cron");
                     }
                     Err(e) => {
-                        if let Some(rid) = run_id
-                            && let Err(db_err) = sqlx::query(
+                        if let Some(rid) = run_id {
+                            match sqlx::query(
                                 "UPDATE cron_runs SET status = 'error', finished_at = now(), \
                                  error = $2 WHERE id = $1",
                             )
@@ -1016,8 +1026,15 @@ impl Scheduler {
                             .execute(&db2)
                             .await
                             {
-                                tracing::warn!(agent = %agent_name2, job_id = %db_id, error = %db_err, "one-shot job: failed to record error");
+                                Ok(res) if res.rows_affected() == 0 => {
+                                    tracing::warn!(agent = %agent_name2, job_id = %db_id, run_id = %rid, "one-shot job: error UPDATE matched 0 cron_runs rows (history lost)");
+                                }
+                                Ok(_) => {}
+                                Err(db_err) => {
+                                    tracing::warn!(agent = %agent_name2, job_id = %db_id, error = %db_err, "one-shot job: failed to record error");
+                                }
                             }
+                        }
                         tracing::error!(agent = %agent_name2, job_id = %db_id, error = %e, "one-shot job failed");
                     }
                 }
@@ -2331,5 +2348,86 @@ mod tests {
     #[test]
     fn heartbeat_not_ok_empty() {
         assert!(!is_heartbeat_ok(""));
+    }
+
+    // ── cron_runs / scheduled_jobs decoupling (migration 071) ──────────
+    //
+    // Regression test for the F1 double-fire fix (commit 23ccbdf0): the
+    // one-shot dispatch order is INSERT cron_runs -> DELETE scheduled_jobs
+    // -> side effect -> UPDATE cron_runs. Before migration 071,
+    // `cron_runs.job_id` was `NOT NULL ... ON DELETE CASCADE`, so the
+    // DELETE cascaded onto the just-inserted `cron_runs` row and the final
+    // UPDATE silently matched zero rows, destroying run history on every
+    // one-shot job execution. After the migration, the FK is nullable with
+    // `ON DELETE SET NULL`, so the row survives (job_id becomes NULL) and
+    // is still reachable by its own primary key for the final UPDATE.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn one_shot_job_deletion_preserves_cron_run_history(pool: sqlx::PgPool) {
+        let job_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO scheduled_jobs (id, agent_id, name, cron_expr, timezone, task_message, enabled, run_once) \
+             VALUES ($1, 'TestAgent', 'one-shot-test', '0 0 * * *', 'UTC', 'do the thing', true, true)",
+        )
+        .bind(job_id)
+        .execute(&pool)
+        .await
+        .expect("insert scheduled_job");
+
+        // Mirrors the dispatch order in `run_once`: INSERT cron_runs first.
+        let run_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO cron_runs (job_id, agent_id) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(job_id)
+        .bind("TestAgent")
+        .fetch_one(&pool)
+        .await
+        .expect("insert cron_run");
+
+        // Then DELETE scheduled_jobs, committing the one-shot dispatch
+        // before the side effect (double-fire fix, must NOT be undone).
+        sqlx::query("DELETE FROM scheduled_jobs WHERE id = $1")
+            .bind(job_id)
+            .execute(&pool)
+            .await
+            .expect("delete scheduled_job");
+
+        // The cron_runs row must survive the cascade, with job_id nulled out.
+        let survived: Option<(Option<Uuid>, String)> = sqlx::query_as(
+            "SELECT job_id, status FROM cron_runs WHERE id = $1",
+        )
+        .bind(run_id)
+        .fetch_optional(&pool)
+        .await
+        .expect("query cron_run after delete");
+        let (job_id_after, status_after) = survived.expect(
+            "cron_runs row must survive scheduled_jobs deletion (ON DELETE SET NULL, not CASCADE)",
+        );
+        assert_eq!(job_id_after, None, "job_id must be nulled, not left dangling");
+        assert_eq!(status_after, "running", "row is unmodified before the post-dispatch UPDATE");
+
+        // Finally, the post-dispatch UPDATE (by cron_runs.id, the PK) must
+        // still find and update the row — this is what was silently
+        // matching zero rows before the fix.
+        let update_result = sqlx::query(
+            "UPDATE cron_runs SET status = 'success', finished_at = now(), \
+             response_preview = $2 WHERE id = $1",
+        )
+        .bind(run_id)
+        .bind("all done")
+        .execute(&pool)
+        .await
+        .expect("update cron_run after parent job deleted");
+        assert_eq!(
+            update_result.rows_affected(),
+            1,
+            "post-dispatch UPDATE must match exactly the surviving cron_runs row"
+        );
+
+        let final_status: String = sqlx::query_scalar("SELECT status FROM cron_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("re-fetch cron_run");
+        assert_eq!(final_status, "success", "run history preserved with final status");
     }
 }

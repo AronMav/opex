@@ -479,7 +479,7 @@ pub(crate) async fn api_run_cron(
                     .ok();
                 if let Some(rid) = run_id {
                     let preview = reply.chars().take(500).collect::<String>();
-                    sqlx::query(
+                    match sqlx::query(
                         "UPDATE cron_runs SET status = 'success', finished_at = now(), \
                          response_preview = $2 WHERE id = $1",
                     )
@@ -487,13 +487,21 @@ pub(crate) async fn api_run_cron(
                     .bind(&preview)
                     .execute(&db)
                     .await
-                    .ok();
+                    {
+                        Ok(res) if res.rows_affected() == 0 => {
+                            tracing::warn!(job_id = %id, agent = %agent_id, run_id = %rid, "manual cron run: success UPDATE matched 0 cron_runs rows (history lost)");
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(job_id = %id, agent = %agent_id, error = %e, "manual cron run: failed to record success");
+                        }
+                    }
                 }
                 tracing::info!(job_id = %id, agent = %agent_id, "manual cron run completed");
             }
             Err(e) => {
                 if let Some(rid) = run_id {
-                    sqlx::query(
+                    match sqlx::query(
                         "UPDATE cron_runs SET status = 'error', finished_at = now(), \
                          error = $2 WHERE id = $1",
                     )
@@ -501,7 +509,15 @@ pub(crate) async fn api_run_cron(
                     .bind(format!("{e:#}"))
                     .execute(&db)
                     .await
-                    .ok();
+                    {
+                        Ok(res) if res.rows_affected() == 0 => {
+                            tracing::warn!(job_id = %id, agent = %agent_id, run_id = %rid, "manual cron run: error UPDATE matched 0 cron_runs rows (history lost)");
+                        }
+                        Ok(_) => {}
+                        Err(db_err) => {
+                            tracing::warn!(job_id = %id, agent = %agent_id, error = %db_err, "manual cron run: failed to record error");
+                        }
+                    }
                 }
                 tracing::error!(job_id = %id, agent = %agent_id, error = %e, "manual cron run failed");
             }
@@ -540,7 +556,7 @@ pub(crate) async fn api_cron_runs(
                 .iter()
                 .map(|r| CronRunDto {
                     id: r.get::<uuid::Uuid, _>("id").to_string(),
-                    job_id: r.get::<uuid::Uuid, _>("job_id").to_string(),
+                    job_id: r.get::<Option<uuid::Uuid>, _>("job_id").map(|u| u.to_string()).unwrap_or_default(),
                     job_name: None,
                     agent_id: r.get::<String, _>("agent_id"),
                     started_at: r.get::<chrono::DateTime<chrono::Utc>, _>("started_at").to_rfc3339(),
@@ -580,7 +596,7 @@ pub(crate) async fn api_cron_runs_all(
                 .iter()
                 .map(|r| CronRunDto {
                     id: r.get::<uuid::Uuid, _>("id").to_string(),
-                    job_id: r.get::<uuid::Uuid, _>("job_id").to_string(),
+                    job_id: r.get::<Option<uuid::Uuid>, _>("job_id").map(|u| u.to_string()).unwrap_or_default(),
                     job_name: r.get::<Option<String>, _>("job_name"),
                     agent_id: r.get::<String, _>("agent_id"),
                     started_at: r.get::<chrono::DateTime<chrono::Utc>, _>("started_at").to_rfc3339(),
