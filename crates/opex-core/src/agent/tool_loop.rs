@@ -200,11 +200,6 @@ impl From<&crate::config::ToolLoopSettings> for ToolLoopConfig {
     }
 }
 
-pub fn is_context_overflow(error: &anyhow::Error) -> bool {
-    let msg = error.to_string().to_lowercase();
-    msg.contains("context length") || msg.contains("token limit") || msg.contains("too many token") || msg.contains("input too long") || (msg.contains("400") && (msg.contains("too long") || msg.contains("too large")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

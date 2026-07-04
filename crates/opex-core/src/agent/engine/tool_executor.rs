@@ -241,6 +241,10 @@ impl crate::agent::pipeline::llm_call::Compactor for AgentEngine {
     async fn compact(&self, messages: &mut Vec<Message>) {
         self.compact_messages(messages, None).await;
     }
+
+    async fn compact_force(&self, messages: &mut Vec<Message>) {
+        self.compact_messages_force(messages).await;
+    }
 }
 
 #[cfg(test)]
