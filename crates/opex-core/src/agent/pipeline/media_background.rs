@@ -309,10 +309,17 @@ impl BackgroundMediaTask {
         // at that deadline regardless of our outer tokio timeout — surfaces
         // as "HTTP request failed". Build a dedicated long-timeout client
         // here so a long news digest or high-quality image render can finish.
-        let bg_http_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
-            .build()
-            .unwrap_or_else(|_| ctx.tex.http_client.clone());
+        //
+        // T01 §3: this used to be a raw `reqwest::Client::builder()` with no
+        // SSRF DNS-resolver and the default auto-following redirect policy,
+        // regardless of `tool.endpoint` — a channel_action (TTS/imagegen)
+        // YAML tool could bypass the SSRF guard entirely. Route through the
+        // same is_internal_endpoint gate the regular YAML-tool dispatch path
+        // uses (engine_dispatch.rs, handlers::handle_tool_test).
+        let bg_http_client = crate::net::ssrf::select_ssrf_aware_client(
+            &tool.endpoint,
+            std::time::Duration::from_secs(600),
+        );
 
         Self {
             tool:           bg_tool,
