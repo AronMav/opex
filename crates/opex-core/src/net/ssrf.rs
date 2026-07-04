@@ -52,6 +52,31 @@ pub enum SsrfError {
     PrivateIpResolved,
 }
 
+/// Cloud-metadata hostnames blocked from user-supplied URLs at the sync
+/// pre-check layer (Batch K, gap #4). These DNS names all resolve to the
+/// well-known link-local instance-metadata address (169.254.169.254 on
+/// AWS/GCP/Azure/DigitalOcean) which IS already rejected by
+/// [`preflight_resolve`] and [`SsrfSafeResolver`] at DNS-resolution time —
+/// but `validate_url_scheme` itself is a **sync, no-DNS** pre-check, so a
+/// caller that uses it as its sole guard (without routing the actual request
+/// through `ssrf_http_client`/`preflight_resolve`) would previously let these
+/// hostnames slip past this layer. Matched case-insensitively, exact-or-suffix
+/// against the URL host (so `metadata.google.internal.` / subdomains of
+/// `metadata.goog` are also caught).
+const METADATA_HOSTNAME_BLOCKLIST: &[&str] = &[
+    "metadata.google.internal",
+    "metadata.goog",
+    "metadata",
+];
+
+/// True if `host` is (or is a subdomain of) a known cloud-metadata hostname.
+fn is_blocked_metadata_hostname(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    METADATA_HOSTNAME_BLOCKLIST
+        .iter()
+        .any(|blocked| host == *blocked || host.ends_with(&format!(".{blocked}")))
+}
+
 /// Internal services blocked from user-supplied URLs (reachable only via
 /// service-to-service calls originating from trusted code paths).
 const INTERNAL_BLOCKLIST: &[&str] = &[
@@ -197,12 +222,17 @@ pub fn select_ssrf_aware_client(endpoint: &str, timeout: std::time::Duration) ->
 
 // ── URL validation (sync, no DNS) ────────────────────────────────────────────
 
-/// Validate URL scheme, internal-service blocklist, and numeric private IPs.
+/// Validate URL scheme, internal-service blocklist, cloud-metadata hostnames,
+/// and numeric private IPs.
 ///
 /// This is a **sync** pre-check. DNS-based private-IP filtering happens at
 /// connection time via [`SsrfSafeResolver`]. Use [`preflight_resolve`] if you
 /// need to bail BEFORE spending a full connect timeout on a hostname whose
-/// first DNS answer is private.
+/// first DNS answer is private. Cloud-metadata hostnames
+/// (`metadata.google.internal`, `metadata.goog`, `metadata`) are rejected
+/// here directly (see [`METADATA_HOSTNAME_BLOCKLIST`]) so a caller relying
+/// solely on this sync check — without also going through a DNS-aware path —
+/// is still covered.
 pub fn validate_url_scheme(url: &str) -> Result<(), SsrfError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
@@ -221,6 +251,14 @@ pub fn validate_url_scheme(url: &str) -> Result<(), SsrfError> {
 
     if INTERNAL_BLOCKLIST.iter().any(|a| *a == authority) {
         return Err(SsrfError::InternalBlocked(authority));
+    }
+
+    // Cloud-metadata DNS names (Batch K, gap #4) — reject at the sync
+    // pre-check layer too, not just at DNS-resolution time.
+    if is_blocked_metadata_hostname(host) {
+        return Err(SsrfError::InternalBlocked(format!(
+            "URL targets cloud-metadata hostname ({host})"
+        )));
     }
 
     // Numeric IP in URL — bypasses DNS so we must check inline.
@@ -557,23 +595,17 @@ mod tests {
         ));
     }
 
-    // TODO(T08 pt.5): `metadata.google.internal` is a DNS NAME, not a literal
-    // IP — `validate_url_scheme` (the sync, no-DNS pre-check) can only reject
-    // it via the static `INTERNAL_BLOCKLIST` (host:port strings), which does
-    // NOT currently include this hostname. It resolves to 169.254.169.254, so
-    // it IS caught, but only one layer down: `preflight_resolve` (async DNS
-    // lookup) and, at actual connect time, `SsrfSafeResolver` (plugged into
-    // every outbound `reqwest::Client` via `ssrf_http_client`) both reject it
-    // because the resolved answer is link-local. There is a narrow TOCTOU
-    // window ONLY if a caller uses `validate_url_scheme` as its sole guard
-    // and builds its own `reqwest::Client` without `ssrf_http_client`'s DNS
-    // resolver — every current caller in this codebase uses one of the two
-    // DNS-aware paths, so this is not exploitable today, but if a new
-    // sync-only caller is added it would not be covered until connect time.
-    // We don't add `metadata.google.internal` to `preflight_resolve`'s test
-    // here because it requires live DNS (flaky in CI); the regression guard
-    // below proves the numeric address it resolves to is blocked, which is
-    // the actual security boundary (`SsrfSafeResolver` / `preflight_resolve`).
+    // RESOLVED (Batch K, gap #4): `metadata.google.internal` is a DNS NAME,
+    // not a literal IP. Previously `validate_url_scheme` (the sync, no-DNS
+    // pre-check) could only reject it via the static `INTERNAL_BLOCKLIST`
+    // (host:port strings), which did not include cloud-metadata hostnames —
+    // those were only caught one layer down, at `preflight_resolve` (async
+    // DNS lookup) / `SsrfSafeResolver` (actual connect time), because the
+    // resolved answer is link-local. A caller using `validate_url_scheme` as
+    // its sole guard (without routing the request through one of the
+    // DNS-aware paths) would have had a narrow gap. `validate_url_scheme` now
+    // also checks the URL hostname against `METADATA_HOSTNAME_BLOCKLIST`
+    // directly, closing that gap without requiring DNS.
     #[test]
     fn metadata_google_internal_resolves_to_blocked_link_local_address() {
         // Pin the *documented* behavior: GCP's metadata server documents
@@ -583,6 +615,42 @@ mod tests {
         // link-local branch of `is_private_ip`, which both `preflight_resolve`
         // and `SsrfSafeResolver` consult on every real resolution.
         assert!(is_private_ip("169.254.169.254".parse().unwrap()));
+    }
+
+    #[test]
+    fn validate_url_scheme_blocks_metadata_hostnames_at_sync_precheck() {
+        // Batch K gap #4: these DNS names must now be rejected by the sync
+        // pre-check itself, not only at DNS-resolution time.
+        assert!(matches!(
+            validate_url_scheme("http://metadata.google.internal/computeMetadata/v1/"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
+        assert!(matches!(
+            validate_url_scheme("http://metadata.goog/computeMetadata/v1/"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
+        assert!(matches!(
+            validate_url_scheme("http://metadata/latest/meta-data/"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
+        // Case-insensitive.
+        assert!(matches!(
+            validate_url_scheme("http://METADATA.GOOGLE.INTERNAL/"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
+        // Subdomain form.
+        assert!(matches!(
+            validate_url_scheme("http://foo.metadata.google.internal/"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
+        // Legitimate hosts must not be caught by a substring match.
+        assert!(validate_url_scheme("https://example.com/").is_ok());
+        assert!(validate_url_scheme("https://mymetadata.example.com/").is_ok());
+        // Existing numeric-IP regression must still pass.
+        assert!(matches!(
+            validate_url_scheme("http://169.254.169.254/"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
     }
 
     // ── select_ssrf_aware_client (channel_action SSRF fix) ──────────────────
