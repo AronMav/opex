@@ -268,9 +268,11 @@ pub async fn execute<S: EventSink>(
             Err(e) => return Err(e.into()),
         }
 
-        // 3. Compact tool results to stay within context budget
+        // 3. Compact tool results to stay within context budget.
+        //    Use the effective model so the window lookup matches the value
+        //    resolved at bootstrap (override-aware).
         crate::agent::pipeline::context::compact_tool_results(
-            &engine.cfg().agent.model,
+            &engine.current_model(),
             engine.cfg().agent.compaction.as_ref(),
             &mut messages,
             &mut context_chars,

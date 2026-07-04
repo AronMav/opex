@@ -119,14 +119,39 @@ pub async fn create_fallback_provider(
 
 // ── Default context window ──────────────────────────────────────────
 
-/// Default context window size based on model name.
+/// Name-based **fallback** context window (tokens), used only when the
+/// provider-delegated `context_limit_hint` (`/api/show`, `/v1/models`) is
+/// unavailable or fails. Prefer [`resolve_context_limit`] /
+/// [`context_limit_tokens`] which consult the real provider value.
+///
+/// Case-insensitive `contains` matching on the model id. The values are
+/// deliberately conservative for families whose window varies by version
+/// (glm/minimax/deepseek) — the provider hint refines them for Ollama/OpenAI
+/// models. Ordered most-specific first.
 pub fn default_context_for_model(model: &str) -> usize {
-    if model.contains("claude") {
-        200_000
-    } else if model.contains("gpt-4") {
+    let m = model.to_ascii_lowercase();
+    if m.contains("gpt-4.1") || m.contains("gpt-5") {
+        1_047_576
+    } else if m.contains("gpt-4") || m.contains("gpt-3.5") || m.contains("o1") || m.contains("o3") || m.contains("o4") {
         128_000
-    } else if model.contains("MiniMax") || model.contains("M2.5") || model.contains("gemini") {
+    } else if m.contains("claude") {
+        200_000
+    } else if m.contains("gemini") {
         1_000_000
+    } else if m.contains("kimi-k2") {
+        262_144
+    } else if m.contains("kimi") {
+        131_072
+    } else if m.contains("minimax") {
+        // m2 = 196_608, m3 = 524_288 — provider hint refines for Ollama.
+        200_000
+    } else if m.contains("glm") {
+        // glm-5/5.1 = 202_752, glm-5.2 = 1_000_000 — provider hint refines.
+        200_000
+    } else if m.contains("deepseek") {
+        128_000
+    } else if m.contains("qwen") {
+        131_072
     } else {
         128_000
     }
@@ -134,20 +159,40 @@ pub fn default_context_for_model(model: &str) -> usize {
 
 // ── Context-limit discovery (provider-delegated, cached) ────────────
 
-static CONTEXT_LIMIT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, u32>>>
+/// A cached window value. `is_fallback` marks values that came from the
+/// name-based heuristic (a failed/absent provider hint) rather than a real
+/// provider probe — those expire after [`FALLBACK_TTL`] so a transient
+/// `/api/show` outage at startup does not pin the wrong window for the whole
+/// process lifetime. Real provider values never expire.
+#[derive(Clone, Copy)]
+struct CachedLimit {
+    value: u32,
+    is_fallback: bool,
+    at: std::time::Instant,
+}
+
+/// How long a heuristic-fallback window stays cached before we re-probe the
+/// provider. Real provider values are cached permanently.
+const FALLBACK_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+
+static CONTEXT_LIMIT_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, CachedLimit>>>
     = std::sync::OnceLock::new();
 
-fn context_limit_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, u32>> {
+fn context_limit_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, CachedLimit>> {
     CONTEXT_LIMIT_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Resolve the real context-window size for `model` via the provider's API.
 ///
 /// Each `LlmProvider` can implement `context_limit_hint` to probe its own API
-/// (e.g. Ollama `/api/show`, OpenAI-compat `/v1/models`). Results are cached
-/// in-process by `"{provider_name}::{model}"` key, so the provider is only
-/// queried once per process per model.  Falls back to `default_context_for_model`
-/// when the provider returns `None` or the call fails.
+/// (e.g. Ollama `/api/show`, OpenAI-compat `/v1/models`). Real values are cached
+/// in-process by `"{provider_name}::{model}"` key permanently; heuristic
+/// fallbacks are cached for [`FALLBACK_TTL`] then re-probed (self-heals after a
+/// transient provider outage). Falls back to `default_context_for_model` when
+/// the provider returns `None` or the call fails.
+///
+/// Pass the **effective** model (`engine.current_model()`), not the static
+/// config model, so a runtime model override resolves the override's window.
 pub async fn resolve_context_limit(
     provider: &dyn crate::agent::providers::LlmProvider,
     model: &str,
@@ -155,17 +200,80 @@ pub async fn resolve_context_limit(
     let cache_key = format!("{}::{}", provider.name(), model);
 
     if let Ok(guard) = context_limit_cache().lock()
-        && let Some(&cached) = guard.get(&cache_key) {
-            return cached;
+        && let Some(c) = guard.get(&cache_key)
+        && (!c.is_fallback || c.at.elapsed() < FALLBACK_TTL) {
+            return c.value;
         }
 
-    let limit = provider.context_limit_hint(model).await
-        .unwrap_or_else(|| default_context_for_model(model) as u32);
+    let (value, is_fallback) = match provider.context_limit_hint(model).await {
+        Some(v) => (v, false),
+        None => (default_context_for_model(model) as u32, true),
+    };
 
     if let Ok(mut guard) = context_limit_cache().lock() {
-        guard.insert(cache_key, limit);
+        guard.insert(cache_key, CachedLimit { value, is_fallback, at: std::time::Instant::now() });
     }
-    limit
+    value
+}
+
+/// Synchronous best-effort window lookup for hot-path context management
+/// (`truncate_tool_result`, `compact_tool_results`, `compaction_params`).
+///
+/// Returns the provider-resolved value cached by [`resolve_context_limit`]
+/// (populated at session bootstrap, before the tool loop runs) so tool-result
+/// truncation and reactive compaction use the SAME real window as the proactive
+/// `Compressor` — not the stale name heuristic. Falls back to
+/// `default_context_for_model` when the model has not been resolved yet.
+///
+/// Matches any cache entry whose key ends in `"::{model}"` (the key is
+/// `"{provider}::{model}"`), so callers need only the model id.
+pub fn context_limit_tokens(model: &str) -> u32 {
+    let suffix = format!("::{model}");
+    if let Ok(guard) = context_limit_cache().lock() {
+        for (key, c) in guard.iter() {
+            if key.ends_with(&suffix) {
+                return c.value;
+            }
+        }
+    }
+    default_context_for_model(model) as u32
+}
+
+#[cfg(test)]
+mod context_window_tests {
+    use super::{context_limit_tokens, default_context_for_model};
+
+    #[test]
+    fn heuristic_is_case_insensitive() {
+        // Real Ollama ids are lowercase; the old code matched "MiniMax"
+        // case-sensitively and missed them → wrong 128k default.
+        assert_eq!(default_context_for_model("minimax-m3:cloud"), 200_000);
+        assert_eq!(default_context_for_model("MINIMAX-M3"), 200_000);
+    }
+
+    #[test]
+    fn heuristic_covers_current_families() {
+        assert_eq!(default_context_for_model("kimi-k2.6"), 262_144);
+        assert_eq!(default_context_for_model("kimi-k1.5"), 131_072);
+        assert_eq!(default_context_for_model("glm-5.2:cloud"), 200_000); // hint refines to 1M for ollama
+        assert_eq!(default_context_for_model("gpt-4.1"), 1_047_576);
+        assert_eq!(default_context_for_model("gpt-4o"), 128_000);
+        assert_eq!(default_context_for_model("claude-opus-4-8"), 200_000);
+        assert_eq!(default_context_for_model("gemini-2.5-pro"), 1_000_000);
+        assert_eq!(default_context_for_model("deepseek-v3.1"), 128_000);
+        assert_eq!(default_context_for_model("qwen3-coder"), 131_072);
+        assert_eq!(default_context_for_model("some-unknown-model"), 128_000);
+    }
+
+    #[test]
+    fn tokens_falls_back_to_heuristic_when_uncached() {
+        // A model never resolved via /api/show is not in the cache → heuristic.
+        // (Use a unique unlikely-to-be-cached id so the test is order-independent.)
+        assert_eq!(
+            context_limit_tokens("zzz-uncached-model-xyz"),
+            default_context_for_model("zzz-uncached-model-xyz") as u32
+        );
+    }
 }
 
 // ── Overflow recovery (non-streaming) ───────────────────────────────
