@@ -96,21 +96,14 @@ export function AppSidebar() {
   return (
     <Sidebar className="border-r border-border bg-sidebar">
       <SidebarHeader className="px-6 py-6">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <WalnutMark className="text-primary" size={48} />
-            <span className="font-display text-base font-bold tracking-wide text-foreground">
-              OPEX
-            </span>
-          </div>
-          <div className="flex items-center gap-2 px-0.5">
-            <span
-              className={`h-3 w-3 rounded-full ${connected ? "bg-success" : "bg-destructive"}`}
-            />
-            <span className="text-xs text-muted-foreground">
-              {connected ? t("nav.online") : t("nav.offline")}
-            </span>
-          </div>
+        <div className="flex items-center gap-2">
+          <WalnutMark className="text-primary" size={48} />
+          <span className="font-display text-base font-bold tracking-wide text-foreground">
+            OPEX
+          </span>
+          <span className="ml-auto text-xs text-muted-foreground">
+            {connected ? t("nav.online") : t("nav.offline")}
+          </span>
         </div>
       </SidebarHeader>
 
