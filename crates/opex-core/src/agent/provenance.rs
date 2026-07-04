@@ -127,7 +127,14 @@ const UNTRUSTED_SYSTEM_TOOL_NAMES: &[&str] = &["web_fetch", "browser_action"];
 /// (internal per `tools::ssrf::is_internal_endpoint`) while still returning
 /// externally sourced page content, so endpoint-internality must never be
 /// used to skip the wrap for these.
-const UNTRUSTED_NAME_HINTS: &[&str] = &["web", "browser", "search"];
+///
+/// `its` covers `workspace/tools/its.yaml` — fetches external content from
+/// its.1c.ru through a persistent logged-in browser session; the page/search
+/// result text is hostile-controllable exactly like `web_fetch`/`browser`
+/// (Batch K, gap from Batch J review). Checked against the current YAML tool
+/// set and the trusted-internal-tools list in the tests below — no other
+/// tool name contains "its" as a substring, so this is safe as a plain hint.
+const UNTRUSTED_NAME_HINTS: &[&str] = &["web", "browser", "search", "its"];
 
 /// Classify a tool as fetching external/untrusted content, for the purpose
 /// of wrapping its result in [`wrap_untrusted_tool_output`] before it
@@ -353,6 +360,13 @@ mod tests {
         ] {
             assert!(is_untrusted_tool(name, false), "{name} should be untrusted");
         }
+    }
+
+    #[test]
+    fn is_untrusted_tool_true_for_its_yaml_tool() {
+        // workspace/tools/its.yaml — fetches external its.1c.ru content
+        // through a browser session; must be wrapped like web/browser tools.
+        assert!(is_untrusted_tool("its", false));
     }
 
     #[test]
