@@ -15,6 +15,7 @@ pub mod channel_voice_modes;
 pub mod compaction;
 pub mod curator_runs;
 pub mod github;
+pub mod model_overrides;
 pub mod outbound;
 pub mod pending;
 pub mod providers;

@@ -258,6 +258,22 @@ pub async fn start_agent_from_config(
         ));
         engine.set_tool_executor(executor);
     }
+
+    // Rehydrate a persisted /model override, if any (T15 triage — the
+    // override previously only lived in-memory and was lost on restart).
+    // Per-agent semantic: applies once at engine construction, before any
+    // session touches this engine's provider.
+    match crate::db::model_overrides::get(&infra.db, name).await {
+        Ok(Some(model)) => {
+            tracing::info!(agent = %name, model = %model, "restoring persisted model override");
+            engine.set_model_override(Some(model));
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!(agent = %name, error = %e, "failed to read persisted model override");
+        }
+    }
+
     let workspace_dir = deps.workspace_dir.clone();
     drop(deps); // Release read lock before async operations
 
