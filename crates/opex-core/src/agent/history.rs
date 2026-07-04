@@ -826,10 +826,21 @@ Continue based on the recent messages below."
     });
 
     // Phase 4: assemble head + summary message + tail
-    let summary_role = if head
-        .last()
-        .map(|m| m.role == MessageRole::Assistant || m.role == MessageRole::Tool)
-        .unwrap_or(false)
+    //
+    // hermes parity (T12 pt.5, `_force_user_leading` guard): if `head` is
+    // empty or ends in (or consists solely of) a System message, the summary
+    // message becomes the FIRST non-system message sent to the provider.
+    // Anthropic's Messages API requires `messages[0].role == "user"` — a
+    // leading `assistant` message is rejected with HTTP 400. Pin
+    // `summary_role = User` in that case and mark it as forced so the
+    // role-collision flip below cannot revert it back to `Assistant`.
+    let head_is_system_only = head.iter().all(|m| m.role == MessageRole::System);
+    let force_user_leading = head.is_empty() || head_is_system_only;
+    let summary_role = if force_user_leading
+        || head
+            .last()
+            .map(|m| m.role == MessageRole::Assistant || m.role == MessageRole::Tool)
+            .unwrap_or(false)
     {
         MessageRole::User
     } else {
@@ -862,7 +873,18 @@ Continue based on the recent messages below."
             });
 
     if !merge_into_tail {
-        let role = if first_tail_role.as_ref() == Some(&summary_role) {
+        // hermes parity (T12 pt.5): when the summary role was forced to
+        // `User` because head is system-only (or empty), never flip it back
+        // to `Assistant` to resolve a role collision with the tail — that
+        // would recreate the exact bug this guard exists to prevent (an
+        // `assistant`-first `messages[]` sent to Anthropic). Instead prefer
+        // merging into the tail (handled by `merge_into_tail` above); if we
+        // reach here with a collision, keep `User` and rely on downstream
+        // role-alternation being provider-tolerant (Anthropic only rejects
+        // a non-`user` FIRST message, not adjacent same-role messages).
+        let role = if force_user_leading {
+            summary_role.clone()
+        } else if first_tail_role.as_ref() == Some(&summary_role) {
             if summary_role == MessageRole::User {
                 MessageRole::Assistant
             } else {
@@ -1606,5 +1628,66 @@ mod tests {
         );
         assert_eq!(compressor.compression_count, 1, "compression_count must be 1");
         assert!(facts.is_empty(), "extract_to_memory=false → no facts");
+    }
+
+    /// H2 (T12 pt.5, hermes `_force_user_leading` parity): when
+    /// `protect_first_n` collapses `head` down to a lone System message,
+    /// the summary message must never become an `Assistant`-first message —
+    /// Anthropic rejects `messages[0].role != "user"` with HTTP 400.
+    #[tokio::test]
+    async fn compress_messages_pins_summary_role_to_user_when_head_is_system_only() {
+        let mut msgs: Vec<Message> = vec![make_message(MessageRole::System, "system prompt")];
+        // messages[1] is Assistant (NOT Tool) so `find_head_end` does not slide
+        // the boundary forward — head stays exactly `[System]`.
+        for i in 0..20 {
+            msgs.push(make_message(
+                if i % 2 == 0 { MessageRole::Assistant } else { MessageRole::User },
+                &"word ".repeat(100), // ~125 tokens each
+            ));
+        }
+        // Ensure the real last message is User (tail-anchor invariant).
+        let last_idx = msgs.len() - 1;
+        msgs[last_idx].role = MessageRole::User;
+
+        let provider = EchoProvider("Mock summary content".into());
+
+        let cfg = crate::config::CompactionConfig {
+            enabled: true,
+            threshold: 0.75,
+            protect_first_n: 1,
+            preserve_last_n: 3,
+            summary_target_ratio: 0.20,
+            extract_to_memory: false,
+            ..Default::default()
+        };
+
+        let mut compressor = crate::agent::compressor::Compressor::new(200_000);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_lazy("postgres://localhost/test_unused")
+            .unwrap();
+
+        // Sanity: head really does collapse to exactly [System].
+        let head_end = find_head_end(&msgs, cfg.protect_first_n);
+        assert_eq!(head_end, 1, "head must be exactly [System] for this test to be valid");
+
+        compress_messages(
+            &mut msgs, &mut compressor, &cfg, &provider, None,
+            &pool, uuid::Uuid::nil(),
+        )
+            .await
+            .unwrap();
+
+        // First non-system message (the summary, or whatever merged with it)
+        // must be `User`, never `Assistant`.
+        let first_non_system = msgs
+            .iter()
+            .find(|m| m.role != MessageRole::System)
+            .expect("must have at least one non-system message after compression");
+        assert_eq!(
+            first_non_system.role,
+            MessageRole::User,
+            "first non-system message after compaction must be User when head is system-only"
+        );
     }
 }
