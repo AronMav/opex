@@ -1,9 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { Nut } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { IconTile } from "@/components/ui/icon-tile"
+import { WalnutMark } from "@/components/ui/walnut-mark"
 
 function AuthShell({
   children,
@@ -38,7 +38,7 @@ function AuthBrand({
   if (orientation === "horizontal") {
     return (
       <div className={cn("flex items-center justify-center gap-3", className)}>
-        <Nut className="h-8 w-8 text-primary" />
+        <WalnutMark size={36} className="text-primary" />
         <span className="font-display text-2xl font-bold tracking-wide">OPEX</span>
       </div>
     )
@@ -46,7 +46,7 @@ function AuthBrand({
   return (
     <div className={cn("flex flex-col items-center gap-3", className)}>
       <IconTile tone="primary" size="lg" className="rounded-2xl">
-        <Nut />
+        <WalnutMark size={26} />
       </IconTile>
       <div className="flex flex-col items-center">
         <h1 className="font-display text-2xl font-bold tracking-wide text-foreground">OPEX</h1>
