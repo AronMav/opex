@@ -5,6 +5,7 @@ pub mod embedding;
 pub mod mcp_workspace;
 pub mod semantic_cache;
 pub mod service_registry;
+pub mod spawn_env;
 pub mod ssrf;
 pub mod url_policy;
 pub mod yaml_tools;

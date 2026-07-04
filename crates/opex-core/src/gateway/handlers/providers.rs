@@ -959,6 +959,10 @@ async fn run_cli_health_check(
         cmd.env_remove(key);
     }
 
+    // Unconditional strip of Core's own secrets, independent of per-preset
+    // clear_env — see T04 Пункт 6 (reuses the helper from Пункт 4).
+    crate::tools::spawn_env::strip_host_secrets(&mut cmd);
+
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
