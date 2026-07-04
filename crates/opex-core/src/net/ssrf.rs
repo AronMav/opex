@@ -220,6 +220,24 @@ pub fn select_ssrf_aware_client(endpoint: &str, timeout: std::time::Duration) ->
     }
 }
 
+/// Validate an outbound endpoint destined for the [`select_ssrf_aware_client`]
+/// path. Trusted internal services (toolgate, browser-renderer, …) pass
+/// unchecked; every other endpoint must clear [`validate_url_scheme`].
+///
+/// This is the companion sync pre-check that closes the *literal-IP* hole in
+/// `ssrf_http_client`: reqwest connects straight to a literal IP written into
+/// the URL (`http://169.254.169.254/…`) without ever invoking the
+/// [`SsrfSafeResolver`], so the DNS filter alone never sees it.
+/// `validate_url_scheme` rejects literal private/metadata IPs (and bad
+/// schemes) inline. Callers that build an SSRF-aware client for a
+/// possibly-hostile endpoint must gate the request on this first.
+pub fn validate_outbound_endpoint(endpoint: &str) -> Result<(), SsrfError> {
+    if is_internal_endpoint(endpoint) {
+        return Ok(());
+    }
+    validate_url_scheme(endpoint)
+}
+
 // ── URL validation (sync, no DNS) ────────────────────────────────────────────
 
 /// Validate URL scheme, internal-service blocklist, cloud-metadata hostnames,
@@ -672,28 +690,39 @@ mod tests {
         drop(client);
     }
 
-    #[tokio::test]
-    async fn select_client_non_internal_endpoint_blocks_private_ip() {
-        // A channel_action YAML tool endpoint pointed at a private/metadata
-        // IP must be routed through the SSRF-safe client, i.e. the request
-        // fails at connect time (DNS resolver rejects the private answer)
-        // rather than silently succeeding like a raw `reqwest::Client`.
-        let client = select_ssrf_aware_client(
+    #[test]
+    fn validate_outbound_endpoint_blocks_literal_private_and_metadata_ips() {
+        // A channel_action YAML tool endpoint pointed at a *literal* private /
+        // cloud-metadata IP must be rejected by the sync pre-check: reqwest
+        // connects to a literal IP without ever calling the DNS resolver, so
+        // `ssrf_http_client`'s resolver alone can't see it.
+        //
+        // Deterministic — NO real network I/O. (The previous version did a
+        // real `.send()` to 169.254.169.254 and asserted failure; on cloud CI
+        // runners that address is a live, reachable metadata endpoint, so the
+        // request SUCCEEDED and the test flaked. That flake is exactly the
+        // real bug this guard now closes.)
+        for ep in [
             "http://169.254.169.254/latest/meta-data/",
-            std::time::Duration::from_secs(5),
-        );
-        let result = client.get("http://169.254.169.254/latest/meta-data/").send().await;
-        assert!(result.is_err(), "expected SSRF-safe client to reject private IP target");
+            "http://10.0.0.1/admin",
+            "http://192.168.1.1/",
+            "http://127.0.0.1/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+        ] {
+            assert!(
+                validate_outbound_endpoint(ep).is_err(),
+                "expected {ep} to be blocked as a private/internal target",
+            );
+        }
     }
 
-    #[tokio::test]
-    async fn select_client_non_internal_endpoint_blocks_private_ip_10_range() {
-        let client = select_ssrf_aware_client(
-            "http://10.0.0.1/admin",
-            std::time::Duration::from_secs(5),
-        );
-        let result = client.get("http://10.0.0.1/admin").send().await;
-        assert!(result.is_err(), "expected SSRF-safe client to reject 10.0.0.0/8 target");
+    #[test]
+    fn validate_outbound_endpoint_allows_internal_and_public_hosts() {
+        // Trusted internal services pass (routed to the plain client elsewhere).
+        assert!(validate_outbound_endpoint("http://localhost:9011/v1/audio/speech").is_ok());
+        // A public hostname passes the sync pre-check (no DNS here); the
+        // SSRF-safe client still filters the resolved answer at connect time.
+        assert!(validate_outbound_endpoint("https://api.openai.com/v1/audio/speech").is_ok());
     }
 
     #[test]

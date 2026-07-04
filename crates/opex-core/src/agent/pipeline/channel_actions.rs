@@ -136,7 +136,13 @@ pub async fn execute_yaml_channel_action(
     }
 
     let task =
-        crate::agent::pipeline::media_background::BackgroundMediaTask::from_ctx(ctx, tool, args, ca);
+        match crate::agent::pipeline::media_background::BackgroundMediaTask::from_ctx(ctx, tool, args, ca) {
+            Some(t) => t,
+            None => {
+                // Endpoint blocked by the SSRF guard (e.g. literal private IP).
+                return "Error: media delivery blocked (SSRF): endpoint targets a private or internal address".to_string();
+            }
+        };
     task.spawn()
 }
 
@@ -182,6 +188,14 @@ async fn execute_inline_for_ui(
     // YAML-tool dispatch path uses — this used to be a raw client with no
     // SSRF protection at all, letting a channel_action endpoint bypass the
     // guard applied to every other YAML tool.
+    // Literal-IP SSRF gate: `select_ssrf_aware_client` only DNS-filters, so a
+    // literal private/metadata IP in the endpoint would slip through. Reject
+    // it here before spending a request on it.
+    if let Err(e) = crate::net::ssrf::validate_outbound_endpoint(&tool.endpoint) {
+        tracing::warn!(tool = %tool.name, endpoint = %tool.endpoint, "channel_action endpoint blocked by SSRF guard: {e}");
+        return format!("Error: media generation blocked (SSRF): {e}");
+    }
+
     let bg_http_client = crate::net::ssrf::select_ssrf_aware_client(
         &tool.endpoint,
         std::time::Duration::from_secs(600),
