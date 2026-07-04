@@ -308,7 +308,7 @@ test("Last-Event-ID resume replays only new events (Phase 3)", async ({ page }) 
   const half = Math.floor(first.lastId / 2);
   const replayed = await page.evaluate(
     async ({ sid, half, token }: { sid: string; half: number; token: string }) => {
-      const r = await fetch(`/api/chat/${sid}/stream`, {
+      const r = await fetch(`/api/chat/${sid}/stream?agent=Arty`, {
         headers: {
           Authorization: `Bearer ${token}`,
           "Last-Event-ID": String(half),

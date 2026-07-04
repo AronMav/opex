@@ -129,14 +129,15 @@ async function waitForStreamingStarted(
 }
 
 /**
- * POST /api/chat/{sessionId}/abort directly.
+ * POST /api/chat/{sessionId}/abort?agent=<agent> directly.
  * This is the definitive way to signal the backend to stop the engine and
- * mark the session as "interrupted".
+ * mark the session as "interrupted". `agent` is required (owner check,
+ * IDOR fix 2026-07-04) — the caller must know which agent owns the session.
  */
-async function apiAbortSession(page: Page, sessionId: string): Promise<void> {
+async function apiAbortSession(page: Page, sessionId: string, agent: string): Promise<void> {
   await page.evaluate(
-    async ({ sid, token }: { sid: string; token: string }) => {
-      await fetch(`/api/chat/${sid}/abort`, {
+    async ({ sid, token, agent }: { sid: string; token: string; agent: string }) => {
+      await fetch(`/api/chat/${sid}/abort?agent=${encodeURIComponent(agent)}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -144,34 +145,25 @@ async function apiAbortSession(page: Page, sessionId: string): Promise<void> {
         },
       }).catch(() => { });
     },
-    { sid: sessionId, token: TOKEN }
+    { sid: sessionId, token: TOKEN, agent }
   );
 }
 
 /**
- * Poll /api/sessions?agent=<agent>&limit=100 until the session's run_status
- * leaves "running"/"streaming".
+ * Read the current agent name from the agent selector element in the page.
+ * Falls back to "Opex" if the selector is not accessible.
  *
- * Reads the current agent name from the agent selector element in the page.
- * Falls back to "OPEX" if the selector is not accessible.
- *
- * Returns the final status string, or null if it was never determinable.
+ * Uses textContent (NOT innerText): innerText applies CSS text-transform
+ * (e.g. "uppercase" renders "Opex" as "OPEX"), but the API is case-sensitive
+ * and expects the original name ("Opex", not "OPEX"). textContent returns
+ * the raw DOM text without CSS transforms.
  */
-async function waitForSessionFinished(
-  page: Page,
-  sessionId: string,
-  timeoutMs: number
-): Promise<string | null> {
-  // Read the current agent name from the page using textContent (NOT innerText).
-  // innerText applies CSS text-transform (e.g. "uppercase" renders "Opex" as "OPEX"),
-  // but the API is case-sensitive and expects the original name ("Opex", not "OPEX").
-  // textContent returns the raw DOM text without CSS transforms.
+async function getAgentNameFromDom(page: Page): Promise<string> {
   let agentName = "Opex"; // safe default for this Pi instance
   try {
     const fromDom = await page.evaluate(() => {
       const trigger = document.querySelector('[aria-label="Switch agent"] button');
       if (trigger) {
-        // Walk text nodes to get raw content before CSS transforms
         const span = trigger.querySelector("span");
         return span?.textContent?.trim() ?? null;
       }
@@ -183,6 +175,21 @@ async function waitForSessionFinished(
   } catch {
     // Use default "Opex"
   }
+  return agentName;
+}
+
+/**
+ * Poll /api/sessions?agent=<agent>&limit=100 until the session's run_status
+ * leaves "running"/"streaming".
+ *
+ * Returns the final status string, or null if it was never determinable.
+ */
+async function waitForSessionFinished(
+  page: Page,
+  sessionId: string,
+  timeoutMs: number
+): Promise<string | null> {
+  const agentName = await getAgentNameFromDom(page);
   console.log(`[pollSessionStatus] Using agent name: "${agentName}" for session ${sessionId}`);
 
   const deadline = Date.now() + timeoutMs;
@@ -302,7 +309,8 @@ test("abort mid-stream marks session interrupted", async ({ page }) => {
 
   // POST /abort to the backend — this triggers the cancellation token and graceful drain.
   // The engine will finish within CANCEL_GRACE (30s) and mark the session "interrupted".
-  await apiAbortSession(page, sessionId);
+  const agentForAbort = await getAgentNameFromDom(page);
+  await apiAbortSession(page, sessionId, agentForAbort);
 
   // Also abort the local SSE fetch so the UI updates immediately
   await page.evaluate(() => {
