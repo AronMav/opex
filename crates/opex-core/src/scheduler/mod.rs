@@ -964,6 +964,28 @@ impl Scheduler {
                     }
                 };
 
+                // Commit the one-shot dispatch BEFORE running the side effect
+                // (hermes parity, T11 pt.3): a one-shot job must fire at most
+                // once. Deleting `scheduled_jobs` here — ahead of the
+                // LLM/tool call below — means a crash mid-side-effect leaves
+                // no row for `load_dynamic_jobs` to (mis-)interpret; the run
+                // history lives on independently in `cron_runs` (job_id is
+                // nullable-safe via the LEFT JOIN in cron.rs history queries).
+                // Trade-off, intentional: this is at-most-once, not
+                // at-least-once — a crash between this DELETE and the side
+                // effect below means the job silently never ran. That is the
+                // accepted hermes-parity trade-off for one-shot jobs (better
+                // to silently skip than to re-fire an already-delivered
+                // action, e.g. a duplicated message or duplicated file
+                // deletion).
+                if let Err(e) = sqlx::query("DELETE FROM scheduled_jobs WHERE id = $1")
+                    .bind(db_id)
+                    .execute(&db2)
+                    .await
+                {
+                    tracing::warn!(agent = %agent_name2, job_id = %db_id, error = %e, "one-shot job: failed to delete scheduled_job before dispatch");
+                }
+
                 match engine2.handle_isolated_via_pipeline(&msg).await {
                     Ok(reply) => {
                         if let Some(rid) = run_id {
@@ -999,15 +1021,9 @@ impl Scheduler {
                         tracing::error!(agent = %agent_name2, job_id = %db_id, error = %e, "one-shot job failed");
                     }
                 }
-
-                // Auto-delete: CASCADE removes cron_runs too
-                if let Err(e) = sqlx::query("DELETE FROM scheduled_jobs WHERE id = $1")
-                    .bind(db_id)
-                    .execute(&db2)
-                    .await
-                {
-                    tracing::warn!(agent = %agent_name2, job_id = %db_id, error = %e, "one-shot job: failed to delete scheduled_job");
-                }
+                // Note: `scheduled_jobs` row for this job was already deleted
+                // above, before the side effect ran — nothing left to clean
+                // up here (see comment above `handle_isolated_via_pipeline`).
             });
             return Ok(());
         }
