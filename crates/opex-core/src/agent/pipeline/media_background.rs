@@ -255,7 +255,7 @@ impl BackgroundMediaTask {
         tool: &YamlToolDef,
         args: &serde_json::Value,
         ca: &ChannelActionConfig,
-    ) -> Self {
+    ) -> Option<Self> {
         use crate::agent::pipeline::channel_actions::{make_oauth_context, make_resolver};
 
         let kind = MediaKind::from_action(&ca.action);
@@ -316,12 +316,20 @@ impl BackgroundMediaTask {
         // YAML tool could bypass the SSRF guard entirely. Route through the
         // same is_internal_endpoint gate the regular YAML-tool dispatch path
         // uses (engine_dispatch.rs, handlers::handle_tool_test).
+        // Literal-IP SSRF gate: `select_ssrf_aware_client` only DNS-filters, so
+        // a literal private/metadata IP in the endpoint would slip through.
+        // Refuse to build the delivery task for a blocked endpoint.
+        if let Err(e) = crate::net::ssrf::validate_outbound_endpoint(&tool.endpoint) {
+            tracing::warn!(tool = %tool.name, endpoint = %tool.endpoint, "channel_action background endpoint blocked by SSRF guard: {e}");
+            return None;
+        }
+
         let bg_http_client = crate::net::ssrf::select_ssrf_aware_client(
             &tool.endpoint,
             std::time::Duration::from_secs(600),
         );
 
-        Self {
+        Some(Self {
             tool:           bg_tool,
             args:           args.clone(),
             ca:             ca.clone(),
@@ -343,7 +351,7 @@ impl BackgroundMediaTask {
             context,
             agent_name:     ctx.cfg.agent.name.clone(),
             tool_message_id,
-        }
+        })
     }
 
     /// Spawn the task into `bg_tasks` (TaskTracker) and return the LLM-facing
