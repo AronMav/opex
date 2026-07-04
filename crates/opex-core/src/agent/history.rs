@@ -54,12 +54,46 @@ pub async fn compact_if_needed(
     preserve_last_n: usize,
     agent_language: Option<&str>,
 ) -> Result<Option<Vec<String>>> {
+    compact_if_needed_inner(messages, provider, compaction_provider, max_tokens, preserve_last_n, agent_language, false).await
+}
+
+/// Force-compact conversation history regardless of the token-threshold gate.
+///
+/// Used by the reactive context-overflow recovery path
+/// (`pipeline::llm_call::chat_stream_with_overflow_recovery`): once the
+/// provider has already rejected a call as too large, the token *estimate*
+/// (a rough heuristic, see [`estimate_tokens`]) may still sit below the
+/// proactive-compaction threshold, so the normal gated path can silently
+/// no-op and the retry fails with the identical error. Forcing bypasses
+/// that gate the same way the existing `/compact` command and
+/// `compact_session` API already do (via `max_tokens=1`), but without
+/// disturbing the threshold semantics for the normal proactive path.
+pub async fn force_compact(
+    messages: &mut Vec<Message>,
+    provider: &dyn LlmProvider,
+    compaction_provider: Option<&dyn LlmProvider>,
+    preserve_last_n: usize,
+    agent_language: Option<&str>,
+) -> Result<Option<Vec<String>>> {
+    compact_if_needed_inner(messages, provider, compaction_provider, 0, preserve_last_n, agent_language, true).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn compact_if_needed_inner(
+    messages: &mut Vec<Message>,
+    provider: &dyn LlmProvider,
+    compaction_provider: Option<&dyn LlmProvider>,
+    max_tokens: usize,
+    preserve_last_n: usize,
+    agent_language: Option<&str>,
+    force: bool,
+) -> Result<Option<Vec<String>>> {
     // Use dedicated compaction provider if available, otherwise fall back to main provider.
     let active_provider: &dyn LlmProvider = compaction_provider.unwrap_or(provider);
     let total = estimate_tokens(messages);
     let threshold = max_tokens * 80 / 100;
 
-    if total < threshold {
+    if !force && total < threshold {
         return Ok(None);
     }
 

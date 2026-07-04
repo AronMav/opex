@@ -170,47 +170,57 @@ pub async fn resolve_context_limit(
 
 // ── Overflow recovery (non-streaming) ───────────────────────────────
 
+/// Whether `e` classifies as a context-overflow error worth a compaction retry.
+/// Uses the canonical `error_classify` classifier (shared with the rest of the
+/// error-handling pipeline) rather than the narrower `tool_loop::is_context_overflow`
+/// regex, so this stays in sync with every other `ContextOverflow`-aware code path.
+fn is_recoverable_overflow(e: &anyhow::Error) -> bool {
+    crate::agent::error_classify::classify(e) == crate::agent::error_classify::LlmErrorClass::ContextOverflow
+}
+
 /// Call LLM with automatic context overflow recovery.
-/// On context overflow (400), invokes `compact` and retries up to 3 times.
+///
+/// On context overflow (413 / "context length exceeded" / etc.), force-compacts
+/// the message history via `Compactor::compact_force` and retries **exactly
+/// once**. `compact_force` bypasses the proactive-compaction token-threshold
+/// gate (see its doc comment) so this retry is not a no-op even when the
+/// rough token estimate sits below that gate. If the retry still overflows
+/// (or overflows again after the one recovery attempt), the error propagates
+/// — this function never loops more than once, by construction: the `for`
+/// loop is bounded to a single iteration and there is no path back to the
+/// top of it.
 pub async fn chat_with_overflow_recovery(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,
     tools: &[ToolDefinition],
     compact: &impl Compactor,
 ) -> Result<opex_types::LlmResponse> {
-    let max_compact_attempts: u8 = 3;
-    let mut last_error = None;
-
-    for compact_attempt in 0..=max_compact_attempts {
-        let result = provider.chat(messages, tools, crate::agent::providers::CallOptions::default()).await;
-        match result {
-            Ok(resp) => return Ok(resp),
-            Err(e)
-                if crate::agent::tool_loop::is_context_overflow(&e)
-                    && compact_attempt < max_compact_attempts =>
-            {
-                tracing::warn!(
-                    attempt = compact_attempt + 1,
-                    max = max_compact_attempts,
-                    "context overflow — compacting"
-                );
-                compact.compact(messages).await;
-                last_error = Some(e);
-            }
-            Err(e) => return Err(e),
-        }
+    let result = provider.chat(messages, tools, crate::agent::providers::CallOptions::default()).await;
+    let e = match result {
+        Ok(resp) => return Ok(resp),
+        Err(e) => e,
+    };
+    if !is_recoverable_overflow(&e) {
+        return Err(e);
     }
-    Err(last_error.unwrap_or_else(|| {
-        anyhow::anyhow!(
-            "context overflow after {} compaction attempts",
-            max_compact_attempts
-        )
-    }))
+
+    tracing::warn!(error = %e, "context overflow — force-compacting and retrying once");
+    compact.compact_force(messages).await;
+
+    provider.chat(messages, tools, crate::agent::providers::CallOptions::default()).await
+        .map_err(|e2| {
+            if is_recoverable_overflow(&e2) {
+                tracing::warn!(error = %e2, "context overflow persists after one compaction retry — giving up");
+            }
+            e2
+        })
 }
 
 // ── Overflow recovery (streaming) ───────────────────────────────────
 
-/// Streaming variant of [`chat_with_overflow_recovery`].
+/// Streaming variant of [`chat_with_overflow_recovery`]. Same one-shot
+/// force-compact-then-retry contract; see that function's doc comment for
+/// the anti-loop guarantee.
 pub async fn chat_stream_with_overflow_recovery(
     provider: &dyn LlmProvider,
     messages: &mut Vec<Message>,
@@ -219,36 +229,29 @@ pub async fn chat_stream_with_overflow_recovery(
     compact: &impl Compactor,
     opts: crate::agent::providers::CallOptions,
 ) -> Result<opex_types::LlmResponse> {
-    let max_compact_attempts: u8 = 3;
-    let mut last_error = None;
-
-    for compact_attempt in 0..=max_compact_attempts {
-        let result = provider
-            .chat_stream(messages, tools, chunk_tx.clone(), opts.clone())
-            .await;
-        match result {
-            Ok(resp) => return Ok(resp),
-            Err(e)
-                if crate::agent::tool_loop::is_context_overflow(&e)
-                    && compact_attempt < max_compact_attempts =>
-            {
-                tracing::warn!(
-                    attempt = compact_attempt + 1,
-                    max = max_compact_attempts,
-                    "context overflow — compacting (stream)"
-                );
-                compact.compact(messages).await;
-                last_error = Some(e);
-            }
-            Err(e) => return Err(e),
-        }
+    let result = provider
+        .chat_stream(messages, tools, chunk_tx.clone(), opts.clone())
+        .await;
+    let e = match result {
+        Ok(resp) => return Ok(resp),
+        Err(e) => e,
+    };
+    if !is_recoverable_overflow(&e) {
+        return Err(e);
     }
-    Err(last_error.unwrap_or_else(|| {
-        anyhow::anyhow!(
-            "context overflow after {} compaction attempts (stream)",
-            max_compact_attempts
-        )
-    }))
+
+    tracing::warn!(error = %e, "context overflow — force-compacting and retrying once (stream)");
+    compact.compact_force(messages).await;
+
+    provider
+        .chat_stream(messages, tools, chunk_tx, opts)
+        .await
+        .map_err(|e2| {
+            if is_recoverable_overflow(&e2) {
+                tracing::warn!(error = %e2, "context overflow persists after one compaction retry — giving up (stream)");
+            }
+            e2
+        })
 }
 
 // ── Transient retry (streaming) ─────────────────────────────────────
@@ -311,7 +314,22 @@ pub async fn chat_stream_with_transient_retry(
 #[async_trait::async_trait]
 pub trait Compactor: Send + Sync {
     /// Compact the message list in-place (e.g. summarize, drop old messages).
+    /// Gated: no-ops if the current token estimate is below the proactive
+    /// compaction threshold — safe to call speculatively on every iteration.
     async fn compact(&self, messages: &mut Vec<Message>);
+
+    /// Force-compact the message list regardless of the token-threshold
+    /// gate. Used by reactive context-overflow recovery
+    /// (`chat_with_overflow_recovery` / `chat_stream_with_overflow_recovery`):
+    /// once the provider has already rejected a call as too large, the
+    /// gated [`Compactor::compact`] may see a token *estimate* that still
+    /// sits below its own threshold and silently no-op, leaving the retry
+    /// doomed to fail with the identical error. Default implementation
+    /// falls back to the gated `compact` so existing test doubles (e.g.
+    /// `NoopCompact`) keep working unchanged.
+    async fn compact_force(&self, messages: &mut Vec<Message>) {
+        self.compact(messages).await;
+    }
 }
 
 // ── Audit ───────────────────────────────────────────────────────────
@@ -871,5 +889,224 @@ mod deadline_retry_tests {
         for (i, chunk) in received.iter().enumerate() {
             assert_eq!(chunk, &format!("chunk-{i}"), "chunk order must be preserved");
         }
+    }
+}
+
+// ── Overflow-recovery tests (Batch G / T13 item 4) ──────────────────
+//
+// Verifies: (1) a single ContextOverflow error triggers exactly one
+// force-compact + retry, and the turn succeeds; (2) an LLM that ALWAYS
+// overflows gets recovery applied exactly once, then fails — no infinite
+// compact/retry cycle. See `is_recoverable_overflow` / `chat_with_overflow_recovery`
+// / `chat_stream_with_overflow_recovery` doc comments for the anti-loop
+// argument (bounded `for` loop, no path back to the top).
+#[cfg(test)]
+mod overflow_recovery_tests {
+    use super::*;
+    use opex_types::LlmResponse;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    fn ok_response(content: &str) -> LlmResponse {
+        LlmResponse {
+            content: content.to_string(),
+            tool_calls: vec![],
+            usage: None,
+            finish_reason: None,
+            model: None,
+            provider: None,
+            fallback_notice: None,
+            tools_used: vec![],
+            iterations: 0,
+            thinking_blocks: vec![],
+        }
+    }
+
+    fn overflow_error() -> anyhow::Error {
+        anyhow::anyhow!("400 request_too_large: prompt is too long, context length exceeded")
+    }
+
+    /// Compactor test double: counts calls to the gated `compact` (should
+    /// never be invoked by the overflow path — it must use `compact_force`)
+    /// and to `compact_force`, and actually shrinks `messages` on force so
+    /// the retry has observably different input (mirrors real compaction
+    /// replacing old turns with a summary).
+    struct CountingCompactor {
+        compact_calls: AtomicU32,
+        force_calls: AtomicU32,
+    }
+
+    impl CountingCompactor {
+        fn new() -> Self {
+            Self { compact_calls: AtomicU32::new(0), force_calls: AtomicU32::new(0) }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Compactor for CountingCompactor {
+        async fn compact(&self, _messages: &mut Vec<Message>) {
+            self.compact_calls.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn compact_force(&self, messages: &mut Vec<Message>) {
+            self.force_calls.fetch_add(1, Ordering::SeqCst);
+            messages.clear();
+        }
+    }
+
+    /// First call overflows, second call (after force-compact) succeeds.
+    struct OverflowThenOkProvider {
+        calls: AtomicU32,
+    }
+
+    impl OverflowThenOkProvider {
+        fn new() -> Self { Self { calls: AtomicU32::new(0) } }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agent::providers::LlmProvider for OverflowThenOkProvider {
+        async fn chat(&self, _m: &[Message], _t: &[ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Err(overflow_error())
+            } else {
+                Ok(ok_response("recovered"))
+            }
+        }
+        async fn chat_stream(&self, _m: &[Message], _t: &[ToolDefinition], tx: mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Err(overflow_error())
+            } else {
+                tx.send("recovered".into()).await.ok();
+                Ok(ok_response("recovered"))
+            }
+        }
+        fn name(&self) -> &str { "overflow-then-ok" }
+    }
+
+    /// Always overflows, regardless of how many times it's called or what
+    /// the (compacted) message list looks like.
+    struct AlwaysOverflowProvider {
+        calls: AtomicU32,
+    }
+
+    impl AlwaysOverflowProvider {
+        fn new() -> Self { Self { calls: AtomicU32::new(0) } }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::agent::providers::LlmProvider for AlwaysOverflowProvider {
+        async fn chat(&self, _m: &[Message], _t: &[ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(overflow_error())
+        }
+        async fn chat_stream(&self, _m: &[Message], _t: &[ToolDefinition], _tx: mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(overflow_error())
+        }
+        fn name(&self) -> &str { "always-overflow" }
+    }
+
+    fn some_messages() -> Vec<Message> {
+        vec![Message {
+            role: opex_types::MessageRole::User,
+            content: "hello".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            thinking_blocks: vec![],
+            db_id: None,
+        }]
+    }
+
+    #[tokio::test]
+    async fn chat_recovers_after_one_force_compact() {
+        let provider = OverflowThenOkProvider::new();
+        let compactor = CountingCompactor::new();
+        let mut messages = some_messages();
+
+        let result = chat_with_overflow_recovery(&provider, &mut messages, &[], &compactor).await;
+
+        assert!(result.is_ok(), "expected recovery to succeed, got {result:?}");
+        assert_eq!(result.unwrap().content, "recovered");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2, "expected exactly 2 provider calls (overflow + retry)");
+        assert_eq!(compactor.force_calls.load(Ordering::SeqCst), 1, "expected exactly 1 forced compaction");
+        assert_eq!(compactor.compact_calls.load(Ordering::SeqCst), 0, "gated compact() must not be used by overflow recovery");
+    }
+
+    #[tokio::test]
+    async fn chat_stream_recovers_after_one_force_compact() {
+        let provider = OverflowThenOkProvider::new();
+        let compactor = CountingCompactor::new();
+        let mut messages = some_messages();
+        let (tx, mut rx) = mpsc::channel::<String>(16);
+
+        let result = chat_stream_with_overflow_recovery(
+            &provider, &mut messages, &[], tx, &compactor,
+            crate::agent::providers::CallOptions::default(),
+        ).await;
+
+        assert!(result.is_ok(), "expected recovery to succeed, got {result:?}");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2, "expected exactly 2 provider calls (overflow + retry)");
+        assert_eq!(compactor.force_calls.load(Ordering::SeqCst), 1, "expected exactly 1 forced compaction");
+
+        let mut chunks = vec![];
+        while let Ok(c) = rx.try_recv() { chunks.push(c); }
+        assert_eq!(chunks, vec!["recovered".to_string()]);
+    }
+
+    /// Anti-loop guarantee: a provider that ALWAYS overflows must see
+    /// recovery applied exactly once (one force-compact, one retry), then
+    /// fail — never an unbounded compact/retry cycle.
+    #[tokio::test]
+    async fn chat_gives_up_after_exactly_one_recovery_attempt() {
+        let provider = AlwaysOverflowProvider::new();
+        let compactor = CountingCompactor::new();
+        let mut messages = some_messages();
+
+        let result = chat_with_overflow_recovery(&provider, &mut messages, &[], &compactor).await;
+
+        assert!(result.is_err(), "expected failure — overflow never resolves");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2, "expected exactly 2 provider calls total (no infinite loop)");
+        assert_eq!(compactor.force_calls.load(Ordering::SeqCst), 1, "expected exactly 1 forced compaction — not repeated");
+    }
+
+    #[tokio::test]
+    async fn chat_stream_gives_up_after_exactly_one_recovery_attempt() {
+        let provider = AlwaysOverflowProvider::new();
+        let compactor = CountingCompactor::new();
+        let mut messages = some_messages();
+        let (tx, _rx) = mpsc::channel::<String>(16);
+
+        let result = chat_stream_with_overflow_recovery(
+            &provider, &mut messages, &[], tx, &compactor,
+            crate::agent::providers::CallOptions::default(),
+        ).await;
+
+        assert!(result.is_err(), "expected failure — overflow never resolves");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2, "expected exactly 2 provider calls total (no infinite loop)");
+        assert_eq!(compactor.force_calls.load(Ordering::SeqCst), 1, "expected exactly 1 forced compaction — not repeated");
+    }
+
+    /// A non-overflow error must propagate immediately without any compaction.
+    #[tokio::test]
+    async fn chat_non_overflow_error_skips_recovery() {
+        struct AuthFailProvider;
+        #[async_trait::async_trait]
+        impl crate::agent::providers::LlmProvider for AuthFailProvider {
+            async fn chat(&self, _m: &[Message], _t: &[ToolDefinition], _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+                Err(anyhow::anyhow!("401 unauthorized: invalid api key"))
+            }
+            async fn chat_stream(&self, _m: &[Message], _t: &[ToolDefinition], _tx: mpsc::Sender<String>, _opts: crate::agent::providers::CallOptions) -> anyhow::Result<LlmResponse> {
+                Err(anyhow::anyhow!("401 unauthorized: invalid api key"))
+            }
+            fn name(&self) -> &str { "auth-fail" }
+        }
+
+        let compactor = CountingCompactor::new();
+        let mut messages = some_messages();
+        let result = chat_with_overflow_recovery(&AuthFailProvider, &mut messages, &[], &compactor).await;
+
+        assert!(result.is_err());
+        assert_eq!(compactor.force_calls.load(Ordering::SeqCst), 0, "non-overflow errors must not trigger compaction");
+        assert_eq!(compactor.compact_calls.load(Ordering::SeqCst), 0);
     }
 }

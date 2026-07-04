@@ -264,6 +264,103 @@ pub async fn compact_messages<F, Fut>(
     }
 }
 
+/// Force-compact messages regardless of the token-threshold gate, indexing
+/// extracted facts to memory. Used by reactive context-overflow recovery
+/// (`pipeline::llm_call::chat_stream_with_overflow_recovery` /
+/// `chat_with_overflow_recovery`) — the provider already rejected the call
+/// as too large, so waiting on the proactive gate (which estimates tokens
+/// via a rough heuristic, see `history::estimate_tokens`) risks a no-op
+/// compaction that leaves the retry doomed to fail identically.
+///
+/// Mirrors [`compact_messages`] (same fact-indexing / progress-header /
+/// notification side effects) but calls `history::force_compact` instead of
+/// the gated `history::compact_if_needed`.
+#[allow(clippy::too_many_arguments)]
+pub async fn compact_messages_force<F, Fut>(
+    compaction_config: Option<&CompactionConfig>,
+    language: &str,
+    provider: &dyn LlmProvider,
+    compaction_provider: Option<&dyn LlmProvider>,
+    db: &sqlx::PgPool,
+    ui_event_tx: Option<&tokio::sync::broadcast::Sender<String>>,
+    agent_name: &str,
+    messages: &mut Vec<Message>,
+    detector: Option<&LoopDetector>,
+    index_facts: F,
+) where
+    F: FnOnce(Vec<String>) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let preserve_last_n = compaction_config
+        .map(|c| c.preserve_last_n as usize)
+        .unwrap_or(10);
+    if let Ok(Some(facts)) = history::force_compact(
+        messages,
+        provider,
+        compaction_provider,
+        preserve_last_n,
+        Some(language),
+    )
+    .await
+    {
+        tracing::info!(facts = facts.len(), "extracted facts during forced (overflow-recovery) compaction");
+        crate::db::audit::audit_spawn(
+            db.clone(),
+            agent_name.to_string(),
+            crate::db::audit::event_types::COMPACTION,
+            None,
+            serde_json::json!({"facts": facts.len(), "forced": true}),
+        );
+        index_facts(facts).await;
+
+        if let Some(det) = detector {
+            history::remove_progress_header(messages);
+            let header = history::generate_progress_header(messages, det);
+            let insert_pos = if messages
+                .first()
+                .map(|m| m.role == MessageRole::System)
+                .unwrap_or(false)
+            {
+                1
+            } else {
+                0
+            };
+            messages.insert(
+                insert_pos,
+                Message {
+                    role: MessageRole::System,
+                    content: header,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    thinking_blocks: vec![],
+                    db_id: None,
+                },
+            );
+        }
+
+        if let Some(ui_tx) = ui_event_tx {
+            let db = db.clone();
+            let tx = ui_tx.clone();
+            let agent_name = agent_name.to_string();
+            tokio::spawn(async move {
+                crate::gateway::notify(
+                    &db,
+                    &tx,
+                    "context_compaction",
+                    &format!("Context compacted: {}", agent_name),
+                    &format!(
+                        "Agent {} session was force-compacted after a context overflow",
+                        agent_name
+                    ),
+                    serde_json::json!({"agent": agent_name, "forced": true}),
+                )
+                .await
+                .ok();
+            });
+        }
+    }
+}
+
 /// Compact a specific session's messages via API.
 /// Returns `(facts_extracted, new_message_count)`.
 #[allow(clippy::too_many_arguments)]

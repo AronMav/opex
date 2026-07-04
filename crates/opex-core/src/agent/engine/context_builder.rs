@@ -126,6 +126,27 @@ impl AgentEngine {
         .await
     }
 
+    /// Force-compact messages regardless of the proactive token-threshold
+    /// gate. Used by reactive context-overflow recovery — see
+    /// `pipeline::context::compact_messages_force` doc comment.
+    pub(crate) async fn compact_messages_force(&self, messages: &mut Vec<Message>) {
+        let engine = self;
+        let cfg = engine.cfg();
+        crate::agent::pipeline::context::compact_messages_force(
+            cfg.agent.compaction.as_ref(),
+            &cfg.agent.language,
+            cfg.provider.as_ref(),
+            cfg.compaction_provider.as_deref(),
+            &cfg.db,
+            engine.state().ui_event_tx.as_ref(),
+            &cfg.agent.name,
+            messages,
+            None,
+            |facts| async move { engine.index_facts_to_memory(&facts).await },
+        )
+        .await
+    }
+
     /// Compact a specific session's messages via API.
     pub async fn compact_session(&self, session_id: uuid::Uuid) -> Result<(usize, usize)> {
         let engine = self;
