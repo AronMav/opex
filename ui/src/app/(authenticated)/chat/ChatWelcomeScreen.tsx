@@ -3,6 +3,7 @@
 import { WalnutMark } from "@/components/ui/walnut-mark";
 import { useTranslation } from "@/hooks/use-translation";
 import { useChatStore } from "@/stores/chat-store";
+import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/stores/auth-store";
 
 export function ChatWelcomeScreen() {
@@ -20,7 +21,7 @@ export function ChatWelcomeScreen() {
           {agentIconUrl ? (
             <img src={agentIconUrl} alt={currentAgent} className="h-full w-full object-cover" />
           ) : (
-            <WalnutMark size={35} className="text-primary/70" />
+            <WalnutMark size={35} className="text-primary/80" />
           )}
         </div>
         <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full border-2 border-card bg-success animate-pulse" />
@@ -37,13 +38,15 @@ export function ChatWelcomeScreen() {
           { key: "chat.suggestion_search", prompt: t("chat.suggestion_search"), delay: "delay-75" },
           { key: "chat.suggestion_tool", prompt: t("chat.suggestion_tool"), delay: "delay-150" },
         ].map((s) => (
-          <button
+          <Button
             key={s.key}
+            variant="outline"
+            size="sm"
             onClick={() => useChatStore.getState().sendMessage(s.prompt)}
-            className={`animate-in fade-in slide-in-from-bottom-1 duration-300 ${s.delay} rounded-lg border border-border/50 bg-card/50 px-4 py-2.5 text-sm text-foreground/70 hover:bg-primary/10 hover:border-primary/30 hover:text-foreground transition-all cursor-pointer`}
+            className={`animate-in fade-in slide-in-from-bottom-1 duration-300 hover:bg-primary/10 hover:border-primary/30 hover:text-foreground ${s.delay}`}
           >
             {s.prompt}
-          </button>
+          </Button>
         ))}
       </div>
     </div>

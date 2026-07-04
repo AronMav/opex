@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useCheckpoints, useRestoreCheckpoint } from "@/lib/queries";
 import { diffCheckpoint } from "@/lib/api";
@@ -108,19 +109,21 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
               <span className="text-xs text-muted-foreground">· {cp.summary}</span>
             </div>
             <div className="flex gap-1 shrink-0">
-              <button
-                className="rounded px-2 py-0.5 text-xs border border-border hover:bg-muted/40 transition-colors"
+              <Button
+                variant="outline"
+                size="xs"
                 onClick={() => handleDiff(cp.n)}
               >
                 {t("checkpoints.diff")}
-              </button>
-              <button
-                className="rounded px-2 py-0.5 text-xs border border-destructive/50 text-destructive hover:bg-destructive/10 transition-colors"
+              </Button>
+              <Button
+                variant="outline-destructive"
+                size="xs"
                 onClick={() => handleRestoreClick(cp.n)}
                 disabled={restore.isPending}
               >
                 {t("checkpoints.rollback")}
-              </button>
+              </Button>
             </div>
           </li>
         ))}

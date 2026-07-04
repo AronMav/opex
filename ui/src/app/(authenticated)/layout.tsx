@@ -144,9 +144,9 @@ export default function AuthenticatedLayout({
         <div className="sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-border bg-background px-3 md:hidden">
           <div className="flex items-center gap-2">
             <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform" />
-            <div className="flex items-center gap-2 pr-2 border-r border-border/20">
+            <div className="flex items-center gap-2 pr-2 border-r border-border/30">
               <WalnutMark size={18} className="text-primary" />
-              <span className="font-display text-sm font-black tracking-wide uppercase text-foreground/90">OPEX</span>
+              <span className="font-display text-sm font-black tracking-wide uppercase text-foreground/80">OPEX</span>
             </div>
           </div>
 

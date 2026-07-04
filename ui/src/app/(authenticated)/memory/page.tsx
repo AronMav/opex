@@ -222,7 +222,7 @@ export default function MemoryPage() {
                             </div>
                             {doc.pinned && (
                               <Badge variant="outline-primary" size="sm" className="shrink-0">
-                                <Pin className="h-3 w-3" />
+                                <Pin className="h-4 w-4" />
                               </Badge>
                             )}
                           </div>
@@ -242,14 +242,14 @@ export default function MemoryPage() {
                         </div>
 
                         <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
-                          <Button variant="ghost" size="sm" className="h-7 text-xs px-2" onClick={() => router.push(`/memory?doc=${doc.id}`)}>
-                            <ExternalLink className="h-3 w-3 mr-1.5" /> {t("memory.show_full_document")}
+                          <Button variant="ghost" size="sm" className="text-xs px-2" onClick={() => router.push(`/memory?doc=${doc.id}`)}>
+                            <ExternalLink className="h-4 w-4 mr-1.5" /> {t("memory.show_full_document")}
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => togglePin(doc)} className="h-7 w-7 p-0">
+                          <Button variant="ghost" size="sm" onClick={() => togglePin(doc)} className="w-7 p-0">
                             {doc.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(doc.id)} className="h-7 text-xs px-2 text-destructive hover:bg-destructive/10">
-                            <Trash2 className="h-3 w-3 mr-1.5" /> {t("common.delete")}
+                          <Button variant="ghost" size="sm" onClick={() => setDeleteTarget(doc.id)} className="text-xs px-2 text-destructive hover:bg-destructive/10">
+                            <Trash2 className="h-4 w-4 mr-1.5" /> {t("common.delete")}
                           </Button>
                         </div>
                       </div>

@@ -44,7 +44,7 @@ export function RoleAvatar({
   if (isUser && !isAgentSender) {
     return (
       <Avatar className="h-9 w-9 rounded-xl shadow-sm">
-        <AvatarFallback className="rounded-xl bg-primary/10 border border-primary/20 text-primary">
+        <AvatarFallback className="rounded-xl bg-primary/10 border border-primary/30 text-primary">
           <User className="h-4 w-4" />
         </AvatarFallback>
       </Avatar>

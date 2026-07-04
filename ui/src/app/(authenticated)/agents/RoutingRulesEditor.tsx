@@ -88,7 +88,7 @@ function RoutingRuleRow({
               fetchModels(v);
             }}
           >
-            <SelectTrigger className="w-full bg-background border-border text-xs h-8">
+            <SelectTrigger className="w-full bg-background border-border text-xs h-9">
               <SelectValue placeholder="Select provider..." />
             </SelectTrigger>
             <SelectContent className="border-border">
@@ -110,7 +110,7 @@ function RoutingRuleRow({
             className="bg-background border-border font-mono text-xs h-8"
             onChange={(e) => onChange({ model: e.target.value })} />
           <Select value={rule.condition} onValueChange={(v) => onChange({ condition: v })}>
-            <SelectTrigger className="w-full bg-background border-border text-xs h-8">
+            <SelectTrigger className="w-full bg-background border-border text-xs h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="border-border">
@@ -211,7 +211,7 @@ export function RoutingRulesEditor({
             ])
           }
         >
-          <Plus className="h-3 w-3 mr-1" /> {t("agents.add_rule")}
+          <Plus className="h-4 w-4 mr-1" /> {t("agents.add_rule")}
         </Button>
       </div>
       {routing.length === 0 ? (

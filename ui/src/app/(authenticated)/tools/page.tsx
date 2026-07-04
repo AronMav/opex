@@ -393,7 +393,7 @@ parameters:
                 </Select>
               </Field>
             </div>
-            <div className="rounded-lg border border-border/60 bg-muted/10 p-4 space-y-4">
+            <div className="rounded-lg border border-border/50 bg-muted/10 p-4 space-y-4">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{t("tools.mcp_connection")}</p>
               <Field label={t("tools.mcp_field_url")}>
                 <Input type="text" value={mcpForm.url} onChange={(e) => setMcpForm((f) => ({ ...f, url: e.target.value }))}
@@ -504,33 +504,33 @@ parameters:
         <div className="space-y-1.5 mt-auto text-xs">
           <div className="flex flex-col gap-0.5 bg-muted/20 rounded px-2.5 py-1.5 border border-border/50 overflow-hidden">
             <span className="text-muted-foreground">{t("tools.endpoint")}</span>
-            <span className="font-mono text-primary/70 truncate" title={tool.endpoint}>{tool.endpoint}</span>
+            <span className="font-mono text-primary/80 truncate" title={tool.endpoint}>{tool.endpoint}</span>
           </div>
         </div>
         <div className="flex gap-1.5 pt-1">
           <Button variant="outline" size="sm" disabled={pending} onClick={() => startEditYaml(tool.name)} className="flex-1">
-            <Pencil className="h-3 w-3" /> {t("common.edit")}
+            <Pencil className="h-4 w-4" /> {t("common.edit")}
           </Button>
           {tool.status === "draft" && (
             <Button variant="outline-success" size="sm" disabled={pending} aria-label={t("tools.verify")}
               onClick={() => handleVerify(tool.name)}>
-              <CheckCircle2 className="h-3 w-3" />
+              <CheckCircle2 className="h-4 w-4" />
             </Button>
           )}
           {tool.status === "disabled" ? (
             <Button variant="outline-success" size="sm" disabled={pending} aria-label={t("tools.enable")}
               onClick={() => handleEnable(tool.name)}>
-              <Play className="h-3 w-3" />
+              <Play className="h-4 w-4" />
             </Button>
           ) : (
             <Button variant="outline-warning" size="sm" disabled={pending} aria-label={t("tools.disable")}
               onClick={() => handleDisable(tool.name)}>
-              <Square className="h-3 w-3" />
+              <Square className="h-4 w-4" />
             </Button>
           )}
           <Button variant="outline-destructive" size="sm" disabled={pending} aria-label={t("common.delete")}
             onClick={() => setDeleteConfirm({ kind: "yaml", name: tool.name })}>
-            <Trash2 className="h-3 w-3" />
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       </Card>
@@ -558,7 +558,7 @@ parameters:
           <Row label={t("tools.mode")} value={s.mode} />
           <div className="flex flex-col gap-0.5 bg-muted/20 rounded px-2.5 py-1.5 border border-border/50 overflow-hidden">
             <span className="text-muted-foreground">{s.url ? t("tools.url") : t("tools.container")}</span>
-            <span className="font-mono text-primary/70 truncate" title={endpoint}>{endpoint}</span>
+            <span className="font-mono text-primary/80 truncate" title={endpoint}>{endpoint}</span>
           </div>
           <div className={`flex items-center gap-1.5 rounded px-2.5 py-1.5 border ${
             active ? "border-success/30 bg-success/5" : "border-border bg-muted/10"
@@ -574,12 +574,12 @@ parameters:
         </div>
         <div className="flex gap-1.5 pt-1">
           <Button variant="outline" size="sm" disabled={pending} onClick={() => startEditMcp(s)} className="flex-1">
-            <Pencil className="h-3 w-3" /> {t("common.edit")}
+            <Pencil className="h-4 w-4" /> {t("common.edit")}
           </Button>
           {s.enabled && s.status === "running" && (
             <Button variant="outline" size="sm" disabled={pending} aria-label={t("tools.reload")}
               onClick={() => reloadMcp(s.name)}>
-              <RotateCcw className={`h-3 w-3 ${actionPending === "reload:" + s.name ? "animate-spin" : ""}`} />
+              <RotateCcw className={`h-4 w-4 ${actionPending === "reload:" + s.name ? "animate-spin" : ""}`} />
             </Button>
           )}
           <Button
@@ -589,11 +589,11 @@ parameters:
             aria-label={s.enabled ? t("tools.disable") : t("tools.enable")}
             onClick={() => toggleMcp(s.name)}
           >
-            {s.enabled ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+            {s.enabled ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           </Button>
           <Button variant="outline-destructive" size="sm" disabled={pending} aria-label={t("common.delete")}
             onClick={() => setDeleteConfirm({ kind: "mcp", name: s.name })}>
-            <Trash2 className="h-3 w-3" />
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       </Card>
@@ -640,7 +640,7 @@ parameters:
           {h.match?.mime?.length ? (
             <div className="flex flex-col gap-0.5 bg-muted/20 rounded px-2.5 py-1.5 border border-border/50 overflow-hidden">
               <span className="text-muted-foreground">{t("tools.handler_mime")}</span>
-              <span className="font-mono text-primary/70 truncate" title={h.match.mime.join(", ")}>{h.match.mime.join(", ")}</span>
+              <span className="font-mono text-primary/80 truncate" title={h.match.mime.join(", ")}>{h.match.mime.join(", ")}</span>
             </div>
           ) : null}
           {h.provider && (
@@ -672,7 +672,7 @@ parameters:
               onClick={() => setHandlerEditorId(h.id)}
               aria-label={t("tools.handler_edit")}
             >
-              <Pencil className="h-3 w-3" /> {t("tools.handler_edit")}
+              <Pencil className="h-4 w-4" /> {t("tools.handler_edit")}
             </Button>
             {h.source !== "builtin" && (
               <Button
@@ -683,9 +683,9 @@ parameters:
                 aria-label={h.source === "override" ? t("tools.handler_reset") : t("tools.handler_delete")}
               >
                 {h.source === "override" ? (
-                  <RotateCcw className="h-3 w-3" />
+                  <RotateCcw className="h-4 w-4" />
                 ) : (
-                  <Trash2 className="h-3 w-3" />
+                  <Trash2 className="h-4 w-4" />
                 )}
                 {h.source === "override" ? t("tools.handler_reset") : t("tools.handler_delete")}
               </Button>

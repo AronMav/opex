@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import * as React from "react";
 import { RotateCcw, X, AlertCircle, WifiOff, Clock, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -90,24 +91,28 @@ export function ErrorBanner({
       {label && <span className="shrink-0 font-semibold">{label}</span>}
       <span className="flex-1 line-clamp-2">{t("common.error_prefix", { error: message })}</span>
       {hasMessages && onRetry && (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xs"
           onClick={onRetry}
-          className={cn("shrink-0 rounded-md px-2 py-1 text-xs font-medium transition-colors", buttonHover)}
+          className={cn("shrink-0", buttonHover)}
         >
           <RotateCcw className="h-3 w-3 mr-1 inline" />
           {retryLabel ?? t("error.retry")}
-        </button>
+        </Button>
       )}
       {onClear && (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           onClick={onClear}
           aria-label={t("common.close")}
-          className={cn("shrink-0 rounded p-0.5 transition-colors", closeHover)}
+          className={cn("shrink-0", closeHover)}
         >
           <X className="h-3.5 w-3.5" />
-        </button>
+        </Button>
       )}
     </div>
   );

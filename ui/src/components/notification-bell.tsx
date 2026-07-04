@@ -16,6 +16,7 @@ import {
   useClearAllNotifications,
   useNotificationWsSync,
 } from "@/lib/queries";
+import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/hooks/use-translation";
 import type { NotificationRow } from "@/types/api";
 
@@ -223,20 +224,23 @@ export function NotificationBell() {
           <span className="text-sm font-semibold">{t("notifications.title")}</span>
           <div className="flex items-center gap-3">
             {unread_count > 0 && (
-              <button
+              <Button
+                variant="link"
+                size="xs"
                 onClick={() => markAllRead.mutate()}
-                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
                 {t("notifications.mark_all_read")}
-              </button>
+              </Button>
             )}
             {notifications.length > 0 && (
-              <button
+              <Button
+                variant="link"
+                size="xs"
+                className="text-destructive"
                 onClick={() => clearAll.mutate()}
-                className="text-xs text-destructive/70 hover:text-destructive transition-colors"
               >
                 {t("notifications.clear_all")}
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -266,7 +270,7 @@ export function NotificationBell() {
                     {n.title}
                   </span>
                   {!n.read && (
-                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-primary" />
+                    <span className="mt-1 h-3 w-3 shrink-0 rounded-full bg-primary" />
                   )}
                 </div>
                 <MediaNotificationBody notification={n} />

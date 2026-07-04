@@ -6,6 +6,7 @@
 import React, { useRef, useEffect, useCallback } from "react";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
 import type { UseMessageSearch } from "./hooks/use-message-search";
+import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/hooks/use-translation";
 
 interface SearchBarProps {
@@ -66,32 +67,37 @@ export function SearchBar({ search }: SearchBarProps) {
           {counterText}
         </span>
       )}
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-sm"
         onClick={prev}
         disabled={matches.length === 0}
         aria-label={t("chat.search_prev")}
-        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="disabled:opacity-30"
       >
         <ChevronUp className="h-3.5 w-3.5" />
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-sm"
         onClick={next}
         disabled={matches.length === 0}
         aria-label={t("chat.search_next")}
-        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="disabled:opacity-30"
       >
         <ChevronDown className="h-3.5 w-3.5" />
-      </button>
-      <button
+      </Button>
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-sm"
         onClick={close}
         aria-label={t("chat.search_close")}
-        className="shrink-0 rounded p-1 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <X className="h-3.5 w-3.5" />
-      </button>
+      </Button>
     </div>
   );
 }

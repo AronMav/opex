@@ -6,6 +6,7 @@
 
 import React, { useState } from "react";
 import { HistoryIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { getContextLimit } from "@/lib/model-limits";
 import { useTranslation } from "@/hooks/use-translation";
 import {
@@ -70,43 +71,41 @@ export function ContextBar({
   const barColor =
     ratio > 0.95 ? "bg-destructive" :
     ratio > 0.8  ? "bg-warning"     :
-                   "bg-primary/50";
+                   "bg-primary/30";
 
   // ── Compact (mobile header) ────────────────────────────────────────────────
   // One tight row, no tooltip provider: model badge + token progress + the
   // checkpoint-history trigger. Kept minimal so it fits the crowded mobile bar.
   if (compact) {
+    const shortLabel = model ? model.replace(/^claude-/, "").replace(/-\d{8}$/, "").slice(0, 5) : null;
     return (
       <>
         <CheckpointPanel agent={currentAgent} open={checkpointOpen} onOpenChange={setCheckpointOpen} />
         <div className="flex items-center gap-1.5 min-w-0 shrink">
-          {model && (
-            <span className="rounded border border-border/40 bg-muted/30 px-1.5 py-0.5 font-mono text-3xs text-muted-foreground/60 whitespace-nowrap truncate max-w-24">
-              {shortModel(model)}
+          {/* Mini model badge — tap for full details (future) */}
+          {shortLabel && (
+            <span className="rounded border border-border/30 bg-muted/30 px-1 py-0.5 font-mono text-3xs leading-none text-muted-foreground/60 whitespace-nowrap max-w-12 truncate">
+              {shortLabel}
             </span>
           )}
+          {/* Mini progress dot — colored by usage */}
           {hasUsage && (
-            <>
-              <span className={`text-3xs tabular-nums whitespace-nowrap ${isGenerating ? "text-muted-foreground/40" : "text-muted-foreground/60"}`}>
-                {formatK(tokens!)}/{formatK(limit!)}
-              </span>
-              <div className="relative h-1 w-8 rounded-full bg-muted/30 overflow-hidden shrink-0">
-                <div
-                  className={`h-full rounded-full transition-all duration-700 ${barColor} ${isGenerating ? "opacity-50" : ""}`}
-                  style={{ width: `${pct}%` }}
-                />
-              </div>
-            </>
+            <span
+              className={`h-1.5 w-1.5 rounded-full shrink-0 ${barColor} ${isGenerating ? "animate-pulse" : ""}`}
+              title={`${pct}%`}
+            />
           )}
           {currentAgent && (
-            <button
-              type="button"
-              className="rounded p-0.5 text-muted-foreground/50 hover:text-muted-foreground transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 md:h-8 md:w-8 shrink-0 border-primary/30 !bg-primary/10 text-primary shadow-md active:scale-95 transition-all"
               onClick={() => setCheckpointOpen(true)}
               aria-label={t("checkpoints.history")}
+              title={t("checkpoints.history")}
             >
-              <HistoryIcon className="size-3.5" />
-            </button>
+              <HistoryIcon className="h-4 w-4 md:h-3.5 md:w-3.5" />
+            </Button>
           )}
         </div>
       </>
@@ -156,13 +155,15 @@ export function ContextBar({
         {currentAgent && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
-                className="rounded p-0.5 text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9 md:h-8 md:w-8 shrink-0 border-primary/30 !bg-primary/10 text-primary shadow-md active:scale-95 transition-all"
                 onClick={() => setCheckpointOpen(true)}
                 aria-label={t("checkpoints.history")}
               >
-                <HistoryIcon className="size-3.5" />
-              </button>
+                <HistoryIcon className="h-4 w-4 md:h-3.5 md:w-3.5" />
+              </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-2xs">
               {t("checkpoints.history")}
@@ -177,7 +178,7 @@ export function ContextBar({
 
               {/* Model badge */}
               {model && (
-                <span className="rounded-md border border-border/40 bg-muted/30 px-2 py-0.5 font-mono text-2xs text-muted-foreground/60 whitespace-nowrap">
+                <span className="rounded-md border border-border/30 bg-muted/30 px-2 py-0.5 font-mono text-2xs text-muted-foreground/60 whitespace-nowrap">
                   {shortModel(model)}
                 </span>
               )}
@@ -185,7 +186,7 @@ export function ContextBar({
               {/* Token count + progress bar */}
               {hasUsage && (
                 <>
-                  <span className={`text-2xs tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground/40" : "text-muted-foreground/60"}`}>
+                  <span className={`text-2xs tabular-nums whitespace-nowrap transition-opacity ${isGenerating ? "text-muted-foreground/50" : "text-muted-foreground/60"}`}>
                     {formatK(tokens!)} / {formatK(limit!)}
                   </span>
                   <div className="relative h-1 w-14 rounded-full bg-muted/30 overflow-hidden">
@@ -211,7 +212,7 @@ export function ContextBar({
           {tooltipLines.length > 0 && (
             <TooltipContent
               side="bottom"
-              className="bg-popover/95 border border-border/60 text-popover-foreground backdrop-blur-sm text-2xs font-mono max-w-60 whitespace-pre-line shadow-lg"
+              className="bg-popover/95 border border-border/50 text-popover-foreground backdrop-blur-sm text-2xs font-mono max-w-60 whitespace-pre-line shadow-lg"
             >
               {tooltipLines.join("\n")}
             </TooltipContent>

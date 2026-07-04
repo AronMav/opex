@@ -267,7 +267,7 @@ export default function WebhooksPage() {
                 </span>
               </div>
               {w.prompt_prefix && (
-                <p className="font-mono text-xs text-foreground/50 line-clamp-1 break-words">{w.prompt_prefix}</p>
+                <p className="font-mono text-xs text-foreground/80 line-clamp-1 break-words">{w.prompt_prefix}</p>
               )}
             </DataRow>
           ))}

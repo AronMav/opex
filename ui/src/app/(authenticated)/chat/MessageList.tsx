@@ -30,7 +30,7 @@ export function MessageSkeleton() {
       <div className="h-9 w-9 rounded-xl bg-muted/50 animate-pulse shrink-0" />
       <div className="flex-1 space-y-2">
         <div className="h-3 w-20 rounded bg-muted/50 animate-pulse" />
-        <div className="h-4 w-full rounded bg-muted/40 animate-pulse" />
+        <div className="h-4 w-full rounded bg-muted/30 animate-pulse" />
         <div className="h-4 w-3/4 rounded bg-muted/30 animate-pulse" />
       </div>
     </div>
@@ -85,7 +85,7 @@ function ScrollToBottomButton({
     >
       <ChevronDown className="h-5 w-5" />
       {isStreaming && (
-        <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-primary animate-pulse" />
+        <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-primary animate-pulse" />
       )}
       {badge && (
         <span className="absolute -bottom-1 -right-1 min-w-5 h-5 rounded-full bg-primary text-primary-foreground text-3xs font-bold flex items-center justify-center px-1 leading-none">
@@ -118,12 +118,14 @@ function VirtuosoHeader({
   if (hiddenCount <= 0) return null;
   return (
     <div className="flex items-center justify-center py-4">
-      <button
+      <Button
+        variant="outline"
+        size="sm"
         onClick={onLoadEarlier}
-        className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors border border-border/40 rounded-full px-4 py-1.5 hover:bg-muted/30"
+        className="rounded-full"
       >
         {t("chat.show_earlier", { count: hiddenCount })}
-      </button>
+      </Button>
     </div>
   );
 }

@@ -395,7 +395,7 @@ export default function WorkspacePage() {
   return (
     <div className="flex h-full flex-col bg-background selection:bg-primary/20 overflow-hidden">
       {/* Header / Breadcrumbs */}
-      <div className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/40 px-4 md:px-6">
+      <div className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/30 px-4 md:px-6">
         <div className="flex items-center gap-3 overflow-hidden min-w-0">
           <SidebarTrigger className="md:hidden shrink-0 h-9 w-9" />
           <Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>
@@ -413,14 +413,16 @@ export default function WorkspacePage() {
           <div className="flex items-center gap-2 font-mono text-sm overflow-hidden">
             <Folder className="h-4 w-4 text-primary shrink-0" />
             <div className="flex items-center whitespace-nowrap overflow-x-auto scrollbar-none pb-0.5">
-              <button onClick={navigateToRoot} className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">{t("workspace.breadcrumb_root")}</button>
+              <Button variant="link" size="sm" onClick={navigateToRoot} className="text-muted-foreground hover:text-primary h-auto p-0">{t("workspace.breadcrumb_root")}</Button>
               <span className="mx-1 text-muted-foreground/30">/</span>
               {breadcrumbs.map((seg, i) => {
                 const segPath = breadcrumbs.slice(0, i + 1).join("/");
                 return (
                   <span key={segPath} className="flex items-center">
-                    <button
-                      className="text-muted-foreground hover:text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="text-muted-foreground hover:text-primary h-auto p-0"
                       onClick={() => {
                         guardNav(() => {
                           setSelectedFile("");
@@ -432,7 +434,7 @@ export default function WorkspacePage() {
                       }}
                     >
                       {seg}
-                    </button>
+                    </Button>
                     <span className="mx-1 text-muted-foreground/30">/</span>
                   </span>
                 );

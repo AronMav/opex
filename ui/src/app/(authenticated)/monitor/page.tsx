@@ -283,7 +283,7 @@ const DailyChart = memo(function DailyChart({ data }: { data: DailyUsageResponse
             <span>0</span>
           </div>
           <div className="min-w-0 flex-1">
-            <div className="flex h-40 items-end gap-0.5 border-l border-border/40 pl-1 sm:gap-1">
+            <div className="flex h-40 items-end gap-0.5 border-l border-border/30 pl-1 sm:gap-1">
               {entries.map(([date, val], idx) => {
                 const total = val.input + val.output;
                 const pct = (total / maxTokens) * 100;
@@ -359,8 +359,8 @@ const AUDIT_PAGE_SIZE = 50;
 
 const FAILURE_KIND_BADGE: Record<string, string> = {
   sub_agent_timeout: "bg-warning/15 text-warning border-warning/30",
-  provider_error: "bg-destructive/15 text-destructive border-destructive/30",
-  llm_error: "bg-destructive/15 text-destructive border-destructive/30",
+  provider_error: "bg-destructive/10 text-destructive border-destructive/30",
+  llm_error: "bg-destructive/10 text-destructive border-destructive/30",
   max_iterations: "bg-warning/15 text-warning border-warning/30",
   tool_error: "bg-warning/15 text-warning border-warning/30",
   other: "bg-muted text-muted-foreground border-border",
@@ -374,7 +374,7 @@ const LOGS_LEVELS = ["DEBUG", "INFO", "WARN", "ERROR"] as const;
 const LEVEL_PRIORITY: Record<string, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
 const LEVEL_COLORS: Record<string, string> = {
   DEBUG: "text-muted-foreground/60",
-  INFO: "text-primary/70",
+  INFO: "text-primary/80",
   WARN: "text-warning/70",
   ERROR: "text-destructive font-bold",
 };
@@ -644,7 +644,7 @@ function MonitorPageInner() {
                       </span>
                     )}
                     <Select value={String(refreshInterval)} onValueChange={(v) => setRefreshInterval(Number(v))}>
-                      <SelectTrigger className="h-8 w-20 text-xs bg-card/50 border-border">
+                      <SelectTrigger className="h-9 w-20 text-xs bg-card/50 border-border">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -718,7 +718,7 @@ function MonitorPageInner() {
               {wdChecks.length > 0 && (
                 <div className="mt-8">
                   <div className="flex items-center gap-3 mb-4">
-                    <HeartPulse size={16} className="text-primary/60" />
+                    <HeartPulse size={16} className="text-primary/50" />
                     <span className="text-sm font-semibold text-foreground">{t("watchdog.services")}</span>
                     <Badge variant="outline" size="sm" className="font-mono">
                       {wdChecks.filter(([,v]) => v.ok).length}/{wdChecks.length}
@@ -752,11 +752,11 @@ function MonitorPageInner() {
                               aria-label={t("watchdog.restart_service")}
                               className="tap-target"
                             >
-                              <RotateCcw className={`h-3 w-3 text-muted-foreground ${restarting === name ? "animate-spin" : ""}`} />
+                              <RotateCcw className={`h-4 w-4 text-muted-foreground ${restarting === name ? "animate-spin" : ""}`} />
                             </Button>
                           )}
                         </div>
-                        <span className="font-mono text-xs text-foreground/60">{svc.latency_ms}ms</span>
+                        <span className="font-mono text-xs text-foreground/80">{svc.latency_ms}ms</span>
                         {svc.error && (
                           <span className="text-3xs text-destructive truncate" title={svc.error}>{svc.error}</span>
                         )}
@@ -780,7 +780,7 @@ function MonitorPageInner() {
                     {infra.length > 0 && (
                       <div>
                         <div className="flex items-center gap-3 mb-3">
-                          <Database size={16} className="text-primary/60" />
+                          <Database size={16} className="text-primary/50" />
                           <span className="text-sm font-semibold text-foreground">{t("watchdog.infrastructure")}</span>
                           <Badge variant="outline" size="sm" className="font-mono">
                             {infra.filter(c => c.healthy).length}/{infra.length}
@@ -788,8 +788,8 @@ function MonitorPageInner() {
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                           {infra.map((c) => (
-                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/5" : ""}`}>
-                              <span className={`h-2 w-2 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
+                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/10" : ""}`}>
+                              <span className={`h-3 w-3 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
                               <div className="min-w-0 flex-1">
                                 <span className="text-xs font-semibold text-foreground block">{c.name}</span>
                                 <span className={`text-3xs block ${c.healthy ? "text-muted-foreground" : "text-destructive"}`}>{c.status}</span>
@@ -802,7 +802,7 @@ function MonitorPageInner() {
                                 aria-label={t("watchdog.restart_service")}
                                 className="tap-target shrink-0"
                               >
-                                <RotateCcw className={`h-3 w-3 text-muted-foreground ${restarting === c.docker_name ? "animate-spin" : ""}`} />
+                                <RotateCcw className={`h-4 w-4 text-muted-foreground ${restarting === c.docker_name ? "animate-spin" : ""}`} />
                               </Button>
                             </Card>
                           ))}
@@ -812,7 +812,7 @@ function MonitorPageInner() {
                     {agents.length > 0 && (
                       <div>
                         <div className="flex items-center gap-3 mb-3">
-                          <Bot size={16} className="text-primary/60" />
+                          <Bot size={16} className="text-primary/50" />
                           <span className="text-sm font-semibold text-foreground">{t("watchdog.agents")}</span>
                           <Badge variant="outline" size="sm" className="font-mono">
                             {agents.filter(c => c.healthy).length}/{agents.length}
@@ -820,8 +820,8 @@ function MonitorPageInner() {
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                           {agents.map((c) => (
-                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/5" : ""}`}>
-                              <span className={`h-2 w-2 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
+                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/10" : ""}`}>
+                              <span className={`h-3 w-3 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
                               <div className="min-w-0 flex-1">
                                 <span className="text-xs font-semibold text-foreground block">{c.name}</span>
                                 <span className={`text-3xs block ${c.healthy ? "text-muted-foreground" : "text-destructive"}`}>{c.status}</span>
@@ -834,7 +834,7 @@ function MonitorPageInner() {
                                 aria-label={t("watchdog.restart_service")}
                                 className="tap-target shrink-0"
                               >
-                                <RotateCcw className={`h-3 w-3 text-muted-foreground ${restarting === c.docker_name ? "animate-spin" : ""}`} />
+                                <RotateCcw className={`h-4 w-4 text-muted-foreground ${restarting === c.docker_name ? "animate-spin" : ""}`} />
                               </Button>
                             </Card>
                           ))}
@@ -1021,20 +1021,20 @@ function MonitorPageInner() {
                       style={{ contentVisibility: "auto", containIntrinsicSize: "auto 24px" }}
                     >
                       <div className="flex items-center gap-3 shrink-0">
-                        <span className="w-16 text-muted-foreground/60 tabular-nums group-hover:text-muted-foreground/70 transition-colors">
+                        <span className="w-16 text-muted-foreground/60 tabular-nums group-hover:text-muted-foreground/60 transition-colors">
                           {new Date(l.timestamp).toLocaleTimeString(locale === "en" ? "en-US" : "ru-RU", { hour12: false })}
                         </span>
                         <span className={`w-12 font-bold uppercase tracking-tighter ${LEVEL_COLORS[l.level] || ""}`}>
                           {l.level}
                         </span>
                         {l.target && (
-                          <span className="w-24 md:w-32 truncate text-primary/60 font-bold hidden sm:inline-block" title={l.target}>
+                          <span className="w-24 md:w-32 truncate text-primary/50 font-bold hidden sm:inline-block" title={l.target}>
                             [{l.target}]
                           </span>
                         )}
                       </div>
                       {l.target && (
-                        <span className="text-primary/60 font-bold sm:hidden" title={l.target}>
+                        <span className="text-primary/50 font-bold sm:hidden" title={l.target}>
                           [{l.target}]
                         </span>
                       )}
@@ -1123,7 +1123,7 @@ function MonitorPageInner() {
                   {auditEvents.map((e: AuditEvent) => (
                     <div
                       key={e.id}
-                      className="group rounded-lg border border-border/50 bg-card/30 transition-colors hover:bg-card/60"
+                      className="group rounded-lg border border-border/50 bg-card/30 transition-colors hover:bg-card/50"
                     >
                       <button
                         type="button"
@@ -1144,10 +1144,10 @@ function MonitorPageInner() {
                             {t("audit.from", { actor: e.actor })}
                           </span>
                         )}
-                        <span className="text-xs text-muted-foreground/40 md:ml-auto">
+                        <span className="text-xs text-muted-foreground/50 md:ml-auto">
                           {new Date(e.created_at).toLocaleDateString(locale === "en" ? "en-US" : "ru-RU")}
                         </span>
-                        <ChevronRight className="hidden text-muted-foreground/40 transition-transform h-3 w-3 md:block" style={{ transform: expandedId === e.id ? "rotate(90deg)" : "rotate(0)" }} />
+                        <ChevronRight className="hidden text-muted-foreground/50 transition-transform h-4 w-4 md:block" style={{ transform: expandedId === e.id ? "rotate(90deg)" : "rotate(0)" }} />
                       </button>
 
                       {expandedId === e.id && (
@@ -1351,7 +1351,7 @@ function MonitorPageInner() {
                                       />
                                       <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-3">
                                         <div className="flex items-center gap-3 flex-wrap">
-                                          <span className="inline-flex h-6 items-center rounded-md bg-muted/60 px-2 text-xs font-mono font-medium text-muted-foreground">
+                                          <span className="inline-flex h-6 items-center rounded-md bg-muted/50 px-2 text-xs font-mono font-medium text-muted-foreground">
                                             {row.provider}
                                           </span>
                                           {row.model && (
@@ -1460,7 +1460,7 @@ function MonitorPageInner() {
                         disabled={processingIds.has(a.id)}
                         className="text-xs font-medium"
                       >
-                        <Check className="h-3 w-3 mr-2" />
+                        <Check className="h-4 w-4 mr-2" />
                         {t("approvals.approve")}
                       </Button>
                       <Button
@@ -1470,7 +1470,7 @@ function MonitorPageInner() {
                         disabled={processingIds.has(a.id)}
                         className="text-xs font-medium"
                       >
-                        <X className="h-3 w-3 mr-2" />
+                        <X className="h-4 w-4 mr-2" />
                         {t("approvals.reject")}
                       </Button>
                     </div>
@@ -1495,7 +1495,7 @@ function MonitorPageInner() {
               actions={
                 <div className="flex items-center gap-2">
                   <Select value={failuresAgent} onValueChange={setFailuresAgent}>
-                    <SelectTrigger className="h-8 w-44 text-xs">
+                    <SelectTrigger className="h-9 w-44 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

@@ -13,7 +13,7 @@ export function ParentBadge({ parentTitle, onNavigate }: ParentBadgeProps) {
       onClick={onNavigate}
       className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors mt-0.5 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <CornerUpLeft className="h-3 w-3 shrink-0" />
+      <CornerUpLeft className="h-4 w-4 shrink-0" />
       <span className="truncate max-w-[160px]">
         {parentTitle ?? "previous session"}
       </span>

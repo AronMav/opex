@@ -20,6 +20,7 @@ import { AlertCircle } from "lucide-react";
 // Collapsible removed — tool grouping disabled
 import { CompressionDivider } from "@/components/chat/CompressionDivider";
 import { CometLoader } from "@/components/ui/loader";
+import { Button } from "@/components/ui/button";
 import { MessageActions } from "./MessageActions";
 import { TextPart } from "./parts/TextPart";
 import { ReasoningPart } from "./parts/ReasoningPart";
@@ -157,7 +158,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
       data-msg-id={message.id}
       {...swipeHandlers}
       className={cn(
-        "group flex gap-3 py-5 md:py-6 border-t border-border/30 dark:border-border/20 first:border-t-0",
+        "group flex gap-3 py-5 md:py-6 border-t border-border/30 dark:border-border/30 first:border-t-0",
         isAgentSender && "bg-muted/20 dark:bg-muted/10 rounded-lg px-3",
         isFailed && "border-l-2 border-l-destructive pl-3"
       )}
@@ -176,7 +177,7 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
               {isAgentSender ? senderAgentName : t("chat.you")}
             </span>
             {message.createdAt && (
-              <span className="text-3xs font-mono tabular-nums text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
+              <span className="text-3xs font-mono tabular-nums text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity">
                 {formatMessageTime(message.createdAt, locale)}
               </span>
             )}
@@ -197,15 +198,17 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
         </div>
         {isFailed && (
           <div className="flex items-center gap-2 mt-1 text-xs text-destructive">
-            <AlertCircle className="h-3 w-3 shrink-0" />
+            <AlertCircle className="h-4 w-4 shrink-0" />
             <span>{t("chat.failedToSend")}</span>
-            <button
+            <Button
               type="button"
-              className="underline hover:no-underline"
+              variant="link"
+              size="sm"
+              className="underline hover:no-underline h-auto p-0 text-destructive"
               onClick={() => regenerate()}
             >
               {t("chat.retry")}
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -271,7 +274,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
         "group flex gap-3",
         continuesPrevious
           ? "pt-0 pb-2 md:pb-3"
-          : "py-5 md:py-6 border-t border-border/30 dark:border-border/20 first:border-t-0",
+          : "py-5 md:py-6 border-t border-border/30 dark:border-border/30 first:border-t-0",
       )}
     >
       <span className="message-avatar">
@@ -289,7 +292,7 @@ function AssistantMessage({ message, continuesPrevious = false }: { message: Cha
                 {agentName || t("chat.assistant")}
               </span>
               {message.createdAt && (
-                <span className="text-3xs font-mono tabular-nums text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-3xs font-mono tabular-nums text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity">
                   {formatMessageTime(message.createdAt, locale)}
                 </span>
               )}

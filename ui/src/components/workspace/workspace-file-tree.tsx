@@ -161,7 +161,7 @@ export function WorkspaceFileTree({
       </div>
 
       {isDragOver && (
-        <div className="mx-2 mb-1 mt-1 flex items-center justify-center rounded-md border-2 border-dashed border-primary/50 bg-primary/5 py-3 text-xs text-primary/70 pointer-events-none">
+        <div className="mx-2 mb-1 mt-1 flex items-center justify-center rounded-md border-2 border-dashed border-primary/50 bg-primary/5 py-3 text-xs text-primary/80 pointer-events-none">
           {t("workspace.drop_to_upload")}
         </div>
       )}
@@ -177,13 +177,15 @@ export function WorkspaceFileTree({
       <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
         <div className="p-2 space-y-0.5">
           {currentPath && (
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={onNavigateUp}
-              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left font-mono text-sm text-muted-foreground hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              className="flex w-full items-center gap-2 justify-start font-mono text-sm text-muted-foreground hover:bg-muted/50 h-auto py-2"
             >
               <CornerDownRight className="h-4 w-4 rotate-180" />
               <span className="opacity-60">..</span>
-            </button>
+            </Button>
           )}
 
           {files.map((f) => {
@@ -235,12 +237,14 @@ export function WorkspaceFileTree({
                     {/* Touch-accessible actions dropdown — always visible, not hover-gated */}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <button
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
                           aria-label={`${f.name} actions`}
-                          className="shrink-0 rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                          className="shrink-0 text-muted-foreground hover:text-foreground"
                         >
                           <MoreVertical className="h-3.5 w-3.5" />
-                        </button>
+                        </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="min-w-[140px]">
                         <DropdownMenuItem

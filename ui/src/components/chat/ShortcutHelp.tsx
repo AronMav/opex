@@ -62,7 +62,7 @@ export function ShortcutHelp({ open, onOpenChange }: ShortcutHelpProps) {
                     <div className="flex items-center gap-1">
                       {s.keys.map((k, i) => (
                         <span key={i} className="flex items-center gap-1">
-                          {i > 0 && <span className="text-[10px] text-muted-foreground/40">+</span>}
+                          {i > 0 && <span className="text-[10px] text-muted-foreground/50">+</span>}
                           <KeyBadge>{k}</KeyBadge>
                         </span>
                       ))}

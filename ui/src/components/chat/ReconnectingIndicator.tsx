@@ -18,7 +18,7 @@ export function ReconnectingIndicator({ attempt, maxAttempts, className }: Recon
       aria-live="polite"
       aria-label={t("chat.reconnecting_aria", { attempt, max: maxAttempts })}
       className={cn(
-        "mx-auto flex max-w-fit items-center gap-2 rounded-lg border border-primary/20 bg-muted/40 px-3 py-2",
+        "mx-auto flex max-w-fit items-center gap-2 rounded-lg border border-primary/30 bg-muted/30 px-3 py-2",
         className,
       )}
     >

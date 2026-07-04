@@ -59,12 +59,12 @@ export default function LoginPage() {
                 onChange={(e) => setToken(e.target.value)}
                 autoFocus
                 disabled={loading}
-                className="h-12 border-border bg-background font-mono text-sm placeholder:text-muted-foreground-subtle focus:border-primary/40 rounded-xl neu-inset pr-12"
+                className="h-12 border-border bg-background font-mono text-sm placeholder:text-muted-foreground-subtle focus:border-primary/30 rounded-xl neu-inset pr-12"
               />
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-xs"
+                size="icon-sm"
                 onClick={() => setShowToken((v) => !v)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 aria-label={t("login.show_token")}
