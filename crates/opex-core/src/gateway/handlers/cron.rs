@@ -97,8 +97,12 @@ pub(crate) struct CreateCronRequest {
 pub(crate) async fn api_create_cron(
     State(infra): State<InfraServices>,
     State(agents): State<AgentCore>,
-    Json(req): Json<CreateCronRequest>,
+    Json(mut req): Json<CreateCronRequest>,
 ) -> impl IntoResponse {
+    // T10 побочный пункт B (hermes parity): strip invisible/zero-width
+    // Unicode from the task prompt before it's persisted — mirrors the
+    // `agent`-tool cron path in `agent/pipeline/cron.rs`.
+    req.task = crate::redact::strip_invisible_unicode(&req.task);
     if req.name.is_empty() || req.agent.is_empty() || req.task.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -265,7 +269,12 @@ pub(crate) async fn api_update_cron(
     let name = req.name.unwrap_or(current.name);
     let cron_expr = req.cron.unwrap_or(current.cron_expr);
     let timezone = req.timezone.unwrap_or(current.timezone);
-    let task_message = req.task.unwrap_or(current.task_message);
+    // T10 побочный пункт B (hermes parity): strip invisible/zero-width
+    // Unicode from a freshly provided task prompt — `current.task_message`
+    // is already clean from a prior sanitized write.
+    let task_message = crate::redact::strip_invisible_unicode(
+        &req.task.unwrap_or(current.task_message),
+    );
     let enabled = req.enabled.unwrap_or(current.enabled);
     let silent = req.silent.unwrap_or(current.silent);
     let jitter_secs = req.jitter_secs.unwrap_or(current.jitter_secs);
