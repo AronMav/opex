@@ -2123,6 +2123,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "ts-rs",
+ "unicode-normalization",
  "url",
  "urlencoding",
  "uuid",

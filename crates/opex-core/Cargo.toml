@@ -80,6 +80,10 @@ serde_yaml = "0.9"
 # Error classification
 regex = "1"
 
+# NFKC normalization for the command-security scanner (T06 hardening) — pure
+# Rust, no OpenSSL. Already present transitively (pulled in by `idna`/`url`).
+unicode-normalization = "0.1"
+
 # mDNS service discovery (pure Rust — no OpenSSL, ARM64-safe)
 mdns-sd = "0.19"
 
