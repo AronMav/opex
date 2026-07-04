@@ -58,7 +58,7 @@ function DocumentFullView({ id, onBack }: { id: string; onBack: () => void }) {
       </div>
       {error && <ErrorBanner error={error} className="mb-4 shrink-0" />}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        <div className="prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-li:my-0.5 prose-pre:my-3">
+        <div className="prose prose-sm dark:prose-invert max-w-none break-words prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-li:my-0.5 prose-pre:my-3 prose-pre:overflow-x-auto prose-pre:max-w-full">
           <Markdown>{content || ""}</Markdown>
         </div>
       </div>
@@ -209,7 +209,7 @@ export default function MemoryPage() {
                   const isSession = doc.source?.startsWith("auto:session") || doc.source?.startsWith("Session:");
                   return (
                     <Card key={doc.id} interactive className="group relative flex flex-col p-4">
-                      <div className="flex items-start justify-between gap-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
                             <div className="flex items-center gap-2 min-w-0">
@@ -241,9 +241,9 @@ export default function MemoryPage() {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
-                          <Button variant="ghost" size="sm" className="text-xs px-2" onClick={() => router.push(`/memory?doc=${doc.id}`)}>
-                            <ExternalLink className="h-4 w-4 mr-1.5" /> {t("memory.show_full_document")}
+                        <div className="flex flex-wrap items-center gap-1 sm:shrink-0 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <Button variant="ghost" size="sm" className="text-xs px-2 min-w-0" onClick={() => router.push(`/memory?doc=${doc.id}`)}>
+                            <ExternalLink className="h-4 w-4 mr-1.5 shrink-0" /> <span className="truncate">{t("memory.show_full_document")}</span>
                           </Button>
                           <Button variant="ghost" size="sm" onClick={() => togglePin(doc)} className="w-7 p-0">
                             {doc.pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}

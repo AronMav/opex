@@ -222,10 +222,10 @@ export default function CronPage() {
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Clock className="h-3.5 w-3.5 text-muted-foreground/60" />
-                      <span className="font-mono text-xs text-muted-foreground font-bold tracking-wider">{j.cron}</span>
-                      <span className="font-mono text-xs text-muted-foreground/60 uppercase tracking-wide bg-muted/50 px-2 py-0.5 rounded border border-border/50 max-w-36 truncate">
+                    <div className="flex items-center gap-2 mt-1 flex-wrap min-w-0">
+                      <Clock className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
+                      <span className="font-mono text-xs text-muted-foreground font-bold tracking-wider truncate max-w-full">{j.cron}</span>
+                      <span className="font-mono text-xs text-muted-foreground/60 uppercase tracking-wide bg-muted/50 px-2 py-0.5 rounded border border-border/50 max-w-36 truncate shrink-0">
                         {j.timezone}
                       </span>
                     </div>

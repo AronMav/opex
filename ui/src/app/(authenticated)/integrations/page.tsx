@@ -470,12 +470,12 @@ export default function IntegrationsPage() {
       />
 
       {/* Agent selector */}
-      <div className="mb-6 flex items-center gap-3">
+      <div className="mb-6 flex flex-wrap items-center gap-3">
         <label htmlFor="integrations-agent-select" className="text-xs font-medium text-muted-foreground uppercase tracking-wider shrink-0">
           {t("integrations.agent_label")}
         </label>
         <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-          <SelectTrigger id="integrations-agent-select" className="h-9 w-48 text-xs font-mono">
+          <SelectTrigger id="integrations-agent-select" className="h-9 w-full sm:w-48 text-xs font-mono">
             <SelectValue placeholder={t("integrations.select_agent")} />
           </SelectTrigger>
           <SelectContent>

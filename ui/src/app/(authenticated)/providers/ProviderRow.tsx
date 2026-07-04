@@ -93,12 +93,12 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
       {/* Meta: base_url + api key + enabled */}
       <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
         {provider.base_url && (
-          <span className="flex items-center gap-1.5 text-xs text-muted-foreground-subtle font-mono truncate min-w-0">
+          <span className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground-subtle font-mono truncate min-w-0">
             <Globe className="h-4 w-4 shrink-0" />
             <span className="truncate">{provider.base_url}</span>
           </span>
         )}
-        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground min-w-0">
           <Key className="h-4 w-4 shrink-0" />
           <span className="font-mono truncate">
             {provider.api_key ?? (provider.has_api_key ? t("providers.api_key_configured") : t("providers.api_key_not_set"))}

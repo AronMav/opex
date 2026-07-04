@@ -616,8 +616,8 @@ export default function AgentsPage() {
                 </div>
                 <div className="flex flex-col gap-0.5 min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">
-                    <h3 className="font-mono text-sm font-bold tracking-tight text-foreground truncate">{a.name}</h3>
-                    <StatusBadge status={a.is_running ? "running" : "inactive"} size="sm" className="gap-1">
+                    <h3 className="font-mono text-sm font-bold tracking-tight text-foreground truncate min-w-0">{a.name}</h3>
+                    <StatusBadge status={a.is_running ? "running" : "inactive"} size="sm" className="gap-1 shrink-0">
                       <StatusDot status={a.is_running ? "success" : "muted"} pulse={a.is_running} className="h-1.5 w-1.5" />
                       {a.is_running ? t("agents.active") : t("agents.inactive")}
                     </StatusBadge>
