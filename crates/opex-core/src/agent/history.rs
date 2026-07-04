@@ -360,10 +360,14 @@ pub fn find_tail_start_by_tokens(messages: &[Message], head_end: usize, tail_bud
 
     cut_idx = cut_idx.min(n.saturating_sub(min_tail));
 
-    // Invariant: most recent User message must be in the tail
+    // Invariant: most recent User message must be in the tail.
+    // Skip previously-inserted summary markers (role=User, content starts with
+    // SUMMARY_PREFIX) — on a second/later compaction they would otherwise be
+    // mistaken for "the last user message" and the anchor would stick to the
+    // banner instead of the real last user turn (hermes parity, T12 pt.6).
     let last_user_idx = messages[head_end..n]
         .iter()
-        .rposition(|m| m.role == MessageRole::User)
+        .rposition(|m| m.role == MessageRole::User && !m.content.starts_with(SUMMARY_PREFIX))
         .map(|rel| rel + head_end);
     if let Some(user_idx) = last_user_idx
         && user_idx < cut_idx {
@@ -380,6 +384,22 @@ pub fn find_tail_start_by_tokens(messages: &[Message], head_end: usize, tail_bud
     {
         cut_idx = cut_idx.saturating_sub(1);
     }
+
+    // Causal-coupling guard (hermes parity, T12 pt.3): the plain
+    // `max(head_end + 1)` clamp below exists to guarantee a non-empty tail
+    // when `cut_idx` fell back to (or below) `head_end`. But if the last user
+    // turn sits exactly at `head_end`, blindly bumping the boundary to
+    // `head_end + 1` pushes it one slot past the User message while keeping
+    // its Assistant/Tool response — splitting the turn-pair and leaving the
+    // user message alone in the compressed region without its answer. When
+    // that collision happens, keep the boundary AT `head_end` instead: the
+    // tail (`messages[tail_start..]`) then naturally contains the whole
+    // turn-pair (User -> Assistant [-> Tool*]), not just the response.
+    if let Some(user_idx) = last_user_idx
+        && user_idx == head_end
+        && cut_idx <= head_end {
+            return head_end;
+        }
 
     cut_idx.max(head_end + 1)
 }
@@ -1256,6 +1276,54 @@ mod tests {
         msgs[3].role = MessageRole::User;
         let tail_start = find_tail_start_by_tokens(&msgs, 0, 50);
         assert!(tail_start <= 3, "last user message must be in tail, tail_start={tail_start}");
+    }
+
+    /// T12 pt.3 — turn-pair preservation (hermes "Causal Coupling" parity).
+    /// When the last user turn sits exactly at head_end, the tail boundary
+    /// must not land between the user message and its assistant response —
+    /// both must survive compaction together, or the agent re-does the task
+    /// on the next turn.
+    #[test]
+    fn tail_cut_preserves_orphan_user_turn_pair() {
+        let msgs = vec![
+            Message { role: MessageRole::System,    content: "s".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::Assistant, content: "a1".repeat(50), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::User,      content: "please do X".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::Assistant, content: "done, X is complete".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+        ];
+        // protect_first_n=2 -> head_end=2 (messages[2] is the last User message).
+        let head_end = find_head_end(&msgs, 2);
+        assert_eq!(head_end, 2);
+        // Tiny tail_budget so the token-budget loop wants to cut as tight as possible.
+        let tail_start = find_tail_start_by_tokens(&msgs, head_end, 1);
+        // tail_start == head_end (2) means messages[2..4] (User + its Assistant
+        // response) both survive in the tail together. Anything > head_end
+        // would split the pair and orphan the user turn (the bug being fixed).
+        assert_eq!(
+            tail_start, head_end,
+            "user turn at head_end must stay in tail together with its response, tail_start={tail_start}"
+        );
+    }
+
+    /// T12 pt.6 — a previously-inserted summary marker (role=User, content
+    /// starting with SUMMARY_PREFIX) must never be picked as the "last user"
+    /// anchor; the real last user message after it must win instead.
+    #[test]
+    fn tail_cut_anchor_skips_summary_marker() {
+        let msgs = vec![
+            Message { role: MessageRole::System,    content: "s".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::User,      content: format!("{SUMMARY_PREFIX}\nEarlier stuff happened."), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::Assistant, content: "ack".repeat(200), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::User,      content: "real last user message".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+            Message { role: MessageRole::Assistant, content: "real last response".into(), tool_calls: None, tool_call_id: None, thinking_blocks: vec![], db_id: None },
+        ];
+        let head_end = find_head_end(&msgs, 1);
+        assert_eq!(head_end, 1);
+        let tail_start = find_tail_start_by_tokens(&msgs, head_end, 50);
+        assert!(
+            tail_start <= 3,
+            "anchor must point at the real last user message (idx 3), not the summary marker (idx 1); tail_start={tail_start}"
+        );
     }
 
     #[test]
