@@ -324,6 +324,10 @@ export type ProviderOptions = {
   timeouts?: Partial<TimeoutsConfig>;
   api_key_envs?: string[];
   max_retries?: number;  // 1..=10, default 3
+  // Explicit context window (tokens). Set for providers whose API doesn't
+  // expose it (e.g. MiMo). Omitted/undefined ⇒ auto-detect via provider API,
+  // then name heuristic. Must be >= 1000 (it's tokens, not thousands).
+  context_window?: number;
   // Unknown fields land here — UI will preserve them on round-trip.
   [extra: string]: unknown;
 };
