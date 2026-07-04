@@ -177,10 +177,15 @@ async fn execute_inline_for_ui(
 
     // Fresh long-timeout client so reqwest doesn't abort at the shared
     // engine 120s deadline. Mirrors BackgroundMediaTask::from_ctx.
-    let bg_http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .unwrap_or_else(|_| ctx.tex.http_client.clone());
+    //
+    // T01 §3: route through the same is_internal_endpoint gate the regular
+    // YAML-tool dispatch path uses — this used to be a raw client with no
+    // SSRF protection at all, letting a channel_action endpoint bypass the
+    // guard applied to every other YAML tool.
+    let bg_http_client = crate::net::ssrf::select_ssrf_aware_client(
+        &tool.endpoint,
+        std::time::Duration::from_secs(600),
+    );
 
     let bytes = match bg_tool
         .execute_binary(

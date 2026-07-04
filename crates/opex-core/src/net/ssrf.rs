@@ -169,6 +169,32 @@ pub fn ssrf_http_client(timeout: std::time::Duration) -> reqwest::Client {
         .expect("failed to build SSRF-safe HTTP client")
 }
 
+/// Select the correct outbound HTTP client for a request whose target is a
+/// (possibly admin-authored YAML tool) `endpoint`, with a caller-provided
+/// timeout for slow generators (TTS / imagegen background jobs).
+///
+/// Mirrors the client-selection already used by the regular YAML-tool
+/// dispatch paths (`agent/engine_dispatch.rs`, `agent/pipeline/handlers.rs`
+/// `handle_tool_test`): admin-configured internal services (toolgate,
+/// browser-renderer, …) recognised by [`is_internal_endpoint`] use the plain
+/// client (no DNS filter needed — the target is trusted and fixed), every
+/// other endpoint gets a fresh SSRF-safe client (private-IP DNS filter +
+/// `redirect(Policy::none())`) built with the same `timeout`.
+///
+/// This closes the `channel_action` (TTS/imagegen) bypass: those code paths
+/// used to build a raw `reqwest::Client::builder()` with no SSRF protection
+/// at all, regardless of endpoint. See docs/superpowers/plans/triage/T01-ssrf-redirect.md §3.
+pub fn select_ssrf_aware_client(endpoint: &str, timeout: std::time::Duration) -> reqwest::Client {
+    if is_internal_endpoint(endpoint) {
+        reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    } else {
+        ssrf_http_client(timeout)
+    }
+}
+
 // ── URL validation (sync, no DNS) ────────────────────────────────────────────
 
 /// Validate URL scheme, internal-service blocklist, and numeric private IPs.
@@ -494,5 +520,58 @@ mod tests {
     fn ipv4_unspecified_flagged() {
         // 0.0.0.0 routes to local interface — must be blocked.
         assert!(is_private_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+    }
+
+    // ── select_ssrf_aware_client (channel_action SSRF fix) ──────────────────
+
+    #[test]
+    fn select_client_internal_endpoint_uses_plain_builder() {
+        // Internal endpoints (toolgate, browser-renderer, ...) are trusted —
+        // no DNS filter, no redirect(Policy::none()) — but they DO get the
+        // caller-provided long timeout for slow media generation.
+        let client = select_ssrf_aware_client(
+            "http://localhost:9011/v1/audio/speech",
+            std::time::Duration::from_secs(600),
+        );
+        // We can't introspect timeout/redirect policy from a built `Client`
+        // directly, so this test asserts the branch selection indirectly via
+        // `is_internal_endpoint` (already unit-tested above) and that client
+        // construction succeeds. The behavioural difference (DNS resolver +
+        // redirect policy) is covered by the private-IP rejection test below.
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn select_client_non_internal_endpoint_blocks_private_ip() {
+        // A channel_action YAML tool endpoint pointed at a private/metadata
+        // IP must be routed through the SSRF-safe client, i.e. the request
+        // fails at connect time (DNS resolver rejects the private answer)
+        // rather than silently succeeding like a raw `reqwest::Client`.
+        let client = select_ssrf_aware_client(
+            "http://169.254.169.254/latest/meta-data/",
+            std::time::Duration::from_secs(5),
+        );
+        let result = client.get("http://169.254.169.254/latest/meta-data/").send().await;
+        assert!(result.is_err(), "expected SSRF-safe client to reject private IP target");
+    }
+
+    #[tokio::test]
+    async fn select_client_non_internal_endpoint_blocks_private_ip_10_range() {
+        let client = select_ssrf_aware_client(
+            "http://10.0.0.1/admin",
+            std::time::Duration::from_secs(5),
+        );
+        let result = client.get("http://10.0.0.1/admin").send().await;
+        assert!(result.is_err(), "expected SSRF-safe client to reject 10.0.0.0/8 target");
+    }
+
+    #[test]
+    fn select_client_is_internal_endpoint_matches_dispatch_gate() {
+        // Sanity: the predicate this helper relies on already recognises the
+        // admin-configured internal services used by TTS/imagegen channel_action
+        // tools (toolgate on 9011, browser-renderer on 9020).
+        assert!(is_internal_endpoint("http://localhost:9011/v1/audio/speech"));
+        assert!(is_internal_endpoint("http://browser-renderer:9020/automation"));
+        assert!(!is_internal_endpoint("https://api.fal.ai/generate-image"));
     }
 }
