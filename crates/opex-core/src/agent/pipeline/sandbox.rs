@@ -129,6 +129,21 @@ pub async fn handle_code_exec(
 
 // ── Host code execution (base agents only) ──────────────────────────────────
 
+/// Cap host-execution output to ~16 KB to protect the LLM context window.
+///
+/// Char-boundary safe: a raw `String::truncate(16000)` panics with
+/// "assertion failed: self.is_char_boundary(new_len)" when byte 16000 lands
+/// mid-codepoint (Cyrillic/CJK/emoji output) — which previously unwound the
+/// pipeline task and killed the session (`guard_dropped`). `floor_char_boundary`
+/// backs up to the nearest valid boundary.
+fn truncate_host_output(mut result: String) -> String {
+    if result.len() > 16000 {
+        result.truncate(result.floor_char_boundary(16000));
+        result.push_str("\n... (truncated)");
+    }
+    result
+}
+
 /// Execute code directly on host (base agents only, no Docker sandbox).
 /// Runs in the opex working directory with full host access.
 async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> String {
@@ -180,14 +195,8 @@ async fn execute_host_code(code: &str, language: &str, packages: &[String]) -> S
             if result.is_empty() {
                 result = format!("Exit code: {}", output.status.code().unwrap_or(-1));
             }
-            // Truncate to prevent LLM context overflow
-            if result.len() > 16000 {
-                // floor to a char boundary — a raw truncate(16000) panics when
-                // byte 16000 lands mid-codepoint (Cyrillic/CJK/emoji output).
-                result.truncate(result.floor_char_boundary(16000));
-                result.push_str("\n... (truncated)");
-            }
-            result
+            // Truncate to prevent LLM context overflow (char-boundary safe).
+            truncate_host_output(result)
         }
         Ok(Err(e)) => format!("Error executing on host: {}", e),
         Err(_) => "Error: host execution timed out (120s)".to_string(),
@@ -444,5 +453,27 @@ mod tests {
         assert!(markers.contains("/workspace-files/chart.png?sig="));
         assert!(markers.contains("\"mediaType\":\"text/csv\""));
         assert!(markers.contains("\"mediaType\":\"image/png\""));
+    }
+
+    // Regression: host-exec output truncation must not panic when byte 16000
+    // lands mid-codepoint. A raw `String::truncate(16000)` on Cyrillic/CJK/emoji
+    // output panicked ("is_char_boundary") and unwound the pipeline task, killing
+    // the session (`guard_dropped`). Verified fixed by `floor_char_boundary`.
+    #[test]
+    fn truncate_host_output_no_panic_on_multibyte_boundary() {
+        use super::truncate_host_output;
+        // 15999 ASCII bytes + a 2-byte 'я' occupying bytes 15999..=16000, then
+        // more — so byte 16000 (the cap) is mid-codepoint.
+        let s = format!("{}я{}", "a".repeat(15999), "б".repeat(1000));
+        assert!(!s.is_char_boundary(16000), "byte 16000 must be mid-codepoint");
+        let out = truncate_host_output(s); // must not panic
+        assert!(out.ends_with("... (truncated)"));
+        assert!(out.len() < 16100, "truncated near the 16000 cap");
+    }
+
+    #[test]
+    fn truncate_host_output_short_unchanged() {
+        let s = "привет".to_string();
+        assert_eq!(super::truncate_host_output(s.clone()), s);
     }
 }

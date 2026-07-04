@@ -238,7 +238,15 @@ pub(crate) async fn api_chat_sse(
     // disconnected from any upstream `traceparent` we honoured at the
     // gateway boundary.
     use tracing::Instrument as _;
-    let request_span = tracing::Span::current();
+    // Child of the request span (contextual parent), NOT the shared current span
+    // itself. Instrumenting this detached engine task with `Span::current()`
+    // directly let the HTTP request span close (handler returns the SSE stream
+    // while the engine task keeps running) with the task still holding it — the
+    // next poll re-entered a freed span id and tracing-subscriber's sharded
+    // registry panicked on a worker thread. A child keeps the parent alive for
+    // the task's lifetime and still inherits the extracted OTel parent context.
+    // See `trace_propagation::spawn_traced` for the same fix + rationale.
+    let request_span = tracing::info_span!("sse_engine_turn");
     let engine_handle = bus.bg_tasks.spawn(async move {
         let current_agent_name = engine.name().to_string();
         if let Err(e) = engine.handle_sse(&msg, engine_event_tx.clone(), session_id, force_new_session, engine_cancel).await {

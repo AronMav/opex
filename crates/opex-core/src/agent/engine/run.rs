@@ -16,6 +16,32 @@ use crate::agent::pipeline::{execute, finalize};
 use crate::agent::stream_event::StreamEvent;
 
 impl AgentEngine {
+    /// Hard-error path helper: when `execute()`/`finalize()` bubble an `Err` out
+    /// of an entry point, the normal `finalize` failure machinery never runs and
+    /// the `SessionLifecycleGuard::Drop` fallback records only an opaque
+    /// `guard_dropped` / "guard dropped (early exit)" row with all-NULL
+    /// diagnostics. This captures the REAL error reason + provider/model instead.
+    /// Idempotent — no-op if the guard already transitioned out of `Running`.
+    /// See `finalize::record_hard_error_failure` for the full rationale.
+    async fn record_hard_error(
+        &self,
+        guard: &mut crate::agent::session_manager::SessionLifecycleGuard,
+        session_id: Uuid,
+        reason: String,
+    ) {
+        finalize::record_hard_error_failure(
+            guard,
+            self.cfg().db.clone(),
+            session_id,
+            self.cfg().agent.name.clone(),
+            reason,
+            Some(self.cfg().provider.name().to_string()),
+            Some(self.current_model()),
+            &self.state().bg_tasks,
+        )
+        .await;
+    }
+
     /// Handle message via SSE: thin adapter over pipeline::{bootstrap, execute, finalize}.
     ///
     /// Phase 62 RES-01: `event_tx` is an `EngineEventSender` wrapping a bounded
@@ -252,6 +278,10 @@ impl AgentEngine {
             // UI can render an error banner and stop the loading animation.
             let msg = format!("pipeline error: {}", e);
             tracing::error!(session = %session_id, error = %e, "pipeline failed");
+            // Capture the REAL failure reason in session_failures instead of the
+            // guard's opaque "guard dropped (early exit)" fallback (idempotent —
+            // no-op if finalize already resolved the guard).
+            self.record_hard_error(&mut lifecycle_guard, session_id, msg.clone()).await;
             let _ = s.emit(PipelineEvent::Stream(StreamEvent::Error(msg))).await;
             let _ = s
                 .emit(PipelineEvent::Stream(StreamEvent::Finish {
@@ -459,7 +489,25 @@ impl AgentEngine {
         // fail the turn and (with R-CONTINUITY) keeps the conversation alive.
         let interactive_layers =
             BehaviourLayers::for_interactive(&self.tool_loop_config(), msg.text.clone().unwrap_or_default());
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await?;
+        // Intercept a hard `Err` from execute BEFORE `compressor` is consumed by
+        // finalize below, so we can record the REAL failure reason instead of the
+        // guard's opaque "early exit" fallback (the telegram/channel path bug).
+        let outcome = match execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await {
+            Ok(o) => o,
+            Err(e) => {
+                let msg = format!("pipeline error: {}", e);
+                tracing::error!(session = %session_id, error = %e, "pipeline failed");
+                self.record_hard_error(&mut lifecycle_guard, session_id, msg.clone()).await;
+                let _ = s.emit(PipelineEvent::Stream(StreamEvent::Error(msg))).await;
+                let _ = s
+                    .emit(PipelineEvent::Stream(StreamEvent::Finish {
+                        finish_reason: "error".to_string(),
+                        continuation: false,
+                    }))
+                    .await;
+                return Err(e);
+            }
+        };
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
@@ -596,7 +644,17 @@ impl AgentEngine {
         let cancel = tokio_util::sync::CancellationToken::new();
         let interactive_layers =
             BehaviourLayers::for_interactive(&self.tool_loop_config(), msg.text.clone().unwrap_or_default());
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await?;
+        // Record the real reason on hard error rather than the guard's opaque
+        // "early exit" fallback (see handle_sse / handle_with_status).
+        let outcome = match execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &interactive_layers).await {
+            Ok(o) => o,
+            Err(e) => {
+                let msg = format!("pipeline error: {}", e);
+                tracing::error!(session = %session_id, error = %e, "pipeline failed");
+                self.record_hard_error(&mut lifecycle_guard, session_id, msg).await;
+                return Err(e);
+            }
+        };
 
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
@@ -762,7 +820,17 @@ impl AgentEngine {
             video_ack_text: String::new(),
         };
 
-        let outcome = execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &layers).await?;
+        let outcome = match execute::execute(self, boot_for_execute, &mut s, cancel, &mut compressor, &layers).await {
+            Ok(o) => o,
+            Err(e) => {
+                // Cron / agent-to-agent path: record the real failure reason so
+                // the guard's opaque "early exit" fallback is not the only trace.
+                let msg = format!("pipeline error: {}", e);
+                tracing::error!(session = %session_id, error = %e, "pipeline failed");
+                self.record_hard_error(&mut lifecycle_guard, session_id, msg).await;
+                return Err(e);
+            }
+        };
         let fin_ctx = finalize::finalize_context_from_engine(
             self,
             session_id,
