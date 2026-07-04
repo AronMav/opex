@@ -647,7 +647,7 @@ parameters:
             <Row label={t("tools.handler_provider")} value={h.provider} />
           )}
         </div>
-        <div className="flex items-center justify-between pt-1">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
           {isBuiltin ? (
             <Switch
               aria-label={h.id}
@@ -664,7 +664,7 @@ parameters:
           ) : (
             <Badge variant="secondary" size="xs">{t("tools.handler_always_on")}</Badge>
           )}
-          <div className="flex gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
             <Button
               variant="outline"
               size="sm"

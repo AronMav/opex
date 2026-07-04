@@ -362,9 +362,9 @@ export default function ConfigPage() {
                       {Object.entries(subagents).filter(([k]) => k !== "enabled").map(([key, val]) => (
                         <div
                           key={key}
-                          className="flex items-center justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
+                          className="flex flex-wrap items-center justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
                         >
-                          <span className="font-mono text-xs text-muted-foreground">{key}</span>
+                          <span className="font-mono text-xs text-muted-foreground truncate min-w-0">{key}</span>
                           <div className="shrink-0">
                             {renderValue(val, t)}
                           </div>
@@ -593,12 +593,14 @@ export default function ConfigPage() {
                             return (
                               <Button key={ch.id} variant={selected ? "default" : "outline"} size="sm"
                                 onClick={() => toggleAlertChannel(ch.id)}
-                                className="w-full justify-start text-xs h-auto py-2">
-                                <span className="font-medium">{ch.agent_name}</span>
-                                <span className="text-muted-foreground"> / {ch.channel_type}</span>
-                                {ch.display_name !== ch.channel_type && (
-                                  <span className="text-muted-foreground-subtle"> ({ch.display_name})</span>
-                                )}
+                                className="w-full justify-start text-xs h-auto py-2 min-w-0">
+                                <span className="truncate min-w-0">
+                                  <span className="font-medium">{ch.agent_name}</span>
+                                  <span className="text-muted-foreground"> / {ch.channel_type}</span>
+                                  {ch.display_name !== ch.channel_type && (
+                                    <span className="text-muted-foreground-subtle"> ({ch.display_name})</span>
+                                  )}
+                                </span>
                               </Button>
                             );
                           })}
@@ -634,9 +636,9 @@ export default function ConfigPage() {
                       {Object.entries(topLevel).map(([key, val]) => (
                         <div
                           key={key}
-                          className="flex items-center justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
+                          className="flex flex-wrap items-center justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
                         >
-                          <span className="font-mono text-xs text-muted-foreground truncate">{key}</span>
+                          <span className="font-mono text-xs text-muted-foreground truncate min-w-0">{key}</span>
                           <div className="shrink-0">
                             {renderValue(val, t)}
                           </div>
@@ -660,10 +662,10 @@ export default function ConfigPage() {
                       {Object.entries(values).map(([key, val]) => (
                         <div
                           key={key}
-                          className="flex items-start justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
+                          className="flex flex-wrap items-start justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
                         >
-                          <span className="font-mono text-xs text-muted-foreground pt-0.5 truncate">{key}</span>
-                          <div className="flex shrink-0 max-w-xs justify-end overflow-x-auto scrollbar-none">
+                          <span className="font-mono text-xs text-muted-foreground pt-0.5 truncate min-w-0">{key}</span>
+                          <div className="flex shrink-0 max-w-full sm:max-w-xs justify-end overflow-x-auto scrollbar-none">
                             {renderValue(val, t)}
                           </div>
                         </div>

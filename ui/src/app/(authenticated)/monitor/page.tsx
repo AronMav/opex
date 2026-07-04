@@ -962,12 +962,12 @@ function MonitorPageInner() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-between md:justify-end gap-4 w-full md:w-auto mt-2 md:mt-0">
+              <div className="flex flex-wrap items-center justify-between md:justify-end gap-2 sm:gap-4 w-full md:w-auto mt-2 md:mt-0">
                 <div className="flex sm:hidden items-center gap-2">
                   <Switch checked={autoScroll} onCheckedChange={setAutoScroll} className="scale-75 data-[state=checked]:bg-primary" />
                   <span className="text-xs text-muted-foreground">{t("logs.autoscroll_short")}</span>
                 </div>
-                <div className="flex items-center gap-4">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-4">
                   <div className="font-mono text-xs tabular-nums text-muted-foreground">
                     {t("logs.entries_count", { count: filteredLogs.length })}
                   </div>
@@ -1225,11 +1225,11 @@ function MonitorPageInner() {
                 {statsError && <ErrorBanner error={statsError} />}
 
                 {totalTokens > 0 && (
-                  <Card className="mb-5 border-chart-3/20 p-5 flex items-center justify-between gap-4 overflow-hidden relative">
+                  <Card className="mb-5 border-chart-3/20 p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between overflow-hidden relative">
                     <div className="absolute -right-6 -top-6 opacity-5">
                       <Zap className="h-32 w-32 text-chart-3" />
                     </div>
-                    <div className="relative">
+                    <div className="relative min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <Zap className="h-4 w-4 text-chart-3" />
                         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{t("usage.total_tokens_summary")}</span>
@@ -1241,7 +1241,7 @@ function MonitorPageInner() {
                         {t("usage.period_days", { days: usageData?.days ?? 0 })} &middot; {totalCalls.toLocaleString()} {t("usage.calls_short")}
                       </div>
                     </div>
-                    <div className="relative flex flex-col items-end gap-1 shrink-0">
+                    <div className="relative flex items-end gap-3 sm:flex-col sm:gap-1 sm:shrink-0">
                       <div className="text-right">
                         <div className="text-xs text-muted-foreground-subtle">{t("usage.input_short")}</div>
                         <div className="text-sm font-mono font-bold text-chart-1">{formatTokens(totalInput)}</div>
@@ -1320,7 +1320,7 @@ function MonitorPageInner() {
                                 </span>
                               </div>
                             </div>
-                            <div className="flex gap-4 sm:gap-6 text-right sm:ml-0">
+                            <div className="flex flex-wrap gap-4 sm:gap-6 text-right sm:ml-0">
                               <div>
                                 <div className="text-xs text-muted-foreground">{t("usage.input_short")}</div>
                                 <div className="text-sm font-mono font-bold text-chart-1">{formatTokens(agentInput)}</div>
@@ -1363,7 +1363,7 @@ function MonitorPageInner() {
                                             {t("usage.calls", { count: row.call_count.toLocaleString() })}
                                           </span>
                                         </div>
-                                        <div className="flex gap-3 sm:gap-5 text-right ml-0 sm:ml-auto">
+                                        <div className="flex flex-wrap gap-3 sm:gap-5 text-right ml-0 sm:ml-auto">
                                           <span className="text-xs font-mono tabular-nums text-chart-1/80">
                                             {formatTokens(row.total_input)} {t("usage.input_abbr")}
                                           </span>

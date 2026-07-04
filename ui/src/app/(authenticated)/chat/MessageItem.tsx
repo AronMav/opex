@@ -171,18 +171,18 @@ function UserMessage({ message, sessionChannel, sessionUserId }: { message: Chat
         />
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="message-header flex items-center justify-between min-h-5">
-          <div className="flex items-center gap-2">
-            <span className={`text-xs font-semibold uppercase tracking-wider ${isAgentSender ? "text-muted-foreground-subtle" : "text-primary"}`}>
+        <div className="message-header flex items-center justify-between min-h-5 gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className={`text-xs font-semibold uppercase tracking-wider truncate max-w-30 ${isAgentSender ? "text-muted-foreground-subtle" : "text-primary"}`}>
               {isAgentSender ? senderAgentName : t("chat.you")}
             </span>
             {message.createdAt && (
-              <span className="text-3xs font-mono tabular-nums text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity">
+              <span className="text-3xs font-mono tabular-nums text-muted-foreground/50 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                 {formatMessageTime(message.createdAt, locale)}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             {branchInfo && (
               <BranchNavigator
                 parentMessageId={branchInfo.parentMessageId}

@@ -222,7 +222,7 @@ export default function AccessPage() {
               <Card key={agent} className="overflow-hidden p-0">
                 {/* Compact header row */}
                 <button
-                  className="w-full flex items-center gap-3 p-4 hover:bg-muted/30 transition-colors text-left"
+                  className="w-full flex flex-wrap items-center gap-3 p-4 hover:bg-muted/30 transition-colors text-left"
                   onClick={() => toggleExpand(agent)}
                 >
                   <IconTile tone="primary" size="sm">
@@ -231,7 +231,7 @@ export default function AccessPage() {
                   <span className="font-mono text-sm font-bold tracking-tight text-foreground truncate flex-1 min-w-0">{agent}</span>
 
                   {/* Status pills */}
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0 basis-full sm:basis-auto justify-end">
                     {agentPending.length > 0 && (
                       <Badge variant="outline-warning" size="xs">
                         {agentPending.length} {t("access.pending")}
