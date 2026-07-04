@@ -233,6 +233,48 @@ export function TextFields({
         </fieldset>
       )}
 
+      {/* Context window override — hidden for CLI providers. Empty = auto-detect
+          via the provider API (/api/show, /v1/models), then name heuristic. */}
+      {!isCli && (
+        <fieldset className="neu-inset rounded-lg p-3 space-y-2">
+          <legend className="text-sm font-medium">
+            {t("providers.context_window_section")}
+          </legend>
+          <label htmlFor="prov-context-window" className="flex items-center justify-between gap-4">
+            <span className="text-sm">{t("providers.context_window_label")}</span>
+            <div className="flex items-center gap-2">
+              <Input
+                id="prov-context-window"
+                type="number"
+                aria-label={t("providers.context_window_label")}
+                placeholder={t("providers.context_window_auto")}
+                value={getOpts(form).context_window ?? ""}
+                onChange={(e) => {
+                  const raw = e.target.value.trim();
+                  const v = raw === "" ? undefined : Number(raw);
+                  setForm((f) => {
+                    const opts = { ...getOpts(f) };
+                    if (v === undefined || Number.isNaN(v)) delete opts.context_window;
+                    else opts.context_window = v;
+                    return { ...f, options: opts };
+                  });
+                }}
+                className="w-32 text-sm h-8"
+                min={1000}
+                step={1000}
+              />
+              {(() => {
+                const v = getOpts(form).context_window;
+                return (typeof v === "number" && v > 0 && v < 1000) ? (
+                  <span className="text-xs text-destructive">{t("providers.context_window_error")}</span>
+                ) : null;
+              })()}
+            </div>
+          </label>
+          <p className="text-xs text-muted-foreground">{t("providers.context_window_hint")}</p>
+        </fieldset>
+      )}
+
       {/* Test Connection for CLI providers */}
       {isCli && isEditing && (
         <div className="space-y-2">
