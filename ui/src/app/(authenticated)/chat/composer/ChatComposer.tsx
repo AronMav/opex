@@ -637,8 +637,8 @@ export function ChatComposer() {
           ref={formRef}
           data-composer-input
           className={cn(
-            "relative flex flex-col rounded-xl border bg-card/90 shadow-lg shadow-black/8 transition-all duration-200 focus-within:border-primary/50 focus-within:shadow-primary/8 focus-within:shadow-xl",
-            dragOver ? "border-primary/70 bg-primary/5" : "border-border/50"
+            "relative flex flex-col rounded-xl border bg-card/50 shadow-lg shadow-black/8 transition-all duration-200 focus-within:border-primary/50 focus-within:shadow-primary/8 focus-within:shadow-xl",
+            dragOver ? "border-primary/50 bg-primary/5" : "border-border/50"
           )}
           onPaste={handlePaste}
           onDragOver={handleDragOver}
@@ -649,7 +649,7 @@ export function ChatComposer() {
         >
           {dragOver && (
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/50 bg-primary/5 backdrop-blur-sm pointer-events-none">
-              <div className="flex flex-col items-center gap-1 text-primary/70">
+              <div className="flex flex-col items-center gap-1 text-primary/80">
                 <Paperclip className="h-6 w-6" />
                 <span className="text-sm font-medium">{t("chat.drop_to_attach")}</span>
               </div>
@@ -674,16 +674,17 @@ export function ChatComposer() {
           {attachments.length > 0 && attachments.map((att) => (
             <div key={att.id} className="flex flex-col">
               <div data-upload-id={att.uploadId} className="flex items-center gap-2 px-3 pt-2 text-xs text-muted-foreground">
-                <Paperclip className="h-3 w-3" />
+                <Paperclip className="h-4 w-4" />
                 <span className="truncate max-w-50">{att.name}</span>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon-sm"
                   aria-label={t("chat.remove_attachment")}
                   onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                  className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <X size={12} />
-                </button>
+                </Button>
               </div>
               <FileActionButtons
                 uploadId={att.uploadId}
@@ -698,14 +699,15 @@ export function ChatComposer() {
               <span className="flex-1 min-w-0 truncate">
                 {t("chat.queue_prefix", { content: `${pendingMessage.content.slice(0, 60)}${pendingMessage.content.length > 60 ? "…" : ""}` })}
               </span>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-sm"
                 aria-label={t("chat.cancel_queue")}
                 onClick={() => useChatStore.getState().clearPending()}
-                className="shrink-0 rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X size={12} />
-              </button>
+              </Button>
             </div>
           )}
           <textarea
@@ -723,21 +725,22 @@ export function ChatComposer() {
                 ? t("chat.continue_dialog")
                 : t("chat.message_placeholder")
             }
-            className="min-h-11 max-h-30 md:max-h-60 resize-none bg-transparent px-4 py-3 text-message text-foreground outline-none placeholder:text-muted-foreground/35"
+            className="min-h-11 max-h-30 md:max-h-60 resize-none bg-transparent px-4 py-3 text-message text-foreground outline-none placeholder:text-muted-foreground/30"
             onKeyDown={handleKeyDown}
           />
           {resolvedMention && (
             <div data-testid="target-agent-indicator" className="flex items-center gap-1.5 px-4 py-1 text-xs text-muted-foreground">
               <span>Targeting</span>
               <span className="font-semibold text-primary">@{resolvedMention}</span>
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon-sm"
                 aria-label={t("chat.clear_mention")}
                 onClick={clearResolvedMention}
-                className="rounded p-0.5 hover:bg-muted/50 text-muted-foreground/60 hover:text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X size={12} />
-              </button>
+              </Button>
             </div>
           )}
           <div className="flex flex-wrap items-center justify-between px-3 pb-3">
@@ -753,17 +756,20 @@ export function ChatComposer() {
                   e.target.value = "";
                 }}
               />
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon"
                 aria-label={t("chat.attach")}
-                className="rounded p-3 md:p-2 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Paperclip className="h-4 w-4" />
-              </button>
+              </Button>
               {hasSttProvider && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   aria-label={
                     voice.state === "recording"
                       ? t("chat.stop_recording", { elapsed: formatElapsed(voice.elapsed) })
@@ -779,18 +785,18 @@ export function ChatComposer() {
                   disabled={voice.state === "transcribing"}
                   onClick={handleMicClick}
                   className={cn(
-                    "relative rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "relative",
                     voice.state === "recording"
                       ? "text-destructive ring-2 ring-destructive/40 rounded-full"
                       : voice.state === "transcribing"
                         ? "text-muted-foreground/30 cursor-not-allowed"
-                        : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50",
+                        : "text-muted-foreground/50 hover:text-muted-foreground",
                   )}
                 >
                   {voice.state === "recording" && (
                     <span
                       aria-hidden
-                      className="pointer-events-none absolute inset-0 rounded-full bg-destructive/25"
+                      className="pointer-events-none absolute inset-0 rounded-full bg-destructive/30"
                       style={{
                         transform: `scale(${1 + Math.min(voice.level, 1) * 0.8})`,
                         opacity: Math.min(0.25 + voice.level * 2, 0.7),
@@ -802,11 +808,13 @@ export function ChatComposer() {
                   ) : (
                     <Mic className="relative h-4 w-4" />
                   )}
-                </button>
+                </Button>
               )}
               {hasSttProvider && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   aria-pressed={continuous}
                   aria-label={t("chat.continuous_voice")}
                   title={t("chat.continuous_voice")}
@@ -816,31 +824,31 @@ export function ChatComposer() {
                     setContinuous((v) => !v);
                   }}
                   className={cn(
-                    "rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     continuous
                       ? "text-primary bg-primary/10"
-                      : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50",
+                      : "text-muted-foreground/50 hover:text-muted-foreground",
                   )}
                 >
                   <Repeat className="h-4 w-4" />
-                </button>
+                </Button>
               )}
               {hasSttProvider && (
                 <div className="relative">
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon"
                     aria-label={t("chat.voice_settings")}
                     title={t("chat.voice_settings")}
                     onClick={() => setVoiceSettingsOpen((v) => !v)}
                     className={cn(
-                      "rounded p-3 md:p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       voiceSettingsOpen
                         ? "text-primary bg-primary/10"
-                        : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50",
+                        : "text-muted-foreground/50 hover:text-muted-foreground",
                     )}
                   >
                     <SlidersHorizontal className="h-4 w-4" />
-                  </button>
+                  </Button>
                   {voiceSettingsOpen && (
                     <>
                       <div
@@ -848,7 +856,7 @@ export function ChatComposer() {
                         aria-hidden
                         onClick={() => setVoiceSettingsOpen(false)}
                       />
-                      <div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg border border-border/60 bg-card p-3 shadow-lg">
+                      <div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-lg border border-border/50 bg-card p-3 shadow-lg">
                         <div className="mb-3">
                           <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
                             <span>{t("chat.voice_sensitivity")}</span>
@@ -893,15 +901,16 @@ export function ChatComposer() {
             </div>
             <div className="relative flex items-center gap-2">
               {hasMessages && !isStreaming && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   title={t("chat.export_session_tooltip")}
                   aria-label={t("chat.export_session")}
-                  className="rounded p-3 md:p-2 text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => useChatStore.getState().exportSession()}
                 >
                   <Download className="h-4 w-4" />
-                </button>
+                </Button>
               )}
               {isStreaming && (
                 <Button
@@ -910,7 +919,7 @@ export function ChatComposer() {
                   aria-label={t("chat.stop_and_keep")}
                   title={t("chat.stop_and_keep")}
                   onClick={() => useChatStore.getState().stopStream()}
-                  className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-destructive/30 bg-destructive/15 text-destructive hover:bg-destructive/25 hover:border-destructive/50 shadow-sm animate-in fade-in zoom-in-90"
+                  className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-destructive/30 bg-destructive/10 text-destructive hover:bg-destructive/30 hover:border-destructive/50 shadow-sm animate-in fade-in zoom-in-90"
                 >
                   <Square className="h-3.5 w-3.5 fill-current" />
                 </Button>
@@ -921,7 +930,7 @@ export function ChatComposer() {
                 aria-label={isStreaming ? t("chat.send_interrupt") : t("chat.send")}
                 title={isStreaming ? t("chat.send_interrupt") : undefined}
                 disabled={(!hasInput && attachments.length === 0) || isUploading}
-                className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-primary/30 bg-primary/15 text-primary hover:bg-primary/25 hover:border-primary/50 shadow-sm disabled:opacity-30 disabled:shadow-none group/send animate-in fade-in zoom-in-90"
+                className="h-11 w-11 md:h-10 md:w-10 rounded-xl border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 hover:border-primary/50 shadow-sm disabled:opacity-30 disabled:shadow-none group/send animate-in fade-in zoom-in-90"
               >
                 {isUploading
                   ? <Loader2 className="h-4 w-4 animate-spin" />

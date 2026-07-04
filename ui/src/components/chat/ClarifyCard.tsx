@@ -50,7 +50,7 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
       <div
         role="status"
         aria-label={t("chat.clarify_answered")}
-        className="rounded-lg border border-border/60 bg-card/50 px-4 py-2 flex items-start gap-2"
+        className="rounded-lg border border-border/50 bg-card/50 px-4 py-2 flex items-start gap-2"
       >
         <div className="w-2 h-2 rounded-full shrink-0 bg-success mt-1.5" />
         <div className="flex-1 min-w-0">
@@ -109,7 +109,7 @@ export function ClarifyCard({ part }: ClarifyCardProps) {
               disabled={isSubmitting}
             >
               {submittingChoice === choice ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 choice
               )}

@@ -88,7 +88,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
       <div
         role="status"
         aria-label={`${part.toolName} ${statusLabel}`}
-        className="rounded-lg border border-border/60 bg-card/50 px-4 py-2 flex items-center gap-2"
+        className="rounded-lg border border-border/50 bg-card/50 px-4 py-2 flex items-center gap-2"
       >
         <div className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`} />
         <span className="font-mono text-xs">{part.toolName}</span>
@@ -123,7 +123,7 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
           <CollapsibleTrigger asChild>
             <button
               type="button"
-              className="p-0.5 text-muted-foreground/40 hover:text-foreground transition-colors group rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="p-0.5 text-muted-foreground/50 hover:text-foreground transition-colors group rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={t("common.expand")}
             >
               <ChevronRight className="h-4 w-4 transition-transform duration-300 group-data-[state=open]:rotate-90" />
@@ -135,10 +135,10 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
             Hidden while expanded to avoid showing the same JSON twice. */}
         {!payloadExpanded && (
           <div className="mt-2">
-            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary/70">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary/80">
               {t("chat.approval_input")}
             </span>
-            <pre className="bg-muted/40 rounded p-2 text-xs font-mono overflow-x-auto line-clamp-3 mt-1 whitespace-pre-wrap">
+            <pre className="bg-muted/30 rounded p-2 text-xs font-mono overflow-x-auto line-clamp-3 mt-1 whitespace-pre-wrap">
               {inputDisplay}
             </pre>
           </div>
@@ -147,10 +147,10 @@ export function ApprovalCard({ part }: ApprovalCardProps) {
         {/* Collapsible: full, unclamped INPUT section */}
         <CollapsibleContent>
           <div className="mt-2">
-            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary/70">
+            <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-primary/80">
               {t("chat.approval_input")}
             </span>
-            <pre className="bg-muted/40 rounded p-2 text-xs font-mono overflow-x-auto max-h-[200px] mt-1 whitespace-pre-wrap">
+            <pre className="bg-muted/30 rounded p-2 text-xs font-mono overflow-x-auto max-h-[200px] mt-1 whitespace-pre-wrap">
               {inputDisplay}
             </pre>
           </div>

@@ -237,7 +237,7 @@ export function AgentEditDialog({
             })}
           </div>
         </DialogHeader>
-        <div className="border-t border-border bg-muted/5" />
+        <div className="border-t border-border bg-muted/10" />
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           <div className="px-5 py-3"><div className="grid">
@@ -315,7 +315,7 @@ export function AgentEditDialog({
                   </div>
                   <Field label={t("agents.field_language")} className="w-full sm:w-36 sm:shrink-0" labelClassName="text-xs">
                     <Select value={form.language} onValueChange={(v) => upd({ language: v })}>
-                      <SelectTrigger className="w-full bg-background border-border text-sm h-8">
+                      <SelectTrigger className="w-full bg-background border-border text-sm h-9">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="border-border">
@@ -341,7 +341,7 @@ export function AgentEditDialog({
                         }
                       }}
                     >
-                      <SelectTrigger className="w-full bg-background border-border text-sm h-8">
+                      <SelectTrigger className="w-full bg-background border-border text-sm h-9">
                         <SelectValue placeholder={t("agents.field_provider")} />
                       </SelectTrigger>
                       <SelectContent className="border-border">
@@ -376,7 +376,7 @@ export function AgentEditDialog({
                                 value={isCustom ? "__custom__" : form.model}
                                 onValueChange={(v) => { upd({ model: v === "__custom__" ? "" : v }); }}
                               >
-                                <SelectTrigger id="agent-edit-model" className="bg-background border-border font-mono text-sm h-8">
+                                <SelectTrigger id="agent-edit-model" className="bg-background border-border font-mono text-sm h-9">
                                   <SelectValue placeholder={t("agents.model_placeholder")} />
                                 </SelectTrigger>
                                 <SelectContent className="border-border max-h-60">
@@ -386,7 +386,7 @@ export function AgentEditDialog({
                                   <SelectItem value="__custom__" className="font-mono text-sm italic text-muted-foreground">{t("agents.model_custom")}</SelectItem>
                                 </SelectContent>
                               </Select>
-                              <Button variant="outline" size="icon" className="shrink-0 h-8 w-8" onClick={() => refetchModels()} disabled={providerModelsLoading}>
+                              <Button variant="outline" size="icon" className="shrink-0" onClick={() => refetchModels()} disabled={providerModelsLoading}>
                                 <RefreshCw className={`h-3.5 w-3.5 ${providerModelsLoading ? "animate-spin" : ""}`} />
                               </Button>
                             </div>
@@ -417,7 +417,7 @@ export function AgentEditDialog({
                   </Field>
                   <Field label={t("agents.field_fallback_provider")} labelClassName="text-xs">
                     <Select value={form.fallbackProvider || "__none__"} onValueChange={(v) => upd({ fallbackProvider: v === "__none__" ? "" : v })}>
-                      <SelectTrigger className="w-full bg-background border-border text-sm h-8">
+                      <SelectTrigger className="w-full bg-background border-border text-sm h-9">
                         <SelectValue placeholder={t("agents.field_fallback_provider")} />
                       </SelectTrigger>
                       <SelectContent className="border-border">
@@ -436,7 +436,7 @@ export function AgentEditDialog({
                   </Field>
                   <Field label={t("agents.field_tts_provider")} labelClassName="text-xs">
                     <Select value={form.ttsProvider || "__none__"} onValueChange={(v) => upd({ ttsProvider: v === "__none__" ? "" : v })}>
-                      <SelectTrigger className="w-full bg-background border-border text-sm h-8">
+                      <SelectTrigger className="w-full bg-background border-border text-sm h-9">
                         <SelectValue placeholder={t("agents.field_tts_provider")} />
                       </SelectTrigger>
                       <SelectContent className="border-border">
@@ -483,7 +483,7 @@ export function AgentEditDialog({
                         <ToolMultiSelect tools={toolNames} selected={form.toolsDeny.split(",").map((s) => s.trim()).filter(Boolean)} onChange={(v) => upd({ toolsDeny: v.join(", ") })} placeholder={t("common.select_tools_placeholder")} />
                       </Field>
                     </div>
-                    <div className="border-t border-border/20 pt-2 mt-2">
+                    <div className="border-t border-border/30 pt-2 mt-2">
                       <span className="text-xs font-medium text-muted-foreground mb-1.5 block">{t("agents.tool_groups")}</span>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                         {([
@@ -630,7 +630,7 @@ export function AgentEditDialog({
                   <div className="space-y-2">
                     <Field label={t("agents.field_dm_scope")} labelClassName="text-xs">
                       <Select value={form.sessionDmScope} onValueChange={(v) => upd({ sessionDmScope: v })}>
-                        <SelectTrigger className="w-full bg-background border-border text-sm h-8"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="w-full bg-background border-border text-sm h-9"><SelectValue /></SelectTrigger>
                         <SelectContent className="border-border">
                           <SelectItem value="per-channel-peer">{t("agents.dm_scope_per_channel_peer")}</SelectItem>
                           <SelectItem value="shared">{t("agents.dm_scope_shared")}</SelectItem>
@@ -659,7 +659,7 @@ export function AgentEditDialog({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <Field label={t("agents.field_access_mode")} labelClassName="text-xs">
                       <Select value={form.accessMode} onValueChange={(v) => upd({ accessMode: v })}>
-                        <SelectTrigger className="bg-background border-border text-sm h-8"><SelectValue /></SelectTrigger>
+                        <SelectTrigger className="bg-background border-border text-sm h-9"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="open">Open</SelectItem>
                           <SelectItem value="restricted">Restricted</SelectItem>
@@ -681,7 +681,7 @@ export function AgentEditDialog({
                 <CronSchedulePicker value={form.hbCron} onChange={(v) => upd({ hbCron: v })} timezone={form.hbTimezone || "UTC"} onTimezoneChange={(v) => upd({ hbTimezone: v })} />
                 <Field label={t("agents.field_announce_to")} labelClassName="text-xs">
                   <Select value={form.hbAnnounceTo || "__none__"} onValueChange={(v) => upd({ hbAnnounceTo: v === "__none__" ? "" : v })}>
-                    <SelectTrigger className="w-full bg-background border-border text-sm h-8"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-full bg-background border-border text-sm h-9"><SelectValue /></SelectTrigger>
                     <SelectContent className="border-border">
                       <SelectItem value="__none__">&mdash;</SelectItem>
                       <SelectItem value="telegram">Telegram</SelectItem>
@@ -701,7 +701,7 @@ export function AgentEditDialog({
                       <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">{t("agents.section_channels")}</h3>
                       <a href="/channels/" className="inline-flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors">
                         {t("agents.manage_channels")}
-                        <ExternalLink className="h-3 w-3" />
+                        <ExternalLink className="h-4 w-4" />
                       </a>
                     </div>
                     {channels.length === 0 ? (
@@ -710,12 +710,12 @@ export function AgentEditDialog({
                       <div className="space-y-2">
                         {channels.map((ch) => (
                           <div key={ch.id} className="flex items-center gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2.5">
-                            <div className={`h-2 w-2 rounded-full shrink-0 ${ch.status === "running" ? "bg-success" : ch.status === "error" ? "bg-destructive" : "bg-muted-foreground/40"}`} />
+                            <div className={`h-3 w-3 rounded-full shrink-0 ${ch.status === "running" ? "bg-success" : ch.status === "error" ? "bg-destructive" : "bg-muted-foreground/40"}`} />
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-semibold truncate text-foreground">{ch.display_name}</p>
                               <p className="text-2xs text-muted-foreground font-mono uppercase">{ch.channel_type}</p>
                             </div>
-                            <span className="text-2xs font-mono text-muted-foreground/40">{ch.id.slice(0, 8)}</span>
+                            <span className="text-2xs font-mono text-muted-foreground/50">{ch.id.slice(0, 8)}</span>
                           </div>
                         ))}
                       </div>
@@ -776,7 +776,7 @@ export function ChannelDialog({
               onValueChange={(v) => setChannelForm((f) => ({ ...f, channel_type: v }))}
               disabled={!!channelDialogId}
             >
-              <SelectTrigger className="w-full bg-background border-border text-sm h-8">
+              <SelectTrigger className="w-full bg-background border-border text-sm h-9">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="border-border">
@@ -981,17 +981,19 @@ function TagInput({
       {values.map((v) => (
         <span
           key={v}
-          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 pl-2 pr-1 py-0.5 font-mono text-2xs"
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/30 pl-2 pr-1 py-0.5 font-mono text-2xs"
         >
           <span className="truncate max-w-40">{v}</span>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-sm"
             onClick={() => onChange(values.filter((x) => x !== v))}
-            className="rounded-full hover:bg-muted text-muted-foreground hover:text-foreground h-4 w-4 inline-flex items-center justify-center text-xs leading-none"
+            className="rounded-full text-muted-foreground hover:text-foreground h-4 w-4"
             aria-label={t("common.remove", { item: v })}
           >
             ×
-          </button>
+          </Button>
         </span>
       ))}
       <input
@@ -1167,7 +1169,7 @@ export function WebhooksEditor({ webhooks, onChange }: WebhooksEditorProps) {
         type="button"
         variant="outline"
         size="sm"
-        className="w-full h-7 text-xs border-dashed border-border/70 text-muted-foreground hover:text-foreground"
+        className="w-full h-7 text-xs border-dashed border-border/50 text-muted-foreground hover:text-foreground"
         onClick={() => onChange([...webhooks, { ...defaultWebhook }])}
       >
         + Добавить webhook

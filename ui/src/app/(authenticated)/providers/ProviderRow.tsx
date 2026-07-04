@@ -54,15 +54,17 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
     >
       {/* Drag handle — active capability rows only */}
       {draggable && (
-        <button
+        <Button
           type="button"
-          className="tap-target flex shrink-0 items-center justify-center cursor-grab active:cursor-grabbing touch-none text-muted-foreground/50 hover:text-muted-foreground"
+          variant="ghost"
+          size="icon-sm"
+          className="tap-target shrink-0 cursor-grab active:cursor-grabbing touch-none text-muted-foreground/50 hover:text-muted-foreground"
           aria-label={t("providers.drag_handle_aria")}
           {...dragHandleAttributes}
           {...dragHandleListeners}
         >
           <GripVertical className="h-4 w-4" />
-        </button>
+        </Button>
       )}
 
       {/* Identity */}
@@ -92,12 +94,12 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
       <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
         {provider.base_url && (
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground-subtle font-mono truncate min-w-0">
-            <Globe className="h-3 w-3 shrink-0" />
+            <Globe className="h-4 w-4 shrink-0" />
             <span className="truncate">{provider.base_url}</span>
           </span>
         )}
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Key className="h-3 w-3 shrink-0" />
+          <Key className="h-4 w-4 shrink-0" />
           <span className="font-mono truncate">
             {provider.api_key ?? (provider.has_api_key ? t("providers.api_key_configured") : t("providers.api_key_not_set"))}
           </span>
@@ -119,12 +121,12 @@ export const ProviderRow = forwardRef<HTMLDivElement, ProviderRowProps>(function
 
       {/* Actions */}
       <div className="flex items-center gap-2 shrink-0">
-        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onEdit}>
-          <Pencil className="h-3 w-3" />
+        <Button variant="outline" size="sm" className="text-xs" onClick={onEdit}>
+          <Pencil className="h-4 w-4" />
           {t("common.edit")}
         </Button>
-        <Button variant="outline" size="sm" className="h-7 text-xs text-destructive hover:text-destructive" onClick={onDelete} aria-label={t("common.delete")}>
-          <Trash2 className="h-3 w-3" />
+        <Button variant="outline" size="sm" className="text-xs text-destructive hover:text-destructive" onClick={onDelete} aria-label={t("common.delete")}>
+          <Trash2 className="h-4 w-4" />
         </Button>
       </div>
     </Card>

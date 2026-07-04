@@ -27,7 +27,7 @@ export function BranchNavigator({ parentMessageId, siblings, currentIndex }: Bra
         className="h-5 w-5 rounded-full"
         aria-label={t("chat.branch_previous")}
       >
-        <ChevronLeft className="h-3 w-3" />
+        <ChevronLeft className="h-4 w-4" />
       </Button>
       <span className="tabular-nums min-w-8 text-center">
         {currentIndex + 1}/{siblings.length}
@@ -40,7 +40,7 @@ export function BranchNavigator({ parentMessageId, siblings, currentIndex }: Bra
         className="h-5 w-5 rounded-full"
         aria-label={t("chat.branch_next")}
       >
-        <ChevronRight className="h-3 w-3" />
+        <ChevronRight className="h-4 w-4" />
       </Button>
     </div>
   );

@@ -175,7 +175,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                   <Card key={v.id} className="overflow-hidden">
                     {/* Header row — click to expand */}
                     <button
-                      className="w-full text-left p-3 hover:bg-muted/40 transition-colors"
+                      className="w-full text-left p-3 hover:bg-muted/30 transition-colors"
                       onClick={() => setExpandedId(isExpanded ? null : v.id)}
                     >
                       <div className="flex items-center gap-2 flex-wrap">
@@ -200,7 +200,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
 
                     {/* Expanded content */}
                     {isExpanded && (
-                      <div className="border-t border-border/40">
+                      <div className="border-t border-border/30">
                         <div className="flex items-center justify-between px-3 py-2 bg-muted/20">
                           <span className="text-3xs font-mono text-muted-foreground-subtle truncate">
                             {v.content_hash}
@@ -212,7 +212,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                             disabled={restoringId === v.id}
                             onClick={() => setConfirmRestore(v.id)}
                           >
-                            <ArchiveRestore className="h-3 w-3 mr-1" />
+                            <ArchiveRestore className="h-4 w-4 mr-1" />
                             {t("skills.restore")}
                           </Button>
                         </div>
@@ -247,7 +247,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
                     </Badge>
                     <div className="flex-1 min-w-0">
                       {d.reason && (
-                        <p className="text-xs text-foreground/70 truncate">{d.reason}</p>
+                        <p className="text-xs text-foreground/80 truncate">{d.reason}</p>
                       )}
                       <p className="text-3xs text-muted-foreground-subtle mt-0.5">
                         {relativeTime(d.decided_at, locale)}
@@ -318,7 +318,7 @@ function CuratorWidget() {
         </span>
       </div>
       <Button size="sm" variant="outline" onClick={runNow} disabled={running} className="shrink-0 self-end sm:self-auto">
-        <RefreshCw className={`h-3 w-3 ${running ? "animate-spin" : ""}`} />
+        <RefreshCw className={`h-4 w-4 ${running ? "animate-spin" : ""}`} />
         {t("skills.curator_run_now")}
       </Button>
     </Card>
@@ -677,7 +677,7 @@ export default function SkillsPage() {
                 {skill.triggers.length > 0 && (
                   <div className="flex flex-wrap items-start gap-2">
                     <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
-                      <Zap className="h-3 w-3 text-warning" />
+                      <Zap className="h-4 w-4 text-warning" />
                       <span className="text-xs text-muted-foreground font-medium">{t("skills.triggers_label")}</span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -695,7 +695,7 @@ export default function SkillsPage() {
                 {skill.tools_required.length > 0 && (
                   <div className="flex flex-wrap items-start gap-2">
                     <div className="flex items-center gap-1.5 shrink-0 pt-0.5">
-                      <Wrench className="h-3 w-3 text-primary" />
+                      <Wrench className="h-4 w-4 text-primary" />
                       <span className="text-xs text-muted-foreground font-medium">{t("skills.tools_label")}</span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -711,7 +711,7 @@ export default function SkillsPage() {
                 {/* Footer: instructions size + actions */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 border-t border-border/30">
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <FileText className="h-3 w-3 text-muted-foreground-subtle shrink-0" />
+                    <FileText className="h-4 w-4 text-muted-foreground-subtle shrink-0" />
                     <span className="text-xs text-muted-foreground-subtle truncate">
                       {t("skills.instructions_size")} {t("skills.instructions_chars", { count: skill.instructions_len.toLocaleString() })}
                     </span>
@@ -729,7 +729,7 @@ export default function SkillsPage() {
                       className="h-7 text-xs"
                       title="Version history"
                     >
-                      <History className="h-3 w-3" />
+                      <History className="h-4 w-4" />
                     </Button>
                     <Button
                       variant="outline"
@@ -740,8 +740,8 @@ export default function SkillsPage() {
                       title={skill.pinned ? "Remove Curator protection" : "Protect from Curator"}
                     >
                       {skill.pinned
-                        ? <Lock className="h-3 w-3 text-primary" />
-                        : <LockOpen className="h-3 w-3" />
+                        ? <Lock className="h-4 w-4 text-primary" />
+                        : <LockOpen className="h-4 w-4" />
                       }
                     </Button>
                     <Button
@@ -750,7 +750,7 @@ export default function SkillsPage() {
                       onClick={() => openEdit(skill)}
                       className="h-7 text-xs"
                     >
-                      <Pencil className="h-3 w-3" />
+                      <Pencil className="h-4 w-4" />
                       <span className="hidden sm:inline">{t("common.edit")}</span>
                     </Button>
                     <Button
@@ -762,8 +762,8 @@ export default function SkillsPage() {
                       title={isArchived ? "Restore" : "Archive"}
                     >
                       {isArchived
-                        ? <ArchiveRestore className="h-3 w-3" />
-                        : <Archive className="h-3 w-3" />
+                        ? <ArchiveRestore className="h-4 w-4" />
+                        : <Archive className="h-4 w-4" />
                       }
                     </Button>
                     <Button
@@ -773,7 +773,7 @@ export default function SkillsPage() {
                       onClick={() => setDeleteConfirm(skill.name)}
                       className="h-7 text-xs text-destructive hover:text-destructive"
                     >
-                      <Trash2 className="h-3 w-3" />
+                      <Trash2 className="h-4 w-4" />
                       <span className="hidden sm:inline">{t("common.delete")}</span>
                     </Button>
                   </div>

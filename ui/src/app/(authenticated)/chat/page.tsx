@@ -479,7 +479,7 @@ export default function ChatPage() {
   // Agent selector component (reused in desktop header and mobile)
   const agentSelector = (
     <Select value={currentAgent} onValueChange={switchAgent} aria-label={t("chat.switch_agent")}>
-      <SelectTrigger size="sm" className="w-auto min-w-20 sm:min-w-28 max-w-28 md:max-w-40 text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
+      <SelectTrigger size="sm" className="w-auto min-w-16 sm:min-w-24 max-w-24 md:max-w-40 text-xs font-semibold uppercase tracking-wide bg-card/50 border-border">
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="border-border">
@@ -528,7 +528,7 @@ export default function ChatPage() {
               size="sm"
               className={`h-8 px-2 text-xs transition-colors ${
                 selectedSessions.size > 0
-                  ? "text-destructive bg-destructive/10 hover:bg-destructive/20"
+                  ? "text-destructive bg-destructive/10 hover:bg-destructive/30"
                   : "text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10"
               }`}
               onClick={handleDeleteSessions}
@@ -550,7 +550,7 @@ export default function ChatPage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 px-3 border-primary/30 bg-primary/10 text-primary text-xs font-medium transition-all hover:bg-primary/15 hover:text-primary hover:border-primary/30"
+            className="h-8 px-3 border-primary/30 !bg-primary/10 text-primary text-xs font-medium transition-all hover:bg-primary/10 hover:text-primary hover:border-primary/30"
             onClick={handleNewChat}
           >
             <Plus className="mr-1.5 h-4 w-4" /> {t("chat.new")}
@@ -560,7 +560,7 @@ export default function ChatPage() {
 
       <div className="shrink-0 px-3 py-2 border-b border-border/30">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/40" />
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
           <Input
             value={sessionFilter}
             onChange={(e) => setSessionFilter(e.target.value)}
@@ -574,8 +574,8 @@ export default function ChatPage() {
           <div className="space-y-4 p-3">
             {[1, 2, 3].map((i) => (
               <div key={i} className="space-y-2">
-                <Skeleton className="h-3 w-16 bg-muted/40" />
-                <Skeleton className="h-4 w-full bg-muted/40" />
+                <Skeleton className="h-3 w-16 bg-muted/30" />
+                <Skeleton className="h-4 w-full bg-muted/30" />
               </div>
             ))}
           </div>
@@ -600,7 +600,7 @@ export default function ChatPage() {
                       className={`shrink-0 self-center h-5 w-5 md:h-3.5 md:w-3.5 rounded border transition-colors flex items-center justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
                         isSelected
                           ? "bg-primary border-primary"
-                          : "border-border/60 bg-transparent hover:border-primary/40"
+                          : "border-border/50 bg-transparent hover:border-primary/30"
                       }`}
                       role="checkbox"
                       aria-checked={isSelected}
@@ -626,18 +626,18 @@ export default function ChatPage() {
                             className={`font-display text-xs font-bold uppercase tracking-tight shrink-0 ${
                               activeSessionId === s.id
                                 ? "text-primary"
-                                : "text-muted-foreground/80 group-hover:text-muted-foreground"
+                                : "text-muted-foreground/60 group-hover:text-muted-foreground"
                             }`}
                           >
                             {s.channel}
                           </span>
                           {(activeSessionIds.includes(s.id) || s.run_status === "running") ? (
                             <span className="ml-1.5 rounded px-1.5 py-0.5 font-mono text-3xs uppercase tracking-wider bg-success/15 text-success flex items-center gap-1 shrink-0">
-                              <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
+                              <span className="h-3 w-3 rounded-full bg-success animate-pulse" />
                               {t("chat.status_running")}
                             </span>
                           ) : (s.run_status === "interrupted" || s.run_status === "timeout" || s.run_status === "failed") ? (
-                            <span className="ml-1 rounded px-1 py-0.5 font-mono text-3xs uppercase tracking-wider bg-destructive/15 text-destructive/80 shrink-0">
+                            <span className="ml-1 rounded px-1 py-0.5 font-mono text-3xs uppercase tracking-wider bg-destructive/10 text-destructive/80 shrink-0">
                               {s.run_status === "interrupted" ? t("chat.status_interrupted") : s.run_status === "timeout" ? t("chat.status_timeout") : t("chat.status_failed")}
                             </span>
                           ) : null}
@@ -676,8 +676,8 @@ export default function ChatPage() {
                             className={`text-sm transition-colors break-words line-clamp-2 ${
                               activeSessionId === s.id
                                 ? "text-foreground"
-                                : "text-muted-foreground/70 group-hover:text-muted-foreground/90"
-                            } ${!s.title && !s.user_id ? "italic text-muted-foreground/40" : ""}`}
+                                : "text-muted-foreground/60 group-hover:text-muted-foreground/60"
+                            } ${!s.title && !s.user_id ? "italic text-muted-foreground/50" : ""}`}
                           >
                             {displayTitle}
                             {s.segment_count != null && s.segment_count > 1 && (
@@ -705,23 +705,23 @@ export default function ChatPage() {
                     <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity duration-150">
                         <Button
                           variant="ghost"
-                          size="icon-xs"
+                          size="icon-sm"
                           onClick={(e) => {
                             e.stopPropagation();
                             setRenamingSessionId(s.id);
                             setRenameValue(s.title || "");
                           }}
-                          className="text-muted-foreground/40 hover:text-foreground"
+                          className="text-muted-foreground/50 hover:text-foreground"
                           title={t("chat.rename_hint")}
                         >
-                          <Pencil className="h-3 w-3" />
+                          <Pencil className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
-                          size="icon-xs"
+                          size="icon-sm"
                           onClick={(e) => handleDeleteSession(e, s.id)}
                           disabled={deletingSessionId === s.id}
-                          className="text-muted-foreground/40 hover:bg-destructive/10 hover:text-destructive"
+                          className="text-muted-foreground/50 hover:bg-destructive/10 hover:text-destructive"
                           title={t("chat.delete_session")}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -767,16 +767,16 @@ export default function ChatPage() {
           {/* HISTORY / Return to live badge removed — confusing for users during agent switch */}
           {streamError && (
             <div className="ml-auto flex items-center gap-1 text-destructive/60 shrink-0">
-              <div className="h-2 w-2 rounded-full bg-destructive/60 animate-pulse" />
+              <div className="h-3 w-3 rounded-full bg-destructive/50 animate-pulse" />
               <span className="text-3xs font-mono uppercase tracking-wider">{t("chat.error")}</span>
             </div>
           )}
         </div>
 
         {/* Mobile/tablet floating actions — visible below lg */}
-        <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-1.5 px-3 py-2 bg-background/90 backdrop-blur-sm border-b border-border/30 lg:hidden">
+        <div className="absolute top-0 left-0 right-0 z-20 flex items-center gap-1 px-2 py-1.5 bg-background/90 backdrop-blur-sm border-b border-border/30 lg:hidden">
           <SidebarTrigger className="h-9 w-9 text-foreground active:scale-90 transition-transform md:hidden shrink-0" />
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
             {agentSelector}
             <ChatCanvasTabs />
           </div>
@@ -793,7 +793,7 @@ export default function ChatPage() {
               <Button
                 variant="outline"
                 size="icon"
-                className="h-11 w-11 md:h-8 md:w-8 shrink-0 border-border bg-background text-foreground shadow-md active:scale-95 transition-all"
+                className="h-9 w-9 md:h-8 md:w-8 shrink-0 border-primary/30 !bg-primary/10 text-primary shadow-md active:scale-95 transition-all"
                 title={t("chat.archive")}
               >
                 <Clock className="h-5 w-5 md:h-4 md:w-4" />
@@ -810,7 +810,7 @@ export default function ChatPage() {
           <Button
             variant="outline"
             size="icon"
-            className="h-11 w-11 md:h-8 md:w-8 shrink-0 border-primary/30 bg-primary/10 text-primary shadow-md active:scale-95 transition-all"
+            className="h-9 w-9 md:h-8 md:w-8 shrink-0 border-primary/30 !bg-primary/10 text-primary shadow-md active:scale-95 transition-all"
             onClick={handleNewChat}
             title={t("chat.new")}
           >
@@ -864,14 +864,14 @@ function ChatCanvasTabs() {
 
   return (
     <Tabs value={panelOpen ? "canvas" : "chat"} onValueChange={(v) => setPanelOpen(v === "canvas")}>
-      <TabsList className="h-8 bg-muted/30 border border-border/40 p-0.5">
-        <TabsTrigger value="chat" className="h-full px-2 md:px-3 text-xs font-medium">
-          <MessageSquare className="h-3 w-3" />
-          {t("nav.chat")}
+      <TabsList className="h-8 bg-muted/30 border border-border/30 p-0.5">
+        <TabsTrigger value="chat" className="h-full px-1.5 md:px-3 text-xs font-medium">
+          <MessageSquare className="h-4 w-4" />
+          <span className="hidden md:inline">{t("nav.chat")}</span>
         </TabsTrigger>
-        <TabsTrigger value="canvas" className="h-full px-2 md:px-3 text-xs font-medium">
-          <PanelRight className="h-3 w-3" />
-          {t("nav.canvas")}
+        <TabsTrigger value="canvas" className="h-full px-1.5 md:px-3 text-xs font-medium">
+          <PanelRight className="h-4 w-4" />
+          <span className="hidden md:inline">{t("nav.canvas")}</span>
         </TabsTrigger>
       </TabsList>
     </Tabs>

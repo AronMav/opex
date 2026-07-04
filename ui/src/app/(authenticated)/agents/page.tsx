@@ -600,7 +600,7 @@ export default function AgentsPage() {
             <Card key={a.name} interactive className="group p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col">
               <div className="flex items-start gap-3 mb-4 min-w-0">
                 <div className="relative shrink-0">
-                  <IconTile tone="muted" size="lg" className="border-primary/20 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
+                  <IconTile tone="muted" size="lg" className="border-primary/30 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">
                     {a.icon_url ? (
                       <>
                         {/* eslint-disable-next-line @next/next/no-img-element -- agent icons are tiny avatars from arbitrary sources (uploads, data URIs, external); next/Image's optimisation pipeline adds no value at this size */}
@@ -612,7 +612,7 @@ export default function AgentsPage() {
                       </span>
                     )}
                   </IconTile>
-                  <div className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${a.is_running ? "bg-success" : "bg-muted-foreground/50"}`} />
+                  <div className={`absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full border-2 border-background ${a.is_running ? "bg-success" : "bg-muted-foreground/50"}`} />
                 </div>
                 <div className="flex flex-col gap-0.5 min-w-0 flex-1">
                   <div className="flex items-center gap-2 min-w-0">

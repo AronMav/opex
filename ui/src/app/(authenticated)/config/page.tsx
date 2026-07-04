@@ -362,7 +362,7 @@ export default function ConfigPage() {
                       {Object.entries(subagents).filter(([k]) => k !== "enabled").map(([key, val]) => (
                         <div
                           key={key}
-                          className="flex items-center justify-between gap-2 border-b border-border/20 py-1.5 last:border-0"
+                          className="flex items-center justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
                         >
                           <span className="font-mono text-xs text-muted-foreground">{key}</span>
                           <div className="shrink-0">
@@ -634,7 +634,7 @@ export default function ConfigPage() {
                       {Object.entries(topLevel).map(([key, val]) => (
                         <div
                           key={key}
-                          className="flex items-center justify-between gap-2 border-b border-border/20 py-1.5 last:border-0"
+                          className="flex items-center justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
                         >
                           <span className="font-mono text-xs text-muted-foreground truncate">{key}</span>
                           <div className="shrink-0">
@@ -660,7 +660,7 @@ export default function ConfigPage() {
                       {Object.entries(values).map(([key, val]) => (
                         <div
                           key={key}
-                          className="flex items-start justify-between gap-2 border-b border-border/20 py-1.5 last:border-0"
+                          className="flex items-start justify-between gap-2 border-b border-border/30 py-1.5 last:border-0"
                         >
                           <span className="font-mono text-xs text-muted-foreground pt-0.5 truncate">{key}</span>
                           <div className="flex shrink-0 max-w-xs justify-end overflow-x-auto scrollbar-none">
@@ -720,6 +720,6 @@ function renderValue(val: unknown, t: (key: TranslationKey, values?: Record<stri
     );
   }
   return (
-    <span className="max-w-full break-all font-mono text-sm text-foreground/90">{String(val)}</span>
+    <span className="max-w-full break-all font-mono text-sm text-foreground/80">{String(val)}</span>
   );
 }

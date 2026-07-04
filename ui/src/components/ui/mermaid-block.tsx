@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react"
 import { useTheme } from "next-themes"
 import { useTranslation } from "@/hooks/use-translation"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Button } from "@/components/ui/button";
 
 const MIN_ZOOM = 0.5
 const MAX_ZOOM = 3
@@ -90,41 +91,49 @@ export function MermaidBlock({ code }: { code: string }) {
         <div className="flex items-center justify-between border-b border-border/50 px-3 py-1.5">
           <span className="text-xs text-muted-foreground">Mermaid</span>
           <div className="flex items-center gap-1">
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={handleZoomOut}
               disabled={zoom <= MIN_ZOOM}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+              className="text-muted-foreground hover:text-foreground"
               title={t("common.zoom_out")}
             >
               <ZoomOut className="h-3.5 w-3.5" />
-            </button>
+            </Button>
             <span className="min-w-[3rem] text-center text-xs tabular-nums text-muted-foreground">
               {Math.round(zoom * 100)}%
             </span>
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={handleZoomIn}
               disabled={zoom >= MAX_ZOOM}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+              className="text-muted-foreground hover:text-foreground"
               title={t("common.zoom_in")}
             >
               <ZoomIn className="h-3.5 w-3.5" />
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={handleReset}
               disabled={zoom === 1}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
+              className="text-muted-foreground hover:text-foreground"
               title={t("common.reset_zoom")}
             >
               <RotateCcw className="h-3.5 w-3.5" />
-            </button>
+            </Button>
             <div className="mx-1 h-4 w-px bg-border" />
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={toggleExpand}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground"
               title={expanded ? t("common.collapse") : t("common.expand")}
             >
               {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-            </button>
+            </Button>
           </div>
         </div>
         {/* Diagram — SVG sanitized by DOMPurify */}

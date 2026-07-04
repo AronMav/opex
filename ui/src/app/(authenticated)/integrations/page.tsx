@@ -475,7 +475,7 @@ export default function IntegrationsPage() {
           {t("integrations.agent_label")}
         </label>
         <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-          <SelectTrigger id="integrations-agent-select" className="h-8 w-48 text-xs font-mono">
+          <SelectTrigger id="integrations-agent-select" className="h-9 w-48 text-xs font-mono">
             <SelectValue placeholder={t("integrations.select_agent")} />
           </SelectTrigger>
           <SelectContent>
@@ -602,7 +602,7 @@ export default function IntegrationsPage() {
                       disabled={!selectedAgent}
                       onClick={() => handleConnect(account.id)}
                     >
-                      <Link2 className="h-3 w-3" />
+                      <Link2 className="h-4 w-4" />
                       {t("integrations.connect")}
                     </Button>
                   )}
@@ -613,7 +613,7 @@ export default function IntegrationsPage() {
                       className="border-destructive/30 text-destructive hover:bg-destructive/10 gap-1.5 text-xs h-7"
                       onClick={() => setRevokeTarget(account)}
                     >
-                      <Unlink className="h-3 w-3" />
+                      <Unlink className="h-4 w-4" />
                       {t("integrations.revoke")}
                     </Button>
                   )}
@@ -625,7 +625,7 @@ export default function IntegrationsPage() {
                       disabled={!selectedAgent}
                       onClick={() => handleConnect(account.id)}
                     >
-                      <Link2 className="h-3 w-3" />
+                      <Link2 className="h-4 w-4" />
                       {t("integrations.reconnect")}
                     </Button>
                   )}
@@ -692,7 +692,7 @@ export default function IntegrationsPage() {
                       value={currentValue}
                       onValueChange={(v) => handleBindingChange(provider, v)}
                     >
-                      <SelectTrigger className="h-8 w-full sm:w-52 text-xs font-mono">
+                      <SelectTrigger className="h-9 w-full sm:w-52 text-xs font-mono">
                         <SelectValue placeholder={t("integrations.none")} />
                       </SelectTrigger>
                       <SelectContent>

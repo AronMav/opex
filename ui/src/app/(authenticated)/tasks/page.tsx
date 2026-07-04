@@ -225,12 +225,12 @@ export default function CronPage() {
                     <div className="flex items-center gap-2 mt-1">
                       <Clock className="h-3.5 w-3.5 text-muted-foreground/60" />
                       <span className="font-mono text-xs text-muted-foreground font-bold tracking-wider">{j.cron}</span>
-                      <span className="font-mono text-xs text-muted-foreground/70 uppercase tracking-wide bg-muted/50 px-2 py-0.5 rounded border border-border/50 max-w-36 truncate">
+                      <span className="font-mono text-xs text-muted-foreground/60 uppercase tracking-wide bg-muted/50 px-2 py-0.5 rounded border border-border/50 max-w-36 truncate">
                         {j.timezone}
                       </span>
                     </div>
                   </div>
-                  <div className="mt-4 rounded-lg bg-muted/30 border border-border/40 p-3">
+                  <div className="mt-4 rounded-lg bg-muted/30 border border-border/30 p-3">
                     <p className="font-mono text-sm leading-relaxed text-foreground/80 line-clamp-2 break-words">
                       {j.task}
                     </p>
@@ -246,7 +246,7 @@ export default function CronPage() {
                       disabled={mutating}
                       className="text-xs font-medium"
                     >
-                      {j.enabled ? <><PowerOff className="h-3 w-3 mr-1.5" /> {t("cron.pause")}</> : <><Power className="h-3 w-3 mr-1.5" /> {t("cron.enable")}</>}
+                      {j.enabled ? <><PowerOff className="h-4 w-4 mr-1.5" /> {t("cron.pause")}</> : <><Power className="h-4 w-4 mr-1.5" /> {t("cron.enable")}</>}
                     </Button>
                     <Button
                       variant="outline-success"
@@ -255,7 +255,7 @@ export default function CronPage() {
                       disabled={mutating || !j.enabled}
                       className="text-xs font-medium"
                     >
-                      <Play className="h-3 w-3 mr-1.5" /> {t("cron.run_now")}
+                      <Play className="h-4 w-4 mr-1.5" /> {t("cron.run_now")}
                     </Button>
                   </div>
                   <div className="grid grid-cols-3 gap-1">
@@ -284,7 +284,7 @@ export default function CronPage() {
                       className="text-xs text-muted-foreground hover:text-foreground"
                     >
                       <History className="h-3.5 w-3.5" />
-                      {expandedJob === j.id ? <ChevronUp className="h-3 w-3 ml-0.5" /> : <ChevronDown className="h-3 w-3 ml-0.5" />}
+                      {expandedJob === j.id ? <ChevronUp className="h-4 w-4 ml-0.5" /> : <ChevronDown className="h-4 w-4 ml-0.5" />}
                     </Button>
                   </div>
                 </div>
@@ -305,7 +305,7 @@ export default function CronPage() {
                             ? Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000)
                             : null;
                           return (
-                            <div key={r.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border/40">
+                            <div key={r.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border/30">
                               <StatusBadge
                                 status={r.status === "success" ? "success" : r.status === "error" ? "error" : "pending"}
                                 size="sm"
@@ -322,7 +322,7 @@ export default function CronPage() {
                                   <p className="text-xs text-destructive mt-1 font-mono line-clamp-2">{r.error}</p>
                                 )}
                                 {r.response_preview && (
-                                  <p className="text-xs text-foreground/70 mt-1 line-clamp-2">{r.response_preview}</p>
+                                  <p className="text-xs text-foreground/80 mt-1 line-clamp-2">{r.response_preview}</p>
                                 )}
                               </div>
                             </div>

@@ -1,5 +1,6 @@
 "use client"
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils"
 import { Check, Copy } from "lucide-react"
 import { useTheme } from "next-themes"
@@ -28,17 +29,19 @@ function CodeBlockHeader({ language, code }: { language?: string; code: string }
   return (
     <div className="flex items-center justify-between px-4 py-1.5 border-b border-border/50 bg-muted/30 text-xs text-muted-foreground">
       <span className="font-mono rounded bg-muted/50 px-1.5 py-0.5">{language || "text"}</span>
-      <button
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={handleCopy}
         aria-label={copied ? t("common.copied") : t("common.copy_code")}
-        className="flex items-center gap-1 rounded px-2 py-1.5 md:px-1.5 md:py-0.5 min-h-[44px] md:min-h-0 hover:bg-muted/50 hover:text-foreground transition-colors"
+        className="gap-1 hover:text-foreground min-h-[44px] md:min-h-0"
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-success" />
         ) : (
           <><Copy className="h-3.5 w-3.5" /> <span>{t("common.copy")}</span></>
         )}
-      </button>
+      </Button>
     </div>
   )
 }

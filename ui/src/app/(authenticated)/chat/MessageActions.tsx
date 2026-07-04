@@ -60,7 +60,7 @@ function CopyButton({ message }: { message: ChatMessage }) {
       variant="ghost"
       size="icon-sm"
       onClick={handleCopy}
-      className={`rounded-full text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
+      className={`rounded-full text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
       title={t("chat.copy_tooltip")}
       aria-label={t("chat.copy_tooltip")}
     >
@@ -94,7 +94,7 @@ function ExportMarkdownButton({ message }: { message: ChatMessage }) {
       variant="ghost"
       size="icon-sm"
       onClick={handleExport}
-      className={`rounded-full text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
+      className={`rounded-full text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
       title={t("chat.export_tooltip")}
       aria-label={t("chat.export_tooltip")}
     >
@@ -113,7 +113,7 @@ function ReloadButton() {
       variant="ghost"
       size="icon-sm"
       onClick={() => useChatStore.getState().regenerate()}
-      className={`rounded-full text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
+      className={`rounded-full text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
       title={t("chat.regenerate_tooltip")}
       aria-label={t("chat.regenerate_tooltip")}
     >
@@ -198,7 +198,7 @@ function SpeakButton({ message }: { message: ChatMessage }) {
       className={`rounded-full ${TOUCH_ICON} ${
         playing
           ? "text-destructive hover:text-destructive hover:bg-destructive/10"
-          : "text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50"
+          : "text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50"
       }`}
       title={playing ? t("chat.stop_speaking_tooltip") : t("chat.speak_tooltip")}
       aria-label={playing ? t("chat.stop_speaking_tooltip") : t("chat.speak_tooltip")}
@@ -242,7 +242,7 @@ function FeedbackButtons({ message }: { message: ChatMessage }) {
         className={`rounded-full ${TOUCH_ICON} ${
           submitted === "positive"
             ? "text-success"
-            : "text-muted-foreground/40 hover:text-success hover:bg-success/10"
+            : "text-muted-foreground/50 hover:text-success hover:bg-success/10"
         }`}
         title={t("chat.like_tooltip")}
         aria-label={t("chat.like_tooltip")}
@@ -256,7 +256,7 @@ function FeedbackButtons({ message }: { message: ChatMessage }) {
         className={`rounded-full ${TOUCH_ICON} ${
           submitted === "negative"
             ? "text-destructive"
-            : "text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10"
+            : "text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10"
         }`}
         title={t("chat.dislike_tooltip")}
         aria-label={t("chat.dislike_tooltip")}
@@ -300,12 +300,12 @@ function EditButton({ message }: { message: ChatMessage }) {
           autoFocus
         />
         <div className="flex items-center gap-2 justify-end">
-          <Button variant="ghost" size="xs" onClick={handleCancel}>
-            <X className="h-3 w-3 mr-1" />
+          <Button variant="ghost" size="sm" onClick={handleCancel}>
+            <X className="h-4 w-4 mr-1" />
             {t("common.cancel")}
           </Button>
-          <Button variant="ghost" size="xs" onClick={handleSubmit} className="text-primary">
-            <Send className="h-3 w-3 mr-1" />
+          <Button variant="ghost" size="sm" onClick={handleSubmit} className="text-primary">
+            <Send className="h-4 w-4 mr-1" />
             {t("common.save")}
           </Button>
         </div>
@@ -319,7 +319,7 @@ function EditButton({ message }: { message: ChatMessage }) {
       size="icon-sm"
       data-action="edit"
       onClick={handleStartEdit}
-      className={`rounded-full text-muted-foreground/40 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
+      className={`rounded-full text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/50 ${TOUCH_ICON}`}
       title={t("chat.edit_tooltip")}
       aria-label={t("chat.edit_tooltip")}
     >
@@ -355,8 +355,8 @@ function DeleteMessageButton({ messageId }: { messageId: string }) {
       onClick={handleClick}
       className={`rounded-full transition-colors ${TOUCH_ICON} ${
         deleteArmed
-          ? "text-destructive bg-destructive/15"
-          : "text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10"
+          ? "text-destructive bg-destructive/10"
+          : "text-muted-foreground/50 hover:text-destructive hover:bg-destructive/10"
       }`}
       title={deleteArmed ? t("chat.delete_message_confirm") : t("chat.delete_message_tooltip")}
       aria-label={deleteArmed ? t("chat.delete_message_confirm") : t("chat.delete_message_tooltip")}
@@ -397,7 +397,7 @@ export function MessageActions({
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  className={`rounded-full text-muted-foreground/40 ${TOUCH_ICON}`}
+                  className={`rounded-full text-muted-foreground/50 ${TOUCH_ICON}`}
                   aria-label={t("chat.more_actions")}
                 >
                   <MoreHorizontal className="h-3.5 w-3.5" />

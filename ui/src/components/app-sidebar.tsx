@@ -105,7 +105,7 @@ export function AppSidebar() {
           </div>
           <div className="flex items-center gap-2 px-0.5">
             <span
-              className={`h-2 w-2 rounded-full ${connected ? "bg-success" : "bg-destructive"}`}
+              className={`h-3 w-3 rounded-full ${connected ? "bg-success" : "bg-destructive"}`}
             />
             <span className="text-xs text-muted-foreground">
               {connected ? t("nav.online") : t("nav.offline")}
@@ -129,7 +129,7 @@ export function AppSidebar() {
                     <SidebarMenuButton
                       asChild
                       isActive={pathname.startsWith(item.href)}
-                      className="group/nav relative h-10 md:h-10 px-3 transition-colors duration-150 hover:bg-accent active:bg-accent/80 active:scale-[0.99] overflow-hidden rounded-md"
+                      className="group/nav relative h-10 md:h-10 px-3 transition-colors duration-150 hover:bg-accent active:bg-accent/50 active:scale-[0.99] overflow-hidden rounded-md"
                     >
                       <Link href={item.href} onClick={() => isMobile && setOpenMobile(false)} className="flex items-center gap-3 w-full">
                         <item.icon className={`transition-colors duration-150 ${pathname.startsWith(item.href) ? "text-primary" : "text-muted-foreground group-hover/nav:text-foreground"}`} />
@@ -154,7 +154,7 @@ export function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-border bg-muted/30 p-4">
-        <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2.5">
+        <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2.5">
           <div className="flex flex-col">
             <span className="text-xs text-muted-foreground-subtle">{t("common.version")}</span>
             <span className="font-mono text-xs font-bold text-muted-foreground">

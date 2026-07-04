@@ -10,7 +10,7 @@ export const TOOL_OUTPUT_MAX_CHARS = 10_000;
 
 // ── Icon picker by tool name ──────────────────────────────────────────────────
 function ToolIcon({ toolName }: { toolName: string }) {
-  const cls = "h-3 w-3 shrink-0";
+  const cls = "h-4 w-4 shrink-0";
   if (toolName.startsWith("workspace_")) return <FileText className={cls} />;
   return <Wrench className={cls} />;
 }
@@ -140,7 +140,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           type="button"
           disabled={!canExpand}
           aria-label={`${toolName}${detail ? `: ${detail}` : ""} — ${isRunning ? t("chat.tool_running") : isComplete ? t("chat.tool_result") : hasError ? t("chat.tool_error") : isDenied ? t("chat.tool_denied") : ""}`}
-          className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-border/60 bg-card/50 px-2.5 py-1.5 text-left transition-colors hover:border-border disabled:cursor-default dark:bg-card/30 dark:hover:bg-card/50"
+          className="flex w-full min-w-0 items-center gap-2 rounded-xl border border-border/50 bg-card/50 px-2.5 py-1.5 text-left transition-colors hover:border-border disabled:cursor-default dark:bg-card/30 dark:hover:bg-card/50"
         >
           {/* tool type icon */}
           <span className="text-muted-foreground/50"><ToolIcon toolName={toolName} /></span>
@@ -167,23 +167,23 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
           {/* status indicator */}
           <span className="ml-auto shrink-0 flex items-center gap-1.5">
             {isRunning ? (
-              <span className="h-2 w-2 rounded-full bg-warning animate-pulse" />
+              <span className="h-3 w-3 rounded-full bg-warning animate-pulse" />
             ) : isComplete ? (
-              <Check className="h-3 w-3 text-success" />
+              <Check className="h-4 w-4 text-success" />
             ) : (hasError || isDenied) ? (
-              <X className="h-3 w-3 text-destructive" />
+              <X className="h-4 w-4 text-destructive" />
             ) : (
-              <Clock className="h-3 w-3 text-muted-foreground/40" />
+              <Clock className="h-4 w-4 text-muted-foreground/50" />
             )}
             {canExpand && (
-              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 transition-transform duration-200 group-data-[state=open]:rotate-90" />
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 transition-transform duration-200 group-data-[state=open]:rotate-90" />
             )}
           </span>
         </button>
       </CollapsibleTrigger>
 
       <CollapsibleContent>
-        <div className="mt-1 overflow-hidden rounded-md border border-border/40 bg-muted/20 text-xs">
+        <div className="mt-1 overflow-hidden rounded-md border border-border/30 bg-muted/20 text-xs">
           {inputDisplay && (
             <div className={hasContent ? "border-b border-border/30" : ""}>
               <div className="px-3 pt-2.5 pb-1">
@@ -191,7 +191,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
                   {t("chat.tool_input")}
                 </span>
               </div>
-              <pre className="max-h-[150px] overflow-auto px-3 pb-2.5 font-mono text-[11px] leading-relaxed text-foreground/70 whitespace-pre-wrap">
+              <pre className="max-h-[150px] overflow-auto px-3 pb-2.5 font-mono text-[11px] leading-relaxed text-foreground/80 whitespace-pre-wrap">
                 {inputDisplay}
               </pre>
             </div>
@@ -209,7 +209,7 @@ export const ToolCallPartView = memo(function ToolCallPartView({ toolName, args,
                   <button
                     type="button"
                     onClick={() => setShowFullOutput(true)}
-                    className="text-[10px] text-primary/60 hover:text-primary underline underline-offset-2"
+                    className="text-[10px] text-primary/50 hover:text-primary underline underline-offset-2"
                   >
                     {t("chat.tool_show_full", { chars: Math.round(resultHiddenChars / 1000) })}
                   </button>

@@ -187,7 +187,7 @@ export default function AccessPage() {
           <div className="flex items-center gap-2">
             {totalPending > 0 && (
               <Badge variant="outline-warning" className="text-xs gap-1">
-                <ShieldAlert className="h-3 w-3" />
+                <ShieldAlert className="h-4 w-4" />
                 {totalPending} {t("access.pending_approvals")}
               </Badge>
             )}
@@ -256,7 +256,7 @@ export default function AccessPage() {
 
                 {/* Expandable content */}
                 {isExpanded && (
-                  <div className="border-t border-border/40 p-4 space-y-4 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="border-t border-border/30 p-4 space-y-4 animate-in fade-in slide-in-from-top-1 duration-150">
                     {/* Settings row */}
                     <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:gap-3">
                       <div className="flex items-center gap-2">
@@ -287,7 +287,7 @@ export default function AccessPage() {
                           />
                         </>
                       )}
-                      <Button size="sm" onClick={() => saveAccessSettings(agent)} disabled={isSaving} className="h-7 text-xs font-semibold w-full sm:w-auto sm:ml-auto">
+                      <Button size="sm" onClick={() => saveAccessSettings(agent)} disabled={isSaving} className="text-xs font-semibold w-full sm:w-auto sm:ml-auto">
                         {isSaving ? t("common.saving") : t("common.save")}
                       </Button>
                     </div>
@@ -323,17 +323,17 @@ export default function AccessPage() {
                     <div className="space-y-2">
                       <div className="flex items-center gap-2">
                         <UserCheck className="h-3.5 w-3.5 text-primary" />
-                        <span className="text-xs font-semibold text-foreground/70">{t("access.authorized_users")}</span>
+                        <span className="text-xs font-semibold text-foreground/80">{t("access.authorized_users")}</span>
                         <span className="text-3xs text-muted-foreground-subtle font-mono">{agentUsers.length}</span>
                       </div>
                       {agentUsers.length === 0 ? (
-                        <div className="flex h-12 items-center justify-center rounded-lg border border-dashed border-border/50 bg-muted/5">
+                        <div className="flex h-12 items-center justify-center rounded-lg border border-dashed border-border/50 bg-muted/10">
                           <span className="text-xs text-muted-foreground-subtle">{t("access.no_authorized_users")}</span>
                         </div>
                       ) : (
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                           {agentUsers.map((u) => (
-                            <div key={u.channel_user_id} className="group flex items-center gap-2.5 rounded-lg border border-border/50 bg-card/30 px-3 py-2 transition-colors hover:bg-card/60">
+                            <div key={u.channel_user_id} className="group flex items-center gap-2.5 rounded-lg border border-border/50 bg-card/30 px-3 py-2 transition-colors hover:bg-card/50">
                               <div className="flex flex-col min-w-0 flex-1">
                                 <span className="font-semibold text-xs truncate">{u.display_name || "—"}</span>
                                 <span className="font-mono text-3xs text-muted-foreground-subtle truncate">{u.channel_user_id}</span>

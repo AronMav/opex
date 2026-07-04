@@ -60,7 +60,7 @@ class ThreadErrorBoundary extends Component<ThreadErrorBoundaryProps, ThreadErro
     if (this.state.error) {
       return (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-          <p className="text-sm text-muted-foreground/70 font-mono">{this.state.error}</p>
+          <p className="text-sm text-muted-foreground/60 font-mono">{this.state.error}</p>
           <Button
             variant="outline"
             size="sm"

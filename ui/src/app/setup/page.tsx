@@ -664,14 +664,16 @@ export default function SetupPage() {
                   {fallbackModels.length > 0 && discoveredModels.length === 0 && !defaultModel && (
                     <div className="flex flex-wrap gap-1.5 mt-1">
                       {fallbackModels.map((m) => (
-                        <button
+                        <Button
                           key={m}
                           type="button"
+                          variant="outline"
+                          size="xs"
                           onClick={() => setDefaultModel(m)}
-                          className="rounded-md border border-border bg-muted/50 px-2 py-0.5 font-mono text-2xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                          className="font-mono text-2xs"
                         >
                           {m}
-                        </button>
+                        </Button>
                       ))}
                     </div>
                   )}
@@ -738,7 +740,7 @@ export default function SetupPage() {
               {networkData && (
                 <div className="rounded-md border border-border bg-muted/30 p-3 space-y-2 text-sm">
                   <p className="font-medium text-xs text-muted-foreground flex items-center gap-1">
-                    <Wifi className="h-3 w-3" />
+                    <Wifi className="h-4 w-4" />
                     {t("setup.network_info")}
                   </p>
                   {networkData.lan.length > 0 && (

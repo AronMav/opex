@@ -23,21 +23,21 @@ function StepBadge({ step }: { step: TaskStep }) {
     case "in_progress":
       return (
         <Badge variant="secondary" className="gap-1">
-          <Loader className="h-3 w-3 animate-spin" />
+          <Loader className="h-4 w-4 animate-spin" />
           {t("common.running")}
         </Badge>
       );
     case "done":
       return (
         <Badge variant="success" className="gap-1">
-          <CheckCircle className="h-3 w-3" />
+          <CheckCircle className="h-4 w-4" />
           {t("common.done")}
         </Badge>
       );
     case "error":
       return (
         <Badge variant="destructive" className="gap-1">
-          <XCircle className="h-3 w-3" />
+          <XCircle className="h-4 w-4" />
           {t("common.error")}
         </Badge>
       );
@@ -45,7 +45,7 @@ function StepBadge({ step }: { step: TaskStep }) {
     default:
       return (
         <Badge variant="outline" className="gap-1">
-          <Circle className="h-3 w-3" />
+          <Circle className="h-4 w-4" />
           {t("common.pending")}
         </Badge>
       );
@@ -63,7 +63,7 @@ function TaskCard({ task }: { task: AgentTask }) {
   return (
     <div className="py-2 px-4">
       <button
-        className="flex w-full items-center gap-1.5 text-left text-sm font-medium text-foreground/90 hover:text-foreground transition-colors"
+        className="flex w-full items-center gap-1.5 text-left text-sm font-medium text-foreground/80 hover:text-foreground transition-colors"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
       >

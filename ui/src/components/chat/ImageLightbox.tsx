@@ -1,5 +1,6 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { useState, useCallback, useEffect } from "react";
 import { X, ZoomIn, ZoomOut, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -57,14 +58,16 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
 
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon"
         onClick={handleOpen}
-        className="cursor-zoom-in"
+        className="cursor-zoom-in h-auto w-auto p-0 hover:bg-transparent"
         aria-label={t("chat.lightbox_open")}
       >
         <img src={src} alt={alt} className={cn("max-w-[min(28rem,100%)] rounded-xl border border-border", className)} loading="lazy" />
-      </button>
+      </Button>
 
       {open && (
         <div
@@ -79,25 +82,29 @@ export function ImageLightbox({ src, alt = "", className }: ImageLightboxProps) 
             className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 flex items-center gap-2 z-10"
             onClick={(e) => e.stopPropagation()}
           >
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={handleZoomOut}
-              className="rounded-lg bg-white/10 p-2 text-white hover:bg-white/20 transition-colors"
+              className="rounded-lg bg-white/10 text-white hover:bg-white/20"
               aria-label={t("chat.lightbox_zoom_out")}
             >
               <ZoomOut className="h-4 w-4" />
-            </button>
+            </Button>
             <span className="text-white/60 text-xs font-mono min-w-[3ch] text-center">
               {Math.round(zoom * 100)}%
             </span>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={handleZoomIn}
-              className="rounded-lg bg-white/10 p-2 text-white hover:bg-white/20 transition-colors"
+              className="rounded-lg bg-white/10 text-white hover:bg-white/20"
               aria-label={t("chat.lightbox_zoom_in")}
             >
               <ZoomIn className="h-4 w-4" />
-            </button>
+            </Button>
             <a
               href={src}
               download

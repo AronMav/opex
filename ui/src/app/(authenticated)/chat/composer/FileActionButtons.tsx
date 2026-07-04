@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
 import { useLanguageStore } from "@/stores/language-store";
+import { Button } from "@/components/ui/button";
 import { queryClient } from "@/lib/query-client";
 import { qk } from "@/lib/queries";
 import type { FileActionButton, FileActionsResponse } from "@/types/api";
@@ -100,16 +101,17 @@ export function FileActionButtons({ uploadId, mime, agent, sessionId }: FileActi
   return (
     <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2">
       {buttons.map((btn) => (
-        <button
+        <Button
           key={btn.id}
           type="button"
+          variant="outline"
+          size="xs"
           disabled={running !== null}
           onClick={() => run(btn)}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-1 text-xs font-medium text-foreground/80 hover:bg-muted/60 hover:text-foreground transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {running === btn.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <IconFor name={btn.icon} />}
           {btn.label}
-        </button>
+        </Button>
       ))}
     </div>
   );
