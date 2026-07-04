@@ -182,7 +182,7 @@ export function createStreamingRenderer(store: StoreAccess) {
       lastEventHeader["Last-Event-ID"] = String(prevId);
     }
 
-    fetch(`/api/chat/${sessionId}/stream`, {
+    fetch(`/api/chat/${sessionId}/stream?agent=${encodeURIComponent(agent)}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}`, ...lastEventHeader },
       signal: session.signal,
@@ -317,7 +317,7 @@ export function createStreamingRenderer(store: StoreAccess) {
   function abortActiveStream(agent: string) {
     const sid = store.get().agents[agent]?.activeSessionId;
     if (sid) {
-      apiPost(`/api/chat/${sid}/abort`).catch(() => {
+      apiPost(`/api/chat/${sid}/abort?agent=${encodeURIComponent(agent)}`).catch(() => {
         // Backend may not have an active stream (already done / not started).
         // Local abort below still cleans up UI state.
       });
