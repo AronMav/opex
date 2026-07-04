@@ -93,9 +93,11 @@ pub async fn bootstrap<S: EventSink>(
 ) -> anyhow::Result<BootstrapOutcome> {
     // Compute context_limit once for Compressor construction (used on all paths below).
     // For Ollama providers this queries /api/show and caches the result in-process.
+    // Resolve by the EFFECTIVE model (current_model), not the static config
+    // model, so a runtime model override (m073) resolves the override's window.
     let context_limit = crate::agent::pipeline::llm_call::resolve_context_limit(
         engine.cfg().provider.as_ref(),
-        &engine.cfg().agent.model,
+        &engine.current_model(),
     ).await;
 
     let effective_resume_id: Option<uuid::Uuid> = ctx.resume_session_id;

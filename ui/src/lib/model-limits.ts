@@ -25,10 +25,11 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "gemini-2.5-flash": 1_048_576,
   "gemini-2.5-pro": 1_048_576,
   // Zhipu GLM — real values from Ollama /api/show
+  "glm-5.2": 1_000_000,
   "glm-5.1": 202_752,
   "glm-5": 202_752,
   "glm-4": 128_000,
-  // Moonshot Kimi — real values from Ollama /api/show
+  // Moonshot Kimi — real values from Ollama /api/show (matches kimi-k2.6)
   "kimi-k2": 262_144,
   "kimi-k1.5": 131_072,
   // DeepSeek — real values from Ollama /api/show (cloud tier)
@@ -37,7 +38,8 @@ export const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   "deepseek-v3": 128_000,
   "deepseek-chat": 128_000,
   "deepseek-r1": 128_000,
-  // MiniMax — real values from Ollama /api/show
+  // MiniMax — real values from Ollama /api/show (m3 matches minimax-m3:cloud)
+  "minimax-m3": 524_288,
   "minimax-m2": 196_608,
   // Ollama local (common)
   "qwen2.5": 32_768,

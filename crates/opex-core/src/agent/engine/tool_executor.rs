@@ -135,7 +135,9 @@ impl AgentEngine {
             context,
             session_id,
             channel,
-            &self.cfg().agent.model,
+            // Effective model (override-aware) so truncate_tool_result's window
+            // lookup matches the value resolved at bootstrap.
+            &self.current_model(),
             current_context_chars,
             detector,
             detect_loops,

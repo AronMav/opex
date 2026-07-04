@@ -81,7 +81,9 @@ pub fn truncate_preview(s: &str, max: usize) -> String {
 // reviewed: all slice bounds via floor_char_boundary — char boundaries
 #[allow(clippy::string_slice)]
 pub fn truncate_tool_result(model: &str, result: &str, current_context_chars: usize) -> String {
-    let model_max_chars = super::llm_call::default_context_for_model(model) * 4;
+    // Provider-resolved window (via the /api/show cache) — NOT the stale name
+    // heuristic — so a 262k/1M model isn't truncated as if it were 128k.
+    let model_max_chars = super::llm_call::context_limit_tokens(model) as usize * 4;
     let remaining = model_max_chars.saturating_sub(current_context_chars);
     let limit = (remaining * 50 / 100).max(2000);
     if result.len() <= limit {
@@ -116,7 +118,7 @@ pub fn compact_tool_results(
     messages: &mut [Message],
     context_chars: &mut usize,
 ) {
-    let context_window = super::llm_call::default_context_for_model(model) * 4;
+    let context_window = super::llm_call::context_limit_tokens(model) as usize * 4;
     let threshold = context_window * 70 / 100;
     if *context_chars <= threshold {
         return;
@@ -163,7 +165,7 @@ pub fn compaction_params(
     let max_tokens = compaction_config
         .and_then(|c| c.max_context_tokens)
         .map(|t| t as usize)
-        .unwrap_or_else(|| super::llm_call::default_context_for_model(model));
+        .unwrap_or_else(|| super::llm_call::context_limit_tokens(model) as usize);
     let preserve_last_n = compaction_config
         .map(|c| c.preserve_last_n as usize)
         .unwrap_or(10);
