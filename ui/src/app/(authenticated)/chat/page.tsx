@@ -702,7 +702,7 @@ export default function ChatPage() {
                         <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-0.5 rounded-full bg-primary" />
                       )}
                     </button>
-                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-0.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity duration-150">
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col items-center gap-0.5 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity duration-150">
                         <Button
                           variant="ghost"
                           size="icon-sm"

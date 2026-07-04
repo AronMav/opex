@@ -892,11 +892,6 @@ export function ChatComposer() {
                   )}
                 </div>
               )}
-              {agents.length > 1 && (
-                <span className="font-mono text-3xs font-semibold uppercase tracking-wider text-muted-foreground/50 bg-muted/30 px-2 py-0.5 rounded">
-                  {currentAgent}
-                </span>
-              )}
               <ModelDropdown agent={currentAgent} />
             </div>
             <div className="relative flex items-center gap-2">
