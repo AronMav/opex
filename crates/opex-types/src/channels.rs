@@ -69,6 +69,15 @@ pub struct IncomingMessageDto {
 }
 
 impl IncomingMessageDto {
+    /// Per-chat/group/thread disambiguator from the adapter's opaque
+    /// `context` — see [`crate::context_chat_scope`]. Used by the channel WS
+    /// dispatcher to compute `SessionKey` BEFORE `into_incoming` consumes
+    /// `self` (T03 triage Point 5).
+    #[must_use]
+    pub fn chat_scope(&self) -> Option<String> {
+        crate::context_chat_scope(&self.context)
+    }
+
     /// Convert to the internal `IncomingMessage` used by the engine.
     #[must_use]
     pub fn into_incoming(self, agent_id: String, channel: String, formatting_prompt: Option<String>) -> IncomingMessage {

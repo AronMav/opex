@@ -44,7 +44,10 @@ pub(super) async fn dispatch_message(
         .unwrap_or("per-channel-peer")
         .to_string();
 
-    let session_key = SessionKey::from_inbound(&agent_name, &msg.user_id, &channel_type, &dm_scope);
+    let chat_scope = msg.chat_scope();
+    let session_key = SessionKey::from_inbound(
+        &agent_name, &msg.user_id, &channel_type, &dm_scope, chat_scope.as_deref(),
+    );
     let req_id_for_task = request_id.clone();
     let agent_name_for_task = agent_name.clone();
     let inflight_for_cleanup = inflight.clone();

@@ -56,6 +56,7 @@ pub(crate) trait ContextBuilderDeps: Send + Sync {
         user_id: &str,
         channel: &str,
         dm_scope: &str,
+        chat_scope: Option<&str>,
     ) -> Result<(Uuid, opex_db::ReentryMode)>;
     /// Read-only `run_status` lookup. Used by `DefaultContextBuilder::build`
     /// when classifying `resume_session_id` paths so a UI-explicit reopen
@@ -224,7 +225,8 @@ impl ContextBuilder for DefaultContextBuilder {
             (id, opex_db::ReentryMode::NewSession)
         } else {
             let dm_scope = deps.agent_dm_scope().to_string();
-            deps.session_get_or_create(&msg.user_id, &msg.channel, &dm_scope).await?
+            let chat_scope = msg.chat_scope();
+            deps.session_get_or_create(&msg.user_id, &msg.channel, &dm_scope, chat_scope.as_deref()).await?
         };
 
         // 2. Load conversation history (branch-aware when leaf_message_id is set)

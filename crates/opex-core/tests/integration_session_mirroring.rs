@@ -48,7 +48,7 @@ async fn mirror_inserts_when_dm_session_exists(pool: PgPool) {
     let agent = format!("mirror-test-{}", Uuid::new_v4());
     let session_id = insert_dm_session(&pool, &agent, "12345", "telegram").await;
 
-    let result = mirror_to_session(&pool, &agent, "telegram", "12345", "hello from cron").await;
+    let result = mirror_to_session(&pool, &agent, "telegram", "12345", None, "hello from cron").await;
     assert!(result.unwrap(), "should return true when DM session exists");
 
     let (role, content, is_mirror): (String, String, bool) = sqlx::query_as(
@@ -71,7 +71,7 @@ async fn mirror_inserts_when_dm_session_exists(pool: PgPool) {
 #[sqlx::test(migrations = "../../migrations")]
 async fn mirror_returns_false_when_no_matching_session(pool: PgPool) {
     let result =
-        mirror_to_session(&pool, "nonexistent-agent", "telegram", "99999", "nobody home").await;
+        mirror_to_session(&pool, "nonexistent-agent", "telegram", "99999", None, "nobody home").await;
     assert!(!result.unwrap(), "should return false when no matching session exists");
 
     let count: i64 = sqlx::query_scalar(
@@ -91,7 +91,7 @@ async fn mirror_skips_per_chat_group_sessions(pool: PgPool) {
     let agent = format!("mirror-group-{}", Uuid::new_v4());
     insert_dm_session(&pool, &agent, "*", "telegram").await;
 
-    let result = mirror_to_session(&pool, &agent, "telegram", "*", "group text").await;
+    let result = mirror_to_session(&pool, &agent, "telegram", "*", None, "group text").await;
     assert!(!result.unwrap(), "per-chat group sessions should be skipped");
 }
 
@@ -104,7 +104,7 @@ async fn trigger_does_not_bump_last_message_at_for_mirror(pool: PgPool) {
 
     let before = last_message_at(&pool, session_id).await;
 
-    let mirrored = mirror_to_session(&pool, &agent, "telegram", "55555", "cron delivery")
+    let mirrored = mirror_to_session(&pool, &agent, "telegram", "55555", None, "cron delivery")
         .await
         .expect("mirror_to_session");
     assert!(mirrored, "mirror_to_session must return true when session exists");
@@ -146,7 +146,7 @@ async fn mirror_uses_most_recent_session(pool: PgPool) {
     .await
     .expect("insert newer session");
 
-    let result = mirror_to_session(&pool, &agent, "telegram", "77777", "latest session check").await;
+    let result = mirror_to_session(&pool, &agent, "telegram", "77777", None, "latest session check").await;
     assert!(result.unwrap(), "should return true");
 
     // The mirror row must be in the newer session.
@@ -175,7 +175,7 @@ async fn mirror_is_mirror_field_in_messages(pool: PgPool) {
     let agent = format!("mirror-field-{}", Uuid::new_v4());
     let session_id = insert_dm_session(&pool, &agent, "33333", "telegram").await;
 
-    mirror_to_session(&pool, &agent, "telegram", "33333", "field check")
+    mirror_to_session(&pool, &agent, "telegram", "33333", None, "field check")
         .await
         .expect("mirror_to_session");
 

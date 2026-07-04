@@ -34,17 +34,23 @@ impl SessionManager {
         &self.db
     }
 
-    /// Find or create a session for the given agent+user+channel.
+    /// Find or create a session for the given agent+user+channel(+chat_scope).
     /// Returns `(session_id, reentry_mode)` so bootstrap can decide whether
     /// to warm the LoopDetector from the timeline.
+    ///
+    /// `chat_scope` (T03 triage Point 5): per-chat/group disambiguator
+    /// extracted from the incoming message's adapter context (e.g. Telegram
+    /// `chat_id`). Without it, all chats/groups on the same platform for the
+    /// same user_id collapse into one session — a cross-chat context leak.
     pub async fn get_or_create(
         &self,
         agent_id: &str,
         user_id: &str,
         channel: &str,
         dm_scope: &str,
+        chat_scope: Option<&str>,
     ) -> Result<(Uuid, opex_db::ReentryMode)> {
-        crate::db::sessions::get_or_create_session(&self.db, agent_id, user_id, channel, dm_scope)
+        crate::db::sessions::get_or_create_session(&self.db, agent_id, user_id, channel, dm_scope, chat_scope)
             .await
     }
 

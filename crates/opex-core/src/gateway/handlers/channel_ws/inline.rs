@@ -403,12 +403,14 @@ pub(super) async fn handle_clarify_text(
         .unwrap_or("per-channel-peer")
         .to_string();
 
+    let chat_scope = msg.chat_scope();
     let session_id = match opex_db::sessions::resolve_active_dm_session(
         &ctx.infra.db,
         agent_name,
         &msg.user_id,
         channel_type,
         &dm_scope,
+        chat_scope.as_deref(),
     )
     .await
     {

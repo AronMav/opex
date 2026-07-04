@@ -99,6 +99,7 @@ mod tests {
             agent_name: "Arty".to_string(),
             eff_user: user.to_string(),
             eff_channel: "telegram".to_string(),
+            eff_chat_scope: None,
         }
     }
 
