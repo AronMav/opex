@@ -115,6 +115,72 @@ pub struct IncomingMessage {
     pub user_message_id: Option<uuid::Uuid>,
 }
 
+/// Render a JSON scalar (string or number) as a `String` for use as a scope
+/// key. Returns `None` for null/bool/array/object — those are not valid
+/// chat-scope shapes from any known adapter.
+fn json_scalar_to_string(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// Extract the per-chat/group/thread disambiguator from an adapter's opaque
+/// `context`, so channel-session lookups can be scoped per chat instead of
+/// just per platform (T03 triage Point 5: a Telegram user_id writing in
+/// group A and group B previously collapsed into ONE session, leaking group
+/// A's history into group B).
+///
+/// Shared by [`IncomingMessage::chat_scope`] and
+/// [`channels::IncomingMessageDto::chat_scope`] so the dispatcher's
+/// `SessionKey` (computed from the DTO, before `into_incoming`) and the
+/// engine's session lookup (computed from `IncomingMessage`, after) always
+/// agree on the same scope for the same wire message.
+///
+/// Tries known field names in priority order — first match wins:
+/// - `chat_id` (Telegram; JSON number) — the most common case.
+/// - `guild_id` combined with `channel_id` (Discord) as
+///   `"{guild_id}:{channel_id}"` when both are present, else whichever is
+///   present alone (DM channels have no `guild_id`).
+/// - `room_id` (Matrix).
+/// - `channel` (Slack channel id — distinct from the top-level platform
+///   `channel` field, which is `"slack"`).
+///
+/// Returns `None` when the context carries none of these (e.g. WhatsApp/
+/// email, where `user_id` already uniquely identifies the peer, or web/UI/
+/// cron callers whose `context` is `Value::Null`). Callers MUST treat `None`
+/// as a valid, non-error degrade — never panic or bail.
+#[must_use]
+pub fn context_chat_scope(ctx: &serde_json::Value) -> Option<String> {
+    if let Some(v) = ctx.get("chat_id") {
+        return json_scalar_to_string(v);
+    }
+    let guild = ctx.get("guild_id").and_then(json_scalar_to_string);
+    let chan = ctx.get("channel_id").and_then(json_scalar_to_string);
+    match (guild, chan) {
+        (Some(g), Some(c)) => return Some(format!("{g}:{c}")),
+        (Some(g), None) => return Some(g),
+        (None, Some(c)) => return Some(c),
+        (None, None) => {}
+    }
+    if let Some(v) = ctx.get("room_id") {
+        return json_scalar_to_string(v);
+    }
+    if let Some(v) = ctx.get("channel") {
+        return json_scalar_to_string(v);
+    }
+    None
+}
+
+impl IncomingMessage {
+    /// See [`context_chat_scope`].
+    #[must_use]
+    pub fn chat_scope(&self) -> Option<String> {
+        context_chat_scope(&self.context)
+    }
+}
+
 // ── Tool definitions for LLM ──
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1214,5 +1280,101 @@ mod tests {
     fn llm_response_thinking_blocks_default_empty() {
         let r: LlmResponse = serde_json::from_str(r#"{"content":"hi","tool_calls":[]}"#).unwrap();
         assert!(r.thinking_blocks.is_empty());
+    }
+
+    // ── chat_scope extraction (T03 triage Point 5) ──
+
+    fn incoming_with_context(ctx: serde_json::Value) -> IncomingMessage {
+        IncomingMessage {
+            user_id: "u1".to_string(),
+            context: ctx,
+            text: Some("hi".to_string()),
+            attachments: vec![],
+            agent_id: "agent".to_string(),
+            channel: "telegram".to_string(),
+            timestamp: Utc::now(),
+            formatting_prompt: None,
+            tool_policy_override: None,
+            leaf_message_id: None,
+            user_message_id: None,
+        }
+    }
+
+    #[test]
+    fn chat_scope_extracts_telegram_chat_id_as_string() {
+        let msg = incoming_with_context(json!({"chat_id": 12345, "message_id": 7}));
+        assert_eq!(msg.chat_scope(), Some("12345".to_string()));
+    }
+
+    #[test]
+    fn chat_scope_different_chat_ids_are_different_scopes() {
+        let a = incoming_with_context(json!({"chat_id": 100}));
+        let b = incoming_with_context(json!({"chat_id": 200}));
+        assert_ne!(a.chat_scope(), b.chat_scope(), "different chat_id must yield different chat_scope");
+    }
+
+    #[test]
+    fn chat_scope_discord_combines_guild_and_channel() {
+        let msg = incoming_with_context(json!({"guild_id": "g1", "channel_id": "c1", "thread_id": "t1"}));
+        assert_eq!(msg.chat_scope(), Some("g1:c1".to_string()));
+    }
+
+    #[test]
+    fn chat_scope_discord_dm_has_no_guild() {
+        // Discord DM channels have no guild_id.
+        let msg = incoming_with_context(json!({"channel_id": "c1"}));
+        assert_eq!(msg.chat_scope(), Some("c1".to_string()));
+    }
+
+    #[test]
+    fn chat_scope_matrix_room_id() {
+        let msg = incoming_with_context(json!({"room_id": "!abc:matrix.org", "event_id": "$xyz"}));
+        assert_eq!(msg.chat_scope(), Some("!abc:matrix.org".to_string()));
+    }
+
+    #[test]
+    fn chat_scope_slack_channel_field() {
+        let msg = incoming_with_context(json!({"channel": "C123", "ts": "1.1"}));
+        assert_eq!(msg.chat_scope(), Some("C123".to_string()));
+    }
+
+    #[test]
+    fn chat_scope_none_for_null_context() {
+        // Web/UI/cron callers: context is Value::Null.
+        let msg = incoming_with_context(serde_json::Value::Null);
+        assert_eq!(msg.chat_scope(), None, "null context must degrade to None, never panic");
+    }
+
+    #[test]
+    fn chat_scope_none_when_no_known_fields_present() {
+        // WhatsApp/email: no chat concept, user_id already IS the peer.
+        let msg = incoming_with_context(json!({"phone_number_id": "p1", "wa_id": "w1"}));
+        assert_eq!(msg.chat_scope(), None);
+    }
+
+    #[test]
+    fn chat_scope_empty_object_is_none() {
+        let msg = incoming_with_context(json!({}));
+        assert_eq!(msg.chat_scope(), None);
+    }
+
+    #[test]
+    fn incoming_message_dto_chat_scope_matches_incoming_message() {
+        // The dispatcher computes SessionKey from the DTO (before
+        // into_incoming); the engine computes it from IncomingMessage
+        // (after). They MUST agree for the same wire payload.
+        let ctx = json!({"chat_id": 555});
+        let dto = channels::IncomingMessageDto {
+            user_id: "u1".to_string(),
+            display_name: None,
+            text: Some("hi".to_string()),
+            attachments: vec![],
+            context: ctx.clone(),
+            timestamp: Utc::now(),
+        };
+        let dto_scope = dto.chat_scope();
+        let incoming = dto.into_incoming("agent".to_string(), "telegram".to_string(), None);
+        assert_eq!(dto_scope, incoming.chat_scope());
+        assert_eq!(dto_scope, Some("555".to_string()));
     }
 }

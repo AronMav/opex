@@ -1260,7 +1260,8 @@ impl Scheduler {
                                             let mirror_txt = announce_text.clone();
                                             tokio::spawn(async move {
                                                 if let Err(e) = crate::db::sessions::mirror_to_session(
-                                                    &mirror_db, &mirror_aid, &mirror_ch, &mirror_cid, &mirror_txt,
+                                                    &mirror_db, &mirror_aid, &mirror_ch, &mirror_cid,
+                                                    Some(mirror_cid.as_str()), &mirror_txt,
                                                 ).await {
                                                     tracing::debug!(
                                                         error = %e,
@@ -1512,7 +1513,8 @@ async fn run_heartbeat(
                     let mirror_txt = text.clone();
                     tokio::spawn(async move {
                         if let Err(e) = crate::db::sessions::mirror_to_session(
-                            &mirror_db, &mirror_aid, &mirror_ch, &mirror_cid, &mirror_txt,
+                            &mirror_db, &mirror_aid, &mirror_ch, &mirror_cid,
+                            Some(mirror_cid.as_str()), &mirror_txt,
                         ).await {
                             tracing::debug!(
                                 error = %e,

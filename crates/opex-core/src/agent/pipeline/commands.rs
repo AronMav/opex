@@ -143,12 +143,17 @@ where
     let command = raw_command.split('@').next().unwrap_or(raw_command);
     tracing::debug!(command = %command, raw = %raw_command, "slash command received");
 
+    // T03 triage Point 5: scope session lookups by chat, not just by
+    // platform, so /status, /new, /reset, etc. act on the session for THIS
+    // chat/group, not whichever chat the same user_id last touched.
+    let chat_scope = msg.chat_scope();
+
     let s = localization::get_strings(ctx.agent_language);
 
     match command {
         "/status" => {
             let session_info = match sessions::find_active_session(
-                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             ).await {
                 Ok(Some(sid)) => {
                     let count = sessions::count_messages(ctx.db, sid).await.unwrap_or(0);
@@ -167,7 +172,7 @@ where
         }
         "/new" => {
             match sessions::find_active_session(
-                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             ).await {
                 Ok(Some(sid)) => {
                     if let Err(e) = sessions::delete_session(ctx.db, sid).await {
@@ -182,7 +187,7 @@ where
         "/reset" => {
             // Delete session
             if let Ok(Some(sid)) = sessions::find_active_session(
-                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             ).await {
                 let _ = sessions::delete_session(ctx.db, sid).await;
             }
@@ -194,7 +199,7 @@ where
         }
         "/compact" => {
             let sid = match sessions::find_active_session(
-                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             ).await {
                 Ok(Some(sid)) => sid,
                 _ => return Some(Ok(s.compact_no_session.to_string())),
@@ -427,7 +432,7 @@ where
         }
         "/usage" => {
             let session_id = match sessions::find_active_session(
-                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             ).await {
                 Ok(Some(sid)) => Some(sid),
                 _ => None,
@@ -473,7 +478,7 @@ where
         }
         "/export" => {
             let sid = match sessions::find_active_session(
-                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             ).await {
                 Ok(Some(sid)) => sid,
                 _ => return Some(Ok(s.export_no_session.to_string())),
@@ -535,7 +540,7 @@ where
         "/goal" => {
             use crate::agent::goal::{parse_goal_command, GoalCmd};
             let session_id = match sessions::find_active_session(
-                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             )
             .await
             {
@@ -598,7 +603,7 @@ where
         "/subgoal" => {
             use crate::agent::goal::{parse_subgoal_command, SubgoalCmd};
             let session_id = match sessions::find_active_session(
-                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope,
+                ctx.db, ctx.agent_name, &msg.user_id, &msg.channel, ctx.dm_scope, chat_scope.as_deref(),
             )
             .await
             {

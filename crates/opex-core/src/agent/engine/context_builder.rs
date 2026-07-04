@@ -225,9 +225,10 @@ impl crate::agent::context_builder::ContextBuilderDeps for AgentEngine {
         user_id: &str,
         channel: &str,
         dm_scope: &str,
+        chat_scope: Option<&str>,
     ) -> Result<(Uuid, opex_db::ReentryMode)> {
         SessionManager::new(self.cfg().db.clone())
-            .get_or_create(&self.cfg().agent.name, user_id, channel, dm_scope)
+            .get_or_create(&self.cfg().agent.name, user_id, channel, dm_scope, chat_scope)
             .await
     }
 

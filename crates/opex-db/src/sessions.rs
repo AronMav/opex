@@ -39,6 +39,10 @@ pub struct Session {
     pub agent_id: String,
     pub user_id: String,
     pub channel: String,
+    /// Per-chat/group/thread disambiguator (see `dm_scope_keys` doc). `None`
+    /// for pre-migration rows and platforms with no chat concept.
+    #[sqlx(default)]
+    pub chat_scope: Option<String>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub last_message_at: chrono::DateTime<chrono::Utc>,
     pub title: Option<String>,
@@ -60,33 +64,57 @@ pub struct Session {
     pub end_reason: Option<String>,
 }
 
-/// Resolve `(user_id, channel)` lookup keys based on the agent's DM scope.
+/// Resolve `(user_id, channel, chat_scope)` lookup keys based on the agent's
+/// DM scope.
 ///
 /// Pure function — used by `get_or_create_session`, `resolve_active_dm_session`,
 /// and the channel WS dispatcher (`SessionKey`) so all three derive the same
 /// logical session identifier.
 ///
-/// - `"per-channel-peer"` (default): `(user_id, channel)` — distinct sessions
-///   per chat platform for the same user.
-/// - `"shared"` / `"per-peer"`: `(user_id, "*")` — single cross-channel DM.
-/// - `"per-chat"`: `("*", channel)` — group-chat sessions keyed only on
-///   channel.
+/// `chat_scope` is the per-chat/group/thread disambiguator threaded from the
+/// incoming message's adapter context (e.g. Telegram `chat_id`, Discord
+/// `"guild_id:channel_id"`, Slack channel id, Matrix `room_id`). It is
+/// returned as-is (never collapsed to a sentinel) — `None` means "no chat
+/// concept on this platform, or the caller couldn't supply one", and
+/// degrades to a plain `(agent_id, user_id, channel)` match (the pre-fix
+/// behaviour), never a panic.
+///
+/// IMPORTANT: unlike `user_id`/`channel`, `chat_scope` is NOT stored in a
+/// dedicated eq-match sentinel like `"*"` — `dm_scope` variants that want to
+/// ignore chat entirely return `None` for it, and the SQL layer treats a
+/// `None` bind as "match rows with NULL chat_scope" (see
+/// `resolve_active_dm_session` / `get_or_create_session`), which is exactly
+/// the pre-migration data shape (existing rows have `chat_scope IS NULL`).
+///
+/// - `"per-channel-peer"` (default): `(user_id, channel, chat_scope)` —
+///   distinct sessions per chat platform AND per chat/group for the same
+///   user (T03 triage Point 5: previously collapsed ALL chats/groups on one
+///   platform into a single session).
+/// - `"shared"` / `"per-peer"`: `(user_id, "*", None)` — single
+///   cross-channel DM; deliberately ignores both channel and chat_scope
+///   (this mode explicitly wants ONE session regardless of platform/chat).
+/// - `"per-chat"`: `("*", channel, chat_scope)` — group-chat sessions keyed
+///   on the actual chat, not on the bare channel label (T03 triage Point 5:
+///   previously used `channel` alone, so ALL users of ALL chats on a
+///   platform collapsed into one session — "per-chat" isolation was
+///   completely broken).
 /// - Any other value falls back to `per-channel-peer` (matches the legacy
 ///   wildcard arm in `get_or_create_session`).
 pub fn dm_scope_keys<'a>(
     user_id: &'a str,
     channel: &'a str,
     dm_scope: &str,
-) -> (&'a str, &'a str) {
+    chat_scope: Option<&'a str>,
+) -> (&'a str, &'a str, Option<&'a str>) {
     match dm_scope {
-        "shared" | "per-peer" => (user_id, "*"),
-        "per-chat" => ("*", channel),
-        _ => (user_id, channel),
+        "shared" | "per-peer" => (user_id, "*", None),
+        "per-chat" => ("*", channel, chat_scope),
+        _ => (user_id, channel, chat_scope),
     }
 }
 
-/// Look up the most recent active DM session for `(agent, user, channel)`
-/// after applying `dm_scope`, or `None` if none qualifies.
+/// Look up the most recent active DM session for `(agent, user, channel,
+/// chat_scope)` after applying `dm_scope`, or `None` if none qualifies.
 ///
 /// "Active" means `last_message_at > now() - 4h`, regardless of `run_status`
 /// (R-CONTINUITY fix). Soft-terminal sessions (`'failed'`, `'interrupted'`,
@@ -106,17 +134,24 @@ pub async fn resolve_active_dm_session(
     user_id: &str,
     channel: &str,
     dm_scope: &str,
+    chat_scope: Option<&str>,
 ) -> Result<Option<(Uuid, Option<SessionStatus>)>> {
-    let (eff_user, eff_channel) = dm_scope_keys(user_id, channel, dm_scope);
+    let (eff_user, eff_channel, eff_chat_scope) = dm_scope_keys(user_id, channel, dm_scope, chat_scope);
+    // `chat_scope IS NOT DISTINCT FROM $4`: NULL-safe equality so a `None`
+    // bind matches rows with `chat_scope IS NULL` (the pre-migration shape
+    // and the graceful "platform has no chat concept" degrade), while a
+    // `Some(x)` bind matches only rows with that exact chat_scope.
     let row: Option<(Uuid, Option<String>)> = sqlx::query_as(
         "SELECT id, run_status FROM sessions \
          WHERE agent_id = $1 AND user_id = $2 AND channel = $3 \
+           AND chat_scope IS NOT DISTINCT FROM $4 \
            AND last_message_at > now() - interval '4 hours' \
          ORDER BY last_message_at DESC LIMIT 1",
     )
     .bind(agent_id)
     .bind(eff_user)
     .bind(eff_channel)
+    .bind(eff_chat_scope)
     .fetch_optional(db)
     .await?;
 
@@ -137,50 +172,66 @@ pub async fn resolve_active_dm_session(
 /// created instead. Rationale: previous run failed; the next user message
 /// should not silently inherit a polluted context.
 ///
-/// `dm_scope` controls session isolation (see `dm_scope_keys`).
+/// `dm_scope` controls session isolation (see `dm_scope_keys`). `chat_scope`
+/// is the per-chat/group disambiguator (see `dm_scope_keys` doc) — `None`
+/// degrades to the pre-fix `(agent_id, user_id, channel)` match.
 pub async fn get_or_create_session(
     db: &PgPool,
     agent_id: &str,
     user_id: &str,
     channel: &str,
     dm_scope: &str,
+    chat_scope: Option<&str>,
 ) -> Result<(Uuid, crate::ReentryMode)> {
-    let (eff_user, eff_channel) = dm_scope_keys(user_id, channel, dm_scope);
+    let (eff_user, eff_channel, eff_chat_scope) = dm_scope_keys(user_id, channel, dm_scope, chat_scope);
 
-    // Advisory lock keyed on (agent_id, user_id, channel) hash prevents concurrent
-    // transactions from both inserting when no session exists. The CTE alone is NOT
-    // sufficient — PostgreSQL snapshot isolation lets two concurrent CTEs both see
-    // `existing` as empty and both INSERT. The advisory lock serializes access.
+    // Advisory lock keyed on (agent_id, user_id, channel, chat_scope) hash
+    // prevents concurrent transactions from both inserting when no session
+    // exists. The CTE alone is NOT sufficient — PostgreSQL snapshot isolation
+    // lets two concurrent CTEs both see `existing` as empty and both INSERT.
+    // The advisory lock serializes access. `chat_scope` defaults to the empty
+    // string in the hash input (hashtext requires non-NULL text) — this only
+    // affects lock-key collision odds, not correctness, since the CTE's own
+    // NULL-safe WHERE is the actual correctness guard.
     let mut tx = db.begin().await?;
 
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1 || $2 || $3))")
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1 || $2 || $3 || $4))")
         .bind(agent_id)
         .bind(eff_user)
         .bind(eff_channel)
+        .bind(eff_chat_scope.unwrap_or(""))
         .execute(&mut *tx)
         .await?;
 
     // Same filter as resolve_active_dm_session: reuse the most-recent session
-    // for this (agent,user,channel) within the 4h window REGARDLESS of
-    // soft-terminal status (R-CONTINUITY fix). Previously failed/interrupted/
-    // timeout/cancelled rows were excluded, so any non-clean turn-end silently
-    // forked a fresh, context-less session on the user's next message — the
-    // dominant cause of "the agent forgot the conversation", especially on
-    // channels (Telegram/Discord) which never supply a resume_session_id.
-    // Re-entry repairs orphan tool calls + streaming rows (bootstrap calls
-    // cleanup_session_streaming_messages + insert_synthetic_tool_results), so
-    // reusing a soft-terminal row no longer "poisons" the next turn. Explicit
-    // "New Chat" still uses create_new_session for a guaranteed-fresh row.
-    // The `was_new` boolean disambiguates existing-vs-new for ReentryMode.
+    // for this (agent,user,channel,chat_scope) within the 4h window
+    // REGARDLESS of soft-terminal status (R-CONTINUITY fix). Previously
+    // failed/interrupted/timeout/cancelled rows were excluded, so any
+    // non-clean turn-end silently forked a fresh, context-less session on the
+    // user's next message — the dominant cause of "the agent forgot the
+    // conversation", especially on channels (Telegram/Discord) which never
+    // supply a resume_session_id. Re-entry repairs orphan tool calls +
+    // streaming rows (bootstrap calls cleanup_session_streaming_messages +
+    // insert_synthetic_tool_results), so reusing a soft-terminal row no
+    // longer "poisons" the next turn. Explicit "New Chat" still uses
+    // create_new_session for a guaranteed-fresh row. The `was_new` boolean
+    // disambiguates existing-vs-new for ReentryMode.
+    //
+    // `chat_scope IS NOT DISTINCT FROM $4` (NULL-safe eq): a `None` bind
+    // matches only NULL rows (pre-migration shape / no-chat-concept
+    // platforms); `Some(x)` matches only that exact chat_scope. The INSERT
+    // stamps `chat_scope` from the same bind so a freshly created row is
+    // immediately findable by the same predicate on the next call.
     let row: (Uuid, Option<String>, bool) = sqlx::query_as(
         "WITH existing AS ( \
            SELECT id, run_status FROM sessions \
            WHERE agent_id = $1 AND user_id = $2 AND channel = $3 \
+             AND chat_scope IS NOT DISTINCT FROM $4 \
              AND last_message_at > now() - interval '4 hours' \
            ORDER BY last_message_at DESC LIMIT 1 \
          ), inserted AS ( \
-           INSERT INTO sessions (agent_id, user_id, channel, participants) \
-           SELECT $1, $2, $3, ARRAY[$1::text] \
+           INSERT INTO sessions (agent_id, user_id, channel, chat_scope, participants) \
+           SELECT $1, $2, $3, $4, ARRAY[$1::text] \
            WHERE NOT EXISTS (SELECT 1 FROM existing) \
            RETURNING id \
          ) \
@@ -192,6 +243,7 @@ pub async fn get_or_create_session(
     .bind(agent_id)
     .bind(eff_user)
     .bind(eff_channel)
+    .bind(eff_chat_scope)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -1410,29 +1462,35 @@ pub async fn cleanup_excess_sessions_per_agent(
     Ok(result.rows_affected())
 }
 
-/// Find the active session for a user+agent+channel pair (last 4 hours).
+/// Find the active session for a user+agent+channel(+chat_scope) pair (last
+/// 4 hours). Used by the channel slash commands (`/status`, `/new`, `/reset`,
+/// `/compact`, ...) — see `agent::pipeline::commands`.
+///
+/// Delegates to `dm_scope_keys` so this stays consistent with
+/// `get_or_create_session` / `resolve_active_dm_session` (previously had its
+/// own inline copy of the scope-collapsing match, which had silently drifted
+/// out of sync with the chat_scope fix — T03 triage Point 5).
 pub async fn find_active_session(
     db: &PgPool,
     agent_id: &str,
     user_id: &str,
     channel: &str,
     dm_scope: &str,
+    chat_scope: Option<&str>,
 ) -> Result<Option<Uuid>> {
-    let (eff_user, eff_channel) = match dm_scope {
-        "shared" | "per-peer" => (user_id, "*"),
-        "per-chat" => ("*", channel),
-        _ => (user_id, channel),
-    };
+    let (eff_user, eff_channel, eff_chat_scope) = dm_scope_keys(user_id, channel, dm_scope, chat_scope);
 
     let row = sqlx::query(
         "SELECT id FROM sessions \
          WHERE agent_id = $1 AND user_id = $2 AND channel = $3 \
+           AND chat_scope IS NOT DISTINCT FROM $4 \
            AND last_message_at > now() - interval '4 hours' \
          ORDER BY last_message_at DESC LIMIT 1",
     )
     .bind(agent_id)
     .bind(eff_user)
     .bind(eff_channel)
+    .bind(eff_chat_scope)
     .fetch_optional(db)
     .await?;
 
@@ -1883,6 +1941,14 @@ pub async fn insert_assistant_partial(
 /// or `"per-chat"` scopes won't be reached by mirrors — known limitation
 /// inherited from the legacy implementation; tracked separately.
 ///
+/// `chat_scope`: the per-chat/group disambiguator for the target DM (see
+/// `dm_scope_keys` doc). Callers pushing to a specific chat (cron announce
+/// targets carry a `chat_id`) should pass it through so the mirror lands in
+/// the SAME session a live message in that chat would resolve to — matching
+/// `T03` triage Point 5's fix for the live-message path. `None` degrades to
+/// matching only chat-scope-less (pre-migration/NULL) rows, same as before
+/// this parameter existed.
+///
 /// Returns `Ok(true)` if a matching session was found and the record inserted.
 /// Returns `Ok(false)` if no active DM session exists. Never fails fatally —
 /// callers fire-and-forget via `tokio::spawn`.
@@ -1891,6 +1957,7 @@ pub async fn mirror_to_session(
     agent_id: &str,
     channel: &str,
     participant_id: &str,
+    chat_scope: Option<&str>,
     text: &str,
 ) -> anyhow::Result<bool> {
     // Per-chat group sessions use `user_id = "*"` as a sentinel; they are
@@ -1907,6 +1974,7 @@ pub async fn mirror_to_session(
         participant_id,
         channel,
         "per-channel-peer",
+        chat_scope,
     )
     .await?;
 
@@ -2140,7 +2208,7 @@ mod tests {
              VALUES ($1, $2, '999', 'telegram', ARRAY['999'])"
         ).bind(session_id).bind(&agent_id).execute(&pool).await.expect("insert session");
 
-        let found = super::mirror_to_session(&pool, &agent_id, "telegram", "999", "hello from cron")
+        let found = super::mirror_to_session(&pool, &agent_id, "telegram", "999", None, "hello from cron")
             .await.expect("mirror_to_session");
         assert!(found, "should return true when session exists");
 
@@ -2156,7 +2224,7 @@ mod tests {
     #[sqlx::test(migrations = "../../migrations")]
     async fn mirror_to_session_returns_false_when_no_session(pool: sqlx::PgPool) {
         let found = super::mirror_to_session(
-            &pool, "nonexistent-agent", "telegram", "000", "nobody home"
+            &pool, "nonexistent-agent", "telegram", "000", None, "nobody home"
         ).await.expect("mirror_to_session");
         assert!(!found, "should return false when no matching session");
     }
@@ -2165,10 +2233,10 @@ mod tests {
     async fn mirror_targets_same_session_as_get_or_create(pool: sqlx::PgPool) {
         // get_or_create creates a session for (agent, alice, telegram). A cron
         // mirror to the same key MUST land in that exact session.
-        let (sid, _) = super::get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let (sid, _) = super::get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await.unwrap();
 
-        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", "hello cron")
+        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", None, "hello cron")
             .await.unwrap();
         assert!(inserted);
 
@@ -2186,7 +2254,7 @@ mod tests {
         let sid = super::create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         super::set_session_run_status(&pool, sid, "failed").await.unwrap();
 
-        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", "hello cron")
+        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", None, "hello cron")
             .await.unwrap();
         assert!(inserted, "mirror must write into the reused (soft-terminal) session");
         let count: i64 = sqlx::query_scalar(
@@ -2203,7 +2271,7 @@ mod tests {
         sqlx::query("UPDATE sessions SET last_message_at = now() - interval '5 hours' WHERE id = $1")
             .bind(sid).execute(&pool).await.unwrap();
 
-        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", "hello cron")
+        let inserted = super::mirror_to_session(&pool, "agent", "telegram", "alice", None, "hello cron")
             .await.unwrap();
         assert!(!inserted, "mirror must not resurrect a stale session");
     }
@@ -2585,33 +2653,73 @@ mod resolve_active_dm_session_tests {
     #[test]
     fn dm_scope_keys_per_channel_peer() {
         assert_eq!(
-            dm_scope_keys("alice", "telegram", "per-channel-peer"),
-            ("alice", "telegram"),
+            dm_scope_keys("alice", "telegram", "per-channel-peer", None),
+            ("alice", "telegram", None),
         );
     }
 
     #[test]
-    fn dm_scope_keys_shared_strips_channel() {
-        assert_eq!(dm_scope_keys("alice", "telegram", "shared"), ("alice", "*"));
-        assert_eq!(dm_scope_keys("alice", "discord", "per-peer"), ("alice", "*"));
+    fn dm_scope_keys_per_channel_peer_threads_chat_scope() {
+        // T03 triage Point 5 regression: chat_scope must flow through
+        // unmodified for the default scope, so two different chats for the
+        // same user_id resolve to different lookup keys.
+        assert_eq!(
+            dm_scope_keys("alice", "telegram", "per-channel-peer", Some("100")),
+            ("alice", "telegram", Some("100")),
+        );
+        assert_eq!(
+            dm_scope_keys("alice", "telegram", "per-channel-peer", Some("200")),
+            ("alice", "telegram", Some("200")),
+        );
     }
 
     #[test]
-    fn dm_scope_keys_per_chat_strips_user() {
-        assert_eq!(dm_scope_keys("alice", "telegram", "per-chat"), ("*", "telegram"));
+    fn dm_scope_keys_shared_strips_channel_and_chat_scope() {
+        // "shared"/"per-peer" deliberately want ONE session regardless of
+        // platform or chat — chat_scope must be dropped to None even when
+        // the caller supplied one.
+        assert_eq!(dm_scope_keys("alice", "telegram", "shared", Some("100")), ("alice", "*", None));
+        assert_eq!(dm_scope_keys("alice", "discord", "per-peer", Some("200")), ("alice", "*", None));
+    }
+
+    #[test]
+    fn dm_scope_keys_per_chat_strips_user_and_uses_chat_scope() {
+        // T03 triage Point 5 fix: "per-chat" must resolve by chat_scope, not
+        // by the bare channel label (previously collapsed ALL chats on a
+        // platform into one session — isolation was completely broken).
+        assert_eq!(
+            dm_scope_keys("alice", "telegram", "per-chat", Some("100")),
+            ("*", "telegram", Some("100")),
+        );
+        // Two different chats under "per-chat" must carry different
+        // chat_scope so they resolve to different sessions.
+        let (u1, c1, s1) = dm_scope_keys("alice", "telegram", "per-chat", Some("100"));
+        let (u2, c2, s2) = dm_scope_keys("bob", "telegram", "per-chat", Some("200"));
+        assert_eq!((u1, c1), (u2, c2), "both collapse user to '*' and share channel");
+        assert_ne!(s1, s2, "different chat_scope must remain distinguishable under per-chat");
     }
 
     #[test]
     fn dm_scope_keys_unknown_falls_back_to_per_channel_peer() {
         assert_eq!(
-            dm_scope_keys("alice", "telegram", "garbage"),
-            ("alice", "telegram"),
+            dm_scope_keys("alice", "telegram", "garbage", Some("100")),
+            ("alice", "telegram", Some("100")),
         );
+    }
+
+    /// DM with no chat concept on the platform (chat_scope = None) must
+    /// degrade gracefully — never panic — and stay stable across calls.
+    #[test]
+    fn dm_scope_keys_no_chat_scope_degrades_gracefully() {
+        let a = dm_scope_keys("alice", "whatsapp", "per-channel-peer", None);
+        let b = dm_scope_keys("alice", "whatsapp", "per-channel-peer", None);
+        assert_eq!(a, b);
+        assert_eq!(a, ("alice", "whatsapp", None));
     }
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn resolve_returns_none_when_no_session(pool: sqlx::PgPool) {
-        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await
             .unwrap();
         assert!(got.is_none());
@@ -2622,7 +2730,7 @@ mod resolve_active_dm_session_tests {
         let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         set_session_run_status(&pool, sid, "done").await.unwrap();
 
-        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await
             .unwrap();
         assert_eq!(got, Some((sid, Some(SessionStatus::Done))));
@@ -2635,7 +2743,7 @@ mod resolve_active_dm_session_tests {
         let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         set_session_run_status(&pool, sid, "failed").await.unwrap();
 
-        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await
             .unwrap();
         assert_eq!(
@@ -2655,7 +2763,7 @@ mod resolve_active_dm_session_tests {
             let sid = create_new_session(&pool, "agent", &format!("u_{status}"), "telegram").await.unwrap();
             set_session_run_status(&pool, sid, status).await.unwrap();
 
-            let got = resolve_active_dm_session(&pool, "agent", &format!("u_{status}"), "telegram", "per-channel-peer")
+            let got = resolve_active_dm_session(&pool, "agent", &format!("u_{status}"), "telegram", "per-channel-peer", None)
                 .await
                 .unwrap();
             assert_eq!(got, Some((sid, Some(parsed))), "{status} session must be reused");
@@ -2667,10 +2775,30 @@ mod resolve_active_dm_session_tests {
         let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         set_session_run_status(&pool, sid, "running").await.unwrap();
 
-        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let got = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await
             .unwrap();
         assert_eq!(got, Some((sid, Some(SessionStatus::Running))));
+    }
+
+    /// T03 triage Point 5 regression: a session created for chat_scope="100"
+    /// must NOT be found when resolving with chat_scope="200" (different
+    /// chat) — this is the core cross-chat leak fix.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn resolve_does_not_cross_chat_scopes(pool: sqlx::PgPool) {
+        let (sid_a, _) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer", Some("100"))
+            .await
+            .unwrap();
+
+        let got_same = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer", Some("100"))
+            .await
+            .unwrap();
+        assert_eq!(got_same.map(|(id, _)| id), Some(sid_a), "same chat_scope must resolve to the same session");
+
+        let got_other = resolve_active_dm_session(&pool, "agent", "alice", "telegram", "per-channel-peer", Some("200"))
+            .await
+            .unwrap();
+        assert!(got_other.is_none(), "different chat_scope must NOT resolve to group A's session");
     }
 }
 
@@ -2681,7 +2809,7 @@ mod get_or_create_with_mode_tests {
 
     #[sqlx::test(migrations = "../../migrations")]
     async fn fresh_session_classified_as_new(pool: sqlx::PgPool) {
-        let (sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let (sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await
             .unwrap();
         assert_eq!(mode, ReentryMode::NewSession);
@@ -2696,7 +2824,7 @@ mod get_or_create_with_mode_tests {
         let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         set_session_run_status(&pool, sid, "done").await.unwrap();
 
-        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await
             .unwrap();
         assert_eq!(got_sid, sid);
@@ -2708,7 +2836,7 @@ mod get_or_create_with_mode_tests {
         let sid = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         set_session_run_status(&pool, sid, "running").await.unwrap();
 
-        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await
             .unwrap();
         assert_eq!(got_sid, sid);
@@ -2723,7 +2851,7 @@ mod get_or_create_with_mode_tests {
         let old = create_new_session(&pool, "agent", "alice", "telegram").await.unwrap();
         set_session_run_status(&pool, old, "failed").await.unwrap();
 
-        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer")
+        let (got_sid, mode) = get_or_create_session(&pool, "agent", "alice", "telegram", "per-channel-peer", None)
             .await
             .unwrap();
         assert_eq!(got_sid, old, "failed session must be reused for continuity");
@@ -2736,12 +2864,76 @@ mod get_or_create_with_mode_tests {
             let old = create_new_session(&pool, "agent", &format!("u_{status}"), "telegram").await.unwrap();
             set_session_run_status(&pool, old, status).await.unwrap();
 
-            let (got_sid, mode) = get_or_create_session(&pool, "agent", &format!("u_{status}"), "telegram", "per-channel-peer")
+            let (got_sid, mode) = get_or_create_session(&pool, "agent", &format!("u_{status}"), "telegram", "per-channel-peer", None)
                 .await
                 .unwrap();
             assert_eq!(got_sid, old, "{status} session must be reused for continuity");
             assert_eq!(mode, ReentryMode::ExplicitResume, "{status} → ExplicitResume");
         }
+    }
+
+    /// T03 triage Point 5 — the headline regression test: the SAME user_id
+    /// writing to two different chats (group A, group B) on the SAME
+    /// platform must get TWO DIFFERENT sessions, not one collapsed session
+    /// leaking group A's history into group B.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn different_chat_scope_same_user_yields_different_sessions(pool: sqlx::PgPool) {
+        let (sid_a, mode_a) = get_or_create_session(
+            &pool, "agent", "alice", "telegram", "per-channel-peer", Some("100"),
+        ).await.unwrap();
+        assert_eq!(mode_a, ReentryMode::NewSession);
+
+        let (sid_b, mode_b) = get_or_create_session(
+            &pool, "agent", "alice", "telegram", "per-channel-peer", Some("200"),
+        ).await.unwrap();
+        assert_eq!(mode_b, ReentryMode::NewSession, "group B must be a fresh session too");
+
+        assert_ne!(sid_a, sid_b, "different chat_scope MUST yield different sessions (T03 Point 5)");
+
+        // Calling again with chat_scope="100" must find the SAME session A,
+        // not fork a third one.
+        let (sid_a_again, mode_a_again) = get_or_create_session(
+            &pool, "agent", "alice", "telegram", "per-channel-peer", Some("100"),
+        ).await.unwrap();
+        assert_eq!(sid_a_again, sid_a, "re-entering chat_scope=100 must reuse session A");
+        assert_ne!(mode_a_again, ReentryMode::NewSession, "must NOT fork a third session for the same chat_scope");
+    }
+
+    /// `dm_scope = "per-chat"` (T03 triage Point 5 fix): two different users
+    /// writing in the SAME chat (chat_scope) must land in the SAME
+    /// group-chat session, and the same user in TWO DIFFERENT chats must
+    /// land in DIFFERENT sessions. Previously "per-chat" used only the bare
+    /// `channel` label, collapsing ALL chats of a platform into one row.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn per_chat_scope_resolves_by_chat_not_bare_channel(pool: sqlx::PgPool) {
+        let (sid_alice, _) = get_or_create_session(
+            &pool, "agent", "alice", "telegram", "per-chat", Some("100"),
+        ).await.unwrap();
+        let (sid_bob, _) = get_or_create_session(
+            &pool, "agent", "bob", "telegram", "per-chat", Some("100"),
+        ).await.unwrap();
+        assert_eq!(sid_alice, sid_bob, "same chat_scope under per-chat must share ONE group session");
+
+        let (sid_other_chat, _) = get_or_create_session(
+            &pool, "agent", "alice", "telegram", "per-chat", Some("200"),
+        ).await.unwrap();
+        assert_ne!(sid_alice, sid_other_chat, "different chat_scope under per-chat must be a DIFFERENT session");
+    }
+
+    /// DM without a chat_scope (adapter has no chat concept, e.g. WhatsApp)
+    /// must not panic and must produce a stable session across re-entries.
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn no_chat_scope_degrades_to_stable_session(pool: sqlx::PgPool) {
+        let (sid1, mode1) = get_or_create_session(
+            &pool, "agent", "alice", "whatsapp", "per-channel-peer", None,
+        ).await.unwrap();
+        assert_eq!(mode1, ReentryMode::NewSession);
+
+        let (sid2, mode2) = get_or_create_session(
+            &pool, "agent", "alice", "whatsapp", "per-channel-peer", None,
+        ).await.unwrap();
+        assert_eq!(sid2, sid1, "no-chat-scope platform must reuse the same session on re-entry");
+        assert_ne!(mode2, ReentryMode::NewSession, "second call must NOT fork a new session");
     }
 }
 

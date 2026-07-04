@@ -38,22 +38,33 @@ pub(super) struct CwsCtx {
 ///
 /// Computed via `opex_db::sessions::dm_scope_keys` so the key matches
 /// what `get_or_create_session` will produce when the dispatcher actually
-/// runs `handle_with_status`.
+/// runs `handle_with_status`. Includes `eff_chat_scope` (T03 triage Point 5)
+/// so two different chats/groups on the same platform for the same user
+/// serialise INDEPENDENTLY instead of contending on the same lock — they are
+/// different sessions now, so they must not be forced into receive-order.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(super) struct SessionKey {
-    pub agent_name:  String,
-    pub eff_user:    String,
-    pub eff_channel: String,
+    pub agent_name:     String,
+    pub eff_user:       String,
+    pub eff_channel:    String,
+    pub eff_chat_scope: Option<String>,
 }
 
 impl SessionKey {
-    pub fn from_inbound(agent_name: &str, user_id: &str, channel: &str, dm_scope: &str) -> Self {
-        let (eff_user, eff_channel) =
-            opex_db::sessions::dm_scope_keys(user_id, channel, dm_scope);
+    pub fn from_inbound(
+        agent_name: &str,
+        user_id: &str,
+        channel: &str,
+        dm_scope: &str,
+        chat_scope: Option<&str>,
+    ) -> Self {
+        let (eff_user, eff_channel, eff_chat_scope) =
+            opex_db::sessions::dm_scope_keys(user_id, channel, dm_scope, chat_scope);
         Self {
-            agent_name:  agent_name.to_string(),
-            eff_user:    eff_user.to_string(),
-            eff_channel: eff_channel.to_string(),
+            agent_name:     agent_name.to_string(),
+            eff_user:       eff_user.to_string(),
+            eff_channel:    eff_channel.to_string(),
+            eff_chat_scope: eff_chat_scope.map(str::to_string),
         }
     }
 }
@@ -98,30 +109,55 @@ mod tests {
 
     #[test]
     fn session_key_per_channel_peer() {
-        let k = SessionKey::from_inbound("Arty", "alice", "telegram", "per-channel-peer");
+        let k = SessionKey::from_inbound("Arty", "alice", "telegram", "per-channel-peer", None);
         assert_eq!(k.agent_name, "Arty");
         assert_eq!(k.eff_user, "alice");
         assert_eq!(k.eff_channel, "telegram");
+        assert_eq!(k.eff_chat_scope, None);
     }
 
     #[test]
     fn session_key_shared_collapses_channel() {
-        let tg = SessionKey::from_inbound("Arty", "alice", "telegram", "shared");
-        let dc = SessionKey::from_inbound("Arty", "alice", "discord", "shared");
-        assert_eq!(tg, dc, "shared dm_scope must collapse channel into '*'");
+        let tg = SessionKey::from_inbound("Arty", "alice", "telegram", "shared", Some("100"));
+        let dc = SessionKey::from_inbound("Arty", "alice", "discord", "shared", Some("200"));
+        assert_eq!(tg, dc, "shared dm_scope must collapse channel AND chat_scope into '*'/None");
     }
 
     #[test]
     fn session_key_per_chat_collapses_user() {
-        let a = SessionKey::from_inbound("Arty", "alice", "telegram", "per-chat");
-        let b = SessionKey::from_inbound("Arty", "bob", "telegram", "per-chat");
-        assert_eq!(a, b, "per-chat dm_scope must collapse user into '*'");
+        let a = SessionKey::from_inbound("Arty", "alice", "telegram", "per-chat", Some("100"));
+        let b = SessionKey::from_inbound("Arty", "bob", "telegram", "per-chat", Some("100"));
+        assert_eq!(a, b, "per-chat dm_scope must collapse user into '*' (same chat_scope)");
     }
 
     #[test]
     fn session_key_unknown_falls_back_to_per_channel_peer() {
-        let k = SessionKey::from_inbound("Arty", "alice", "telegram", "garbage");
+        let k = SessionKey::from_inbound("Arty", "alice", "telegram", "garbage", None);
         assert_eq!(k.eff_user, "alice");
         assert_eq!(k.eff_channel, "telegram");
+    }
+
+    /// T03 triage Point 5 regression: the same user_id writing in two
+    /// different chats on the same platform must produce DIFFERENT session
+    /// keys under the default "per-channel-peer" scope — previously both
+    /// collapsed into the identical key (cross-chat context leak).
+    #[test]
+    fn session_key_different_chat_scope_differs_per_channel_peer() {
+        let group_a = SessionKey::from_inbound("Arty", "alice", "telegram", "per-channel-peer", Some("100"));
+        let group_b = SessionKey::from_inbound("Arty", "alice", "telegram", "per-channel-peer", Some("200"));
+        assert_ne!(group_a, group_b, "different chat_scope must produce different SessionKey");
+        assert_eq!(group_a.eff_chat_scope, Some("100".to_string()));
+        assert_eq!(group_b.eff_chat_scope, Some("200".to_string()));
+    }
+
+    /// DM without a chat_scope (adapter context has no chat concept) must
+    /// still produce a stable, non-panicking key — degrades to the bare
+    /// (user, channel) pair, matching pre-fix behaviour.
+    #[test]
+    fn session_key_no_chat_scope_degrades_gracefully() {
+        let k1 = SessionKey::from_inbound("Arty", "alice", "whatsapp", "per-channel-peer", None);
+        let k2 = SessionKey::from_inbound("Arty", "alice", "whatsapp", "per-channel-peer", None);
+        assert_eq!(k1, k2, "repeated calls with no chat_scope must be stable");
+        assert_eq!(k1.eff_chat_scope, None);
     }
 }
