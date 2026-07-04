@@ -101,7 +101,9 @@ export function AppSidebar() {
           <span className="font-display text-base font-bold tracking-wide text-foreground">
             OPEX
           </span>
-          <span className="ml-auto text-xs text-muted-foreground">
+          <span
+            className={`ml-auto text-xs ${connected ? "text-success" : "text-destructive"}`}
+          >
             {connected ? t("nav.online") : t("nav.offline")}
           </span>
         </div>
