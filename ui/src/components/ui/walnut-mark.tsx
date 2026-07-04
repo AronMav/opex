@@ -2,6 +2,9 @@ import * as React from "react"
 
 // Соотношение сторон исходной гравюры (обрезка по контуру, 584x487)
 const RATIO = 0.8339
+// Поднимайте версию при замене public/walnut-mark.png — nginx кэширует
+// статику ~20ч, без этого клиенты видят старую гравюру до истечения кэша.
+const MASK_URL = "/walnut-mark.png?v=2"
 
 /**
  * Фирменный знак — гравюрный грецкий орех (растровая маска из референса).
@@ -26,8 +29,8 @@ function WalnutMark({
         width: size,
         height: Math.round(size * RATIO),
         backgroundColor: "currentColor",
-        WebkitMaskImage: "url(/walnut-mark.png)",
-        maskImage: "url(/walnut-mark.png)",
+        WebkitMaskImage: `url(${MASK_URL})`,
+        maskImage: `url(${MASK_URL})`,
         WebkitMaskSize: "contain",
         maskSize: "contain",
         WebkitMaskRepeat: "no-repeat",
