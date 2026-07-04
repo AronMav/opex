@@ -9,6 +9,7 @@ const mockSession: SessionRow = {
   agent_id: "main",
   user_id: "user-1",
   channel: "web",
+  chat_scope: null,
   started_at: "2024-01-15T10:30:00.000Z",
   last_message_at: "2024-01-15T10:35:00.000Z",
   title: null,
