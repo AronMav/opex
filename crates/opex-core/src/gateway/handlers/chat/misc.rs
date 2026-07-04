@@ -3,13 +3,15 @@
 //! splitting them further produces files dominated by their import blocks.
 
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use serde_json::{Value, json};
 
+use crate::gateway::ApiError;
 use crate::gateway::clusters::{AgentCore, ChannelBus, ConfigServices, InfraServices};
+use crate::gateway::handlers::sessions::verify_session_agent;
 
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct ModelOverrideBody {
@@ -51,11 +53,33 @@ pub(crate) async fn health(
     }))
 }
 
-/// POST /api/chat/{id}/abort — cancel an in-progress stream from any client.
+/// POST /api/chat/{id}/abort?agent=xxx — cancel an in-progress stream.
+///
+/// `?agent=<owner>` is REQUIRED (audit 2026-07-04, IDOR): the bearer token
+/// is shared across the whole instance, so without an owner check any
+/// token-holder could cancel any other agent's in-flight turn by guessing
+/// the session UUID (DoS on someone else's run). Matches the
+/// `verify_session_agent` gate already enforced on every session endpoint
+/// in `sessions.rs`.
 pub(crate) async fn api_chat_abort(
     Path(session_id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
     State(bus): State<ChannelBus>,
+    State(infra): State<InfraServices>,
 ) -> impl IntoResponse {
+    let agent = match params.get("agent").map(String::as_str) {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+
+    let session_uuid = match uuid::Uuid::parse_str(&session_id) {
+        Ok(u) => u,
+        Err(_) => return ApiError::BadRequest("invalid session id".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, session_uuid, agent).await {
+        return resp;
+    }
+
     let cancelled = bus.stream_registry.cancel(&session_id).await;
     if cancelled {
         tracing::info!(session_id = %session_id, "stream cancelled via API");
