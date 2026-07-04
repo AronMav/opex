@@ -1,6 +1,13 @@
 use crate::config::CompactionConfig;
 use serde::{Deserialize, Serialize};
 
+/// Hard safety-valve fraction of the model's context window. Once the prompt is
+/// within `1 - HARD_COMPACT_CEILING` of the window, overflow (provider 413/5xx
+/// or SILENT truncation) is imminent, so compaction fires even if the anti-thrash
+/// gate would otherwise skip it. Set well above the usual `threshold` (0.75) so
+/// it only ever engages in the danger zone.
+const HARD_COMPACT_CEILING: f64 = 0.92;
+
 // ── Persisted state ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,6 +74,21 @@ impl Compressor {
         let threshold = (self.context_limit as f64 * cfg.threshold) as u32;
         if self.last_prompt_tokens < threshold {
             return false;
+        }
+        // Hard safety-valve: within ~8% of the window, a marginally-ineffective
+        // compaction is strictly better than a dead turn. Bypass the anti-thrash
+        // gate so a long tool-heavy conversation whose recent compactions each
+        // saved <min_savings cannot trip `ineffective_count >= max_skips` and then
+        // grow UNBOUNDED until the provider rejects it (413/5xx) or silently
+        // truncates. Below this ceiling the anti-thrash gate still applies.
+        let hard_ceiling = (self.context_limit as f64 * HARD_COMPACT_CEILING) as u32;
+        if self.last_prompt_tokens >= hard_ceiling {
+            tracing::warn!(
+                prompt_tokens = self.last_prompt_tokens,
+                context_limit = self.context_limit,
+                "context near window limit — forcing compaction despite anti-thrash gate"
+            );
+            return true;
         }
         if self.ineffective_count >= cfg.anti_thrash_max_skips {
             tracing::warn!(
@@ -166,6 +188,38 @@ mod tests {
         c.record_compression_result(100_000, 60_000, &cfg); // saved 40% → reset
         assert_eq!(c.ineffective_count, 0);
         assert!(c.should_compress(&cfg));
+    }
+
+    #[test]
+    fn hard_ceiling_overrides_anti_thrash_near_window() {
+        let mut c = Compressor::new(128_000);
+        let cfg = cfg(0.75);
+        // Trip the anti-thrash gate with two ineffective compressions.
+        c.last_prompt_tokens = 100_000;
+        c.record_compression_result(100_000, 98_000, &cfg); // saved 2% < 10%
+        c.record_compression_result(98_000, 96_500, &cfg); // saved 1.5% < 10%
+        assert_eq!(c.ineffective_count, 2);
+        // Below the hard ceiling (128_000 * 0.92 = 117_760) the gate still skips.
+        assert!(!c.should_compress(&cfg), "anti-thrash gate applies below ceiling");
+        // Context grows into the danger zone (> 92% of the window): overflow is
+        // imminent, so compaction must fire despite the anti-thrash gate.
+        c.last_prompt_tokens = 120_000;
+        assert!(
+            c.should_compress(&cfg),
+            "hard ceiling must override anti-thrash to avoid unbounded growth → provider 5xx"
+        );
+    }
+
+    #[test]
+    fn hard_ceiling_still_respects_disabled_flag() {
+        let mut c = Compressor::new(128_000);
+        c.last_prompt_tokens = 127_000; // well past the ceiling
+        let mut disabled = cfg(0.75);
+        disabled.enabled = false;
+        assert!(
+            !c.should_compress(&disabled),
+            "disabled compaction must never fire, even near the window limit"
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::agent::clarify_manager::ClarifyManager;
 use crate::agent::memory_service::MemoryService;
 use crate::agent::pipeline::sink::{EventSink, PipelineEvent};
 use crate::agent::providers::LlmProvider;
-use crate::agent::session_manager::{SessionLifecycleGuard, SessionManager};
+use crate::agent::session_manager::{SessionLifecycleGuard, SessionManager, SessionOutcome};
 use crate::agent::stream_event::StreamEvent;
 use crate::db::session_failures::{record_session_failure, NewSessionFailure};
 use sqlx::PgPool;
@@ -264,6 +264,56 @@ pub(crate) fn spawn_record_failure(
             );
         }
     });
+}
+
+/// Record a failure for the **hard-error path** — i.e. `execute()` or
+/// `finalize()` bubbled an `Err` out of an engine entry point (`run.rs`) so the
+/// normal `finalize::finalize` failure machinery never ran.
+///
+/// Without this, the only record of the failure is the `SessionLifecycleGuard`
+/// `Drop` fallback, which synthesizes an opaque `guard_dropped` /
+/// "guard dropped (early exit)" row with all-NULL diagnostics (no provider,
+/// model, tool, or iteration data) — leaving operators blind to *why* the
+/// session died. In production this made every hard-error session look
+/// identical regardless of root cause (provider outage, tool crash, corrupt
+/// context, …).
+///
+/// This helper instead:
+///   1. marks the guard `fail(reason)` with the REAL error string — which sets
+///      `recorded = true`, so the guard's `Drop` does NOT also emit a duplicate
+///      `guard_dropped` row; and
+///   2. spawns a structured `session_failures` row carrying the actual reason +
+///      provider/model, classified via `classify_failure_kind`.
+///
+/// Idempotent: if the guard has already transitioned out of `Running` (a normal
+/// `finalize` done/fail/interrupt already ran), this is a no-op — we must not
+/// clobber the real outcome or double-record.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn record_hard_error_failure(
+    guard: &mut SessionLifecycleGuard,
+    db: PgPool,
+    session_id: Uuid,
+    agent_name: String,
+    reason: String,
+    llm_provider: Option<String>,
+    llm_model: Option<String>,
+    bg_tasks: &TaskTracker,
+) {
+    if !matches!(guard.outcome, SessionOutcome::Running) {
+        // A normal finalize path already resolved this session (done / failed /
+        // interrupted). Nothing to do — the Drop fallback is already suppressed.
+        return;
+    }
+    guard.fail(&reason).await;
+    spawn_record_failure(
+        db,
+        session_id,
+        agent_name,
+        reason,
+        llm_provider,
+        llm_model,
+        bg_tasks,
+    );
 }
 
 // ── FinalizeOutcome ───────────────────────────────────────────────────────────
@@ -963,6 +1013,117 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(role, "assistant", "partial saved as assistant message");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn hard_error_path_records_real_reason_and_suppresses_guard_dropped(pool: PgPool) {
+        let session_id =
+            crate::db::sessions::create_new_session(&pool, "test-agent", "test-user", "test-channel")
+                .await
+                .unwrap();
+
+        let bg = TaskTracker::new();
+        let mut guard = SessionLifecycleGuard::new(pool.clone(), session_id)
+            .with_agent("test-agent")
+            // Give the guard its own tracker so IF the Drop fallback ever fired
+            // it would have somewhere to spawn — the test asserts it does NOT.
+            .with_tracker(Arc::new(TaskTracker::new()));
+
+        record_hard_error_failure(
+            &mut guard,
+            pool.clone(),
+            session_id,
+            "test-agent".into(),
+            "pipeline error: provider returned 503".into(),
+            Some("ollama".into()),
+            Some("kimi-k2.6".into()),
+            &bg,
+        )
+        .await;
+
+        // Guard is now Failed → its Drop must NOT synthesize a duplicate row.
+        drop(guard);
+        bg.close();
+        bg.wait().await;
+
+        let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT failure_kind, error_message, llm_provider, llm_model \
+             FROM session_failures WHERE session_id = $1",
+        )
+        .bind(session_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "exactly one failure row — no duplicate guard_dropped from Drop"
+        );
+        assert_eq!(
+            rows[0].1, "pipeline error: provider returned 503",
+            "the REAL error reason is captured, not 'guard dropped (early exit)'"
+        );
+        assert_ne!(
+            rows[0].0, "guard_dropped",
+            "failure_kind reflects the real error (llm_error), not the opaque Drop fallback"
+        );
+        assert_eq!(rows[0].2.as_deref(), Some("ollama"), "provider captured");
+        assert_eq!(rows[0].3.as_deref(), Some("kimi-k2.6"), "model captured");
+
+        let run_status: Option<String> =
+            sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(run_status.as_deref(), Some("failed"));
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn hard_error_path_is_noop_when_session_already_finalized(pool: PgPool) {
+        let session_id =
+            crate::db::sessions::create_new_session(&pool, "test-agent", "test-user", "test-channel")
+                .await
+                .unwrap();
+
+        let bg = TaskTracker::new();
+        let mut guard = SessionLifecycleGuard::new(pool.clone(), session_id).with_agent("test-agent");
+        // Normal success path already resolved the session.
+        guard.done().await;
+
+        // A late Err bubbling after finalize already ran must not clobber the
+        // 'done' outcome nor record a spurious failure row.
+        record_hard_error_failure(
+            &mut guard,
+            pool.clone(),
+            session_id,
+            "test-agent".into(),
+            "late pipeline error".into(),
+            None,
+            None,
+            &bg,
+        )
+        .await;
+        drop(guard);
+        bg.close();
+        bg.wait().await;
+
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM session_failures WHERE session_id = $1")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(n, 0, "no failure row when the session already finalized 'done'");
+
+        let run_status: Option<String> =
+            sqlx::query_scalar("SELECT run_status FROM sessions WHERE id = $1")
+                .bind(session_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(run_status.as_deref(), Some("done"), "outcome preserved");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

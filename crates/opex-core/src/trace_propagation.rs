@@ -143,10 +143,24 @@ pub async fn extract_trace_context_layer(
 /// appear under the originating `pipeline.execute` / `http_request`
 /// span in Jaeger.
 ///
-/// Without `otel` feature: still applies `.instrument()` because the
-/// `tracing` subscriber may have other layers (file logging, broadcast)
-/// that benefit from the span context. The cost is one extra struct
-/// allocation per spawn — negligible compared to anything you'd spawn.
+/// The task is instrumented with a fresh **child** of the current span, NOT the
+/// current span itself. This is a correctness fix, not just style:
+///
+/// Instrumenting a *detached* task with `Span::current()` shares one span across
+/// the spawn boundary. When the originating request finished, its `http_request`
+/// span closed (ref-count → 0, id freed in tracing-subscriber's sharded
+/// registry) while the spawned task was still running. The task's next poll
+/// re-entered that freed id and the registry panicked on a tokio worker thread —
+/// `"tried to clone a span that already closed"` / `"no span exists with that
+/// ID"` — aborting whatever task that worker was driving. In production this
+/// showed up under WebSocket-churn + health-check load (short-lived request
+/// spans outlived by `spawn_traced` tasks).
+///
+/// A child span instead keeps its parent alive for the task's whole lifetime and
+/// is opened/closed solely by the task, so no other party can clone it after
+/// close. Log lines stay nested under the originating span (fmt prints the full
+/// stack) and, with the `otel` feature, the child inherits the trace_id so
+/// Jaeger continuity is preserved.
 ///
 /// Don't use for fire-and-forget work that should NOT inherit the
 /// parent span (e.g. unrelated background sweepers, watchdog pings).
@@ -158,7 +172,10 @@ where
     F::Output: Send + 'static,
 {
     use tracing::Instrument;
-    tokio::spawn(future.instrument(tracing::Span::current()))
+    // Child of the current span (contextual parent) — never the shared current
+    // span itself. See the doc comment above for the panic this prevents.
+    let span = tracing::info_span!("spawned_task");
+    tokio::spawn(future.instrument(span))
 }
 
 #[cfg(test)]
