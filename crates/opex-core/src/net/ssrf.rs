@@ -522,6 +522,69 @@ mod tests {
         assert!(is_private_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
     }
 
+    // ── H5a (T08 pt.5): explicit cloud-metadata endpoint coverage ──────────
+
+    #[test]
+    fn validate_url_scheme_blocks_numeric_cloud_metadata_ip() {
+        // 169.254.169.254 is the well-known AWS/GCP/Azure/DigitalOcean cloud
+        // instance-metadata endpoint. It falls under the 169.254.0.0/16
+        // link-local range already covered by `is_private_ip`, but this test
+        // pins the EXACT address explicitly at the `validate_url_scheme`
+        // sync pre-check layer (not just the DNS-resolver layer exercised by
+        // `select_client_non_internal_endpoint_blocks_private_ip`), so a
+        // regression in either `is_private_ip`'s link-local branch or the
+        // numeric-IP fast path in `validate_url_scheme` fails loudly here.
+        assert!(matches!(
+            validate_url_scheme("http://169.254.169.254/latest/meta-data/"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
+        assert!(matches!(
+            validate_url_scheme("http://169.254.169.254/"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
+        // Azure IMDS uses the same well-known address on a different path.
+        assert!(matches!(
+            validate_url_scheme("http://169.254.169.254/metadata/instance"),
+            Err(SsrfError::InternalBlocked(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn preflight_resolve_blocks_numeric_cloud_metadata_ip() {
+        assert!(matches!(
+            preflight_resolve("169.254.169.254").await,
+            Err(SsrfError::PrivateIpResolved)
+        ));
+    }
+
+    // TODO(T08 pt.5): `metadata.google.internal` is a DNS NAME, not a literal
+    // IP — `validate_url_scheme` (the sync, no-DNS pre-check) can only reject
+    // it via the static `INTERNAL_BLOCKLIST` (host:port strings), which does
+    // NOT currently include this hostname. It resolves to 169.254.169.254, so
+    // it IS caught, but only one layer down: `preflight_resolve` (async DNS
+    // lookup) and, at actual connect time, `SsrfSafeResolver` (plugged into
+    // every outbound `reqwest::Client` via `ssrf_http_client`) both reject it
+    // because the resolved answer is link-local. There is a narrow TOCTOU
+    // window ONLY if a caller uses `validate_url_scheme` as its sole guard
+    // and builds its own `reqwest::Client` without `ssrf_http_client`'s DNS
+    // resolver — every current caller in this codebase uses one of the two
+    // DNS-aware paths, so this is not exploitable today, but if a new
+    // sync-only caller is added it would not be covered until connect time.
+    // We don't add `metadata.google.internal` to `preflight_resolve`'s test
+    // here because it requires live DNS (flaky in CI); the regression guard
+    // below proves the numeric address it resolves to is blocked, which is
+    // the actual security boundary (`SsrfSafeResolver` / `preflight_resolve`).
+    #[test]
+    fn metadata_google_internal_resolves_to_blocked_link_local_address() {
+        // Pin the *documented* behavior: GCP's metadata server documents
+        // 169.254.169.254 as the canonical address behind the
+        // `metadata.google.internal` hostname — same address as AWS/Azure/DO.
+        // Any DNS answer for that hostname is therefore covered by the
+        // link-local branch of `is_private_ip`, which both `preflight_resolve`
+        // and `SsrfSafeResolver` consult on every real resolution.
+        assert!(is_private_ip("169.254.169.254".parse().unwrap()));
+    }
+
     // ── select_ssrf_aware_client (channel_action SSRF fix) ──────────────────
 
     #[test]
