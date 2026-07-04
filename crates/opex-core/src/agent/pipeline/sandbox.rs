@@ -233,6 +233,11 @@ pub async fn handle_process_start(
     {
         cmd.current_dir(wd);
     }
+    // Defence-in-depth: this is a host-spawned background process (no Docker
+    // isolation), available to base agents. It must not inherit Core's own
+    // secrets (OPEX_MASTER_KEY / OPEX_AUTH_TOKEN / DATABASE_URL) — same class
+    // of leak fixed for code_exec's host fallback and CLI-backend in Batch A.
+    crate::tools::spawn_env::strip_host_secrets(&mut cmd);
     let mut child = match cmd
         .stdout(std::process::Stdio::from(
             log_file_std.try_clone().expect("clone stdout"),
