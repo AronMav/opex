@@ -122,6 +122,63 @@ fn is_system_tool_parallel_safe(name: &str) -> bool {
     )
 }
 
+/// Wrap a completed tool result in the `<untrusted_tool_output>` provenance
+/// delimiter (defense-in-depth against indirect prompt injection from
+/// external content — web pages, browser automation, MCP servers, search
+/// results) when `name` is classified untrusted by
+/// [`crate::agent::provenance::is_untrusted_tool`].
+///
+/// Skips the wrap in two cases where the string reaching this point is NOT
+/// externally-fetched content, even for an otherwise-untrusted tool name:
+///
+/// 1. `result` carries an inline media marker (`__file__:` / `__rich_card__:`,
+///    see `agent::engine::{FILE_PREFIX, RICH_CARD_PREFIX}`) — extracted
+///    verbatim downstream by `pipeline::execute::extract_tool_result_events`
+///    to drive the SSE File/RichCard events, so wrapping the whole string
+///    would garble the binary upload URL / rich-card JSON with surrounding
+///    XML-ish delimiter text.
+/// 2. `name` is a YAML tool with `channel_action` configured (TTS/imagegen/
+///    `screenshot_web`, …) — its non-inline-media branch returns a trusted,
+///    OPEX-authored `"[SYSTEM] … dispatched in background …"` instruction
+///    (see `pipeline::media_background::MediaKind::system_message`), not
+///    fetched external content. Wrapping that instruction as "untrusted"
+///    would be a false positive that could make the model discount an
+///    OPEX-authored directive.
+///
+/// This means media-producing untrusted tools (e.g. `screenshot_web`) ship
+/// both of their result shapes (inline marker and background instruction)
+/// unwrapped, same as before this hardening — only the plain-text result
+/// path (e.g. `web`, `browser`, search tools) gains the provenance boundary.
+///
+/// Called AFTER `truncate_tool_result` in both the parallel and sequential
+/// branches so the wrapper tags themselves are never truncated.
+async fn maybe_wrap_untrusted_result(
+    name: &str,
+    result: String,
+    mcp: Option<&crate::mcp::McpRegistry>,
+    yaml_tools: &HashMap<String, YamlToolDef>,
+) -> String {
+    use crate::agent::engine::{FILE_PREFIX, RICH_CARD_PREFIX};
+    if result.contains(FILE_PREFIX) || result.starts_with(RICH_CARD_PREFIX) {
+        return result;
+    }
+    if yaml_tools
+        .get(name)
+        .is_some_and(|t| t.channel_action.is_some())
+    {
+        return result;
+    }
+    let is_mcp = match mcp {
+        Some(reg) => reg.find_mcp_for_tool(name).await.is_some(),
+        None => false,
+    };
+    if crate::agent::provenance::is_untrusted_tool(name, is_mcp) {
+        crate::agent::provenance::wrap_untrusted_tool_output(name, &result)
+    } else {
+        result
+    }
+}
+
 // ── Arg enrichment ───────────────────────────────────────────────────────────
 
 /// Enrich tool arguments with `_context` (message context + `session_id`).
@@ -435,14 +492,12 @@ pub async fn execute_tool_calls_partitioned(
                             timeout.as_secs()
                         ),
                     };
-                    (
-                        i,
-                        super::context::truncate_tool_result(
-                            model,
-                            &result,
-                            current_context_chars,
-                        ),
-                    )
+                    let truncated = super::context::truncate_tool_result(
+                        model,
+                        &result,
+                        current_context_chars,
+                    );
+                    (i, truncated)
                 }
             })
             .collect();
@@ -451,7 +506,12 @@ pub async fn execute_tool_calls_partitioned(
             // Record the result FIRST so a subsequent loop-break check still
             // surfaces this completed tool's output to the caller. Without
             // this, the early Err path would leave results[i] = None and the
-            // tool would render as "in flight forever" on the UI.
+            // tool would render as "in flight forever" on the UI. NOTE: this
+            // is the RAW (unwrapped) result — the loop-break early-return
+            // below intentionally surfaces it as-is rather than paying the
+            // async provenance-wrap cost on a path that's about to terminate
+            // the turn; the provenance wrap is applied on the normal
+            // (non-broken) completion path further down before persist.
             results[i] = Some(result.clone());
 
             if detect_loops {
@@ -505,7 +565,6 @@ pub async fn execute_tool_calls_partitioned(
                 }
             }
 
-            // results[i] already set at the top of this loop iteration.
             let _ = crate::db::session_timeline::log_event(
                 db,
                 session_id,
@@ -513,6 +572,17 @@ pub async fn execute_tool_calls_partitioned(
                 Some(&end_payload(&tool_calls[i], &result)),
             )
             .await;
+
+            // Provenance wrap happens LAST, after loop-detection /
+            // semantic-cache / timeline bookkeeping above (all of which need
+            // the raw "Error:"/"tool error:" prefix on `result` to classify
+            // success/failure). Re-assign `results[i]` to the wrapped text so
+            // the LLM context and persisted row both see the same
+            // provenance-tagged content the model reasons over.
+            let wrapped =
+                maybe_wrap_untrusted_result(&tool_calls[i].name, result.clone(), mcp, yaml_tools)
+                    .await;
+            results[i] = Some(wrapped.clone());
 
             // Durable persist for THIS tool — spawned immediately after its
             // `tool_end` timeline entry so we don't leave a window where the timeline says
@@ -530,7 +600,7 @@ pub async fn execute_tool_calls_partitioned(
                     session_id,
                     pctx.agent_name,
                     tool_calls[i].id.as_str(),
-                    &result,
+                    &wrapped,
                     parent_for_this,
                     active_batch_id,
                 );
@@ -649,7 +719,13 @@ pub async fn execute_tool_calls_partitioned(
             }
         }
 
-        results[i] = Some(res.clone());
+        // Provenance wrap happens LAST, after loop-detection / semantic-cache
+        // bookkeeping above, which need to see the raw "Error:"/"tool error:"
+        // prefix on `res` to classify success/failure. Wrapping earlier would
+        // hide those prefixes behind the `<untrusted_tool_output>` tag and
+        // silently defeat error classification for untrusted tools.
+        let wrapped =
+            maybe_wrap_untrusted_result(&tool_calls[i].name, res.clone(), mcp, yaml_tools).await;
         let _ = crate::db::session_timeline::log_event(
             db,
             session_id,
@@ -666,6 +742,10 @@ pub async fn execute_tool_calls_partitioned(
         // The row id was pre-generated above (before dispatch) so the YAML
         // channel-action path could thread it into `_context.tool_message_id`.
         // Reuse it here — `Uuid::new_v4()` is NOT called twice.
+        //
+        // Persist the WRAPPED text (same as `results[i]`, which feeds the LLM
+        // context and the display path) so a session reload/resume sees the
+        // same provenance-tagged content the model originally reasoned over.
         if let Some(pctx) = persist_ctx {
             let new_id = persisted_ids[i].expect(
                 "persisted_ids[i] was set above when persist_ctx is Some — invariant",
@@ -676,12 +756,13 @@ pub async fn execute_tool_calls_partitioned(
                 session_id,
                 pctx.agent_name,
                 tool_calls[i].id.as_str(),
-                &res,
+                &wrapped,
                 chain_parent,
                 None,
             );
             chain_parent = Some(new_id);
         }
+        results[i] = Some(wrapped);
     }
 
     // 5. Final reassemble — merge denied + dispatched, re-order by original input.
@@ -1034,6 +1115,126 @@ mod tests {
             tool_msg_id: Some(uuid::Uuid::nil()),
         };
         assert!(with_id.tool_msg_id.is_some());
+    }
+
+    // ── maybe_wrap_untrusted_result (Batch J) ─────────────────────────────────
+
+    fn channel_action_yaml_tool(name: &str) -> crate::tools::yaml_tools::YamlToolDef {
+        serde_yaml::from_str(&format!(
+            "name: {name}\n\
+             description: capture-only channel-action YAML tool\n\
+             endpoint: \"http://127.0.0.1:1\"\n\
+             method: POST\n\
+             timeout: 5\n\
+             channel_action:\n  action: send_photo\n  data_field: _binary\n",
+        ))
+        .expect("valid yaml")
+    }
+
+    #[tokio::test]
+    async fn wraps_web_fetch_plain_text_result() {
+        let yaml_tools: HashMap<String, crate::tools::yaml_tools::YamlToolDef> = HashMap::new();
+        let out =
+            maybe_wrap_untrusted_result("web_fetch", "page body".to_string(), None, &yaml_tools)
+                .await;
+        assert!(out.starts_with("<untrusted_tool_output tool=\"web_fetch\""), "{out}");
+        assert!(out.contains("page body"));
+    }
+
+    #[tokio::test]
+    async fn does_not_wrap_trusted_workspace_tool() {
+        let yaml_tools: HashMap<String, crate::tools::yaml_tools::YamlToolDef> = HashMap::new();
+        let out = maybe_wrap_untrusted_result(
+            "workspace_read",
+            "file contents".to_string(),
+            None,
+            &yaml_tools,
+        )
+        .await;
+        assert_eq!(out, "file contents", "trusted tool must pass through unwrapped");
+    }
+
+    #[tokio::test]
+    async fn does_not_wrap_result_carrying_file_marker() {
+        // Even an untrusted-by-name tool (e.g. a hypothetical "web_capture")
+        // must NOT be wrapped when its result carries an inline __file__:
+        // marker — extract_tool_result_events downstream depends on parsing
+        // that marker verbatim.
+        let yaml_tools: HashMap<String, crate::tools::yaml_tools::YamlToolDef> = HashMap::new();
+        let marker_body = format!(
+            "{}{}",
+            crate::agent::engine::FILE_PREFIX,
+            r#"{"url":"/api/uploads/1?sig=x","mediaType":"image/png"}"#
+        );
+        let out =
+            maybe_wrap_untrusted_result("screenshot_web", marker_body.clone(), None, &yaml_tools)
+                .await;
+        assert_eq!(out, marker_body, "file-marker result must pass through unwrapped");
+    }
+
+    #[tokio::test]
+    async fn does_not_wrap_result_carrying_rich_card_marker() {
+        let yaml_tools: HashMap<String, crate::tools::yaml_tools::YamlToolDef> = HashMap::new();
+        let card_body = format!(
+            "{}{}",
+            crate::agent::engine::RICH_CARD_PREFIX,
+            r#"{"card_type":"table","data":[]}"#
+        );
+        let out = maybe_wrap_untrusted_result("search_web", card_body.clone(), None, &yaml_tools)
+            .await;
+        assert_eq!(out, card_body, "rich-card result must pass through unwrapped");
+    }
+
+    #[tokio::test]
+    async fn does_not_wrap_channel_action_background_dispatch_instruction() {
+        // Critical regression guard: a YAML tool with `channel_action`
+        // configured whose name also matches the untrusted "web" hint
+        // (mirrors the real `screenshot_web` capability tool). When
+        // delivered via the Telegram/Discord background-dispatch path, its
+        // result is a trusted OPEX-authored "[SYSTEM] ... dispatched in
+        // background ..." instruction, NOT externally fetched content — it
+        // must never be wrapped as untrusted.
+        let mut yaml_tools: HashMap<String, crate::tools::yaml_tools::YamlToolDef> =
+            HashMap::new();
+        yaml_tools.insert("screenshot_web".to_string(), channel_action_yaml_tool("screenshot_web"));
+
+        let system_instruction =
+            "[SYSTEM] Image dispatched in background; the user will receive a photo message directly. \
+             End your turn immediately.".to_string();
+        let out = maybe_wrap_untrusted_result(
+            "screenshot_web",
+            system_instruction.clone(),
+            None,
+            &yaml_tools,
+        )
+        .await;
+        assert_eq!(
+            out, system_instruction,
+            "channel_action tool's background-dispatch instruction must pass through unwrapped"
+        );
+    }
+
+    #[tokio::test]
+    async fn wraps_yaml_tool_without_channel_action_matching_name_hint() {
+        // Sanity check that the channel_action exemption is scoped: a YAML
+        // tool with NO channel_action but a "web"/"browser"/"search" name
+        // hint is still wrapped normally.
+        let mut yaml_tools: HashMap<String, crate::tools::yaml_tools::YamlToolDef> =
+            HashMap::new();
+        let plain_web_tool: crate::tools::yaml_tools::YamlToolDef = serde_yaml::from_str(
+            "name: web\n\
+             description: read web pages\n\
+             endpoint: \"http://127.0.0.1:1\"\n\
+             method: POST\n\
+             timeout: 5\n",
+        )
+        .expect("valid yaml");
+        yaml_tools.insert("web".to_string(), plain_web_tool);
+
+        let out =
+            maybe_wrap_untrusted_result("web", "some article text".to_string(), None, &yaml_tools)
+                .await;
+        assert!(out.starts_with("<untrusted_tool_output tool=\"web\""), "{out}");
     }
 }
 
