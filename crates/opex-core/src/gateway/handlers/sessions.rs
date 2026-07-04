@@ -385,7 +385,7 @@ pub(crate) async fn api_delete_session(
     }
 }
 
-async fn verify_session_agent(db: &sqlx::PgPool, session_id: uuid::Uuid, expected_agent: &str) -> Result<(), axum::response::Response> {
+pub(crate) async fn verify_session_agent(db: &sqlx::PgPool, session_id: uuid::Uuid, expected_agent: &str) -> Result<(), axum::response::Response> {
     let row = sqlx::query_scalar::<_, String>(
         "SELECT agent_id FROM sessions WHERE id = $1"
     )
@@ -1201,6 +1201,70 @@ mod tests {
         let md = format_session_as_markdown(&data);
         assert!(md.contains("2026-04-27T10:05"), "truncated prefix must be present");
         assert!(!md.contains("2026-04-27T10:05:00.000Z"), "full timestamp must not appear — truncated to 16 chars");
+    }
+}
+
+// ── verify_session_agent (shared IDOR gate — resume.rs, misc.rs abort) ──────
+//
+// Covers the ownership check that `api_chat_resume_stream` (chat/resume.rs)
+// and `api_chat_abort` (chat/misc.rs) now depend on (audit 2026-07-04,
+// batch E). Both handlers are thin wrappers around this function plus a
+// `?agent=` extraction identical to every other `sessions.rs` handler —
+// exercising it here covers the ownership-check branch for both call sites
+// without needing a full HTTP harness.
+#[cfg(test)]
+mod verify_session_agent_tests {
+    use super::verify_session_agent;
+    use sqlx::PgPool;
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn matching_agent_is_allowed(db: PgPool) {
+        let session_id = uuid::Uuid::new_v4();
+        let agent = format!("test-owner-{session_id}");
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, started_at, last_message_at) \
+             VALUES ($1, $2, 'test-user', 'web', now(), now())",
+        )
+        .bind(session_id)
+        .bind(&agent)
+        .execute(&db)
+        .await
+        .expect("insert session");
+
+        let result = verify_session_agent(&db, session_id, &agent).await;
+        assert!(result.is_ok(), "owning agent must be allowed");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn different_agent_is_forbidden(db: PgPool) {
+        let session_id = uuid::Uuid::new_v4();
+        let owner = format!("test-owner-{session_id}");
+        let intruder = format!("test-intruder-{session_id}");
+        sqlx::query(
+            "INSERT INTO sessions (id, agent_id, user_id, channel, started_at, last_message_at) \
+             VALUES ($1, $2, 'test-user', 'web', now(), now())",
+        )
+        .bind(session_id)
+        .bind(&owner)
+        .execute(&db)
+        .await
+        .expect("insert session");
+
+        let result = verify_session_agent(&db, session_id, &intruder).await;
+        let resp = result.expect_err("different agent must be rejected");
+        assert_eq!(
+            resp.status(),
+            axum::http::StatusCode::FORBIDDEN,
+            "wrong-owner request must be rejected with 403, not silently allowed"
+        );
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn missing_session_is_not_found(db: PgPool) {
+        let session_id = uuid::Uuid::new_v4();
+        let result = verify_session_agent(&db, session_id, "whatever-agent").await;
+        let resp = result.expect_err("nonexistent session must error, not succeed");
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     }
 }
 

@@ -8,6 +8,13 @@
 //! `?last_event_id=<seq>` query string for fetch-based clients that can not
 //! set custom headers easily — only events with seq > last_event_id are
 //! replayed from the buffer, eliminating duplicates after reconnect.
+//!
+//! `?agent=<owner>` is REQUIRED (audit 2026-07-04, IDOR): the bearer token
+//! is shared across the whole instance, so without an owner check any
+//! token-holder could attach to any other agent's live stream by guessing
+//! the session UUID and read the in-flight response in real time. Matches
+//! the `verify_session_agent` gate already enforced on every session
+//! endpoint in `sessions.rs`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -19,16 +26,32 @@ use axum::{
 };
 use opex_types::sse::{SseEvent, SyncStatus};
 
-use crate::gateway::clusters::ChannelBus;
+use crate::gateway::clusters::{ChannelBus, InfraServices};
+use crate::gateway::handlers::sessions::verify_session_agent;
+use crate::gateway::ApiError;
 
 pub(crate) async fn api_chat_resume_stream(
     Path(id): Path<String>,
     Query(params): Query<std::collections::HashMap<String, String>>,
     headers: axum::http::HeaderMap,
     State(bus): State<ChannelBus>,
+    State(infra): State<InfraServices>,
 ) -> impl IntoResponse {
     use async_stream::stream;
     use tokio::sync::broadcast;
+
+    let agent = match params.get("agent").map(String::as_str) {
+        Some(a) if !a.is_empty() => a,
+        _ => return ApiError::BadRequest("agent parameter required".into()).into_response(),
+    };
+
+    let session_uuid = match uuid::Uuid::parse_str(&id) {
+        Ok(u) => u,
+        Err(_) => return ApiError::BadRequest("invalid session id".into()).into_response(),
+    };
+    if let Err(resp) = verify_session_agent(&infra.db, session_uuid, agent).await {
+        return resp;
+    }
 
     let last_event_id: Option<u64> = headers
         .get("last-event-id")
@@ -38,48 +61,47 @@ pub(crate) async fn api_chat_resume_stream(
 
     match bus.stream_registry.subscribe(&id).await {
         None => {
-            // No in-memory stream — check DB for recently finished/interrupted job
-            let session_uuid = uuid::Uuid::parse_str(&id).ok();
-            if let Some(sid) = session_uuid
-                && let Ok(Some(job)) = crate::gateway::stream_jobs::get_active_job(
-                    bus.stream_registry.db(), sid
-                ).await {
-                    let status = match job.status.as_str() {
-                        "finished" => SyncStatus::Finished,
-                        "error" => SyncStatus::Error,
-                        "running" => {
-                            // Running in DB but not in memory = Core restarted mid-stream
-                            if let Err(e) = crate::gateway::stream_jobs::error_job(
-                                bus.stream_registry.db(), job.id, "stream lost: core restarted"
-                            ).await {
-                                tracing::warn!(error = %e, "failed to mark stream job as error on resume");
-                            }
-                            SyncStatus::Interrupted
+            // No in-memory stream — check DB for recently finished/interrupted job.
+            // `session_uuid` was already validated + ownership-checked above.
+            if let Ok(Some(job)) = crate::gateway::stream_jobs::get_active_job(
+                bus.stream_registry.db(), session_uuid
+            ).await {
+                let status = match job.status.as_str() {
+                    "finished" => SyncStatus::Finished,
+                    "error" => SyncStatus::Error,
+                    "running" => {
+                        // Running in DB but not in memory = Core restarted mid-stream
+                        if let Err(e) = crate::gateway::stream_jobs::error_job(
+                            bus.stream_registry.db(), job.id, "stream lost: core restarted"
+                        ).await {
+                            tracing::warn!(error = %e, "failed to mark stream job as error on resume");
                         }
-                        _ => SyncStatus::Error,
-                    };
-                    // `StreamJob.tool_calls` is a `serde_json::Value`; coerce
-                    // to `Vec<Value>` for the typed payload (any non-array
-                    // shape — null, {}, etc. — falls back to empty Vec).
-                    let tool_calls: Vec<serde_json::Value> = serde_json::from_value(
-                        job.tool_calls.clone()
-                    ).unwrap_or_default();
-                    let sync_event = SseEvent::Sync {
-                        content: job.aggregated_text.clone(),
-                        tool_calls,
-                        status,
-                        error: job.error_text.clone(),
-                    };
-                    let sync_str = serde_json::to_string(&sync_event)
-                        .expect("SseEvent::Sync must serialize");
-                    let sse_stream = async_stream::stream! {
-                        yield Ok::<_, std::convert::Infallible>(Event::default().data(sync_str));
-                        yield Ok(Event::default().data("[DONE]"));
-                    };
-                    return Sse::new(sse_stream)
-                        .keep_alive(KeepAlive::default())
-                        .into_response();
-                }
+                        SyncStatus::Interrupted
+                    }
+                    _ => SyncStatus::Error,
+                };
+                // `StreamJob.tool_calls` is a `serde_json::Value`; coerce
+                // to `Vec<Value>` for the typed payload (any non-array
+                // shape — null, {}, etc. — falls back to empty Vec).
+                let tool_calls: Vec<serde_json::Value> = serde_json::from_value(
+                    job.tool_calls.clone()
+                ).unwrap_or_default();
+                let sync_event = SseEvent::Sync {
+                    content: job.aggregated_text.clone(),
+                    tool_calls,
+                    status,
+                    error: job.error_text.clone(),
+                };
+                let sync_str = serde_json::to_string(&sync_event)
+                    .expect("SseEvent::Sync must serialize");
+                let sse_stream = async_stream::stream! {
+                    yield Ok::<_, std::convert::Infallible>(Event::default().data(sync_str));
+                    yield Ok(Event::default().data("[DONE]"));
+                };
+                return Sse::new(sse_stream)
+                    .keep_alive(KeepAlive::default())
+                    .into_response();
+            }
             StatusCode::NO_CONTENT.into_response()
         }
         Some((buffered_events, mut broadcast_rx, already_finished)) => {
