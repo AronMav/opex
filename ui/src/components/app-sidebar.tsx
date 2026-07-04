@@ -26,9 +26,10 @@ import {
   MessageSquare, Bot, FileText, Clock, Brain,
   Wrench, Folder, Key, Shield, Settings, LogOut, BookOpen,
   Radio, Zap, Webhook, Link2,
-  Archive, Monitor, Nut,
+  Archive, Monitor,
   type LucideProps,
 } from "lucide-react";
+import { WalnutMark } from "@/components/ui/walnut-mark";
 import type { TranslationKey } from "@/i18n/types";
 
 interface NavItem {
@@ -97,7 +98,7 @@ export function AppSidebar() {
       <SidebarHeader className="px-6 py-6">
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
-            <Nut className="text-primary" size={20} />
+            <WalnutMark className="text-primary" size={24} />
             <span className="font-display text-base font-bold tracking-wide text-foreground">
               OPEX
             </span>
