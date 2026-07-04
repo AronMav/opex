@@ -310,6 +310,9 @@ pub async fn handle_process_status(
     let lines: Vec<&str> = log_content.lines().collect();
     let tail: Vec<&str> = lines.iter().rev().take(20).copied().collect();
     let tail_str = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+    // Background process runs an arbitrary bash command (including
+    // `env`/`printenv`); redact before this reaches the model.
+    let tail_str = crate::redact::redact_terminal_output(&tail_str);
 
     format!(
         "process_id: {}\nstatus: {}\n\n--- last 20 log lines ---\n{}",
@@ -347,6 +350,9 @@ pub async fn handle_process_logs(
     let lines: Vec<&str> = log_content.lines().collect();
     let tail: Vec<&str> = lines.iter().rev().take(tail_lines).copied().collect();
     let tail_str = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+    // Background process runs an arbitrary bash command (including
+    // `env`/`printenv`); redact before this reaches the model.
+    let tail_str = crate::redact::redact_terminal_output(&tail_str);
 
     format!(
         "process_id: {}\n--- last {} lines ---\n{}",
