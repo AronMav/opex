@@ -263,6 +263,13 @@ pub async fn get_or_create_session(
             Some(s) if s.is_terminal() && s != SessionStatus::Done => {
                 crate::ReentryMode::ExplicitResume
             }
+            // FOUND row (was_new = false) with no run_status yet — created but
+            // its first turn never set a status, or a rapid re-entry before the
+            // first turn completed. This is a REUSE, not a brand-new session, so
+            // it must NOT classify as NewSession. `ReentryMode::classify(None)`
+            // returns NewSession (correct only for the was_new = true insert
+            // case), so map the found-NULL case to a continuation here.
+            None => crate::ReentryMode::NewTurnAfterDone,
             other => crate::ReentryMode::classify(other),
         }
     };
