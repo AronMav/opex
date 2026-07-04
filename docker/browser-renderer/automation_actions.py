@@ -4,16 +4,51 @@ this is unit-testable with a fake page object."""
 from fastapi import HTTPException
 from fastapi.responses import Response
 
+from ssrf_guard import is_private_or_metadata
+
+# Actions that are exempt from the post-navigation private-network re-check:
+# `create_session` never reaches this dispatcher (handled in app.py before a
+# page exists), `navigate` validates the *destination* itself (post-goto,
+# below — this also catches redirects into a private range), and `close`
+# only tears down local session state (no page interaction that could leak
+# anything).
+_GUARD_EXEMPT_ACTIONS = {"navigate", "close"}
+
+
+def _block_private(url: str | None):
+    raise HTTPException(
+        403,
+        f"blocked: page is on a private/internal address ({url or 'unknown'})",
+    )
+
 
 async def dispatch_action(page, req, sid, session_dialog):
     """Handle every action except create_session. `page` is a Playwright Page (or a
     fake in tests); `session_dialog` is the per-session dialog-state dict."""
     action = req.action
 
+    # ── Post-navigation invariant (T08 §4) ────────────────────────────────
+    # Whatever got the page to its *current* url — redirect inside goto,
+    # in-page JS navigation, a clicked link, `back` — re-validate before
+    # doing anything else with it. This is independent of (and in addition
+    # to) the Rust-side pre-check on the `url` argument, which only ever
+    # sees the argument for `navigate`/`create_session`, never the page's
+    # actual current location.
+    if action not in _GUARD_EXEMPT_ACTIONS:
+        current_url = getattr(page, "url", None)
+        if is_private_or_metadata(current_url):
+            _block_private(current_url)
+
     if action == "navigate":
         if not req.url:
             raise HTTPException(400, "url is required")
         await page.goto(req.url, wait_until="domcontentloaded", timeout=req.timeout * 1000)
+        # Re-check AFTER navigating: `goto` may have followed a redirect
+        # onto a private/metadata address even though the requested `url`
+        # itself was fine (T01 §2, T08 §4 note 3).
+        final_url = getattr(page, "url", None) or req.url
+        if is_private_or_metadata(final_url):
+            _block_private(final_url)
         title = await page.title() if hasattr(page, "title") else ""
         return {"status": "navigated", "url": req.url, "title": title or ""}
 
@@ -104,6 +139,12 @@ async def dispatch_action(page, req, sid, session_dialog):
 
     if action == "back":
         await page.go_back(wait_until="domcontentloaded", timeout=req.timeout * 1000)
+        # Re-check AFTER navigating back (T08 §1): the pre-dispatch guard
+        # above only saw the page's PRE-back url; history could easily hold
+        # a private/internal address (e.g. an earlier same-tab redirect).
+        back_url = getattr(page, "url", None)
+        if is_private_or_metadata(back_url):
+            _block_private(back_url)
         return {"status": "navigated_back", "url": page.url}
 
     if action == "press":

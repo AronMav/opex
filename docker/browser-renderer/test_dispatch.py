@@ -129,3 +129,135 @@ async def test_unknown_action_raises():
     p = FakePage()
     with pytest.raises(HTTPException):
         await dispatch_action(p, req(action="bogus"), "s1", {})
+
+
+# ── Post-navigation SSRF guard (T08 §1, §4) ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_action_blocked_when_page_on_metadata_ip():
+    from fastapi import HTTPException
+    p = FakePage()
+    p.url = "http://169.254.169.254/latest/meta-data/"
+    with pytest.raises(HTTPException) as exc:
+        await dispatch_action(p, req(action="click", selector="#x"), "s1", {})
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_content_blocked_when_page_on_private_ip():
+    from fastapi import HTTPException
+    p = FakePage()
+    p.url = "http://10.0.0.5/"
+
+    async def inner_text(_sel):
+        return "should not be reached"
+    p.inner_text = inner_text
+
+    async def content():
+        return "<html></html>"
+    p.content = content
+
+    with pytest.raises(HTTPException) as exc:
+        await dispatch_action(p, req(action="content"), "s1", {})
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_evaluate_blocked_when_page_on_private_ip():
+    from fastapi import HTTPException
+    p = FakePage()
+    p.url = "http://192.168.1.1/"
+    with pytest.raises(HTTPException):
+        await dispatch_action(p, req(action="evaluate", js="1+1"), "s1", {})
+    # evaluate() itself was never invoked
+    assert not p.calls
+
+
+@pytest.mark.asyncio
+async def test_action_allowed_on_public_page():
+    p = FakePage()  # default url is http://example.test/
+    out = await dispatch_action(p, req(action="hover", selector="#b"), "s1", {})
+    assert out["status"] == "hovered"
+
+
+@pytest.mark.asyncio
+async def test_back_blocked_when_landing_on_private_ip():
+    from fastapi import HTTPException
+
+    class BackToPrivatePage(FakePage):
+        async def go_back(self, **kw):
+            self.calls.append(("back",))
+            self.url = "http://169.254.169.254/"
+
+    p = BackToPrivatePage()
+    with pytest.raises(HTTPException) as exc:
+        await dispatch_action(p, req(action="back"), "s1", {})
+    assert exc.value.status_code == 403
+    assert ("back",) in p.calls  # go_back() did run; only the post-check blocks
+
+
+@pytest.mark.asyncio
+async def test_back_allowed_when_landing_on_public_page():
+    p = FakePage()
+
+    async def go_back(**kw):
+        p.calls.append(("back",))
+        p.url = "http://example.test/other"
+    p.go_back = go_back
+
+    out = await dispatch_action(p, req(action="back"), "s1", {})
+    assert out["status"] == "navigated_back"
+    assert out["url"] == "http://example.test/other"
+
+
+@pytest.mark.asyncio
+async def test_navigate_blocked_when_goto_redirects_to_private():
+    from fastapi import HTTPException
+
+    class RedirectingPage(FakePage):
+        async def goto(self, url, **kw):
+            self.calls.append(("goto", url))
+            self.url = "http://169.254.169.254/"
+
+        async def title(self):
+            return "redirected"
+
+    p = RedirectingPage()
+    with pytest.raises(HTTPException) as exc:
+        await dispatch_action(p, req(action="navigate", url="http://example.test/redirect-me"), "s1", {})
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_navigate_allowed_when_goto_stays_public():
+    class GotoPage(FakePage):
+        async def goto(self, url, **kw):
+            self.calls.append(("goto", url))
+            self.url = url
+
+        async def title(self):
+            return "ok"
+
+    p = GotoPage()
+    out = await dispatch_action(p, req(action="navigate", url="http://example.test/"), "s1", {})
+    assert out["status"] == "navigated"
+
+
+@pytest.mark.asyncio
+async def test_navigate_allowed_for_its_profile_public_domain():
+    """Regression guard for the ITS integration (workspace/tools/its.yaml,
+    profile='its'): its.1c.ru is a legitimate public domain and must never
+    trip the private/metadata guard."""
+    class ItsPage(FakePage):
+        async def goto(self, url, **kw):
+            self.calls.append(("goto", url))
+            self.url = url
+
+        async def title(self):
+            return "ИТС"
+
+    p = ItsPage()
+    out = await dispatch_action(
+        p, req(action="navigate", url="https://its.1c.ru/db/v854doc"), "s1", {}
+    )
+    assert out["status"] == "navigated"
