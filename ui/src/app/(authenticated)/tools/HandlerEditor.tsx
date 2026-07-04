@@ -393,7 +393,7 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
           {errors.length > 0 && (
             <ul className="space-y-1">
               {errors.map((e, i) => (
-                <li key={i} className="text-sm text-destructive">
+                <li key={i} className="text-sm text-destructive break-words">
                   {e.field ? <span className="font-medium">{e.field}: </span> : null}
                   {e.message}
                 </li>

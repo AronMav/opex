@@ -305,7 +305,7 @@ export default function CronPage() {
                             ? Math.round((new Date(r.finished_at).getTime() - new Date(r.started_at).getTime()) / 1000)
                             : null;
                           return (
-                            <div key={r.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border/30">
+                            <div key={r.id} className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 border border-border/30 min-w-0 overflow-hidden">
                               <StatusBadge
                                 status={r.status === "success" ? "success" : r.status === "error" ? "error" : "pending"}
                                 size="sm"

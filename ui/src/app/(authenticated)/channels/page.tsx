@@ -299,7 +299,7 @@ export default function ChannelsPage() {
         ) : (
           <div className="space-y-6">
             {Object.entries(grouped).map(([agentName, agentChannels]) => (
-              <Card key={agentName} interactive={false} className="p-5 md:p-6">
+              <Card key={agentName} interactive={false} className="p-5 md:p-6 min-w-0 overflow-hidden">
                 <SectionHeader icon={Bot} title={agentName} count={agentChannels.length} />
                 <div className="space-y-3">
                   {agentChannels.map((ch) => {

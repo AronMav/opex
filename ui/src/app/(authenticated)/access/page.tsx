@@ -219,7 +219,7 @@ export default function AccessPage() {
             const isSaving = savingAgents.has(agent);
 
             return (
-              <Card key={agent} className="overflow-hidden p-0">
+              <Card key={agent} className="overflow-hidden p-0 min-w-0">
                 {/* Compact header row */}
                 <button
                   className="w-full flex flex-wrap items-center gap-3 p-4 hover:bg-muted/30 transition-colors text-left"
@@ -300,7 +300,7 @@ export default function AccessPage() {
                           <span className="text-xs font-semibold text-warning">{t("access.pending_approvals")}</span>
                         </div>
                         {agentPending.map((p) => (
-                          <div key={p.code} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2">
+                          <div key={p.code} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2 min-w-0">
                             <div className="flex items-center gap-2 min-w-0">
                               <span className="font-semibold text-xs truncate">{p.display_name || t("access.unknown_user")}</span>
                               <Badge variant="outline" size="xs" className="font-mono bg-background shrink-0">{p.code}</Badge>
@@ -333,7 +333,7 @@ export default function AccessPage() {
                       ) : (
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                           {agentUsers.map((u) => (
-                            <div key={u.channel_user_id} className="group flex items-center gap-2.5 rounded-lg border border-border/50 bg-card/30 px-3 py-2 transition-colors hover:bg-card/50">
+                            <div key={u.channel_user_id} className="group flex items-center gap-2.5 rounded-lg border border-border/50 bg-card/30 px-3 py-2 min-w-0 overflow-hidden transition-colors hover:bg-card/50">
                               <div className="flex flex-col min-w-0 flex-1">
                                 <span className="font-semibold text-xs truncate">{u.display_name || "—"}</span>
                                 <span className="font-mono text-3xs text-muted-foreground-subtle truncate">{u.channel_user_id}</span>
