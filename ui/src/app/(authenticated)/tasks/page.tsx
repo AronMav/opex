@@ -196,7 +196,7 @@ export default function CronPage() {
         ) : (
           <div className="grid gap-4 md:gap-6">
             {jobs.map((j) => (
-              <Card key={j.id} className={`group relative flex flex-col md:flex-row md:flex-wrap md:items-stretch gap-4 p-5 transition-all duration-300 ${
+              <Card key={j.id} className={`group relative flex flex-col md:flex-row md:flex-wrap md:items-stretch gap-4 p-5 min-w-0 overflow-hidden transition-all duration-300 ${
                 j.enabled
                   ? "hover:shadow-lg"
                   : "opacity-70 hover:opacity-100"

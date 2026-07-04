@@ -656,7 +656,7 @@ export default function ConfigPage() {
                     typing: Keyboard,
                   };
                   return (
-                  <Card key={section} className="p-4 md:p-5">
+                  <Card key={section} className="p-4 md:p-5 min-w-0 overflow-hidden">
                     <SectionHeader icon={sectionIcons[section] ?? Settings} title={section} />
                     <div className="space-y-1.5">
                       {Object.entries(values).map(([key, val]) => (

@@ -597,7 +597,7 @@ export default function AgentsPage() {
       ) : (
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {filteredAgents.map((a) => (
-            <Card key={a.name} interactive className="group p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col">
+            <Card key={a.name} interactive className="group p-4 md:p-5 transition-all duration-300 overflow-hidden flex flex-col min-w-0">
               <div className="flex items-start gap-3 mb-4 min-w-0">
                 <div className="relative shrink-0">
                   <IconTile tone="muted" size="lg" className="border-primary/30 shadow-inner group-hover:border-primary/50 transition-colors overflow-hidden">

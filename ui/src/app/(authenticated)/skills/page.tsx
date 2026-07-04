@@ -647,7 +647,7 @@ export default function SkillsPage() {
             const isArchived = skill.state === "archived";
 
             return (
-              <Card key={skill.name} className={`p-5 space-y-4 ${isArchived ? "opacity-60" : ""}`}>
+              <Card key={skill.name} className={`p-5 space-y-4 min-w-0 overflow-hidden ${isArchived ? "opacity-60" : ""}`}>
                 {/* Header */}
                 <div className="flex items-start gap-3">
                   <IconTile tone="primary" size="md">
