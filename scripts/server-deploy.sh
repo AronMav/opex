@@ -107,8 +107,17 @@ fi
 # start them — `ensure_running` only inspect+start, never create. `up --no-start`
 # is idempotent: creates any missing container from already-built images. If an
 # image is absent, build first: `docker compose --profile on-demand build`.
+#
+# `--no-recreate` is CRITICAL: without it, `up` reconciles every in-scope
+# service — including the profile-less always-on ones (postgres,
+# browser-renderer, …) — and RECREATES them on any config-hash drift, leaving
+# them stopped (`--no-start`) for ~60s until something starts them again. That
+# briefly kills Postgres mid-deploy and used to crash-loop opex-core with
+# "pool timed out". `--no-recreate` makes this step create-missing-only and
+# never touch running infrastructure. (core also retries its startup DB
+# connection now, so this is defence-in-depth, not the sole guard.)
 echo "==> ensure on-demand MCP containers exist"
-if (cd "${RUN_DIR}/docker" && docker compose --profile on-demand up --no-start >/dev/null 2>&1); then
+if (cd "${RUN_DIR}/docker" && docker compose --profile on-demand up --no-start --no-recreate >/dev/null 2>&1); then
     echo "  MCP containers ensured ($(docker ps -a --format '{{.Names}}' | grep -c '^mcp-') present)"
 else
     echo "  MCP ensure skipped — build images: (cd ${RUN_DIR}/docker && docker compose --profile on-demand build)"
