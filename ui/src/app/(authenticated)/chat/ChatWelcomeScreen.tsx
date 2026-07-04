@@ -20,7 +20,7 @@ export function ChatWelcomeScreen() {
           {agentIconUrl ? (
             <img src={agentIconUrl} alt={currentAgent} className="h-full w-full object-cover" />
           ) : (
-            <WalnutMark size={52} className="text-primary/70" />
+            <WalnutMark size={35} className="text-primary/70" />
           )}
         </div>
         <div className="absolute -bottom-1 -right-1 h-4 w-4 rounded-full border-2 border-card bg-success animate-pulse" />
