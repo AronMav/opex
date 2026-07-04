@@ -788,7 +788,7 @@ function MonitorPageInner() {
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                           {infra.map((c) => (
-                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/10" : ""}`}>
+                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group min-w-0 overflow-hidden ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/10" : ""}`}>
                               <span className={`h-3 w-3 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
                               <div className="min-w-0 flex-1">
                                 <span className="text-xs font-semibold text-foreground block">{c.name}</span>
@@ -820,7 +820,7 @@ function MonitorPageInner() {
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                           {agents.map((c) => (
-                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/10" : ""}`}>
+                            <Card key={c.name} className={`px-3 py-2.5 flex items-center gap-2 group min-w-0 overflow-hidden ${!c.healthy ? "border-l-2 border-l-destructive bg-destructive/10" : ""}`}>
                               <span className={`h-3 w-3 rounded-full shrink-0 ${c.healthy ? "bg-success" : "bg-destructive"}`} />
                               <div className="min-w-0 flex-1">
                                 <span className="text-xs font-semibold text-foreground block">{c.name}</span>

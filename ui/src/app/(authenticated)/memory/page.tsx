@@ -208,7 +208,7 @@ export default function MemoryPage() {
                 {chunks.map((doc) => {
                   const isSession = doc.source?.startsWith("auto:session") || doc.source?.startsWith("Session:");
                   return (
-                    <Card key={doc.id} interactive className="group relative flex flex-col p-4">
+                    <Card key={doc.id} interactive className="group relative flex flex-col p-4 min-w-0 overflow-hidden">
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
