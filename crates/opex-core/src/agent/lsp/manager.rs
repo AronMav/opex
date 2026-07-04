@@ -481,15 +481,23 @@ const MAX_SOURCE_CHARS: usize = 80;
 /// prompt-injection vector — a hostile identifier could embed newlines to
 /// forge fake tool-result boundaries, or a long payload to smuggle
 /// instructions. This collapses control characters (including `\r`/`\n`)
-/// to a single space and clamps the result to `max_len` chars.
+/// to a single space, strips zero-width/bidi-override Unicode (Cf class —
+/// U+200B ZWSP, U+202E RLO, etc. — via [`crate::redact::strip_invisible_unicode`],
+/// Batch K P3: these aren't `char::is_control()` but can still visually
+/// reorder/hide malicious content in the diagnostic text), and clamps the
+/// result to `max_len` chars.
 fn sanitize_diag_field(value: &str, max_len: usize) -> String {
     let collapsed: String = value
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
+    let invisible_stripped = crate::redact::strip_invisible_unicode(&collapsed);
     // Collapse repeated whitespace introduced by the control-char replacement
     // and trim, so `\n\n` doesn't turn into an awkward double space.
-    let normalized = collapsed.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = invisible_stripped
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     normalized.chars().take(max_len).collect()
 }
 
@@ -993,6 +1001,26 @@ mod tests {
         let long = "A".repeat(1000);
         let out = sanitize_diag_field(&long, 300);
         assert_eq!(out.chars().count(), 300);
+    }
+
+    #[test]
+    fn sanitize_diag_field_strips_zero_width_and_bidi_chars() {
+        // Batch K P3: zero-width space + RLO bidi-override, neither of which
+        // is `char::is_control()`, must still be stripped.
+        let hostile = "safe\u{200B}text\u{202E}reversed";
+        let out = sanitize_diag_field(hostile, 300);
+        assert!(!out.contains('\u{200B}'), "zero-width space must be stripped: {out:?}");
+        assert!(!out.contains('\u{202E}'), "RLO bidi override must be stripped: {out:?}");
+        assert!(out.contains("safe"));
+        assert!(out.contains("text"));
+        assert!(out.contains("reversed"));
+    }
+
+    #[test]
+    fn sanitize_diag_field_preserves_cyrillic_and_emoji() {
+        let value = "тип не совпадает 🚀";
+        let out = sanitize_diag_field(value, 300);
+        assert_eq!(out, value);
     }
 
     #[test]
