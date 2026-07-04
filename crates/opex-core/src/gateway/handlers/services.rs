@@ -234,6 +234,10 @@ pub(crate) async fn api_service_action(
             Ok(Ok(output)) => {
                 let stdout: String = String::from_utf8_lossy(&output.stdout).chars().take(8000).collect();
                 let stderr: String = String::from_utf8_lossy(&output.stderr).chars().take(4000).collect();
+                // The allowlist permits `env`/`printenv`; redact before this
+                // reaches the API response (T02 triage Пункт 5).
+                let stdout = crate::redact::redact_terminal_output(&stdout);
+                let stderr = crate::redact::redact_terminal_output(&stderr);
                 Json(json!({"ok": output.status.success(), "exit_code": output.status.code(), "stdout": stdout, "stderr": stderr})).into_response()
             }
             Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"ok": false, "error": format!("failed to spawn docker: {}", e)}))).into_response(),
