@@ -1273,11 +1273,21 @@ pub async fn handle_lsp(
 
     // For rename the manager returns a JSON envelope — apply it.
     let is_rename = matches!(lsp_action, LspAction::Rename { .. });
+    // Diagnostics echo repository-supplied text (identifier/type names) that
+    // a hostile repo can craft for prompt injection — wrap in an untrusted
+    // provenance delimiter before it reaches the LLM (T05 Пункт 5). Other
+    // actions (definition/references/hover/symbols/rename) are out of scope
+    // for this hardening pass.
+    let is_diagnostics = matches!(lsp_action, LspAction::Diagnostics);
 
     let raw = match mgr.op(agent_name, workspace_dir, file, lsp_action).await {
         Ok(s) => s,
         Err(e) => return format!("Error: {e}"),
     };
+
+    if is_diagnostics {
+        return crate::agent::provenance::wrap_lsp_output(file, &raw);
+    }
 
     if !is_rename {
         return raw;

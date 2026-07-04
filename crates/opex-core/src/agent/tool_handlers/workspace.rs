@@ -39,8 +39,11 @@ pub(crate) async fn append_diagnostics(
             if text.is_empty() || text == "No diagnostics." {
                 result.push_str("\n\nNo diagnostics.");
             } else {
-                result.push_str("\n\nDiagnostics:\n");
-                result.push_str(&text);
+                result.push_str("\n\n");
+                result.push_str(&crate::agent::provenance::wrap_lsp_output(
+                    file,
+                    &format!("Diagnostics:\n{text}"),
+                ));
             }
         }
         // best-effort: Err silently ignored
