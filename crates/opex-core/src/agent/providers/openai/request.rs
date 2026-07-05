@@ -25,7 +25,6 @@ impl OpenAiCompatibleProvider {
             serde_json::json!({
                 "model": effective_model,
                 "messages": messages_to_openai_format(messages, self.uses_reasoning_content()),
-                "temperature": self.temperature,
                 "stream": true,
                 // Opt into the usage block on the final chunk. OpenAI-compatible
                 // servers (Ollama, vLLM, SGLang, LiteLLM, DeepSeek, Moonshot, …)
@@ -39,9 +38,19 @@ impl OpenAiCompatibleProvider {
             serde_json::json!({
                 "model": effective_model,
                 "messages": messages_to_openai_format(messages, self.uses_reasoning_content()),
-                "temperature": self.temperature,
             })
         };
+        // Temperature — omitted when the catalog marks the model as not accepting
+        // it (Phase 3c): o1/reasoning-style models 400 on a `temperature` param.
+        // Unknown model → send it (permissive default).
+        let allow_temperature = crate::agent::providers::catalog::global_caps(
+            &self.provider_name,
+            &effective_model,
+        )
+        .is_none_or(|c| c.temperature);
+        if allow_temperature {
+            body["temperature"] = serde_json::json!(self.temperature);
+        }
         if let Some(mt) = self.max_tokens {
             // Clamp to the model's catalog output limit (Phase 3): a configured
             // max_tokens above the model's cap 400s on some providers.

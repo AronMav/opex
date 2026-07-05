@@ -4,7 +4,7 @@
 //! `models{}` map; every model has `limit: { context, output }`. See
 //! `docs/architecture/2026-07-05-model-catalog-multicatalog.md`.
 
-use super::{CatalogSource, CostMeta, ModelCatalog, ModelMeta, ProviderMeta};
+use super::{Caps, CatalogSource, CostMeta, ModelCatalog, ModelMeta, ProviderMeta};
 use serde_json::Value;
 
 const OPENAI_COMPAT_NPM: &str = "@ai-sdk/openai-compatible";
@@ -33,10 +33,17 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
             }
             let output = limit.get("output").and_then(as_u32);
             let cost = parse_cost(mv.get("cost"));
+            let caps = Some(Caps {
+                attachment: mv.get("attachment").and_then(Value::as_bool).unwrap_or(false),
+                reasoning: mv.get("reasoning").and_then(Value::as_bool).unwrap_or(false),
+                tool_call: mv.get("tool_call").and_then(Value::as_bool).unwrap_or(false),
+                // Default true: absence must not spuriously disable temperature.
+                temperature: mv.get("temperature").and_then(Value::as_bool).unwrap_or(true),
+            });
             cat.insert(
                 provider_id,
                 model_id,
-                ModelMeta { context, output, cost, source: CatalogSource::ModelsDev },
+                ModelMeta { context, output, cost, caps, source: CatalogSource::ModelsDev },
             );
             model_ids.push(model_id.clone());
             n += 1;
