@@ -70,6 +70,13 @@ pub fn global_caps(provider_type: &str, model: &str) -> Option<Caps> {
     global().read().ok().and_then(|c| c.caps(provider_type, model))
 }
 
+/// Vendor-hinted full resolution (context + caps) for model discovery. The
+/// `vendor` (a provider's `owned_by`) is tried as an authoritative exact tier
+/// above the `provider_type` chain. See [`ModelCatalog::meta`].
+pub fn global_meta(provider_type: &str, vendor: Option<&str>, model: &str) -> Option<ModelMeta> {
+    global().read().ok().and_then(|c| c.meta(provider_type, vendor, model))
+}
+
 /// Which aggregator a `ModelMeta` came from. Lower `priority()` wins on conflict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogSource {
@@ -220,27 +227,50 @@ impl ModelCatalog {
     /// Resolve a model's context window for one of OUR `provider_type`s.
     /// Returns `None` when the model isn't in the catalog (caller falls back).
     pub fn context(&self, provider_type: &str, model: &str) -> Option<u32> {
-        self.lookup(provider_type, model).map(|m| m.context)
+        self.lookup(provider_type, None, model).map(|m| m.context)
     }
 
     /// Resolve a model's max-output-tokens, when the catalog reports it.
     pub fn output(&self, provider_type: &str, model: &str) -> Option<u32> {
-        self.lookup(provider_type, model).and_then(|m| m.output)
+        self.lookup(provider_type, None, model).and_then(|m| m.output)
     }
 
     /// Resolve a model's token cost (USD/1M), when the catalog reports it.
     pub fn cost(&self, provider_type: &str, model: &str) -> Option<CostMeta> {
-        self.lookup(provider_type, model).and_then(|m| m.cost)
+        self.lookup(provider_type, None, model).and_then(|m| m.cost)
     }
 
     /// Resolve a model's capability flags, when the catalog reports them.
     pub fn caps(&self, provider_type: &str, model: &str) -> Option<Caps> {
-        self.lookup(provider_type, model).and_then(|m| m.caps)
+        self.lookup(provider_type, None, model).and_then(|m| m.caps)
     }
 
-    fn lookup(&self, provider_type: &str, model: &str) -> Option<&ModelMeta> {
+    /// Full vendor-hinted resolution for model discovery, which knows the
+    /// model's true vendor from the provider's `/v1/models` `owned_by`. The
+    /// vendor is tried as an authoritative exact-match tier ABOVE the
+    /// `provider_type` chain, so an openai-compat provider still lands on the
+    /// model's native models.dev row (complete caps) instead of a reseller/
+    /// gateway duplicate that happened to win the flat loose slot.
+    pub fn meta(&self, provider_type: &str, vendor: Option<&str>, model: &str) -> Option<ModelMeta> {
+        self.lookup(provider_type, vendor, model).cloned()
+    }
+
+    fn lookup(&self, provider_type: &str, vendor: Option<&str>, model: &str) -> Option<&ModelMeta> {
         let mid = normalize_model(model);
 
+        // 0. Authoritative: the model's true vendor (discovery `owned_by`), when
+        //    it names a catalog provider id directly (e.g. `xiaomi`). Beats
+        //    reseller/gateway rows that drop capability fields. Skipped for junk
+        //    `owned_by` values (`system`, org ids) — they simply miss and fall
+        //    through.
+        if let Some(v) = vendor {
+            let v = v.trim().to_ascii_lowercase();
+            if !v.is_empty()
+                && let Some(m) = self.exact.get(&(v, mid.clone()))
+            {
+                return Some(m);
+            }
+        }
         // 1. Exact match under any catalog provider id mapped from provider_type.
         for cid in catalog_provider_ids(provider_type) {
             if let Some(m) = self.exact.get(&(cid.to_string(), mid.clone())) {
@@ -381,6 +411,35 @@ mod tests {
                 c.caps("openai", "mimo-v2.5-pro").map(|c| c.reasoning_content),
                 Some(true),
                 "reasoning_content must OR-merge regardless of insert order (native_first={native_first})",
+            );
+        }
+    }
+
+    #[test]
+    fn vendor_hint_resolves_native_row_over_reseller() {
+        // openai-compat provider_type can't reach the `xiaomi` row; the discovery
+        // `owned_by="xiaomi"` hint lands on it authoritatively — native context
+        // (1048576, not the reseller's 1050000) and complete caps — regardless of
+        // (nondeterministic) insertion order.
+        for native_first in [true, false] {
+            let mut c = ModelCatalog::new();
+            let native = || meta_caps(1_048_576, true, CatalogSource::ModelsDev);
+            let reseller = || meta_caps(1_050_000, false, CatalogSource::ModelsDev);
+            if native_first {
+                c.insert("xiaomi", "mimo-v2.5-pro", native());
+                c.insert("vercel", "xiaomi/mimo-v2.5-pro", reseller());
+            } else {
+                c.insert("vercel", "xiaomi/mimo-v2.5-pro", reseller());
+                c.insert("xiaomi", "mimo-v2.5-pro", native());
+            }
+            let m = c.meta("openai", Some("xiaomi"), "mimo-v2.5-pro").expect("vendor-hinted hit");
+            assert_eq!(m.context, 1_048_576, "vendor hint picks native row (native_first={native_first})");
+            assert_eq!(m.caps.map(|c| c.reasoning_content), Some(true));
+            // Junk `owned_by` misses the vendor tier and falls through to loose
+            // (still rc=true via OR-merge, but numeric field is order-dependent).
+            assert_eq!(
+                c.meta("openai", Some("system"), "mimo-v2.5-pro").and_then(|m| m.caps).map(|c| c.reasoning_content),
+                Some(true),
             );
         }
     }
