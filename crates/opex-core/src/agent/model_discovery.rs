@@ -52,8 +52,16 @@ pub struct ModelInfo {
 pub fn enrich_from_catalog(provider_type: &str, models: &mut [ModelInfo]) {
     use opex_catalog as catalog;
     for m in models.iter_mut() {
-        m.context_window = catalog::global_context(provider_type, &m.id);
-        if let Some(c) = catalog::global_caps(provider_type, &m.id) {
+        // Resolve once, hinted by the model's true vendor (`owned_by`), so an
+        // openai-compat provider lands on the model's native models.dev row
+        // rather than a reseller/gateway duplicate. context + caps come from the
+        // same row (no divergence).
+        let Some(meta) = catalog::global_meta(provider_type, m.owned_by.as_deref(), &m.id) else {
+            m.context_window = None;
+            continue;
+        };
+        m.context_window = Some(meta.context);
+        if let Some(c) = meta.caps {
             m.vision = Some(c.attachment);
             m.reasoning = Some(c.reasoning);
             m.reasoning_content = Some(c.reasoning_content);
