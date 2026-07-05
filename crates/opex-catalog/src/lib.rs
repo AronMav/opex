@@ -212,9 +212,9 @@ impl ModelCatalog {
         if let Some((_vendor, suffix)) = mid.split_once('/')
             && !suffix.is_empty()
         {
-            upsert_loose(&mut self.loose, suffix.to_string(), meta.clone());
+            upsert(&mut self.loose, suffix.to_string(), meta.clone());
         }
-        upsert_loose(&mut self.loose, mid, meta);
+        upsert(&mut self.loose, mid, meta);
     }
 
     /// Resolve a model's context window for one of OUR `provider_type`s.
@@ -258,22 +258,46 @@ impl ModelCatalog {
     }
 }
 
-fn upsert(map: &mut HashMap<(String, String), ModelMeta>, key: (String, String), meta: ModelMeta) {
-    match map.get(&key) {
-        Some(existing) if existing.source.priority() <= meta.source.priority() => {}
-        _ => {
-            map.insert(key, meta);
-        }
+/// Merge two optional capability sets. Capability-*presence* flags are
+/// monotonic-OR: a catalog source that omits `interleaved` / `attachment` / … is
+/// not asserting the model *lacks* it (models.dev aggregator rows — vercel,
+/// requesty, … — are routinely less complete than the native provider's row).
+/// `temperature` is the exception: `false` is the notable restrictive fact
+/// (o1-style models), so it's AND-ed. Without this, a less-detailed duplicate
+/// (e.g. vercel's `xiaomi/mimo-v2.5-pro`, which drops `interleaved`) winning a
+/// loose slot would mask the native row's `reasoning_content`.
+fn merge_caps(a: Option<Caps>, b: Option<Caps>) -> Option<Caps> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(Caps {
+            attachment: a.attachment || b.attachment,
+            reasoning: a.reasoning || b.reasoning,
+            tool_call: a.tool_call || b.tool_call,
+            temperature: a.temperature && b.temperature,
+            reasoning_content: a.reasoning_content || b.reasoning_content,
+        }),
+        (Some(a), None) => Some(a),
+        (None, b) => b,
     }
 }
 
-fn upsert_loose(map: &mut HashMap<String, ModelMeta>, key: String, meta: ModelMeta) {
-    match map.get(&key) {
-        Some(existing) if existing.source.priority() <= meta.source.priority() => {}
-        _ => {
-            map.insert(key, meta);
+/// Insert-or-merge one entry. The higher-priority source keeps the numeric
+/// fields (context/output/cost) and `source`; capability flags are OR-merged
+/// across both via [`merge_caps`] so a duplicate row can only ADD capabilities,
+/// never mask them — regardless of (nondeterministic) insertion order.
+fn upsert<K: std::hash::Hash + Eq>(map: &mut HashMap<K, ModelMeta>, key: K, mut meta: ModelMeta) {
+    if let Some(existing) = map.get(&key) {
+        if existing.source.priority() <= meta.source.priority() {
+            // Existing wins numerics; absorb `meta`'s capability presence.
+            let merged = merge_caps(existing.caps, meta.caps);
+            if let Some(e) = map.get_mut(&key) {
+                e.caps = merged;
+            }
+            return;
         }
+        // `meta` wins numerics; carry the existing row's capability presence forward.
+        meta.caps = merge_caps(meta.caps, existing.caps);
     }
+    map.insert(key, meta);
 }
 
 #[cfg(test)]
@@ -317,6 +341,48 @@ mod tests {
         c.insert("requesty", "xai/grok-4", meta(256_000, CatalogSource::ModelsDev));
         // our provider sends the bare `grok-4`
         assert_eq!(c.context("xai", "grok-4"), Some(256_000));
+    }
+
+    fn meta_caps(context: u32, reasoning_content: bool, source: CatalogSource) -> ModelMeta {
+        ModelMeta {
+            context,
+            output: None,
+            cost: None,
+            caps: Some(Caps {
+                attachment: false,
+                reasoning: true,
+                tool_call: true,
+                temperature: true,
+                reasoning_content,
+            }),
+            source,
+        }
+    }
+
+    #[test]
+    fn loose_caps_or_merge_is_order_independent() {
+        // Reproduces the real models.dev conflict: `vercel` lists
+        // `xiaomi/mimo-v2.5-pro` WITHOUT `interleaved` (reasoning_content=false),
+        // while `xiaomi`'s own `mimo-v2.5-pro` HAS it. Both are ModelsDev (equal
+        // priority) and collide in the loose `mimo-v2.5-pro` slot. Whichever
+        // wins the numeric fields, reasoning_content must survive — either way.
+        for (native_first, native_rc, agg_rc) in [(true, true, false), (false, true, false)] {
+            let mut c = ModelCatalog::new();
+            let native = || meta_caps(1_048_576, native_rc, CatalogSource::ModelsDev);
+            let agg = || meta_caps(1_050_000, agg_rc, CatalogSource::ModelsDev);
+            if native_first {
+                c.insert("xiaomi", "mimo-v2.5-pro", native());
+                c.insert("vercel", "xiaomi/mimo-v2.5-pro", agg());
+            } else {
+                c.insert("vercel", "xiaomi/mimo-v2.5-pro", agg());
+                c.insert("xiaomi", "mimo-v2.5-pro", native());
+            }
+            assert_eq!(
+                c.caps("openai", "mimo-v2.5-pro").map(|c| c.reasoning_content),
+                Some(true),
+                "reasoning_content must OR-merge regardless of insert order (native_first={native_first})",
+            );
+        }
     }
 
     #[test]
