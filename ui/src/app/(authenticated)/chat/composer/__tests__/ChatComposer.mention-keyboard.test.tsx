@@ -34,6 +34,7 @@ vi.mock("@/lib/queries", () => ({
   useAgents: () => ({ data: [] }),
   useProviders: () => ({ data: [] }),
   useProviderModels: () => ({ data: [] }),
+  useProviderModelsDetailed: () => ({ data: [] }),
 }));
 
 // Two agents so MentionAutocomplete renders (filtered peers = ["Beta"]).

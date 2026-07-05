@@ -41,6 +41,7 @@ vi.mock("@/lib/queries", () => ({
   useAgents: () => ({ data: [] }),
   useProviders: () => ({ data: [] }),
   useProviderModels: () => ({ data: [] }),
+  useProviderModelsDetailed: () => ({ data: [] }),
 }));
 
 vi.mock("@/stores/auth-store", () => ({
