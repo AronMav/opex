@@ -43,7 +43,14 @@ impl OpenAiCompatibleProvider {
             })
         };
         if let Some(mt) = self.max_tokens {
-            body["max_tokens"] = serde_json::json!(mt);
+            // Clamp to the model's catalog output limit (Phase 3): a configured
+            // max_tokens above the model's cap 400s on some providers.
+            let capped = crate::agent::providers::catalog::global_output(
+                &self.provider_name,
+                &effective_model,
+            )
+            .map_or(mt, |lim| mt.min(lim));
+            body["max_tokens"] = serde_json::json!(capped);
         }
 
         if !tools.is_empty() {

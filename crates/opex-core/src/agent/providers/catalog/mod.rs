@@ -55,6 +55,16 @@ pub fn global_providers() -> Vec<ProviderMeta> {
     global().read().map(|c| c.providers_sorted()).unwrap_or_default()
 }
 
+/// Look up a model's max-output-tokens in the process-global catalog.
+pub fn global_output(provider_type: &str, model: &str) -> Option<u32> {
+    global().read().ok().and_then(|c| c.output(provider_type, model))
+}
+
+/// Look up a model's token cost (USD per 1M tokens) in the process-global catalog.
+pub fn global_cost(provider_type: &str, model: &str) -> Option<CostMeta> {
+    global().read().ok().and_then(|c| c.cost(provider_type, model))
+}
+
 /// Which aggregator a `ModelMeta` came from. Lower `priority()` wins on conflict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogSource {
@@ -77,17 +87,22 @@ impl CatalogSource {
     }
 }
 
-/// Metadata for one model. Phase 1 only consumes `context`; the rest is carried
-/// for later phases (cost tracking, capability gating) and to keep the loader
-/// shape stable.
+/// USD cost per **1M tokens** (models.dev `cost` units).
+#[derive(Debug, Clone, Copy)]
+pub struct CostMeta {
+    pub input: f64,
+    pub output: f64,
+}
+
+/// Metadata for one model.
 #[derive(Debug, Clone)]
 pub struct ModelMeta {
     /// Total context window in tokens (matches `compressor.context_limit`).
     pub context: u32,
-    /// Max output tokens, when the source reports it. Carried for Phase 3
-    /// (response cap); not consumed in Phase 1.
-    #[allow(dead_code)]
+    /// Max output tokens, when the source reports it (Phase 3 max_tokens cap).
     pub output: Option<u32>,
+    /// USD/1M-token cost, when the source reports it (Phase 3 $ usage).
+    pub cost: Option<CostMeta>,
     pub source: CatalogSource,
 }
 
@@ -175,6 +190,16 @@ impl ModelCatalog {
         self.lookup(provider_type, model).map(|m| m.context)
     }
 
+    /// Resolve a model's max-output-tokens, when the catalog reports it.
+    pub fn output(&self, provider_type: &str, model: &str) -> Option<u32> {
+        self.lookup(provider_type, model).and_then(|m| m.output)
+    }
+
+    /// Resolve a model's token cost (USD/1M), when the catalog reports it.
+    pub fn cost(&self, provider_type: &str, model: &str) -> Option<CostMeta> {
+        self.lookup(provider_type, model).and_then(|m| m.cost)
+    }
+
     fn lookup(&self, provider_type: &str, model: &str) -> Option<&ModelMeta> {
         let mid = normalize_model(model);
 
@@ -218,7 +243,7 @@ mod tests {
     use super::*;
 
     fn meta(context: u32, source: CatalogSource) -> ModelMeta {
-        ModelMeta { context, output: None, source }
+        ModelMeta { context, output: None, cost: None, source }
     }
 
     #[test]
