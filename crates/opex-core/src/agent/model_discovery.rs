@@ -56,6 +56,7 @@ pub fn enrich_from_catalog(provider_type: &str, models: &mut [ModelInfo]) {
         if let Some(c) = catalog::global_caps(provider_type, &m.id) {
             m.vision = Some(c.attachment);
             m.reasoning = Some(c.reasoning);
+            m.reasoning_content = Some(c.reasoning_content);
             m.tools = Some(c.tool_call);
         }
     }
