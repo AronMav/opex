@@ -24,10 +24,10 @@ import { Card } from "@/components/ui/card";
 import { StatCard } from "@/components/ui/stat-card";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { SectionHeader } from "@/components/ui/section-header";
-import { ScrollableTabsList } from "@/components/ui/scrollable-tabs-list";
+import { FilterTabsList } from "@/components/ui/filter-tabs";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-import { Tabs, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -39,7 +39,7 @@ import {
   Activity, Clock, Brain, Bot, User, Wrench, Zap, RefreshCw, RotateCcw, Calendar, Database,
   CheckCircle2, XCircle, HeartPulse, AlertTriangle, Stethoscope,
   BarChart3, Cpu, ArrowUpRight, ArrowDownRight, DollarSign,
-  ShieldCheck, Check, X, ChevronRight, ScrollText, Sparkles,
+  ShieldCheck, Check, X, ChevronRight, ScrollText, Sparkles, ClipboardList,
 } from "lucide-react";
 import type { StatusInfo, StatsInfo, UsageSummary, DailyUsageResponse, AuditEvent, SessionFailureEntry, CuratorRun } from "@/types/api";
 import type { LogEntry } from "@/types/api";
@@ -611,16 +611,18 @@ function MonitorPageInner() {
     <div className="flex h-full flex-col">
       <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col flex-1 min-h-0 min-w-0">
         <div className="border-b border-border/50 bg-background px-4 md:px-6 pt-4 shrink-0 min-w-0">
-          <ScrollableTabsList className="h-9">
-            <TabsTrigger value="watchdog" className="text-xs">{t("monitor.tab_watchdog")}</TabsTrigger>
-            <TabsTrigger value="doctor" className="text-xs">{t("monitor.tab_doctor")}</TabsTrigger>
-            <TabsTrigger value="logs" className="text-xs">{t("monitor.tab_logs")}</TabsTrigger>
-            <TabsTrigger value="audit" className="text-xs">{t("monitor.tab_audit")}</TabsTrigger>
-            <TabsTrigger value="statistics" className="text-xs">{t("monitor.tab_statistics")}</TabsTrigger>
-            <TabsTrigger value="approvals" className="text-xs">{t("monitor.tab_approvals")}</TabsTrigger>
-            <TabsTrigger value="failures" className="text-xs">{t("monitor.tab_failures")}</TabsTrigger>
-            <TabsTrigger value="curator" className="text-xs">{t("monitor.tab_curator")}</TabsTrigger>
-          </ScrollableTabsList>
+          <FilterTabsList
+            items={[
+              { value: "watchdog", label: t("monitor.tab_watchdog"), icon: <ShieldCheck /> },
+              { value: "doctor", label: t("monitor.tab_doctor"), icon: <Stethoscope /> },
+              { value: "logs", label: t("monitor.tab_logs"), icon: <ScrollText /> },
+              { value: "audit", label: t("monitor.tab_audit"), icon: <ClipboardList /> },
+              { value: "statistics", label: t("monitor.tab_statistics"), icon: <BarChart3 /> },
+              { value: "approvals", label: t("monitor.tab_approvals"), icon: <CheckCircle2 /> },
+              { value: "failures", label: t("monitor.tab_failures"), icon: <AlertTriangle /> },
+              { value: "curator", label: t("monitor.tab_curator"), icon: <Sparkles /> },
+            ]}
+          />
         </div>
 
         {/* Watchdog tab */}

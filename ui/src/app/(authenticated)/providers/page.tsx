@@ -8,9 +8,8 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { ScrollableTabsList } from "@/components/ui/scrollable-tabs-list";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { FilterTabsList } from "@/components/ui/filter-tabs";
 import { SectionHeader } from "@/components/ui/section-header";
 import { Plus, RefreshCw, Zap } from "lucide-react";
 import { toast } from "sonner";
@@ -321,15 +320,14 @@ export default function ProvidersPage() {
         }
         return (
           <Tabs defaultValue={visibleCategories[0]} className="min-w-0">
-            <ScrollableTabsList className="h-9">
-              {visibleCategories.map((cap) => (
-                <TabsTrigger key={cap} value={cap}>
-                  {CATEGORY_ICONS[cap]}
-                  {capLabel(cap)}
-                  <Badge variant="secondary" size="sm" className="ml-1.5">{providersForCapability(cap).length}</Badge>
-                </TabsTrigger>
-              ))}
-            </ScrollableTabsList>
+            <FilterTabsList
+              items={visibleCategories.map((cap) => ({
+                value: cap,
+                label: capLabel(cap),
+                icon: CATEGORY_ICONS[cap],
+                count: providersForCapability(cap).length,
+              }))}
+            />
 
             {visibleCategories.map((cap) => {
               const capProviders = providersForCapability(cap);
