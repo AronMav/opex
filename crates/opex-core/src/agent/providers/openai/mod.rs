@@ -45,10 +45,11 @@ pub struct OpenAiCompatibleProvider {
     cancel: tokio_util::sync::CancellationToken,
     /// Max HTTP retry attempts on transient errors (429/5xx). Configurable per-provider via UI.
     max_retries: u32,
-    /// Operator-configured context window (tokens) from `providers.options`.
-    /// Highest-priority source in `context_limit_hint` — set it for providers
-    /// whose API doesn't expose the window (e.g. MiMo).
-    context_window_override: Option<u32>,
+    /// Operator-configured per-model context windows (tokens) from
+    /// `providers.options.context_windows`. Highest-priority source in
+    /// `context_limit_hint` — set entries for models whose API doesn't expose
+    /// the window (e.g. MiMo).
+    context_windows: Option<std::collections::BTreeMap<String, u32>>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -114,7 +115,7 @@ impl OpenAiCompatibleProvider {
             timeouts,
             cancel,
             max_retries: opts.max_retries,
-            context_window_override: opts.context_window,
+            context_windows: opts.context_windows,
         };
 
         if !opts.api_key_envs.is_empty() {
@@ -272,11 +273,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
     }
 
     async fn context_limit_hint(&self, model: &str) -> Option<u32> {
-        // Operator-configured window wins — for providers whose API doesn't
-        // expose it (e.g. MiMo's /v1/models returns no context field, leaving
-        // the model on the 128k name-heuristic fallback).
-        if let Some(w) = self.context_window_override {
-            return Some(w);
+        // Operator-configured per-model window wins — for providers whose API
+        // doesn't expose it (e.g. MiMo's /v1/models returns no context field,
+        // leaving the model on the 128k name-heuristic fallback).
+        if let Some(w) = self.context_windows.as_ref().and_then(|m| m.get(model)) {
+            return Some(*w);
         }
         if self.provider_name == "ollama" {
             self.ollama_context_limit(model).await

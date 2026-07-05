@@ -324,10 +324,11 @@ export type ProviderOptions = {
   timeouts?: Partial<TimeoutsConfig>;
   api_key_envs?: string[];
   max_retries?: number;  // 1..=10, default 3
-  // Explicit context window (tokens). Set for providers whose API doesn't
-  // expose it (e.g. MiMo). Omitted/undefined ⇒ auto-detect via provider API,
-  // then name heuristic. Must be >= 1000 (it's tokens, not thousands).
-  context_window?: number;
+  // Per-model explicit context windows (tokens), keyed by model id. Set entries
+  // for models whose provider API doesn't expose the window (e.g. MiMo). Models
+  // absent from the map ⇒ auto-detect via provider API, then name heuristic.
+  // Each value must be >= 1000 (tokens, not thousands).
+  context_windows?: Record<string, number>;
   // Unknown fields land here — UI will preserve them on round-trip.
   [extra: string]: unknown;
 };

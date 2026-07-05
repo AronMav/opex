@@ -233,47 +233,82 @@ export function TextFields({
         </fieldset>
       )}
 
-      {/* Context window override — hidden for CLI providers. Empty = auto-detect
-          via the provider API (/api/show, /v1/models), then name heuristic. */}
-      {!isCli && (
-        <fieldset className="neu-inset rounded-lg p-3 space-y-2">
-          <legend className="text-sm font-medium">
-            {t("providers.context_window_section")}
-          </legend>
-          <label htmlFor="prov-context-window" className="flex items-center justify-between gap-4">
-            <span className="text-sm">{t("providers.context_window_label")}</span>
-            <div className="flex items-center gap-2">
-              <Input
-                id="prov-context-window"
-                type="number"
-                aria-label={t("providers.context_window_label")}
-                placeholder={t("providers.context_window_auto")}
-                value={getOpts(form).context_window ?? ""}
-                onChange={(e) => {
-                  const raw = e.target.value.trim();
-                  const v = raw === "" ? undefined : Number(raw);
-                  setForm((f) => {
-                    const opts = { ...getOpts(f) };
-                    if (v === undefined || Number.isNaN(v)) delete opts.context_window;
-                    else opts.context_window = v;
-                    return { ...f, options: opts };
-                  });
-                }}
-                className="w-32 text-sm h-8"
-                min={1000}
-                step={1000}
-              />
-              {(() => {
-                const v = getOpts(form).context_window;
-                return (typeof v === "number" && v > 0 && v < 1000) ? (
-                  <span className="text-xs text-destructive">{t("providers.context_window_error")}</span>
-                ) : null;
-              })()}
+      {/* Per-model context window overrides — hidden for CLI providers. Each
+          row: a model + tokens input. Empty = auto-detect via the provider API
+          (/api/show, /v1/models), then name heuristic. Set explicitly only for
+          models whose API doesn't report the window (e.g. MiMo). */}
+      {!isCli && (() => {
+        const cw = (getOpts(form).context_windows ?? {}) as Record<string, number>;
+        const rows = Array.from(
+          new Set([
+            ...(form.default_model ? [form.default_model] : []),
+            ...discoveredModels,
+            ...Object.keys(cw),
+          ]),
+        ).filter(Boolean);
+        const setCw = (model: string, raw: string) => {
+          const v = raw.trim() === "" ? undefined : Number(raw);
+          setForm((f) => {
+            const opts = { ...getOpts(f) };
+            const map: Record<string, number> = { ...((opts.context_windows as Record<string, number>) ?? {}) };
+            if (v === undefined || Number.isNaN(v)) delete map[model];
+            else map[model] = v;
+            opts.context_windows = Object.keys(map).length ? map : undefined;
+            return { ...f, options: opts };
+          });
+        };
+        return (
+          <fieldset className="neu-inset rounded-lg p-3 space-y-2">
+            <legend className="text-sm font-medium">{t("providers.context_window_section")}</legend>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">{t("providers.context_window_hint")}</p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onDiscoverModels}
+                disabled={modelsLoading}
+                className="shrink-0 h-8"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${modelsLoading ? "animate-spin" : ""}`} />
+                {t("providers.discover")}
+              </Button>
             </div>
-          </label>
-          <p className="text-xs text-muted-foreground">{t("providers.context_window_hint")}</p>
-        </fieldset>
-      )}
+            {rows.length === 0 ? (
+              <p className="text-2xs text-muted-foreground-subtle">{t("providers.context_window_no_models")}</p>
+            ) : (
+              <div className="max-h-56 overflow-y-auto divide-y divide-border/50">
+                {rows.map((model, i) => {
+                  const v = cw[model];
+                  const invalid = typeof v === "number" && v > 0 && v < 1000;
+                  const fid = `cw-${i}`;
+                  return (
+                    <label key={model} htmlFor={fid} className="flex items-center justify-between gap-3 py-1.5">
+                      <span className="text-sm truncate" title={model}>{model}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Input
+                          id={fid}
+                          type="number"
+                          aria-label={`${model} ${t("providers.context_window_label")}`}
+                          placeholder={t("providers.context_window_auto")}
+                          value={cw[model] ?? ""}
+                          onChange={(e) => setCw(model, e.target.value)}
+                          className="w-32 text-sm h-8"
+                          min={1000}
+                          step={1000}
+                        />
+                        {invalid && (
+                          <span className="text-xs text-destructive">{t("providers.context_window_error")}</span>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
+        );
+      })()}
 
       {/* Test Connection for CLI providers */}
       {isCli && isEditing && (
