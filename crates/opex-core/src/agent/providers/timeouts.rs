@@ -60,14 +60,14 @@ pub struct ProviderOptions {
     /// Max HTTP retry attempts on transient errors (429/5xx). Default 3, range 1–10.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
-    /// Explicit context-window size (tokens) — highest-priority source for
-    /// [`resolve_context_limit`]. Set this for providers whose API does NOT
-    /// expose the window (e.g. MiMo's `/v1/models` returns no `context_window`
-    /// field), so the model isn't left on the name-heuristic fallback (128k).
-    /// When `None`, the provider probes its API, then falls back to the
-    /// name heuristic.
-    #[serde(default)]
-    pub context_window: Option<u32>,
+    /// Per-model explicit context-window sizes (tokens), keyed by model id —
+    /// highest-priority source for [`resolve_context_limit`]. Set entries for
+    /// models whose provider API does NOT expose the window (e.g. MiMo's
+    /// `/v1/models` returns no `context_window` field), so the model isn't left
+    /// on the name-heuristic fallback (128k). Models absent from the map (or an
+    /// empty/None map) fall back to the API probe, then the name heuristic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_windows: Option<std::collections::BTreeMap<String, u32>>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
 }
@@ -117,7 +117,7 @@ impl Default for ProviderOptions {
             api_key_envs: Vec::new(),
             prompt_cache: false,
             max_retries: default_max_retries(),
-            context_window: None,
+            context_windows: None,
             extra: HashMap::new(),
         }
     }
@@ -131,12 +131,15 @@ impl ProviderOptions {
         }
         // Guard against a units mistake (e.g. `128` meaning 128k tokens): the
         // window is in TOKENS, so anything under 1000 is almost certainly wrong.
-        if let Some(w) = self.context_window
-            && w < 1000 {
-                return Err(format!(
-                    "context_window is in tokens and must be >= 1000 (got {w}); use 128000, not 128"
-                ));
+        if let Some(map) = &self.context_windows {
+            for (model, &w) in map {
+                if w < 1000 {
+                    return Err(format!(
+                        "context_windows[{model}] is in tokens and must be >= 1000 (got {w}); use 128000, not 128"
+                    ));
+                }
             }
+        }
         Ok(())
     }
 }
@@ -218,27 +221,31 @@ mod tests {
     }
 
     #[test]
-    fn context_window_override_parses_and_is_not_extra() {
-        let input = r#"{"context_window":1000000}"#;
+    fn context_windows_map_parses_and_is_not_extra() {
+        let input = r#"{"context_windows":{"mimo-v2.5-pro":1000000,"other":262144}}"#;
         let opts: ProviderOptions = serde_json::from_str(input).unwrap();
-        assert_eq!(opts.context_window, Some(1_000_000));
-        assert!(opts.extra.is_empty(), "context_window is a known field, not extra");
+        let map = opts.context_windows.as_ref().unwrap();
+        assert_eq!(map.get("mimo-v2.5-pro"), Some(&1_000_000));
+        assert_eq!(map.get("other"), Some(&262_144));
+        assert!(opts.extra.is_empty(), "context_windows is a known field, not extra");
         opts.validate().unwrap();
     }
 
     #[test]
-    fn context_window_defaults_none() {
+    fn context_windows_defaults_none() {
         let opts: ProviderOptions = serde_json::from_str("{}").unwrap();
-        assert_eq!(opts.context_window, None);
+        assert_eq!(opts.context_windows, None);
     }
 
     #[test]
-    fn context_window_rejects_sub_1000_units_mistake() {
-        // `128` (meaning 128k) must be rejected — the field is in tokens.
-        let bad = ProviderOptions { context_window: Some(128), ..Default::default() };
-        assert!(bad.validate().is_err());
-        let good = ProviderOptions { context_window: Some(128_000), ..Default::default() };
-        assert!(good.validate().is_ok());
+    fn context_windows_rejects_sub_1000_units_mistake() {
+        // `128` (meaning 128k) must be rejected — values are in tokens.
+        let mk = |w: u32| ProviderOptions {
+            context_windows: Some([("m".to_string(), w)].into_iter().collect()),
+            ..Default::default()
+        };
+        assert!(mk(128).validate().is_err());
+        assert!(mk(128_000).validate().is_ok());
     }
 
     #[test]
