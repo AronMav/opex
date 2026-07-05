@@ -37,6 +37,7 @@ interface MediaFieldsProps {
   driverId: string;
   voiceId: string;
   mediaKeyId: string;
+  activeTab: "general" | "models" | "advanced";
 }
 
 export function MediaFields({
@@ -52,12 +53,14 @@ export function MediaFields({
   driverId,
   voiceId,
   mediaKeyId,
+  activeTab,
 }: MediaFieldsProps) {
   const { t } = useTranslation();
   const dialogCategory = form.type;
 
   return (
     <>
+      {activeTab === "general" && (<>
       {/* Name */}
       <Field label={t("providers.field_name") + " *"} labelClassName="text-xs" hint={t("providers.media_name_hint")}>
         <Input
@@ -207,7 +210,9 @@ export function MediaFields({
           className="text-sm resize-none h-16"
         />
       </Field>
+      </>)}
 
+      {activeTab === "advanced" && (<>
       {/* Timeouts (request_secs is the main TTS knob — long synth +
           voice-clone warmup can exceed the 120s default) */}
       <TimeoutsSection
@@ -228,6 +233,7 @@ export function MediaFields({
           {t("providers.field_enabled")}
         </span>
       </div>
+      </>)}
     </>
   );
 }
