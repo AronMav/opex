@@ -255,7 +255,7 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="w-[92vw] max-w-6xl sm:max-w-6xl h-[90vh] flex flex-col gap-0 p-0">
+      <DialogContent layout="panel" size="6xl" className="h-[90dvh]">
         <DialogHeader className="px-6 pt-5 pb-0 shrink-0">
           <DialogTitle className="pb-3">{title}</DialogTitle>
           <DialogTabs

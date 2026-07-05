@@ -14,6 +14,7 @@ import { CronSchedulePicker } from "@/components/ui/cron-schedule-picker";
 import { Field } from "@/components/ui/field";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -204,7 +205,7 @@ export function AgentEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex flex-col max-h-[90dvh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-2xl rounded-xl">
+      <DialogContent layout="panel" size="2xl">
         <DialogHeader className="px-5 pt-4 pb-0 border-b-0 bg-muted/20">
           <DialogTitle className="text-sm font-bold text-foreground truncate pb-3">
             {editName ? t("agents.editing", { name: editName }) : t("agents.new_agent_dialog")}
@@ -218,7 +219,7 @@ export function AgentEditDialog({
         </DialogHeader>
         <div className="border-t border-border bg-muted/10" />
 
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+        <DialogBody className="overscroll-contain">
           <div className="px-5 py-3"><div className="grid">
 
             {/* ── General tab ── */}
@@ -709,7 +710,7 @@ export function AgentEditDialog({
             </div>
 
           </div></div>
-        </div>
+        </DialogBody>
 
         <DialogFooter className="px-5 py-3 border-t border-border bg-muted/20">
           <div className="flex gap-3 w-full justify-end">
@@ -749,11 +750,11 @@ export function ChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-sm max-h-[90dvh] overflow-y-auto rounded-xl p-0">
+      <DialogContent layout="panel" size="sm">
         <DialogHeader className="px-5 py-4 border-b border-border bg-muted/20">
           <DialogTitle className="text-sm font-bold">{channelDialogId ? t("agents.channel_edit") : t("agents.channel_add_dialog")}</DialogTitle>
         </DialogHeader>
-        <div className="px-5 py-4 space-y-4">
+        <DialogBody className="px-5 py-4 space-y-4">
           <Field label={t("agents.channel_field_type")} labelClassName="text-xs">
             <Select
               value={channelForm.channel_type}
@@ -793,7 +794,7 @@ export function ChannelDialog({
               onChange={(e) => setChannelForm((f) => ({ ...f, api_url: e.target.value }))}
             />
           </Field>
-        </div>
+        </DialogBody>
         <DialogFooter className="px-5 py-3 border-t border-border bg-muted/20">
           <div className="flex gap-3 w-full justify-end">
             <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => onOpenChange(false)}>{t("common.cancel")}</Button>

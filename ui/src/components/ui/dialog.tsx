@@ -52,6 +52,19 @@ const DIALOG_SIZE = {
   md: "sm:max-w-md",
   lg: "sm:max-w-lg",
   xl: "sm:max-w-xl",
+  "2xl": "sm:max-w-2xl",
+  "3xl": "sm:max-w-3xl",
+  "4xl": "sm:max-w-4xl",
+  "6xl": "sm:max-w-6xl",
+} as const
+
+// `scroll` — the whole dialog scrolls (short forms, prompts).
+// `panel` — flex column with a sticky header/footer and an internal scroll
+// region (`DialogBody`); for large forms/editors. Both share the same
+// standardized max-width / max-height (dvh) / rounding / shadow.
+const DIALOG_LAYOUT = {
+  scroll: "grid gap-4 overflow-y-auto p-6",
+  panel: "flex flex-col overflow-hidden p-0",
 } as const
 
 function DialogContent({
@@ -59,10 +72,12 @@ function DialogContent({
   children,
   showCloseButton = true,
   size = "lg",
+  layout = "scroll",
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
   size?: keyof typeof DIALOG_SIZE
+  layout?: keyof typeof DIALOG_LAYOUT
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
@@ -70,7 +85,8 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] overflow-y-auto translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-6 shadow-lg duration-200 outline-none",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-2rem)] translate-x-[-50%] translate-y-[-50%] rounded-lg border shadow-lg duration-200 outline-none",
+          DIALOG_LAYOUT[layout],
           DIALOG_SIZE[size],
           className
         )}
@@ -96,6 +112,21 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="dialog-header"
       className={cn("flex flex-col gap-2 text-center sm:text-left", className)}
+      {...props}
+    />
+  )
+}
+
+/**
+ * Internal scroll region for `layout="panel"` dialogs. Grows to fill the space
+ * between a sticky header/footer and scrolls its own overflow. Pair with
+ * `<DialogContent layout="panel">`.
+ */
+function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="dialog-body"
+      className={cn("flex-1 min-h-0 overflow-y-auto", className)}
       {...props}
     />
   )
@@ -156,6 +187,7 @@ function DialogDescription({
 
 export {
   Dialog,
+  DialogBody,
   DialogClose,
   DialogContent,
   DialogDescription,

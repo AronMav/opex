@@ -144,7 +144,7 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
 
       {/* Diff viewer */}
       <Dialog open={diffOpen} onOpenChange={setDiffOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="2xl">
           <DialogHeader>
             <DialogTitle>{t("checkpoints.diff_title", { n: diffN ?? "" })}</DialogTitle>
           </DialogHeader>
