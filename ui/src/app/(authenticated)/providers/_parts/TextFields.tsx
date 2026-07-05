@@ -48,6 +48,7 @@ interface TextFieldsProps {
   defaultUrlFor: (id: string) => string;
   typeId: string;
   modelId: string;
+  activeTab: "general" | "models" | "advanced";
 }
 
 export function TextFields({
@@ -70,11 +71,13 @@ export function TextFields({
   defaultUrlFor,
   typeId,
   modelId,
+  activeTab,
 }: TextFieldsProps) {
   const { t } = useTranslation();
 
   return (
     <>
+      {activeTab === "general" && (<>
       {/* Name */}
       <Field label={t("providers.field_name") + " *"} labelClassName="text-xs" hint={t("providers.field_name_hint")}>
         <Input
@@ -189,7 +192,9 @@ export function TextFields({
           />
         </Field>
       )}
+      </>)}
 
+      {activeTab === "advanced" && (<>
       {/* Timeouts — hidden for CLI providers */}
       {!isCli && (
         <TimeoutsSection
@@ -232,12 +237,13 @@ export function TextFields({
           </label>
         </fieldset>
       )}
+      </>)}
 
       {/* Per-model context window overrides — hidden for CLI providers. Each
           row: a model + tokens input. Empty = auto-detect via the provider API
           (/api/show, /v1/models), then name heuristic. Set explicitly only for
           models whose API doesn't report the window (e.g. MiMo). */}
-      {!isCli && (() => {
+      {activeTab === "models" && !isCli && (() => {
         const cw = (getOpts(form).context_windows ?? {}) as Record<string, number>;
         const rows = Array.from(
           new Set([
@@ -283,8 +289,8 @@ export function TextFields({
                   const invalid = typeof v === "number" && v > 0 && v < 1000;
                   const fid = `cw-${i}`;
                   return (
-                    <label key={model} htmlFor={fid} className="flex items-center justify-between gap-3 py-1.5">
-                      <span className="text-sm truncate" title={model}>{model}</span>
+                    <label key={model} htmlFor={fid} className="flex items-center justify-between gap-3 py-1.5 min-w-0">
+                      <span className="text-sm truncate min-w-0" title={model}>{model}</span>
                       <div className="flex items-center gap-2 shrink-0">
                         <Input
                           id={fid}
@@ -310,8 +316,8 @@ export function TextFields({
         );
       })()}
 
-      {/* Test Connection for CLI providers */}
-      {isCli && isEditing && (
+      {/* Test Connection for CLI providers (Advanced tab) */}
+      {isCli && isEditing && activeTab === "advanced" && (
         <div className="space-y-2">
           <Button variant="outline" size="sm" className="w-full gap-1.5" onClick={onTestConnection} disabled={testLoading}>
             {testLoading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
@@ -349,15 +355,17 @@ export function TextFields({
         </div>
       )}
 
-      {/* Notes */}
-      <Field label={`${t("providers.field_notes")} (${t("providers.optional")})`} labelClassName="text-xs">
-        <Textarea
-          placeholder={t("providers.field_notes_placeholder")}
-          value={form.notes ?? ""}
-          onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-          className="text-sm resize-none h-16"
-        />
-      </Field>
+      {activeTab === "general" && (
+        /* Notes */
+        <Field label={`${t("providers.field_notes")} (${t("providers.optional")})`} labelClassName="text-xs">
+          <Textarea
+            placeholder={t("providers.field_notes_placeholder")}
+            value={form.notes ?? ""}
+            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+            className="text-sm resize-none h-16"
+          />
+        </Field>
+      )}
     </>
   );
 }
