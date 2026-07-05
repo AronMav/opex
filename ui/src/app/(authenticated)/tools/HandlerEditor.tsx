@@ -24,7 +24,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Field } from "@/components/ui/field";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { DialogTabs } from "@/components/ui/dialog-tabs";
+import { Settings2, FileCode2 } from "lucide-react";
 import { getToken } from "@/lib/api";
 import { useTranslation } from "@/hooks/use-translation";
 import { spliceDescriptor, DescriptorFields, ParamDescriptor } from "./handler-descriptor";
@@ -139,6 +140,7 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
   const { t } = useTranslation();
   const isEdit = Boolean(id);
 
+  const [tab, setTab] = useState<"settings" | "code">("settings");
   const [source, setSource] = useState(initialSource);
   const [fields, setFields] = useState<DescriptorFields>(() => defaultFields(id));
   const [errors, setErrors] = useState<SaveError[]>([]);
@@ -254,18 +256,24 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="w-[92vw] max-w-6xl sm:max-w-6xl h-[90vh] flex flex-col gap-0 p-0">
-        <DialogHeader className="px-6 pt-5 pb-3 shrink-0">
-          <DialogTitle>{title}</DialogTitle>
+        <DialogHeader className="px-6 pt-5 pb-0 shrink-0">
+          <DialogTitle className="pb-3">{title}</DialogTitle>
+          <DialogTabs
+            items={[
+              { value: "settings", label: t("tools.handler_tab_settings"), icon: Settings2 },
+              { value: "code", label: t("tools.handler_tab_code"), icon: FileCode2 },
+            ]}
+            value={tab}
+            onChange={setTab}
+            className="-mx-6 px-6"
+          />
         </DialogHeader>
+        <div className="border-t border-border bg-muted/10" />
 
-        <Tabs defaultValue="settings" className="flex-1 min-h-0 overflow-hidden px-6 pt-1">
-          <TabsList className="shrink-0">
-            <TabsTrigger value="settings">{t("tools.handler_tab_settings")}</TabsTrigger>
-            <TabsTrigger value="code">{t("tools.handler_tab_code")}</TabsTrigger>
-          </TabsList>
-
+        <div className="flex-1 min-h-0 overflow-hidden flex flex-col px-6 pt-3">
           {/* ── Descriptor form ── */}
-          <TabsContent value="settings" className="min-h-0 overflow-y-auto pr-1 pb-2">
+          {tab === "settings" && (
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1 pb-2">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label={t("tools.handler_field_id")}>
                 <Input
@@ -373,10 +381,12 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
             >
               {syncing ? t("tools.handler_syncing") : t("tools.handler_sync_from_code")}
             </Button>
-          </TabsContent>
+          </div>
+          )}
 
           {/* ── Python editor ── */}
-          <TabsContent value="code" className="min-h-0 flex flex-col gap-2 pb-2">
+          {tab === "code" && (
+          <div className="min-h-0 flex-1 flex flex-col gap-2 pb-2">
             <p className="text-xs text-muted-foreground shrink-0">
               {t("tools.handler_code_hint")}
             </p>
@@ -385,8 +395,9 @@ export function HandlerEditor({ id, initialSource, sourceKind, onSaved, onClose 
               onChange={setSource}
               onSave={handleSave}
             />
-          </TabsContent>
-        </Tabs>
+          </div>
+          )}
+        </div>
 
         {/* ── Errors + footer ── */}
         <div className="shrink-0 px-6 pb-5 pt-3 border-t space-y-2">
