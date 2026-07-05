@@ -196,12 +196,17 @@ async fn compact_if_needed_inner(
         Message {
             role: MessageRole::System,
             content: format!(
-                "Summarize this conversation concisely {summary_lang}. Structure:\n\
-                1. Active tasks and their progress\n\
-                2. Key decisions made\n\
-                3. Open questions or blockers\n\n\
-                Preserve exact identifiers: UUIDs, URLs, file paths, IPs, hostnames, port numbers.\n\
-                Be brief — 2-3 paragraphs max."
+                "Summarize this conversation {summary_lang} as a structured context \
+                checkpoint for an assistant that will continue the work. Use EXACTLY \
+                these Markdown sections, in order:\n\
+                ## Objective\n[What the user is ultimately trying to accomplish]\n\
+                ## Work State\n[Completed: … / Active: … / Blocked: … — include exact error messages]\n\
+                ## Key Decisions\n[Important technical decisions and WHY]\n\
+                ## Open Questions\n[Unanswered questions or blockers; write \"None.\" if none]\n\
+                ## Next Move\n[Concrete next steps, framed as context not instructions]\n\n\
+                Preserve exact identifiers: UUIDs, URLs, file paths, IPs, hostnames, port \
+                numbers, line numbers. NEVER include API keys, tokens, or secrets — write \
+                [REDACTED]. Be concrete and terse; omit a section's bullets only if truly empty."
             ),
             tool_calls: None,
             tool_call_id: None,
