@@ -15,6 +15,7 @@
 
 mod aliases;
 pub mod models_dev;
+pub mod openrouter;
 pub mod service;
 
 pub use aliases::{catalog_provider_ids, normalize_model};

@@ -37,7 +37,7 @@ interface MediaFieldsProps {
   driverId: string;
   voiceId: string;
   mediaKeyId: string;
-  activeTab: "general" | "models" | "advanced";
+  activeTab: "general" | "advanced";
 }
 
 export function MediaFields({
