@@ -11,6 +11,56 @@ use crate::config::{AgentToolPolicy, ApprovalConfig};
 use crate::agent::channel_kind::ToolCategory;
 use opex_types::ToolDefinition;
 
+// ── Wildcard tool matching ─────────────────────────────────────────────────────
+
+/// Match a tool `name` against a policy / approval `pattern`.
+///
+/// `*` is a wildcard matching any run of characters (including empty), so
+/// `workspace_*`, `*_write`, and `*exec*` all work. A pattern with **no** `*`
+/// matches exactly — backward-compatible with the historic exact-name deny /
+/// allow / `require_for` lists. Tool names are ASCII, so byte slicing is safe.
+pub fn tool_pattern_matches(pattern: &str, name: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == name;
+    }
+    let anchored_start = !pattern.starts_with('*');
+    let anchored_end = !pattern.ends_with('*');
+    // Non-empty literals between the `*`s, matched left-to-right. Tool names are
+    // ASCII, so byte-slice matching is exact and avoids UTF-8 boundary panics.
+    let segments: Vec<&[u8]> = pattern
+        .split('*')
+        .filter(|s| !s.is_empty())
+        .map(str::as_bytes)
+        .collect();
+    if segments.is_empty() {
+        return true; // pattern was all `*`
+    }
+    let name = name.as_bytes();
+    let mut pos = 0usize;
+    let last = segments.len() - 1;
+    for (i, &seg) in segments.iter().enumerate() {
+        let rest = &name[pos..];
+        if i == 0 && anchored_start {
+            if !rest.starts_with(seg) {
+                return false;
+            }
+            pos += seg.len();
+        } else if i == last && anchored_end {
+            // Tail-anchored: the final literal must end the string, at or after `pos`.
+            if rest.len() < seg.len() || !rest.ends_with(seg) {
+                return false;
+            }
+            pos = name.len();
+        } else {
+            match rest.windows(seg.len()).position(|w| w == seg) {
+                Some(idx) => pos += idx + seg.len(),
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
 // ── Approval ─────────────────────────────────────────────────────────────────
 
 /// Check if a tool requires approval before execution (pure config check).
@@ -20,8 +70,8 @@ pub fn needs_approval(approval: Option<&ApprovalConfig>, tool_name: &str) -> boo
         _ => return false,
     };
 
-    // Check explicit tool names
-    if approval.require_for.iter().any(|t| t == tool_name) {
+    // Check explicit tool names (glob-aware, e.g. `*_write`, `code_*`).
+    if approval.require_for.iter().any(|t| tool_pattern_matches(t, tool_name)) {
         return true;
     }
 
@@ -98,8 +148,9 @@ pub fn filter_tools_by_policy(
         .filter(|t| {
             let name = t.name.as_str();
 
-            // Check deny list first (applies to ALL tools including core)
-            if policy.deny.iter().any(|d| d == name) {
+            // Check deny list first (applies to ALL tools including core).
+            // Glob-aware: `workspace_*` denies the whole workspace family.
+            if policy.deny.iter().any(|d| tool_pattern_matches(d, name)) {
                 return false;
             }
 
@@ -121,13 +172,13 @@ pub fn filter_tools_by_policy(
             if policy.allow_all {
                 return true;
             }
-            // deny_all_others = only explicitly allowed
+            // deny_all_others = only explicitly allowed (glob-aware)
             if policy.deny_all_others {
-                return policy.allow.iter().any(|a| a == &t.name);
+                return policy.allow.iter().any(|a| tool_pattern_matches(a, name));
             }
-            // Non-empty allow list = only those
+            // Non-empty allow list = only those (glob-aware)
             if !policy.allow.is_empty() {
-                return policy.allow.iter().any(|a| a == &t.name);
+                return policy.allow.iter().any(|a| tool_pattern_matches(a, name));
             }
             true
         })
@@ -153,18 +204,18 @@ pub fn apply_tool_policy_override(
     tools
         .into_iter()
         .filter(|t| {
-            // Union of deny lists
-            if override_policy.deny.iter().any(|d| d == &t.name) {
+            // Union of deny lists (glob-aware)
+            if override_policy.deny.iter().any(|d| tool_pattern_matches(d, &t.name)) {
                 return false;
             }
             if let Some(bd) = base_deny
-                && bd.iter().any(|d| d == &t.name)
+                && bd.iter().any(|d| tool_pattern_matches(d, &t.name))
             {
                 return false;
             }
             // If override has a non-empty allow list, restrict to those tools only
             if !override_policy.allow.is_empty() {
-                return override_policy.allow.iter().any(|a| a == &t.name);
+                return override_policy.allow.iter().any(|a| tool_pattern_matches(a, &t.name));
             }
             true
         })
@@ -195,6 +246,63 @@ mod tests {
         };
         assert!(needs_approval(Some(&cfg), "code_exec"));
         assert!(!needs_approval(Some(&cfg), "workspace_read"));
+    }
+
+    #[test]
+    fn tool_pattern_matches_globs() {
+        // exact (no `*`) — backward compatible
+        assert!(tool_pattern_matches("code_exec", "code_exec"));
+        assert!(!tool_pattern_matches("code_exec", "code_execx"));
+        // prefix
+        assert!(tool_pattern_matches("workspace_*", "workspace_write"));
+        assert!(tool_pattern_matches("workspace_*", "workspace_"));
+        assert!(!tool_pattern_matches("workspace_*", "web_fetch"));
+        // suffix
+        assert!(tool_pattern_matches("*_write", "workspace_write"));
+        assert!(!tool_pattern_matches("*_write", "workspace_read"));
+        // contains
+        assert!(tool_pattern_matches("*exec*", "code_exec"));
+        assert!(tool_pattern_matches("*exec*", "exec"));
+        assert!(!tool_pattern_matches("*exec*", "code_run"));
+        // prefix + suffix
+        assert!(tool_pattern_matches("work*write", "workspace_write"));
+        assert!(!tool_pattern_matches("work*write", "workspace_read"));
+        // bare `*` matches anything
+        assert!(tool_pattern_matches("*", "anything"));
+        assert!(tool_pattern_matches("*", ""));
+        // no false overlap: `a*b` needs both ends
+        assert!(!tool_pattern_matches("a*b", "a"));
+        assert!(tool_pattern_matches("a*b", "ab"));
+    }
+
+    #[test]
+    fn needs_approval_wildcard() {
+        let cfg = ApprovalConfig {
+            enabled: true,
+            require_for: vec!["*_write".into(), "code_*".into()],
+            ..default_approval()
+        };
+        assert!(needs_approval(Some(&cfg), "workspace_write"));
+        assert!(needs_approval(Some(&cfg), "code_exec"));
+        assert!(!needs_approval(Some(&cfg), "workspace_read"));
+    }
+
+    #[test]
+    fn filter_tools_deny_wildcard() {
+        let tools = vec![
+            tool("workspace_write"),
+            tool("workspace_read"),
+            tool("code_exec"),
+        ];
+        let policy = AgentToolPolicy {
+            deny: vec!["workspace_*".into()],
+            ..default_policy()
+        };
+        let filtered = filter_tools_by_policy(tools, Some(&policy), true);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"code_exec"));
+        assert!(!names.contains(&"workspace_write"));
+        assert!(!names.contains(&"workspace_read"));
     }
 
     #[test]
