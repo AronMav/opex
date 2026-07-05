@@ -33,7 +33,7 @@ import {
   Activity, FileCode2, CheckCircle2, FileCog,
   RefreshCw, Plus, Pencil, Trash2, RotateCcw,
   ArrowLeft, Save, Square, Play,
-  ExternalLink,
+  ExternalLink, Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -162,6 +162,11 @@ export default function ToolsPage() {
   const [yamlContent, setYamlContent] = useState("");
   const [yamlLoading, setYamlLoading] = useState(false);
   const [formBusy, setFormBusy] = useState(false);
+  // OpenAPI import dialog
+  const [importOpen, setImportOpen] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [importPrefix, setImportPrefix] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<
     | { kind: "mcp"; name: string }
     | { kind: "yaml"; name: string }
@@ -174,6 +179,27 @@ export default function ToolsPage() {
     qc.invalidateQueries({ queryKey: qk.mcpServers });
     qc.invalidateQueries({ queryKey: qk.handlers });
   }, [qc]);
+
+  const runImportOpenapi = useCallback(async () => {
+    if (!importUrl.trim()) return;
+    setImportBusy(true);
+    try {
+      const res = await apiPost<{ discovered: number; created: string[]; errors: string[] }>(
+        "/api/tools/import-openapi",
+        { spec_url: importUrl.trim(), prefix: importPrefix.trim() },
+      );
+      toast.success(t("tools.import_openapi_success", { count: res.created.length }));
+      if (res.errors?.length) toast.warning(res.errors.slice(0, 3).join("; "));
+      qc.invalidateQueries({ queryKey: qk.yamlTools });
+      setImportOpen(false);
+      setImportUrl("");
+      setImportPrefix("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t("tools.import_openapi_error"));
+    } finally {
+      setImportBusy(false);
+    }
+  }, [importUrl, importPrefix, qc, t]);
 
   const handleConfirmDelete = async () => {
     const target = deleteConfirm;
@@ -711,6 +737,9 @@ parameters:
               <Button variant="outline" size="lg" onClick={startCreateYaml} className="w-full md:w-auto gap-2">
                 <Plus className="h-4 w-4" /> {t("tools.external_apis")}
               </Button>
+              <Button variant="outline" size="lg" onClick={() => setImportOpen(true)} className="w-full md:w-auto gap-2">
+                <Download className="h-4 w-4" /> {t("tools.import_openapi_button")}
+              </Button>
               <Button variant="outline" size="lg" onClick={startCreateMcp} className="w-full md:w-auto gap-2">
                 <Plus className="h-4 w-4" /> {t("tools.add_mcp")}
               </Button>
@@ -827,6 +856,37 @@ parameters:
             <AlertDialogAction variant="destructive" onClick={handleConfirmDelete}>
               {deleteConfirm?.kind === "handler" && deleteConfirm.isReset ? t("tools.handler_reset") : t("common.delete")}
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* OpenAPI import dialog */}
+      <AlertDialog open={importOpen} onOpenChange={(open) => { if (!open && !importBusy) setImportOpen(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("tools.import_openapi_title")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("tools.import_openapi_desc")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <Input
+              autoFocus
+              placeholder="https://api.example.com/openapi.json"
+              value={importUrl}
+              onChange={(e) => setImportUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && importUrl.trim() && !importBusy) runImportOpenapi(); }}
+            />
+            <Input
+              placeholder={t("tools.import_openapi_prefix")}
+              value={importPrefix}
+              onChange={(e) => setImportPrefix(e.target.value)}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={importBusy}>{t("common.cancel")}</AlertDialogCancel>
+            <Button onClick={runImportOpenapi} disabled={importBusy || !importUrl.trim()} className="gap-2">
+              {importBusy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              {t("tools.import_openapi_run")}
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

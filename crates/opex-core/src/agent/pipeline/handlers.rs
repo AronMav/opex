@@ -1009,81 +1009,107 @@ pub async fn handle_skill_list(
 
 // ── OpenAPI discovery ──────────────────────────────────────────
 
+/// Structured result of an OpenAPI import (shared by the `tool_meta` agent tool
+/// and the operator-facing `POST /api/tools/import-openapi` endpoint).
+pub struct OpenApiImport {
+    pub discovered: usize,
+    pub created: Vec<String>,
+    pub errors: Vec<String>,
+    pub base_url: String,
+}
+
+/// Fetch an OpenAPI/Swagger spec (SSRF-safe), extract one draft YAML tool per
+/// operation, and write them to `workspace/tools/draft/`. Returns structured
+/// results. `Err` covers fetch/parse/no-op failures the caller reports verbatim.
+pub async fn import_openapi_tools(
+    workspace_dir: &str,
+    ssrf_client: &reqwest::Client,
+    spec_url: &str,
+    prefix: &str,
+) -> Result<OpenApiImport, String> {
+    use crate::agent::openapi::{discover_base_url, extract_openapi_tools};
+
+    if spec_url.is_empty() {
+        return Err("'spec_url' is required".to_string());
+    }
+    // SSRF-safe client prevents caller-directed requests to internal services.
+    let spec_text = ssrf_client
+        .get(spec_url)
+        .header("Accept", "application/json, application/yaml, */*")
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| format!("Error fetching spec: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Error reading spec: {e}"))?;
+
+    let spec: serde_json::Value = serde_json::from_str(&spec_text)
+        .or_else(|_| serde_yaml::from_str::<serde_json::Value>(&spec_text))
+        .map_err(|_| "could not parse spec as JSON or YAML".to_string())?;
+
+    let base_url = discover_base_url(&spec, spec_url);
+    let tools = extract_openapi_tools(&spec, &base_url, prefix);
+    if tools.is_empty() {
+        return Err("No API operations found in spec. Make sure it's a valid OpenAPI 2.x/3.x spec.".to_string());
+    }
+
+    let draft_dir = std::path::Path::new(workspace_dir).join("tools").join("draft");
+    tokio::fs::create_dir_all(&draft_dir)
+        .await
+        .map_err(|e| format!("Failed to create draft tools directory '{}': {e}", draft_dir.display()))?;
+
+    let discovered = tools.len();
+    let mut created = Vec::new();
+    let mut errors = Vec::new();
+    for tool in &tools {
+        // Defense-in-depth: the filename is derived from a spec-controlled
+        // operationId. Reject anything outside `[a-zA-Z0-9_-]` so a crafted spec
+        // cannot path-traverse out of the draft dir.
+        if tool.name.is_empty()
+            || !tool.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            errors.push(format!("{}: invalid tool name (rejected)", tool.name));
+            continue;
+        }
+        let yaml = match serde_yaml::to_string(tool) {
+            Ok(y) => y,
+            Err(e) => { errors.push(format!("{}: {e}", tool.name)); continue; }
+        };
+        let path = draft_dir.join(format!("{}.yaml", tool.name));
+        match tokio::fs::write(&path, &yaml).await {
+            Ok(()) => created.push(tool.name.clone()),
+            Err(e) => errors.push(format!("{}: {e}", tool.name)),
+        }
+    }
+
+    Ok(OpenApiImport { discovered, created, errors, base_url })
+}
+
 /// Tool meta: discover and create draft tools from an OpenAPI/Swagger spec URL.
 pub async fn handle_tool_discover(
     workspace_dir: &str,
     ssrf_client: &reqwest::Client,
     args: &serde_json::Value,
 ) -> String {
-    use crate::agent::openapi::{discover_base_url, extract_openapi_tools};
+    let spec_url = args.get("spec_url").and_then(|v| v.as_str()).unwrap_or("");
+    let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
 
-    let spec_url = match args.get("spec_url").and_then(|v| v.as_str()) {
-        Some(u) if !u.is_empty() => u.to_string(),
-        _ => return "Error: 'spec_url' is required".to_string(),
+    let res = match import_openapi_tools(workspace_dir, ssrf_client, spec_url, prefix).await {
+        Ok(r) => r,
+        Err(e) => return format!("Error: {e}"),
     };
-    let prefix = args.get("prefix").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-    // Use SSRF-safe client to prevent LLM-directed requests to internal services
-    let spec_text = match ssrf_client
-        .get(&spec_url)
-        .header("Accept", "application/json, application/yaml, */*")
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-    {
-        Ok(r) => match r.text().await {
-            Ok(t) => t,
-            Err(e) => return format!("Error reading spec: {}", e),
-        },
-        Err(e) => return format!("Error fetching spec: {}", e),
-    };
-
-    let spec: serde_json::Value = if let Ok(v) = serde_json::from_str(&spec_text) {
-        v
-    } else if let Ok(v) = serde_yaml::from_str::<serde_json::Value>(&spec_text) {
-        v
-    } else {
-        return "Error: could not parse spec as JSON or YAML".to_string();
-    };
-
-    let base_url = discover_base_url(&spec, &spec_url);
-    let tools = extract_openapi_tools(&spec, &base_url, &prefix);
-    if tools.is_empty() {
-        return "No API operations found in spec. Make sure it's a valid OpenAPI 2.x/3.x spec.".to_string();
-    }
-
-    let draft_dir = std::path::Path::new(workspace_dir)
-        .join("tools")
-        .join("draft");
-    if let Err(e) = tokio::fs::create_dir_all(&draft_dir).await {
-        return format!("Failed to create draft tools directory '{}': {}", draft_dir.display(), e);
-    }
-
-    let mut created = Vec::new();
-    let mut errors = Vec::new();
-
-    for tool in &tools {
-        let yaml = match serde_yaml::to_string(tool) {
-            Ok(y) => y,
-            Err(e) => { errors.push(format!("{}: {}", tool.name, e)); continue; }
-        };
-        let path = draft_dir.join(format!("{}.yaml", tool.name));
-        match tokio::fs::write(&path, &yaml).await {
-            Ok(_) => created.push(tool.name.clone()),
-            Err(e) => errors.push(format!("{}: {}", tool.name, e)),
-        }
-    }
 
     let mut out = format!(
         "Discovered {} tools from {}\nCreated {} draft tools:\n",
-        tools.len(), spec_url, created.len()
+        res.discovered, spec_url, res.created.len()
     );
-    for name in &created {
-        out.push_str(&format!("- {} (draft)\n", name));
+    for name in &res.created {
+        out.push_str(&format!("- {name} (draft)\n"));
     }
-    if !errors.is_empty() {
+    if !res.errors.is_empty() {
         out.push_str("\nErrors:\n");
-        for e in &errors { out.push_str(&format!("- {}\n", e)); }
+        for e in &res.errors { out.push_str(&format!("- {e}\n")); }
     }
     out.push_str("\nUse tool_test to verify, then tool_verify to activate.");
     out

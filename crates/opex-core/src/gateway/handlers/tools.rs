@@ -17,6 +17,7 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/tool-definitions", get(api_tool_definitions))
         .route("/api/tools", get(api_list_tools))
+        .route("/api/tools/import-openapi", post(api_import_openapi))
         .route("/api/mcp", get(api_list_mcp).post(api_mcp_create))
         .route("/api/mcp/{name}", put(api_mcp_update).delete(api_mcp_delete))
         .route("/api/mcp/{name}/reload", post(api_mcp_reload))
@@ -56,6 +57,38 @@ pub(crate) async fn api_tool_definitions(State(agents): State<AgentCore>) -> Jso
 
     let sorted: Vec<&str> = names.iter().map(std::string::String::as_str).collect();
     Json(json!({ "tools": sorted }))
+}
+
+/// POST /api/tools/import-openapi — operator-facing OpenAPI/Swagger import.
+/// Fetches the spec (SSRF-safe), writes one draft YAML tool per operation to
+/// `workspace/tools/draft/`, and returns what was created. Mirrors the
+/// `tool_meta` agent tool but reachable from the Tools UI.
+pub(crate) async fn api_import_openapi(Json(body): Json<Value>) -> impl IntoResponse {
+    let spec_url = body.get("spec_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if spec_url.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": "spec_url is required"}))).into_response();
+    }
+    let prefix = body.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
+
+    let client = crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(20));
+    match crate::agent::pipeline::handlers::import_openapi_tools(
+        crate::config::WORKSPACE_DIR,
+        &client,
+        &spec_url,
+        prefix,
+    )
+    .await
+    {
+        Ok(r) => Json(json!({
+            "ok": true,
+            "discovered": r.discovered,
+            "created": r.created,
+            "errors": r.errors,
+            "base_url": r.base_url,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    }
 }
 
 pub(crate) async fn api_list_tools(
