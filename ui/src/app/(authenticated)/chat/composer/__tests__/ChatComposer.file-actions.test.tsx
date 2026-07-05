@@ -29,6 +29,7 @@ vi.mock("@/lib/queries", () => ({
   useAgents: () => ({ data: [] }),
   useProviders: () => ({ data: [] }),
   useProviderModels: () => ({ data: [] }),
+  useProviderModelsDetailed: () => ({ data: [] }),
 }));
 
 // ChatComposer renders <ModelDropdown agent={currentAgent} /> unconditionally

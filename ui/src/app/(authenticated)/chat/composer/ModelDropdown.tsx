@@ -8,7 +8,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useChatStore } from "@/stores/chat-store";
-import { useAgents, useProviders, useProviderModels } from "@/lib/queries";
+import { useAgents, useProviders, useProviderModelsDetailed } from "@/lib/queries";
+import { ModelBadges } from "@/components/model-badges";
 
 export function ModelDropdown({ agent }: { agent: string }) {
   const modelOverride = useChatStore(s => s.agents[agent]?.modelOverride ?? null);
@@ -18,7 +19,7 @@ export function ModelDropdown({ agent }: { agent: string }) {
   const providerConnection = agentInfo?.provider_connection;
   const selectedProvider = allProviders.filter(p => p.type === "text").find(p => p.name === providerConnection);
   const defaultModel = agentInfo?.model ?? "";
-  const { data: models } = useProviderModels(selectedProvider?.id ?? null);
+  const { data: models } = useProviderModelsDetailed(selectedProvider?.id ?? null);
 
   const currentModel = modelOverride ?? defaultModel;
   const shortModel = currentModel.split("/").pop()?.split(":")[0] ?? currentModel;
@@ -36,9 +37,12 @@ export function ModelDropdown({ agent }: { agent: string }) {
         <SelectValue>{shortModel}</SelectValue>
       </SelectTrigger>
       <SelectContent className="border-border text-xs">
-        {(models as string[]).map((m) => (
-          <SelectItem key={m} value={m} className="font-mono text-xs">
-            {m === defaultModel ? `${m} ★` : m}
+        {models.map((pm) => (
+          <SelectItem key={pm.id} value={pm.id} className="font-mono text-xs">
+            <span className="flex items-center justify-between gap-3 w-full min-w-0">
+              <span className="truncate">{pm.id === defaultModel ? `${pm.id} ★` : pm.id}</span>
+              <ModelBadges m={pm} className="shrink-0" />
+            </span>
           </SelectItem>
         ))}
       </SelectContent>
