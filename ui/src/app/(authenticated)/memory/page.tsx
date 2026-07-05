@@ -9,6 +9,7 @@ import { formatDate } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { IconTile } from "@/components/ui/icon-tile";
 import { SearchInput } from "@/components/ui/search-input";
 import { Pagination } from "@/components/ui/pagination";
@@ -150,7 +151,7 @@ export default function MemoryPage() {
   }
 
   return (
-    <div className="flex flex-col h-full p-4 md:p-6 lg:p-8 w-full overflow-hidden">
+    <PageContainer variant="fill" className="p-4 md:p-6 lg:p-8 w-full">
       <PageHeader
         title={t("memory.title")}
         description={t("memory.subtitle")}
@@ -279,6 +280,6 @@ export default function MemoryPage() {
         title={t("memory.delete_chunk_title")}
         description={t("memory.delete_chunk_description")}
       />
-    </div>
+    </PageContainer>
   );
 }

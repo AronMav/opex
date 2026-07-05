@@ -18,6 +18,7 @@ import { CircularLoader } from "@/components/ui/loader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { StatusDot } from "@/components/ui/status-dot";
 import { Switch } from "@/components/ui/switch";
@@ -168,7 +169,7 @@ export default function CronPage() {
   const errorMessage = error ? `${error}` : actionError;
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
         <PageHeader
           title={t("cron.title")}
           description={t("cron.subtitle")}
@@ -515,6 +516,6 @@ export default function CronPage() {
         title={t("cron.delete_task_title")}
         description={t("cron.delete_task_description")}
       />
-    </div>
+    </PageContainer>
   );
 }

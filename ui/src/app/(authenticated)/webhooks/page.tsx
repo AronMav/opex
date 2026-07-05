@@ -14,6 +14,7 @@ import { useTranslation } from "@/hooks/use-translation";
 import { formatDate } from "@/lib/format";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageHeader } from "@/components/ui/page-header";
+import { PageContainer } from "@/components/ui/page-container";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Field } from "@/components/ui/field";
@@ -155,7 +156,7 @@ export default function WebhooksPage() {
   const errorMessage = error ? `${error}` : actionError;
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
       <PageHeader
         title={t("webhooks.title")}
         description={t("webhooks.subtitle")}
@@ -384,6 +385,6 @@ export default function WebhooksPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageContainer>
   );
 }

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { PageContainer } from "@/components/ui/page-container";
 import { IconTile } from "@/components/ui/icon-tile";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -178,7 +179,7 @@ export default function AccessPage() {
   const totalPending = Object.values(pending).reduce((sum, arr) => sum + arr.length, 0);
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 selection:bg-primary/20">
+    <PageContainer>
       {/* Header */}
       <PageHeader
         title={t("access.title")}
@@ -371,6 +372,6 @@ export default function AccessPage() {
         description={t("access.revoke_description", { name: removeTarget?.name ?? "" })}
         confirmLabel={t("access.revoke")}
       />
-    </div>
+    </PageContainer>
   );
 }

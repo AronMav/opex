@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/page-header";
+import { PageContainer } from "@/components/ui/page-container";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -456,7 +457,7 @@ export default function IntegrationsPage() {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+    <PageContainer>
       {/* Page header */}
       <PageHeader
         title={t("integrations.title")}
@@ -756,6 +757,6 @@ export default function IntegrationsPage() {
         variant="destructive"
         confirmLabel={t("integrations.delete_account")}
       />
-    </div>
+    </PageContainer>
   );
 }
