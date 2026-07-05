@@ -243,6 +243,8 @@
   "chat.approval_countdown": "Auto-reject in {{time}}",
   "chat.approval_approve": "Approve",
   "chat.approval_reject": "Reject",
+  "chat.approval_always_allow": "Always allow",
+  "chat.approval_always_allow_tooltip": "Approve and skip approval for this tool in future",
   "chat.approval_edit_args": "Edit args",
   "chat.approval_submit_modified": "Submit modified",
   "chat.approval_invalid_json": "Invalid JSON",

@@ -202,6 +202,26 @@ export async function decideApproval(
   }
 }
 
+/** Add a tool (or `*`-glob pattern) to an agent's approval allowlist, so future
+ *  matching calls skip the approval prompt. Backs the "Always allow" action. */
+export async function addApprovalAllowlist(
+  agentId: string,
+  toolPattern: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const resp = await apiFetch(`/api/approvals/allowlist`, {
+      method: "POST",
+      body: JSON.stringify({ agent_id: agentId, tool_pattern: toolPattern }),
+    });
+    if (!resp.ok) {
+      return { ok: false, error: await extractError(resp) };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Unknown error" };
+  }
+}
+
 export async function submitClarify(
   clarifyId: string,
   response: string,

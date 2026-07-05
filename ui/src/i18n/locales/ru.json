@@ -243,6 +243,8 @@
   "chat.approval_countdown": "Автоотклонение через {{time}}",
   "chat.approval_approve": "Одобрить",
   "chat.approval_reject": "Отклонить",
+  "chat.approval_always_allow": "Всегда разрешать",
+  "chat.approval_always_allow_tooltip": "Одобрить и впредь не спрашивать подтверждение для этого инструмента",
   "chat.approval_edit_args": "Изменить аргументы",
   "chat.approval_submit_modified": "Отправить изменённые",
   "chat.approval_invalid_json": "Некорректный JSON",
