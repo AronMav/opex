@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { DialogTabs } from "@/components/ui/dialog-tabs";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -144,7 +145,7 @@ export function ProviderDialog(props: ProviderDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <DialogContent className="flex flex-col max-h-[90dvh] overflow-hidden p-0 border-border shadow-2xl max-w-[calc(100%-1rem)] sm:max-w-xl rounded-xl">
+      <DialogContent layout="panel" size="xl">
         <DialogHeader className="px-5 pt-4 pb-0 border-b-0 bg-muted/20 space-y-3">
           <DialogTitle className="flex items-center gap-2 text-sm font-bold text-foreground truncate">
             {category !== "" ? CATEGORY_ICONS[category] : <Plus className="h-4 w-4" />}
@@ -185,7 +186,7 @@ export function ProviderDialog(props: ProviderDialogProps) {
         </DialogHeader>
         <div className="border-t border-border bg-muted/10" />
 
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+        <DialogBody className="overscroll-contain">
           <div className="px-5 py-4 space-y-3 min-w-0">
             {category === "" && (
               <p className="text-sm text-muted-foreground">{t("providers.select_category")}</p>
@@ -236,7 +237,7 @@ export function ProviderDialog(props: ProviderDialogProps) {
               />
             )}
           </div>
-        </div>
+        </DialogBody>
 
         <DialogFooter className="px-5 py-3 border-t border-border bg-muted/20">
           <Button variant="ghost" onClick={onClose}>

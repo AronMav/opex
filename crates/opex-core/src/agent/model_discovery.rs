@@ -37,6 +37,10 @@ pub struct ModelInfo {
     /// Extended reasoning / chain-of-thought.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<bool>,
+    /// Emits/expects reasoning in a `reasoning_content` field (DeepSeek-R1,
+    /// Kimi-thinking, …). Drives the OpenAI-compat message formatter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<bool>,
     /// Function calling.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<bool>,
