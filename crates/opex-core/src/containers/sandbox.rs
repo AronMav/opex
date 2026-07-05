@@ -47,6 +47,12 @@ impl CodeSandbox {
         })
     }
 
+    /// Hard wall-clock execution limit (seconds). Used to scope the codemode
+    /// capability-token TTL to the actual maximum run length.
+    pub fn timeout_secs(&self) -> u64 {
+        self.timeout_secs
+    }
+
     /// Sanitize agent name for use as a Docker container name.
     fn container_name(&self, agent_id: &str) -> String {
         let sanitized: String = agent_id

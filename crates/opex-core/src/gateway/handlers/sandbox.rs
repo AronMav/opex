@@ -27,7 +27,6 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 
-use crate::agent::tool_registry::ToolDeps;
 use crate::gateway::state::AppState;
 use crate::uploads::{codemode_tools_hash, verify_codemode_token};
 
@@ -192,28 +191,31 @@ async fn tool_call(
         ));
     }
 
-    // Build ToolDeps from the engine + dispatch via the system tool registry.
     // Acquire a concurrency permit so a script using ThreadPoolExecutor can't
     // exhaust resources with dozens of parallel calls (M2).
     let _permit = codemode_semaphore().acquire().await
         .map_err(|_| tool_err(StatusCode::INTERNAL_SERVER_ERROR, "codemode semaphore closed", None))?;
-    let deps = ToolDeps::from_engine(&engine, &available, Some(session_id));
-    let result = engine
-        .tool_registry()
-        .dispatch(&req.tool, &deps, &req.arguments)
-        .await;
 
-    match result {
-        Some(output) => Ok(Json(ToolCallResponse { result: output })),
-        None => Err(tool_err(
-            StatusCode::NOT_FOUND,
-            &format!(
-                "tool '{}' is not a system tool (codemode v1 supports system tools only)",
-                req.tool
-            ),
-            None,
-        )),
+    // Route through the SAME pipeline as the LLM tool loop so BeforeToolCall /
+    // AfterToolResult hooks + decision-webhooks (Block/ModifyArgs/TransformResult),
+    // audit-log, and tool-quality all apply (SEC review H1/L3). Enrich args with
+    // `_context` so the audit record captures the session and session-aware
+    // tools work. Approval was already rejected above for non-interactive
+    // codemode, so `execute_tool_call`'s (interactive-only) approval gate is a
+    // no-op for the tools that reach here.
+    let mut enriched = req.arguments.clone();
+    if let Some(obj) = enriched.as_object_mut() {
+        obj.insert(
+            "_context".to_string(),
+            serde_json::json!({
+                "session_id": session_id.to_string(),
+                "agent_name": agent_name,
+                "_channel": "codemode",
+            }),
+        );
     }
+    let output = engine.codemode_execute_tool(&req.tool, &enriched).await;
+    Ok(Json(ToolCallResponse { result: output }))
 }
 
 /// Search the agent's visible tool definitions by substring.

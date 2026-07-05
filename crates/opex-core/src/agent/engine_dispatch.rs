@@ -96,6 +96,21 @@ impl AgentEngine {
         })
     }
 
+    /// Codemode (tools-as-code) dispatch entry point. Routes a sandbox
+    /// tool-call through the SAME `execute_tool_call` pipeline as the LLM loop
+    /// so that `BeforeToolCall`/`AfterToolResult` hooks + decision-webhooks
+    /// (Block / ModifyArgs / TransformResult), audit-log, latency metrics, and
+    /// tool-quality records ALL apply — closing the gap where codemode bypassed
+    /// them by calling the tool registry directly (SEC review 2026-07-06, H1/L3).
+    ///
+    /// Approval is still enforced *before* this call in the sandbox handler
+    /// (codemode is non-interactive, so approval-required tools are rejected
+    /// outright rather than reaching here). The caller must have already
+    /// verified the tool is in the agent's policy-filtered available set.
+    pub(crate) async fn codemode_execute_tool(&self, name: &str, arguments: &serde_json::Value) -> String {
+        self.execute_tool_call(name, arguments).await
+    }
+
     /// Inner tool dispatch (separated for audit wrapping).
     pub(super) fn execute_tool_call_inner<'a>(
         &'a self,

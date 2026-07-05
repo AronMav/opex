@@ -66,13 +66,27 @@ const DEFAULT_ALLOW_RESPONSE_HEADERS: &[&str] = &["content-type"];
 /// stripped) → value replaced with `REDACTED` recursively.
 const DEFAULT_REDACT_JSON_FIELDS: &[&str] = &[
     "access_token",
+    "accesskey",
     "api_key",
     "apikey",
+    "apitoken",
+    "auth",
+    "authorization",
+    "bearer",
     "client_secret",
+    "cookie",
+    "credential",
+    "credentials",
+    "passwd",
     "password",
+    "private_key",
+    "pwd",
     "refresh_token",
     "secret",
+    "secret_key",
+    "session_token",
     "token",
+    "x_api_key",
 ];
 
 /// Redact a single HTTP interaction in place (request + response).
@@ -267,6 +281,13 @@ fn secret_patterns() -> &'static [Regex] {
             Regex::new(r"\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b").unwrap(),
             // PEM private keys
             Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").unwrap(),
+            // JWTs (header.payload.signature) — catches opaque bearer/session
+            // tokens embedded in a body field the field-name deny-list misses.
+            Regex::new(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}").unwrap(),
+            // HTTP Basic-auth credentials (base64 blob after `Basic `).
+            Regex::new(r"(?i)basic\s+[A-Za-z0-9+/]{16,}={0,2}").unwrap(),
+            // Slack tokens.
+            Regex::new(r"xox[baprs]-[A-Za-z0-9-]{10,}").unwrap(),
         ]
     })
 }
@@ -504,6 +525,29 @@ mod tests {
         };
         interaction.request.body = r#"{"api_key":"sk-12345678901234567890"}"#.into();
         assert!(scan_for_secrets(&interaction).is_some());
+    }
+
+    #[test]
+    fn scan_detects_jwt_under_non_denylisted_field() {
+        // F1 backstop: an opaque JWT under a field name the deny-list misses
+        // ("credentials" is now on the list, but a JWT is caught by the scanner
+        // regardless of field name).
+        let mut interaction = HttpInteraction {
+            request: req_snapshot(),
+            response: resp_snapshot(),
+        };
+        interaction.request.body = r#"{"whatever":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"}"#.into();
+        assert!(scan_for_secrets(&interaction).is_some(), "JWT must be caught by the scanner backstop");
+    }
+
+    #[test]
+    fn scan_detects_basic_auth() {
+        let mut interaction = HttpInteraction {
+            request: req_snapshot(),
+            response: resp_snapshot(),
+        };
+        interaction.request.headers.insert("x-custom".into(), "Basic dXNlcjpwYXNzd29yZDEyMzQ1Ng==".into());
+        assert!(scan_for_secrets(&interaction).is_some(), "Basic-auth blob must be caught");
     }
 
     #[test]

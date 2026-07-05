@@ -31,10 +31,12 @@ use crate::uploads::{codemode_tools_hash, mint_codemode_token};
 
 pub struct CodeOrchestrateHandler;
 
-/// TTL for the codemode capability token. Fixed at 300s (5 minutes) — long
-/// enough to cover a typical codemode run (sandbox timeout is usually 30s),
-/// short enough to limit the exposure window if the token is exfiltrated.
-const CODEMODE_TOKEN_TTL_SECS: u64 = 300;
+/// Buffer added to the sandbox timeout when scoping the codemode token TTL —
+/// covers container startup + the last in-flight tool call finishing after the
+/// script's wall-clock deadline. The TTL itself is derived from the sandbox's
+/// actual `timeout_secs` (SEC review L4) so the token can't be replayed long
+/// after the run that minted it could still be executing.
+const CODEMODE_TOKEN_TTL_BUFFER_SECS: u64 = 30;
 
 #[async_trait]
 impl SystemToolHandler for CodeOrchestrateHandler {
@@ -97,15 +99,18 @@ async fn handle_code_orchestrate(deps: ToolDeps<'_>, args: &Value) -> String {
         .collect();
     let sdk_preamble = generate_python_sdk(&sdk_tools);
 
-    // Mint the capability token.
+    // Mint the capability token. TTL is scoped to the sandbox's actual run
+    // deadline + a small buffer (SEC review L4) — a token can't outlive the run
+    // that could still be using it, shrinking the replay window.
     let key = deps.secrets.get_upload_hmac_key();
     let session_id = deps.session_id.unwrap_or_default();
+    let token_ttl = sandbox.timeout_secs() + CODEMODE_TOKEN_TTL_BUFFER_SECS;
     let token = mint_codemode_token(
         &key,
         session_id,
         deps.agent_name,
         tools_hash,
-        CODEMODE_TOKEN_TTL_SECS,
+        token_ttl,
     );
 
     // Build the full script: SDK preamble + user code.

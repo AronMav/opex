@@ -277,12 +277,6 @@ impl AgentEngine {
     // endpoints (gateway/handlers/sandbox.rs) to resolve an agent's visible
     // tool set and dispatch tool calls from sandbox scripts.
 
-    /// System tool registry accessor (for codemode dispatch).
-    #[inline]
-    pub(crate) fn tool_registry(&self) -> &std::sync::Arc<crate::agent::tool_registry::SystemToolRegistry> {
-        &self.tool_registry
-    }
-
     /// Return the agent's available system tool names (filtered by the agent's
     /// tool policy). Used by the codemode endpoint to build the allow-list for
     /// the capability token + enforce per-call policy.
