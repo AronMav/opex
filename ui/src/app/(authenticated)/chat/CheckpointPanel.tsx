@@ -152,7 +152,7 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
           {diffText == null ? (
             <p className="text-sm text-muted-foreground py-4 text-center">{t("checkpoints.loading")}</p>
           ) : (
-            <pre className="overflow-auto max-h-[60vh] rounded bg-muted/30 p-3 text-xs font-mono whitespace-pre-wrap">
+            <pre className="overflow-auto max-h-[60dvh] rounded bg-muted/30 p-3 text-xs font-mono whitespace-pre-wrap">
               {diffText}
             </pre>
           )}

@@ -404,7 +404,7 @@ export default function WorkspacePage() {
                 <FolderTree className="h-5 w-5" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="p-0 w-[75vw] md:w-70 border-r border-border bg-sidebar">
+            <SheetContent side="left" className="p-0 w-[75dvw] md:w-70 border-r border-border bg-sidebar">
               {/* Mobile instance — independent ref/state */}
               <WorkspaceFileTree {...fileTreeProps} />
             </SheetContent>

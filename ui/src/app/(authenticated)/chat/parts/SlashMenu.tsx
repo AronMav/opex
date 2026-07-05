@@ -49,7 +49,7 @@ export function SlashMenu({ query, onSelect, onClose }: Props) {
     <div
       role="listbox"
       aria-label={t("chat.slash_stop")}
-      className="absolute bottom-full mb-2 left-0 z-50 w-72 max-w-[calc(100vw-1.5rem)] max-h-[40vh] overflow-y-auto rounded-xl border border-border bg-card shadow-lg"
+      className="absolute bottom-full mb-2 left-0 z-50 w-72 max-w-[calc(100dvw-1.5rem)] max-h-[40dvh] overflow-y-auto rounded-xl border border-border bg-card shadow-lg"
     >
       {filtered.map((item, i) => (
         <button

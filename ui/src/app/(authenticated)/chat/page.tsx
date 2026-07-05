@@ -802,7 +802,7 @@ export default function ChatPage() {
             </SheetTrigger>
             <SheetContent
               side="left"
-              className="w-[85vw] border-r border-border bg-sidebar p-0"
+              className="w-[85dvw] border-r border-border bg-sidebar p-0"
             >
               <SheetTitle className="sr-only">{t("chat.sessions")}</SheetTitle>
               {sessionList}
