@@ -205,9 +205,15 @@ pub async fn resolve_context_limit(
             return c.value;
         }
 
+    // Priority: native self-report > external catalog (models.dev/…) > heuristic.
+    // The catalog value is authoritative (not a fallback), so it caches
+    // permanently like a native hint.
     let (value, is_fallback) = match provider.context_limit_hint(model).await {
         Some(v) => (v, false),
-        None => (default_context_for_model(model) as u32, true),
+        None => match crate::agent::providers::catalog::global_context(provider.name(), model) {
+            Some(v) => (v, false),
+            None => (default_context_for_model(model) as u32, true),
+        },
     };
 
     if let Ok(mut guard) = context_limit_cache().lock() {

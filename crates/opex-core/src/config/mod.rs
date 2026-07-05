@@ -37,6 +37,10 @@ pub struct AppConfig {
     /// OpenTelemetry trace export (requires `otel` feature).
     #[serde(default)]
     pub otel: OtelConfig,
+    /// External model-metadata catalog (context windows). See
+    /// docs/architecture/2026-07-05-model-catalog-multicatalog.md
+    #[serde(default)]
+    pub model_catalog: ModelCatalogConfig,
     /// Native child processes managed by Core (channels, toolgate).
     #[serde(default, skip_serializing)]
     #[schemars(skip)]
@@ -587,6 +591,41 @@ pub struct OtelConfig {
 
 fn default_otel_service() -> String {
     "opex-core".to_string()
+}
+
+/// External model-metadata catalog (context windows, output limits) merged from
+/// aggregators like models.dev. Populates the context-window resolution chain
+/// between the native provider probe and the name heuristic.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct ModelCatalogConfig {
+    /// Fetch + use the catalog. When false the catalog stays empty and callers
+    /// fall back to native probe / heuristic (no regression).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Background refresh cadence in hours (min 1). Default 24.
+    #[serde(default = "default_catalog_refresh_hours")]
+    pub refresh_hours: u64,
+    /// models.dev catalog endpoint (or a self-hosted mirror).
+    #[serde(default = "default_models_dev_url")]
+    pub models_dev_url: String,
+}
+
+impl Default for ModelCatalogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            refresh_hours: default_catalog_refresh_hours(),
+            models_dev_url: default_models_dev_url(),
+        }
+    }
+}
+
+fn default_catalog_refresh_hours() -> u64 {
+    24
+}
+
+fn default_models_dev_url() -> String {
+    "https://models.dev/api.json".to_string()
 }
 fn default_otel_sampling_ratio() -> f64 {
     1.0

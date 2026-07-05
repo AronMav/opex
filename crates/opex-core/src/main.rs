@@ -293,6 +293,10 @@ async fn main() -> Result<()> {
     // stage). Core no longer writes unit files at runtime — that was a
     // hot-path side effect that belonged to the installer.
 
+    // Model metadata catalog (context windows from models.dev/…): background
+    // load + refresh into the process-global catalog. No-op when disabled.
+    crate::agent::providers::catalog::service::spawn(cfg.model_catalog.clone());
+
     // Config hot-reload watcher
     let shared_config = std::sync::Arc::new(tokio::sync::RwLock::new(cfg.clone()));
     let config_api_write_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
