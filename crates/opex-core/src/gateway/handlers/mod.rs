@@ -2,6 +2,7 @@ pub(crate) mod cancel_grace;
 pub(crate) mod secrets;
 pub(crate) mod sessions;
 pub(crate) mod session_failures;
+pub(crate) mod catalog;
 pub(crate) mod monitoring;
 pub(crate) mod memory;
 pub(crate) mod cron;

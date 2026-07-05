@@ -49,6 +49,12 @@ pub fn global_context(provider_type: &str, model: &str) -> Option<u32> {
     global().read().ok().and_then(|c| c.context(provider_type, model))
 }
 
+/// All catalog providers (sorted) for the preset picker. Empty when the catalog
+/// hasn't loaded yet.
+pub fn global_providers() -> Vec<ProviderMeta> {
+    global().read().map(|c| c.providers_sorted()).unwrap_or_default()
+}
+
 /// Which aggregator a `ModelMeta` came from. Lower `priority()` wins on conflict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CatalogSource {
@@ -85,12 +91,32 @@ pub struct ModelMeta {
     pub source: CatalogSource,
 }
 
+/// Provider-level metadata from the catalog — powers the "add provider" preset
+/// picker (Phase 2). Only sources that carry provider info (models.dev) populate
+/// this; model-only sources (OpenRouter) don't.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderMeta {
+    pub id: String,
+    pub name: String,
+    /// Base API URL (models.dev `api`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    /// API-key env var name(s) (models.dev `env`).
+    pub env: Vec<String>,
+    /// Whether this provider is OpenAI-compatible (`npm` = `@ai-sdk/openai-compatible`).
+    pub openai_compatible: bool,
+    /// Known model ids (sorted).
+    pub models: Vec<String>,
+}
+
 /// In-memory model catalog: an exact `(catalog_provider_id, model_id)` index
-/// plus a loose `model_id`-only index for provider-agnostic fallback matches.
+/// plus a loose `model_id`-only index for provider-agnostic fallback matches,
+/// and a provider-metadata map for the preset picker.
 #[derive(Debug, Default)]
 pub struct ModelCatalog {
     exact: HashMap<(String, String), ModelMeta>,
     loose: HashMap<String, ModelMeta>,
+    providers: HashMap<String, ProviderMeta>,
 }
 
 impl ModelCatalog {
@@ -106,6 +132,20 @@ impl ModelCatalog {
     #[allow(dead_code)] // paired with len() (clippy::len_without_is_empty)
     pub fn is_empty(&self) -> bool {
         self.exact.is_empty()
+    }
+
+    /// Record provider-level metadata (preset picker source).
+    pub fn insert_provider(&mut self, p: ProviderMeta) {
+        if !p.id.is_empty() {
+            self.providers.insert(p.id.clone(), p);
+        }
+    }
+
+    /// All providers, sorted by display name — for the preset picker.
+    pub fn providers_sorted(&self) -> Vec<ProviderMeta> {
+        let mut v: Vec<ProviderMeta> = self.providers.values().cloned().collect();
+        v.sort_by_key(|p| p.name.to_ascii_lowercase());
+        v
     }
 
     /// Insert one model. `provider_id` is the catalog's own id (e.g. `moonshotai`),

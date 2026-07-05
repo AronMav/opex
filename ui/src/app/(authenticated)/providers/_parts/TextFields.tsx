@@ -16,6 +16,7 @@ import {
 import { RefreshCw, Zap } from "lucide-react";
 import type { CreateProviderInput, Provider, ProviderType } from "@/types/api";
 import { TimeoutsSection } from "./TimeoutsSection";
+import { ProviderPresetPicker, type CatalogProvider } from "./ProviderPresetPicker";
 import { getOpts } from "./helpers";
 
 interface TestResult {
@@ -75,9 +76,27 @@ export function TextFields({
 }: TextFieldsProps) {
   const { t } = useTranslation();
 
+  // Apply a catalog preset (models.dev/…) onto the form — the way to add the
+  // hundreds of providers OPEX doesn't ship natively. Most are OpenAI-compatible
+  // → provider_type `openai_compat` + the catalog base_url; natively-supported
+  // ids (openai/anthropic/google/…) use their own type.
+  const applyPreset = (p: CatalogProvider) => {
+    const known = providerTypes.some((pt) => pt.id === p.id);
+    setForm((f) => ({
+      ...f,
+      name: f.name?.trim() ? f.name : p.id,
+      provider_type: known ? p.id : "openai_compat",
+      base_url: p.api ?? f.base_url,
+      default_model: f.default_model?.trim() ? f.default_model : (p.models[0] ?? ""),
+    }));
+  };
+
   return (
     <>
       {activeTab === "general" && (<>
+      {/* Preset picker — only when adding a NEW provider */}
+      {!isEditing && <ProviderPresetPicker onPick={applyPreset} />}
+
       {/* Name */}
       <Field label={t("providers.field_name") + " *"} labelClassName="text-xs" hint={t("providers.field_name_hint")}>
         <Input

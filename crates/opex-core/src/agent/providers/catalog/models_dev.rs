@@ -4,11 +4,14 @@
 //! `models{}` map; every model has `limit: { context, output }`. See
 //! `docs/architecture/2026-07-05-model-catalog-multicatalog.md`.
 
-use super::{CatalogSource, ModelCatalog, ModelMeta};
+use super::{CatalogSource, ModelCatalog, ModelMeta, ProviderMeta};
 use serde_json::Value;
 
+const OPENAI_COMPAT_NPM: &str = "@ai-sdk/openai-compatible";
+
 /// Merge a parsed models.dev payload into `cat`. Lenient — malformed providers
-/// or models are skipped. Returns the number of models added.
+/// or models are skipped. Returns the number of models added. Also records
+/// provider-level metadata (name/api/env/models) for the preset picker.
 pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
     let Some(providers) = json.as_object() else {
         return 0;
@@ -18,6 +21,7 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
         let Some(models) = pv.get("models").and_then(Value::as_object) else {
             continue;
         };
+        let mut model_ids: Vec<String> = Vec::new();
         for (model_id, mv) in models {
             let Some(limit) = mv.get("limit") else { continue };
             let Some(context) = limit.get("context").and_then(as_u32) else {
@@ -33,8 +37,32 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
                 model_id,
                 ModelMeta { context, output, source: CatalogSource::ModelsDev },
             );
+            model_ids.push(model_id.clone());
             n += 1;
         }
+
+        // Provider metadata for the "add provider" preset picker.
+        model_ids.sort();
+        let name = pv
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or(provider_id)
+            .to_string();
+        let api = pv.get("api").and_then(Value::as_str).map(str::to_string);
+        let npm = pv.get("npm").and_then(Value::as_str).unwrap_or_default();
+        let env = pv
+            .get("env")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|e| e.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        cat.insert_provider(ProviderMeta {
+            id: provider_id.clone(),
+            name,
+            api,
+            env,
+            openai_compatible: npm == OPENAI_COMPAT_NPM,
+            models: model_ids,
+        });
     }
     n
 }
