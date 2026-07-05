@@ -189,11 +189,17 @@ impl OpenAiCompatibleProvider {
         }).sum()
     }
 
-    /// Whether this provider supports forced `tool_choice` (specific function forcing).
-    /// DeepSeek reasoner models reject tool_choice with a 400 error.
+    /// Whether the model emits/expects assistant reasoning in a `reasoning_content`
+    /// field (DeepSeek-R1, Kimi-thinking, …). Catalog-driven when the model is
+    /// known (models.dev `interleaved.field == "reasoning_content"` — accurate
+    /// per-model: deepseek-reasoner yes, deepseek-chat no); name-match fallback
+    /// for uncatalogued models.
     fn uses_reasoning_content(&self) -> bool {
-        self.provider_name == "deepseek"
-            || self.model.effective().to_lowercase().contains("deepseek")
+        let model = self.model.effective();
+        if let Some(rc) = opex_catalog::global_caps(&self.provider_name, &model).map(|c| c.reasoning_content) {
+            return rc;
+        }
+        self.provider_name == "deepseek" || model.to_lowercase().contains("deepseek")
     }
 
     fn supports_forced_tool_choice(&self) -> bool {

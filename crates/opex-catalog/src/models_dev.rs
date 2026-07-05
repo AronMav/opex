@@ -42,6 +42,12 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
                 tool_call: mv.get("tool_call").and_then(Value::as_bool).unwrap_or(false),
                 // Default true: absence must not spuriously disable temperature.
                 temperature: mv.get("temperature").and_then(Value::as_bool).unwrap_or(true),
+                // models.dev `interleaved: { field: "reasoning_content" }`.
+                reasoning_content: mv
+                    .get("interleaved")
+                    .and_then(|iv| iv.get("field"))
+                    .and_then(Value::as_str)
+                    == Some("reasoning_content"),
             });
             cat.insert(
                 provider_id,
@@ -132,5 +138,23 @@ mod tests {
         let json: Value = serde_json::from_str("[]").unwrap();
         let mut cat = ModelCatalog::new();
         assert_eq!(load_into(&mut cat, &json), 0);
+    }
+
+    #[test]
+    fn parses_reasoning_content_from_interleaved() {
+        let json: Value = serde_json::from_str(
+            r#"{ "deepseek": { "models": {
+                "deepseek-reasoner": { "limit": {"context": 128000}, "reasoning": true,
+                    "interleaved": {"field": "reasoning_content"} },
+                "deepseek-chat": { "limit": {"context": 128000}, "reasoning": false }
+            }}}"#,
+        )
+        .unwrap();
+        let mut cat = ModelCatalog::new();
+        load_into(&mut cat, &json);
+        // reasoner → reasoning_content; plain chat → not (fixes the old name-match
+        // that flagged ALL deepseek models).
+        assert_eq!(cat.caps("deepseek", "deepseek-reasoner").map(|c| c.reasoning_content), Some(true));
+        assert_eq!(cat.caps("deepseek", "deepseek-chat").map(|c| c.reasoning_content), Some(false));
     }
 }

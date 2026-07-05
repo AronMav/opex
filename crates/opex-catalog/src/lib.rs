@@ -116,6 +116,10 @@ pub struct Caps {
     pub tool_call: bool,
     /// Accepts a `temperature` parameter (false for e.g. o1-style models).
     pub temperature: bool,
+    /// Emits/expects assistant reasoning in a `reasoning_content` field
+    /// (models.dev `interleaved.field == "reasoning_content"`) — DeepSeek-R1,
+    /// Kimi-thinking, … Drives the OpenAI-compat message formatter.
+    pub reasoning_content: bool,
 }
 
 /// Metadata for one model.
