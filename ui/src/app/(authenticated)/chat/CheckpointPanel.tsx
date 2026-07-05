@@ -9,6 +9,7 @@ import {
   Sheet,
   SheetContent,
   SheetHeader,
+  SheetBody,
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
@@ -96,7 +97,7 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
     );
   } else {
     body = (
-      <ul className="divide-y divide-border overflow-y-auto">
+      <ul className="divide-y divide-border">
         {data.items.map((cp) => (
           <li
             key={cp.n}
@@ -138,7 +139,7 @@ export function CheckpointPanel({ agent, open, onOpenChange }: CheckpointPanelPr
           <SheetHeader className="px-4 pt-5 pb-3 border-b border-border">
             <SheetTitle>{t("checkpoints.title")}</SheetTitle>
           </SheetHeader>
-          {body}
+          <SheetBody>{body}</SheetBody>
         </SheetContent>
       </Sheet>
 

@@ -95,6 +95,21 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/**
+ * Internal scroll region for a sheet: grows to fill the space between a sticky
+ * header/footer and scrolls its own overflow (instead of scrolling the whole
+ * sheet, header included).
+ */
+function SheetBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="sheet-body"
+      className={cn("flex-1 min-h-0 overflow-y-auto", className)}
+      {...props}
+    />
+  )
+}
+
 function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -137,6 +152,7 @@ export {
   SheetClose,
   SheetContent,
   SheetHeader,
+  SheetBody,
   SheetFooter,
   SheetTitle,
   SheetDescription,

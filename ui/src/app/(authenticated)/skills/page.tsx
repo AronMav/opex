@@ -24,7 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field } from "@/components/ui/field";
 import {
-  Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
+  Sheet, SheetContent, SheetHeader, SheetBody, SheetTitle, SheetDescription,
 } from "@/components/ui/sheet";
 import {
   BookOpen, Wrench, Zap, Trash2, RefreshCw, Tag,
@@ -153,12 +153,13 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
   return (
     <>
       <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
-        <SheetContent className="w-full sm:max-w-xl overflow-y-auto">
+        <SheetContent className="w-full sm:max-w-xl">
           <SheetHeader className="mb-4">
             <SheetTitle className="font-mono text-sm">{skillName}</SheetTitle>
             <SheetDescription>{t("skills.version_description")}</SheetDescription>
           </SheetHeader>
 
+          <SheetBody>
           {isLoading ? (
             <div className="space-y-3 max-w-4xl mx-auto w-full">
               {[1, 2, 3].map((i) => (
@@ -258,6 +259,7 @@ function SkillHistorySheet({ skillName, onClose }: { skillName: string; onClose:
               </div>
             </div>
           )}
+          </SheetBody>
         </SheetContent>
       </Sheet>
 
