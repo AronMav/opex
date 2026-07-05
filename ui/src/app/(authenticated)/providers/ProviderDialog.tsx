@@ -149,13 +149,14 @@ export function ProviderDialog(props: ProviderDialogProps) {
             <span className="truncate">{isEditing ? t("providers.edit_title") : t("providers.add_title")}</span>
           </DialogTitle>
 
-          {/* Category picker — always visible; drives which tabs/fields show */}
-          <div className="space-y-1.5">
-            <label htmlFor={catId} className="text-xs font-medium text-muted-foreground">
+          {/* Category picker — label + select on one line; always visible,
+              drives which tabs/fields show */}
+          <div className="flex items-center gap-3">
+            <label htmlFor={catId} className="text-xs font-medium text-muted-foreground shrink-0">
               {t("providers.field_category")} <span className="text-destructive">*</span>
             </label>
             <Select value={category} onValueChange={(v) => onSetCategory(v as ProviderCategory)}>
-              <SelectTrigger id={catId} className="text-sm">
+              <SelectTrigger id={catId} className="text-sm flex-1 min-w-0">
                 <SelectValue placeholder={t("providers.select_category")} />
               </SelectTrigger>
               <SelectContent>
