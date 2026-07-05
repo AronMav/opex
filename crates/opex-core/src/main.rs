@@ -295,7 +295,19 @@ async fn main() -> Result<()> {
 
     // Model metadata catalog (context windows from models.dev/…): background
     // load + refresh into the process-global catalog. No-op when disabled.
-    crate::agent::providers::catalog::service::spawn(cfg.model_catalog.clone());
+    // The SSRF-guarded client is built here (host policy) and handed to the crate.
+    {
+        let mc = &cfg.model_catalog;
+        opex_catalog::service::spawn(
+            opex_catalog::service::CatalogConfig {
+                enabled: mc.enabled,
+                refresh_hours: mc.refresh_hours,
+                models_dev_url: mc.models_dev_url.clone(),
+                openrouter_url: mc.openrouter_url.clone(),
+            },
+            crate::net::ssrf::ssrf_http_client(std::time::Duration::from_secs(20)),
+        );
+    }
 
     // Config hot-reload watcher
     let shared_config = std::sync::Arc::new(tokio::sync::RwLock::new(cfg.clone()));

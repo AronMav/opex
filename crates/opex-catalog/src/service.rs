@@ -9,18 +9,27 @@
 use std::time::Duration;
 
 use super::{models_dev, openrouter, ModelCatalog};
-use crate::config::ModelCatalogConfig;
 
-/// Spawn the background catalog loader. No-op when disabled.
-pub fn spawn(cfg: ModelCatalogConfig) {
+/// Runtime config for the catalog loader. The host crate maps its own config
+/// (e.g. `opex.toml [model_catalog]`) onto this plain struct so `opex-catalog`
+/// stays free of any host dependency.
+#[derive(Debug, Clone)]
+pub struct CatalogConfig {
+    pub enabled: bool,
+    pub refresh_hours: u64,
+    pub models_dev_url: String,
+    pub openrouter_url: String,
+}
+
+/// Spawn the background catalog loader. No-op when disabled. The host passes a
+/// pre-built `reqwest::Client` (e.g. an SSRF-guarded one) — the crate never
+/// builds its own, so URL/network policy stays with the host.
+pub fn spawn(cfg: CatalogConfig, client: reqwest::Client) {
     if !cfg.enabled {
         tracing::info!("model catalog disabled via config");
         return;
     }
     tokio::spawn(async move {
-        // SSRF-guarded client: the URLs are admin-configured (trusted), but the
-        // guarded client is harmless for a public host and safe if misconfigured.
-        let client = crate::net::ssrf::ssrf_http_client(Duration::from_secs(20));
         let period = Duration::from_secs(cfg.refresh_hours.max(1) * 3600);
         loop {
             let cat = build(&client, &cfg).await;
@@ -39,7 +48,7 @@ pub fn spawn(cfg: ModelCatalogConfig) {
 /// Build one catalog from all configured sources. models.dev is loaded FIRST
 /// (priority 0), OpenRouter SECOND (priority 1), so on-conflict models.dev wins.
 /// Each source is independent — a failure logs and is skipped.
-async fn build(client: &reqwest::Client, cfg: &ModelCatalogConfig) -> ModelCatalog {
+async fn build(client: &reqwest::Client, cfg: &CatalogConfig) -> ModelCatalog {
     let mut cat = ModelCatalog::new();
 
     if !cfg.models_dev_url.is_empty() {

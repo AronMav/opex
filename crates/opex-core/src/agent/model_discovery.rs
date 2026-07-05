@@ -46,7 +46,7 @@ pub struct ModelInfo {
 /// looked up by `(provider_type, model_id)`. No-op fields when the catalog
 /// doesn't know the model.
 pub fn enrich_from_catalog(provider_type: &str, models: &mut [ModelInfo]) {
-    use crate::agent::providers::catalog;
+    use opex_catalog as catalog;
     for m in models.iter_mut() {
         m.context_window = catalog::global_context(provider_type, &m.id);
         if let Some(c) = catalog::global_caps(provider_type, &m.id) {

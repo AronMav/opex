@@ -43,7 +43,7 @@ impl OpenAiCompatibleProvider {
         // Temperature — omitted when the catalog marks the model as not accepting
         // it (Phase 3c): o1/reasoning-style models 400 on a `temperature` param.
         // Unknown model → send it (permissive default).
-        let allow_temperature = crate::agent::providers::catalog::global_caps(
+        let allow_temperature = opex_catalog::global_caps(
             &self.provider_name,
             &effective_model,
         )
@@ -54,7 +54,7 @@ impl OpenAiCompatibleProvider {
         if let Some(mt) = self.max_tokens {
             // Clamp to the model's catalog output limit (Phase 3): a configured
             // max_tokens above the model's cap 400s on some providers.
-            let capped = crate::agent::providers::catalog::global_output(
+            let capped = opex_catalog::global_output(
                 &self.provider_name,
                 &effective_model,
             )

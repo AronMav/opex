@@ -87,8 +87,6 @@ pub use routing::create_routing_provider;
 #[allow(unused_imports)]
 pub use routing::RoutingProvider;
 
-pub mod catalog;
-
 // ── UnconfiguredProvider sentinel ─────────────────────────────────────────────
 
 /// Sentinel "unconfigured" provider used when no usable LLM backend could be

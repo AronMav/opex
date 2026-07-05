@@ -123,6 +123,7 @@ opex-types = { workspace = true, features = ["sqlx"] }
 opex-db           = { path = "../opex-db" }
 opex-gateway-util = { path = "../opex-gateway-util" }
 opex-embedding    = { path = "../opex-embedding" }
+opex-catalog      = { path = "../opex-catalog" }
 
 # Lock-free atomic swap for hot-reloadable shared state (e.g. ToolgateEmbedder
 # rotating the upstream URL without taking a mutex on every embedding call).

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/opex-core",
+    "crates/opex-catalog",
     "crates/opex-types",
     "crates/opex-watchdog",
     "crates/opex-memory-worker",

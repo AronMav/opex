@@ -2053,6 +2053,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "opex-catalog"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "opex-core"
 version = "0.32.0"
 dependencies = [
@@ -2087,6 +2099,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "opex-catalog",
  "opex-db",
  "opex-embedding",
  "opex-gateway-util",
