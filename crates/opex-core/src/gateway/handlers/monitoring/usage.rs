@@ -41,7 +41,7 @@ pub(crate) async fn api_usage(
 
 /// Cost (USD) for `input`/`output` tokens from the catalog's per-1M pricing.
 fn catalog_cost(provider: &str, model: &str, input: i64, output: i64) -> Option<f64> {
-    let c = crate::agent::providers::catalog::global_cost(provider, model)?;
+    let c = opex_catalog::global_cost(provider, model)?;
     let cost = (input.max(0) as f64 / 1_000_000.0) * c.input
         + (output.max(0) as f64 / 1_000_000.0) * c.output;
     Some((cost * 10000.0).round() / 10000.0)

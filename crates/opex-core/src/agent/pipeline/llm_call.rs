@@ -210,7 +210,7 @@ pub async fn resolve_context_limit(
     // permanently like a native hint.
     let (value, is_fallback) = match provider.context_limit_hint(model).await {
         Some(v) => (v, false),
-        None => match crate::agent::providers::catalog::global_context(provider.name(), model) {
+        None => match opex_catalog::global_context(provider.name(), model) {
             Some(v) => (v, false),
             None => (default_context_for_model(model) as u32, true),
         },

@@ -14,7 +14,7 @@ pub(crate) fn routes() -> Router<AppState> {
 }
 
 async fn list_providers() -> Json<serde_json::Value> {
-    let providers = crate::agent::providers::catalog::global_providers();
+    let providers = opex_catalog::global_providers();
     Json(serde_json::json!({
         "count": providers.len(),
         "providers": providers,
