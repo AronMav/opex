@@ -38,7 +38,8 @@ import type { ChannelRow, RoutingRule } from "@/types/api";
 import type { WebhookDto } from "@/types/api.generated";
 import { ChevronDown, Bot, ExternalLink, Link2, Camera, RefreshCw, Settings, Wrench, Zap, Archive, Clock, Radio } from "lucide-react";
 import { RoutingRulesEditor } from "./RoutingRulesEditor";
-import { useProviders, useProviderModels } from "@/lib/queries";
+import { useProviders, useProviderModelsDetailed } from "@/lib/queries";
+import { ModelBadges } from "@/components/model-badges";
 
 const LANGUAGES: { value: string; labelKey?: TranslationKey; label?: string }[] = [
   { value: "ru", labelKey: "agents.lang_ru" },
@@ -197,7 +198,8 @@ export function AgentEditDialog({
   const llmProviders = allProviders.filter((p) => p.type === "text");
   const ttsProviders = allProviders.filter((p) => p.type === "tts");
   const selectedProvider = llmProviders.find((p) => p.name === form.providerConnection);
-  const { data: providerModels = [], isLoading: providerModelsLoading, refetch: refetchModels } = useProviderModels(selectedProvider?.id ?? null);
+  const { data: providerModelsDetailed = [], isLoading: providerModelsLoading, refetch: refetchModels } = useProviderModelsDetailed(selectedProvider?.id ?? null);
+  const providerModels = providerModelsDetailed.map((m) => m.id);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -380,8 +382,13 @@ export function AgentEditDialog({
                                   <SelectValue placeholder={t("agents.model_placeholder")} />
                                 </SelectTrigger>
                                 <SelectContent className="border-border max-h-60">
-                                  {models.map((m) => (
-                                    <SelectItem key={m} value={m} className="font-mono text-sm">{m}</SelectItem>
+                                  {providerModelsDetailed.map((pm) => (
+                                    <SelectItem key={pm.id} value={pm.id} className="font-mono text-sm">
+                                      <span className="flex items-center justify-between gap-3 w-full min-w-0">
+                                        <span className="truncate">{pm.id}</span>
+                                        <ModelBadges m={pm} className="shrink-0" />
+                                      </span>
+                                    </SelectItem>
                                   ))}
                                   <SelectItem value="__custom__" className="font-mono text-sm italic text-muted-foreground">{t("agents.model_custom")}</SelectItem>
                                 </SelectContent>
