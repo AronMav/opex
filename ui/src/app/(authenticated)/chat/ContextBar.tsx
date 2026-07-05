@@ -77,17 +77,12 @@ export function ContextBar({
   // One tight row, no tooltip provider: model badge + token progress + the
   // checkpoint-history trigger. Kept minimal so it fits the crowded mobile bar.
   if (compact) {
-    const shortLabel = model ? model.replace(/^claude-/, "").replace(/-\d{8}$/, "").slice(0, 5) : null;
     return (
       <>
         <CheckpointPanel agent={currentAgent} open={checkpointOpen} onOpenChange={setCheckpointOpen} />
         <div className="flex items-center gap-1.5 min-w-0 shrink">
-          {/* Mini model badge — tap for full details (future) */}
-          {shortLabel && (
-            <span className="rounded border border-border/30 bg-muted/30 px-1 py-0.5 font-mono text-3xs leading-none text-muted-foreground/60 whitespace-nowrap max-w-12 truncate">
-              {shortLabel}
-            </span>
-          )}
+          {/* Model is shown in the composer's model dropdown; omit it here to
+              avoid redundancy in the crowded mobile header. */}
           {/* Mini progress dot — colored by usage */}
           {hasUsage && (
             <span
