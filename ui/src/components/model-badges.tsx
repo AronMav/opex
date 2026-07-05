@@ -3,15 +3,12 @@
 import { Brain, Eye, Wrench } from "lucide-react";
 import type { ProviderModel } from "@/lib/queries";
 
-/** Human context-window size: 1048576 → "1M", 262144 → "256K". */
+/** Human context-window size (decimal, base-1000 for consistency):
+ *  1048576 → "1M", 262144 → "262K", 128000 → "128K". */
 function fmtContext(n?: number): string | null {
   if (!n || n <= 0) return null;
-  if (n >= 1_000_000) {
-    const m = n / 1_048_576;
-    return `${m >= 10 || Number.isInteger(m) ? Math.round(m) : m.toFixed(1)}M`;
-  }
-  if (n >= 1000) return `${Math.round(n / 1024)}K`;
-  return String(n);
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  return `${Math.round(n / 1000)}K`;
 }
 
 type Meta = Pick<ProviderModel, "context_window" | "vision" | "reasoning" | "tools">;

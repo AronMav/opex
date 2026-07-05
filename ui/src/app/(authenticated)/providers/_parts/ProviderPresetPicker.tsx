@@ -12,6 +12,8 @@ export interface CatalogProvider {
   api?: string;
   env: string[];
   openai_compatible: boolean;
+  /** OPEX provider_type to create (native when known, else openai_compat). */
+  provider_type: string;
   models: string[];
 }
 

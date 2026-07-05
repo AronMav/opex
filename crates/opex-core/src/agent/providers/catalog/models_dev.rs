@@ -23,6 +23,9 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
         };
         let mut model_ids: Vec<String> = Vec::new();
         for (model_id, mv) in models {
+            // List every model for the preset picker (incl. TTS/embedding models
+            // with no context window).
+            model_ids.push(model_id.clone());
             let Some(limit) = mv.get("limit") else { continue };
             let Some(context) = limit.get("context").and_then(as_u32) else {
                 continue;
@@ -69,6 +72,7 @@ pub fn load_into(cat: &mut ModelCatalog, json: &Value) -> usize {
             api,
             env,
             openai_compatible: npm == OPENAI_COMPAT_NPM,
+            provider_type: super::aliases::opex_provider_type(provider_id).to_string(),
             models: model_ids,
         });
     }

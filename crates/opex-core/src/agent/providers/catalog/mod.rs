@@ -146,6 +146,9 @@ pub struct ProviderMeta {
     pub env: Vec<String>,
     /// Whether this provider is OpenAI-compatible (`npm` = `@ai-sdk/openai-compatible`).
     pub openai_compatible: bool,
+    /// OPEX `provider_type` to create for this preset (native type when known,
+    /// else `openai_compat`) — so the UI doesn't have to map catalog ids.
+    pub provider_type: String,
     /// Known model ids (sorted).
     pub models: Vec<String>,
 }
